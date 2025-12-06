@@ -1,0 +1,19 @@
+# FastAPI & Server
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+pydantic-settings==2.6.0
+
+# ML & Data Processing
+catboost==1.2.8
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.5.2
+
+# Database
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Utilities
+python-dateutil==2.9.0
+pytz==2024.2

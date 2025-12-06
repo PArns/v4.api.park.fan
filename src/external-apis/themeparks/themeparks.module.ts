@@ -1,0 +1,9 @@
+import { Module } from "@nestjs/common";
+import { ThemeParksClient } from "./themeparks.client";
+import { ThemeParksMapper } from "./themeparks.mapper";
+
+@Module({
+  providers: [ThemeParksClient, ThemeParksMapper],
+  exports: [ThemeParksClient, ThemeParksMapper],
+})
+export class ThemeParksModule {}

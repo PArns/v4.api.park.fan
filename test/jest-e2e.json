@@ -1,0 +1,36 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/../src/$1",
+    "^@config/(.*)$": "<rootDir>/../src/config/$1",
+    "^@common/(.*)$": "<rootDir>/../src/common/$1",
+    "^@parks/(.*)$": "<rootDir>/../src/parks/$1",
+    "^@attractions/(.*)$": "<rootDir>/../src/attractions/$1",
+    "^@shows/(.*)$": "<rootDir>/../src/shows/$1",
+    "^@restaurants/(.*)$": "<rootDir>/../src/restaurants/$1",
+    "^@queue-data/(.*)$": "<rootDir>/../src/queue-data/$1",
+    "^@queues/(.*)$": "<rootDir>/../src/queues/$1",
+    "^@external-apis/(.*)$": "<rootDir>/../src/external-apis/$1",
+    "^@analytics/(.*)$": "<rootDir>/../src/analytics/$1",
+    "^@destinations/(.*)$": "<rootDir>/../src/destinations/$1",
+    "^@search/(.*)$": "<rootDir>/../src/search/$1",
+    "^@ml/(.*)$": "<rootDir>/../src/ml/$1"
+  },
+  "collectCoverageFrom": [
+    "../src/**/*.(t|j)s",
+    "!../src/main.ts",
+    "!../src/**/*.module.ts",
+    "!../src/**/*.dto.ts",
+    "!../src/**/*.entity.ts"
+  ],
+  "coverageDirectory": "../coverage-e2e",
+  "setupFilesAfterEnv": ["<rootDir>/setup-e2e.ts"],
+  "testTimeout": 60000,
+  "maxWorkers": 1
+}

@@ -1,0 +1,49 @@
+"""
+Configuration for ML Service
+"""
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    """Application settings"""
+
+    # Database
+    DB_HOST: str = "postgres"
+    DB_PORT: int = 5432
+    DB_NAME: str = "parkfan"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str = "postgres"
+
+    # Model Configuration
+    MODEL_DIR: str = "/app/models"
+    MODEL_VERSION: str = "v1.1.0"
+
+    # CatBoost Hyperparameters
+    CATBOOST_ITERATIONS: int = 1000
+    CATBOOST_LEARNING_RATE: float = 0.03
+    CATBOOST_DEPTH: int = 6
+    CATBOOST_L2_LEAF_REG: float = 3.0
+    CATBOOST_RANDOM_SEED: int = 42
+
+    # Training Configuration
+    TRAIN_LOOKBACK_YEARS: int = 2
+    TRAIN_TEST_SPLIT: float = 0.8
+    VALIDATION_DAYS: int = 30
+
+    # Prediction Configuration
+    HOURLY_PREDICTIONS: int = 24   # Next 24 hours (internal use)
+    DAILY_PREDICTIONS: int = 365   # Next 365 days (1 year)
+
+    # Multi-Country Holiday Radius
+    DEFAULT_INFLUENCE_RADIUS_KM: int = 200
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Get cached settings instance"""
+    return Settings()

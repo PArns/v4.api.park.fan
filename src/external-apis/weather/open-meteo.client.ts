@@ -1,0 +1,274 @@
+import { Injectable, Logger } from "@nestjs/common";
+import axios, { AxiosInstance } from "axios";
+
+/**
+ * Open-Meteo Weather API Client
+ *
+ * Documentation: https://open-meteo.com/en/docs
+ *
+ * Features:
+ * - Free, no API key required
+ * - No rate limits
+ * - Historical data (1940 - present)
+ * - 16-day forecast
+ * - Hourly and daily data
+ *
+ * Daily Variables:
+ * - temperature_2m_max, temperature_2m_min
+ * - precipitation_sum, rain_sum, snowfall_sum
+ * - weathercode (WMO code)
+ * - windspeed_10m_max
+ */
+@Injectable()
+export class OpenMeteoClient {
+  private readonly logger = new Logger(OpenMeteoClient.name);
+  private readonly client: AxiosInstance;
+  private readonly baseUrl = "https://api.open-meteo.com/v1";
+
+  constructor() {
+    this.client = axios.create({
+      baseURL: this.baseUrl,
+      timeout: 10000,
+    });
+  }
+
+  /**
+   * Fetch daily weather forecast for a location
+   *
+   * @param latitude - Location latitude
+   * @param longitude - Location longitude
+   * @param forecastDays - Number of forecast days (max 16)
+   * @returns Daily weather data (current + forecast)
+   */
+  async getDailyWeather(
+    latitude: number,
+    longitude: number,
+    forecastDays: number = 16,
+  ): Promise<DailyWeatherResponse> {
+    try {
+      const response = await this.client.get<OpenMeteoResponse>("/forecast", {
+        params: {
+          latitude,
+          longitude,
+          forecast_days: forecastDays,
+          daily: [
+            "temperature_2m_max",
+            "temperature_2m_min",
+            "precipitation_sum",
+            "rain_sum",
+            "snowfall_sum",
+            "weathercode",
+            "windspeed_10m_max",
+          ].join(","),
+          timezone: "auto",
+        },
+      });
+
+      return this.transformResponse(response.data);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to fetch weather data: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new Error(`Open-Meteo API error: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Fetch historical weather data
+   *
+   * @param latitude - Location latitude
+   * @param longitude - Location longitude
+   * @param startDate - Start date (YYYY-MM-DD)
+   * @param endDate - End date (YYYY-MM-DD)
+   * @returns Historical daily weather data
+   */
+  async getHistoricalWeather(
+    latitude: number,
+    longitude: number,
+    startDate: string,
+    endDate: string,
+  ): Promise<DailyWeatherResponse> {
+    try {
+      const response = await this.client.get<OpenMeteoResponse>("/archive", {
+        params: {
+          latitude,
+          longitude,
+          start_date: startDate,
+          end_date: endDate,
+          daily: [
+            "temperature_2m_max",
+            "temperature_2m_min",
+            "precipitation_sum",
+            "rain_sum",
+            "snowfall_sum",
+            "weathercode",
+            "windspeed_10m_max",
+          ].join(","),
+          timezone: "auto",
+        },
+      });
+
+      return this.transformResponse(response.data);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to fetch historical weather data: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new Error(`Open-Meteo API error: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Fetch hourly weather forecast for a location
+   *
+   * @param latitude - Location latitude
+   * @param longitude - Location longitude
+   * @param forecastDays - Number of forecast days (max 16)
+   * @returns Hourly weather data
+   */
+  async getHourlyForecast(
+    latitude: number,
+    longitude: number,
+    forecastDays: number = 2, // Default to 2 days (48h) enough for hourly prediction
+  ): Promise<HourlyWeatherResponse> {
+    try {
+      const response = await this.client.get<OpenMeteoResponse>("/forecast", {
+        params: {
+          latitude,
+          longitude,
+          forecast_days: forecastDays,
+          hourly: [
+            "temperature_2m",
+            "precipitation",
+            "rain",
+            "snowfall",
+            "weathercode",
+            "windspeed_10m",
+          ].join(","),
+          timezone: "auto",
+        },
+      });
+
+      return this.transformHourlyResponse(response.data);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to fetch hourly weather data: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new Error(`Open-Meteo API error: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Transform Open-Meteo API response to our format
+   */
+  private transformResponse(data: OpenMeteoResponse): DailyWeatherResponse {
+    const { daily } = data;
+
+    if (!daily || !daily.time) {
+      throw new Error("Invalid Open-Meteo response: missing daily data");
+    }
+
+    const days: DailyWeather[] = daily.time.map((date, index) => ({
+      date,
+      temperatureMax: daily.temperature_2m_max?.[index] ?? null,
+      temperatureMin: daily.temperature_2m_min?.[index] ?? null,
+      precipitationSum: daily.precipitation_sum?.[index] ?? null,
+      rainSum: daily.rain_sum?.[index] ?? null,
+      snowfallSum: daily.snowfall_sum?.[index] ?? null,
+      weatherCode: daily.weathercode?.[index] ?? null,
+      windSpeedMax: daily.windspeed_10m_max?.[index] ?? null,
+    }));
+
+    return { days };
+  }
+
+  private transformHourlyResponse(
+    data: OpenMeteoResponse,
+  ): HourlyWeatherResponse {
+    const { hourly } = data;
+
+    if (!hourly || !hourly.time) {
+      throw new Error("Invalid Open-Meteo response: missing hourly data");
+    }
+
+    const hours: HourlyWeather[] = hourly.time.map((time, index) => ({
+      time,
+      temperature: hourly.temperature_2m?.[index] ?? null,
+      precipitation: hourly.precipitation?.[index] ?? null,
+      rain: hourly.rain?.[index] ?? null,
+      snowfall: hourly.snowfall?.[index] ?? null,
+      weatherCode: hourly.weathercode?.[index] ?? null,
+      windSpeed: hourly.windspeed_10m?.[index] ?? null,
+    }));
+
+    return { hours };
+  }
+}
+
+/**
+ * Open-Meteo API Response
+ */
+interface OpenMeteoResponse {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  daily: {
+    time: string[];
+    temperature_2m_max?: (number | null)[];
+    temperature_2m_min?: (number | null)[];
+    precipitation_sum?: (number | null)[];
+    rain_sum?: (number | null)[];
+    snowfall_sum?: (number | null)[];
+    weathercode?: (number | null)[];
+    windspeed_10m_max?: (number | null)[];
+  };
+  hourly: {
+    time: string[];
+    temperature_2m?: (number | null)[];
+    precipitation?: (number | null)[];
+    rain?: (number | null)[];
+    snowfall?: (number | null)[];
+    weathercode?: (number | null)[];
+    windspeed_10m?: (number | null)[];
+  };
+}
+
+/**
+ * Daily Weather Data (our format)
+ */
+export interface DailyWeather {
+  date: string; // YYYY-MM-DD
+  temperatureMax: number | null;
+  temperatureMin: number | null;
+  precipitationSum: number | null;
+  rainSum: number | null;
+  snowfallSum: number | null;
+  weatherCode: number | null;
+  windSpeedMax: number | null;
+}
+
+export interface DailyWeatherResponse {
+  days: DailyWeather[];
+}
+
+export interface HourlyWeather {
+  time: string; // ISO 8601
+  temperature: number | null;
+  precipitation: number | null;
+  rain: number | null;
+  snowfall: number | null;
+  weatherCode: number | null;
+  windSpeed: number | null;
+}
+
+export interface HourlyWeatherResponse {
+  hours: HourlyWeather[];
+}

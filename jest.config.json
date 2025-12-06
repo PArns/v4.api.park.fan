@@ -1,0 +1,41 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": "src",
+  "testRegex": ".*\\.spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "collectCoverageFrom": [
+    "**/*.(t|j)s",
+    "!**/*.module.ts",
+    "!**/*.dto.ts",
+    "!**/*.entity.ts",
+    "!main.ts"
+  ],
+  "coverageDirectory": "../coverage",
+  "testEnvironment": "node",
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/$1",
+    "^@config/(.*)$": "<rootDir>/config/$1",
+    "^@common/(.*)$": "<rootDir>/common/$1",
+    "^@parks/(.*)$": "<rootDir>/parks/$1",
+    "^@attractions/(.*)$": "<rootDir>/attractions/$1",
+    "^@shows/(.*)$": "<rootDir>/shows/$1",
+    "^@restaurants/(.*)$": "<rootDir>/restaurants/$1",
+    "^@queue-data/(.*)$": "<rootDir>/queue-data/$1",
+    "^@queues/(.*)$": "<rootDir>/queues/$1",
+    "^@external-apis/(.*)$": "<rootDir>/external-apis/$1",
+    "^@analytics/(.*)$": "<rootDir>/analytics/$1",
+    "^@destinations/(.*)$": "<rootDir>/destinations/$1",
+    "^@search/(.*)$": "<rootDir>/search/$1",
+    "^@ml/(.*)$": "<rootDir>/ml/$1"
+  },
+  "coverageThreshold": {
+    "global": {
+      "branches": 70,
+      "functions": 70,
+      "lines": 70,
+      "statements": 70
+    }
+  }
+}

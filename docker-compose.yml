@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: parkfan_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: parkfan
+      POSTGRES_PASSWORD: parkfan_dev_password
+      POSTGRES_DB: parkfan
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-timescaledb.sql:/docker-entrypoint-initdb.d/init-timescaledb.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parkfan -d parkfan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - parkfan-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: parkfan_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - parkfan-network
+    command: redis-server --appendonly yes
+
+  bull-board:
+    image: venatum/bull-board:latest
+    container_name: parkfan_bull_board
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: '0'
+      REDIS_PASSWORD: ''
+      REDIS_USE_TLS: 'false'
+      REDIS_FAMILY: 4
+      BULL_PREFIX: parkfan
+      BULL_VERSION: BULL
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: parkfan_ml_service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: parkfan
+      DB_USER: parkfan
+      DB_PASSWORD: parkfan_dev_password
+      MODEL_DIR: /app/models
+      MODEL_VERSION: v1.0.0
+    volumes:
+      - ml-models:/app/models
+      - ./ml-service:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  ml-models:
+    driver: local
+
+networks:
+  parkfan-network:
+    driver: bridge
