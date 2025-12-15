@@ -161,6 +161,36 @@ v4.api.park.fan/
 
 ---
 
+## 🚀 Deployment
+
+### Coolify (Docker Compose)
+
+This project is optimized for deployment on [Coolify](https://coolify.io/):
+
+```bash
+# All services are defined in docker-compose.production.yml
+# with persistent volumes for data retention across deployments
+```
+
+**Quick Setup:**
+1. Connect GitHub repository to Coolify  
+2. Set `docker-compose.production.yml` as compose file
+3. Upload `.env` file with your configuration
+4. Deploy!
+
+📖 **[Full Deployment Guide →](./DEPLOYMENT.md)**
+
+### Persistent Volumes
+
+Your data is automatically preserved across redeployments:
+- `pgdata` → PostgreSQL database
+- `redisdata` → Redis cache
+- `ml-models` → Trained ML models
+
+---
+
+---
+
 ## 🐳 Docker Commands
 
 ```bash

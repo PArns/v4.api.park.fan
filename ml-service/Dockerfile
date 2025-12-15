@@ -23,5 +23,5 @@ RUN mkdir -p /app/models
 # Expose port
 EXPOSE 8000
 
-# Run FastAPI with uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Run FastAPI with uvicorn (production mode)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

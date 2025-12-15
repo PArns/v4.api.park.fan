@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-parkfan}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE:-parkfan}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-timescaledb.sql:/docker-entrypoint-initdb.d/init-timescaledb.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-parkfan} -d ${DB_DATABASE:-parkfan}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - parkfan-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - parkfan-network
+    command: redis-server --appendonly yes
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_DATABASE:-parkfan}
+      DB_USER: ${DB_USERNAME:-parkfan}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MODEL_DIR: ${MODEL_DIR:-/app/models}
+      MODEL_VERSION: ${MODEL_VERSION:-v1.0.0}
+    volumes:
+      - ml-models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  bull-board:
+    image: venatum/bull-board:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: '0'
+      REDIS_PASSWORD: ''
+      REDIS_USE_TLS: 'false'
+      REDIS_FAMILY: 4
+      BULL_PREFIX: ${BULL_PREFIX:-parkfan}
+      BULL_VERSION: BULL
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  ml-models:
+    driver: local
+
+networks:
+  parkfan-network:
+    driver: bridge
