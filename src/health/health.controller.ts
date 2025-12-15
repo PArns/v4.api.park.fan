@@ -1,8 +1,13 @@
 import { Controller, Get } from "@nestjs/common";
-import { InjectConnection } from "@nestjs/typeorm";
-import { InjectQueue } from "@nestjs/bull";
-import { Connection } from "typeorm";
-import { Queue } from "bull";
+import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
+import { Connection, Repository } from "typeorm";
+import { Park } from "../parks/entities/park.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
+import { QueueData } from "../queue-data/entities/queue-data.entity";
+import { MLModel } from "../ml/entities/ml-model.entity";
+import { Redis } from "ioredis";
+import { Inject } from "@nestjs/common";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 interface HealthStatus {
   status: "ok" | "degraded" | "error";
@@ -17,14 +22,21 @@ interface HealthStatus {
     redis: {
       status: "connected" | "disconnected";
     };
-    queues: {
-      [key: string]: {
-        waiting: number;
-        active: number;
-        completed: number;
-        failed: number;
-      };
+    ml?: {
+      status: "ready" | "not_ready";
+      version?: string;
+      trained_at?: string;
     };
+  };
+  data: {
+    parks: number;
+    attractions: number;
+    wait_times_24h: number;
+    last_sync: {
+      wait_times?: string;
+      parks?: string;
+    };
+    data_age_minutes?: number;
   };
 }
 
@@ -32,10 +44,16 @@ interface HealthStatus {
 export class HealthController {
   constructor(
     @InjectConnection() private connection: Connection,
-    @InjectQueue("wait-times") private waitTimesQueue: Queue,
-    @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
-    @InjectQueue("attractions-metadata") private attractionsQueue: Queue,
-  ) {}
+    @InjectRepository(Park)
+    private parkRepository: Repository<Park>,
+    @InjectRepository(Attraction)
+    private attractionRepository: Repository<Attraction>,
+    @InjectRepository(QueueData)
+    private queueDataRepository: Repository<QueueData>,
+    @InjectRepository(MLModel)
+    private mlModelRepository: Repository<MLModel>,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) { }
 
   @Get()
   async getHealth(): Promise<HealthStatus> {
@@ -43,14 +61,31 @@ export class HealthController {
       ? "connected"
       : "disconnected";
 
-    // Get queue stats
-    const queues = {
-      "wait-times": await this.getQueueStats(this.waitTimesQueue),
-      "park-metadata": await this.getQueueStats(this.parkMetadataQueue),
-      "attractions-metadata": await this.getQueueStats(this.attractionsQueue),
-    };
+    // Run all queries in parallel for speed
+    const [
+      parksCount,
+      attractionsCount,
+      waitTimes24h,
+      latestWaitTime,
+      latestParkUpdate,
+      activeModel,
+      redisStatus,
+    ] = await Promise.all([
+      this.parkRepository.count(),
+      this.attractionRepository.count(),
+      this.getWaitTimesCount24h(),
+      this.getLatestWaitTime(),
+      this.getLatestParkUpdate(),
+      this.getActiveMLModel(),
+      this.checkRedisConnection(),
+    ]);
 
-    const redisStatus = await this.checkRedisConnection();
+    // Calculate data age
+    let dataAgeMinutes: number | undefined;
+    if (latestWaitTime) {
+      const ageMs = Date.now() - latestWaitTime.getTime();
+      dataAgeMinutes = Math.round(ageMs / 60000); // Convert to minutes
+    }
 
     return {
       status: dbStatus === "connected" && redisStatus ? "ok" : "degraded",
@@ -65,7 +100,27 @@ export class HealthController {
         redis: {
           status: redisStatus ? "connected" : "disconnected",
         },
-        queues,
+        ...(activeModel && {
+          ml: {
+            status: "ready",
+            version: activeModel.version,
+            trained_at: activeModel.trainedAt?.toISOString(),
+          },
+        }),
+      },
+      data: {
+        parks: parksCount,
+        attractions: attractionsCount,
+        wait_times_24h: waitTimes24h,
+        last_sync: {
+          ...(latestWaitTime && {
+            wait_times: latestWaitTime.toISOString(),
+          }),
+          ...(latestParkUpdate && {
+            parks: latestParkUpdate.toISOString(),
+          }),
+        },
+        ...(dataAgeMinutes !== undefined && { data_age_minutes: dataAgeMinutes }),
       },
     };
   }
@@ -78,32 +133,66 @@ export class HealthController {
     };
   }
 
-  private async getQueueStats(queue: Queue): Promise<{
-    waiting: number;
-    active: number;
-    completed: number;
-    failed: number;
-  }> {
+  private async getWaitTimesCount24h(): Promise<number> {
     try {
-      const [waiting, active, completed, failed] = await Promise.all([
-        queue.getWaitingCount(),
-        queue.getActiveCount(),
-        queue.getCompletedCount(),
-        queue.getFailedCount(),
-      ]);
-
-      return { waiting, active, completed, failed };
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const count = await this.queueDataRepository.count({
+        where: {
+          timestamp: { $gte: yesterday } as any,
+        },
+      });
+      return count;
     } catch {
-      return { waiting: 0, active: 0, completed: 0, failed: 0 };
+      return 0;
+    }
+  }
+
+  private async getLatestWaitTime(): Promise<Date | null> {
+    try {
+      const latest = await this.queueDataRepository.findOne({
+        order: { timestamp: "DESC" },
+        select: ["timestamp"],
+      });
+      return latest?.timestamp || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getLatestParkUpdate(): Promise<Date | null> {
+    try {
+      const latest = await this.parkRepository.findOne({
+        order: { updatedAt: "DESC" },
+        select: ["updatedAt"],
+      });
+      return latest?.updatedAt || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getActiveMLModel(): Promise<{
+    version: string;
+    trainedAt?: Date;
+  } | null> {
+    try {
+      const activeModel = await this.mlModelRepository.findOne({
+        where: { isActive: true },
+        select: ["version", "trainedAt"],
+      });
+      return activeModel || null;
+    } catch {
+      return null;
     }
   }
 
   private async checkRedisConnection(): Promise<boolean> {
     try {
-      await this.waitTimesQueue.client.ping();
+      await this.redis.ping();
       return true;
     } catch {
       return false;
     }
   }
 }
+
