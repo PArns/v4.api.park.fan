@@ -6,6 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { HolidaysService } from "./holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { HolidayResponseDto } from "./dto/holiday-response.dto";
@@ -20,6 +21,7 @@ import { HolidayItemDto } from "./dto/holiday-item.dto";
  * - GET /holidays - Query holidays by country and date range
  * - GET /parks/:slug/holidays - Get holidays for a specific park's country
  */
+@ApiTags("holidays")
 @Controller()
 export class HolidaysController {
   constructor(

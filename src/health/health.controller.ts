@@ -1,4 +1,5 @@
 import { Controller, Get } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
 import { Connection, Repository, MoreThanOrEqual } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -40,6 +41,7 @@ interface HealthStatus {
   };
 }
 
+@ApiTags("health")
 @Controller("health")
 export class HealthController {
   constructor(
@@ -53,7 +55,7 @@ export class HealthController {
     @InjectRepository(MLModel)
     private mlModelRepository: Repository<MLModel>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   @Get()
   async getHealth(): Promise<HealthStatus> {
@@ -120,7 +122,9 @@ export class HealthController {
             parks: latestParkUpdate.toISOString(),
           }),
         },
-        ...(dataAgeMinutes !== undefined && { data_age_minutes: dataAgeMinutes }),
+        ...(dataAgeMinutes !== undefined && {
+          data_age_minutes: dataAgeMinutes,
+        }),
       },
     };
   }
@@ -196,4 +200,3 @@ export class HealthController {
     }
   }
 }
-

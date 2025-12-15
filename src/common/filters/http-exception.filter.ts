@@ -54,7 +54,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     } else {
       // Client errors (4xx) - log as warning
       this.logger.warn(
-        `${request.method} ${request.url} - Status: ${status} - Message: ${Array.isArray(message) ? message.join(", ") : message
+        `${request.method} ${request.url} - Status: ${status} - Message: ${
+          Array.isArray(message) ? message.join(", ") : message
         }`,
       );
     }
@@ -76,4 +77,3 @@ export class HttpExceptionFilter implements ExceptionFilter {
     response.status(status).json(errorResponse);
   }
 }
-

@@ -7,7 +7,7 @@ import {
   AttractionPercentilesDto,
 } from "./dto";
 
-@ApiTags("Analytics")
+@ApiTags("stats")
 @Controller("analytics")
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}

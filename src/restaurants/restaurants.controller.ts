@@ -5,6 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { RestaurantsService } from "./restaurants.service";
 import {
   RestaurantResponseDto,
@@ -21,6 +22,7 @@ import { RestaurantQueryDto } from "./dto/restaurant-query.dto";
  * - GET /restaurants - List all restaurants
  * - GET /restaurants/:slug - Get specific restaurant
  */
+@ApiTags("restaurants")
 @Controller("restaurants")
 export class RestaurantsController {
   constructor(private readonly restaurantsService: RestaurantsService) {}

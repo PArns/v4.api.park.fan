@@ -5,6 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { ShowsService } from "./shows.service";
 import { ShowResponseDto, ShowWithLiveDataDto } from "./dto/show-response.dto";
 import { ShowQueryDto } from "./dto/show-query.dto";
@@ -18,6 +19,7 @@ import { ShowQueryDto } from "./dto/show-query.dto";
  * - GET /shows - List all shows
  * - GET /shows/:slug - Get specific show
  */
+@ApiTags("shows")
 @Controller("shows")
 export class ShowsController {
   constructor(private readonly showsService: ShowsService) {}

@@ -55,4 +55,4 @@ ml-service/__pycache__/
 ml-service/catboost_info/
 
 *.md
-!readme.md
+!readme.md.env.production

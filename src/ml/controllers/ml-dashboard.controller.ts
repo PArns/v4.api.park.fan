@@ -20,6 +20,7 @@ import { MLDashboardDto } from "../dto/ml-dashboard.dto";
  * - Accuracy endpoints (system-wide, trends)
  */
 @ApiTags("ML Dashboard")
+@ApiTags("predictions")
 @Controller("ml")
 export class MLDashboardController {
   constructor(

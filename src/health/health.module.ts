@@ -12,9 +12,7 @@ import { MLModel } from "../ml/entities/ml-model.entity";
  * Provides health check endpoints with API statistics.
  */
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Park, Attraction, QueueData, MLModel]),
-  ],
+  imports: [TypeOrmModule.forFeature([Park, Attraction, QueueData, MLModel])],
   controllers: [HealthController],
 })
-export class HealthModule { }
+export class HealthModule {}

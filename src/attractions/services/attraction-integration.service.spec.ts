@@ -1,6 +1,5 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { AttractionIntegrationService } from "./attraction-integration.service";
-import { Attraction } from "../entities/attraction.entity";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";

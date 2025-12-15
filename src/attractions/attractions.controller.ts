@@ -5,6 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { AttractionsService } from "./attractions.service";
 import { AttractionIntegrationService } from "./services/attraction-integration.service";
 import { AttractionResponseDto } from "./dto/attraction-response.dto";
@@ -22,6 +23,7 @@ import { AttractionQueryDto } from "./dto/attraction-query.dto";
  * - GET /attractions - List all attractions
  * - GET /attractions/:slug - Get specific attraction (integrated with live data)
  */
+@ApiTags("attractions")
 @Controller("attractions")
 export class AttractionsController {
   constructor(

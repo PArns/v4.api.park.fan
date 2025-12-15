@@ -1,5 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
+import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
@@ -42,10 +43,30 @@ async function bootstrap(): Promise<void> {
   // API versioning prefix
   app.setGlobalPrefix("v1");
 
+  // Swagger/OpenAPI Documentation
+  const config = new DocumentBuilder()
+    .setTitle("park.fan API v4")
+    .setDescription(
+      "Theme park wait times, predictions, and statistics API powered by ThemeParks.wiki and Queue-Times.com data",
+    )
+    .setVersion("4.0.0")
+    .addTag("health", "Health and monitoring endpoints")
+    .addTag("parks", "Park information and management")
+    .addTag("attractions", "Attraction details and wait times")
+    .addTag("queue-data", "Historical wait time data")
+    .addTag("predictions", "ML-powered wait time predictions")
+    .addTag("stats", "Global and park statistics")
+    .addTag("admin", "Administrative operations")
+    .build();
+
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup("api", app, document);
+
   const port = process.env.PORT || 3000;
   await app.listen(port);
 
   console.log(`🚀 park.fan API v4 running on: http://localhost:${port}/v1`);
+  console.log(`📚 API Documentation: http://localhost:${port}/api`);
   console.log(`📊 Bull Board Dashboard: http://localhost:3001`);
   console.log(`🗄️  Database: PostgreSQL + TimescaleDB on port 5432`);
   console.log(`⚡ Redis: localhost:6379`);

@@ -7,6 +7,7 @@ import {
   BadRequestException,
   Inject,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
@@ -39,6 +40,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
  * - GET /parks - List all parks
  * - GET /parks/:slug - Get specific park with attractions
  */
+@ApiTags("parks")
 @Controller("parks")
 export class ParksController {
   private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes for real-time data

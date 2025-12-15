@@ -6,6 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { QueueDataService } from "./queue-data.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ParksService } from "../parks/parks.service";
@@ -26,6 +27,7 @@ import { ForecastData } from "./entities/forecast-data.entity";
  *
  * Handles endpoints for wait times, forecasts, and real-time status
  */
+@ApiTags("queue-data")
 @Controller()
 export class QueueDataController {
   constructor(

@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
 
 /**
@@ -15,6 +16,7 @@ import { PredictionAccuracyService } from "../services/prediction-accuracy.servi
  * - Building user trust with transparency
  * - Identifying which parks/attractions need model improvements
  */
+@ApiTags("predictions")
 @Controller("ml/accuracy")
 export class PredictionAccuracyController {
   constructor(private readonly accuracyService: PredictionAccuracyService) {}
