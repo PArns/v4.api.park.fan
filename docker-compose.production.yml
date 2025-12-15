@@ -45,7 +45,6 @@ services:
       DB_USER: ${DB_USERNAME:-parkfan}
       DB_PASSWORD: ${DB_PASSWORD}
       MODEL_DIR: ${MODEL_DIR:-/app/models}
-      MODEL_VERSION: ${MODEL_VERSION:-v1.0.0}
     volumes:
       - ml-models:/app/models
     depends_on:
