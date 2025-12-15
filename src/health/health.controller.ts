@@ -1,6 +1,6 @@
 import { Controller, Get } from "@nestjs/common";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
-import { Connection, Repository } from "typeorm";
+import { Connection, Repository, MoreThanOrEqual } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -90,7 +90,7 @@ export class HealthController {
     return {
       status: dbStatus === "connected" && redisStatus ? "ok" : "degraded",
       timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
+      uptime: Math.floor(process.uptime()),
       version: "4.0.0",
       services: {
         database: {
@@ -138,11 +138,12 @@ export class HealthController {
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const count = await this.queueDataRepository.count({
         where: {
-          timestamp: { $gte: yesterday } as any,
+          timestamp: MoreThanOrEqual(yesterday),
         },
       });
       return count;
-    } catch {
+    } catch (error) {
+      console.error("Error fetching wait times count:", error);
       return 0;
     }
   }
