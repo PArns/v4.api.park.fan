@@ -1,16 +1,47 @@
-# park.fan API v4
+<div align="center">
 
-Real-time theme park data aggregation API providing wait times, occupancy insights, and ML-ready analytics for optimizing park visits.
+# 🎢 park.fan API v4
 
-## Tech Stack
+**Real-time theme park intelligence powered by machine learning**
 
-- **Framework**: NestJS 10
-- **Database**: PostgreSQL 16 + TimescaleDB
-- **Cache/Queue**: Redis 7 + Bull Queue
-- **Language**: TypeScript (strict mode)
-- **Container**: Docker Compose
+[![NestJS](https://img.shields.io/badge/NestJS-11.0-E0234E?logo=nestjs&logoColor=white)](https://nestjs.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-## Quick Start
+*Aggregating wait times, weather forecasts, park schedules, and ML-powered predictions for optimal theme park experiences worldwide.*
+
+</div>
+
+---
+
+## ✨ Features
+
+- **🚀 Real-time Wait Times** — Live queue data for attractions, shows, and restaurants
+- **🤖 ML Predictions** — Machine learning forecasts for wait times and crowd levels
+- **🌤️ Weather Integration** — Current conditions and 16-day forecasts for all parks
+- **📅 Park Schedules** — Opening hours, special events, and operating calendars
+- **🌍 Multi-Source Data** — Aggregated from multiple providers for maximum coverage
+- **📊 Analytics Ready** — TimescaleDB-powered time-series data for insights
+- **⚡ High Performance** — Redis caching and Bull queue processing
+- **🎯 RESTful API** — Clean, intuitive endpoints with geographic routing
+
+---
+
+## 🛠️ Tech Stack
+
+| Category | Technology |
+|----------|-----------|
+| **Backend** | [NestJS 11](https://nestjs.com/) · TypeScript (strict mode) |
+| **Database** | [PostgreSQL 16](https://www.postgresql.org/) · [TimescaleDB](https://www.timescale.com/) |
+| **Cache & Queue** | [Redis 7](https://redis.io/) · [Bull Queue](https://github.com/OptimalBits/bull) |
+| **ML Service** | Python 3.11 · CatBoost · FastAPI |
+| **DevOps** | Docker Compose · GitHub Actions |
+| **Testing** | Jest · Supertest · Testcontainers |
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
@@ -21,82 +52,116 @@ Real-time theme park data aggregation API providing wait times, occupancy insigh
 ### Installation
 
 ```bash
-# 1. Install dependencies
+# Clone the repository
+git clone https://github.com/PArns/v4.api.park.fan.git
+cd v4.api.park.fan
+
+# Install dependencies
 npm install
 
-# 2. Copy environment file
+# Copy environment configuration
 cp .env.example .env
 
-# 3. Start infrastructure (PostgreSQL + Redis)
+# Start infrastructure (PostgreSQL + Redis)
 npm run docker:up
 
-# 4. Start development server
+# Start development server
 npm run dev
 ```
 
-The API will be available at:
+### Access Points
+
+Once running, you can access:
+
 - **API**: http://localhost:3000/v1
-- **Bull Board**: http://localhost:3001 (queue monitoring)
+- **Bull Board**: http://localhost:3001 (queue monitoring dashboard)
+- **API Docs**: http://localhost:3000/api (Swagger)
 
-## API Documentation
+---
 
-### Parks (`/v1/parks`)
+## 📚 API Documentation
 
-Core endpoints for park data, weather, schedules, and live wait times.
+### 🎡 Parks
 
-- **List All Parks**: `GET /v1/parks`
-  - Query params: `continent`, `country`, `city`, `sort`
-- **Park Details**: `GET /v1/parks/:slugOrContinent` (e.g., `europa-park`)
-- **Park by Location**: `GET /v1/parks/:continent/:country/:city/:parkSlug`
-- **Wait Times**: `GET /v1/parks/:slug/wait-times`
-  - Returns current wait times for all attractions.
-- **Weather**:
-  - Current & Range: `GET /v1/parks/:slug/weather`
-  - 16-Day Forecast: `GET /v1/parks/:slug/weather/forecast`
-- **Schedule**:
-  - Range: `GET /v1/parks/:slug/schedule`
-  - Specific Date: `GET /v1/parks/:slug/schedule/:date`
+Core endpoints for park information, weather, schedules, and wait times.
 
-### Attractions (`/v1/attractions`)
-
-Detailed attraction data including ML predictions and forecasts.
-
-- **List All**: `GET /v1/attractions`
-- **Details**: `GET /v1/attractions/:slug`
-  - Includes: Live Queue Data, Forecasts (24h), ML Predictions (Daily), Statistics.
-
-### Geographic Discovery
-
-- **Destinations**: `GET /v1/destinations` (Resorts like Disney World)
-- **Parks by City**: `GET /v1/parks/:continent/:country/:city`
-- **Parks by Country**: `GET /v1/parks/:continent/:country`
-
-### Shows & Restaurants
-
-- **Shows**:
-  - List: `GET /v1/shows`
-  - Details: `GET /v1/shows/:slug`
-- **Restaurants**:
-  - List: `GET /v1/restaurants`
-  - Details: `GET /v1/restaurants/:slug`
-
-## Project Structure
-
-```
-src/
-├── config/                 # Configuration
-├── common/                 # Shared utilities (filters, interceptors)
-├── queues/                 # Bull queue setup & processors
-├── destinations/           # Destinations module
-├── parks/                  # Parks module (weather, schedules)
-├── attractions/            # Attractions module
-├── shows/                  # Shows module
-├── restaurants/            # Restaurants module
-├── queue-data/             # Wait times & forecasting
-└── ml/                     # Machine Learning integration
+```http
+GET /v1/parks
+GET /v1/parks/:slug
+GET /v1/parks/:continent/:country/:city/:parkSlug
+GET /v1/parks/:slug/wait-times
+GET /v1/parks/:slug/weather
+GET /v1/parks/:slug/weather/forecast
+GET /v1/parks/:slug/schedule
+GET /v1/parks/:slug/schedule/:date
 ```
 
-## Docker Commands
+**Query Parameters:**
+- `continent`, `country`, `city` — Filter by location
+- `sort` — Sort order (name, popularity, etc.)
+
+### 🎢 Attractions
+
+Detailed attraction data with ML predictions and historical analytics.
+
+```http
+GET /v1/attractions
+GET /v1/attractions/:slug
+```
+
+**Response includes:**
+- Live wait times and status
+- 24-hour forecasts
+- Daily ML predictions
+- Historical statistics
+- Percentile data (P50, P75, P90, P95)
+
+### 🌍 Geographic Discovery
+
+Navigate parks by geographic hierarchy.
+
+```http
+GET /v1/destinations              # Resorts (e.g., Disney World, Disneyland Paris)
+GET /v1/parks/:continent
+GET /v1/parks/:continent/:country
+GET /v1/parks/:continent/:country/:city
+```
+
+### 🎭 Shows & Dining
+
+```http
+GET /v1/shows
+GET /v1/shows/:slug
+GET /v1/restaurants
+GET /v1/restaurants/:slug
+```
+
+---
+
+## 📁 Project Structure
+
+```
+v4.api.park.fan/
+├── src/
+│   ├── config/                    # App configuration
+│   ├── common/                    # Shared utilities, filters, interceptors
+│   ├── queues/                    # Bull queue setup & processors
+│   ├── destinations/              # Destinations module
+│   ├── parks/                     # Parks, weather, schedules
+│   ├── attractions/               # Attractions & integration services
+│   ├── shows/                     # Shows module
+│   ├── restaurants/               # Restaurants module
+│   ├── queue-data/                # Wait times & forecasting
+│   ├── ml/                        # ML integration
+│   └── analytics/                 # Analytics & statistics
+├── ml-service/                    # Python ML service
+├── docker/                        # Docker configurations
+└── scripts/                       # Utility scripts
+```
+
+---
+
+## 🐳 Docker Commands
 
 ```bash
 # Start all services
@@ -107,23 +172,85 @@ npm run docker:down
 
 # View logs
 npm run docker:logs
+
+# Reset database (WARNING: deletes all data)
+npm run db:reset
 ```
 
-## Environment Variables
+---
 
-See `.env.example` for all available configuration options.
+## 🧪 Testing
 
-Key variables:
-- `DB_SYNCHRONIZE=true`: Auto-sync schema (dev only!)
-- `DB_LOGGING=true`: Show SQL queries
-- `NODE_ENV=development`: Environment mode
+```bash
+# Run unit tests
+npm run test
 
-## Documentation References
+# Run e2e tests
+npm run test:e2e
 
-- [CLAUDE.md](./CLAUDE.md): Development guidelines & Implementation Status
-- [ML_TRAINING.md](./ML_TRAINING.md): ML Training guide & commands
-- [ThemeParks.wiki API Docs](https://api.themeparks.wiki/docs/v1/)
+# Run all tests with coverage
+npm run test:all:cov
 
-## License
+# Watch mode
+npm run test:watch
+```
 
-UNLICENSED - Private project
+---
+
+## 🔧 Environment Variables
+
+Key configuration options (see `.env.example` for complete list):
+
+```env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=parkfan
+DB_PASSWORD=parkfan
+DB_DATABASE=parkfan
+DB_SYNCHRONIZE=true              # ⚠️ Development only!
+DB_LOGGING=false
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Application
+NODE_ENV=development
+PORT=3000
+API_PREFIX=v1
+
+# External APIs
+OPEN_WEATHER_API_KEY=your_key_here
+```
+
+---
+
+## 🤝 Contributing
+
+This is a private project. For questions or collaboration inquiries, please contact the maintainer.
+
+---
+
+## 📄 License
+
+**UNLICENSED** — Private project by Patrick Arns [arns.dev](https://arns.dev/)
+
+---
+
+## 🙏 Powered By
+
+This project aggregates data from multiple sources:
+
+- **[Queue-Times.com](https://queue-times.com/)** — Real-time wait time data
+- **[ThemeParks.wiki](https://themeparks.wiki/)** — Comprehensive park information and live data
+
+Special thanks to these services for making real-time theme park data accessible.
+
+---
+
+<div align="center">
+
+Made with ❤️ for theme park enthusiasts worldwide
+
+</div>
