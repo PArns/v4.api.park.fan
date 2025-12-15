@@ -161,34 +161,6 @@ v4.api.park.fan/
 
 ---
 
-## 🚀 Deployment
-
-### Coolify (Docker Compose)
-
-This project is optimized for deployment on [Coolify](https://coolify.io/):
-
-```bash
-# All services are defined in docker-compose.production.yml
-# with persistent volumes for data retention across deployments
-```
-
-**Quick Setup:**
-1. Connect GitHub repository to Coolify  
-2. Set `docker-compose.production.yml` as compose file
-3. Upload `.env` file with your configuration
-4. Deploy!
-
-📖 **[Full Deployment Guide →](./DEPLOYMENT.md)**
-
-### Persistent Volumes
-
-Your data is automatically preserved across redeployments:
-- `pgdata` → PostgreSQL database
-- `redisdata` → Redis cache
-- `ml-models` → Trained ML models
-
----
-
 ---
 
 ## 🐳 Docker Commands
@@ -232,11 +204,16 @@ npm run test:watch
 Key configuration options (see `.env.example` for complete list):
 
 ```env
-# Database
+# Application
+NODE_ENV=development
+PORT=3000
+API_PREFIX=v1
+
+# Database - PostgreSQL with TimescaleDB
 DB_HOST=localhost
 DB_PORT=5432
 DB_USERNAME=parkfan
-DB_PASSWORD=parkfan
+DB_PASSWORD=your_secure_password
 DB_DATABASE=parkfan
 DB_SYNCHRONIZE=true              # ⚠️ Development only!
 DB_LOGGING=false
@@ -245,14 +222,19 @@ DB_LOGGING=false
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# Application
-NODE_ENV=development
-PORT=3000
-API_PREFIX=v1
+# Bull Queue
+BULL_PREFIX=parkfan
 
 # External APIs
-OPEN_WEATHER_API_KEY=your_key_here
+GOOGLE_API_KEY=your_google_api_key
+OPEN_WEATHER_API_KEY=your_openweather_key
+
+# ML Service (Production)
+ML_SERVICE_URL=http://ml-service:8000
+MODEL_DIR=/app/models
 ```
+
+**Note:** ML service uses hardcoded model version (`v1.1.0`) and fetches active model from database.
 
 ---
 

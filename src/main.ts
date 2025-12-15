@@ -53,14 +53,24 @@ async function bootstrap(): Promise<void> {
     .addTag("health", "Health and monitoring endpoints")
     .addTag("parks", "Park information and management")
     .addTag("attractions", "Attraction details and wait times")
-    .addTag("queue-data", "Historical wait time data")
-    .addTag("predictions", "ML-powered wait time predictions")
-    .addTag("stats", "Global and park statistics")
-    .addTag("admin", "Administrative operations")
+    .addTag("queue-data", "Queue and wait time history")
+    .addTag("predictions", "ML predictions and forecasts")
+    .addTag("stats", "Analytics and statistics")
+    .addTag("search", "Search functionality")
+    .addTag("destinations", "Destination/resort information")
+    .addTag("restaurants", "Restaurant information")
+    .addTag("shows", "Show schedules")
+    .addTag("holidays", "Holiday information")
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("api", app, document);
+
+  // Swagger UI options (cache headers handled by CacheControlInterceptor)
+  SwaggerModule.setup("api", app, document, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+  });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

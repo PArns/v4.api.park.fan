@@ -32,19 +32,23 @@ export class CacheControlInterceptor implements NestInterceptor {
   }
 
   private getCacheHeaderForPath(path: string, method: string): string | null {
-    // No cache for non-GET requests
+    // No caching for write operations
     if (method !== "GET") {
-      return "no-cache, no-store, must-revalidate";
+      return "no-store, no-cache, must-revalidate";
+    }
+
+    // Swagger/OpenAPI - cache the spec and UI assets
+    if (path.includes("/api") || path.includes("/api-json")) {
+      // Cache Swagger spec for 5 minutes, UI assets for 1 hour
+      if (path.includes("-json") || path.includes("swagger")) {
+        return "public, max-age=3600, s-maxage=3600"; // 1 hour for static assets
+      }
+      return "public, max-age=300, s-maxage=300"; // 5 minutes for API spec
     }
 
     // Health endpoints - minimal cache (2s) for monitoring
     if (path.includes("/health")) {
       return "public, max-age=2, s-maxage=2";
-    }
-
-    // Admin endpoints - no cache
-    if (path.includes("/admin")) {
-      return "no-cache, no-store, must-revalidate";
     }
 
     // Parks - moderate cache (5 min)
