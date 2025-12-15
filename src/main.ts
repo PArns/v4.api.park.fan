@@ -4,6 +4,7 @@ import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
+import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
@@ -27,6 +28,7 @@ async function bootstrap(): Promise<void> {
 
   // Global interceptors
   app.useGlobalInterceptors(
+    new CacheControlInterceptor(), // Cloudflare caching
     new LoggingInterceptor(),
     new ExcludeNullInterceptor(), // Remove null values (disable with ?debug=true)
   );

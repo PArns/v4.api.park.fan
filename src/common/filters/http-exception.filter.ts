@@ -10,19 +10,14 @@ import { Request, Response } from "express";
 
 /**
  * Global exception filter for consistent error responses.
- *
- * Formats all errors as:
- * {
- *   statusCode: number,
- *   timestamp: string,
- *   path: string,
- *   message: string | string[],
- *   error?: string
- * }
+ * - Hides stack traces in production
+ * - Provides clean, helpful error messages
+ * - Maintains detailed logging for debugging
  */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
+  private readonly isProduction = process.env.NODE_ENV === "production";
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
@@ -49,21 +44,36 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error = exception.name;
     }
 
-    // Log error
-    this.logger.error(
-      `${request.method} ${request.url} - Status: ${status} - Message: ${
-        Array.isArray(message) ? message.join(", ") : message
-      }`,
-      exception instanceof Error ? exception.stack : undefined,
-    );
+    // Log full error details (including stack) for debugging
+    if (status >= 500) {
+      // Server errors - log with full stack trace
+      this.logger.error(
+        `${request.method} ${request.url} - Status: ${status}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+    } else {
+      // Client errors (4xx) - log as warning
+      this.logger.warn(
+        `${request.method} ${request.url} - Status: ${status} - Message: ${Array.isArray(message) ? message.join(", ") : message
+        }`,
+      );
+    }
 
-    // Send response
-    response.status(status).json({
+    // Build response
+    const errorResponse: any = {
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
       message,
       ...(error && { error }),
-    });
+    };
+
+    // Only include stack trace in development
+    if (!this.isProduction && exception instanceof Error) {
+      errorResponse.stack = exception.stack;
+    }
+
+    response.status(status).json(errorResponse);
   }
 }
+
