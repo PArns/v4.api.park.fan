@@ -107,10 +107,22 @@ services:
 volumes:
   pgdata:
     driver: local
+    driver_opts:
+      type: none
+      device: /data/parkfan/postgres
+      o: bind
   redisdata:
     driver: local
+    driver_opts:
+      type: none
+      device: /data/parkfan/redis
+      o: bind
   ml-models:
     driver: local
+    driver_opts:
+      type: none
+      device: /data/parkfan/ml-models
+      o: bind
 
 networks:
   parkfan-network:
