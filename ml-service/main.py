@@ -195,7 +195,6 @@ async def train_model_endpoint(request: TrainRequest):
     # Generate version if not provided
     version = request.version
     if not version:
-        from datetime import datetime
         now = datetime.utcnow()
         version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
     
