@@ -113,13 +113,20 @@ export class ParkIntegrationService {
         this.mlService.getParkPredictions(park.id, "daily"),
       ]);
 
-      // Filter hourly for TODAY only
-      const todayStr = new Date().toISOString().split("T")[0];
+      // Filter hourly predictions:
+      // - If park OPERATING: Show today's hourly predictions
+      // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
+      const targetDateStr =
+        dto.status === "OPERATING"
+          ? new Date().toISOString().split("T")[0] // Today
+          : new Date(Date.now() + 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split("T")[0]; // Tomorrow
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
-          // Check if prediction is for today
-          if (p.predictedTime.startsWith(todayStr)) {
+          // Check if prediction is for target date
+          if (p.predictedTime.startsWith(targetDateStr)) {
             if (!hourlyPredictions[p.attractionId])
               hourlyPredictions[p.attractionId] = [];
             hourlyPredictions[p.attractionId].push(p);
@@ -303,47 +310,82 @@ export class ParkIntegrationService {
 
     // Fetch current status for shows
     if (park.shows && park.shows.length > 0) {
+      const showLiveData = await Promise.all(
+        park.shows.map((show) =>
+          this.showsService.findCurrentStatusByShow(show.id),
+        ),
+      );
+      const showLiveDataMap = new Map(
+        park.shows.map((show, index) => [show.id, showLiveData[index]]),
+      );
+
       for (const show of dto.shows || []) {
-        const liveData = await this.showsService.findCurrentStatusByShow(
-          show.id,
-        );
+        const liveData = showLiveDataMap.get(show.id);
         if (liveData) {
-          show.status = liveData.status;
-          show.showtimes = liveData.showtimes || [];
+          // Keep operatingHours always (general schedule info)
           show.operatingHours = liveData.operatingHours || [];
-          show.lastUpdated = liveData.lastUpdated
-            ? liveData.lastUpdated.toISOString()
-            : new Date().toISOString();
+
+          // Only show live showtimes if park is OPERATING
+          if (dto.status === "OPERATING") {
+            show.showtimes = liveData.showtimes || [];
+            show.status = liveData.status;
+            show.lastUpdated = liveData.lastUpdated?.toISOString();
+          } else {
+            // Park closed - no live showtimes, but keep schedule
+            show.showtimes = [];
+            show.status = "CLOSED";
+            show.lastUpdated = undefined;
+          }
         } else {
-          show.status = "CLOSED";
+          // No live data available
           show.showtimes = [];
           show.operatingHours = [];
-          show.lastUpdated = new Date().toISOString();
+          show.status = undefined;
+          show.lastUpdated = undefined;
         }
       }
     }
 
     // Fetch current status for restaurants
     if (park.restaurants && park.restaurants.length > 0) {
+      const restaurantLiveData = await Promise.all(
+        park.restaurants.map((restaurant) =>
+          this.restaurantsService.findCurrentStatusByRestaurant(restaurant.id),
+        ),
+      );
+      const restaurantLiveDataMap = new Map(
+        park.restaurants.map((restaurant, index) => [
+          restaurant.id,
+          restaurantLiveData[index],
+        ]),
+      );
+
       for (const restaurant of dto.restaurants || []) {
-        const liveData =
-          await this.restaurantsService.findCurrentStatusByRestaurant(
-            restaurant.id,
-          );
+        const liveData = restaurantLiveDataMap.get(restaurant.id);
         if (liveData) {
-          restaurant.status = liveData.status;
-          restaurant.waitTime = liveData.waitTime ?? null;
-          restaurant.partySize = liveData.partySize ?? null;
+          // Keep operatingHours always (general schedule info)
           restaurant.operatingHours = liveData.operatingHours || [];
-          restaurant.lastUpdated = liveData.lastUpdated
-            ? liveData.lastUpdated.toISOString()
-            : new Date().toISOString();
+
+          // Only show live data if park is OPERATING
+          if (dto.status === "OPERATING") {
+            restaurant.status = liveData.status;
+            restaurant.waitTime = liveData.waitTime;
+            restaurant.partySize = liveData.partySize;
+            restaurant.lastUpdated = liveData.lastUpdated?.toISOString();
+          } else {
+            // Park closed - no live data, but keep schedule
+            restaurant.status = "CLOSED";
+            restaurant.waitTime = null;
+            restaurant.partySize = null;
+            restaurant.lastUpdated = undefined;
+          }
         } else {
-          restaurant.status = "CLOSED";
+          // No live data available
+          restaurant.operatingHours = [];
+          restaurant.status = undefined;
           restaurant.waitTime = null;
           restaurant.partySize = null;
-          restaurant.operatingHours = [];
-          restaurant.lastUpdated = new Date().toISOString();
+          restaurant.lastUpdated = undefined;
         }
       }
     }
@@ -386,33 +428,72 @@ export class ParkIntegrationService {
         dto.analytics = null;
       }
     } else {
-      // Park is CLOSED - return zeroed analytics with correct operatingAttractions count
-      dto.analytics = {
-        occupancy: {
-          current: 0,
-          trend: "stable",
-          comparedToTypical: 0,
-          comparisonStatus: "typical",
-          baseline90thPercentile: 0,
-          updatedAt: new Date().toISOString(),
-          breakdown: {
-            currentAvgWait: 0,
-            typicalAvgWait: 0,
-            activeAttractions: 0,
+      // Park is CLOSED - Fetch today's historical analytics but with zeroed live values
+      try {
+        const [statistics, percentiles] = await Promise.all([
+          this.analyticsService.getParkStatistics(park.id),
+          this.analyticsService.getParkPercentilesToday(park.id),
+        ]);
+
+        dto.analytics = {
+          occupancy: {
+            current: 0, // No current occupancy
+            trend: "stable",
+            comparedToTypical: 0,
+            comparisonStatus: "typical",
+            baseline90thPercentile: 0,
+            updatedAt: new Date().toISOString(),
+            breakdown: {
+              currentAvgWait: 0,
+              typicalAvgWait: 0,
+              activeAttractions: 0,
+            },
           },
-        },
-        statistics: {
-          avgWaitTime: 0,
-          avgWaitToday: 0, // Could fetch historical if needed
-          peakHour: null,
-          crowdLevel: "very_low",
-          totalAttractions: totalAttractionsCount,
-          operatingAttractions: 0, // KEY FIX: Should be 0 when closed
-          closedAttractions: totalAttractionsCount,
-          timestamp: new Date().toISOString(),
-        },
-        percentiles: undefined,
-      };
+          statistics: {
+            avgWaitTime: 0, // No current wait
+            avgWaitToday: statistics.avgWaitToday || 0, // Historical from when park was open today
+            peakHour: statistics.peakHour || null, // Historical peak hour
+            crowdLevel: "very_low", // Currently very low (closed)
+            totalAttractions: totalAttractionsCount,
+            operatingAttractions: 0,
+            closedAttractions: totalAttractionsCount,
+            timestamp: new Date().toISOString(),
+          },
+          percentiles: percentiles || undefined, // Historical percentiles for planning
+        };
+      } catch (error) {
+        this.logger.error(
+          "Failed to fetch historical analytics for closed park:",
+          error,
+        );
+        // Fallback to fully zeroed if error
+        dto.analytics = {
+          occupancy: {
+            current: 0,
+            trend: "stable",
+            comparedToTypical: 0,
+            comparisonStatus: "typical",
+            baseline90thPercentile: 0,
+            updatedAt: new Date().toISOString(),
+            breakdown: {
+              currentAvgWait: 0,
+              typicalAvgWait: 0,
+              activeAttractions: 0,
+            },
+          },
+          statistics: {
+            avgWaitTime: 0,
+            avgWaitToday: 0,
+            peakHour: null,
+            crowdLevel: "very_low",
+            totalAttractions: totalAttractionsCount,
+            operatingAttractions: 0,
+            closedAttractions: totalAttractionsCount,
+            timestamp: new Date().toISOString(),
+          },
+          percentiles: undefined,
+        };
+      }
     }
 
     // Cache the complete response (5 minutes for real-time data freshness)
