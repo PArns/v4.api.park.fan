@@ -394,15 +394,22 @@ export class WaitTimesProcessor {
               }
             }
 
-            // Mark each show as CLOSED
+            // Mark each show as CLOSED (but preserve operatingHours)
             for (const show of parkShows) {
               try {
+                // Fetch last known live data to preserve operatingHours
+                const lastLiveData =
+                  await this.showsService.findCurrentStatusByShow(show.id);
+
                 const closedData: EntityLiveResponse = {
                   id: show.externalId,
                   name: show.name,
                   entityType: EntityType.SHOW,
                   status: LiveStatus.CLOSED,
                   lastUpdated: new Date().toISOString(),
+                  // Preserve operatingHours from last known data (if available)
+                  showtimes: [], // Clear live showtimes
+                  operatingHours: lastLiveData?.operatingHours || [],
                 };
 
                 const savedCount = await this.showsService.saveShowLiveData(
@@ -420,15 +427,24 @@ export class WaitTimesProcessor {
               }
             }
 
-            // Mark each restaurant as CLOSED
+            // Mark each restaurant as CLOSED (but preserve operatingHours)
             for (const restaurant of parkRestaurants) {
               try {
+                // Fetch last known live data to preserve operatingHours
+                const lastLiveData =
+                  await this.restaurantsService.findCurrentStatusByRestaurant(
+                    restaurant.id,
+                  );
+
                 const closedData: EntityLiveResponse = {
                   id: restaurant.externalId,
                   name: restaurant.name,
                   entityType: EntityType.RESTAURANT,
                   status: LiveStatus.CLOSED,
                   lastUpdated: new Date().toISOString(),
+                  // Preserve operatingHours from last known data (if available)
+                  diningAvailability: undefined, // Clear live dining data
+                  operatingHours: lastLiveData?.operatingHours || [],
                 };
 
                 const savedCount =
