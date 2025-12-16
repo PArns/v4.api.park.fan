@@ -107,6 +107,7 @@ async function bootstrap(): Promise<void> {
 
   // Swagger UI options (cache headers handled by CacheControlInterceptor)
   SwaggerModule.setup("api", app, document, {
+    customSiteTitle: "park.fan API Documentation",
     swaggerOptions: {
       persistAuthorization: true,
     },
