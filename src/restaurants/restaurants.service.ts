@@ -22,7 +22,7 @@ export class RestaurantsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -469,9 +469,9 @@ export class RestaurantsService {
     return result;
   }
   /**
- * Find last known OPERATING status for all restaurants in a park
- * Used to recover operatingHours when park is closed
- */
+   * Find last known OPERATING status for all restaurants in a park
+   * Used to recover operatingHours when park is closed
+   */
   async findLastKnownOperatingStatusByPark(
     parkId: string,
   ): Promise<Map<string, RestaurantLiveData>> {

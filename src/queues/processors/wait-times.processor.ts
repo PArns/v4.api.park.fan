@@ -59,7 +59,7 @@ export class WaitTimesProcessor {
     private restaurantsService: RestaurantsService,
     private queueDataService: QueueDataService,
     private readonly orchestrator: MultiSourceOrchestrator,
-  ) { }
+  ) {}
 
   @Process("fetch-wait-times")
   async handleSyncWaitTimes(_job: Job): Promise<void> {
@@ -372,7 +372,9 @@ export class WaitTimesProcessor {
                 where: { parkId: park.id },
               }),
               this.showsService.findLastKnownOperatingStatusByPark(park.id),
-              this.restaurantsService.findLastKnownOperatingStatusByPark(park.id),
+              this.restaurantsService.findLastKnownOperatingStatusByPark(
+                park.id,
+              ),
             ]);
 
             // Mark each attraction as CLOSED
@@ -476,8 +478,8 @@ export class WaitTimesProcessor {
             const percent = Math.round(((parkIdx + 1) / totalParks) * 100);
             this.logger.log(
               `Progress: ${parkIdx + 1}/${totalParks} (${percent}%) - ` +
-              `${openParksCount} open, ${closedParksCount} closed - ` +
-              `${totalAttractions} attractions processed`,
+                `${openParksCount} open, ${closedParksCount} closed - ` +
+                `${totalAttractions} attractions processed`,
             );
           }
         } catch (error) {
@@ -505,9 +507,10 @@ export class WaitTimesProcessor {
         `🔄 Updated: ${savedAttractions} attractions, ${savedShows} shows, ${savedRestaurants} restaurants (delta-based)`,
       );
       this.logger.log(
-        `📡 Sources: ${Object.entries(sourceStats)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(", ") || "none"
+        `📡 Sources: ${
+          Object.entries(sourceStats)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ") || "none"
         }`,
       );
     } catch (error) {

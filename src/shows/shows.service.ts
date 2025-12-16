@@ -25,7 +25,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -487,9 +487,9 @@ export class ShowsService {
     return result;
   }
   /**
- * Find last known OPERATING status for all shows in a park
- * Used to recover showtimes when park is closed
- */
+   * Find last known OPERATING status for all shows in a park
+   * Used to recover showtimes when park is closed
+   */
   async findLastKnownOperatingStatusByPark(
     parkId: string,
   ): Promise<Map<string, ShowLiveData>> {
