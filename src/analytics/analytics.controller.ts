@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from "@nestjs/common";
+import { Controller, Get, Param, UseInterceptors } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from "@nestjs/swagger";
 import { AnalyticsService } from "./analytics.service";
 import {
@@ -6,6 +6,7 @@ import {
   ParkPercentilesDto,
   AttractionPercentilesDto,
 } from "./dto";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 @ApiTags("stats")
 @Controller("analytics")
@@ -13,6 +14,7 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("realtime")
+  @UseInterceptors(new HttpCacheInterceptor(3 * 60)) // 3 minutes (queue data updates every 5min)
   @ApiOperation({ summary: "Get global platform statistics" })
   @ApiResponse({
     status: 200,
@@ -24,6 +26,7 @@ export class AnalyticsController {
   }
 
   @Get("parks/:parkId/percentiles")
+  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours (percentiles update daily)
   @ApiOperation({ summary: "Get complete percentile distribution for a park" })
   @ApiParam({ name: "parkId", description: "Park ID" })
   @ApiResponse({
@@ -40,6 +43,7 @@ export class AnalyticsController {
   }
 
   @Get("attractions/:attractionId/percentiles")
+  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours (percentiles update daily)
   @ApiOperation({
     summary: "Get complete percentile distribution for an attraction",
   })

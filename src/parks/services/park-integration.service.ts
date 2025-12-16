@@ -30,7 +30,17 @@ import { toZonedTime } from "date-fns-tz";
 @Injectable()
 export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes for real-time data
+
+  // Multi-tier caching strategy aligned with actual update frequencies
+  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 3 * 60; // 3 minutes (queue data updates every 5min)
+  private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
+  private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
+  private readonly TTL_ML_HOURLY = 60 * 60; // 1 hour (hourly predictions update at :15)
+  private readonly TTL_WEATHER_FORECAST = 6 * 60 * 60; // 6 hours (forecast updates every 12h)
+  private readonly TTL_WEATHER_CURRENT = 6 * 60 * 60; // 6 hours (current updates every 12h)
+  private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
+  private readonly TTL_QUEUE_DATA = 3 * 60; // 3 minutes (updates every 5min, cache slightly less)
+  private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
 
   constructor(
     private readonly parksService: ParksService,
@@ -68,6 +78,17 @@ export class ParkIntegrationService {
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
+      // Implement stale-while-revalidate pattern
+      const ttl = await this.redis.ttl(cacheKey);
+      if (ttl < 60 && ttl > 0) {
+        // Cache expires in less than 1 minute, refresh in background
+        this.refreshCacheInBackground(park).catch((err) =>
+          this.logger.warn(
+            `Background cache refresh failed for ${park.slug}:`,
+            err,
+          ),
+        );
+      }
       return JSON.parse(cached);
     }
 
@@ -155,14 +176,15 @@ export class ParkIntegrationService {
     ) {
       // Only fetch live queue data if park is currently OPERATING
       if (dto.status === "OPERATING") {
+        // OPTIMIZED: Fetch queue data for all attractions in a single bulk query
+        const queueDataMap =
+          await this.queueDataService.findCurrentStatusByPark(park.id);
+
         for (const attraction of dto.attractions) {
           totalAttractionsCount++;
 
-          // Get current queue data for this attraction
-          const queueData =
-            await this.queueDataService.findCurrentStatusByAttraction(
-              attraction.id,
-            );
+          // Get current queue data for this attraction from the bulk result
+          const queueData = queueDataMap.get(attraction.id) || [];
 
           if (queueData.length > 0) {
             // Convert to DTOs (removed timestamp field)
@@ -496,15 +518,28 @@ export class ParkIntegrationService {
       }
     }
 
-    // Cache the complete response (5 minutes for real-time data freshness)
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(dto),
-      "EX",
-      this.TTL_INTEGRATED_RESPONSE,
-    );
+    // Cache the complete response with dynamic TTL based on park status
+    const ttl =
+      dto.status === "OPERATING"
+        ? this.TTL_INTEGRATED_RESPONSE_OPERATING
+        : this.TTL_INTEGRATED_RESPONSE_CLOSED;
+
+    await this.redis.set(cacheKey, JSON.stringify(dto), "EX", ttl);
 
     return dto;
+  }
+
+  /**
+   * Refresh cache in background (stale-while-revalidate pattern)
+   * This ensures users always get fast cached responses
+   */
+  private async refreshCacheInBackground(park: Park): Promise<void> {
+    // Clear the cache and rebuild
+    const cacheKey = `park:integrated:${park.id}`;
+    await this.redis.del(cacheKey);
+
+    // Rebuild will automatically cache the result
+    await this.buildIntegratedResponse(park);
   }
 
   /**

@@ -381,6 +381,47 @@ export class QueueDataService {
   }
 
   /**
+   * Find current status for all attractions in a park (bulk query optimization)
+   *
+   * This is a performance-optimized version that fetches queue data for all attractions
+   * in a single query instead of N queries (one per attraction).
+   *
+   * @param parkId - Park ID
+   * @returns Map of attractionId -> QueueData[] (current status for all queue types)
+   */
+  async findCurrentStatusByPark(
+    parkId: string,
+  ): Promise<Map<string, QueueData[]>> {
+    // Use a subquery to get the latest timestamp for each attraction+queueType combination
+    const queueData = await this.queueDataRepository
+      .createQueryBuilder("qd")
+      .innerJoin("qd.attraction", "attraction")
+      .where("attraction.parkId = :parkId", { parkId })
+      .andWhere(
+        `qd.timestamp = (
+          SELECT MAX(qd2.timestamp)
+          FROM queue_data qd2
+          WHERE qd2."attractionId" = qd."attractionId"
+            AND qd2."queueType" = qd."queueType"
+        )`,
+      )
+      .orderBy("qd.attractionId", "ASC")
+      .addOrderBy("qd.queueType", "ASC")
+      .getMany();
+
+    // Group by attractionId
+    const result = new Map<string, QueueData[]>();
+    for (const data of queueData) {
+      if (!result.has(data.attractionId)) {
+        result.set(data.attractionId, []);
+      }
+      result.get(data.attractionId)!.push(data);
+    }
+
+    return result;
+  }
+
+  /**
    * Find forecasts for an attraction
    *
    * @param attractionId - Attraction ID

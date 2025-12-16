@@ -36,7 +36,12 @@ services:
       retries: 5
     networks:
       - parkfan-network
-    command: redis-server --appendonly yes
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save ""
 
   bull-board:
     image: venatum/bull-board:latest

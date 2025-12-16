@@ -6,6 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
   Inject,
+  UseInterceptors,
 } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
@@ -30,6 +31,7 @@ import { AttractionResponseDto } from "../attractions/dto/attraction-response.dt
 import { Park } from "./entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 /**
  * Parks Controller
@@ -143,6 +145,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":slug/weather/forecast")
+  @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache (weather updates every 12h)
   async getWeatherForecast(
     @Param("slug") slug: string,
   ): Promise<WeatherResponseDto> {
@@ -191,6 +194,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":slug/weather")
+  @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache
   async getWeather(
     @Param("slug") slug: string,
     @Query("from") from?: string,
@@ -261,6 +265,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":slug/schedule/:date")
+  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache (schedule updates daily)
   async getScheduleForDate(
     @Param("slug") slug: string,
     @Param("date") date: string,
@@ -311,6 +316,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":slug/schedule")
+  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache
   async getSchedule(
     @Param("slug") slug: string,
     @Query("from") from?: string,
@@ -651,6 +657,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
   async getParkByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -737,6 +744,7 @@ export class ParksController {
    * @throws NotFoundException if neither park nor continent found
    */
   @Get(":slugOrContinent")
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
   async findOneOrContinent(
     @Param("slugOrContinent") slugOrContinent: string,
   ): Promise<ParkWithAttractionsDto | ParkResponseDto[]> {
