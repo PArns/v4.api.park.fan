@@ -8,6 +8,7 @@ import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
+import * as packageJson from "../package.json";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -58,18 +59,48 @@ async function bootstrap(): Promise<void> {
     .setDescription(
       "Theme park wait times, predictions, and statistics API powered by ThemeParks.wiki and Queue-Times.com data",
     )
-    .setVersion("4.0.0")
-    .addTag("health", "Health and monitoring endpoints")
-    .addTag("parks", "Park information and management")
-    .addTag("attractions", "Attraction details and wait times")
-    .addTag("queue-data", "Queue and wait time history")
-    .addTag("predictions", "ML predictions and forecasts")
-    .addTag("stats", "Analytics and statistics")
-    .addTag("search", "Search functionality")
-    .addTag("destinations", "Destination/resort information")
-    .addTag("restaurants", "Restaurant information")
-    .addTag("shows", "Show schedules")
-    .addTag("holidays", "Holiday information")
+    .setVersion(packageJson.version)
+    .addTag(
+      "health",
+      "System health checks, database connectivity status, and application monitoring endpoints",
+    )
+    .addTag(
+      "parks",
+      "Core park data, including operating hours, metadata, and geographic details",
+    )
+    .addTag(
+      "attractions",
+      "Detailed attraction information, live status, and wait time data",
+    )
+    .addTag(
+      "queue-data",
+      "Historical wait time data, queue performance metrics, and ride availability history",
+    )
+    .addTag(
+      "predictions",
+      "Machine learning-powered crowd predictions and wait time forecasts",
+    )
+    .addTag(
+      "stats",
+      "Park-wide analytics, crowd level statistics, and historical performance metrics",
+    )
+    .addTag(
+      "search",
+      "Global search capabilities for finding parks, attractions, and resorts",
+    )
+    .addTag(
+      "destinations",
+      "Resort-level destination data, grouping multiple parks and amenities",
+    )
+    .addTag("restaurants", "Dining options, menus, and operating hours")
+    .addTag(
+      "shows",
+      "Live entertainment schedules, showtimes, and performance details",
+    )
+    .addTag(
+      "holidays",
+      "Public holiday data affecting park crowds and operating hours",
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
