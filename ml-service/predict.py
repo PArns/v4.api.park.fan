@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from model import WaitTimeModel
 from features import engineer_features, get_feature_columns
+from percentile_features import add_percentile_features
 from db import fetch_parks_metadata, get_db, fetch_holidays
 from config import get_settings
 
@@ -468,6 +469,9 @@ def create_prediction_features(
                 
                 # Also, we might want to blend the "rolling_avg_7d" with current reality?
                 # For now, just overriding avg_wait_last_1h is the strongest signal.
+                
+    # Add percentile features (Weather extremes)
+    df = add_percentile_features(df)
 
     return df
 

@@ -53,7 +53,7 @@ export class ParkIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -141,8 +141,8 @@ export class ParkIntegrationService {
         dto.status === "OPERATING"
           ? new Date().toISOString().split("T")[0] // Today
           : new Date(Date.now() + 24 * 60 * 60 * 1000)
-              .toISOString()
-              .split("T")[0]; // Tomorrow
+            .toISOString()
+            .split("T")[0]; // Tomorrow
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
@@ -450,12 +450,24 @@ export class ParkIntegrationService {
         dto.analytics = null;
       }
     } else {
-      // Park is CLOSED - Fetch today's historical analytics but with zeroed live values
+      // Park is CLOSED - Fetch today's historical analytics and provide "Typical" values for context
       try {
         const [statistics, percentiles] = await Promise.all([
           this.analyticsService.getParkStatistics(park.id),
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
+
+        // Get typical rating for "right now" even if closed, to show what it would be like
+        const hour = new Date().getHours();
+        const day = new Date().getDay();
+        const p90Park = await this.analyticsService.get90thPercentileOneYear(
+          park.id,
+          hour,
+          day,
+          "park",
+        );
+        // Note: We don't have a "current" wait, so we can't calculate a rating. 
+        // But we can populate baseline90thPercentile to show "Typical Wait: X min"
 
         dto.analytics = {
           occupancy: {
@@ -463,11 +475,11 @@ export class ParkIntegrationService {
             trend: "stable",
             comparedToTypical: 0,
             comparisonStatus: "typical",
-            baseline90thPercentile: 0,
+            baseline90thPercentile: p90Park || 0, // Show typical wait for this time
             updatedAt: new Date().toISOString(),
             breakdown: {
               currentAvgWait: 0,
-              typicalAvgWait: 0,
+              typicalAvgWait: p90Park || 0, // Use p90 as proxy for typical
               activeAttractions: 0,
             },
           },
