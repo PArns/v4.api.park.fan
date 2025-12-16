@@ -23,10 +23,18 @@ interface HealthStatus {
     redis: {
       status: "connected" | "disconnected";
     };
-    ml?: {
-      status: "ready" | "not_ready";
-      version?: string;
-      trained_at?: string;
+    ml: {
+      status: "ready" | "not_ready" | "unhealthy";
+      active_model?: {
+        version: string;
+        trained_at: string;
+        metrics?: {
+          mae: number;
+          rmse: number;
+        };
+      };
+      predictions_24h?: number;
+      service_url?: string;
     };
   };
   data: {
@@ -55,7 +63,7 @@ export class HealthController {
     @InjectRepository(MLModel)
     private mlModelRepository: Repository<MLModel>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   @Get()
   async getHealth(): Promise<HealthStatus> {
@@ -68,6 +76,7 @@ export class HealthController {
       parksCount,
       attractionsCount,
       waitTimes24h,
+      predictions24h,
       latestWaitTime,
       latestParkUpdate,
       activeModel,
@@ -76,6 +85,7 @@ export class HealthController {
       this.parkRepository.count(),
       this.attractionRepository.count(),
       this.getWaitTimesCount24h(),
+      this.getPredictionsCount24h(),
       this.getLatestWaitTime(),
       this.getLatestParkUpdate(),
       this.getActiveMLModel(),
@@ -88,6 +98,26 @@ export class HealthController {
       const ageMs = Date.now() - latestWaitTime.getTime();
       dataAgeMinutes = Math.round(ageMs / 60000); // Convert to minutes
     }
+
+    // Build ML status
+    const mlStatus = {
+      status: activeModel ? ("ready" as const) : ("not_ready" as const),
+      ...(activeModel && {
+        active_model: {
+          version: activeModel.version,
+          trained_at: activeModel.trainedAt?.toISOString() || "",
+          ...(activeModel.mae !== undefined &&
+            activeModel.rmse !== undefined && {
+            metrics: {
+              mae: activeModel.mae,
+              rmse: activeModel.rmse,
+            },
+          }),
+        },
+      }),
+      ...(predictions24h > 0 && { predictions_24h: predictions24h }),
+      service_url: process.env.ML_SERVICE_URL || "http://ml-service:8000",
+    };
 
     return {
       status: dbStatus === "connected" && redisStatus ? "ok" : "degraded",
@@ -102,13 +132,7 @@ export class HealthController {
         redis: {
           status: redisStatus ? "connected" : "disconnected",
         },
-        ...(activeModel && {
-          ml: {
-            status: "ready",
-            version: activeModel.version,
-            trained_at: activeModel.trainedAt?.toISOString(),
-          },
-        }),
+        ml: mlStatus,
       },
       data: {
         parks: parksCount,
@@ -179,15 +203,33 @@ export class HealthController {
   private async getActiveMLModel(): Promise<{
     version: string;
     trainedAt?: Date;
+    mae?: number;
+    rmse?: number;
   } | null> {
     try {
       const activeModel = await this.mlModelRepository.findOne({
         where: { isActive: true },
-        select: ["version", "trainedAt"],
+        select: ["version", "trainedAt", "mae", "rmse"],
       });
       return activeModel || null;
     } catch {
       return null;
+    }
+  }
+
+  private async getPredictionsCount24h(): Promise<number> {
+    try {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      // Query WaitTimePrediction table for predictions generated in last 24h
+      const count = await this.connection.query(
+        `SELECT COUNT(*) as count FROM wait_time_prediction 
+         WHERE "createdAt" >= $1`,
+        [yesterday],
+      );
+      return parseInt(count[0]?.count || "0", 10);
+    } catch (error) {
+      console.error("Error fetching predictions count:", error);
+      return 0;
     }
   }
 

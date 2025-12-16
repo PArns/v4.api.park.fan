@@ -6,6 +6,7 @@ import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
 import { PredictionAccuracyController } from "./controllers/prediction-accuracy.controller";
 import { MLDashboardController } from "./controllers/ml-dashboard.controller";
+import { MLHealthController } from "./controllers/ml-health.controller";
 import {
   WaitTimePrediction,
   MLModel,
@@ -37,7 +38,11 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
     MLModelService,
     MLDashboardService,
   ],
-  controllers: [PredictionAccuracyController, MLDashboardController],
+  controllers: [
+    PredictionAccuracyController,
+    MLDashboardController,
+    MLHealthController,
+  ],
   exports: [
     MLService,
     PredictionAccuracyService,
@@ -45,4 +50,4 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
     MLDashboardService,
   ],
 })
-export class MLModule {}
+export class MLModule { }
