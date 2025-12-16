@@ -228,6 +228,10 @@ export class HealthController {
       );
       return parseInt(count[0]?.count || "0", 10);
     } catch (error) {
+      // If table doesn't exist yet (first deployment), return 0
+      if (error instanceof Error && error.message?.includes('does not exist')) {
+        return 0;
+      }
       console.error("Error fetching predictions count:", error);
       return 0;
     }
