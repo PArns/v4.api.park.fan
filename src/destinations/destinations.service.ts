@@ -93,11 +93,21 @@ export class DestinationsService {
   /**
    * Finds all destinations
    */
-  async findAll(): Promise<Destination[]> {
-    return this.destinationRepository.find({
+  /**
+   * Finds all destinations with pagination
+   */
+  async findAll(
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{ data: Destination[]; total: number }> {
+    const [data, total] = await this.destinationRepository.findAndCount({
       relations: ["parks"],
       order: { name: "ASC" },
+      take: limit,
+      skip: (page - 1) * limit,
     });
+
+    return { data, total };
   }
 
   /**

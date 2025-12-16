@@ -227,12 +227,20 @@ export class AttractionsService {
    * @param parkId - Park ID (UUID)
    * @returns Array of attractions in this park
    */
-  async findByParkId(parkId: string): Promise<Attraction[]> {
-    return this.attractionRepository.find({
+  async findByParkId(
+    parkId: string,
+    page: number = 1,
+    limit: number = 50,
+  ): Promise<{ data: Attraction[]; total: number }> {
+    const [data, total] = await this.attractionRepository.findAndCount({
       where: { parkId },
       relations: ["park", "park.destination"],
       order: { name: "ASC" },
+      take: limit,
+      skip: (page - 1) * limit,
     });
+
+    return { data, total };
   }
 
   /**

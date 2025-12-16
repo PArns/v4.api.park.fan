@@ -1,8 +1,15 @@
-import { Controller, Get, Param, NotFoundException } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  NotFoundException,
+} from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { DestinationsService } from "./destinations.service";
 import { DestinationResponseDto } from "./dto/destination-response.dto";
 import { DestinationWithParksDto } from "./dto/destination-with-parks.dto";
+import { DestinationQueryDto } from "./dto/destination-query.dto";
 
 /**
  * Destinations Controller
@@ -22,22 +29,50 @@ export class DestinationsController {
    * GET /v1/destinations
    *
    * Returns all destinations (resort-level entities).
+   * Supports pagination.
    *
    * Example: Walt Disney World Resort, Disneyland Resort, etc.
    */
   @Get()
   @ApiOperation({
     summary: "List all destinations",
-    description: "Returns a list of all resort-level destinations.",
+    description: "Returns a paginated list of all resort-level destinations.",
   })
   @ApiResponse({
     status: 200,
     description: "List of destinations retrieved successfully",
-    type: [DestinationResponseDto],
+    type: DestinationResponseDto, // Swagger will not show pagination structure automatically without generic wrap detailed manual type, keeping simple for now
   })
-  async findAll(): Promise<DestinationResponseDto[]> {
-    const destinations = await this.destinationsService.findAll();
-    return destinations.map((dest) => DestinationResponseDto.fromEntity(dest));
+  async findAll(@Query() query: DestinationQueryDto): Promise<{
+    data: DestinationResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
+    const { page = 1, limit = 20 } = query;
+    const { data: destinations, total } =
+      await this.destinationsService.findAll(page, limit);
+
+    const mappedDestinations = destinations.map((dest) =>
+      DestinationResponseDto.fromEntity(dest),
+    );
+
+    return {
+      data: mappedDestinations,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrevious: page > 1,
+      },
+    };
   }
 
   /**

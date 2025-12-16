@@ -41,7 +41,10 @@ export class ParksService {
     this.logger.log("Syncing parks from ThemeParks.wiki...");
 
     // Ensure destinations are synced first
-    const destinations = await this.destinationsService.findAll();
+    const { data: destinations } = await this.destinationsService.findAll(
+      1,
+      1000,
+    );
 
     if (destinations.length === 0) {
       this.logger.warn("No destinations found. Syncing destinations first...");

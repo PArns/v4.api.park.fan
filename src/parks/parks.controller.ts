@@ -444,7 +444,8 @@ export class ParksController {
   @Get(":slug/attractions")
   @ApiOperation({
     summary: "List park attractions",
-    description: "Returns all attractions for a specific park.",
+    description:
+      "Returns a paginated list of all attractions for a specific park.",
   })
   @ApiResponse({
     status: 200,
@@ -455,19 +456,44 @@ export class ParksController {
   @ApiResponse({ status: 404, description: "Park not found" })
   async getAttractionsInPark(
     @Param("slug") slug: string,
-  ): Promise<AttractionResponseDto[]> {
+    @Query("page") page: number = 1,
+    @Query("limit") limit: number = 50,
+  ): Promise<{
+    data: AttractionResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
     const park = await this.parksService.findBySlug(slug);
 
     if (!park) {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Get all attractions for this park
-    const attractions = await this.attractionsService.findByParkId(park.id);
+    // Get paginated attractions for this park
+    const { data: attractions, total } =
+      await this.attractionsService.findByParkId(park.id, page, limit);
 
-    return attractions.map((attraction) =>
+    const mappedAttractions = attractions.map((attraction) =>
       AttractionResponseDto.fromEntity(attraction),
     );
+
+    return {
+      data: mappedAttractions,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrevious: page > 1,
+      },
+    };
   }
 
   /**
