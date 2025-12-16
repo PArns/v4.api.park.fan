@@ -24,7 +24,7 @@
 - **🌍 Multi-Source Data** — Aggregated from multiple providers for maximum coverage
 - **📊 Analytics Ready** — TimescaleDB-powered time-series data for insights
 - **⚡ High Performance** — Redis caching and Bull queue processing
-- **🎯 RESTful API** — Clean, intuitive endpoints with geographic routing
+- **🎯 RESTful API** — Clean endpoints with full Swagger/OpenAPI documentation
 
 ---
 
@@ -135,6 +135,17 @@ GET /v1/shows/:slug
 GET /v1/restaurants
 GET /v1/restaurants/:slug
 ```
+
+### ⚠️ Breaking Changes (v4.1)
+
+To improve semantic clarity, the following fields have been renamed:
+
+- `dates` → `crowdForecast` (Park Daily Predictions)
+- `predictions` → `hourlyForecast` (Attraction Hourly Predictions)
+- `currentLoad.rating` → `currentLoad.crowdLevel`
+- `currentLoad.current` → `currentLoad.currentWaitTime`
+
+Swagger documentation has been significantly updated. Please refer to `/api` for the latest schemas.
 
 ---
 
