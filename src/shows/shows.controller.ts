@@ -5,7 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { ShowsService } from "./shows.service";
 import { ShowResponseDto, ShowWithLiveDataDto } from "./dto/show-response.dto";
 import { ShowQueryDto } from "./dto/show-query.dto";
@@ -33,6 +33,16 @@ export class ShowsController {
    * @param query - Filter and sort options (park, duration range, sort, page, limit)
    */
   @Get()
+  @ApiOperation({
+    summary: "List shows",
+    description: "Returns a paginated list of all shows globally.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of shows",
+    type: ShowResponseDto,
+    isArray: true,
+  })
   async findAll(@Query() query: ShowQueryDto): Promise<{
     data: ShowResponseDto[];
     pagination: {
@@ -70,6 +80,16 @@ export class ShowsController {
    * @throws NotFoundException if show not found
    */
   @Get(":slug")
+  @ApiOperation({
+    summary: "Get show details",
+    description: "Returns details for a specific show.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Show details",
+    type: ShowWithLiveDataDto,
+  })
+  @ApiResponse({ status: 404, description: "Show not found" })
   async findOne(@Param("slug") slug: string): Promise<ShowWithLiveDataDto> {
     const show = await this.showsService.findBySlug(slug);
 
@@ -109,6 +129,12 @@ export class ShowsController {
    * @throws NotFoundException if show not found
    */
   @Get(":slug/showtimes")
+  @ApiOperation({
+    summary: "Get showtimes",
+    description: "Returns upcoming showtimes for a specific show.",
+  })
+  @ApiResponse({ status: 200, description: "Showtimes data" })
+  @ApiResponse({ status: 404, description: "Show not found" })
   async getShowtimes(@Param("slug") slug: string): Promise<any> {
     const show = await this.showsService.findBySlug(slug);
 

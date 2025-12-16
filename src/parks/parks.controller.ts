@@ -8,7 +8,7 @@ import {
   Inject,
   UseInterceptors,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
@@ -68,6 +68,17 @@ export class ParksController {
    * Now supports pagination with default limit of 10 items.
    */
   @Get()
+  @ApiOperation({
+    summary: "List all parks",
+    description:
+      "Returns a paginated list of all parks with status and analytics.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of parks",
+    type: ParkResponseDto,
+    isArray: true,
+  })
   async findAll(@Query() query: ParkQueryDto): Promise<{
     data: ParkResponseDto[];
     pagination: {
@@ -105,6 +116,10 @@ export class ParksController {
    * @returns Parks with incomplete geocoding data
    */
   @Get("debug/missing-geocode")
+  @ApiOperation({
+    summary: "List parks with missing geocode",
+    description: "Debug endpoint for identifying data issues.",
+  })
   async findParksWithMissingGeocode(): Promise<any[]> {
     const parks = await this.parksService.findAll();
 
@@ -146,6 +161,16 @@ export class ParksController {
    */
   @Get(":slug/weather/forecast")
   @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache (weather updates every 12h)
+  @ApiOperation({
+    summary: "Get weather forecast",
+    description: "Returns 16-day weather forecast.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Weather forecast",
+    type: WeatherResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getWeatherForecast(
     @Param("slug") slug: string,
   ): Promise<WeatherResponseDto> {
@@ -195,6 +220,16 @@ export class ParksController {
    */
   @Get(":slug/weather")
   @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache
+  @ApiOperation({
+    summary: "Get weather history/forecast",
+    description: "Returns weather data within a date range.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Weather data",
+    type: WeatherResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getWeather(
     @Param("slug") slug: string,
     @Query("from") from?: string,
@@ -266,6 +301,17 @@ export class ParksController {
    */
   @Get(":slug/schedule/:date")
   @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache (schedule updates daily)
+  @ApiOperation({
+    summary: "Get schedule for date",
+    description:
+      "Returns operating hours, shows, and parades for a specific date.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Schedule data",
+    type: ScheduleResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getScheduleForDate(
     @Param("slug") slug: string,
     @Param("date") date: string,
@@ -317,6 +363,17 @@ export class ParksController {
    */
   @Get(":slug/schedule")
   @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache
+  @ApiOperation({
+    summary: "Get schedule range",
+    description:
+      "Returns schedule data within a date range (default: 30 days).",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Schedule data",
+    type: ScheduleResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getSchedule(
     @Param("slug") slug: string,
     @Query("from") from?: string,
@@ -385,6 +442,17 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":slug/attractions")
+  @ApiOperation({
+    summary: "List park attractions",
+    description: "Returns all attractions for a specific park.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of attractions",
+    type: AttractionResponseDto,
+    isArray: true,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getAttractionsInPark(
     @Param("slug") slug: string,
   ): Promise<AttractionResponseDto[]> {
@@ -412,6 +480,16 @@ export class ParksController {
    * @throws NotFoundException if park or attraction not found
    */
   @Get(":slug/attractions/:attractionSlug")
+  @ApiOperation({
+    summary: "Get attraction details",
+    description: "Returns details for a specific attraction in a park.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Attraction details",
+    type: AttractionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park or attraction not found" })
   async getAttractionInPark(
     @Param("slug") slug: string,
     @Param("attractionSlug") attractionSlug: string,
@@ -447,6 +525,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":slug/wait-times")
+  @ApiOperation({
+    summary: "Get current wait times",
+    description: "Returns live wait times for all attractions in a park.",
+  })
+  @ApiResponse({ status: 200, description: "Wait times data" })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getParkWaitTimes(
     @Param("slug") slug: string,
     @Query("queueType") queueType?: QueueType,
@@ -548,6 +632,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/wait-times")
+  @ApiOperation({
+    summary: "Get wait times (geo)",
+    description: "Returns wait times via geographic path.",
+  })
+  @ApiResponse({ status: 200, description: "Wait times data" })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getParkWaitTimesByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -658,6 +748,16 @@ export class ParksController {
    */
   @Get(":continent/:country/:city/:parkSlug")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
+  @ApiOperation({
+    summary: "Get park by location",
+    description: "Returns a specific park by its geographic structure.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Park details",
+    type: ParkWithAttractionsDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getParkByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -692,6 +792,17 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country/:city")
+  @ApiOperation({
+    summary: "List parks in city",
+    description: "Returns all parks operating in a specific city.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of parks",
+    type: ParkResponseDto,
+    isArray: true,
+  })
+  @ApiResponse({ status: 404, description: "No parks found" })
   async getParksByCity(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -718,6 +829,17 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country")
+  @ApiOperation({
+    summary: "List parks in country",
+    description: "Returns all parks operating in a specific country.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of parks",
+    type: ParkResponseDto,
+    isArray: true,
+  })
+  @ApiResponse({ status: 404, description: "No parks found" })
   async getParksByCountry(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -745,6 +867,17 @@ export class ParksController {
    */
   @Get(":slugOrContinent")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
+  @ApiOperation({
+    summary: "Get park or continent",
+    description:
+      "Smart route that returns either a specific park or a list of parks in a continent.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Park or list of parks",
+    type: ParkWithAttractionsDto,
+  })
+  @ApiResponse({ status: 404, description: "Not found" })
   async findOneOrContinent(
     @Param("slugOrContinent") slugOrContinent: string,
   ): Promise<ParkWithAttractionsDto | ParkResponseDto[]> {

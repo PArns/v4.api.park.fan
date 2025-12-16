@@ -62,7 +62,7 @@ export class AnalyticsService {
     @InjectRepository(QueueDataAggregate)
     private queueDataAggregateRepository: Repository<QueueDataAggregate>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Calculate park occupancy based on 90th percentile of historical wait times
@@ -1171,29 +1171,29 @@ export class AnalyticsService {
     const mostCrowdedPark =
       openParks.length > 0
         ? {
-          id: openParks[0].id,
-          name: openParks[0].name,
-          slug: openParks[0].slug,
-          averageWaitTime: Math.round(openParks[0].avg_wait),
-          url: buildParkUrl(openParks[0]) || `/v1/parks/${openParks[0].slug}`,
-          crowdLevel: null,
-        }
+            id: openParks[0].id,
+            name: openParks[0].name,
+            slug: openParks[0].slug,
+            averageWaitTime: Math.round(openParks[0].avg_wait),
+            url: buildParkUrl(openParks[0]) || `/v1/parks/${openParks[0].slug}`,
+            crowdLevel: null,
+          }
         : null;
 
     const leastCrowdedPark =
       openParks.length > 0
         ? {
-          id: openParks[openParks.length - 1].id,
-          name: openParks[openParks.length - 1].name,
-          slug: openParks[openParks.length - 1].slug,
-          averageWaitTime: Math.round(
-            openParks[openParks.length - 1].avg_wait,
-          ),
-          url:
-            buildParkUrl(openParks[openParks.length - 1]) ||
-            `/v1/parks/${openParks[openParks.length - 1].slug}`,
-          crowdLevel: null,
-        }
+            id: openParks[openParks.length - 1].id,
+            name: openParks[openParks.length - 1].name,
+            slug: openParks[openParks.length - 1].slug,
+            averageWaitTime: Math.round(
+              openParks[openParks.length - 1].avg_wait,
+            ),
+            url:
+              buildParkUrl(openParks[openParks.length - 1]) ||
+              `/v1/parks/${openParks[openParks.length - 1].slug}`,
+            crowdLevel: null,
+          }
         : null;
 
     // 3. Find Longest/Shortest Wait Ride (Global)
@@ -1226,29 +1226,29 @@ export class AnalyticsService {
     const longestWaitRide =
       rideStats.length > 0
         ? {
-          id: rideStats[0].attractionId,
-          name: rideStats[0].name,
-          slug: rideStats[0].slug,
-          parkName: rideStats[0].parkName,
-          parkSlug: rideStats[0].parkSlug,
-          waitTime: rideStats[0].waitTime,
-          url: `/v1/parks/${rideStats[0].parkSlug}/attractions/${rideStats[0].slug}`,
-          crowdLevel: null,
-        }
+            id: rideStats[0].attractionId,
+            name: rideStats[0].name,
+            slug: rideStats[0].slug,
+            parkName: rideStats[0].parkName,
+            parkSlug: rideStats[0].parkSlug,
+            waitTime: rideStats[0].waitTime,
+            url: `/v1/parks/${rideStats[0].parkSlug}/attractions/${rideStats[0].slug}`,
+            crowdLevel: null,
+          }
         : null;
 
     const shortestWaitRide =
       rideStats.length > 0
         ? {
-          id: rideStats[rideStats.length - 1].attractionId,
-          name: rideStats[rideStats.length - 1].name,
-          slug: rideStats[rideStats.length - 1].slug,
-          parkName: rideStats[rideStats.length - 1].parkName,
-          parkSlug: rideStats[rideStats.length - 1].parkSlug,
-          waitTime: rideStats[rideStats.length - 1].waitTime,
-          url: `/v1/parks/${rideStats[rideStats.length - 1].parkSlug}/attractions/${rideStats[rideStats.length - 1].slug}`,
-          crowdLevel: null,
-        }
+            id: rideStats[rideStats.length - 1].attractionId,
+            name: rideStats[rideStats.length - 1].name,
+            slug: rideStats[rideStats.length - 1].slug,
+            parkName: rideStats[rideStats.length - 1].parkName,
+            parkSlug: rideStats[rideStats.length - 1].parkSlug,
+            waitTime: rideStats[rideStats.length - 1].waitTime,
+            url: `/v1/parks/${rideStats[rideStats.length - 1].parkSlug}/attractions/${rideStats[rideStats.length - 1].slug}`,
+            crowdLevel: null,
+          }
         : null;
 
     // 4. Calculate Details for Top/Bottom Stats (Parallel)

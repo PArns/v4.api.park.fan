@@ -5,7 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { RestaurantsService } from "./restaurants.service";
 import {
   RestaurantResponseDto,
@@ -36,6 +36,16 @@ export class RestaurantsController {
    * @param query - Filter and sort options (park, cuisineType, requiresReservation, sort, page, limit)
    */
   @Get()
+  @ApiOperation({
+    summary: "List restaurants",
+    description: "Returns a paginated list of all restaurants globally.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of restaurants",
+    type: RestaurantResponseDto,
+    isArray: true,
+  })
   async findAll(@Query() query: RestaurantQueryDto): Promise<{
     data: RestaurantResponseDto[];
     pagination: {
@@ -75,6 +85,16 @@ export class RestaurantsController {
    * @throws NotFoundException if restaurant not found
    */
   @Get(":slug")
+  @ApiOperation({
+    summary: "Get restaurant details",
+    description: "Returns details for a specific restaurant.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Restaurant details",
+    type: RestaurantWithLiveDataDto,
+  })
+  @ApiResponse({ status: 404, description: "Restaurant not found" })
   async findOne(
     @Param("slug") slug: string,
   ): Promise<RestaurantWithLiveDataDto> {
@@ -123,6 +143,12 @@ export class RestaurantsController {
    * @throws NotFoundException if restaurant not found
    */
   @Get(":slug/availability")
+  @ApiOperation({
+    summary: "Get availability",
+    description: "Returns dining availability for a specific restaurant.",
+  })
+  @ApiResponse({ status: 200, description: "Availability data" })
+  @ApiResponse({ status: 404, description: "Restaurant not found" })
   async getAvailability(@Param("slug") slug: string): Promise<any> {
     const restaurant = await this.restaurantsService.findBySlug(slug);
 

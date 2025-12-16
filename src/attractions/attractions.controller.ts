@@ -5,7 +5,7 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AttractionsService } from "./attractions.service";
 import { AttractionIntegrationService } from "./services/attraction-integration.service";
 import { AttractionResponseDto } from "./dto/attraction-response.dto";
@@ -40,6 +40,16 @@ export class AttractionsController {
    * @param query - Filter and sort options (park, status, queueType, waitTime range, sort, page, limit)
    */
   @Get()
+  @ApiOperation({
+    summary: "List attractions",
+    description: "Returns a paginated list of all attractions globally.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of attractions",
+    type: AttractionResponseDto,
+    isArray: true,
+  })
   async findAll(@Query() query: AttractionQueryDto): Promise<{
     data: AttractionResponseDto[];
     pagination: {
@@ -82,6 +92,16 @@ export class AttractionsController {
    * @throws NotFoundException if attraction not found
    */
   @Get(":slug")
+  @ApiOperation({
+    summary: "Get attraction details",
+    description: "Returns details for a specific attraction.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Attraction details",
+    type: AttractionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Attraction not found" })
   async findOne(@Param("slug") slug: string): Promise<AttractionResponseDto> {
     const attraction = await this.attractionsService.findBySlug(slug);
 
