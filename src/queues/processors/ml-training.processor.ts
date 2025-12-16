@@ -10,7 +10,7 @@ import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import axios from "axios";
 
-const execAsync = promisify(exec);
+const _execAsync = promisify(exec);
 
 /**
  * ML Training Queue Processor
