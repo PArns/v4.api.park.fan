@@ -22,7 +22,7 @@ export class RestaurantsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -457,6 +457,35 @@ export class RestaurantsService {
           SELECT MAX(rld2.timestamp)
           FROM restaurant_live_data rld2
           WHERE rld2."restaurantId" = rld."restaurantId"
+        )`,
+      )
+      .getMany();
+
+    const result = new Map<string, RestaurantLiveData>();
+    for (const item of data) {
+      result.set(item.restaurantId, item);
+    }
+
+    return result;
+  }
+  /**
+ * Find last known OPERATING status for all restaurants in a park
+ * Used to recover operatingHours when park is closed
+ */
+  async findLastKnownOperatingStatusByPark(
+    parkId: string,
+  ): Promise<Map<string, RestaurantLiveData>> {
+    const data = await this.restaurantLiveDataRepository
+      .createQueryBuilder("rld")
+      .innerJoin("rld.restaurant", "restaurant")
+      .where("restaurant.parkId = :parkId", { parkId })
+      .andWhere("rld.status = 'OPERATING'")
+      .andWhere(
+        `rld.timestamp = (
+          SELECT MAX(rld2.timestamp)
+          FROM restaurant_live_data rld2
+          WHERE rld2."restaurantId" = rld."restaurantId"
+          AND rld2.status = 'OPERATING'
         )`,
       )
       .getMany();

@@ -25,7 +25,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -475,6 +475,35 @@ export class ShowsService {
           SELECT MAX(sld2.timestamp)
           FROM show_live_data sld2
           WHERE sld2."showId" = sld."showId"
+        )`,
+      )
+      .getMany();
+
+    const result = new Map<string, ShowLiveData>();
+    for (const data of showData) {
+      result.set(data.showId, data);
+    }
+
+    return result;
+  }
+  /**
+ * Find last known OPERATING status for all shows in a park
+ * Used to recover showtimes when park is closed
+ */
+  async findLastKnownOperatingStatusByPark(
+    parkId: string,
+  ): Promise<Map<string, ShowLiveData>> {
+    const showData = await this.showLiveDataRepository
+      .createQueryBuilder("sld")
+      .innerJoin("sld.show", "show")
+      .where("show.parkId = :parkId", { parkId })
+      .andWhere("sld.status = 'OPERATING'")
+      .andWhere(
+        `sld.timestamp = (
+          SELECT MAX(sld2.timestamp)
+          FROM show_live_data sld2
+          WHERE sld2."showId" = sld."showId"
+          AND sld2.status = 'OPERATING'
         )`,
       )
       .getMany();
