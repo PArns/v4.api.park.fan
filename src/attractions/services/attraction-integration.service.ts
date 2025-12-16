@@ -85,7 +85,6 @@ export class AttractionIntegrationService {
             currentGroupEnd: qd.currentGroupEnd ?? null,
             estimatedWait: qd.estimatedWait ?? null,
             lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
-            timestamp: qd.timestamp.toISOString(),
           };
 
           // Add trend data for wait-time based queues (STANDBY, SINGLE_RIDER, etc.)

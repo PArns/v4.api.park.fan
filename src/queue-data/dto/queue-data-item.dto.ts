@@ -33,8 +33,7 @@ export class QueueDataItemDto {
   estimatedWait?: number | null;
 
   // Timestamps
-  lastUpdated: string; // ISO 8601 - from API
-  timestamp: string; // ISO 8601 - when we stored it
+  lastUpdated: string; // ISO 8601 - from API (most relevant for users)
 
   // Phase 5.5: Wait time trends (last 2-3 hours)
   trend?: {

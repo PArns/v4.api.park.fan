@@ -24,11 +24,7 @@ export class ParkWithAttractionsDto {
   continent: string | null;
   country: string | null;
   city: string | null;
-  destination: {
-    id: string;
-    name: string;
-    slug: string;
-  } | null;
+  // Destination field removed - was redundant with park name/slug
   status?: "OPERATING" | "CLOSED";
   currentLoad?: {
     rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
@@ -161,13 +157,7 @@ export class ParkWithAttractionsDto {
       continent: park.continent || null,
       country: park.country || null,
       city: park.city || null,
-      destination: park.destination
-        ? {
-            id: park.destination.id,
-            name: park.destination.name,
-            slug: park.destination.slug,
-          }
-        : null,
+      // Destination field removed
       attractions: park.attractions
         ? park.attractions.map((attraction) => ({
             id: attraction.id,

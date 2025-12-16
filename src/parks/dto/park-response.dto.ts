@@ -20,11 +20,7 @@ export class ParkResponseDto {
   countrySlug: string | null;
   city: string | null;
   citySlug: string | null;
-  destination: {
-    id: string;
-    name: string;
-    slug: string;
-  } | null;
+  // Destination field removed - was redundant with park name/slug
   status?: "OPERATING" | "CLOSED";
   isOpen?: boolean;
   createdAt: Date;
@@ -45,13 +41,7 @@ export class ParkResponseDto {
       countrySlug: park.countrySlug || null,
       city: park.city || null,
       citySlug: park.citySlug || null,
-      destination: park.destination
-        ? {
-            id: park.destination.id,
-            name: park.destination.name,
-            slug: park.destination.slug,
-          }
-        : null,
+      // Destination field removed
       createdAt: park.createdAt,
       updatedAt: park.updatedAt,
     };

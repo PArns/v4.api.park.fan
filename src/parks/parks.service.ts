@@ -499,6 +499,53 @@ export class ParksService {
   }
 
   /**
+   * Get upcoming schedule for a park (today + next N days)
+   *
+   * Returns schedule entries from today through the next N days.
+   * Used for trip planning - shows users when park will be open.
+   *
+   * @param parkId - Park ID (UUID)
+   * @param days - Number of days to fetch (default: 7)
+   * @returns Schedule entries for upcoming days
+   */
+  async getUpcomingSchedule(
+    parkId: string,
+    days: number = 7,
+  ): Promise<ScheduleEntry[]> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(today);
+    endDate.setDate(endDate.getDate() + days);
+    endDate.setHours(23, 59, 59, 999);
+
+    const cacheKey = `schedule:upcoming:${parkId}:${today.toISOString().split("T")[0]}:${days}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached) {
+      const parsed = JSON.parse(cached) as any[];
+      return parsed.map((entry) => ({
+        ...entry,
+        date: new Date(entry.date),
+        openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
+        closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
+      })) as ScheduleEntry[];
+    }
+
+    const schedule = await this.getSchedule(parkId, today, endDate);
+
+    // Cache result (1 hour TTL)
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(schedule),
+      "EX",
+      this.TTL_SCHEDULE,
+    );
+
+    return schedule;
+  }
+
+  /**
    * Finds parks by continent slug
    *
    * @param continentSlug - Continent slug (e.g., "north-america", "europe")

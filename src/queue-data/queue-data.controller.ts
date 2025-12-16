@@ -294,7 +294,6 @@ export class QueueDataController {
       currentGroupEnd: queueData.currentGroupEnd ?? null,
       estimatedWait: queueData.estimatedWait ?? null,
       lastUpdated: (queueData.lastUpdated || queueData.timestamp).toISOString(),
-      timestamp: queueData.timestamp.toISOString(),
     };
   }
 

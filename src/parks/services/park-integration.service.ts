@@ -14,6 +14,7 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { toZonedTime } from "date-fns-tz";
 
 /**
  * Park Integration Service
@@ -84,19 +85,20 @@ export class ParkIntegrationService {
       forecast: weatherData.forecast.map((w) => WeatherItemDto.fromEntity(w)),
     };
 
-    // Fetch today's schedule
-    const schedule = await this.parksService.getTodaySchedule(park.id);
+    // Fetch upcoming schedule (today + next 7 days)
+    const schedule = await this.parksService.getUpcomingSchedule(park.id, 7);
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
     // Determine overall park status based on schedule
-    const now = new Date();
+    // CRITICAL: Use park's timezone to get current time, compare with UTC schedule times
+    const nowInParkTz = toZonedTime(new Date(), park.timezone);
     const operatingSchedule = schedule.find(
       (s) =>
         s.scheduleType === "OPERATING" &&
         s.openingTime &&
         s.closingTime &&
-        now >= s.openingTime &&
-        now < s.closingTime,
+        nowInParkTz >= s.openingTime &&
+        nowInParkTz < s.closingTime,
     );
     dto.status = operatingSchedule ? "OPERATING" : "CLOSED";
 
@@ -144,100 +146,110 @@ export class ParkIntegrationService {
       dto.attractions &&
       dto.attractions.length > 0
     ) {
-      for (const attraction of dto.attractions) {
-        totalAttractionsCount++;
+      // Only fetch live queue data if park is currently OPERATING
+      if (dto.status === "OPERATING") {
+        for (const attraction of dto.attractions) {
+          totalAttractionsCount++;
 
-        // Get current queue data for this attraction
-        const queueData =
-          await this.queueDataService.findCurrentStatusByAttraction(
-            attraction.id,
-          );
+          // Get current queue data for this attraction
+          const queueData =
+            await this.queueDataService.findCurrentStatusByAttraction(
+              attraction.id,
+            );
 
-        if (queueData.length > 0) {
-          // Convert to DTOs
-          attraction.queues = queueData.map((qd) => ({
-            queueType: qd.queueType,
-            status: qd.status,
-            waitTime: qd.waitTime ?? null,
-            state: qd.state ?? null,
-            returnStart: qd.returnStart ? qd.returnStart.toISOString() : null,
-            returnEnd: qd.returnEnd ? qd.returnEnd.toISOString() : null,
-            price: qd.price ?? null,
-            allocationStatus: qd.allocationStatus ?? null,
-            currentGroupStart: qd.currentGroupStart ?? null,
-            currentGroupEnd: qd.currentGroupEnd ?? null,
-            estimatedWait: qd.estimatedWait ?? null,
-            lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
-            timestamp: qd.timestamp.toISOString(),
+          if (queueData.length > 0) {
+            // Convert to DTOs (removed timestamp field)
+            attraction.queues = queueData.map((qd) => ({
+              queueType: qd.queueType,
+              status: qd.status,
+              waitTime: qd.waitTime ?? null,
+              state: qd.state ?? null,
+              returnStart: qd.returnStart ? qd.returnStart.toISOString() : null,
+              returnEnd: qd.returnEnd ? qd.returnEnd.toISOString() : null,
+              price: qd.price ?? null,
+              allocationStatus: qd.allocationStatus ?? null,
+              currentGroupStart: qd.currentGroupStart ?? null,
+              currentGroupEnd: qd.currentGroupEnd ?? null,
+              estimatedWait: qd.estimatedWait ?? null,
+              lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
+            }));
+
+            // Set overall status (use first queue's status as representative)
+            attraction.status = queueData[0].status;
+            if (attraction.status === "OPERATING") {
+              totalOperatingCount++;
+            }
+          } else {
+            // Fallback if no live data found
+            attraction.queues = [];
+            attraction.status = "CLOSED";
+          }
+
+          // Attach ML predictions
+          const mlPreds = hourlyPredictions[attraction.id] || [];
+          attraction.predictions = mlPreds.map((p) => ({
+            predictedTime: p.predictedTime,
+            predictedWaitTime: p.predictedWaitTime,
+            confidencePercentage: p.confidence,
+            trend: p.trend,
+            modelVersion: p.modelVersion,
           }));
 
-          // Set overall status (use first queue's status as representative)
-          attraction.status = queueData[0].status;
-          if (attraction.status === "OPERATING") {
-            totalOperatingCount++;
+          // Attach Prediction Accuracy (Feedback Loop)
+          try {
+            attraction.predictionAccuracy =
+              await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
+                attraction.id,
+              );
+          } catch (error) {
+            this.logger.error(
+              `Failed to fetch prediction accuracy for ${attraction.id}:`,
+              error,
+            );
+            attraction.predictionAccuracy = null;
           }
-        } else {
-          // Fallback if no live data found
+
+          // Attach Current Load Rating (Relative Wait Time)
+          // Only if we have live wait time data
+          const standbyQueue = attraction.queues.find(
+            (q) => q.queueType === "STANDBY" && q.waitTime !== null,
+          );
+
+          if (standbyQueue && typeof standbyQueue.waitTime === "number") {
+            try {
+              // Get 90th percentile baseline (1 year window)
+              const hour = new Date().getHours();
+              const day = new Date().getDay();
+
+              const p90 = await this.analyticsService.get90thPercentileOneYear(
+                attraction.id,
+                hour,
+                day,
+                "attraction",
+              );
+
+              const ratingResult = this.analyticsService.getLoadRating(
+                standbyQueue.waitTime,
+                p90,
+              );
+
+              attraction.currentLoad = {
+                ...ratingResult,
+                current: standbyQueue.waitTime,
+              };
+            } catch (_error) {
+              // specific logging if needed, or silent fail
+            }
+          } else {
+            attraction.currentLoad = null;
+          }
+        }
+      } else {
+        // Park is CLOSED - set all attractions to CLOSED without queue data
+        for (const attraction of dto.attractions) {
+          totalAttractionsCount++;
           attraction.queues = [];
           attraction.status = "CLOSED";
-        }
-
-        // Attach ML predictions
-        const mlPreds = hourlyPredictions[attraction.id] || [];
-        attraction.predictions = mlPreds.map((p) => ({
-          predictedTime: p.predictedTime,
-          predictedWaitTime: p.predictedWaitTime,
-          confidencePercentage: p.confidence,
-          trend: p.trend,
-          modelVersion: p.modelVersion,
-        }));
-
-        // Attach Prediction Accuracy (Feedback Loop)
-        try {
-          attraction.predictionAccuracy =
-            await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
-              attraction.id,
-            );
-        } catch (error) {
-          this.logger.error(
-            `Failed to fetch prediction accuracy for ${attraction.id}:`,
-            error,
-          );
-          attraction.predictionAccuracy = null;
-        }
-
-        // Attach Current Load Rating (Relative Wait Time)
-        // Only if we have live wait time data
-        const standbyQueue = attraction.queues.find(
-          (q) => q.queueType === "STANDBY" && q.waitTime !== null,
-        );
-
-        if (standbyQueue && typeof standbyQueue.waitTime === "number") {
-          try {
-            // Get 90th percentile baseline (1 year window)
-            const hour = new Date().getHours();
-            const day = new Date().getDay();
-
-            const p90 = await this.analyticsService.get90thPercentileOneYear(
-              attraction.id,
-              hour,
-              day,
-              "attraction",
-            );
-
-            const ratingResult = this.analyticsService.getLoadRating(
-              standbyQueue.waitTime,
-              p90,
-            );
-
-            attraction.currentLoad = {
-              ...ratingResult,
-              current: standbyQueue.waitTime,
-            };
-          } catch (_error) {
-            // specific logging if needed, or silent fail
-          }
-        } else {
           attraction.currentLoad = null;
         }
       }
@@ -287,14 +299,7 @@ export class ParkIntegrationService {
       }
     }
 
-    // Fallback: If status is CLOSED but >= 50% rides are open, mark park as OPERATING
-    if (
-      dto.status === "CLOSED" &&
-      totalAttractionsCount > 0 &&
-      totalOperatingCount / totalAttractionsCount >= 0.5
-    ) {
-      dto.status = "OPERATING";
-    }
+    // Removed problematic fallback heuristic - timezone-aware status is reliable
 
     // Fetch current status for shows
     if (park.shows && park.shows.length > 0) {
@@ -306,9 +311,9 @@ export class ParkIntegrationService {
           show.status = liveData.status;
           show.showtimes = liveData.showtimes || [];
           show.operatingHours = liveData.operatingHours || [];
-          show.lastUpdated = (
-            liveData.lastUpdated || liveData.timestamp
-          ).toISOString();
+          show.lastUpdated = liveData.lastUpdated
+            ? liveData.lastUpdated.toISOString()
+            : new Date().toISOString();
         } else {
           show.status = "CLOSED";
           show.showtimes = [];
@@ -330,9 +335,9 @@ export class ParkIntegrationService {
           restaurant.waitTime = liveData.waitTime ?? null;
           restaurant.partySize = liveData.partySize ?? null;
           restaurant.operatingHours = liveData.operatingHours || [];
-          restaurant.lastUpdated = (
-            liveData.lastUpdated || liveData.timestamp
-          ).toISOString();
+          restaurant.lastUpdated = liveData.lastUpdated
+            ? liveData.lastUpdated.toISOString()
+            : new Date().toISOString();
         } else {
           restaurant.status = "CLOSED";
           restaurant.waitTime = null;
@@ -344,39 +349,70 @@ export class ParkIntegrationService {
     }
 
     // Fetch analytics (occupancy + statistics + percentiles)
-    try {
-      const [occupancy, statistics, percentiles] = await Promise.all([
-        this.analyticsService.calculateParkOccupancy(park.id),
-        this.analyticsService.getParkStatistics(park.id),
-        this.analyticsService.getParkPercentilesToday(park.id),
-      ]);
+    // Only fetch live analytics if park is operating, otherwise return zeroed values
+    if (dto.status === "OPERATING") {
+      try {
+        const [occupancy, statistics, percentiles] = await Promise.all([
+          this.analyticsService.calculateParkOccupancy(park.id),
+          this.analyticsService.getParkStatistics(park.id),
+          this.analyticsService.getParkPercentilesToday(park.id),
+        ]);
 
+        dto.analytics = {
+          occupancy: {
+            current: occupancy.current,
+            trend: occupancy.trend,
+            comparedToTypical: occupancy.comparedToTypical,
+            comparisonStatus: occupancy.comparisonStatus,
+            baseline90thPercentile: occupancy.baseline90thPercentile,
+            updatedAt: occupancy.updatedAt.toISOString(),
+            breakdown: occupancy.breakdown,
+          },
+          statistics: {
+            avgWaitTime: statistics.avgWaitTime,
+            avgWaitToday: statistics.avgWaitToday,
+            peakHour: statistics.peakHour,
+            crowdLevel: statistics.crowdLevel,
+            totalAttractions: statistics.totalAttractions,
+            operatingAttractions: statistics.operatingAttractions,
+            closedAttractions: statistics.closedAttractions,
+            timestamp: statistics.timestamp.toISOString(),
+          },
+          percentiles: percentiles || undefined, // Only include if data available
+        };
+      } catch (error) {
+        // Log error but don't fail the whole request
+        this.logger.error("Failed to fetch analytics:", error);
+        dto.analytics = null;
+      }
+    } else {
+      // Park is CLOSED - return zeroed analytics with correct operatingAttractions count
       dto.analytics = {
         occupancy: {
-          current: occupancy.current,
-          trend: occupancy.trend,
-          comparedToTypical: occupancy.comparedToTypical,
-          comparisonStatus: occupancy.comparisonStatus,
-          baseline90thPercentile: occupancy.baseline90thPercentile,
-          updatedAt: occupancy.updatedAt.toISOString(),
-          breakdown: occupancy.breakdown,
+          current: 0,
+          trend: "stable",
+          comparedToTypical: 0,
+          comparisonStatus: "typical",
+          baseline90thPercentile: 0,
+          updatedAt: new Date().toISOString(),
+          breakdown: {
+            currentAvgWait: 0,
+            typicalAvgWait: 0,
+            activeAttractions: 0,
+          },
         },
         statistics: {
-          avgWaitTime: statistics.avgWaitTime,
-          avgWaitToday: statistics.avgWaitToday,
-          peakHour: statistics.peakHour,
-          crowdLevel: statistics.crowdLevel,
-          totalAttractions: statistics.totalAttractions,
-          operatingAttractions: statistics.operatingAttractions,
-          closedAttractions: statistics.closedAttractions,
-          timestamp: statistics.timestamp.toISOString(),
+          avgWaitTime: 0,
+          avgWaitToday: 0, // Could fetch historical if needed
+          peakHour: null,
+          crowdLevel: "very_low",
+          totalAttractions: totalAttractionsCount,
+          operatingAttractions: 0, // KEY FIX: Should be 0 when closed
+          closedAttractions: totalAttractionsCount,
+          timestamp: new Date().toISOString(),
         },
-        percentiles: percentiles || undefined, // Only include if data available
+        percentiles: undefined,
       };
-    } catch (error) {
-      // Log error but don't fail the whole request
-      this.logger.error("Failed to fetch analytics:", error);
-      dto.analytics = null;
     }
 
     // Cache the complete response (5 minutes for real-time data freshness)
