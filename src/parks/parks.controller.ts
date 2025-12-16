@@ -451,7 +451,25 @@ export class ParksController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Delegate to QueueDataService
+    // Check timezone-aware park status
+    const statusMap = await this.parksService.getBatchParkStatus([park.id]);
+    const parkStatus = statusMap.get(park.id) || "CLOSED";
+
+    // If park is CLOSED, return empty wait times (no stale data)
+    if (parkStatus === "CLOSED") {
+      return {
+        park: {
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          timezone: park.timezone,
+          status: "CLOSED",
+        },
+        attractions: [],
+      };
+    }
+
+    // Park is OPERATING - fetch live wait times
     const waitTimes = await this.queueDataService.findWaitTimesByPark(
       park.id,
       queueType,
@@ -493,7 +511,6 @@ export class ParksController {
         lastUpdated: (
           queueData.lastUpdated || queueData.timestamp
         ).toISOString(),
-        timestamp: queueData.timestamp.toISOString(),
       };
 
       attractionsMap.get(attractionId)!.queues.push(queueDto);
@@ -505,6 +522,7 @@ export class ParksController {
         name: park.name,
         slug: park.slug,
         timezone: park.timezone,
+        status: parkStatus,
       },
       attractions: Array.from(attractionsMap.values()),
     };
@@ -544,7 +562,25 @@ export class ParksController {
       );
     }
 
-    // Delegate to QueueDataService
+    // Check timezone-aware park status
+    const statusMap = await this.parksService.getBatchParkStatus([park.id]);
+    const parkStatus = statusMap.get(park.id) || "CLOSED";
+
+    // If park is CLOSED, return empty wait times (no stale data)
+    if (parkStatus === "CLOSED") {
+      return {
+        park: {
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          timezone: park.timezone,
+          status: "CLOSED",
+        },
+        attractions: [],
+      };
+    }
+
+    // Park is OPERATING - fetch live wait times
     const waitTimes = await this.queueDataService.findWaitTimesByPark(
       park.id,
       queueType,
@@ -586,7 +622,6 @@ export class ParksController {
         lastUpdated: (
           queueData.lastUpdated || queueData.timestamp
         ).toISOString(),
-        timestamp: queueData.timestamp.toISOString(),
       };
 
       attractionsMap.get(attractionId)!.queues.push(queueDto);
@@ -598,6 +633,7 @@ export class ParksController {
         name: park.name,
         slug: park.slug,
         timezone: park.timezone,
+        status: parkStatus,
       },
       attractions: Array.from(attractionsMap.values()),
     };
