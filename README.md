@@ -136,18 +136,7 @@ GET /v1/restaurants
 GET /v1/restaurants/:slug
 ```
 
-### ⚠️ Breaking Changes (v4.1)
 
-To improve semantic clarity, the following fields have been renamed:
-
-- `dates` → `crowdForecast` (Park Daily Predictions)
-- `predictions` → `hourlyForecast` (Attraction Hourly Predictions)
-- `currentLoad.rating` → `currentLoad.crowdLevel`
-- `currentLoad.current` → `currentLoad.currentWaitTime`
-
-Swagger documentation has been significantly updated. Please refer to `/api` for the latest schemas.
-
----
 
 ## 📁 Project Structure
 
