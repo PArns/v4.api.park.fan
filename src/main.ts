@@ -1,5 +1,7 @@
 import { NestFactory } from "@nestjs/core";
+import { NestExpressApplication } from "@nestjs/platform-express";
 import { ValidationPipe } from "@nestjs/common";
+import { Request, Response, NextFunction } from "express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
@@ -8,8 +10,15 @@ import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.inter
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ["log", "error", "warn", "debug", "verbose"],
+  });
+
+  // Custom X-Powered-By header
+  app.disable("x-powered-by");
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("X-Powered-By", "api.park.fan");
+    next();
   });
 
   // Global validation pipe for DTOs
