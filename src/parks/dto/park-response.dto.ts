@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { Park } from "../entities/park.entity";
 import { buildParkUrl } from "../../common/utils/url.util";
 import { WeatherItemDto } from "./weather-item.dto";
@@ -9,32 +10,87 @@ import { ScheduleItemDto } from "./schedule-item.dto";
  * Used for API responses when returning park data.
  */
 export class ParkResponseDto {
+  @ApiProperty({
+    description: "Unique identifier of the park",
+    example: "ebf830...",
+  })
   id: string;
+
+  @ApiProperty({ description: "Name of the park", example: "Phantasialand" })
   name: string;
+
+  @ApiProperty({ description: "URL-friendly slug", example: "phantasialand" })
   slug: string;
+
+  @ApiProperty({
+    description: "Official website URL",
+    required: false,
+    nullable: true,
+  })
   url: string | null;
 
+  @ApiProperty({ description: "Country name", required: false, nullable: true })
   country: string | null;
+
+  @ApiProperty({ description: "City name", required: false, nullable: true })
   city: string | null;
+
+  @ApiProperty({
+    description: "Continent name",
+    required: false,
+    nullable: true,
+  })
   continent: string | null;
+
+  @ApiProperty({
+    description: "Latitude coordinate",
+    required: false,
+    nullable: true,
+  })
   latitude: number | null;
+
+  @ApiProperty({
+    description: "Longitude coordinate",
+    required: false,
+    nullable: true,
+  })
   longitude: number | null;
+
+  @ApiProperty({ description: "Timezone identifier", example: "Europe/Berlin" })
   timezone: string;
 
+  @ApiProperty({
+    description: "Current operating status",
+    enum: ["OPERATING", "CLOSED"],
+  })
   status: "OPERATING" | "CLOSED";
 
   // Analytics / Live Data
+  @ApiProperty({
+    description: "Current load rating",
+    required: false,
+    nullable: true,
+  })
   currentLoad?: {
-    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    crowdLevel: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
     baseline: number;
-    current: number;
+    currentWaitTime: number;
   } | null;
 
+  @ApiProperty({
+    description: "Weather information (current and forecast)",
+    required: false,
+  })
   weather?: {
     current: WeatherItemDto | null;
     forecast: WeatherItemDto[];
   };
 
+  @ApiProperty({
+    description: "Real-time analytics and statistics",
+    required: false,
+    nullable: true,
+  })
   analytics?: {
     occupancy: {
       current: number;
@@ -57,6 +113,11 @@ export class ParkResponseDto {
   } | null;
 
   // Additional Data
+  @ApiProperty({
+    description: "Operating schedule",
+    required: false,
+    type: [ScheduleItemDto],
+  })
   schedule?: ScheduleItemDto[];
 
   static fromEntity(park: Park): ParkResponseDto {

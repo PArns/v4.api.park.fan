@@ -53,7 +53,7 @@ export class ParkIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -141,8 +141,8 @@ export class ParkIntegrationService {
         dto.status === "OPERATING"
           ? new Date().toISOString().split("T")[0] // Today
           : new Date(Date.now() + 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split("T")[0]; // Tomorrow
+              .toISOString()
+              .split("T")[0]; // Tomorrow
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
@@ -162,7 +162,7 @@ export class ParkIntegrationService {
       this.logger.warn(`ML Service unavailable for park ${park.slug}:`, error);
     }
 
-    dto.dates = dailyPredictions;
+    dto.crowdForecast = dailyPredictions;
 
     // Fetch current queue data for all attractions
     let totalAttractionsCount = 0;
@@ -216,7 +216,7 @@ export class ParkIntegrationService {
 
           // Attach ML predictions
           const mlPreds = hourlyPredictions[attraction.id] || [];
-          attraction.predictions = mlPreds.map((p) => ({
+          attraction.hourlyForecast = mlPreds.map((p) => ({
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
             confidencePercentage: p.confidence,
@@ -263,8 +263,9 @@ export class ParkIntegrationService {
               );
 
               attraction.currentLoad = {
-                ...ratingResult,
-                current: standbyQueue.waitTime,
+                crowdLevel: ratingResult.rating,
+                baseline: ratingResult.baseline,
+                currentWaitTime: standbyQueue.waitTime,
               };
             } catch (_error) {
               // specific logging if needed, or silent fail
@@ -319,8 +320,9 @@ export class ParkIntegrationService {
           );
 
           dto.currentLoad = {
-            ...parkRating,
-            current: currentAvgWait,
+            crowdLevel: parkRating.rating,
+            baseline: parkRating.baseline,
+            currentWaitTime: currentAvgWait,
           };
         }
       } catch (_error) {
@@ -466,7 +468,7 @@ export class ParkIntegrationService {
           day,
           "park",
         );
-        // Note: We don't have a "current" wait, so we can't calculate a rating. 
+        // Note: We don't have a "current" wait, so we can't calculate a rating.
         // But we can populate baseline90thPercentile to show "Typical Wait: X min"
 
         dto.analytics = {

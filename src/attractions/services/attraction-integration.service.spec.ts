@@ -203,9 +203,11 @@ describe("AttractionIntegrationService", () => {
       expect(result.forecasts?.[0].predictedWaitTime).toBe(35);
 
       // Verify ML predictions
-      expect(result.predictions).toHaveLength(1);
-      expect(result.predictions?.[0].predictedWaitTime).toBe(40);
-      expect(result.predictions?.[0].confidence).toBe(0.9);
+      expect(result.hourlyForecast).toHaveLength(1);
+      if (result.hourlyForecast) {
+        expect(result.hourlyForecast[0].predictedWaitTime).toBe(40);
+        expect(result.hourlyForecast[0].confidence).toBe(0.9);
+      }
 
       // Verify statistics
       expect(result.statistics?.avgWaitToday).toBe(30);
@@ -252,7 +254,7 @@ describe("AttractionIntegrationService", () => {
       const result = await service.buildIntegratedResponse(testAttraction);
 
       // Predictions should be undefined when ML service is down (not initialized)
-      expect(result.predictions).toBeUndefined();
+      expect(result.hourlyForecast).toBeUndefined();
 
       // Other data should still be present
       expect(result.statistics).toBeDefined();

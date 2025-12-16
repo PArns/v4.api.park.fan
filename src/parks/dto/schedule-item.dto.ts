@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { ScheduleType } from "../entities/schedule-entry.entity";
 
 /**
@@ -6,11 +7,44 @@ import { ScheduleType } from "../entities/schedule-entry.entity";
  * Represents a single schedule entry for a park
  */
 export class ScheduleItemDto {
+  @ApiProperty({
+    description: "Date of the schedule (YYYY-MM-DD)",
+    example: "2025-12-17",
+  })
   date: string; // ISO 8601 date (YYYY-MM-DD)
+
+  @ApiProperty({
+    description: "Type of schedule: OPERATING or CLOSED",
+    enum: ["OPERATING", "CLOSED"],
+  })
   scheduleType: ScheduleType;
+
+  @ApiProperty({
+    description: "Opening time (ISO 8601)",
+    required: false,
+    nullable: true,
+  })
   openingTime: string | null; // ISO 8601 timestamp
+
+  @ApiProperty({
+    description: "Closing time (ISO 8601)",
+    required: false,
+    nullable: true,
+  })
   closingTime: string | null; // ISO 8601 timestamp
+
+  @ApiProperty({
+    description: "Description or notes",
+    required: false,
+    nullable: true,
+  })
   description: string | null;
+
+  @ApiProperty({
+    description: "Ticket/Upgrade purchase options",
+    required: false,
+    nullable: true,
+  })
   purchases:
     | {
         startDate: string;

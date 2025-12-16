@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { Show } from "../entities/show.entity";
 
 /**
@@ -6,13 +7,34 @@ import { Show } from "../entities/show.entity";
  * Used for API responses when returning show data.
  */
 export class ShowResponseDto {
+  @ApiProperty({ description: "Unique identifier of the show" })
   id: string;
+
+  @ApiProperty({ description: "Name of the show" })
   name: string;
+
+  @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
 
+  @ApiProperty({
+    description: "Latitude coordinate",
+    required: false,
+    nullable: true,
+  })
   latitude: number | null;
+
+  @ApiProperty({
+    description: "Longitude coordinate",
+    required: false,
+    nullable: true,
+  })
   longitude: number | null;
 
+  @ApiProperty({
+    description: "Parent park details",
+    required: false,
+    nullable: true,
+  })
   park: {
     id: string;
     name: string;
@@ -56,19 +78,31 @@ export class ShowResponseDto {
 }
 
 export class ShowWithLiveDataDto extends ShowResponseDto {
+  @ApiProperty({ description: "Current operating status" })
   status: string;
 
+  @ApiProperty({
+    description: "Upcoming showtimes",
+    required: false,
+    nullable: true,
+  })
   showtimes: Array<{
     type: string;
     startTime: string;
     endTime?: string;
   }> | null;
 
+  @ApiProperty({
+    description: "General operating hours",
+    required: false,
+    nullable: true,
+  })
   operatingHours?: Array<{
     type: string;
     startTime: string;
     endTime: string;
   }> | null;
 
+  @ApiProperty({ description: "Last updated timestamp" })
   lastUpdated: string;
 }

@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 
 /**
@@ -6,15 +7,72 @@ import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.
  * Represents a single day's weather data
  */
 export class WeatherItemDto {
+  @ApiProperty({
+    description: "Date of the weather data (YYYY-MM-DD)",
+    example: "2025-12-17",
+  })
   date: string; // ISO 8601 date (YYYY-MM-DD)
+
+  @ApiProperty({
+    description: "Type of data source",
+    enum: ["historical", "current", "forecast"],
+  })
   dataType: "historical" | "current" | "forecast";
+
+  @ApiProperty({
+    description: "Maximum temperature (Celsius)",
+    required: false,
+    nullable: true,
+  })
   temperatureMax: number | null;
+
+  @ApiProperty({
+    description: "Minimum temperature (Celsius)",
+    required: false,
+    nullable: true,
+  })
   temperatureMin: number | null;
+
+  @ApiProperty({
+    description: "Total precipitation (mm)",
+    required: false,
+    nullable: true,
+  })
   precipitationSum: number | null;
+
+  @ApiProperty({
+    description: "Total rain (mm)",
+    required: false,
+    nullable: true,
+  })
   rainSum: number | null;
+
+  @ApiProperty({
+    description: "Total snowfall (cm)",
+    required: false,
+    nullable: true,
+  })
   snowfallSum: number | null;
+
+  @ApiProperty({
+    description: "WMO Weather Code",
+    required: false,
+    nullable: true,
+  })
   weatherCode: number | null;
+
+  @ApiProperty({
+    description: "Human-readable weather description",
+    required: false,
+    nullable: true,
+  })
   weatherDescription: string | null; // Human-readable weather (e.g., "Rain, slight intensity")
+
+  @ApiProperty({
+    description: "Maximum wind speed (km/h)",
+    required: false,
+    nullable: true,
+  })
   windSpeedMax: number | null;
 
   static fromEntity(weatherData: {

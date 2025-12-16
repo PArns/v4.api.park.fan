@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { Restaurant } from "../entities/restaurant.entity";
 
 /**
@@ -6,16 +7,40 @@ import { Restaurant } from "../entities/restaurant.entity";
  * Used for API responses when returning restaurant data.
  */
 export class RestaurantResponseDto {
+  @ApiProperty({ description: "Unique identifier of the restaurant" })
   id: string;
+
+  @ApiProperty({ description: "Name of the restaurant" })
   name: string;
+
+  @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
 
+  @ApiProperty({ description: "Cuisine type", required: false, nullable: true })
   cuisineType: string | null;
+
+  @ApiProperty({ description: "Reservation requirement" })
   requiresReservation: boolean;
 
+  @ApiProperty({
+    description: "Latitude coordinate",
+    required: false,
+    nullable: true,
+  })
   latitude: number | null;
+
+  @ApiProperty({
+    description: "Longitude coordinate",
+    required: false,
+    nullable: true,
+  })
   longitude: number | null;
 
+  @ApiProperty({
+    description: "Parent park details",
+    required: false,
+    nullable: true,
+  })
   park: {
     id: string;
     name: string;
@@ -62,15 +87,34 @@ export class RestaurantResponseDto {
 }
 
 export class RestaurantWithLiveDataDto extends RestaurantResponseDto {
+  @ApiProperty({ description: "Current operating status" })
   status: string;
+
+  @ApiProperty({
+    description: "Current wait time",
+    required: false,
+    nullable: true,
+  })
   waitTime: number | null;
+
+  @ApiProperty({
+    description: "Current party size",
+    required: false,
+    nullable: true,
+  })
   partySize: number | null;
 
+  @ApiProperty({
+    description: "General operating hours",
+    required: false,
+    nullable: true,
+  })
   operatingHours?: Array<{
     type: string;
     startTime: string;
     endTime: string;
   }> | null;
 
+  @ApiProperty({ description: "Last updated timestamp" })
   lastUpdated: string;
 }

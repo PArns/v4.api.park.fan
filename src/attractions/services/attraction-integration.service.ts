@@ -148,7 +148,7 @@ export class AttractionIntegrationService {
             "daily",
           );
 
-        dto.predictions = predictions.map((p) => ({
+        dto.hourlyForecast = predictions.map((p) => ({
           predictedTime: p.predictedTime,
           predictedWaitTime: p.predictedWaitTime,
           confidence: p.confidence,
@@ -163,7 +163,7 @@ export class AttractionIntegrationService {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.warn("ML predictions unavailable:", errorMessage);
-      dto.predictions = [];
+      dto.hourlyForecast = [];
     }
 
     // Fetch attraction statistics

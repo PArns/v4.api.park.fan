@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
@@ -9,33 +10,75 @@ import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
  * Now includes integrated live data: current queues, status, forecasts, ML predictions, statistics.
  */
 export class AttractionResponseDto {
+  @ApiProperty({ description: "Unique identifier of the attraction" })
   id: string;
+
+  @ApiProperty({ description: "Name of the attraction" })
   name: string;
+
+  @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
 
+  @ApiProperty({ description: "Current status", required: false })
   status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
 
   // Live Data
-  queues?: QueueDataItemDto[]; // Current wait times (all queue types)
+  @ApiProperty({
+    description: "Current wait times (all queue types)",
+    required: false,
+    type: [QueueDataItemDto],
+  })
+  queues?: QueueDataItemDto[];
+
+  @ApiProperty({
+    description: "Current load rating",
+    required: false,
+    nullable: true,
+  })
   currentLoad?: {
-    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    crowdLevel: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
     baseline: number;
     message?: string;
   } | null;
 
-  predictions?: {
+  @ApiProperty({
+    description: "Hourly ML predictions (internal model)",
+    required: false,
+  })
+  hourlyForecast?: {
     predictedTime: string;
     predictedWaitTime: number;
     confidence: number;
     trend: string;
     modelVersion: string;
-  }[]; // Our ML model predictions (hourly)
+  }[];
 
-  forecasts?: ForecastItemDto[]; // ThemeParks.wiki predictions (next 24 hours)
+  @ApiProperty({
+    description: "External forecasts (e.g. ThemeParks.wiki)",
+    required: false,
+    type: [ForecastItemDto],
+  })
+  forecasts?: ForecastItemDto[];
 
+  @ApiProperty({
+    description: "Latitude coordinate",
+    required: false,
+    nullable: true,
+  })
   latitude: number | null;
+
+  @ApiProperty({
+    description: "Longitude coordinate",
+    required: false,
+    nullable: true,
+  })
   longitude: number | null;
 
+  @ApiProperty({
+    description: "Parent park details",
+    required: false,
+    nullable: true,
+  })
   park: {
     id: string;
     name: string;
@@ -46,6 +89,11 @@ export class AttractionResponseDto {
     city: string | null;
   } | null;
 
+  @ApiProperty({
+    description: "Attraction statistics",
+    required: false,
+    nullable: true,
+  })
   statistics?: {
     avgWaitToday: number | null;
     peakWaitToday: number | null;
@@ -58,16 +106,21 @@ export class AttractionResponseDto {
   } | null;
 
   // Prediction Accuracy (Feedback Loop)
+  @ApiProperty({
+    description: "Prediction accuracy metrics",
+    required: false,
+    nullable: true,
+  })
   predictionAccuracy?: {
     badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
     last30Days: {
-      mae: number; // Mean Absolute Error (minutes)
-      mape: number; // Mean Absolute Percentage Error (%)
-      rmse: number; // Root Mean Square Error (minutes)
-      comparedPredictions: number; // How many predictions were compared
-      totalPredictions: number; // Total predictions made
+      mae: number;
+      mape: number;
+      rmse: number;
+      comparedPredictions: number;
+      totalPredictions: number;
     };
-    message?: string; // Optional explanation
+    message?: string;
   } | null;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
@@ -94,7 +147,7 @@ export class AttractionResponseDto {
           }
         : null,
 
-      predictions: [],
+      hourlyForecast: [],
       forecasts: [],
       statistics: null,
     };
