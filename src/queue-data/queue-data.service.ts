@@ -321,7 +321,7 @@ export class QueueDataService {
       limit?: number;
     } = {},
   ): Promise<{ data: QueueData[]; total: number }> {
-    const { from, to, queueType, page = 1, limit = 50 } = options;
+    const { from, to, queueType, page = 1, limit = 10 } = options;
 
     const whereClause: Record<string, unknown> = { attractionId };
 

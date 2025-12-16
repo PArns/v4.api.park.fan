@@ -54,7 +54,7 @@ export class DestinationsController {
       hasPrevious: boolean;
     };
   }> {
-    const { page = 1, limit = 20 } = query;
+    const { page = 1, limit = 10 } = query;
     const { data: destinations, total } =
       await this.destinationsService.findAll(page, limit);
 

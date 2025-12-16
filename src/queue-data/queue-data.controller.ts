@@ -96,7 +96,7 @@ export class QueueDataController {
         to: toDate,
         queueType,
         page: page ? parseInt(String(page)) : 1,
-        limit: limit ? parseInt(String(limit)) : 50,
+        limit: limit ? parseInt(String(limit)) : 10,
       });
 
     // Build response
@@ -115,7 +115,7 @@ export class QueueDataController {
       waitTimes: waitTimes.map(this.mapQueueDataToDto),
       pagination: new PaginationDto(
         page ? parseInt(String(page)) : 1,
-        limit ? parseInt(String(limit)) : 50,
+        limit ? parseInt(String(limit)) : 10,
         total,
       ),
     };

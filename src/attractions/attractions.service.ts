@@ -230,7 +230,7 @@ export class AttractionsService {
   async findByParkId(
     parkId: string,
     page: number = 1,
-    limit: number = 50,
+    limit: number = 10,
   ): Promise<{ data: Attraction[]; total: number }> {
     const [data, total] = await this.attractionRepository.findAndCount({
       where: { parkId },

@@ -98,7 +98,7 @@ export class DestinationsService {
    */
   async findAll(
     page: number = 1,
-    limit: number = 20,
+    limit: number = 10,
   ): Promise<{ data: Destination[]; total: number }> {
     const [data, total] = await this.destinationRepository.findAndCount({
       relations: ["parks"],
