@@ -8,7 +8,13 @@ import {
   Inject,
   UseInterceptors,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiExtraModels,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
@@ -28,6 +34,7 @@ import { WeatherItemDto } from "./dto/weather-item.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
 import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
+import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { Park } from "./entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -73,11 +80,23 @@ export class ParksController {
     description:
       "Returns a paginated list of all parks with status and analytics.",
   })
+  @ApiExtraModels(PaginatedResponseDto, ParkResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of parks",
-    type: ParkResponseDto,
-    isArray: true,
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(ParkResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   async findAll(@Query() query: ParkQueryDto): Promise<{
     data: ParkResponseDto[];
@@ -447,11 +466,23 @@ export class ParksController {
     description:
       "Returns a paginated list of all attractions for a specific park.",
   })
+  @ApiExtraModels(PaginatedResponseDto, AttractionResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of attractions",
-    type: AttractionResponseDto,
-    isArray: true,
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(AttractionResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getAttractionsInPark(

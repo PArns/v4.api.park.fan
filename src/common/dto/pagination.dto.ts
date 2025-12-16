@@ -1,15 +1,30 @@
 import { IsOptional, IsInt, Min } from "class-validator";
 import { Type } from "class-transformer";
+import { ApiProperty } from "@nestjs/swagger";
 
 /**
  * Pagination metadata for paginated responses
  */
 export class PaginationDto {
+  @ApiProperty({ example: 1, description: "Current page number" })
   page: number;
+
+  @ApiProperty({ example: 10, description: "Items per page" })
   limit: number;
+
+  @ApiProperty({ example: 100, description: "Total number of items" })
   total: number;
+
+  @ApiProperty({ example: 10, description: "Total number of pages" })
   totalPages: number;
+
+  @ApiProperty({ example: true, description: "Whether there is a next page" })
   hasNext: boolean;
+
+  @ApiProperty({
+    example: false,
+    description: "Whether there is a previous page",
+  })
   hasPrevious: boolean;
 
   constructor(page: number, limit: number, total: number) {
@@ -20,6 +35,16 @@ export class PaginationDto {
     this.hasNext = page < this.totalPages;
     this.hasPrevious = page > 1;
   }
+}
+
+/**
+ * Generic paginated response wrapper
+ */
+export class PaginatedResponseDto<T> {
+  data: T[];
+
+  @ApiProperty({ type: PaginationDto })
+  pagination: PaginationDto;
 }
 
 /**

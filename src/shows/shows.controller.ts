@@ -5,10 +5,17 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiExtraModels,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { ShowsService } from "./shows.service";
 import { ShowResponseDto, ShowWithLiveDataDto } from "./dto/show-response.dto";
 import { ShowQueryDto } from "./dto/show-query.dto";
+import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 /**
  * Shows Controller
@@ -37,11 +44,23 @@ export class ShowsController {
     summary: "List shows",
     description: "Returns a paginated list of all shows globally.",
   })
+  @ApiExtraModels(PaginatedResponseDto, ShowResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of shows",
-    type: ShowResponseDto,
-    isArray: true,
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(ShowResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   async findAll(@Query() query: ShowQueryDto): Promise<{
     data: ShowResponseDto[];

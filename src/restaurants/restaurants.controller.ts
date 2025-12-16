@@ -5,13 +5,20 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiExtraModels,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { RestaurantsService } from "./restaurants.service";
 import {
   RestaurantResponseDto,
   RestaurantWithLiveDataDto,
 } from "./dto/restaurant-response.dto";
 import { RestaurantQueryDto } from "./dto/restaurant-query.dto";
+import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 /**
  * Restaurants Controller
@@ -40,11 +47,23 @@ export class RestaurantsController {
     summary: "List restaurants",
     description: "Returns a paginated list of all restaurants globally.",
   })
+  @ApiExtraModels(PaginatedResponseDto, RestaurantResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of restaurants",
-    type: RestaurantResponseDto,
-    isArray: true,
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(RestaurantResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   async findAll(@Query() query: RestaurantQueryDto): Promise<{
     data: RestaurantResponseDto[];

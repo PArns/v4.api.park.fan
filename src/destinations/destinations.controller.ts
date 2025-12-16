@@ -5,11 +5,18 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiExtraModels,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { DestinationsService } from "./destinations.service";
 import { DestinationResponseDto } from "./dto/destination-response.dto";
 import { DestinationWithParksDto } from "./dto/destination-with-parks.dto";
 import { DestinationQueryDto } from "./dto/destination-query.dto";
+import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 /**
  * Destinations Controller
@@ -38,10 +45,23 @@ export class DestinationsController {
     summary: "List all destinations",
     description: "Returns a paginated list of all resort-level destinations.",
   })
+  @ApiExtraModels(PaginatedResponseDto, DestinationResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of destinations retrieved successfully",
-    type: DestinationResponseDto, // Swagger will not show pagination structure automatically without generic wrap detailed manual type, keeping simple for now
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(DestinationResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   async findAll(@Query() query: DestinationQueryDto): Promise<{
     data: DestinationResponseDto[];

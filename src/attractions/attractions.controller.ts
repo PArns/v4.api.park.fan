@@ -5,11 +5,18 @@ import {
   Query,
   NotFoundException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiExtraModels,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { AttractionsService } from "./attractions.service";
 import { AttractionIntegrationService } from "./services/attraction-integration.service";
 import { AttractionResponseDto } from "./dto/attraction-response.dto";
 import { AttractionQueryDto } from "./dto/attraction-query.dto";
+import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 // Removed EntityLiveResponse as it's not used in the provided code snippet
 // Removed Entity as it's not used and replaced Controller which is used
@@ -44,11 +51,23 @@ export class AttractionsController {
     summary: "List attractions",
     description: "Returns a paginated list of all attractions globally.",
   })
+  @ApiExtraModels(PaginatedResponseDto, AttractionResponseDto)
   @ApiResponse({
     status: 200,
     description: "List of attractions",
-    type: AttractionResponseDto,
-    isArray: true,
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(PaginatedResponseDto) },
+        {
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: getSchemaPath(AttractionResponseDto) },
+            },
+          },
+        },
+      ],
+    },
   })
   async findAll(@Query() query: AttractionQueryDto): Promise<{
     data: AttractionResponseDto[];
