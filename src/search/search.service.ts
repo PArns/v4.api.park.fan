@@ -40,6 +40,7 @@ export class SearchService {
         ...parks.map((p) => ({
           type: "park" as const,
           id: p.id,
+          name: p.name,
           slug: p.slug,
         })),
       );
@@ -53,6 +54,7 @@ export class SearchService {
         ...attractions.map((a) => ({
           type: "attraction" as const,
           id: a.id,
+          name: a.name,
           slug: a.slug,
         })),
       );
@@ -66,6 +68,7 @@ export class SearchService {
         ...shows.map((s) => ({
           type: "show" as const,
           id: s.id,
+          name: s.name,
           slug: s.slug,
         })),
       );
@@ -79,6 +82,7 @@ export class SearchService {
         ...restaurants.map((r) => ({
           type: "restaurant" as const,
           id: r.id,
+          name: r.name,
           slug: r.slug,
         })),
       );
@@ -100,10 +104,10 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Park, "id" | "slug">[]> {
+  ): Promise<Pick<Park, "id" | "slug" | "name">[]> {
     return this.parkRepository
       .createQueryBuilder("park")
-      .select(["park.id", "park.slug"])
+      .select(["park.id", "park.slug", "park.name"])
       .where("park.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(park.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
@@ -116,10 +120,10 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Attraction, "id" | "slug">[]> {
+  ): Promise<Pick<Attraction, "id" | "slug" | "name">[]> {
     return this.attractionRepository
       .createQueryBuilder("attraction")
-      .select(["attraction.id", "attraction.slug"])
+      .select(["attraction.id", "attraction.slug", "attraction.name"])
       .where("attraction.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(attraction.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
@@ -132,10 +136,10 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Show, "id" | "slug">[]> {
+  ): Promise<Pick<Show, "id" | "slug" | "name">[]> {
     return this.showRepository
       .createQueryBuilder("show")
-      .select(["show.id", "show.slug"])
+      .select(["show.id", "show.slug", "show.name"])
       .where("show.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(show.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
@@ -148,10 +152,10 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Restaurant, "id" | "slug">[]> {
+  ): Promise<Pick<Restaurant, "id" | "slug" | "name">[]> {
     return this.restaurantRepository
       .createQueryBuilder("restaurant")
-      .select(["restaurant.id", "restaurant.slug"])
+      .select(["restaurant.id", "restaurant.slug", "restaurant.name"])
       .where("restaurant.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(restaurant.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
