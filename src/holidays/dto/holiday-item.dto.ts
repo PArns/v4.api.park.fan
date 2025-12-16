@@ -1,15 +1,36 @@
+import { ApiProperty } from "@nestjs/swagger";
+
 /**
  * Holiday Item DTO
  *
  * Represents a single holiday
  */
 export class HolidayItemDto {
-  date: string; // ISO 8601 date (YYYY-MM-DD)
+  @ApiProperty({ description: "Date of the holiday (ISO 8601 YYYY-MM-DD)" })
+  date: string;
+
+  @ApiProperty({ description: "Name of the holiday (English)" })
   name: string;
+
+  @ApiProperty({ description: "Local name of the holiday", nullable: true })
   localName: string | null;
-  country: string; // ISO 3166-1 alpha-2 code (e.g., "US")
+
+  @ApiProperty({ description: "ISO 3166-1 alpha-2 country code" })
+  country: string;
+
+  @ApiProperty({
+    description: "Region code (e.g., US-FL) if applicable",
+    nullable: true,
+  })
   region: string | null;
+
+  @ApiProperty({
+    description: "Type of holiday",
+    enum: ["public", "observance", "school", "bank"],
+  })
   holidayType: "public" | "observance" | "school" | "bank";
+
+  @ApiProperty({ description: "Whether the holiday applies nationwide" })
   isNationwide: boolean;
 
   static fromEntity(holiday: {

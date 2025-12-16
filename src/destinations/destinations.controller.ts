@@ -1,4 +1,5 @@
 import { Controller, Get, Param, NotFoundException } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { DestinationsService } from "./destinations.service";
 import { DestinationResponseDto } from "./dto/destination-response.dto";
 import { DestinationWithParksDto } from "./dto/destination-with-parks.dto";
@@ -12,6 +13,7 @@ import { DestinationWithParksDto } from "./dto/destination-with-parks.dto";
  * - GET /destinations - List all destinations
  * - GET /destinations/:slug - Get specific destination with parks
  */
+@ApiTags("destinations")
 @Controller("destinations")
 export class DestinationsController {
   constructor(private readonly destinationsService: DestinationsService) {}
@@ -24,6 +26,15 @@ export class DestinationsController {
    * Example: Walt Disney World Resort, Disneyland Resort, etc.
    */
   @Get()
+  @ApiOperation({
+    summary: "List all destinations",
+    description: "Returns a list of all resort-level destinations.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "List of destinations retrieved successfully",
+    type: [DestinationResponseDto],
+  })
   async findAll(): Promise<DestinationResponseDto[]> {
     const destinations = await this.destinationsService.findAll();
     return destinations.map((dest) => DestinationResponseDto.fromEntity(dest));
@@ -38,6 +49,17 @@ export class DestinationsController {
    * @throws NotFoundException if destination not found
    */
   @Get(":slug")
+  @ApiOperation({
+    summary: "Get a destination by slug",
+    description:
+      "Returns detailed information about a specific destination, including its parks.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Destination details retrieved successfully",
+    type: DestinationWithParksDto,
+  })
+  @ApiResponse({ status: 404, description: "Destination not found" })
   async findOne(@Param("slug") slug: string): Promise<DestinationWithParksDto> {
     const destination = await this.destinationsService.findBySlug(slug);
 

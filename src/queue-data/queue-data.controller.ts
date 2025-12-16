@@ -6,7 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { QueueDataService } from "./queue-data.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ParksService } from "../parks/parks.service";
@@ -42,6 +42,17 @@ export class QueueDataController {
    * Returns historical and current wait time data for an attraction
    */
   @Get("attractions/:slug/wait-times")
+  @ApiOperation({
+    summary: "Get attraction wait times",
+    description:
+      "Returns historical and current wait time data for a specific attraction.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Wait times retrieved successfully",
+    type: WaitTimesResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Attraction not found" })
   async getWaitTimes(
     @Param("slug") slug: string,
     @Query("from") from?: string,
@@ -118,6 +129,17 @@ export class QueueDataController {
    * Returns current real-time status for an attraction
    */
   @Get("attractions/:slug/status")
+  @ApiOperation({
+    summary: "Get attraction live status",
+    description:
+      "Returns current real-time status only (no historical data) for an attraction.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Status retrieved successfully",
+    type: StatusResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Attraction not found" })
   async getStatus(@Param("slug") slug: string): Promise<StatusResponseDto> {
     // Find attraction
     const attraction = await this.attractionsService.findBySlug(slug);
@@ -177,6 +199,17 @@ export class QueueDataController {
    * Returns wait time predictions for an attraction
    */
   @Get("attractions/:slug/forecasts")
+  @ApiOperation({
+    summary: "Get attraction forecasts",
+    description:
+      "Returns future wait time predictions for a specific attraction.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Forecasts retrieved successfully",
+    type: ForecastResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Attraction not found" })
   async getForecasts(
     @Param("slug") slug: string,
     @Query("hours") hours?: number,

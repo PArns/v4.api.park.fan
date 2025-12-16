@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { Destination } from "../entities/destination.entity";
 
 /**
@@ -5,18 +6,41 @@ import { Destination } from "../entities/destination.entity";
  *
  * Used when returning destination data with its parks included.
  */
-export class DestinationWithParksDto {
+export class DestinationParkDto {
+  @ApiProperty({ description: "Unique identifier for the park" })
   id: string;
+
+  @ApiProperty({ description: "Name of the park" })
   name: string;
+
+  @ApiProperty({ description: "URL-friendly slug for the park" })
   slug: string;
+
+  @ApiProperty({ description: "External identifier from source" })
   externalId: string;
-  parks: {
-    id: string;
-    name: string;
-    slug: string;
-    externalId: string;
-    timezone: string;
-  }[];
+
+  @ApiProperty({ description: "Timezone of the park" })
+  timezone: string;
+}
+
+export class DestinationWithParksDto {
+  @ApiProperty({ description: "Unique identifier for the destination" })
+  id: string;
+
+  @ApiProperty({ description: "Name of the destination" })
+  name: string;
+
+  @ApiProperty({ description: "URL-friendly slug for the destination" })
+  slug: string;
+
+  @ApiProperty({ description: "External identifier from source" })
+  externalId: string;
+
+  @ApiProperty({
+    description: "List of parks within this destination",
+    type: [DestinationParkDto],
+  })
+  parks: DestinationParkDto[];
 
   static fromEntity(destination: Destination): DestinationWithParksDto {
     return {

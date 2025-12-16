@@ -1,5 +1,5 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
 
 /**
@@ -29,6 +29,15 @@ export class PredictionAccuracyController {
    * GET /v1/ml/accuracy/global?days=30
    */
   @Get("global")
+  @ApiOperation({
+    summary: "Get global prediction accuracy",
+    description:
+      "Returns system-wide accuracy statistics covering all attractions",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Global accuracy stats retrieved successfully",
+  })
   async getGlobalStats(
     @Query("days", new ParseIntPipe({ optional: true })) days?: number,
   ) {
@@ -48,6 +57,14 @@ export class PredictionAccuracyController {
    * GET /v1/ml/accuracy/parks/:parkId/stats?days=30
    */
   @Get("parks/:parkId/stats")
+  @ApiOperation({
+    summary: "Get park accuracy statistics",
+    description: "Returns aggregated prediction accuracy for a specific park",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Park accuracy stats retrieved successfully",
+  })
   async getParkStats(
     @Param("parkId") parkId: string,
     @Query("days", new ParseIntPipe({ optional: true })) days?: number,
@@ -70,6 +87,15 @@ export class PredictionAccuracyController {
    * GET /v1/ml/accuracy/attractions/:slug/stats?days=30
    */
   @Get("attractions/:attractionId/stats")
+  @ApiOperation({
+    summary: "Get attraction accuracy statistics",
+    description:
+      "Returns prediction accuracy metrics for a specific attraction",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Attraction accuracy stats retrieved successfully",
+  })
   async getAttractionStats(
     @Param("attractionId") attractionId: string,
     @Query("days", new ParseIntPipe({ optional: true })) days?: number,
@@ -92,6 +118,14 @@ export class PredictionAccuracyController {
    * GET /v1/ml/accuracy/attractions/:slug/comparisons?limit=50
    */
   @Get("attractions/:attractionId/comparisons")
+  @ApiOperation({
+    summary: "Get recent prediction comparisons",
+    description: "Returns a list of recent predictions vs actual wait times",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Comparisons retrieved successfully",
+  })
   async getComparisons(
     @Param("attractionId") attractionId: string,
     @Query("limit", new ParseIntPipe({ optional: true })) limit?: number,
@@ -120,6 +154,15 @@ export class PredictionAccuracyController {
    * GET /v1/ml/accuracy/features/analysis?threshold=15&days=30&attractionId=uuid
    */
   @Get("features/analysis")
+  @ApiOperation({
+    summary: "Analyze prediction error correlations",
+    description:
+      "Identifies features (time, weather, etc.) associated with high prediction errors",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Feature analysis retrieved successfully",
+  })
   async analyzeFeatureErrors(
     @Query("threshold", new ParseIntPipe({ optional: true }))
     threshold?: number,

@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { HolidayItemDto } from "./holiday-item.dto";
 
 /**
@@ -6,5 +7,9 @@ import { HolidayItemDto } from "./holiday-item.dto";
  * Returns holidays for a country or park
  */
 export class HolidayResponseDto {
+  @ApiProperty({
+    description: "List of holidays",
+    type: [HolidayItemDto],
+  })
   holidays: HolidayItemDto[];
 }

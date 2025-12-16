@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { QueueDataItemDto } from "./queue-data-item.dto";
 import { PaginationDto } from "../../common/dto/pagination.dto";
 
@@ -6,12 +7,14 @@ import { PaginationDto } from "../../common/dto/pagination.dto";
  * Returns historical and current wait time data
  */
 export class WaitTimesResponseDto {
+  @ApiProperty({ description: "Attraction details" })
   attraction: {
     id: string;
     name: string;
     slug: string;
   };
 
+  @ApiProperty({ description: "Park details" })
   park: {
     id: string;
     name: string;
@@ -19,6 +22,12 @@ export class WaitTimesResponseDto {
     timezone: string;
   };
 
+  @ApiProperty({
+    description: "List of historical wait time entries",
+    type: [QueueDataItemDto],
+  })
   waitTimes: QueueDataItemDto[];
-  pagination?: PaginationDto;
+
+  @ApiProperty({ description: "Pagination metadata" })
+  pagination: PaginationDto;
 }

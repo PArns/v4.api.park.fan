@@ -1,5 +1,5 @@
 import { Controller, Get } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
 import { Connection, Repository, MoreThanOrEqual } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -66,6 +66,26 @@ export class HealthController {
   ) {}
 
   @Get()
+  @ApiOperation({
+    summary: "System health check",
+    description:
+      "Returns detailed health status of the API, database, Redis, and ML services.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "System health status retrieved successfully",
+    schema: {
+      type: "object",
+      properties: {
+        status: { type: "string", example: "ok" },
+        timestamp: { type: "string", format: "date-time" },
+        uptime: { type: "number" },
+        services: { type: "object" },
+        data: { type: "object" },
+      },
+    },
+  })
+  @ApiResponse({ status: 503, description: "System is unhealthy" })
   async getHealth(): Promise<HealthStatus> {
     const dbStatus = this.connection.isInitialized
       ? "connected"

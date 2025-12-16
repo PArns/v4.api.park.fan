@@ -6,7 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { HolidaysService } from "./holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { HolidayResponseDto } from "./dto/holiday-response.dto";
@@ -43,6 +43,16 @@ export class HolidaysController {
    * @throws BadRequestException if parameters invalid
    */
   @Get("holidays")
+  @ApiOperation({
+    summary: "Query holidays",
+    description:
+      "Retrieve holidays filtering by country, date range, region, and type.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Holidays retrieved successfully",
+    type: HolidayResponseDto,
+  })
   async getHolidays(
     @Query("country") country?: string,
     @Query("from") from?: string,
@@ -129,6 +139,16 @@ export class HolidaysController {
    * @throws BadRequestException if park has no country data
    */
   @Get("parks/:slug/holidays")
+  @ApiOperation({
+    summary: "Get holidays for a park",
+    description: "Returns holidays for the country where the park is located.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Holidays retrieved successfully",
+    type: HolidayResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getParkHolidays(
     @Param("slug") slug: string,
     @Query("year") year?: number,
