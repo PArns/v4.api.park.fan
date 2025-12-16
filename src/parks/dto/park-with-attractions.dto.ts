@@ -17,20 +17,29 @@ export class ParkWithAttractionsDto {
   name: string;
   slug: string;
   url: string | null;
-  dates?: ParkDailyPredictionDto[]; // Daily ML predictions
+
+  country: string | null;
+  city: string | null;
   timezone: string;
+  status?: "OPERATING" | "CLOSED";
+
   latitude: number | null;
   longitude: number | null;
   continent: string | null;
-  country: string | null;
-  city: string | null;
-  // Destination field removed - was redundant with park name/slug
-  status?: "OPERATING" | "CLOSED";
+
+  // Live Data
   currentLoad?: {
     rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
     baseline: number;
     current: number;
   } | null;
+
+  weather?: {
+    current: WeatherItemDto | null; // Today's weather
+    forecast: WeatherItemDto[]; // 16-day forecast
+  };
+
+  // Content
   attractions: {
     id: string;
     name: string;
@@ -62,7 +71,6 @@ export class ParkWithAttractionsDto {
     } | null;
   }[];
 
-  // Phase 6: Shows & Restaurants
   shows?: {
     id: string;
     name: string;
@@ -102,14 +110,7 @@ export class ParkWithAttractionsDto {
     lastUpdated?: string;
   }[];
 
-  // Integrated live data
-  weather?: {
-    current: WeatherItemDto | null; // Today's weather
-    forecast: WeatherItemDto[]; // 16-day forecast
-  };
-  schedule?: ScheduleItemDto[]; // Today's schedule only
-
-  // Analytics (Phase 4: with optional percentiles)
+  // Analytics & Planning
   analytics?: {
     occupancy: {
       current: number;
@@ -142,19 +143,24 @@ export class ParkWithAttractionsDto {
     };
   } | null;
 
+  schedule?: ScheduleItemDto[]; // Today's schedule only
+  dates?: ParkDailyPredictionDto[]; // Daily ML predictions
+
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,
       name: park.name,
       slug: park.slug,
       url: buildParkUrl(park),
-      timezone: park.timezone,
-      latitude: park.latitude !== undefined ? park.latitude : null,
-      longitude: park.longitude !== undefined ? park.longitude : null,
-      continent: park.continent || null,
+
       country: park.country || null,
       city: park.city || null,
-      // Destination field removed
+      continent: park.continent || null,
+      timezone: park.timezone,
+      status: "CLOSED", // Default to ensure order
+      latitude: park.latitude !== undefined ? park.latitude : null,
+      longitude: park.longitude !== undefined ? park.longitude : null,
+
       attractions: park.attractions
         ? park.attractions.map((attraction) => ({
             id: attraction.id,
@@ -171,6 +177,7 @@ export class ParkWithAttractionsDto {
             id: show.id,
             name: show.name,
             slug: show.slug,
+            status: "CLOSED", // Default to ensure order
             latitude: show.latitude !== undefined ? show.latitude : null,
             longitude: show.longitude !== undefined ? show.longitude : null,
           }))
@@ -180,6 +187,7 @@ export class ParkWithAttractionsDto {
             id: restaurant.id,
             name: restaurant.name,
             slug: restaurant.slug,
+            status: "CLOSED", // Default to ensure order
             latitude:
               restaurant.latitude !== undefined ? restaurant.latitude : null,
             longitude:

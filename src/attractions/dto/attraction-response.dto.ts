@@ -12,8 +12,30 @@ export class AttractionResponseDto {
   id: string;
   name: string;
   slug: string;
+
+  status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
+
+  // Live Data
+  queues?: QueueDataItemDto[]; // Current wait times (all queue types)
+  currentLoad?: {
+    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    baseline: number;
+    message?: string;
+  } | null;
+
+  predictions?: {
+    predictedTime: string;
+    predictedWaitTime: number;
+    confidence: number;
+    trend: string;
+    modelVersion: string;
+  }[]; // Our ML model predictions (hourly)
+
+  forecasts?: ForecastItemDto[]; // ThemeParks.wiki predictions (next 24 hours)
+
   latitude: number | null;
   longitude: number | null;
+
   park: {
     id: string;
     name: string;
@@ -23,20 +45,6 @@ export class AttractionResponseDto {
     country: string | null;
     city: string | null;
   } | null;
-
-  // Integrated live data
-  queues?: QueueDataItemDto[]; // Current wait times (all queue types)
-  status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
-  forecasts?: ForecastItemDto[]; // ThemeParks.wiki predictions (next 24 hours)
-
-  // Phase 5: ML & Analytics
-  predictions?: {
-    predictedTime: string;
-    predictedWaitTime: number;
-    confidence: number;
-    trend: string;
-    modelVersion: string;
-  }[]; // Our ML model predictions (hourly)
 
   statistics?: {
     avgWaitToday: number | null;
@@ -49,7 +57,7 @@ export class AttractionResponseDto {
     timestamp: string;
   } | null;
 
-  // Phase 5.6: Prediction Accuracy (Feedback Loop)
+  // Prediction Accuracy (Feedback Loop)
   predictionAccuracy?: {
     badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
     last30Days: {
@@ -62,21 +70,18 @@ export class AttractionResponseDto {
     message?: string; // Optional explanation
   } | null;
 
-  // Phase 6: Load Rating (Relative Wait Time)
-  currentLoad?: {
-    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
-    baseline: number;
-    message?: string;
-  } | null;
-
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {
       id: attraction.id,
       name: attraction.name,
       slug: attraction.slug,
+
+      status: "CLOSED", // Default
+
       latitude: attraction.latitude !== undefined ? attraction.latitude : null,
       longitude:
         attraction.longitude !== undefined ? attraction.longitude : null,
+
       park: attraction.park
         ? {
             id: attraction.park.id,
@@ -88,6 +93,7 @@ export class AttractionResponseDto {
             city: attraction.park.city || null,
           }
         : null,
+
       predictions: [],
       forecasts: [],
       statistics: null,

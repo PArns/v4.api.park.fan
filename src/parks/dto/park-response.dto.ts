@@ -1,5 +1,7 @@
 import { Park } from "../entities/park.entity";
 import { buildParkUrl } from "../../common/utils/url.util";
+import { WeatherItemDto } from "./weather-item.dto";
+import { ScheduleItemDto } from "./schedule-item.dto";
 
 /**
  * Park Response DTO
@@ -11,18 +13,51 @@ export class ParkResponseDto {
   name: string;
   slug: string;
   url: string | null;
-  timezone: string;
+
+  country: string | null;
+  city: string | null;
+  continent: string | null;
   latitude: number | null;
   longitude: number | null;
-  continent: string | null;
-  continentSlug: string | null;
-  country: string | null;
-  countrySlug: string | null;
-  city: string | null;
-  citySlug: string | null;
-  // Destination field removed - was redundant with park name/slug
-  status?: "OPERATING" | "CLOSED";
-  isOpen?: boolean;
+  timezone: string;
+
+  status: "OPERATING" | "CLOSED";
+
+  // Analytics / Live Data
+  currentLoad?: {
+    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    baseline: number;
+    current: number;
+  } | null;
+
+  weather?: {
+    current: WeatherItemDto | null;
+    forecast: WeatherItemDto[];
+  };
+
+  analytics?: {
+    occupancy: {
+      current: number;
+      trend: "up" | "stable" | "down";
+      comparedToTypical: number;
+      comparisonStatus: "lower" | "typical" | "higher";
+      baseline90thPercentile: number;
+      updatedAt: string;
+    };
+    statistics: {
+      avgWaitTime: number;
+      avgWaitToday: number;
+      peakHour: string | null;
+      crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
+      totalAttractions: number;
+      operatingAttractions: number;
+      closedAttractions: number;
+      timestamp: string;
+    };
+  } | null;
+
+  // Additional Data
+  schedule?: ScheduleItemDto[];
 
   static fromEntity(park: Park): ParkResponseDto {
     return {
@@ -30,16 +65,15 @@ export class ParkResponseDto {
       name: park.name,
       slug: park.slug,
       url: buildParkUrl(park),
-      timezone: park.timezone,
+
+      country: park.country || null,
+      city: park.city || null,
+      continent: park.continent || null,
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,
-      continent: park.continent || null,
-      continentSlug: park.continentSlug || null,
-      country: park.country || null,
-      countrySlug: park.countrySlug || null,
-      city: park.city || null,
-      citySlug: park.citySlug || null,
-      // Destination field removed
+      timezone: park.timezone,
+
+      status: "CLOSED", // Default, overwritten by service
     };
   }
 }

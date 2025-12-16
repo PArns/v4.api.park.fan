@@ -785,7 +785,7 @@ export class ParksController {
 
     return parks.map((park) => {
       const dto = ParkResponseDto.fromEntity(park);
-      dto.status = statusMap.get(park.id);
+      dto.status = statusMap.get(park.id) || "CLOSED";
       return dto;
     });
   }

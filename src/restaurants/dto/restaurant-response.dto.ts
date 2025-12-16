@@ -9,10 +9,13 @@ export class RestaurantResponseDto {
   id: string;
   name: string;
   slug: string;
-  latitude: number | null;
-  longitude: number | null;
+
   cuisineType: string | null;
   requiresReservation: boolean;
+
+  latitude: number | null;
+  longitude: number | null;
+
   park: {
     id: string;
     name: string;
@@ -32,10 +35,12 @@ export class RestaurantResponseDto {
     dto.id = restaurant.id;
     dto.name = restaurant.name;
     dto.slug = restaurant.slug;
-    dto.latitude = restaurant.latitude || null;
-    dto.longitude = restaurant.longitude || null;
+
     dto.cuisineType = restaurant.cuisineType || null;
     dto.requiresReservation = restaurant.requiresReservation;
+
+    dto.latitude = restaurant.latitude || null;
+    dto.longitude = restaurant.longitude || null;
 
     // Map park relation if loaded
     if (restaurant.park) {
@@ -60,10 +65,12 @@ export class RestaurantWithLiveDataDto extends RestaurantResponseDto {
   status: string;
   waitTime: number | null;
   partySize: number | null;
+
   operatingHours?: Array<{
     type: string;
     startTime: string;
     endTime: string;
   }> | null;
+
   lastUpdated: string;
 }

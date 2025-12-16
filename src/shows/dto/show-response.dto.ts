@@ -9,6 +9,10 @@ export class ShowResponseDto {
   id: string;
   name: string;
   slug: string;
+
+  latitude: number | null;
+  longitude: number | null;
+
   park: {
     id: string;
     name: string;
@@ -28,6 +32,9 @@ export class ShowResponseDto {
     dto.id = show.id;
     dto.name = show.name;
     dto.slug = show.slug;
+
+    dto.latitude = show.latitude || null;
+    dto.longitude = show.longitude || null;
 
     // Map park relation if loaded
     if (show.park) {
@@ -50,15 +57,18 @@ export class ShowResponseDto {
 
 export class ShowWithLiveDataDto extends ShowResponseDto {
   status: string;
+
   showtimes: Array<{
     type: string;
     startTime: string;
     endTime?: string;
   }> | null;
+
   operatingHours?: Array<{
     type: string;
     startTime: string;
     endTime: string;
   }> | null;
+
   lastUpdated: string;
 }
