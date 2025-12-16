@@ -4,7 +4,7 @@ export interface OccupancyDto {
   comparedToTypical: number; // Absolute difference from typical (P90 baseline)
   comparisonStatus: "lower" | "typical" | "higher"; // Human-readable status
   baseline90thPercentile: number; // The calculated P90 value (NEW - Phase 4)
-  updatedAt: Date;
+  updatedAt: string; // ISO 8601 timestamp - when occupancy was calculated
   breakdown?: {
     currentAvgWait: number;
     typicalAvgWait: number;

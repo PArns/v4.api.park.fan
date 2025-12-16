@@ -78,12 +78,6 @@ export class CurrentModelDto {
   trainedAt: string;
 
   @ApiProperty({
-    example: "/app/models/catboost_v1.1.0.cbm",
-    description: "Path to model file",
-  })
-  filePath: string;
-
-  @ApiProperty({
     example: 2457600,
     nullable: true,
     description: "Model file size in bytes",

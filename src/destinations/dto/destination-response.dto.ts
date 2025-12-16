@@ -7,18 +7,14 @@ import { Destination } from "../entities/destination.entity";
  */
 export class DestinationResponseDto {
   id: string;
-  name: string;
+  externalId: string;
   slug: string;
-  createdAt: Date;
-  updatedAt: Date;
 
   static fromEntity(destination: Destination): DestinationResponseDto {
     return {
       id: destination.id,
-      name: destination.name,
+      externalId: destination.externalId,
       slug: destination.slug,
-      createdAt: destination.createdAt,
-      updatedAt: destination.updatedAt,
     };
   }
 }

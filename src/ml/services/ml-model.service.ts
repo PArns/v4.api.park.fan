@@ -81,7 +81,6 @@ export class MLModelService {
     const currentModelDto: CurrentModelDto = {
       version: model.version,
       trainedAt: model.trainedAt.toISOString(),
-      filePath: model.filePath,
       fileSizeBytes,
       fileSizeMB,
       modelType: model.modelType,

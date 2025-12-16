@@ -142,9 +142,6 @@ export class ParkWithAttractionsDto {
     };
   } | null;
 
-  createdAt: Date;
-  updatedAt: Date;
-
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,
@@ -191,8 +188,6 @@ export class ParkWithAttractionsDto {
             requiresReservation: restaurant.requiresReservation,
           }))
         : [],
-      createdAt: park.createdAt,
-      updatedAt: park.updatedAt,
     };
   }
 }

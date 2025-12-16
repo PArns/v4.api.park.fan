@@ -66,11 +66,8 @@ export class AttractionResponseDto {
   currentLoad?: {
     rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
     baseline: number;
-    current: number;
+    message?: string;
   } | null;
-
-  createdAt: Date;
-  updatedAt: Date;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {
@@ -91,8 +88,9 @@ export class AttractionResponseDto {
             city: attraction.park.city || null,
           }
         : null,
-      createdAt: attraction.createdAt,
-      updatedAt: attraction.updatedAt,
+      predictions: [],
+      forecasts: [],
+      statistics: null,
     };
   }
 }

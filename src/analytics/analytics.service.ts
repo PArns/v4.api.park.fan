@@ -85,7 +85,7 @@ export class AnalyticsService {
         comparedToTypical: 0,
         comparisonStatus: "typical",
         baseline90thPercentile: 0,
-        updatedAt: now,
+        updatedAt: now.toISOString(),
         breakdown: {
           currentAvgWait: 0,
           typicalAvgWait: 0,
@@ -112,7 +112,7 @@ export class AnalyticsService {
         comparedToTypical: 0,
         comparisonStatus: "typical",
         baseline90thPercentile: 0,
-        updatedAt: now,
+        updatedAt: now.toISOString(),
         breakdown: {
           currentAvgWait,
           typicalAvgWait: 0,
@@ -174,7 +174,7 @@ export class AnalyticsService {
       comparedToTypical: Math.round(comparedToTypical),
       comparisonStatus,
       baseline90thPercentile: Math.round(p90Baseline),
-      updatedAt: now,
+      updatedAt: now.toISOString(),
       breakdown: {
         currentAvgWait: Math.round(currentAvgWait),
         typicalAvgWait: Math.round(typicalAvgWait || 0),

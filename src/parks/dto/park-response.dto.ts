@@ -23,8 +23,6 @@ export class ParkResponseDto {
   // Destination field removed - was redundant with park name/slug
   status?: "OPERATING" | "CLOSED";
   isOpen?: boolean;
-  createdAt: Date;
-  updatedAt: Date;
 
   static fromEntity(park: Park): ParkResponseDto {
     return {
@@ -42,8 +40,6 @@ export class ParkResponseDto {
       city: park.city || null,
       citySlug: park.citySlug || null,
       // Destination field removed
-      createdAt: park.createdAt,
-      updatedAt: park.updatedAt,
     };
   }
 }

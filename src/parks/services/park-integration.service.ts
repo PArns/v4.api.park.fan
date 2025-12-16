@@ -365,7 +365,7 @@ export class ParkIntegrationService {
             comparedToTypical: occupancy.comparedToTypical,
             comparisonStatus: occupancy.comparisonStatus,
             baseline90thPercentile: occupancy.baseline90thPercentile,
-            updatedAt: occupancy.updatedAt.toISOString(),
+            updatedAt: occupancy.updatedAt,
             breakdown: occupancy.breakdown,
           },
           statistics: {
