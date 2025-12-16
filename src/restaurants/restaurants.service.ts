@@ -442,4 +442,30 @@ export class RestaurantsService {
 
     return { data, total };
   }
+  /**
+   * Find current status for all restaurants in a park (bulk query optimization)
+   */
+  async findCurrentStatusByPark(
+    parkId: string,
+  ): Promise<Map<string, RestaurantLiveData>> {
+    const data = await this.restaurantLiveDataRepository
+      .createQueryBuilder("rld")
+      .innerJoin("rld.restaurant", "restaurant")
+      .where("restaurant.parkId = :parkId", { parkId })
+      .andWhere(
+        `rld.timestamp = (
+          SELECT MAX(rld2.timestamp)
+          FROM restaurant_live_data rld2
+          WHERE rld2."restaurantId" = rld."restaurantId"
+        )`,
+      )
+      .getMany();
+
+    const result = new Map<string, RestaurantLiveData>();
+    for (const item of data) {
+      result.set(item.restaurantId, item);
+    }
+
+    return result;
+  }
 }

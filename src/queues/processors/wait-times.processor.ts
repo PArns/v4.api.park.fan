@@ -355,18 +355,25 @@ export class WaitTimesProcessor {
             closedParksCount++;
 
             // Get all entities for this closed park
-            const [parkAttractions, parkShows, parkRestaurants] =
-              await Promise.all([
-                this.attractionsService.getRepository().find({
-                  where: { parkId: park.id },
-                }),
-                this.showsService.getRepository().find({
-                  where: { parkId: park.id },
-                }),
-                this.restaurantsService.getRepository().find({
-                  where: { parkId: park.id },
-                }),
-              ]);
+            const [
+              parkAttractions,
+              parkShows,
+              parkRestaurants,
+              lastShowDataMap,
+              lastRestaurantDataMap,
+            ] = await Promise.all([
+              this.attractionsService.getRepository().find({
+                where: { parkId: park.id },
+              }),
+              this.showsService.getRepository().find({
+                where: { parkId: park.id },
+              }),
+              this.restaurantsService.getRepository().find({
+                where: { parkId: park.id },
+              }),
+              this.showsService.findCurrentStatusByPark(park.id),
+              this.restaurantsService.findCurrentStatusByPark(park.id),
+            ]);
 
             // Mark each attraction as CLOSED
             for (const attraction of parkAttractions) {
@@ -394,12 +401,11 @@ export class WaitTimesProcessor {
               }
             }
 
-            // Mark each show as CLOSED (but preserve operatingHours)
+            // Mark each show as CLOSED (preserve showtimes & operatingHours)
             for (const show of parkShows) {
               try {
-                // Fetch last known live data to preserve operatingHours
-                const lastLiveData =
-                  await this.showsService.findCurrentStatusByShow(show.id);
+                // Get last known live data from bulk fetch
+                const lastLiveData = lastShowDataMap.get(show.id);
 
                 const closedData: EntityLiveResponse = {
                   id: show.externalId,
@@ -407,8 +413,8 @@ export class WaitTimesProcessor {
                   entityType: EntityType.SHOW,
                   status: LiveStatus.CLOSED,
                   lastUpdated: new Date().toISOString(),
-                  // Preserve operatingHours from last known data (if available)
-                  showtimes: [], // Clear live showtimes
+                  // Preserve data from last known status if available
+                  showtimes: lastLiveData?.showtimes || [],
                   operatingHours: lastLiveData?.operatingHours || [],
                 };
 
@@ -427,14 +433,11 @@ export class WaitTimesProcessor {
               }
             }
 
-            // Mark each restaurant as CLOSED (but preserve operatingHours)
+            // Mark each restaurant as CLOSED (preserve operatingHours)
             for (const restaurant of parkRestaurants) {
               try {
-                // Fetch last known live data to preserve operatingHours
-                const lastLiveData =
-                  await this.restaurantsService.findCurrentStatusByRestaurant(
-                    restaurant.id,
-                  );
+                // Get last known live data from bulk fetch
+                const lastLiveData = lastRestaurantDataMap.get(restaurant.id);
 
                 const closedData: EntityLiveResponse = {
                   id: restaurant.externalId,

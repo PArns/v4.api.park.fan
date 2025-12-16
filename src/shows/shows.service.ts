@@ -460,4 +460,30 @@ export class ShowsService {
 
     return { data, total };
   }
+  /**
+   * Find current status for all shows in a park (bulk query optimization)
+   */
+  async findCurrentStatusByPark(
+    parkId: string,
+  ): Promise<Map<string, ShowLiveData>> {
+    const showData = await this.showLiveDataRepository
+      .createQueryBuilder("sld")
+      .innerJoin("sld.show", "show")
+      .where("show.parkId = :parkId", { parkId })
+      .andWhere(
+        `sld.timestamp = (
+          SELECT MAX(sld2.timestamp)
+          FROM show_live_data sld2
+          WHERE sld2."showId" = sld."showId"
+        )`,
+      )
+      .getMany();
+
+    const result = new Map<string, ShowLiveData>();
+    for (const data of showData) {
+      result.set(data.showId, data);
+    }
+
+    return result;
+  }
 }
