@@ -2,6 +2,8 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg16
     restart: unless-stopped
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_USER: ${DB_USERNAME:-parkfan}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
