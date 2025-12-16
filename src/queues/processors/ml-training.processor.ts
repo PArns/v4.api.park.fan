@@ -29,7 +29,7 @@ export class MLTrainingProcessor {
     private mlModelRepository: Repository<MLModel>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) {}
+  ) { }
 
   @Process("train-model")
   async handleTrainModels(_job: Job): Promise<void> {
@@ -43,22 +43,57 @@ export class MLTrainingProcessor {
 
       this.logger.log(`Training version: ${version}`);
 
-      // Execute training in ml-service container
-      const command = `docker exec parkfan_ml_service python train.py --version ${version}`;
+      // Trigger training via HTTP API (replaces docker exec)
+      const mlServiceUrl =
+        process.env.ML_SERVICE_URL || "http://ml-service:8000";
+      this.logger.log(`Triggering training via ${mlServiceUrl}/train`);
 
-      this.logger.log(`Executing: ${command}`);
-      const { stdout, stderr } = await execAsync(command, {
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+      const response = await axios.post(`${mlServiceUrl}/train`, {
+        version,
       });
 
-      if (stderr && !stderr.includes("[notice]")) {
-        this.logger.warn("Training stderr:", stderr);
+      this.logger.log("Training started:", response.data);
+
+      // Poll for training completion
+      let isTraining = true;
+      let attempts = 0;
+      const maxAttempts = 60; // 30 minutes max (30s intervals)
+
+      while (isTraining && attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 30000)); // Wait 30s
+        attempts++;
+
+        const statusResponse = await axios.get(`${mlServiceUrl}/train/status`);
+        const status = statusResponse.data;
+
+        this.logger.log(
+          `Training status check ${attempts}/${maxAttempts}: ${status.status}`,
+        );
+
+        if (status.status === "completed") {
+          isTraining = false;
+          this.logger.log("✅ Training completed successfully");
+        } else if (status.status === "failed") {
+          throw new Error(`Training failed: ${status.error}`);
+        }
       }
 
-      this.logger.log("Training output:", stdout);
+      if (attempts >= maxAttempts) {
+        throw new Error("Training timeout - exceeded 30 minutes");
+      }
 
-      // Parse metrics from output (simplified - could be improved)
-      const metrics = this.parseMetrics(stdout);
+      // Fetch training metrics from ML service
+      const modelInfoResponse = await axios.get(`${mlServiceUrl}/model/info`);
+      const modelInfo = modelInfoResponse.data;
+
+      const metrics = {
+        mae: modelInfo.metrics?.mae || 0,
+        rmse: modelInfo.metrics?.rmse || 0,
+        mape: modelInfo.metrics?.mape || 0,
+        r2: modelInfo.metrics?.r2 || 0,
+        trainSamples: modelInfo.metrics?.train_samples || 0,
+        valSamples: modelInfo.metrics?.val_samples || 0,
+      };
 
       // Deactivate old models
       await this.mlModelRepository.update(
@@ -118,20 +153,6 @@ export class MLTrainingProcessor {
 
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();
-
-      // Trigger hot-reload on the ML service
-      this.logger.log("🔄 Triggering ML service model reload...");
-      try {
-        await axios.post("http://parkfan_ml_service:8000/model/reload");
-        this.logger.log("✅ ML service reloaded successfully");
-      } catch (reloadError: any) {
-        this.logger.error(
-          "❌ Failed to reload ML service:",
-          reloadError.message,
-        );
-        // We don't fail the job here, as the training was successful.
-        // The service will pick it up on next restart anyway.
-      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";

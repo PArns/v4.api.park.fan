@@ -160,6 +160,109 @@ async def reload_model():
         raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
 
 
+# Training status tracking
+training_status = {
+    "is_training": False,
+    "current_version": None,
+    "started_at": None,
+    "finished_at": None,
+    "status": "idle",
+    "error": None
+}
+
+
+class TrainRequest(BaseModel):
+    """Training request"""
+    version: Optional[str] = None
+
+
+@app.post("/train")
+async def train_model_endpoint(request: TrainRequest):
+    """
+    Trigger model training in background
+    
+    This endpoint starts training asynchronously and returns immediately.
+    Use /train/status to check progress.
+    """
+    global training_status
+    
+    if training_status["is_training"]:
+        raise HTTPException(
+            status_code=409, 
+            detail="Training already in progress"
+        )
+    
+    # Generate version if not provided
+    version = request.version
+    if not version:
+        from datetime import datetime
+        now = datetime.utcnow()
+        version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
+    
+    # Start training in background thread
+    import threading
+    from train import train_model
+    
+    def training_worker():
+        global training_status
+        try:
+            training_status["is_training"] = True
+            training_status["current_version"] = version
+            training_status["started_at"] = datetime.utcnow().isoformat()
+            training_status["status"] = "training"
+            training_status["error"] = None
+            training_status["finished_at"] = None
+            
+            logger.info(f"🤖 Starting training in background for version {version}")
+            train_model(version=version)
+            
+            training_status["status"] = "completed"
+            training_status["finished_at"] = datetime.utcnow().isoformat()
+            training_status["is_training"] = False
+            
+            logger.info(f"✅ Training completed for version {version}")
+            
+            # Auto-reload the new model
+            try:
+                global model
+                new_model = WaitTimeModel(version)
+                new_model.load()
+                model = new_model
+                logger.info("✅ New model loaded automatically")
+            except Exception as e:
+                logger.error(f"Failed to auto-load new model: {e}")
+                
+        except Exception as e:
+            logger.error(f"❌ Training failed: {e}")
+            training_status["status"] = "failed"
+            training_status["error"] = str(e)
+            training_status["finished_at"] = datetime.utcnow().isoformat()
+            training_status["is_training"] = False
+    
+    # Start background thread
+    thread = threading.Thread(target=training_worker, daemon=True)
+    thread.start()
+    
+    return {
+        "status": "training_started",
+        "version": version,
+        "message": f"Training started in background for version {version}",
+        "check_status_at": "/train/status"
+    }
+
+
+@app.get("/train/status")
+async def get_training_status():
+    """Get current training status"""
+    return {
+        "is_training": training_status["is_training"],
+        "current_version": training_status["current_version"],
+        "started_at": training_status["started_at"],
+        "finished_at": training_status["finished_at"],
+        "status": training_status["status"],
+        "error": training_status["error"]
+    }
+
 
 @app.post("/predict", response_model=BulkPredictionResponse)
 async def predict(request: PredictionRequest):

@@ -7,6 +7,7 @@ import { Park } from "../parks/entities/park.entity";
 import { Holiday } from "../holidays/entities/holiday.entity";
 import { WeatherData } from "../parks/entities/weather-data.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
+import { MLModel } from "../ml/entities/ml-model.entity";
 
 /**
  * Database Seeding Service
@@ -38,6 +39,8 @@ export class DbSeedService implements OnModuleInit {
     private weatherRepository: Repository<WeatherData>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
+    @InjectRepository(MLModel)
+    private mlModelRepository: Repository<MLModel>,
     @InjectQueue("park-metadata")
     private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata")
@@ -48,7 +51,9 @@ export class DbSeedService implements OnModuleInit {
     private holidaysQueue: Queue,
     @InjectQueue("wait-times")
     private waitTimesQueue: Queue,
-  ) {}
+    @InjectQueue("ml-training")
+    private mlTrainingQueue: Queue,
+  ) { }
 
   async onModuleInit(): Promise<void> {
     // Run async to not block app startup
@@ -140,6 +145,24 @@ export class DbSeedService implements OnModuleInit {
       );
     }
 
+    // 5. ML Model (trigger training if no active model exists)
+    if (checks.needsMLModel) {
+      this.logger.log("❌ ML Model: No active model found");
+      jobsToQueue.push({
+        name: "ML Training",
+        priority: 1, // Low priority - run after all data is collected
+        fn: async () => {
+          await this.mlTrainingQueue.add(
+            "train-model",
+            {},
+            { priority: 1, delay: 60000 }, // 1 minute delay to ensure data is synced
+          );
+        },
+      });
+    } else {
+      this.logger.log(`✅ ML Model: Active model found (version: ${checks.mlModelVersion})`);
+    }
+
     // Queue jobs if any are needed
     if (jobsToQueue.length > 0) {
       this.logger.log(
@@ -176,6 +199,8 @@ export class DbSeedService implements OnModuleInit {
     needsWaitTimes: boolean;
     queueDataCount: number;
     latestQueueTime: Date | null;
+    needsMLModel: boolean;
+    mlModelVersion: string | null;
   }> {
     // Check Parks
     const parkCount = await this.parkRepository.count();
@@ -226,6 +251,14 @@ export class DbSeedService implements OnModuleInit {
 
     const needsWaitTimes = recentQueueData === 0;
 
+    // Check ML Model (should have at least one active model)
+    const activeModel = await this.mlModelRepository.findOne({
+      where: { isActive: true },
+      select: ["version"],
+    });
+
+    const needsMLModel = !activeModel;
+
     return {
       needsParks,
       parkCount,
@@ -237,6 +270,8 @@ export class DbSeedService implements OnModuleInit {
       needsWaitTimes,
       queueDataCount: recentQueueData,
       latestQueueTime: latestQueue?.timestamp || null,
+      needsMLModel,
+      mlModelVersion: activeModel?.version || null,
     };
   }
 }
