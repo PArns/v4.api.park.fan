@@ -50,4 +50,4 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
     MLDashboardService,
   ],
 })
-export class MLModule { }
+export class MLModule {}

@@ -180,7 +180,9 @@ export class ParksService {
     country?: string;
     city?: string;
     sort?: string;
-  }): Promise<Park[]> {
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Park[]; total: number }> {
     const queryBuilder = this.parkRepository
       .createQueryBuilder("park")
       .leftJoinAndSelect("park.destination", "destination");
@@ -221,7 +223,13 @@ export class ParksService {
       queryBuilder.orderBy("park.name", "ASC");
     }
 
-    return queryBuilder.getMany();
+    // Apply pagination
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    queryBuilder.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
+    return { data, total };
   }
 
   /**

@@ -62,14 +62,36 @@ export class ParksController {
   /**
    * GET /v1/parks
    *
-   * Returns all parks globally with optional filtering and sorting.
-   *
-   * @param query - Filter and sort options (continent, country, city, sort)
+   * Returns all parks with optional filtering and sorting.
+   * Now supports pagination with default limit of 10 items.
    */
   @Get()
-  async findAll(@Query() query: ParkQueryDto): Promise<ParkResponseDto[]> {
-    const parks = await this.parksService.findAllWithFilters(query);
-    return this.mapToResponseWithStatus(parks);
+  async findAll(@Query() query: ParkQueryDto): Promise<{
+    data: ParkResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
+    const { data: parks, total } =
+      await this.parksService.findAllWithFilters(query);
+    const mappedParks = await this.mapToResponseWithStatus(parks);
+
+    return {
+      data: mappedParks,
+      pagination: {
+        page: query.page || 1,
+        limit: query.limit || 10,
+        total,
+        totalPages: Math.ceil(total / (query.limit || 10)),
+        hasNext: (query.page || 1) < Math.ceil(total / (query.limit || 10)),
+        hasPrevious: (query.page || 1) > 1,
+      },
+    };
   }
 
   /**

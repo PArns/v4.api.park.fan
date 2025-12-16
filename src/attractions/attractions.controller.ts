@@ -35,20 +35,39 @@ export class AttractionsController {
    * GET /v1/attractions
    *
    * Returns all attractions globally with optional filtering and sorting.
+   * Now supports pagination with default limit of 10 items.
    *
-   * @param query - Filter and sort options (park, status, queueType, waitTime range, sort)
-   *
-   * Note: This can return a large dataset (4000+ attractions).
-   * Consider using pagination in future versions.
+   * @param query - Filter and sort options (park, status, queueType, waitTime range, sort, page, limit)
    */
   @Get()
-  async findAll(
-    @Query() query: AttractionQueryDto,
-  ): Promise<AttractionResponseDto[]> {
-    const attractions = await this.attractionsService.findAllWithFilters(query);
-    return attractions.map((attraction) =>
+  async findAll(@Query() query: AttractionQueryDto): Promise<{
+    data: AttractionResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
+    const { data: attractions, total } =
+      await this.attractionsService.findAllWithFilters(query);
+    const mappedAttractions = attractions.map((attraction) =>
       AttractionResponseDto.fromEntity(attraction),
     );
+
+    return {
+      data: mappedAttractions,
+      pagination: {
+        page: query.page || 1,
+        limit: query.limit || 10,
+        total,
+        totalPages: Math.ceil(total / (query.limit || 10)),
+        hasNext: (query.page || 1) < Math.ceil(total / (query.limit || 10)),
+        hasPrevious: (query.page || 1) > 1,
+      },
+    };
   }
 
   /**

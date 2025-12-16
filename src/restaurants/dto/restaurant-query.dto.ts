@@ -1,7 +1,8 @@
 import { IsOptional, IsString, IsBoolean, IsIn } from "class-validator";
 import { Transform } from "class-transformer";
+import { PaginationQueryDto } from "../../common/dto/pagination.dto";
 
-export class RestaurantQueryDto {
+export class RestaurantQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   park?: string;

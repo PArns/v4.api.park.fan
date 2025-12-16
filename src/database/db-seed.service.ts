@@ -53,7 +53,7 @@ export class DbSeedService implements OnModuleInit {
     private waitTimesQueue: Queue,
     @InjectQueue("ml-training")
     private mlTrainingQueue: Queue,
-  ) { }
+  ) {}
 
   async onModuleInit(): Promise<void> {
     // Run async to not block app startup
@@ -160,7 +160,9 @@ export class DbSeedService implements OnModuleInit {
         },
       });
     } else {
-      this.logger.log(`✅ ML Model: Active model found (version: ${checks.mlModelVersion})`);
+      this.logger.log(
+        `✅ ML Model: Active model found (version: ${checks.mlModelVersion})`,
+      );
     }
 
     // Queue jobs if any are needed

@@ -126,7 +126,9 @@ export class AttractionsService {
     waitTimeMin?: number;
     waitTimeMax?: number;
     sort?: string;
-  }): Promise<Attraction[]> {
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Attraction[]; total: number }> {
     const queryBuilder = this.attractionRepository
       .createQueryBuilder("attraction")
       .leftJoinAndSelect("attraction.park", "park");
@@ -198,7 +200,13 @@ export class AttractionsService {
       queryBuilder.orderBy("attraction.name", "ASC");
     }
 
-    return queryBuilder.getMany();
+    // Apply pagination
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    queryBuilder.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
+    return { data, total };
   }
 
   /**

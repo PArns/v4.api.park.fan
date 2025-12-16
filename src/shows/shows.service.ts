@@ -128,7 +128,9 @@ export class ShowsService {
     durationMin?: number;
     durationMax?: number;
     sort?: string;
-  }): Promise<Show[]> {
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Show[]; total: number }> {
     const queryBuilder = this.showRepository
       .createQueryBuilder("show")
       .leftJoinAndSelect("show.park", "park");
@@ -168,7 +170,13 @@ export class ShowsService {
       queryBuilder.orderBy("show.name", "ASC");
     }
 
-    return queryBuilder.getMany();
+    // Apply pagination
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    queryBuilder.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
+    return { data, total };
   }
 
   /**

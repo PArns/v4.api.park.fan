@@ -29,7 +29,7 @@ export class MLTrainingProcessor {
     private mlModelRepository: Repository<MLModel>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) { }
+  ) {}
 
   @Process("train-model")
   async handleTrainModels(_job: Job): Promise<void> {

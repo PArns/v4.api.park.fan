@@ -149,7 +149,9 @@ export class RestaurantsService {
     cuisineType?: string;
     requiresReservation?: boolean;
     sort?: string;
-  }): Promise<Restaurant[]> {
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Restaurant[]; total: number }> {
     const queryBuilder = this.restaurantRepository
       .createQueryBuilder("restaurant")
       .leftJoinAndSelect("restaurant.park", "park");
@@ -194,7 +196,13 @@ export class RestaurantsService {
       queryBuilder.orderBy("restaurant.name", "ASC");
     }
 
-    return queryBuilder.getMany();
+    // Apply pagination
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    queryBuilder.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
+    return { data, total };
   }
 
   /**

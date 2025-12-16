@@ -28,13 +28,37 @@ export class ShowsController {
    * GET /v1/shows
    *
    * Returns all shows globally with optional filtering and sorting.
+   * Now supports pagination with default limit of 10 items.
    *
-   * @param query - Filter and sort options (park, duration range, sort)
+   * @param query - Filter and sort options (park, duration range, sort, page, limit)
    */
   @Get()
-  async findAll(@Query() query: ShowQueryDto): Promise<ShowResponseDto[]> {
-    const shows = await this.showsService.findAllWithFilters(query);
-    return shows.map((show) => ShowResponseDto.fromEntity(show));
+  async findAll(@Query() query: ShowQueryDto): Promise<{
+    data: ShowResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
+    const { data: shows, total } =
+      await this.showsService.findAllWithFilters(query);
+    const mappedShows = shows.map((show) => ShowResponseDto.fromEntity(show));
+
+    return {
+      data: mappedShows,
+      pagination: {
+        page: query.page || 1,
+        limit: query.limit || 10,
+        total,
+        totalPages: Math.ceil(total / (query.limit || 10)),
+        hasNext: (query.page || 1) < Math.ceil(total / (query.limit || 10)),
+        hasPrevious: (query.page || 1) > 1,
+      },
+    };
   }
 
   /**

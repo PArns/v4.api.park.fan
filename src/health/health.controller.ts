@@ -63,7 +63,7 @@ export class HealthController {
     @InjectRepository(MLModel)
     private mlModelRepository: Repository<MLModel>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   @Get()
   async getHealth(): Promise<HealthStatus> {
@@ -108,11 +108,11 @@ export class HealthController {
           trained_at: activeModel.trainedAt?.toISOString() || "",
           ...(activeModel.mae !== undefined &&
             activeModel.rmse !== undefined && {
-            metrics: {
-              mae: activeModel.mae,
-              rmse: activeModel.rmse,
-            },
-          }),
+              metrics: {
+                mae: activeModel.mae,
+                rmse: activeModel.rmse,
+              },
+            }),
         },
       }),
       ...(predictions24h > 0 && { predictions_24h: predictions24h }),
@@ -229,7 +229,7 @@ export class HealthController {
       return parseInt(count[0]?.count || "0", 10);
     } catch (error) {
       // If table doesn't exist yet (first deployment), return 0
-      if (error instanceof Error && error.message?.includes('does not exist')) {
+      if (error instanceof Error && error.message?.includes("does not exist")) {
         return 0;
       }
       console.error("Error fetching predictions count:", error);

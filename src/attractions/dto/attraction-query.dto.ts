@@ -4,8 +4,9 @@ import {
   QueueType,
   LiveStatus,
 } from "../../external-apis/themeparks/themeparks.types";
+import { PaginationQueryDto } from "../../common/dto/pagination.dto";
 
-export class AttractionQueryDto {
+export class AttractionQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   park?: string;

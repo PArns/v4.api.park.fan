@@ -28,20 +28,42 @@ export class RestaurantsController {
   constructor(private readonly restaurantsService: RestaurantsService) {}
 
   /**
-   * GET /v1/restaurants
+   * GET /v1/ restaurants
    *
    * Returns all restaurants globally with optional filtering and sorting.
+   * Now supports pagination with default limit of 10 items.
    *
-   * @param query - Filter and sort options (park, cuisineType, requiresReservation, sort)
+   * @param query - Filter and sort options (park, cuisineType, requiresReservation, sort, page, limit)
    */
   @Get()
-  async findAll(
-    @Query() query: RestaurantQueryDto,
-  ): Promise<RestaurantResponseDto[]> {
-    const restaurants = await this.restaurantsService.findAllWithFilters(query);
-    return restaurants.map((restaurant) =>
+  async findAll(@Query() query: RestaurantQueryDto): Promise<{
+    data: RestaurantResponseDto[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrevious: boolean;
+    };
+  }> {
+    const { data: restaurants, total } =
+      await this.restaurantsService.findAllWithFilters(query);
+    const mappedRestaurants = restaurants.map((restaurant) =>
       RestaurantResponseDto.fromEntity(restaurant),
     );
+
+    return {
+      data: mappedRestaurants,
+      pagination: {
+        page: query.page || 1,
+        limit: query.limit || 10,
+        total,
+        totalPages: Math.ceil(total / (query.limit || 10)),
+        hasNext: (query.page || 1) < Math.ceil(total / (query.limit || 10)),
+        hasPrevious: (query.page || 1) > 1,
+      },
+    };
   }
 
   /**

@@ -33,4 +33,4 @@ import { MLModel } from "../ml/entities/ml-model.entity";
   providers: [TimescaleInitService, DbSeedService],
   exports: [TimescaleInitService, DbSeedService],
 })
-export class DatabaseModule { }
+export class DatabaseModule {}

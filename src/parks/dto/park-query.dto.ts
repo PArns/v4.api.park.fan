@@ -1,6 +1,7 @@
 import { IsOptional, IsString, IsIn } from "class-validator";
+import { PaginationQueryDto } from "../../common/dto/pagination.dto";
 
-export class ParkQueryDto {
+export class ParkQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   continent?: string;
