@@ -29,6 +29,7 @@ import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { ParkResponseDto } from "./dto/park-response.dto";
 import { ParkWithAttractionsDto } from "./dto/park-with-attractions.dto";
 import { ParkQueryDto } from "./dto/park-query.dto";
+import { ParkDailyPredictionDto } from "./dto/park-daily-prediction.dto";
 import { WeatherResponseDto } from "./dto/weather-response.dto";
 import { WeatherItemDto } from "./dto/weather-item.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
@@ -314,69 +315,13 @@ export class ParksController {
    * Returns schedule for a specific date.
    *
    * @param slug - Park slug
-   * @param date - Date (YYYY-MM-DD)
-   * @throws NotFoundException if park not found
-   * @throws BadRequestException if date format invalid
-   */
-  @Get(":slug/schedule/:date")
-  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache (schedule updates daily)
-  @ApiOperation({
-    summary: "Get schedule for date",
-    description:
-      "Returns operating hours, shows, and parades for a specific date.",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Schedule data",
-    type: ScheduleResponseDto,
-  })
-  @ApiResponse({ status: 404, description: "Park not found" })
-  async getScheduleForDate(
-    @Param("slug") slug: string,
-    @Param("date") date: string,
-  ): Promise<ScheduleResponseDto> {
-    const park = await this.parksService.findBySlug(slug);
-
-    if (!park) {
-      throw new NotFoundException(`Park with slug "${slug}" not found`);
-    }
-
-    // Parse date parameter
-    const targetDate = new Date(date);
-    if (isNaN(targetDate.getTime())) {
-      throw new BadRequestException("Invalid date format. Use YYYY-MM-DD.");
-    }
-    targetDate.setHours(0, 0, 0, 0);
-
-    // Get schedule for this specific date
-    const endDate = new Date(targetDate);
-    endDate.setHours(23, 59, 59, 999);
-
-    const scheduleData = await this.parksService.getSchedule(
-      park.id,
-      targetDate,
-      endDate,
-    );
-
-    return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-      },
-      schedule: scheduleData.map((s) => ScheduleItemDto.fromEntity(s)),
-    };
-  }
-
-  /**
    * GET /v1/parks/:slug/schedule
    *
-   * Returns schedule data for a park within a date range.
+   * Returns park operating schedule with optional date range filtering.
    *
    * @param slug - Park slug
-   * @param from - Start date (YYYY-MM-DD, optional, defaults to today)
-   * @param to - End date (YYYY-MM-DD, optional, defaults to 30 days ahead)
+   * @param from - Start date (YYYY-MM-DD, optional)
+   * @param to - End date (YYYY-MM-DD, optional)
    * @throws NotFoundException if park not found
    * @throws BadRequestException if date format invalid
    */
@@ -435,7 +380,7 @@ export class ParksController {
     }
     toDate.setHours(23, 59, 59, 999);
 
-    const scheduleData = await this.parksService.getSchedule(
+    const schedules = await this.parksService.getSchedule(
       park.id,
       fromDate,
       toDate,
@@ -448,7 +393,167 @@ export class ParksController {
         slug: park.slug,
         timezone: park.timezone,
       },
-      schedule: scheduleData.map((s) => ScheduleItemDto.fromEntity(s)),
+      schedule: schedules.map((s) => ScheduleItemDto.fromEntity(s)),
+    };
+  }
+
+  /**
+   * GET /v1/parks/:slug/predictions/yearly
+   *
+   * Returns yearly crowd predictions (365 days) for trip planning.
+   */
+  @Get(":slug/predictions/yearly")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours HTTP cache
+  @ApiOperation({
+    summary: "Get yearly crowd predictions",
+    description:
+      "Returns daily crowd predictions for the entire year (365 days). " +
+      "Useful for long-term trip planning and identifying best times to visit.",
+  })
+  @ApiExtraModels(ParkDailyPredictionDto)
+  @ApiResponse({
+    status: 200,
+    description: "Yearly predictions retrieved",
+    schema: {
+      type: "object",
+      properties: {
+        park: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            name: { type: "string", example: "Disneyland Park" },
+            slug: { type: "string", example: "disneyland-park" },
+          },
+        },
+        predictions: {
+          type: "array",
+          items: { $ref: getSchemaPath("ParkDailyPredictionDto") },
+          description:
+            "Daily predictions for up to 365 days (or fewer if off-season days filtered)",
+        },
+        modelVersion: {
+          type: "string",
+          example: "v20241217_120000",
+          description: "ML model version used for predictions",
+        },
+        generatedAt: {
+          type: "string",
+          format: "date-time",
+          example: "2024-01-15T10:00:00.000Z",
+          description: "Timestamp when predictions were generated",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getYearlyPredictions(@Param("slug") slug: string) {
+    const park = await this.parksService.findBySlug(slug);
+
+    if (!park) {
+      throw new NotFoundException(`Park not found: ${slug}`);
+    }
+
+    const predictions = await this.mlService.getParkPredictionsYearly(park.id);
+    const dailyPredictions =
+      await this.parkIntegrationService.aggregateDailyPredictions(
+        predictions.predictions,
+      );
+
+    return {
+      park: {
+        id: park.id,
+        name: park.name,
+        slug: park.slug,
+      },
+      predictions: dailyPredictions,
+      modelVersion: predictions.modelVersion,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/predictions/yearly
+   *
+   * Returns yearly crowd predictions via geographic path.
+   */
+  @Get(":continent/:country/:city/:parkSlug/predictions/yearly")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours HTTP cache
+  @ApiOperation({
+    summary: "Get yearly crowd predictions (geo)",
+    description:
+      "Returns daily crowd predictions for the entire year (365 days) via geographic path. " +
+      "Useful for long-term trip planning and identifying best times to visit.",
+  })
+  @ApiExtraModels(ParkDailyPredictionDto)
+  @ApiResponse({
+    status: 200,
+    description: "Yearly predictions retrieved",
+    schema: {
+      type: "object",
+      properties: {
+        park: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            name: { type: "string", example: "Disneyland Park" },
+            slug: { type: "string", example: "disneyland-park" },
+          },
+        },
+        predictions: {
+          type: "array",
+          items: { $ref: getSchemaPath("ParkDailyPredictionDto") },
+          description:
+            "Daily predictions for up to 365 days (or fewer if off-season days filtered)",
+        },
+        modelVersion: {
+          type: "string",
+          example: "v20241217_120000",
+          description: "ML model version used for predictions",
+        },
+        generatedAt: {
+          type: "string",
+          format: "date-time",
+          example: "2024-01-15T10:00:00.000Z",
+          description: "Timestamp when predictions were generated",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getYearlyPredictionsByGeographicPath(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+  ) {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const predictions = await this.mlService.getParkPredictionsYearly(park.id);
+    const dailyPredictions =
+      await this.parkIntegrationService.aggregateDailyPredictions(
+        predictions.predictions,
+      );
+
+    return {
+      park: {
+        id: park.id,
+        name: park.name,
+        slug: park.slug,
+      },
+      predictions: dailyPredictions,
+      modelVersion: predictions.modelVersion,
+      generatedAt: new Date().toISOString(),
     };
   }
 

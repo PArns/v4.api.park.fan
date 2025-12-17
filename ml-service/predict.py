@@ -75,8 +75,15 @@ def generate_future_timestamps(
         List of future timestamps
     """
     if prediction_type == 'hourly':
-        # Next 24 hours
-        return [base_time + timedelta(hours=i) for i in range(1, settings.HOURLY_PREDICTIONS + 1)]
+        # Round base_time to the NEXT full hour (not current hour)
+        # This ensures all predictions have timestamps like "2024-01-15T14:00:00"
+        # If it's 14:37, round up to 15:00 (next hour)
+        rounded_base = base_time.replace(minute=0, second=0, microsecond=0)
+        if base_time.minute > 0 or base_time.second > 0 or base_time.microsecond > 0:
+            rounded_base = rounded_base + timedelta(hours=1)
+        
+        # Next 24 hours from rounded base (starting from next full hour)
+        return [rounded_base + timedelta(hours=i) for i in range(settings.HOURLY_PREDICTIONS)]
     elif prediction_type == 'daily':
         # Next 14 days (at 14:00 each day, typical peak time)
         return [
@@ -592,6 +599,7 @@ def predict_wait_times(
 
         results.append({
             'attractionId': row['attractionId'],
+            'parkId': row['parkId'],  # Include parkId for schedule filtering
             'predictedTime': row['timestamp'].isoformat(),
             'predictedWaitTime': pred_wait,
             'predictionType': prediction_type,
@@ -637,6 +645,8 @@ def predict_wait_times(
             results[-1]['confidence'] = 100.0
             results[-1]['crowdLevel'] = 'closed'
 
+    # NOTE: Schedule filtering will be applied after this function returns
+    # See filter_predictions_by_schedule() for operating hours filtering
     return results
 
 

@@ -124,6 +124,7 @@ export class ParkIntegrationService {
     dto.status = operatingSchedule ? "OPERATING" : "CLOSED";
 
     // Fetch ML Predictions (Hourly for attractions, Daily for park)
+    // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)
     const hourlyPredictions: Record<string, any[]> = {};
     let dailyPredictions: import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] =
       [];
@@ -131,7 +132,7 @@ export class ParkIntegrationService {
     try {
       const [hourlyRes, dailyRes] = await Promise.all([
         this.mlService.getParkPredictions(park.id, "hourly"),
-        this.mlService.getParkPredictions(park.id, "daily"),
+        this.mlService.getParkPredictions(park.id, "daily", 16), // Limit to 16 days
       ]);
 
       // Filter hourly predictions:
@@ -558,8 +559,9 @@ export class ParkIntegrationService {
 
   /**
    * Helper: Aggregate attraction daily predictions into park-level daily predictions
+   * Public so it can be used by yearly predictions route
    */
-  private aggregateDailyPredictions(
+  public aggregateDailyPredictions(
     predictions: any[],
   ): import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] {
     const datesMap = new Map<string, any[]>();

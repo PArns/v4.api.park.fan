@@ -121,10 +121,15 @@ export class MLService {
    * Cached in Redis:
    * - Hourly: 1 hour TTL (aligned with generation frequency)
    * - Daily: 6 hours TTL (more stable data)
+   *
+   * @param parkId - Park ID
+   * @param predictionType - Type of prediction (hourly or daily)
+   * @param maxDays - Optional limit on number of days (only applies to daily predictions)
    */
   async getParkPredictions(
     parkId: string,
     predictionType: "hourly" | "daily" = "hourly",
+    maxDays?: number,
   ): Promise<BulkPredictionResponseDto> {
     // Try cache first (include date to invalidate daily)
     const today = new Date().toISOString().split("T")[0];
@@ -132,7 +137,21 @@ export class MLService {
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
-      return JSON.parse(cached);
+      const cachedData = JSON.parse(cached);
+
+      // Apply maxDays filter to cached data as well
+      if (maxDays && predictionType === "daily" && cachedData.predictions) {
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() + maxDays);
+
+        cachedData.predictions = cachedData.predictions.filter((p: any) => {
+          const predTime = new Date(p.predictedTime);
+          return predTime <= cutoffDate;
+        });
+        cachedData.count = cachedData.predictions.length;
+      }
+
+      return cachedData;
     }
 
     try {
@@ -220,6 +239,18 @@ export class MLService {
 
       await this.redis.set(cacheKey, JSON.stringify(response.data), "EX", ttl);
 
+      // Apply maxDays filter if specified (for daily predictions only)
+      if (maxDays && predictionType === "daily" && response.data.predictions) {
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() + maxDays);
+
+        response.data.predictions = response.data.predictions.filter((p) => {
+          const predTime = new Date(p.predictedTime);
+          return predTime <= cutoffDate;
+        });
+        response.data.count = response.data.predictions.length;
+      }
+
       return response.data;
     } catch (error: unknown) {
       const errorMessage =
@@ -231,6 +262,54 @@ export class MLService {
       );
 
       // Return empty response on error to handle gracefully in controller
+      return {
+        predictions: [],
+        count: 0,
+        modelVersion: "unavailable",
+      };
+    }
+  }
+
+  /**
+   * Get yearly predictions for a park (full 365 days)
+   * Used for the yearly predictions route
+   *
+   * Cached separately from regular daily predictions
+   * TTL: 24 hours (same as daily predictions)
+   */
+  async getParkPredictionsYearly(
+    parkId: string,
+  ): Promise<BulkPredictionResponseDto> {
+    // Separate cache key for yearly predictions
+    const today = new Date().toISOString().split("T")[0];
+    const cacheKey = `ml:park:${parkId}:yearly:${today}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    try {
+      // Fetch daily predictions (full dataset, no limit)
+      const response = await this.getParkPredictions(parkId, "daily");
+
+      // Cache for 24 hours
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(response),
+        "EX",
+        this.TTL_DAILY_PREDICTIONS,
+      );
+
+      return response;
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      this.logger.warn(
+        `ML service unavailable for park ${parkId} yearly predictions: ${errorMessage}`,
+      );
+
       return {
         predictions: [],
         count: 0,

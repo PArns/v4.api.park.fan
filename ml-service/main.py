@@ -9,6 +9,7 @@ import logging
 
 from model import WaitTimeModel
 from predict import predict_wait_times, predict_for_park
+from schedule_filter import filter_predictions_by_schedule
 from config import get_settings
 from db import fetch_active_model_version
 
@@ -73,6 +74,7 @@ class PredictionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     """Single prediction response"""
     attractionId: str
+    parkId: str  # Added for schedule filtering
     predictedTime: str
     predictedWaitTime: int
     predictionType: str
@@ -307,6 +309,15 @@ async def predict(request: PredictionRequest):
             base_time,
             request.weatherForecast,
             request.currentWaitTimes
+        )
+        
+        # Apply schedule filtering for both hourly and daily predictions
+        # Hourly: Only hours within operating times
+        # Daily: Only days when park is open (no off-season)
+        predictions = filter_predictions_by_schedule(
+            predictions,
+            request.parkIds,
+            request.predictionType
         )
 
         return BulkPredictionResponse(
