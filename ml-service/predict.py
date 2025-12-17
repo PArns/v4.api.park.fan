@@ -203,7 +203,10 @@ def create_prediction_features(
             use_forecast = False
 
     if not use_forecast:
-        # Weather features (use recent averages from DB)
+        # Weather features (use seasonal averages from DB for better accuracy)
+        # Get the month we're predicting for
+        prediction_month = timestamps[0].month if timestamps else datetime.utcnow().month
+        
         weather_query = text("""
             SELECT
                 "parkId"::text as "parkId",
@@ -214,12 +217,16 @@ def create_prediction_features(
                 MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
             FROM weather_data
             WHERE "parkId"::text = ANY(:park_ids)
-                AND date >= CURRENT_DATE - INTERVAL '30 days'
+                AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
+                AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 
             GROUP BY "parkId"
         """)
     
         with get_db() as db:
-            result = db.execute(weather_query, {"park_ids": list(set(park_ids))})
+            result = db.execute(weather_query, {
+                "park_ids": list(set(park_ids)),
+                "month": prediction_month
+            })
             weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
     
         # Merge weather data
@@ -462,21 +469,25 @@ def create_prediction_features(
                 df.loc[mask, 'avg_wait_same_hour_last_week'] = avg_same_hour
                 df.loc[mask, 'rolling_avg_7d'] = rolling_7d
 
+    # Calculate wait time velocity (momentum) BEFORE overriding lags
+    # Initialize with default (no change)
+    df['wait_time_velocity'] = 0.0
+    
     # Override lags with current wait times if available (Autoregression)
     if current_wait_times:
         for attraction_id, wait_time in current_wait_times.items():
             if wait_time is not None:
-                # Override features for the first few time steps (short-term impact)
-                # Typically valid for t+0 to t+1h
                 mask = df['attractionId'] == str(attraction_id)
-                # Assume 1h lag is effectively the current wait time for immediate future
-                df.loc[mask, 'avg_wait_last_1h'] = float(wait_time)
-                # And 24h lag could be influenced if we want more complex logic, 
-                # but 1h lag is the most critical for "next hour" prediction.
-                
-                # Also, we might want to blend the "rolling_avg_7d" with current reality?
-                # For now, just overriding avg_wait_last_1h is the strongest signal.
-                
+                if mask.any():
+                    # Calculate velocity: current - recent average
+                    # Positive = queues building, Negative = queues clearing
+                    recent_avg = df.loc[mask, 'avg_wait_last_1h'].iloc[0]
+                    velocity = (float(wait_time) - recent_avg) / 6.0  # Normalize
+                    df.loc[mask, 'wait_time_velocity'] = velocity
+                    
+                    # Now override the lag feature with current value
+                    df.loc[mask, 'avg_wait_last_1h'] = float(wait_time)
+    
     # Add percentile features (Weather extremes)
     df = add_percentile_features(df)
 

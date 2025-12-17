@@ -44,13 +44,13 @@ export class PredictionAccuracy {
   predictedWaitTime: number;
 
   @Column({ type: "int", nullable: true })
-  actualWaitTime: number; // Filled when actual data becomes available
+  actualWaitTime: number | null; // Filled when actual data becomes available
 
   @Column({ type: "int", nullable: true })
-  absoluteError: number; // |predicted - actual|
+  absoluteError: number | null; // |predicted - actual|
 
   @Column({ type: "float", nullable: true })
-  percentageError: number; // (|predicted - actual| / actual) * 100
+  percentageError: number | null; // (|predicted - actual| / actual) * 100
 
   @Column()
   modelVersion: string;
@@ -64,6 +64,10 @@ export class PredictionAccuracy {
   // Features used (for debugging which features led to errors)
   @Column({ type: "jsonb", nullable: true })
   features: Record<string, unknown>;
+
+  // Track unplanned closures (predicted open, but actually closed)
+  @Column({ type: "boolean", default: false })
+  wasUnplannedClosure: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

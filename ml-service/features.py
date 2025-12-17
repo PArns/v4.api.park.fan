@@ -301,6 +301,18 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
             lambda x: x.fillna(x.mean())
         ).fillna(0)
 
+    # Wait time velocity (rate of change / momentum)
+    # Positive = queues building up, Negative = queues clearing
+    # Uses last 6 observations (~30 min at 5-min intervals) to calculate trend
+    df['wait_time_velocity'] = df.groupby('attractionId')['waitTime'].transform(
+        lambda x: x.diff().rolling(window=6, min_periods=1).mean().shift(1)
+    )
+    
+    # Fill NaN velocity with 0 (no change)
+    df['wait_time_velocity'] = df.groupby('attractionId')['wait_time_velocity'].transform(
+        lambda x: x.fillna(0)
+    ).fillna(0)
+
     return df
 
 
@@ -535,6 +547,7 @@ def get_feature_columns() -> List[str]:
         'avg_wait_last_1h',
         'avg_wait_same_hour_last_week',
         'rolling_avg_7d',
+        'wait_time_velocity',  # Rate of change (momentum)
 
         # Percentile-based features (Phase 3)
         'is_temp_extreme',

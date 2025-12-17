@@ -312,4 +312,62 @@ npm run build
 
 ---
 
+## 🚀 Next Priority Tasks
+
+### ⭐ IMPLEMENT NEXT: Real-Time Prediction Updates
+
+**Plan Location**: `/Users/patrick/.gemini/antigravity/brain/4c07901a-b450-46d6-9b4f-2beb13e0146f/real-time-updates-plan.md`
+
+**Goal**: Automatically regenerate predictions when actual wait times deviate significantly from forecasts.
+
+**Triggers**:
+- Absolute deviation > 10 minutes
+- Percentage deviation > 20%
+- Rate limited: Max 1 update per attraction per 15 min
+
+**Implementation**:
+- New Service: `PredictionDeviationService` - Detect deviations
+- New Processor: `PredictionUpdateProcessor` - Handle regeneration
+- Modify: `wait-times.processor.ts` - Trigger checks on new data
+
+**Debug Points** (Record These Deviations):
+```typescript
+// In PredictionDeviationService
+logger.debug({
+  event: 'deviation_detected',
+  attractionId,
+  predicted: predictedWaitTime,
+  actual: actualWaitTime,
+  absoluteDeviation,
+  percentageDeviation,
+  timestamp: new Date().toISOString(),
+  threshold: { absolute: 10, percentage: 20 }
+});
+
+// In PredictionUpdateProcessor  
+logger.log({
+  event: 'prediction_regenerated',
+  attractionId,
+  parkId,
+  oldPredictions: previousPredictions.length,
+  newPredictions: updatedPredictions.length,
+  duration: regenerationTimeMs,
+  timestamp: new Date().toISOString()
+});
+
+// Rate limiting
+logger.warn({
+  event: 'update_rate_limited',
+  attractionId,
+  lastUpdate: lastUpdateTimestamp,
+  cooldownRemaining: remainingSeconds,
+  timestamp: new Date().toISOString()
+});
+```
+
+**Estimated Effort**: 6-8 hours
+**Impact**: 30-40% fresher predictions during volatility
+
+---
+
 **Update this file whenever**: Data models change, queue configs tuned, architectural decisions made, or new learnings discovered.

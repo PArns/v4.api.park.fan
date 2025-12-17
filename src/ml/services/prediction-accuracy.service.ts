@@ -98,11 +98,15 @@ export class PredictionAccuracyService {
           end: windowEnd,
         })
         .andWhere("qd.queueType = :queueType", { queueType: "STANDBY" })
-        .andWhere("qd.status = :status", { status: "OPERATING" })
+        // REMOVED: Status filter - we want to detect unplanned closures
         .orderBy("qd.timestamp", "ASC")
         .getOne();
 
       if (actualData && actualData.waitTime !== null) {
+        // Normal case: attraction was operating
+        accuracy.actualWaitTime = actualData.waitTime;
+        accuracy.wasUnplannedClosure = false;
+
         // Calculate error metrics
         const absoluteError = Math.abs(
           accuracy.predictedWaitTime - actualData.waitTime,
@@ -112,8 +116,6 @@ export class PredictionAccuracyService {
             ? (absoluteError / actualData.waitTime) * 100
             : null;
 
-        // Update accuracy record
-        accuracy.actualWaitTime = actualData.waitTime;
         accuracy.absoluteError = absoluteError;
         if (percentageError !== null) {
           accuracy.percentageError = percentageError;
@@ -121,6 +123,20 @@ export class PredictionAccuracyService {
 
         await this.accuracyRepository.save(accuracy);
         updated++;
+      } else if (actualData && actualData.status !== "OPERATING") {
+        // Unplanned closure: We predicted a wait time, but attraction was closed
+        // This is a prediction error that we want to track
+        accuracy.actualWaitTime = 0;
+        accuracy.wasUnplannedClosure = true;
+        accuracy.absoluteError = accuracy.predictedWaitTime; // Error = predicted wait time
+        accuracy.percentageError = null; // Cannot calculate % error when actual is 0
+
+        await this.accuracyRepository.save(accuracy);
+        updated++;
+
+        this.logger.debug(
+          `Detected unplanned closure for ${accuracy.attractionId} at ${accuracy.targetTime.toISOString()}`,
+        );
       } else {
         notFound++;
       }
@@ -1316,5 +1332,82 @@ export class PredictionAccuracyService {
       rmse: Math.round(rmse * 10) / 10,
       attractionsCount,
     };
+  }
+
+  /**
+   * Check if model retraining is needed based on accuracy degradation
+   *
+   * Triggers retraining if:
+   * 1. MAE > 15 minutes (poor accuracy)
+   * 2. Coverage < 80% (not enough predictions matching actuals)
+   * 3. MAPE > 35% (high percentage error)
+   *
+   * @param {number} days - Days to analyze (default: 7)
+   * @returns {Promise<{needed: boolean; reason?: string; metrics: any}>}
+   */
+  async checkRetrainingNeeded(days: number = 7): Promise<{
+    needed: boolean;
+    reason?: string;
+    metrics: any;
+  }> {
+    try {
+      const stats = await this.getSystemAccuracyStats(days);
+
+      // Thresholds
+      const MAE_THRESHOLD = 15; // minutes
+      const COVERAGE_THRESHOLD = 80; // percent
+      const MAPE_THRESHOLD = 35; // percent
+
+      // Check conditions
+      if (stats.overall.mae > MAE_THRESHOLD) {
+        this.logger.warn(
+          `⚠️  Retraining recommended: MAE ${stats.overall.mae.toFixed(1)} > ${MAE_THRESHOLD} min`,
+        );
+        return {
+          needed: true,
+          reason: `accuracy_degradation`,
+          metrics: stats.overall,
+        };
+      }
+
+      if (stats.overall.coveragePercent < COVERAGE_THRESHOLD) {
+        this.logger.warn(
+          `⚠️  Retraining recommended: Coverage ${stats.overall.coveragePercent}% < ${COVERAGE_THRESHOLD}%`,
+        );
+        return {
+          needed: true,
+          reason: `low_coverage`,
+          metrics: stats.overall,
+        };
+      }
+
+      if (stats.overall.mape > MAPE_THRESHOLD) {
+        this.logger.warn(
+          `⚠️  Retraining recommended: MAPE ${stats.overall.mape.toFixed(1)}% > ${MAPE_THRESHOLD}%`,
+        );
+        return {
+          needed: true,
+          reason: `high_percentage_error`,
+          metrics: stats.overall,
+        };
+      }
+
+      // All good
+      this.logger.debug(
+        `✅ Model performance acceptable: MAE ${stats.overall.mae.toFixed(1)} min, Coverage ${stats.overall.coveragePercent}%`,
+      );
+      return {
+        needed: false,
+        metrics: stats.overall,
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to check retraining need: ${errorMessage}`);
+      return {
+        needed: false,
+        metrics: null,
+      };
+    }
   }
 }

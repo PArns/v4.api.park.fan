@@ -10,6 +10,7 @@ from config import get_settings
 from db import fetch_training_data
 from features import engineer_features, get_feature_columns
 from model import WaitTimeModel
+from data_validation import validate_training_data
 
 settings = get_settings()
 
@@ -81,7 +82,11 @@ def train_model(version: str = None) -> None:
     if len(df) == 0:
         print("❌ No training data found!")
         return
-    # 2.5 Remove anomalies
+    
+    # 2.5 Validate data quality
+    df, validation_report = validate_training_data(df)
+    
+    # 2.6 Remove anomalies
     df = remove_anomalies(df)
     print()
     # 3. Feature engineering

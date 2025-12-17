@@ -411,13 +411,26 @@ export class MLService {
     );
 
     // Record predictions for accuracy tracking (feedback loop)
-    let recordedCount = 0;
-    const totalCount = savedPredictions.length;
+    // ONLY record predictions for OPERATING status (park was open)
+    // This prevents recording predictions for scheduled closed periods
+    // Unplanned closures will still be detected in compareWithActuals()
+    const validPredictionsForFeedback = savedPredictions.filter(
+      (pred) => pred.status === "OPERATING" || pred.status === null,
+    );
 
-    for (let i = 0; i < savedPredictions.length; i++) {
+    let recordedCount = 0;
+    const totalCount = validPredictionsForFeedback.length;
+
+    if (validPredictionsForFeedback.length < savedPredictions.length) {
+      this.logger.debug(
+        `Filtering: Recording ${validPredictionsForFeedback.length}/${savedPredictions.length} predictions (excluding scheduled closures)`,
+      );
+    }
+
+    for (let i = 0; i < validPredictionsForFeedback.length; i++) {
       try {
         await this.predictionAccuracyService.recordPrediction(
-          savedPredictions[i],
+          validPredictionsForFeedback[i],
         );
         recordedCount++;
 
@@ -437,7 +450,7 @@ export class MLService {
       }
     }
     this.logger.log(
-      `✅ Recorded ${recordedCount}/${savedPredictions.length} predictions for accuracy tracking`,
+      `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} OPERATING predictions for accuracy tracking`,
     );
   }
 
