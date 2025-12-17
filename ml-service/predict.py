@@ -182,7 +182,7 @@ def create_prediction_features(
             
             # Use UTC generic time handling or assume match
             # Round prediction timestamp to nearest hour for joining
-            df['join_time'] = df['timestamp'].dt.round('H')
+            df['join_time'] = df['timestamp'].dt.round('h')
             
             # Merge logic
             # Note: weather_forecast is assumed to apply to all parks in this batch (usually same park)
