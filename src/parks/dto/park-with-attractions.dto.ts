@@ -379,6 +379,17 @@ export class ParkWithAttractionsDto {
   })
   crowdForecast?: ParkDailyPredictionDto[];
 
+  // Cache Metadata (for debugging and optimization)
+  @ApiProperty({
+    description: "Cache metadata",
+    required: false,
+  })
+  meta?: {
+    cachedAt?: string; // When this response was cached
+    cacheTTL?: number; // Cache TTL in seconds
+    nextOpeningTime?: string; // Next opening time (if park is closed)
+  };
+
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,

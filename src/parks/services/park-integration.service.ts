@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { Park } from "../entities/park.entity";
+import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
 import { WeatherItemDto } from "../dto/weather-item.dto";
 import { ScheduleItemDto } from "../dto/schedule-item.dto";
@@ -533,11 +534,33 @@ export class ParkIntegrationService {
       }
     }
 
-    // Cache the complete response with dynamic TTL based on park status
-    const ttl =
-      dto.status === "OPERATING"
-        ? this.TTL_INTEGRATED_RESPONSE_OPERATING
-        : this.TTL_INTEGRATED_RESPONSE_CLOSED;
+    // Cache the complete response with dynamic TTL
+    // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data
+    // For OPERATING parks: Short 3-minute TTL for live data
+    const ttl = this.calculateDynamicTTL(dto.status, schedule, park.timezone);
+
+    // Add cache metadata for debugging and transparency
+    const now = toZonedTime(new Date(), park.timezone);
+    dto.meta = {
+      cachedAt: new Date().toISOString(),
+      cacheTTL: ttl,
+    };
+
+    // Add next opening time if park is closed
+    if (dto.status === "CLOSED") {
+      const nextOpening = schedule
+        .filter(
+          (s) =>
+            s.scheduleType === "OPERATING" &&
+            s.openingTime &&
+            s.openingTime > now,
+        )
+        .sort((a, b) => a.openingTime!.getTime() - b.openingTime!.getTime())[0];
+
+      if (nextOpening && nextOpening.openingTime) {
+        dto.meta.nextOpeningTime = nextOpening.openingTime.toISOString();
+      }
+    }
 
     await this.redis.set(cacheKey, JSON.stringify(dto), "EX", ttl);
 
@@ -555,6 +578,73 @@ export class ParkIntegrationService {
 
     // Rebuild will automatically cache the result
     await this.buildIntegratedResponse(park);
+  }
+
+  /**
+   * Calculate dynamic TTL based on park status and next opening time
+   *
+   * For OPERATING parks: Use short TTL (3 minutes) for fresh live data
+   * For CLOSED parks: Calculate TTL to expire ~5 minutes before next opening
+   *
+   * This prevents the issue where an early morning request caches CLOSED status
+   * for 6 hours, causing the park to appear closed even after it opens.
+   *
+   * @param status - Current park status ("OPERATING" or "CLOSED")
+   * @param schedules - Park schedule entries
+   * @param timezone - Park timezone (e.g., "Europe/Berlin")
+   * @returns TTL in seconds
+   */
+  private calculateDynamicTTL(
+    status: string,
+    schedules: ScheduleEntry[],
+    timezone: string,
+  ): number {
+    if (status === "OPERATING") {
+      // Park is open -> use short TTL for fresh live data
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 3 minutes
+    }
+
+    // Park is CLOSED - find next opening time
+    const now = toZonedTime(new Date(), timezone);
+
+    // Find next OPERATING schedule entry
+    const nextOpening = schedules
+      .filter(
+        (s) =>
+          s.scheduleType === "OPERATING" &&
+          s.openingTime &&
+          s.openingTime > now,
+      )
+      .sort((a, b) => a.openingTime!.getTime() - b.openingTime!.getTime())[0];
+
+    if (nextOpening && nextOpening.openingTime) {
+      // Calculate seconds until opening
+      const secondsUntilOpening = Math.floor(
+        (nextOpening.openingTime.getTime() - now.getTime()) / 1000,
+      );
+
+      // TTL = time until opening - 5 minute buffer (cache expires before opening)
+      // This ensures fresh data when park opens
+      const bufferSeconds = 5 * 60; // 5 minutes
+      const ttl = Math.max(60, secondsUntilOpening - bufferSeconds);
+
+      // Cap at 6 hours to avoid extremely long TTLs for off-season parks
+      const cappedTTL = Math.min(ttl, this.TTL_INTEGRATED_RESPONSE_CLOSED);
+
+      this.logger.debug(
+        `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+      );
+
+      return cappedTTL;
+    }
+
+    // No next opening found (off-season or no schedule data)
+    // Fall back to default TTL
+    this.logger.debug(
+      "No next opening time found, using default CLOSED TTL (6 hours)",
+    );
+    return this.TTL_INTEGRATED_RESPONSE_CLOSED;
   }
 
   /**
