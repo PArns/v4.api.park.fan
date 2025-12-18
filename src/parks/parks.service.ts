@@ -27,7 +27,7 @@ export class ParksService {
     private themeParksMapper: ThemeParksMapper,
     private destinationsService: DestinationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -290,9 +290,9 @@ export class ParksService {
         // Update if times or description changed
         const hasChanges =
           existing.openingTime?.getTime() !==
-            scheduleEntry.openingTime?.getTime() ||
+          scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
-            scheduleEntry.closingTime?.getTime() ||
+          scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description;
 
         if (hasChanges) {
@@ -786,6 +786,7 @@ export class ParksService {
           SELECT status
           FROM queue_data qd
           WHERE qd."attractionId" = a.id
+            AND qd.timestamp > NOW() - INTERVAL '60 minutes'
           ORDER BY timestamp DESC
           LIMIT 1
         ) q ON true
