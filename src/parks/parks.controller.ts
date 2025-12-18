@@ -1054,7 +1054,7 @@ export class ParksController {
   }
 
   /**
-   * Helper: Map parks to response DTOs with status
+   * Helper: Map parks to response DTOs with status and analytics
    */
   private async mapToResponseWithStatus(
     parks: Park[],
@@ -1064,12 +1064,54 @@ export class ParksController {
     }
 
     const parkIds = parks.map((p) => p.id);
-    const statusMap = await this.parksService.getBatchParkStatus(parkIds);
+    const [statusMap, occupancyMap] = await Promise.all([
+      this.parksService.getBatchParkStatus(parkIds),
+      this.analyticsService.getBatchParkOccupancy(parkIds),
+    ]);
 
     return parks.map((park) => {
       const dto = ParkResponseDto.fromEntity(park);
       dto.status = statusMap.get(park.id) || "CLOSED";
+
+      const occupancy = occupancyMap.get(park.id);
+      if (occupancy) {
+        dto.currentLoad = {
+          crowdLevel: this.mapCrowdLevel(occupancy.current),
+          baseline: occupancy.baseline90thPercentile,
+          currentWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+        };
+
+        dto.analytics = {
+          occupancy: {
+            current: occupancy.current,
+            trend: occupancy.trend,
+            comparedToTypical: occupancy.comparedToTypical,
+            comparisonStatus: occupancy.comparisonStatus,
+            baseline90thPercentile: occupancy.baseline90thPercentile,
+            updatedAt: occupancy.updatedAt,
+          },
+          statistics: {
+            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+            avgWaitToday: 0, // Not fetched in batch
+            peakHour: null, // Not fetched in batch
+            crowdLevel: this.mapCrowdLevel(occupancy.current),
+            totalAttractions: 0,
+            operatingAttractions: 0,
+            closedAttractions: 0,
+            timestamp: occupancy.updatedAt,
+          },
+        };
+      }
+
       return dto;
     });
+  }
+
+  private mapCrowdLevel(occupancy: number): any {
+    if (occupancy < 30) return "very_low";
+    if (occupancy < 50) return "low";
+    if (occupancy < 75) return "moderate";
+    if (occupancy < 95) return "high";
+    return "very_high";
   }
 }

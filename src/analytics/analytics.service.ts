@@ -65,6 +65,61 @@ export class AnalyticsService {
   ) {}
 
   /**
+   * Calculate park occupancy for multiple parks in batch
+   * OPTIMIZED: Cache-first strategy using Redis
+   * Pre-computed values are written during wait-times sync
+   */
+  async getBatchParkOccupancy(
+    parkIds: string[],
+  ): Promise<Map<string, OccupancyDto>> {
+    const resultMap = new Map<string, OccupancyDto>();
+
+    if (parkIds.length === 0) {
+      return resultMap;
+    }
+
+    // Try to fetch from Redis first (cache-first strategy)
+    const cacheKeys = parkIds.map((id) => `park:occupancy:${id}`);
+    const cachedValues = await this.redis.mget(...cacheKeys);
+
+    for (let i = 0; i < parkIds.length; i++) {
+      const parkId = parkIds[i];
+      const cached = cachedValues[i];
+
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          resultMap.set(parkId, parsed);
+        } catch (_e) {
+          this.logger.warn(`Failed to parse cached occupancy for ${parkId}`);
+        }
+      }
+    }
+
+    // For parks not in cache, calculate on-demand using EXISTING function
+    // This is rare if warmup works, but provides accurate fallback
+    const missingParkIds = parkIds.filter((id) => !resultMap.has(id));
+    if (missingParkIds.length > 0) {
+      this.logger.verbose(
+        `Computing occupancy for ${missingParkIds.length} parks (cache miss)`,
+      );
+      for (const parkId of missingParkIds) {
+        try {
+          const occupancy = await this.calculateParkOccupancy(parkId);
+          resultMap.set(parkId, occupancy);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to calculate occupancy for ${parkId}`,
+            error,
+          );
+        }
+      }
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Calculate park occupancy based on 90th percentile of historical wait times
    * 100% = 90th percentile of typical wait times for this hour/weekday over last 1 year
    *

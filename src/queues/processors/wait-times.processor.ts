@@ -529,13 +529,14 @@ export class WaitTimesProcessor {
         }`,
       );
 
-      // Cache Warmup: Prepopulate cache for OPERATING parks + Top 100 attractions
+      // Cache Warmup: Prepopulate cache for OPERATING parks + Top 100 attractions + Occupancy data
       // This eliminates cold start delays on first API request after sync
       this.logger.verbose("🔥 Starting cache warmup..."); // Log -> Verbose
       try {
         await Promise.all([
           this.cacheWarmupService.warmupOperatingParks(),
           this.cacheWarmupService.warmupTopAttractions(100),
+          this.cacheWarmupService.warmupParkOccupancy(parks.map((p) => p.id)),
         ]);
       } catch (error: unknown) {
         const errorMessage =

@@ -327,4 +327,49 @@ export class CacheWarmupService {
       return 0;
     }
   }
+
+  /**
+   * Warm up park occupancy cache for all parks
+   *
+   * Reuses AnalyticsService.calculateParkOccupancy for each park
+   * and caches result in Redis for fast batch retrieval
+   *
+   * @param parkIds - Array of park IDs to warm up
+   * @returns Number of parks successfully warmed
+   */
+  async warmupParkOccupancy(parkIds: string[]): Promise<number> {
+    if (parkIds.length === 0) {
+      return 0;
+    }
+
+    const startTime = Date.now();
+    this.logger.verbose(
+      `🔥 Warming occupancy cache for ${parkIds.length} parks...`,
+    );
+
+    let successCount = 0;
+    const analyticsService = this.parkIntegrationService["analyticsService"];
+
+    for (const parkId of parkIds) {
+      try {
+        const occupancy = await analyticsService.calculateParkOccupancy(parkId);
+        const cacheKey = `park:occupancy:${parkId}`;
+        await this.redis.setex(
+          cacheKey,
+          5 * 60, // 5 minutes TTL (same as wait times sync interval)
+          JSON.stringify(occupancy),
+        );
+        successCount++;
+      } catch (error) {
+        this.logger.warn(`Failed to warm occupancy for park ${parkId}`, error);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    this.logger.verbose(
+      `✓ Occupancy warmup complete: ${successCount}/${parkIds.length} parks in ${duration}ms`,
+    );
+
+    return successCount;
+  }
 }
