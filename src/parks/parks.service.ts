@@ -27,7 +27,7 @@ export class ParksService {
     private themeParksMapper: ThemeParksMapper,
     private destinationsService: DestinationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -290,9 +290,9 @@ export class ParksService {
         // Update if times or description changed
         const hasChanges =
           existing.openingTime?.getTime() !==
-          scheduleEntry.openingTime?.getTime() ||
+            scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
-          scheduleEntry.closingTime?.getTime() ||
+            scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description;
 
         if (hasChanges) {
@@ -723,7 +723,7 @@ export class ParksService {
 
     // If we have a schedule entry, trust it:
     if (todaySchedule) {
-      return todaySchedule.scheduleType === 'OPERATING';
+      return todaySchedule.scheduleType === "OPERATING";
     }
 
     // If NO schedule exists (e.g. Toverland), default to TRUE to ensure we check live sources.
