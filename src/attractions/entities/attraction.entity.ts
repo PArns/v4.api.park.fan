@@ -9,8 +9,10 @@ import {
   BeforeUpdate,
   Index,
   JoinColumn,
+  OneToMany,
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
+import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { generateSlug } from "../../common/utils/slug.util";
 
 /**
@@ -66,6 +68,9 @@ export class Attraction {
 
   @Column({ nullable: true })
   attractionType: string;
+
+  @OneToMany(() => QueueData, (queueData) => queueData.attraction)
+  queueData: QueueData[];
 
   @CreateDateColumn()
   createdAt: Date;

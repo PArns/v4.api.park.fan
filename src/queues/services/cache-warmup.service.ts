@@ -34,7 +34,7 @@ export class CacheWarmupService {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Warm up cache for a single park
@@ -58,7 +58,7 @@ export class CacheWarmupService {
       // Fetch park
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        relations: ["attractions"],
+        relations: ["attractions", "shows", "restaurants"],
       });
 
       if (!park) {
@@ -168,6 +168,8 @@ export class CacheWarmupService {
         .andWhere("schedule.openingTime >= :now", { now })
         .andWhere("schedule.openingTime <= :next12h", { next12h })
         .leftJoinAndSelect("park.attractions", "attractions")
+        .leftJoinAndSelect("park.shows", "shows")
+        .leftJoinAndSelect("park.restaurants", "restaurants")
         .getMany();
 
       this.logger.log(`Found ${upcomingParks.length} parks opening soon`);

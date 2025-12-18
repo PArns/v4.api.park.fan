@@ -31,7 +31,9 @@
     "db:test:drop": "docker exec -it parkfan_postgres psql -U parkfan -c 'DROP DATABASE IF EXISTS parkfan_test;'",
     "db:test:reset": "npm run db:test:drop && npm run db:test:create",
     "clear-queues": "ts-node scripts/clear-queues.ts",
-    "job:ml-train": "ts-node scripts/trigger-ml-training.ts"
+    "job:ml-train": "ts-node scripts/trigger-ml-training.ts",
+    "job:children-sync": "ts-node scripts/trigger-children-sync.ts",
+    "job:clear-cache": "ts-node scripts/clear-cache.ts"
   },
   "dependencies": {
     "@nestjs/bull": "^11.0.4",

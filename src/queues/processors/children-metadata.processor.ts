@@ -1,5 +1,5 @@
 import { Processor, Process, InjectQueue } from "@nestjs/bull";
-import { Logger } from "@nestjs/common";
+import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Job, Queue } from "bull";
@@ -13,6 +13,8 @@ import { EntityResponse } from "../../external-apis/themeparks/themeparks.types"
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * Children Metadata Processor (Combined)
@@ -43,6 +45,7 @@ export class ChildrenMetadataProcessor {
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectQueue("entity-mappings")
     private entityMappingsQueue: Queue,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   @Process("fetch-all-children")
@@ -174,6 +177,18 @@ export class ChildrenMetadataProcessor {
               } catch (e) {
                 this.logger.error(
                   `Failed to queue mapping job for ${park.name}: ${e}`,
+                );
+              }
+
+              // Invalidate integrated park cache to ensure new data (shows/restaurants) is visible immediately
+              try {
+                await this.redis.del(`park:integrated:${park.id}`);
+                this.logger.debug(
+                  `🧹 Invalidated integrated cache for ${park.name} after sync`,
+                );
+              } catch (e) {
+                this.logger.warn(
+                  `Failed to invalidate cache for ${park.name}: ${e}`,
                 );
               }
 
