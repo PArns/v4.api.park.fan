@@ -25,4 +25,4 @@ import { RedisModule } from "../common/redis/redis.module";
   providers: [AttractionsService, AttractionIntegrationService],
   exports: [AttractionsService, AttractionIntegrationService],
 })
-export class AttractionsModule { }
+export class AttractionsModule {}

@@ -348,14 +348,15 @@ export class AnalyticsService {
   private async getCurrentAverageWaitTime(
     parkId: string,
   ): Promise<number | null> {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    // Use 30 minutes to accommodate sync intervals (not all parks sync every 5 min)
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
       .select("AVG(qd.waitTime)", "avgWait")
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :fiveMinutesAgo", { fiveMinutesAgo })
+      .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
       .andWhere("qd.waitTime > 0")
@@ -453,14 +454,15 @@ export class AnalyticsService {
    * Get count of currently operating attractions
    */
   private async getActiveAttractionsCount(parkId: string): Promise<number> {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    // Use 30 minutes to accommodate sync intervals
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
       .select("COUNT(DISTINCT qd.attractionId)", "count")
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :fiveMinutesAgo", { fiveMinutesAgo })
+      .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .getRawOne();
 
@@ -882,143 +884,197 @@ export class AnalyticsService {
       return parseInt(cached, 10);
     }
 
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    // Adaptive time windows for new parks with limited data
+    const timeWindows = [
+      { days: 365, name: "1 year" },
+      { days: 30, name: "30 days" },
+      { days: 7, name: "7 days" },
+      { days: 3, name: "3 days" },
+      { days: null, name: "any available" }, // All available data
+    ];
 
     let waitTimes: any[] = [];
+    let usedWindow = "";
 
-    if (type === "attraction") {
-      // Strategy 1: Exact hour + day of week (last year) - The "Gold Standard"
-      const strict = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("qd.waitTime", "waitTime")
-        .where("qd.attractionId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
-        .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-        .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
-        .andWhere("qd.status = :status", { status: "OPERATING" })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawMany();
+    // Try each time window until we get enough data
+    for (const window of timeWindows) {
+      const cutoff = window.days
+        ? new Date(Date.now() - window.days * 24 * 60 * 60 * 1000)
+        : new Date(0); // epoch for "any available"
 
-      if (strict.length >= 5) {
-        waitTimes = strict;
-      } else {
-        // Strategy 2: Same hour, any day of week (last year)
+      if (type === "attraction") {
+        // Strategy 1: Exact hour + day of week - The "Gold Standard"
+        const strict = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .where("qd.attractionId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
+          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
+            dayOfWeek,
+          })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        // Reduced threshold: 3 samples instead of 5 for limited data
+        if (strict.length >= 3) {
+          waitTimes = strict;
+          usedWindow = `${window.name} (strict: ${strict.length} samples)`;
+          break;
+        }
+
+        // Strategy 2: Same hour, any day of week
         const sameHour = await this.queueDataRepository
           .createQueryBuilder("qd")
           .select("qd.waitTime", "waitTime")
           .where("qd.attractionId = :entityId", { entityId })
-          .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
           .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
           .getRawMany();
 
-        if (sameHour.length >= 20) {
+        // Reduced threshold: 10 samples instead of 20
+        if (sameHour.length >= 10) {
           waitTimes = sameHour;
-        } else {
-          // Strategy 3: Same day of week, any hour (last year)
-          const sameDay = await this.queueDataRepository
-            .createQueryBuilder("qd")
-            .select("qd.waitTime", "waitTime")
-            .where("qd.attractionId = :entityId", { entityId })
-            .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
-            .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-              dayOfWeek,
-            })
-            .andWhere("qd.status = :status", { status: "OPERATING" })
-            .andWhere("qd.waitTime IS NOT NULL")
-            .andWhere("qd.queueType = 'STANDBY'")
-            .getRawMany();
-
-          // Validation / Selection Logic
-          // Prefer Strict > SameHour > SameDay if they have *any* data
-          if (strict.length > 0) {
-            waitTimes = strict;
-          } else if (sameHour.length > 0) {
-            waitTimes = sameHour;
-          } else if (sameDay.length > 0) {
-            waitTimes = sameDay;
-          } else {
-            // Last resort: Any data from last 1 year (expanded from 30 days)
-            const anyData = await this.queueDataRepository
-              .createQueryBuilder("qd")
-              .select("qd.waitTime", "waitTime")
-              .where("qd.attractionId = :entityId", { entityId })
-              .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo }) // KEY CHANGE: 30 days -> 1 year
-              .andWhere("qd.status = :status", { status: "OPERATING" })
-              .andWhere("qd.waitTime IS NOT NULL")
-              .andWhere("qd.queueType = 'STANDBY'")
-              .getRawMany();
-            waitTimes = anyData;
-          }
+          usedWindow = `${window.name} (same hour: ${sameHour.length} samples)`;
+          break;
         }
-      }
-    } else {
-      // Park Logic (Same Waterfall)
-      const strict = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("qd.waitTime", "waitTime")
-        .innerJoin("qd.attraction", "attraction")
-        .where("attraction.parkId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
-        .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-        .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
-        .andWhere("qd.status = :status", { status: "OPERATING" })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawMany();
 
-      if (strict.length >= 10) {
-        waitTimes = strict;
+        // Strategy 3: Same day of week, any hour
+        const sameDay = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .where("qd.attractionId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
+            dayOfWeek,
+          })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        // Prefer any data over nothing
+        if (strict.length > 0) {
+          waitTimes = strict;
+          usedWindow = `${window.name} (strict: ${strict.length} samples)`;
+          break;
+        } else if (sameHour.length > 0) {
+          waitTimes = sameHour;
+          usedWindow = `${window.name} (same hour: ${sameHour.length} samples)`;
+          break;
+        } else if (sameDay.length > 0) {
+          waitTimes = sameDay;
+          usedWindow = `${window.name} (same day: ${sameDay.length} samples)`;
+          break;
+        }
+
+        // Strategy 4: Any data from this time window
+        const anyData = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .where("qd.attractionId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        if (anyData.length > 0) {
+          waitTimes = anyData;
+          usedWindow = `${window.name} (any: ${anyData.length} samples)`;
+          break;
+        }
       } else {
+        // Park Logic (Same progressive fallback)
+        const strict = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .innerJoin("qd.attraction", "attraction")
+          .where("attraction.parkId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
+          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
+            dayOfWeek,
+          })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        // Reduced threshold: 5 samples instead of 10
+        if (strict.length >= 5) {
+          waitTimes = strict;
+          usedWindow = `${window.name} (strict: ${strict.length} samples)`;
+          break;
+        }
+
         const sameHour = await this.queueDataRepository
           .createQueryBuilder("qd")
           .select("qd.waitTime", "waitTime")
           .innerJoin("qd.attraction", "attraction")
           .where("attraction.parkId = :entityId", { entityId })
-          .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
           .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
           .getRawMany();
 
-        if (sameHour.length >= 50) {
+        // Reduced threshold: 20 samples instead of 50
+        if (sameHour.length >= 20) {
           waitTimes = sameHour;
-        } else {
-          const sameDay = await this.queueDataRepository
-            .createQueryBuilder("qd")
-            .select("qd.waitTime", "waitTime")
-            .innerJoin("qd.attraction", "attraction")
-            .where("attraction.parkId = :entityId", { entityId })
-            .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
-            .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-              dayOfWeek,
-            })
-            .andWhere("qd.status = :status", { status: "OPERATING" })
-            .andWhere("qd.waitTime IS NOT NULL")
-            .andWhere("qd.queueType = 'STANDBY'")
-            .getRawMany();
+          usedWindow = `${window.name} (same hour: ${sameHour.length} samples)`;
+          break;
+        }
 
-          if (strict.length > 0) waitTimes = strict;
-          else if (sameHour.length > 0) waitTimes = sameHour;
-          else if (sameDay.length > 0) waitTimes = sameDay;
-          else {
-            const anyData = await this.queueDataRepository
-              .createQueryBuilder("qd")
-              .select("qd.waitTime", "waitTime")
-              .innerJoin("qd.attraction", "attraction")
-              .where("attraction.parkId = :entityId", { entityId })
-              .andWhere("qd.timestamp >= :oneYearAgo", { oneYearAgo })
-              .andWhere("qd.status = :status", { status: "OPERATING" })
-              .andWhere("qd.waitTime IS NOT NULL")
-              .andWhere("qd.queueType = 'STANDBY'")
-              .getRawMany();
-            waitTimes = anyData;
-          }
+        const sameDay = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .innerJoin("qd.attraction", "attraction")
+          .where("attraction.parkId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
+            dayOfWeek,
+          })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        if (strict.length > 0) {
+          waitTimes = strict;
+          usedWindow = `${window.name} (strict: ${strict.length} samples)`;
+          break;
+        } else if (sameHour.length > 0) {
+          waitTimes = sameHour;
+          usedWindow = `${window.name} (same hour: ${sameHour.length} samples)`;
+          break;
+        } else if (sameDay.length > 0) {
+          waitTimes = sameDay;
+          usedWindow = `${window.name} (same day: ${sameDay.length} samples)`;
+          break;
+        }
+
+        const anyData = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .select("qd.waitTime", "waitTime")
+          .innerJoin("qd.attraction", "attraction")
+          .where("attraction.parkId = :entityId", { entityId })
+          .andWhere("qd.timestamp >= :cutoff", { cutoff })
+          .andWhere("qd.status = :status", { status: "OPERATING" })
+          .andWhere("qd.waitTime IS NOT NULL")
+          .andWhere("qd.queueType = 'STANDBY'")
+          .getRawMany();
+
+        if (anyData.length > 0) {
+          waitTimes = anyData;
+          usedWindow = `${window.name} (any: ${anyData.length} samples)`;
+          break;
         }
       }
     }
@@ -1030,15 +1086,19 @@ export class AnalyticsService {
         .sort((a, b) => a - b);
       const idx = Math.ceil(sorted.length * 0.9) - 1;
       value = Math.round(sorted[idx]);
+
+      this.logger.debug(
+        `P90 for ${type} ${entityId} (h=${hour}, dow=${dayOfWeek}): ${value}min using ${usedWindow}`,
+      );
+    } else {
+      this.logger.warn(
+        `No historical data found for ${type} ${entityId} (h=${hour}, dow=${dayOfWeek}) - returning 0`,
+      );
     }
 
-    // Cache result in Redis (even if 0) - 24h TTL for stable historical data
-    await this.redis.set(
-      cacheKey,
-      value.toString(),
-      "EX",
-      this.TTL_PERCENTILES,
-    );
+    // Cache result in Redis - shorter TTL for 0 values (1 hour vs 24 hours)
+    const ttl = value === 0 ? 60 * 60 : this.TTL_PERCENTILES;
+    await this.redis.set(cacheKey, value.toString(), "EX", ttl);
 
     return value;
   }

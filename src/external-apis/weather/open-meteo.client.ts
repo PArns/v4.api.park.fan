@@ -164,14 +164,25 @@ export class OpenMeteoClient {
         );
 
         // More specific error messages
-        if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') {
-          throw new Error(`Open-Meteo API: DNS resolution failed (lat: ${latitude}, lon: ${longitude})`);
-        } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
-          throw new Error(`Open-Meteo API: Request timeout (lat: ${latitude}, lon: ${longitude})`);
+        if (error.code === "ENOTFOUND" || error.code === "EAI_AGAIN") {
+          throw new Error(
+            `Open-Meteo API: DNS resolution failed (lat: ${latitude}, lon: ${longitude})`,
+          );
+        } else if (
+          error.code === "ETIMEDOUT" ||
+          error.code === "ECONNABORTED"
+        ) {
+          throw new Error(
+            `Open-Meteo API: Request timeout (lat: ${latitude}, lon: ${longitude})`,
+          );
         } else if (error.response?.status) {
-          throw new Error(`Open-Meteo API: HTTP ${error.response.status} ${error.response.statusText}`);
+          throw new Error(
+            `Open-Meteo API: HTTP ${error.response.status} ${error.response.statusText}`,
+          );
         } else {
-          throw new Error(`Open-Meteo API: ${error.message} (lat: ${latitude}, lon: ${longitude})`);
+          throw new Error(
+            `Open-Meteo API: ${error.message} (lat: ${latitude}, lon: ${longitude})`,
+          );
         }
       }
 
