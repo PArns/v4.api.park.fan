@@ -1217,10 +1217,17 @@ export class AnalyticsService {
     }
 
     // 1. Get Park Statuses & Average Waits concurrently
-    // We check parks that have had queue updates in the last 60 minutes to consider them "active"
-    // or active schedule. For simplicity & speed, we use the last updated queue_data.
+    // IMPORTANT: Only consider parks that are currently OPERATING
+    // to avoid showing closed parks with 0 wait times
     const activeParksResult = await this.queueDataRepository.query(`
-      WITH latest_updates AS (
+      WITH park_status AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+          AND s."openingTime" <= NOW()
+          AND s."closingTime" > NOW()
+      ),
+      latest_updates AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
           qd."waitTime",
@@ -1228,6 +1235,7 @@ export class AnalyticsService {
           qd.timestamp
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
+        JOIN park_status ps ON ps."parkId" = a."parkId"
         WHERE qd.timestamp > NOW() - INTERVAL '60 minutes'
         AND qd.status = 'OPERATING'
         ORDER BY qd."attractionId", qd.timestamp DESC
