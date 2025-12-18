@@ -16,6 +16,37 @@ from config import get_settings
 settings = get_settings()
 
 
+def round_to_nearest_5(value: float) -> int:
+    """
+    Round wait time to nearest 5 minutes for UX consistency
+    
+    Theme parks typically display wait times in 5-minute increments.
+    This provides better user experience and consistency with actual queue displays.
+    
+    Args:
+        value: Raw prediction value (any float)
+    
+    Returns:
+        Rounded integer in 5-minute increments
+    
+    Examples:
+        >>> round_to_nearest_5(7.2)
+        5
+        >>> round_to_nearest_5(8.9)
+        10
+        >>> round_to_nearest_5(12.4)
+        10
+        >>> round_to_nearest_5(34.7)
+        35
+    """
+    if value < 2.5:
+        return 0  # Very short wait → 0
+    
+    # Add 2.5 and floor divide by 5, then multiply by 5
+    # This ensures consistent rounding: 2.5→5, 7.5→10, 12.5→15
+    return int((value + 2.5) // 5) * 5
+
+
 def fetch_recent_wait_times(attraction_ids: List[str], lookback_days: int = 730) -> pd.DataFrame:
     """
     Fetch recent wait times aggregated by day for historical features
@@ -559,7 +590,7 @@ def predict_wait_times(
     # Format results
     results = []
     for idx, row in features_df.iterrows():
-        pred_wait = int(round(predictions[idx]))
+        pred_wait = round_to_nearest_5(predictions[idx])
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row['timestamp'] - base_time).total_seconds() / 3600
