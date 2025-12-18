@@ -718,11 +718,17 @@ export class ParksService {
       where: {
         parkId,
         date: parkDateStr as any,
-        scheduleType: "OPERATING" as ScheduleType,
       },
     });
 
-    return !!todaySchedule;
+    // If we have a schedule entry, trust it:
+    if (todaySchedule) {
+      return todaySchedule.scheduleType === 'OPERATING';
+    }
+
+    // If NO schedule exists (e.g. Toverland), default to TRUE to ensure we check live sources.
+    // This allows us to "discover" open parks even if we lack schedule data.
+    return true;
   }
 
   /**
