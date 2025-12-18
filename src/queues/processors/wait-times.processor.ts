@@ -11,6 +11,7 @@ import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
+import { CacheWarmupService } from "../services/cache-warmup.service";
 import {
   EntityLiveResponse,
   EntityType,
@@ -21,7 +22,7 @@ import { EntityLiveData } from "../../external-apis/data-sources/interfaces/data
 import { In } from "typeorm";
 
 /**
- * Wait Times Processor (OPTIMIZED + ENTITY ROUTING)
+ * Wait Times Processor (OPTIMIZED + ENTITY ROUTING + CACHE WARMUP)
  *
  * Processes jobs in the 'wait-times' queue.
  * Fetches live data from ThemeParks.wiki for ALL entity types (attractions, shows, restaurants).
@@ -35,6 +36,10 @@ import { In } from "typeorm";
  * - ATTRACTION → queue_data + forecast_data
  * - SHOW → show_live_data (showtimes)
  * - RESTAURANT → restaurant_live_data (dining availability)
+ *
+ * CACHE WARMUP (Phase 6.7):
+ * - After sync: Warm up cache for OPERATING parks + Top 100 attractions
+ * - Eliminates cold start delays on first API request
  *
  * Result:
  * - Before: 4,017 API calls (per attraction) = 803 calls/min
@@ -59,6 +64,7 @@ export class WaitTimesProcessor {
     private restaurantsService: RestaurantsService,
     private queueDataService: QueueDataService,
     private readonly orchestrator: MultiSourceOrchestrator,
+    private readonly cacheWarmupService: CacheWarmupService,
   ) {}
 
   @Process("fetch-wait-times")
@@ -513,6 +519,21 @@ export class WaitTimesProcessor {
             .join(", ") || "none"
         }`,
       );
+
+      // Cache Warmup: Prepopulate cache for OPERATING parks + Top 100 attractions
+      // This eliminates cold start delays on first API request after sync
+      this.logger.log("🔥 Starting cache warmup...");
+      try {
+        await Promise.all([
+          this.cacheWarmupService.warmupOperatingParks(),
+          this.cacheWarmupService.warmupTopAttractions(100),
+        ]);
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Cache warmup failed: ${errorMessage}`);
+        // Don't throw - warmup failure shouldn't fail the entire sync
+      }
     } catch (error) {
       this.logger.error("❌ Wait times sync failed", error);
       throw error; // Bull will retry

@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { MLService } from "../../ml/ml.service";
 import { ParksService } from "../../parks/parks.service";
+import { CacheWarmupService } from "../services/cache-warmup.service";
 
 /**
  * Prediction Generator Processor
@@ -28,6 +29,7 @@ export class PredictionGeneratorProcessor {
   constructor(
     private mlService: MLService,
     private parksService: ParksService,
+    private cacheWarmupService: CacheWarmupService,
   ) {}
 
   @Process("generate-hourly")
@@ -75,6 +77,18 @@ export class PredictionGeneratorProcessor {
         this.logger.warn(
           `⚠️  ${failedParks} parks failed to generate predictions`,
         );
+      }
+
+      // Cache Warmup: Prepopulate cache for parks opening in next 12h
+      // Important for trip planning - users look at tomorrow's data
+      this.logger.log("🔥 Starting cache warmup for upcoming parks...");
+      try {
+        await this.cacheWarmupService.warmupUpcomingParks();
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Cache warmup failed: ${errorMessage}`);
+        // Don't throw - warmup failure shouldn't fail the entire generation
       }
     } catch (error) {
       const errorMessage =

@@ -5,6 +5,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { getRedisConfig } from "../config/redis.config";
 import { QueueBootstrapService } from "./services/queue-bootstrap.service";
 import { QueueSchedulerService } from "./services/queue-scheduler.service";
+import { CacheWarmupService } from "./services/cache-warmup.service";
 import { ParkMetadataProcessor } from "./processors/park-metadata.processor";
 import { ChildrenMetadataProcessor } from "./processors/children-metadata.processor";
 import { AttractionsMetadataProcessor } from "./processors/attractions-metadata.processor";
@@ -34,6 +35,8 @@ import { GeocodingModule } from "../external-apis/geocoding/geocoding.module";
 import { NagerDateModule } from "../external-apis/nager-date/nager-date.module";
 import { DataSourcesModule } from "../external-apis/data-sources/data-sources.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
+import { RedisModule } from "../common/redis/redis.module";
+import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
 import { ExternalEntityMapping } from "../database/entities/external-entity-mapping.entity";
@@ -45,6 +48,7 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
     ConfigModule,
     TypeOrmModule.forFeature([
       Park,
+      Attraction,
       MLModel,
       ExternalEntityMapping,
       QueueData,
@@ -109,10 +113,12 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
     GeocodingModule,
     NagerDateModule,
     AnalyticsModule,
+    RedisModule, // For cache warmup service
   ],
   providers: [
     QueueBootstrapService,
     QueueSchedulerService,
+    CacheWarmupService, // Cache warmup service
     ParkMetadataProcessor,
     ChildrenMetadataProcessor, // Phase 6.2: Combined processor
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
