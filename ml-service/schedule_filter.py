@@ -41,6 +41,11 @@ def filter_predictions_by_schedule(
     # Fetch park metadata for timezone info
     parks_metadata = fetch_parks_metadata()
     
+    # CRITICAL FIX: Convert UUID objects to strings for comparison
+    # Predictions have park_id as strings, but DB returns UUID objects
+    if not parks_metadata.empty:
+        parks_metadata['park_id'] = parks_metadata['park_id'].astype(str)
+    
     # Group predictions by park
     park_predictions_map = defaultdict(list)
     for pred in predictions:
@@ -54,15 +59,8 @@ def filter_predictions_by_schedule(
         # Get park metadata for timezone
         park_info = parks_metadata[parks_metadata['park_id'] == park_id]
         if park_info.empty:
-            # No metadata - keep all predictions
+            # No metadata - keep all predictions (should be rare now with UUID fix)
             print(f"⚠️  No metadata for park {park_id}, keeping all predictions")
-            # Debug: Show what we're looking for vs what we have
-            print(f"   Looking for park_id: '{park_id}' (type: {type(park_id)})")
-            if not parks_metadata.empty:
-                print(f"   Available park IDs (first 3): {list(parks_metadata['park_id'].head(3))}")
-                print(f"   Available park ID types: {parks_metadata['park_id'].dtype}")
-            else:
-                print(f"   ❌ Parks metadata DataFrame is completely empty!")
             filtered_predictions.extend(park_preds)
             continue
         
