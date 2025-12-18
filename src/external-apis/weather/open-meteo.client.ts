@@ -123,14 +123,6 @@ export class OpenMeteoClient {
     }
   }
 
-  /**
-   * Fetch hourly weather forecast for a location
-   *
-   * @param latitude - Location latitude
-   * @param longitude - Location longitude
-   * @param forecastDays - Number of forecast days (max 16)
-   * @returns Hourly weather data
-   */
   async getHourlyForecast(
     latitude: number,
     longitude: number,
@@ -156,6 +148,33 @@ export class OpenMeteoClient {
 
       return this.transformHourlyResponse(response.data);
     } catch (error: unknown) {
+      // Enhanced error logging with context
+      if (axios.isAxiosError(error)) {
+        const details = {
+          url: error.config?.url,
+          params: { latitude, longitude, forecast_days: forecastDays },
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          code: error.code,
+          message: error.message,
+        };
+
+        this.logger.error(
+          `Open-Meteo API request failed: ${JSON.stringify(details)}`,
+        );
+
+        // More specific error messages
+        if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') {
+          throw new Error(`Open-Meteo API: DNS resolution failed (lat: ${latitude}, lon: ${longitude})`);
+        } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
+          throw new Error(`Open-Meteo API: Request timeout (lat: ${latitude}, lon: ${longitude})`);
+        } else if (error.response?.status) {
+          throw new Error(`Open-Meteo API: HTTP ${error.response.status} ${error.response.statusText}`);
+        } else {
+          throw new Error(`Open-Meteo API: ${error.message} (lat: ${latitude}, lon: ${longitude})`);
+        }
+      }
+
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
