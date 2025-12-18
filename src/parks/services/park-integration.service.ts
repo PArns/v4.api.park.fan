@@ -53,7 +53,7 @@ export class ParkIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -83,14 +83,18 @@ export class ParkIntegrationService {
       // Self-Healing: Check if cache is "corrupted" (missing relations that exist in DB)
       // This fixes the issue where a cold start cached an incomplete response
       const hasShowsInDb = park.shows && park.shows.length > 0;
-      const hasRestaurantsInDb = park.restaurants && park.restaurants.length > 0;
+      const hasRestaurantsInDb =
+        park.restaurants && park.restaurants.length > 0;
 
-      const missingShowsInCache = hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
-      const missingRestaurantsInCache = hasRestaurantsInDb && (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
+      const missingShowsInCache =
+        hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
+      const missingRestaurantsInCache =
+        hasRestaurantsInDb &&
+        (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
 
       if (missingShowsInCache || missingRestaurantsInCache) {
         this.logger.warn(
-          `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`
+          `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`,
         );
         // Fall through to rebuild logic below
       } else {
@@ -159,8 +163,8 @@ export class ParkIntegrationService {
         dto.status === "OPERATING"
           ? new Date().toISOString().split("T")[0] // Today
           : new Date(Date.now() + 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split("T")[0]; // Tomorrow
+              .toISOString()
+              .split("T")[0]; // Tomorrow
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
@@ -361,37 +365,35 @@ export class ParkIntegrationService {
 
     // Fetch current status for shows
     if (park.shows && park.shows.length > 0) {
-      const showLiveData = await Promise.all(
-        park.shows.map((show) =>
-          this.showsService.findCurrentStatusByShow(show.id),
-        ),
-      );
-      const showLiveDataMap = new Map(
-        park.shows.map((show, index) => [show.id, showLiveData[index]]),
-      );
+      let showLiveDataMap = new Map<string, any>();
+
+      if (dto.status === "OPERATING") {
+        showLiveDataMap = await this.showsService.findCurrentStatusByPark(
+          park.id,
+        );
+      } else {
+        // Park is CLOSED - Fetch "Today's" operating data to show schedule/times
+        showLiveDataMap = await this.showsService.findTodayOperatingDataByPark(
+          park.id,
+          park.timezone,
+        );
+      }
 
       for (const show of dto.shows || []) {
         const liveData = showLiveDataMap.get(show.id);
         if (liveData) {
           // Keep operatingHours always (general schedule info)
           show.operatingHours = liveData.operatingHours || [];
+          show.showtimes = liveData.showtimes || [];
 
-          // Only show live showtimes if park is OPERATING
-          if (dto.status === "OPERATING") {
-            show.showtimes = liveData.showtimes || [];
-            show.status = liveData.status;
-            show.lastUpdated = liveData.lastUpdated?.toISOString();
-          } else {
-            // Park closed - no live showtimes, but keep schedule
-            show.showtimes = [];
-            show.status = "CLOSED";
-            show.lastUpdated = undefined;
-          }
+          // If park is OPERATING, use live status. If CLOSED, force CLOSED but show times.
+          show.status = dto.status === "OPERATING" ? liveData.status : "CLOSED";
+          show.lastUpdated = liveData.lastUpdated?.toISOString();
         } else {
           // No live data available
           show.showtimes = [];
           show.operatingHours = [];
-          show.status = undefined;
+          show.status = "CLOSED";
           show.lastUpdated = undefined;
         }
       }
@@ -399,17 +401,19 @@ export class ParkIntegrationService {
 
     // Fetch current status for restaurants
     if (park.restaurants && park.restaurants.length > 0) {
-      const restaurantLiveData = await Promise.all(
-        park.restaurants.map((restaurant) =>
-          this.restaurantsService.findCurrentStatusByRestaurant(restaurant.id),
-        ),
-      );
-      const restaurantLiveDataMap = new Map(
-        park.restaurants.map((restaurant, index) => [
-          restaurant.id,
-          restaurantLiveData[index],
-        ]),
-      );
+      let restaurantLiveDataMap = new Map<string, any>();
+
+      if (dto.status === "OPERATING") {
+        restaurantLiveDataMap =
+          await this.restaurantsService.findCurrentStatusByPark(park.id);
+      } else {
+        // Park is CLOSED - Fetch "Today's" operating data
+        restaurantLiveDataMap =
+          await this.restaurantsService.findTodayOperatingDataByPark(
+            park.id,
+            park.timezone,
+          );
+      }
 
       for (const restaurant of dto.restaurants || []) {
         const liveData = restaurantLiveDataMap.get(restaurant.id);
@@ -417,23 +421,21 @@ export class ParkIntegrationService {
           // Keep operatingHours always (general schedule info)
           restaurant.operatingHours = liveData.operatingHours || [];
 
-          // Only show live data if park is OPERATING
+          // Only show wait times if park is OPERATING
           if (dto.status === "OPERATING") {
             restaurant.status = liveData.status;
             restaurant.waitTime = liveData.waitTime;
             restaurant.partySize = liveData.partySize;
-            restaurant.lastUpdated = liveData.lastUpdated?.toISOString();
           } else {
-            // Park closed - no live data, but keep schedule
             restaurant.status = "CLOSED";
             restaurant.waitTime = null;
             restaurant.partySize = null;
-            restaurant.lastUpdated = undefined;
           }
+          restaurant.lastUpdated = liveData.lastUpdated?.toISOString();
         } else {
           // No live data available
           restaurant.operatingHours = [];
-          restaurant.status = undefined;
+          restaurant.status = "CLOSED";
           restaurant.waitTime = null;
           restaurant.partySize = null;
           restaurant.lastUpdated = undefined;
@@ -636,7 +638,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;

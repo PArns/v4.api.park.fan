@@ -355,6 +355,16 @@ export class RestaurantsService {
       }
     }
 
+    // Operating hours changed → save
+    if (
+      this.hasOperatingHoursChanged(
+        latest.operatingHours,
+        newData.operatingHours,
+      )
+    ) {
+      return true;
+    }
+
     // No significant change
     return false;
   }
@@ -469,30 +479,62 @@ export class RestaurantsService {
     return result;
   }
   /**
-   * Find last known OPERATING status for all restaurants in a park
-   * Used to recover operatingHours when park is closed
+   * Find today's operating data for all restaurants in a park
+   *
+   * Used when park is CLOSED to recover the day's schedule.
+   * Filters by the park's timezone to ensure we only get "today's" data.
    */
-  async findLastKnownOperatingStatusByPark(
+  async findTodayOperatingDataByPark(
     parkId: string,
+    timezone: string,
   ): Promise<Map<string, RestaurantLiveData>> {
+    // 1. Calculate Start of Day in Park's Timezone
+    const now = new Date();
+    const parkDateStr = now.toLocaleDateString("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    // Format: MM/DD/YYYY -> YYYY-MM-DD
+    const [month, day, year] = parkDateStr.split("/");
+
+    // Simplified: Fetch all Operating data for the last 24h and filter in memory
+    const lookbackHours = 26; // 24h + buffer
+    const lookbackDate = new Date(
+      now.getTime() - lookbackHours * 60 * 60 * 1000,
+    );
+
     const data = await this.restaurantLiveDataRepository
       .createQueryBuilder("rld")
       .innerJoin("rld.restaurant", "restaurant")
       .where("restaurant.parkId = :parkId", { parkId })
       .andWhere("rld.status = 'OPERATING'")
-      .andWhere(
-        `rld.timestamp = (
-          SELECT MAX(rld2.timestamp)
-          FROM restaurant_live_data rld2
-          WHERE rld2."restaurantId" = rld."restaurantId"
-          AND rld2.status = 'OPERATING'
-        )`,
-      )
+      .andWhere("rld.timestamp > :lookbackDate", { lookbackDate })
+      .orderBy("rld.timestamp", "DESC")
       .getMany();
 
     const result = new Map<string, RestaurantLiveData>();
+
+    // Filter for "Today" in Park Time
+    const parkDate = `${year}-${month}-${day}`; // YYYY-MM-DD
+
     for (const item of data) {
-      result.set(item.restaurantId, item);
+      if (!result.has(item.restaurantId)) {
+        // Check if this data point belongs to "today" in the park's timezone
+        const entryDateStr = item.timestamp.toLocaleDateString("en-US", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        const [eMonth, eDay, eYear] = entryDateStr.split("/");
+        const entryDate = `${eYear}-${eMonth}-${eDay}`;
+
+        if (entryDate === parkDate) {
+          result.set(item.restaurantId, item);
+        }
+      }
     }
 
     return result;

@@ -102,11 +102,16 @@ export class WaitTimesProcessor {
       for (let parkIdx = 0; parkIdx < parks.length; parkIdx++) {
         const park = parks[parkIdx];
         try {
-          // OPTIMIZATION 1: Check if park is currently open
-          const isOpen = await this.parksService.isParkCurrentlyOpen(park.id);
+          // OPTIMIZATION 1: Check if park is operating today
+          // We fetch data if the park has an OPERATING schedule for today,
+          // even if it is currently closed (e.g. before open / after close).
+          // This ensures we have "Today's" showtimes/hours for display.
+          const isOperatingToday = await this.parksService.isParkOperatingToday(
+            park.id,
+          );
 
-          if (isOpen) {
-            // Park is OPEN: Fetch park-level live data (ONE API call for all attractions)
+          if (isOperatingToday) {
+            // Park is OPERATING TODAY: Fetch live data
             openParksCount++;
 
             try {
@@ -377,9 +382,13 @@ export class WaitTimesProcessor {
               this.restaurantsService.getRepository().find({
                 where: { parkId: park.id },
               }),
-              this.showsService.findLastKnownOperatingStatusByPark(park.id),
-              this.restaurantsService.findLastKnownOperatingStatusByPark(
+              this.showsService.findTodayOperatingDataByPark(
                 park.id,
+                park.timezone || "UTC",
+              ),
+              this.restaurantsService.findTodayOperatingDataByPark(
+                park.id,
+                park.timezone || "UTC",
               ),
             ]);
 

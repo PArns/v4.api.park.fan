@@ -487,30 +487,78 @@ export class ShowsService {
     return result;
   }
   /**
-   * Find last known OPERATING status for all shows in a park
-   * Used to recover showtimes when park is closed
+  /**
+   * Find today's operating data for all shows in a park
+   *
+   * Used when park is CLOSED to recover the day's schedule.
+   * Filters by the park's timezone to ensure we only get "today's" data.
    */
-  async findLastKnownOperatingStatusByPark(
+  async findTodayOperatingDataByPark(
     parkId: string,
+    timezone: string,
   ): Promise<Map<string, ShowLiveData>> {
+    // 1. Calculate Start of Day in Park's Timezone
+    // We want 00:00:00 in the park's timezone, converted to UTC
+    const now = new Date();
+    const parkDateStr = now.toLocaleDateString("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    // Format: MM/DD/YYYY -> YYYY-MM-DD
+    const [month, day, year] = parkDateStr.split("/");
+
+    // Create Date object (node assumes local time if no Z, but we need to trick it or use a library)
+    // Better strategy: Use the timestamp from DB directly with a string comparison or raw query if needed.
+    // However, TypeORM abstracts this. Let's rely on the fact that we've stored UTC timestamps.
+    // We strictly need the UTC timestamp corresponding to 00:00:00 Park Time.
+
+    // Using simple offset calculation (approximate but robust enough for "today")
+    // Or just use the string comparison logic on the application side if the volume is low.
+    // Best: Use a library like date-fns-tz if available, or Intl.DateTimeFormat (which we used).
+
+    // Let's get the UTC equivalent of "00:00 Park Time"
+    // We can do this by creating a date at 00:00 UTC and adjusting.
+    // But since we already have the YYYY-MM-DD for the park, let's just use that as a broad filter.
+    // Ideally we'd use: timestamp >= StartOfTodayInUTC
+
+    // Simplified: Fetch all Operating data for the last 24h and filter in memory for "today park time"
+    const lookbackHours = 26; // 24h + buffer
+    const lookbackDate = new Date(
+      now.getTime() - lookbackHours * 60 * 60 * 1000,
+    );
+
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
       .innerJoin("sld.show", "show")
       .where("show.parkId = :parkId", { parkId })
       .andWhere("sld.status = 'OPERATING'")
-      .andWhere(
-        `sld.timestamp = (
-          SELECT MAX(sld2.timestamp)
-          FROM show_live_data sld2
-          WHERE sld2."showId" = sld."showId"
-          AND sld2.status = 'OPERATING'
-        )`,
-      )
+      .andWhere("sld.timestamp > :lookbackDate", { lookbackDate })
+      .orderBy("sld.timestamp", "DESC")
       .getMany();
 
     const result = new Map<string, ShowLiveData>();
+
+    // Filter for "Today" in Park Time
+    const parkDate = `${year}-${month}-${day}`; // YYYY-MM-DD
+
     for (const data of showData) {
-      result.set(data.showId, data);
+      if (!result.has(data.showId)) {
+        // Check if this data point belongs to "today" in the park's timezone
+        const entryDateStr = data.timestamp.toLocaleDateString("en-US", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        const [eMonth, eDay, eYear] = entryDateStr.split("/");
+        const entryDate = `${eYear}-${eMonth}-${eDay}`;
+
+        if (entryDate === parkDate) {
+          result.set(data.showId, data);
+        }
+      }
     }
 
     return result;

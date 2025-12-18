@@ -685,6 +685,47 @@ export class ParksService {
   }
 
   /**
+   * Checks if a park is scheduled to operate today (even if currently closed)
+   *
+   * Used by WaitTimesProcessor to decide whether to fetch live data.
+   * fetch data if park operates TODAY, even if closed right now (e.g. before opening/after closing).
+   */
+  async isParkOperatingToday(parkId: string): Promise<boolean> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park || !park.timezone) {
+      return false;
+    }
+
+    // Get current time (UTC)
+    const now = new Date();
+
+    // Get current date in park's timezone (YYYY-MM-DD)
+    const parkTimeStr = now.toLocaleString("en-US", {
+      timeZone: park.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const [month, day, year] = parkTimeStr.split("/");
+    const parkDateStr = `${year}-${month}-${day}`;
+
+    // Query schedule for today in park's timezone
+    const todaySchedule = await this.scheduleRepository.findOne({
+      where: {
+        parkId,
+        date: parkDateStr as any,
+        scheduleType: "OPERATING" as ScheduleType,
+      },
+    });
+
+    return !!todaySchedule;
+  }
+
+  /**
    * Checks operating status for multiple parks efficiently
    *
    * @param parkIds - Array of Park IDs
