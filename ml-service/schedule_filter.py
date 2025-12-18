@@ -104,7 +104,7 @@ def filter_predictions_by_schedule(
             FROM schedule_entries
             WHERE "parkId"::text = :park_id
                 AND "attractionId" IS NULL
-                AND date = ANY(:dates)
+                AND date = ANY(CAST(:dates AS DATE[]))
                 AND "scheduleType" = 'OPERATING'
         """)
         
