@@ -56,6 +56,13 @@ def filter_predictions_by_schedule(
         if park_info.empty:
             # No metadata - keep all predictions
             print(f"⚠️  No metadata for park {park_id}, keeping all predictions")
+            # Debug: Show what we're looking for vs what we have
+            print(f"   Looking for park_id: '{park_id}' (type: {type(park_id)})")
+            if not parks_metadata.empty:
+                print(f"   Available park IDs (first 3): {list(parks_metadata['park_id'].head(3))}")
+                print(f"   Available park ID types: {parks_metadata['park_id'].dtype}")
+            else:
+                print(f"   ❌ Parks metadata DataFrame is completely empty!")
             filtered_predictions.extend(park_preds)
             continue
         
