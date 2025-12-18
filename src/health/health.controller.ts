@@ -63,7 +63,7 @@ export class HealthController {
     @InjectRepository(MLModel)
     private mlModelRepository: Repository<MLModel>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   @Get()
   @ApiOperation({
@@ -128,11 +128,11 @@ export class HealthController {
           trained_at: activeModel.trainedAt?.toISOString() || "",
           ...(activeModel.mae !== undefined &&
             activeModel.rmse !== undefined && {
-              metrics: {
-                mae: activeModel.mae,
-                rmse: activeModel.rmse,
-              },
-            }),
+            metrics: {
+              mae: activeModel.mae,
+              rmse: activeModel.rmse,
+            },
+          }),
         },
       }),
       ...(predictions24h > 0 && { predictions_24h: predictions24h }),
@@ -242,7 +242,7 @@ export class HealthController {
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
       // Query WaitTimePrediction table for predictions generated in last 24h
       const count = await this.connection.query(
-        `SELECT COUNT(*) as count FROM wait_time_prediction 
+        `SELECT COUNT(*) as count FROM wait_time_predictions 
          WHERE "createdAt" >= $1`,
         [yesterday],
       );
