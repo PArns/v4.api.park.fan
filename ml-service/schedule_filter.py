@@ -164,10 +164,11 @@ def filter_predictions_by_schedule(
                             opening = schedule_map[pred_date]['opening']
                             closing = schedule_map[pred_date]['closing']
                             
-                            # Keep predictions within operating hours (opening to closing)
-                            if opening <= pred_time_local <= closing:
+                            # Keep predictions within operating hours (from opening up to, but NOT including, closing)
+                            # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
+                            if opening <= pred_time_local < closing:
                                 filtered_predictions.append(pred)
-                            # else: Prediction is outside operating hours, filter it out
+                            # else: Prediction is at or after closing time, filter it out
                         # else: No schedule for this date - park might be closed today, skip prediction
                     except Exception as e:
                         print(f"⚠️  Error filtering prediction: {e}")
