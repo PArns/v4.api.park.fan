@@ -73,6 +73,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+      - ML_SERVICE_URL=http://ml-service:8000
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

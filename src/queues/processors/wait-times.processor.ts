@@ -522,7 +522,7 @@ export class WaitTimesProcessor {
 
       // Cache Warmup: Prepopulate cache for OPERATING parks + Top 100 attractions
       // This eliminates cold start delays on first API request after sync
-      this.logger.log("🔥 Starting cache warmup...");
+      this.logger.verbose("🔥 Starting cache warmup..."); // Log -> Verbose
       try {
         await Promise.all([
           this.cacheWarmupService.warmupOperatingParks(),

@@ -34,7 +34,7 @@ export class CacheWarmupService {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Warm up cache for a single park
@@ -42,17 +42,22 @@ export class CacheWarmupService {
    * @param parkId - Park ID
    * @returns true if warmed successfully, false if skipped or failed
    */
-  async warmupParkCache(parkId: string): Promise<boolean> {
+  async warmupParkCache(
+    parkId: string,
+    force: boolean = false,
+  ): Promise<boolean> {
     try {
       const cacheKey = `park:integrated:${parkId}`;
 
       // Check if cache is already fresh
-      const ttl = await this.redis.ttl(cacheKey);
-      if (ttl > this.CACHE_FRESHNESS_THRESHOLD) {
-        this.logger.debug(
-          `Cache for park ${parkId} is fresh (TTL: ${ttl}s), skipping`,
-        );
-        return false;
+      if (!force) {
+        const ttl = await this.redis.ttl(cacheKey);
+        if (ttl > this.CACHE_FRESHNESS_THRESHOLD) {
+          this.logger.verbose(
+            `Cache for park ${parkId} is fresh (TTL: ${ttl}s), skipping`,
+          );
+          return false;
+        }
       }
 
       // Fetch park
@@ -91,7 +96,7 @@ export class CacheWarmupService {
    */
   async warmupOperatingParks(): Promise<number> {
     const startTime = Date.now();
-    this.logger.log("🔥 Starting cache warmup for OPERATING parks...");
+    this.logger.verbose("🔥 Starting cache warmup for OPERATING parks...");
 
     try {
       // Get all parks
@@ -111,14 +116,14 @@ export class CacheWarmupService {
         .filter(([, status]) => status === "OPERATING")
         .map(([parkId]) => parkId);
 
-      this.logger.log(
+      this.logger.verbose(
         `Found ${operatingParkIds.length}/${parks.length} OPERATING parks`,
       );
 
       // Warm up in parallel with controlled concurrency
       let warmedCount = 0;
       const results = await Promise.allSettled(
-        operatingParkIds.map((parkId) => this.warmupParkCache(parkId)),
+        operatingParkIds.map((parkId) => this.warmupParkCache(parkId, true)),
       );
 
       results.forEach((result) => {
@@ -152,7 +157,7 @@ export class CacheWarmupService {
    */
   async warmupUpcomingParks(): Promise<number> {
     const startTime = Date.now();
-    this.logger.log(
+    this.logger.verbose(
       "🔥 Starting cache warmup for parks opening in next 12h...",
     );
 
@@ -172,7 +177,7 @@ export class CacheWarmupService {
         .leftJoinAndSelect("park.restaurants", "restaurants")
         .getMany();
 
-      this.logger.log(`Found ${upcomingParks.length} parks opening soon`);
+      this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
 
       // Warm up in parallel
       let warmedCount = 0;
@@ -206,17 +211,22 @@ export class CacheWarmupService {
    * @param attractionId - Attraction ID
    * @returns true if warmed successfully, false if skipped or failed
    */
-  async warmupAttractionCache(attractionId: string): Promise<boolean> {
+  async warmupAttractionCache(
+    attractionId: string,
+    force: boolean = false,
+  ): Promise<boolean> {
     try {
       const cacheKey = `attraction:integrated:${attractionId}`;
 
       // Check if cache is already fresh
-      const ttl = await this.redis.ttl(cacheKey);
-      if (ttl > this.CACHE_FRESHNESS_THRESHOLD) {
-        this.logger.debug(
-          `Cache for attraction ${attractionId} is fresh (TTL: ${ttl}s), skipping`,
-        );
-        return false;
+      if (!force) {
+        const ttl = await this.redis.ttl(cacheKey);
+        if (ttl > this.CACHE_FRESHNESS_THRESHOLD) {
+          this.logger.verbose(
+            `Cache for attraction ${attractionId} is fresh (TTL: ${ttl}s), skipping`,
+          );
+          return false;
+        }
       }
 
       // Fetch attraction
@@ -260,7 +270,9 @@ export class CacheWarmupService {
    */
   async warmupTopAttractions(limit: number = 100): Promise<number> {
     const startTime = Date.now();
-    this.logger.log(`🔥 Starting cache warmup for top ${limit} attractions...`);
+    this.logger.verbose(
+      `🔥 Starting cache warmup for top ${limit} attractions...`,
+    );
 
     try {
       // Query top attractions by queue data frequency (last 7 days)
@@ -275,21 +287,32 @@ export class CacheWarmupService {
         .limit(limit)
         .getMany();
 
-      this.logger.log(`Found ${topAttractions.length} top attractions`);
+      this.logger.verbose(`Found ${topAttractions.length} top attractions`);
 
-      // Warm up in parallel
+      // Batch processing to avoid connection timeouts
+      // 100 concurrent requests can exhaust the connection pool
+      const BATCH_SIZE = 10;
       let warmedCount = 0;
-      const results = await Promise.allSettled(
-        topAttractions.map((attraction) =>
-          this.warmupAttractionCache(attraction.id),
-        ),
-      );
 
-      results.forEach((result) => {
-        if (result.status === "fulfilled" && result.value) {
-          warmedCount++;
-        }
-      });
+      for (let i = 0; i < topAttractions.length; i += BATCH_SIZE) {
+        const batch = topAttractions.slice(i, i + BATCH_SIZE);
+
+        await Promise.all(
+          batch.map(async (attraction) => {
+            const success = await this.warmupAttractionCache(
+              attraction.id,
+              true,
+            );
+            if (success) warmedCount++;
+          }),
+        );
+
+        // Log progress every batch
+        const progress = Math.min(i + BATCH_SIZE, topAttractions.length);
+        this.logger.verbose(
+          `Progress: ${progress}/${topAttractions.length} attractions warmed`,
+        );
+      }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(

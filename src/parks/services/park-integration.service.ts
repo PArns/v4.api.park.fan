@@ -53,7 +53,7 @@ export class ParkIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -78,18 +78,35 @@ export class ParkIntegrationService {
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
-      // Implement stale-while-revalidate pattern
-      const ttl = await this.redis.ttl(cacheKey);
-      if (ttl < 60 && ttl > 0) {
-        // Cache expires in less than 1 minute, refresh in background
-        this.refreshCacheInBackground(park).catch((err) =>
-          this.logger.warn(
-            `Background cache refresh failed for ${park.slug}:`,
-            err,
-          ),
+      const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
+
+      // Self-Healing: Check if cache is "corrupted" (missing relations that exist in DB)
+      // This fixes the issue where a cold start cached an incomplete response
+      const hasShowsInDb = park.shows && park.shows.length > 0;
+      const hasRestaurantsInDb = park.restaurants && park.restaurants.length > 0;
+
+      const missingShowsInCache = hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
+      const missingRestaurantsInCache = hasRestaurantsInDb && (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
+
+      if (missingShowsInCache || missingRestaurantsInCache) {
+        this.logger.warn(
+          `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`
         );
+        // Fall through to rebuild logic below
+      } else {
+        // Implement stale-while-revalidate pattern
+        const ttl = await this.redis.ttl(cacheKey);
+        if (ttl < 60 && ttl > 0) {
+          // Cache expires in less than 1 minute, refresh in background
+          this.refreshCacheInBackground(park).catch((err) =>
+            this.logger.warn(
+              `Background cache refresh failed for ${park.slug}:`,
+              err,
+            ),
+          );
+        }
+        return cachedDto;
       }
-      return JSON.parse(cached);
     }
 
     // Start with base DTO
@@ -142,8 +159,8 @@ export class ParkIntegrationService {
         dto.status === "OPERATING"
           ? new Date().toISOString().split("T")[0] // Today
           : new Date(Date.now() + 24 * 60 * 60 * 1000)
-              .toISOString()
-              .split("T")[0]; // Tomorrow
+            .toISOString()
+            .split("T")[0]; // Tomorrow
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
@@ -619,7 +636,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
