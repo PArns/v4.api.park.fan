@@ -34,6 +34,6 @@ import { RedisModule } from "../common/redis/redis.module";
   ],
   controllers: [ParksController],
   providers: [ParksService, WeatherService, ParkIntegrationService],
-  exports: [ParksService, WeatherService],
+  exports: [ParksService, WeatherService, ParkIntegrationService],
 })
 export class ParksModule {}
