@@ -37,7 +37,36 @@ export class PredictionGeneratorProcessor {
     this.logger.log("⏰ Generating hourly predictions for all parks...");
 
     try {
-      const parks = await this.parksService.findAll();
+      const allParks = await this.parksService.findAll();
+
+      // OPTIMIZATION: Only generate hourly predictions for OPERATING parks
+      // or parks opening soon / without schedule data (for morning planning)
+      const parkIds = allParks.map((p) => p.id);
+      const statusMap = await this.parksService.getBatchParkStatus(parkIds);
+
+      // Filter to parks that are operating OR might operate soon
+      // Note: Parks without schedules default to true via isParkOperatingToday
+      const parks = [];
+      for (const park of allParks) {
+        const isOperating = statusMap.get(park.id) === "OPERATING";
+
+        if (isOperating) {
+          parks.push(park);
+        } else {
+          // Check if opens soon OR has no schedule (returns true by default)
+          const shouldInclude = await this.parksService.isParkOperatingToday(
+            park.id,
+          );
+          if (shouldInclude) {
+            parks.push(park);
+          }
+        }
+      }
+
+      this.logger.log(
+        `Filtered to ${parks.length}/${allParks.length} parks for hourly predictions`,
+      );
+
       let totalPredictions = 0;
       let successParks = 0;
       let failedParks = 0;
@@ -51,6 +80,10 @@ export class PredictionGeneratorProcessor {
           );
 
           if (response.predictions.length > 0) {
+            // OPTIMIZATION: Delete old hourly predictions for this park before storing new ones
+            // This prevents duplicate predictions for the same time slots
+            await this.mlService.deduplicatePredictions(park.id, "hourly");
+
             // Store predictions in database
             await this.mlService.storePredictions(response.predictions);
             totalPredictions += response.predictions.length;
@@ -117,6 +150,9 @@ export class PredictionGeneratorProcessor {
           );
 
           if (response.predictions.length > 0) {
+            // OPTIMIZATION: Delete old daily predictions for this park before storing new ones
+            await this.mlService.deduplicatePredictions(park.id, "daily");
+
             // Store predictions in database
             await this.mlService.storePredictions(response.predictions);
             totalPredictions += response.predictions.length;

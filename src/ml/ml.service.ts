@@ -540,4 +540,51 @@ export class MLService {
 
     return result.affected || 0;
   }
+
+  /**
+   * Deduplicate predictions for a park
+   * Deletes existing predictions for the same time range before new generation
+   *
+   * @param parkId - Park ID to deduplicate for
+   * @param predictionType - Type of prediction
+   */
+  async deduplicatePredictions(
+    parkId: string,
+    predictionType: "hourly" | "daily",
+  ): Promise<number> {
+    const now = new Date();
+    const startTime = new Date(now);
+    const endTime = new Date(now);
+
+    if (predictionType === "hourly") {
+      // Delete predictions for next 24 hours
+      endTime.setHours(endTime.getHours() + 24);
+    } else {
+      // Delete predictions for next 30 days
+      endTime.setDate(endTime.getDate() + 30);
+    }
+
+    // Get all attraction IDs for this park
+    const attractions = await this.attractionRepository.find({
+      where: { parkId },
+      select: ["id"],
+    });
+
+    const attractionIds = attractions.map((a) => a.id);
+
+    if (attractionIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.predictionRepository
+      .createQueryBuilder()
+      .delete()
+      .where("attractionId IN (:...attractionIds)", { attractionIds })
+      .andWhere("predictionType = :predictionType", { predictionType })
+      .andWhere("predictedTime >= :startTime", { startTime })
+      .andWhere("predictedTime <= :endTime", { endTime })
+      .execute();
+
+    return result.affected || 0;
+  }
 }
