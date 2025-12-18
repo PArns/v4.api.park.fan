@@ -43,6 +43,31 @@ export class QueueDataService {
     let savedCount = 0;
 
     if (!liveData.queue) {
+      // If no queue data, but status is explicitly CLOSED/DOWN/REFURBISHMENT, we should record that.
+      // Otherwise we miss the "Close" signal if the API just sends status + empty queue.
+      if (liveData.status && liveData.status !== "OPERATING") {
+        // Force a save for STANDBY queue to record the status change
+        const queueData: Partial<QueueData> = {
+          attractionId,
+          queueType: QueueType.STANDBY,
+          status: liveData.status,
+          lastUpdated: liveData.lastUpdated
+            ? new Date(liveData.lastUpdated)
+            : new Date(),
+          waitTime: 0, // Closed = 0 wait
+        };
+
+        const shouldSave = await this.shouldSaveQueueData(
+          attractionId,
+          QueueType.STANDBY,
+          queueData,
+        );
+        if (shouldSave) {
+          const queueEntry = this.queueDataRepository.create(queueData);
+          await this.queueDataRepository.save(queueEntry);
+          return 1;
+        }
+      }
       // No queue data available (attraction might not have wait times)
       return savedCount;
     }
