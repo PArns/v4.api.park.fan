@@ -112,15 +112,15 @@ export class ParkIntegrationService {
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
     // Determine overall park status based on schedule
-    // CRITICAL: Use park's timezone to get current time, compare with UTC schedule times
-    const nowInParkTz = toZonedTime(new Date(), park.timezone);
+    // Compare current UTC time with schedule's UTC timestamps
+    const now = new Date(); // Current time in UTC
     const operatingSchedule = schedule.find(
       (s) =>
         s.scheduleType === "OPERATING" &&
         s.openingTime &&
         s.closingTime &&
-        nowInParkTz >= s.openingTime &&
-        nowInParkTz < s.closingTime,
+        now >= s.openingTime &&
+        now < s.closingTime,
     );
     dto.status = operatingSchedule ? "OPERATING" : "CLOSED";
 
