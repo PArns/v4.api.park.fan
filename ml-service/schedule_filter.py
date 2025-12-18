@@ -19,8 +19,9 @@ def filter_predictions_by_schedule(
     Filter predictions to only include valid operating times.
     
     Strategy for HOURLY predictions:
-    1. Primary: Use schedule_entries for precise operating hours
-    2. Fallback: If no schedule data, use queue_data to infer park status (≥50% rule)
+    - Remove predictions that are AFTER park closing time for each day
+    - Keep predictions that fall within operating hours (including future days)
+    - This allows users to see predictions for upcoming hours even when park is currently closed
     
     Strategy for DAILY predictions:
     1. Primary: Use schedule_entries to filter out closed days (off-season)
@@ -113,7 +114,12 @@ def filter_predictions_by_schedule(
             # PRIMARY LOGIC: Filter by schedule
             
             if prediction_type == "hourly":
-                # HOURLY: Filter by time of day (within opening-closing hours)
+                # HOURLY: Only show predictions for TODAY (in park's timezone)
+                # Filter out predictions AFTER park closing time for today
+                # Get current date in park's timezone
+                now_park_tz = datetime.now(park_tz)
+                today_park = now_park_tz.date()
+                
                 schedule_map = {}
                 for schedule_row in schedules:
                     date = schedule_row[0]
@@ -136,7 +142,7 @@ def filter_predictions_by_schedule(
                             'closing': closing_local
                         }
                 
-                # Filter predictions
+                # Filter predictions: Keep only those for TODAY and BEFORE or AT closing time
                 for pred in park_preds:
                     try:
                         pred_time_str = pred['predictedTime']
@@ -149,14 +155,20 @@ def filter_predictions_by_schedule(
                         pred_time_local = pred_time_utc.astimezone(park_tz)
                         pred_date = pred_time_local.date()
                         
+                        # Only include predictions for TODAY in park's timezone
+                        if pred_date != today_park:
+                            # Skip predictions for other days (past or future)
+                            continue
+                        
                         if pred_date in schedule_map:
                             opening = schedule_map[pred_date]['opening']
                             closing = schedule_map[pred_date]['closing']
                             
-                            # Check if prediction time is within operating hours
+                            # Keep predictions within operating hours (opening to closing)
                             if opening <= pred_time_local <= closing:
                                 filtered_predictions.append(pred)
-                        # else: No schedule for this date - park might be closed, skip prediction
+                            # else: Prediction is outside operating hours, filter it out
+                        # else: No schedule for this date - park might be closed today, skip prediction
                     except Exception as e:
                         print(f"⚠️  Error filtering prediction: {e}")
                         continue
@@ -189,50 +201,9 @@ def filter_predictions_by_schedule(
                         print(f"⚠️  Error filtering daily prediction: {e}")
                         continue
         else:
-            # FALLBACK LOGIC: No schedule data
-            
-            if prediction_type == "hourly":
-                # For hourly: use queue data to infer park status
-                print(f"⚠️  No schedule data for park {park_id}, using queue data fallback")
-                
-                # Query current queue data
-                queue_query = text("""
-                    SELECT
-                        COUNT(DISTINCT q."attractionId") as total_attractions,
-                        COUNT(DISTINCT CASE WHEN q.status = 'OPERATING' THEN q."attractionId" END) as operating_attractions
-                    FROM queue_data q
-                    INNER JOIN attractions a ON q."attractionId"::text = a.id::text
-                    WHERE a."parkId"::text = :park_id
-                        AND q.timestamp >= NOW() - INTERVAL '1 hour'
-                """)
-                
-                with get_db() as db:
-                    result = db.execute(queue_query, {"park_id": park_id})
-                    queue_stats = result.fetchone()
-                
-                if queue_stats and queue_stats[0] > 0:
-                    total = queue_stats[0]
-                    operating = queue_stats[1] or 0
-                    operating_percentage = operating / total if total > 0 else 0
-                    
-                    if operating_percentage >= 0.5:
-                        # Park is considered OPERATING (≥50% attractions operating)
-                        print(f"✓ Park {park_id} inferred as OPERATING ({operating}/{total} = {operating_percentage:.0%})")
-                        filtered_predictions.extend(park_preds)
-                    else:
-                        # Park is considered CLOSED (<50% attractions operating)
-                        print(f"✗ Park {park_id} inferred as CLOSED ({operating}/{total} = {operating_percentage:.0%})")
-                        # Skip all predictions for this park
-                else:
-                    # No queue data either - default to keeping predictions
-                    print(f"⚠️  No queue data for park {park_id}, keeping all predictions")
-                    filtered_predictions.extend(park_preds)
-                    
-            elif prediction_type == "daily":
-                # For daily: without schedule data, keep all predictions
-                # (We can't infer off-season from queue data)
-                print(f"⚠️  No schedule data for park {park_id}, keeping all daily predictions")
-                filtered_predictions.extend(park_preds)
+            # FALLBACK LOGIC: No schedule data, keep all predictions
+            print(f"⚠️  No schedule data for park {park_id}, keeping all predictions")
+            filtered_predictions.extend(park_preds)
     
     # Log filtering statistics
     original_count = len(predictions)

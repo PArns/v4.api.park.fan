@@ -223,7 +223,6 @@ export class ParkIntegrationService {
             predictedWaitTime: p.predictedWaitTime,
             confidencePercentage: p.confidence,
             trend: p.trend,
-            modelVersion: p.modelVersion,
           }));
 
           // Attach Prediction Accuracy (Feedback Loop)
@@ -538,29 +537,6 @@ export class ParkIntegrationService {
     // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data
     // For OPERATING parks: Short 3-minute TTL for live data
     const ttl = this.calculateDynamicTTL(dto.status, schedule, park.timezone);
-
-    // Add cache metadata for debugging and transparency
-    const now = toZonedTime(new Date(), park.timezone);
-    dto.meta = {
-      cachedAt: new Date().toISOString(),
-      cacheTTL: ttl,
-    };
-
-    // Add next opening time if park is closed
-    if (dto.status === "CLOSED") {
-      const nextOpening = schedule
-        .filter(
-          (s) =>
-            s.scheduleType === "OPERATING" &&
-            s.openingTime &&
-            s.openingTime > now,
-        )
-        .sort((a, b) => a.openingTime!.getTime() - b.openingTime!.getTime())[0];
-
-      if (nextOpening && nextOpening.openingTime) {
-        dto.meta.nextOpeningTime = nextOpening.openingTime.toISOString();
-      }
-    }
 
     await this.redis.set(cacheKey, JSON.stringify(dto), "EX", ttl);
 

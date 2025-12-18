@@ -45,9 +45,6 @@ export class PredictionDto {
   @ApiProperty({ description: "Baseline wait time" })
   baseline: number;
 
-  @ApiProperty({ description: "Model version used" })
-  modelVersion: string;
-
   @ApiProperty({ required: false })
   status?: string;
 }
@@ -74,9 +71,6 @@ export class BulkPredictionResponseDto {
 
   @ApiProperty()
   count: number;
-
-  @ApiProperty()
-  modelVersion: string;
 }
 
 export class ModelInfoDto {

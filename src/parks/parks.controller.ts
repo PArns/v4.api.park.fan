@@ -431,11 +431,6 @@ export class ParksController {
           description:
             "Daily predictions for up to 365 days (or fewer if off-season days filtered)",
         },
-        modelVersion: {
-          type: "string",
-          example: "v20241217_120000",
-          description: "ML model version used for predictions",
-        },
         generatedAt: {
           type: "string",
           format: "date-time",
@@ -466,7 +461,6 @@ export class ParksController {
         slug: park.slug,
       },
       predictions: dailyPredictions,
-      modelVersion: predictions.modelVersion,
       generatedAt: new Date().toISOString(),
     };
   }
@@ -504,11 +498,6 @@ export class ParksController {
           items: { $ref: getSchemaPath("ParkDailyPredictionDto") },
           description:
             "Daily predictions for up to 365 days (or fewer if off-season days filtered)",
-        },
-        modelVersion: {
-          type: "string",
-          example: "v20241217_120000",
-          description: "ML model version used for predictions",
         },
         generatedAt: {
           type: "string",
@@ -552,7 +541,6 @@ export class ParksController {
         slug: park.slug,
       },
       predictions: dailyPredictions,
-      modelVersion: predictions.modelVersion,
       generatedAt: new Date().toISOString(),
     };
   }

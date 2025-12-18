@@ -312,9 +312,6 @@ export class PredictionAccuracyService {
   ): Promise<{
     badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
     last30Days: {
-      mae: number;
-      mape: number;
-      rmse: number;
       comparedPredictions: number;
       totalPredictions: number;
     };
@@ -329,9 +326,6 @@ export class PredictionAccuracyService {
     return {
       badge: badgeInfo.badge,
       last30Days: {
-        mae: stats.averageAbsoluteError,
-        mape: stats.averagePercentageError,
-        rmse: stats.rmse,
         comparedPredictions: stats.comparedPredictions,
         totalPredictions: stats.totalPredictions,
       },

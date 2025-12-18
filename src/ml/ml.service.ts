@@ -169,7 +169,7 @@ export class MLService {
 
       if (attractions.length === 0) {
         this.logger.warn(`No attractions found for park ${parkId}`);
-        return { predictions: [], count: 0, modelVersion: "none" };
+        return { predictions: [], count: 0 };
       }
 
       const attractionIds = attractions.map((a) => a.id);
@@ -265,7 +265,6 @@ export class MLService {
       return {
         predictions: [],
         count: 0,
-        modelVersion: "unavailable",
       };
     }
   }
@@ -313,7 +312,6 @@ export class MLService {
       return {
         predictions: [],
         count: 0,
-        modelVersion: "unavailable",
       };
     }
   }
@@ -400,7 +398,6 @@ export class MLService {
       entity.confidence = pred.confidence;
       entity.crowdLevel = pred.crowdLevel;
       entity.baseline = pred.baseline;
-      entity.modelVersion = pred.modelVersion;
       entity.status = pred.status || null;
       return entity;
     });
@@ -510,7 +507,6 @@ export class MLService {
           confidence: p.confidence,
           crowdLevel: p.crowdLevel,
           baseline: p.baseline,
-          modelVersion: p.modelVersion,
           status: p.status || undefined,
         }));
       }

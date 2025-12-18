@@ -15,9 +15,6 @@ export class ParkPredictioAccuracyDto {
 
   @ApiProperty({ description: "Last 30 days statistics" })
   last30Days: {
-    mae: number;
-    mape: number;
-    rmse: number;
     comparedPredictions: number;
     totalPredictions: number;
   };
@@ -378,17 +375,6 @@ export class ParkWithAttractionsDto {
     type: [ParkDailyPredictionDto],
   })
   crowdForecast?: ParkDailyPredictionDto[];
-
-  // Cache Metadata (for debugging and optimization)
-  @ApiProperty({
-    description: "Cache metadata",
-    required: false,
-  })
-  meta?: {
-    cachedAt?: string; // When this response was cached
-    cacheTTL?: number; // Cache TTL in seconds
-    nextOpeningTime?: string; // Next opening time (if park is closed)
-  };
 
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {

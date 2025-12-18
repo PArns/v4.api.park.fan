@@ -50,7 +50,6 @@ export class AttractionResponseDto {
     predictedWaitTime: number;
     confidence: number;
     trend: string;
-    modelVersion: string;
   }[];
 
   @ApiProperty({
@@ -114,9 +113,6 @@ export class AttractionResponseDto {
   predictionAccuracy?: {
     badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
     last30Days: {
-      mae: number;
-      mape: number;
-      rmse: number;
       comparedPredictions: number;
       totalPredictions: number;
     };

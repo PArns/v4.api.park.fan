@@ -155,7 +155,6 @@ export class AttractionIntegrationService {
           crowdLevel: p.crowdLevel,
           baseline: p.baseline,
           trend: p.trend || "stable",
-          modelVersion: p.modelVersion,
         }));
       }
     } catch (error) {
