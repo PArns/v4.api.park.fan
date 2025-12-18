@@ -151,4 +151,42 @@ export class PredictionGeneratorProcessor {
       throw error;
     }
   }
+
+  @Process("cleanup-old")
+  async handleCleanupOld(_job: Job): Promise<void> {
+    this.logger.log("🧹 Cleaning up old predictions...");
+
+    try {
+      const now = new Date();
+
+      // Delete hourly predictions older than 7 days
+      const hourlyCutoff = new Date(now);
+      hourlyCutoff.setDate(hourlyCutoff.getDate() - 7);
+
+      const deletedHourly = await this.mlService.deleteOldPredictions(
+        "hourly",
+        hourlyCutoff,
+      );
+
+      // Delete daily predictions older than 90 days
+      const dailyCutoff = new Date(now);
+      dailyCutoff.setDate(dailyCutoff.getDate() - 90);
+
+      const deletedDaily = await this.mlService.deleteOldPredictions(
+        "daily",
+        dailyCutoff,
+      );
+
+      const totalDeleted = deletedHourly + deletedDaily;
+
+      this.logger.log(
+        `✅ Cleanup complete: Removed ${totalDeleted.toLocaleString()} old predictions (hourly: ${deletedHourly.toLocaleString()}, daily: ${deletedDaily.toLocaleString()})`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Prediction cleanup failed: ${errorMessage}`);
+      throw error;
+    }
+  }
 }

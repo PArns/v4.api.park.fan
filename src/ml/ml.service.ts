@@ -519,4 +519,25 @@ export class MLService {
     // Fall back to ML service
     return this.getAttractionPredictions(attractionId, predictionType);
   }
+
+  /**
+   * Delete old predictions to manage database size
+   *
+   * @param predictionType - Type of prediction to delete
+   * @param cutoffDate - Delete predictions older than this date
+   * @returns Number of deleted records
+   */
+  async deleteOldPredictions(
+    predictionType: "hourly" | "daily",
+    cutoffDate: Date,
+  ): Promise<number> {
+    const result = await this.predictionRepository
+      .createQueryBuilder()
+      .delete()
+      .where("predictionType = :predictionType", { predictionType })
+      .andWhere("predictedTime < :cutoffDate", { cutoffDate })
+      .execute();
+
+    return result.affected || 0;
+  }
 }
