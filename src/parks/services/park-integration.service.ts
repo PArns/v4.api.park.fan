@@ -227,10 +227,20 @@ export class ParkIntegrationService {
 
           // Attach Prediction Accuracy (Feedback Loop)
           try {
-            attraction.predictionAccuracy =
+            const accuracy =
               await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
                 attraction.id,
               );
+
+            // Map to public DTO, excluding technical metrics
+            attraction.predictionAccuracy = {
+              badge: accuracy.badge,
+              last30Days: {
+                comparedPredictions: accuracy.last30Days.comparedPredictions,
+                totalPredictions: accuracy.last30Days.totalPredictions,
+              },
+              message: accuracy.message,
+            };
           } catch (error) {
             this.logger.error(
               `Failed to fetch prediction accuracy for ${attraction.id}:`,

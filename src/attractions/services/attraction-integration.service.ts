@@ -196,7 +196,11 @@ export class AttractionIntegrationService {
 
       dto.predictionAccuracy = {
         badge: accuracy.badge,
-        last30Days: accuracy.last30Days,
+        last30Days: {
+          // Only expose counts to public, not technical metrics
+          comparedPredictions: accuracy.last30Days.comparedPredictions,
+          totalPredictions: accuracy.last30Days.totalPredictions,
+        },
         message: accuracy.message,
       };
     } catch (error) {

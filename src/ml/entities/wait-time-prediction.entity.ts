@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 @Entity("wait_time_predictions")
 @Index(["attractionId", "predictedTime"])
 @Index(["predictionType", "createdAt"])
+@Index(["modelVersion"])
 export class WaitTimePrediction {
   // Composite Primary Key (required for TimescaleDB)
   @PrimaryColumn("uuid")
@@ -78,6 +79,9 @@ export class WaitTimePrediction {
 
   @Column({ type: "float", nullable: true })
   baseline: number; // Baseline wait time for comparison (rolling_avg_7d)
+
+  @Column()
+  modelVersion: string; // e.g., "v1.2.0", "catboost-2025-01" - for internal tracking only
 
   // Feature values used for prediction (for debugging)
   @Column({ type: "jsonb", nullable: true })
