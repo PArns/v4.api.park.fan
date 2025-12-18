@@ -15,7 +15,6 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { toZonedTime } from "date-fns-tz";
 
 /**
  * Park Integration Service
@@ -583,7 +582,7 @@ export class ParkIntegrationService {
   private calculateDynamicTTL(
     status: string,
     schedules: ScheduleEntry[],
-    timezone: string,
+    _timezone: string, // Unused but kept for backwards compatibility
   ): number {
     if (status === "OPERATING") {
       // Park is open -> use short TTL for fresh live data
@@ -591,7 +590,8 @@ export class ParkIntegrationService {
     }
 
     // Park is CLOSED - find next opening time
-    const now = toZonedTime(new Date(), timezone);
+    // Use UTC for comparison (schedule times are stored as UTC)
+    const now = new Date(); // Current time in UTC
 
     // Find next OPERATING schedule entry
     const nextOpening = schedules
