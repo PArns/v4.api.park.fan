@@ -68,8 +68,20 @@ export class GlobalCountsDto {
   @ApiProperty({ description: "Total number of parks in the system" })
   parks: number;
 
+  @ApiProperty({ description: "Percentage of parks currently open" })
+  parksOpenPercentage: number;
+
+  @ApiProperty({ description: "Number of attractions currently operating" })
+  openAttractions: number;
+
+  @ApiProperty({ description: "Number of attractions currently closed" })
+  closedAttractions: number;
+
   @ApiProperty({ description: "Total number of attractions" })
   attractions: number;
+
+  @ApiProperty({ description: "Percentage of attractions currently open" })
+  attractionsOpenPercentage: number;
 
   @ApiProperty({ description: "Total number of shows" })
   shows: number;

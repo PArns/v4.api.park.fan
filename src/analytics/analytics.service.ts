@@ -1448,12 +1448,47 @@ export class AnalyticsService {
       })(),
     ]);
 
+    // Count open vs closed attractions
+    const openAttractionsCount = await this.attractionRepository.query(`
+      SELECT COUNT(DISTINCT a.id) as count
+      FROM attractions a
+      JOIN LATERAL (
+        SELECT qd.status
+        FROM queue_data qd
+        WHERE qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '20 minutes'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      ) latest_status ON true
+      WHERE latest_status.status = 'OPERATING'
+    `);
+
+    const openAttractions = parseInt(openAttractionsCount[0]?.count || "0");
+    const closedAttractions = Math.max(
+      0,
+      totalAttractionsCount - openAttractions,
+    );
+
+    // Calculate percentages
+    const parksOpenPercentage =
+      totalParksCount > 0
+        ? Math.round((openParksCount / totalParksCount) * 100)
+        : 0;
+    const attractionsOpenPercentage =
+      totalAttractionsCount > 0
+        ? Math.round((openAttractions / totalAttractionsCount) * 100)
+        : 0;
+
     const response: GlobalStatsDto = {
       counts: {
         openParks: openParksCount,
         closedParks: closedParksCount,
         parks: totalParksCount,
+        parksOpenPercentage,
+        openAttractions,
+        closedAttractions,
         attractions: totalAttractionsCount,
+        attractionsOpenPercentage,
         shows: totalShowsCount,
         restaurants: totalRestaurantsCount,
         queueDataRecords: queueDataCount,
