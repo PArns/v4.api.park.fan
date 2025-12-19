@@ -4,6 +4,7 @@ import { Queue } from "bull";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { Park } from "../../parks/entities/park.entity";
 
 /**
  * Queue Bootstrap Service
