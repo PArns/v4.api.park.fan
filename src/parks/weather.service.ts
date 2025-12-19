@@ -4,7 +4,12 @@ import { Repository } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { WeatherData } from "./entities/weather-data.entity";
-import { DailyWeather } from "../external-apis/weather/open-meteo.client";
+import { Park } from "./entities/park.entity";
+import {
+  DailyWeather,
+  OpenMeteoClient,
+} from "../external-apis/weather/open-meteo.client";
+import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
 
 /**
  * Weather Service
@@ -15,12 +20,86 @@ import { DailyWeather } from "../external-apis/weather/open-meteo.client";
 export class WeatherService {
   private readonly logger = new Logger(WeatherService.name);
   private readonly CACHE_TTL_SECONDS = 30 * 60; // 30 minutes
+  private readonly HOURLY_CACHE_TTL = 60 * 60; // 1 hour
 
   constructor(
     @InjectRepository(WeatherData)
     private weatherDataRepository: Repository<WeatherData>,
+    @InjectRepository(Park)
+    private parkRepository: Repository<Park>,
+    private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
+
+  /**
+   * Get hourly weather forecast for a park
+   * Used by ML Service for predictions
+   *
+   * cached by parkId to reduce API calls
+   */
+  async getHourlyForecast(parkId: string): Promise<WeatherForecastItemDto[]> {
+    const cacheKey = `weather:hourly:park:${parkId}`;
+
+    // Try cache first
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch (err) {
+      this.logger.warn(`Redis cache error: ${err}`);
+      // Continue to fetch
+    }
+
+    try {
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["latitude", "longitude"],
+      });
+
+      if (!park || !park.latitude || !park.longitude) {
+        this.logger.warn(
+          `Cannot fetch weather for park ${parkId}: Missing coordinates`,
+        );
+        return [];
+      }
+
+      const forecast = await this.openMeteoClient.getHourlyForecast(
+        park.latitude,
+        park.longitude,
+      );
+
+      // Map to DTO
+      const mappedForecast: WeatherForecastItemDto[] = forecast.hours.map(
+        (h) => ({
+          time: h.time,
+          temperature: h.temperature,
+          precipitation: h.precipitation,
+          rain: h.rain,
+          snowfall: h.snowfall,
+          weatherCode: h.weatherCode,
+          windSpeed: h.windSpeed,
+        }),
+      );
+
+      // Cache result
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(mappedForecast),
+        "EX",
+        this.HOURLY_CACHE_TTL,
+      );
+
+      return mappedForecast;
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to fetch hourly weather for park ${parkId}: ${errorMessage}`,
+      );
+      return [];
+    }
+  }
 
   /**
    * Save weather data for a park

@@ -16,8 +16,9 @@ import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
-import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client";
+import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client"; // Kept if needed for other methods, but we're removing usage
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { WeatherService } from "../parks/weather.service";
 
 @Injectable()
 export class MLService {
@@ -40,7 +41,7 @@ export class MLService {
     private attractionRepository: Repository<Attraction>,
     private configService: ConfigService,
     private predictionAccuracyService: PredictionAccuracyService,
-    private openMeteoClient: OpenMeteoClient,
+    private weatherService: WeatherService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     // ML service URL from environment or default
@@ -174,19 +175,12 @@ export class MLService {
 
       const attractionIds = attractions.map((a) => a.id);
 
-      // 3. Fetch hourly weather forecast (if we have coordinates)
+      // 3. Fetch hourly weather forecast (cached by WeatherService)
       let weatherForecast: WeatherForecastItemDto[] = [];
-      if (park.latitude && park.longitude) {
-        try {
-          const forecast = await this.openMeteoClient.getHourlyForecast(
-            park.latitude,
-            park.longitude,
-          );
-          weatherForecast = forecast.hours;
-        } catch (error) {
-          this.logger.warn(`Failed to fetch weather for prediction: ${error}`);
-          // Continue without weather (Python will fallback to DB averages)
-        }
+      try {
+        weatherForecast = await this.weatherService.getHourlyForecast(parkId);
+      } catch (error) {
+        this.logger.warn(`Failed to fetch weather for prediction: ${error}`);
       }
 
       // 4. Fetch current wait times for attractions (for input optimization)
@@ -337,18 +331,13 @@ export class MLService {
     }
 
     // 2. Fetch hourly weather forecast (if we have coordinates)
+    // 2. Fetch hourly weather forecast (cached by WeatherService)
     let weatherForecast: WeatherForecastItemDto[] = [];
-    if (
-      attraction.park &&
-      attraction.park.latitude &&
-      attraction.park.longitude
-    ) {
+    if (attraction.parkId) {
       try {
-        const forecast = await this.openMeteoClient.getHourlyForecast(
-          attraction.park.latitude,
-          attraction.park.longitude,
+        weatherForecast = await this.weatherService.getHourlyForecast(
+          attraction.parkId,
         );
-        weatherForecast = forecast.hours;
       } catch (error) {
         this.logger.warn(`Failed to fetch weather for prediction: ${error}`);
       }
