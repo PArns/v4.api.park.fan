@@ -53,4 +53,4 @@ import { forwardRef } from "@nestjs/common";
     MLDashboardService,
   ],
 })
-export class MLModule { }
+export class MLModule {}

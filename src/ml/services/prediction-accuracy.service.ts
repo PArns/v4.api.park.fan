@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Between, IsNull } from "typeorm";
+import { Repository, Between, LessThan } from "typeorm";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
@@ -25,7 +25,7 @@ export class PredictionAccuracyService {
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) { }
+  ) {}
 
   /**
    * Record prediction for accuracy tracking
@@ -47,6 +47,48 @@ export class PredictionAccuracyService {
   }
 
   /**
+   * Cleanup old accuracy records
+   * Retention Policy:
+   * - MISSED/PENDING: 7 days (short term for debugging)
+   * - COMPLETED: 90 days (long term for trending/stats)
+   */
+  async cleanupOldRecords(): Promise<void> {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
+    try {
+      // 1. Delete MISSED and stuck PENDING older than 7 days
+      const resultMissed = await this.accuracyRepository
+        .createQueryBuilder()
+        .delete()
+        .where("targetTime < :sevenDaysAgo", { sevenDaysAgo })
+        .andWhere("comparisonStatus IN (:...statuses)", {
+          statuses: ["MISSED", "PENDING"],
+        })
+        .execute();
+
+      // 2. Delete COMPLETED older than 90 days
+      const resultCompleted = await this.accuracyRepository
+        .createQueryBuilder()
+        .delete()
+        .where("targetTime < :ninetyDaysAgo", { ninetyDaysAgo })
+        .andWhere("comparisonStatus = :status", { status: "COMPLETED" })
+        .execute();
+
+      const deletedMissed = resultMissed.affected || 0;
+      const deletedCompleted = resultCompleted.affected || 0;
+
+      if (deletedMissed > 0 || deletedCompleted > 0) {
+        this.logger.log(
+          `🧹 Cleanup: Deleted ${deletedMissed} MISSED/PENDING (>7d) and ${deletedCompleted} COMPLETED (>90d) records`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to cleanup old records: ${error}`);
+    }
+  }
+
+  /**
    * Compare predictions with actual wait times
    * Optimized with batch processing and smart retries
    *
@@ -57,7 +99,9 @@ export class PredictionAccuracyService {
     const startTime = Date.now();
     this.logger.log("🔄 Comparing predictions with actual wait times...");
 
-    const now = new Date();
+    // Run cleanup first
+    await this.cleanupOldRecords();
+
     // Look back 7 days for pending predictions
     const lookbackWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -96,7 +140,8 @@ export class PredictionAccuracyService {
     // 2. Prepare for batch fetching actual data
     // We need data for the time range of our batch
     const minTime = pendingPredictions[0].targetTime;
-    const maxTime = pendingPredictions[pendingPredictions.length - 1].targetTime;
+    const maxTime =
+      pendingPredictions[pendingPredictions.length - 1].targetTime;
 
     // Expand window by 15 mins
     const dataWindowStart = new Date(minTime.getTime() - 15 * 60 * 1000);
@@ -220,7 +265,7 @@ export class PredictionAccuracyService {
     const duration = Date.now() - startTime;
     this.logger.log(
       `✅ Batch complete: Processed ${pendingPredictions.length}, Saved ${updates.length} updates. ` +
-      `Completed: ${completed} (${unplannedClosures} closures), Missed: ${missed}. Duration: ${duration}ms`,
+        `Completed: ${completed} (${unplannedClosures} closures), Missed: ${missed}. Duration: ${duration}ms`,
     );
 
     if (missed > 0) {
@@ -278,9 +323,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE (Root Mean Square Error)
@@ -391,15 +436,24 @@ export class PredictionAccuracyService {
    * Useful for diagnosing if compareWithActuals is running properly
    */
   async getHealthStatus(): Promise<{
-    pendingComparisons: number;
+    pendingComparisons: {
+      total: number;
+      stalled: number; // Older than 3 hours
+      active: number; // 0-3 hours
+    };
+    missedComparisons: {
+      total7Days: number;
+    };
     completedLast7Days: number;
     completedLast30Days: number;
+    unplannedClosures24h: number;
     recentSamples: Array<{
       attractionId: string;
       targetTime: Date;
       predictedWaitTime: number;
       actualWaitTime: number | null;
       absoluteError: number | null;
+      status: string;
       comparedAt: Date;
     }>;
     successRate: {
@@ -408,76 +462,104 @@ export class PredictionAccuracyService {
     };
   }> {
     const now = new Date();
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    // Count pending comparisons (predictions with null actualWaitTime)
-    const pendingCount = await this.accuracyRepository.count({
+    // 1. Pending Comparisons Breakdown
+    const pendingTotal = await this.accuracyRepository.count({
       where: {
-        targetTime: Between(sevenDaysAgo, now),
-        actualWaitTime: IsNull(),
+        comparisonStatus: "PENDING",
       },
     });
 
-    // Count completed comparisons in last 7 days
-    const completed7Days = await this.accuracyRepository
-      .createQueryBuilder("pa")
-      .where("pa.targetTime >= :sevenDaysAgo", { sevenDaysAgo })
-      .andWhere("pa.targetTime <= :now", { now })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
-      .getCount();
-
-    // Count completed comparisons in last 30 days
-    const completed30Days = await this.accuracyRepository
-      .createQueryBuilder("pa")
-      .where("pa.targetTime >= :thirtyDaysAgo", { thirtyDaysAgo })
-      .andWhere("pa.targetTime <= :now", { now })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
-      .getCount();
-
-    // Get total predictions (for success rate calculation)
-    const total7Days = await this.accuracyRepository.count({
+    const pendingStalled = await this.accuracyRepository.count({
       where: {
+        comparisonStatus: "PENDING",
+        targetTime: LessThan(threeHoursAgo),
+      },
+    });
+
+    // 2. Missed Comparisons (Zombies)
+    const missed7Days = await this.accuracyRepository.count({
+      where: {
+        comparisonStatus: "MISSED",
         targetTime: Between(sevenDaysAgo, now),
       },
     });
 
-    const total30Days = await this.accuracyRepository.count({
+    // 3. Completed Counts
+    const completed7Days = await this.accuracyRepository.count({
       where: {
+        comparisonStatus: "COMPLETED",
+        targetTime: Between(sevenDaysAgo, now),
+      },
+    });
+
+    const completed30Days = await this.accuracyRepository.count({
+      where: {
+        comparisonStatus: "COMPLETED",
         targetTime: Between(thirtyDaysAgo, now),
       },
     });
 
-    // Get recent completed comparisons as samples
-    const recentSamples = await this.accuracyRepository.find({
+    // 4. Unplanned Closures (Last 24h) - Good indicator of data reality mismatch
+    const closures24h = await this.accuracyRepository.count({
       where: {
-        actualWaitTime: Between(0, 999), // Not null
+        wasUnplannedClosure: true,
+        targetTime: Between(oneDayAgo, now),
       },
+    });
+
+    // 5. Success Rates (Completed / (Completed + Missed + Pending))
+    // We only care about records that SHOULD have been processed
+    const totalProcessed7Days = completed7Days + missed7Days;
+    const rate7Days =
+      totalProcessed7Days > 0
+        ? Math.round((completed7Days / totalProcessed7Days) * 100)
+        : 0;
+
+    const total30Days = await this.accuracyRepository.count({
+      where: { targetTime: Between(thirtyDaysAgo, now) },
+    });
+    // For 30 days, we might rely on status if we had it, but for now simple math
+    const rate30Days =
+      total30Days > 0 ? Math.round((completed30Days / total30Days) * 100) : 0;
+
+    // 6. Recent Samples (include status)
+    const recentSamples = await this.accuracyRepository.find({
       order: {
+        comparisonStatus: "DESC", // Show completed/missed first
         createdAt: "DESC",
       },
       take: 5,
     });
 
     return {
-      pendingComparisons: pendingCount,
+      pendingComparisons: {
+        total: pendingTotal,
+        stalled: pendingStalled,
+        active: pendingTotal - pendingStalled,
+      },
+      missedComparisons: {
+        total7Days: missed7Days,
+      },
       completedLast7Days: completed7Days,
       completedLast30Days: completed30Days,
+      unplannedClosures24h: closures24h,
       recentSamples: recentSamples.map((s) => ({
         attractionId: s.attractionId,
         targetTime: s.targetTime,
         predictedWaitTime: s.predictedWaitTime,
         actualWaitTime: s.actualWaitTime,
         absoluteError: s.absoluteError,
+        status: s.comparisonStatus,
         comparedAt: s.createdAt,
       })),
       successRate: {
-        last7Days:
-          total7Days > 0 ? Math.round((completed7Days / total7Days) * 100) : 0,
-        last30Days:
-          total30Days > 0
-            ? Math.round((completed30Days / total30Days) * 100)
-            : 0,
+        last7Days: rate7Days,
+        last30Days: rate30Days,
       },
     };
   }
@@ -991,8 +1073,8 @@ export class PredictionAccuracyService {
     const coveragePercent =
       allRecords.length > 0
         ? parseFloat(
-          ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
-        )
+            ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
+          )
         : 0;
 
     // Breakdown by prediction type
@@ -1024,8 +1106,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             hourlyAll.length > 0
               ? parseFloat(
-                ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
-              )
+                  ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
+                )
               : 0,
         },
         DAILY: {
@@ -1034,8 +1116,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             dailyAll.length > 0
               ? parseFloat(
-                ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
-              )
+                  ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
+                )
               : 0,
         },
       },
@@ -1155,11 +1237,11 @@ export class PredictionAccuracyService {
       coveragePercent:
         parseInt(r.totalCount, 10) > 0
           ? parseFloat(
-            (
-              (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
-              100
-            ).toFixed(1),
-          )
+              (
+                (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
+                100
+              ).toFixed(1),
+            )
           : 0,
     }));
 
@@ -1296,9 +1378,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // R² (Coefficient of Determination)
@@ -1393,9 +1475,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE
@@ -1486,9 +1568,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE

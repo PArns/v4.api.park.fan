@@ -16,7 +16,6 @@ import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
-import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client"; // Kept if needed for other methods, but we're removing usage
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 

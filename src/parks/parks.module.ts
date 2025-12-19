@@ -17,6 +17,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { MLModule } from "../ml/ml.module";
 import { GeocodingModule } from "../external-apis/geocoding/geocoding.module";
 import { RedisModule } from "../common/redis/redis.module";
+import { WeatherModule } from "../external-apis/weather/weather.module";
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { RedisModule } from "../common/redis/redis.module";
     forwardRef(() => MLModule),
     GeocodingModule,
     RedisModule,
+    WeatherModule,
   ],
   controllers: [ParksController],
   providers: [ParksService, WeatherService, ParkIntegrationService],
