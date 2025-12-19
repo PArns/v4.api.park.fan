@@ -92,7 +92,6 @@ export class WaitTimesProcessor {
       let savedRestaurants = 0;
 
       let openParksCount = 0;
-      let closedParksCount = 0;
       let apiCallsCount = 0;
       const totalParks = parks.length;
 
@@ -102,13 +101,8 @@ export class WaitTimesProcessor {
       for (let parkIdx = 0; parkIdx < parks.length; parkIdx++) {
         const park = parks[parkIdx];
         try {
-          // OPTIMIZATION 1: Check if park is operating today
-          // We fetch data if the park has an OPERATING schedule for today,
-          // even if it is currently closed (e.g. before open / after close).
-          // This ensures we have "Today's" showtimes/hours for display.
-          const isOperatingToday = await this.parksService.isParkOperatingToday(
-            park.id,
-          );
+          // ALWAYS fetch ALL parks - ensures parks without schedules get updates
+          const isOperatingToday = true; // Disabled schedule check
 
           if (isOperatingToday) {
             // Park is OPERATING TODAY: Fetch live data
@@ -362,8 +356,7 @@ export class WaitTimesProcessor {
               // Continue with next park
             }
           } else {
-            // Park is CLOSED: Mark all entities as CLOSED (NO API call!)
-            closedParksCount++;
+            // This should never be reached since isOperatingToday = true
 
             // Get all entities for this closed park
             const [
@@ -493,7 +486,7 @@ export class WaitTimesProcessor {
             const percent = Math.round(((parkIdx + 1) / totalParks) * 100);
             this.logger.log(
               `Progress: ${parkIdx + 1}/${totalParks} (${percent}%) - ` +
-                `${openParksCount} open, ${closedParksCount} closed - ` +
+                `${openParksCount} parks - ` +
                 `${totalAttractions} attractions processed`,
             );
           }
@@ -513,7 +506,7 @@ export class WaitTimesProcessor {
 
       this.logger.log(`✅ Wait times sync complete!`);
       this.logger.log(
-        `📊 Parks: ${openParksCount} open, ${closedParksCount} closed (${apiCallsCount} API calls)`,
+        `📊 Parks: ${openParksCount} fetched (${apiCallsCount} API calls)`,
       );
       this.logger.log(
         `💾 Processed: ${totalAttractions} attractions, ${totalShows} shows, ${totalRestaurants} restaurants`,
