@@ -435,7 +435,12 @@ export class ParkIntegrationService {
         } else {
           // No live data available
           restaurant.operatingHours = [];
-          restaurant.status = "CLOSED";
+
+          // Improved Fallback: If park is OPERATING, assume restaurant is OPERATING
+          // Many restaurants don't have real-time wait times but are open
+          restaurant.status =
+            dto.status === "OPERATING" ? "OPERATING" : "CLOSED";
+
           restaurant.waitTime = null;
           restaurant.partySize = null;
           restaurant.lastUpdated = undefined;
