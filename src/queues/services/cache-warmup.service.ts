@@ -94,6 +94,14 @@ export class CacheWarmupService {
    *
    * @returns Number of parks warmed
    */
+  /**
+   * Warm up cache for currently OPERATING parks
+   *
+   * Used after wait-times sync (every 5 minutes).
+   * Typically affects 10-20 parks.
+   *
+   * @returns Number of parks warmed
+   */
   async warmupOperatingParks(): Promise<number> {
     const startTime = Date.now();
     this.logger.verbose("🔥 Starting cache warmup for OPERATING parks...");
@@ -120,17 +128,28 @@ export class CacheWarmupService {
         `Found ${operatingParkIds.length}/${parks.length} OPERATING parks`,
       );
 
-      // Warm up in parallel with controlled concurrency
+      // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
+      const BATCH_SIZE = 5;
       let warmedCount = 0;
-      const results = await Promise.allSettled(
-        operatingParkIds.map((parkId) => this.warmupParkCache(parkId, true)),
-      );
 
-      results.forEach((result) => {
-        if (result.status === "fulfilled" && result.value) {
-          warmedCount++;
+      for (let i = 0; i < operatingParkIds.length; i += BATCH_SIZE) {
+        const batch = operatingParkIds.slice(i, i + BATCH_SIZE);
+
+        const results = await Promise.allSettled(
+          batch.map((parkId) => this.warmupParkCache(parkId, true)),
+        );
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled" && result.value) {
+            warmedCount++;
+          }
+        });
+
+        // Small delay between batches to be nice to APIs
+        if (i + BATCH_SIZE < operatingParkIds.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
-      });
+      }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
@@ -179,17 +198,28 @@ export class CacheWarmupService {
 
       this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
 
-      // Warm up in parallel
+      // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
+      const BATCH_SIZE = 5;
       let warmedCount = 0;
-      const results = await Promise.allSettled(
-        upcomingParks.map((park) => this.warmupParkCache(park.id)),
-      );
 
-      results.forEach((result) => {
-        if (result.status === "fulfilled" && result.value) {
-          warmedCount++;
+      for (let i = 0; i < upcomingParks.length; i += BATCH_SIZE) {
+        const batch = upcomingParks.slice(i, i + BATCH_SIZE);
+
+        const results = await Promise.allSettled(
+          batch.map((park) => this.warmupParkCache(park.id)),
+        );
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled" && result.value) {
+            warmedCount++;
+          }
+        });
+
+        // Small delay between batches
+        if (i + BATCH_SIZE < upcomingParks.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
-      });
+      }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
