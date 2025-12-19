@@ -153,7 +153,7 @@ export class WeatherService {
             }
           }
 
-          this.logger.log(
+          this.logger.debug(
             `✓ Bootstrapped ${synthesizedForecast.length} hourly weather points from DB for park ${parkId}`,
           );
           return synthesizedForecast;
