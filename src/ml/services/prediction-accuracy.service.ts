@@ -125,7 +125,7 @@ export class PredictionAccuracyService {
       order: {
         targetTime: "ASC",
       },
-      take: 1000,
+      take: 5000, // Process larger batches to prevent backlog
     });
 
     if (pendingPredictions.length === 0) {
