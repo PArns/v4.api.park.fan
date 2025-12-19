@@ -98,7 +98,7 @@ export class TimescaleInitService implements OnModuleInit {
       const isHypertable = await this.isHypertable(tableName);
 
       if (isHypertable) {
-        this.logger.log(`  ✓ ${tableName} is already a hypertable`);
+        this.logger.debug(`  ✓ ${tableName} is already a hypertable`);
         return;
       }
 
@@ -113,7 +113,7 @@ export class TimescaleInitService implements OnModuleInit {
           `  ⚠️  ${tableName} has ${rowCount} rows. Truncating before conversion...`,
         );
         await this.dataSource.query(`TRUNCATE TABLE ${tableName} CASCADE;`);
-        this.logger.log(`  ✓ Truncated ${tableName}`);
+        this.logger.debug(`  ✓ Truncated ${tableName}`);
       }
 
       // Get current primary key constraint name
@@ -124,7 +124,7 @@ export class TimescaleInitService implements OnModuleInit {
         await this.dataSource.query(
           `ALTER TABLE ${tableName} DROP CONSTRAINT "${pkName}";`,
         );
-        this.logger.log(`  ✓ Dropped primary key constraint: ${pkName}`);
+        this.logger.debug(`  ✓ Dropped primary key constraint: ${pkName}`);
       }
 
       // Add composite primary key BEFORE creating hypertable
@@ -144,14 +144,14 @@ export class TimescaleInitService implements OnModuleInit {
       await this.dataSource.query(
         `ALTER TABLE ${tableName} ADD PRIMARY KEY (${compositePK});`,
       );
-      this.logger.log(`  ✓ Added composite primary key (${compositePK})`);
+      this.logger.debug(`  ✓ Added composite primary key (${compositePK})`);
 
       // Convert to hypertable
       await this.dataSource.query(
         `SELECT create_hypertable('${tableName}', '${timeColumn}', chunk_time_interval => INTERVAL '${chunkInterval}', if_not_exists => TRUE);`,
       );
 
-      this.logger.log(
+      this.logger.debug(
         `  ✅ Created hypertable: ${tableName} (time_column: ${timeColumn}, chunk_interval: ${chunkInterval})`,
       );
     } catch (error) {
@@ -290,7 +290,7 @@ export class TimescaleInitService implements OnModuleInit {
         await this.dataSource.query(
           `ALTER TABLE ${tableName} SET (timescaledb.compress);`,
         );
-        this.logger.log(`  ✓ Enabled compression on ${tableName}`);
+        this.logger.debug(`  ✓ Enabled compression on ${tableName}`);
       }
 
       // Add compression policy (compress chunks older than N days)
@@ -305,11 +305,13 @@ export class TimescaleInitService implements OnModuleInit {
         await this.dataSource.query(
           `SELECT add_compression_policy('${tableName}', INTERVAL '${compressAfterDays} days');`,
         );
-        this.logger.log(
+        this.logger.debug(
           `  ✓ ${tableName}: Compress after ${compressAfterDays} days (${description})`,
         );
       } else {
-        this.logger.log(`  ✓ ${tableName}: Compression policy already exists`);
+        this.logger.debug(
+          `  ✓ ${tableName}: Compression policy already exists`,
+        );
       }
     } catch (error) {
       const errorMessage =

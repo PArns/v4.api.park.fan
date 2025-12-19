@@ -211,7 +211,7 @@ export class QueueBootstrapService implements OnModuleInit {
         totalCleaned += cleaned;
 
         if (cleaned > 0) {
-          this.logger.log(
+          this.logger.debug(
             `  ✓ Queue [${name}]: cleaned ${completed.length} completed, ${failed.length} failed jobs`,
           );
         }
