@@ -29,7 +29,7 @@ export class WeatherService {
     private parkRepository: Repository<Park>,
     private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Get hourly weather forecast for a park
@@ -118,9 +118,10 @@ export class WeatherService {
 
           for (const day of dailyData) {
             // Create 24 hours for each day
-            const dateStr = day.date instanceof Date
-              ? day.date.toISOString().split('T')[0]
-              : day.date; // Handle string/date discrepancies
+            const dateStr =
+              day.date instanceof Date
+                ? day.date.toISOString().split("T")[0]
+                : day.date; // Handle string/date discrepancies
 
             for (let hour = 0; hour < 24; hour++) {
               // Simple sinusoidal interpolation for temperature
@@ -132,11 +133,16 @@ export class WeatherService {
               // Shift curve so peak is at 14:00
               // cos((h - 14) / 12 * PI) gives peak at 14, trough at 2/26
               // simplified interpolation
-              const normalizedTime = (hour - 14) / 12 * Math.PI;
-              const temp = Math.round(((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange + minTemp) * 10) / 10;
+              const normalizedTime = ((hour - 14) / 12) * Math.PI;
+              const temp =
+                Math.round(
+                  ((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange +
+                    minTemp) *
+                    10,
+                ) / 10;
 
               synthesizedForecast.push({
-                time: `${dateStr}T${hour.toString().padStart(2, '0')}:00`,
+                time: `${dateStr}T${hour.toString().padStart(2, "0")}:00`,
                 temperature: temp,
                 precipitation: Number(day.precipitationSum || 0) / 24, // Distribute evenly (naive)
                 rain: Number(day.rainSum || 0) / 24,
@@ -147,7 +153,9 @@ export class WeatherService {
             }
           }
 
-          this.logger.log(`✓ Bootstrapped ${synthesizedForecast.length} hourly weather points from DB for park ${parkId}`);
+          this.logger.log(
+            `✓ Bootstrapped ${synthesizedForecast.length} hourly weather points from DB for park ${parkId}`,
+          );
           return synthesizedForecast;
         }
       } catch (dbError) {
