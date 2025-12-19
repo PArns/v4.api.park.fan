@@ -71,10 +71,12 @@ export class CacheWarmupService {
         return false;
       }
 
-      // Warm up cache by calling integration service
-      await this.parkIntegrationService.buildIntegratedResponse(park);
+      // Warm up cache by calling integration service (bypass cache read if forced)
+      await this.parkIntegrationService.buildIntegratedResponse(park, force);
 
-      this.logger.debug(`✓ Warmed cache for park: ${park.slug}`);
+      this.logger.debug(
+        `✓ Warmed cache for park: ${park.slug} (force=${force})`,
+      );
       return true;
     } catch (error: unknown) {
       const errorMessage =

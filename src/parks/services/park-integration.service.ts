@@ -32,7 +32,7 @@ export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
   // Multi-tier caching strategy aligned with actual update frequencies
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 3 * 60; // 3 minutes (queue data updates every 5min)
+  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 15 * 60; // 15 minutes (Push-based caching: Updated by background job every 5m)
   private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
   private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
   private readonly TTL_ML_HOURLY = 60 * 60; // 1 hour (hourly predictions update at :15)
@@ -67,49 +67,56 @@ export class ParkIntegrationService {
    * - Show times
    * - Restaurant status
    *
-   * Cached for 5 minutes (balances freshness with performance)
+   * Cached for 15 minutes (Push-based: warmed by queue-bootstrap/cache-warmup)
    *
    * @param park - Park entity
+   * @param skipCache - If true, bypass cache read and force rebuild (used by CacheWarmup)
    * @returns Complete park DTO with all integrated live data
    */
-  async buildIntegratedResponse(park: Park): Promise<ParkWithAttractionsDto> {
-    // Try cache first
+  async buildIntegratedResponse(
+    park: Park,
+    skipCache: boolean = false,
+  ): Promise<ParkWithAttractionsDto> {
+    // Try cache first (unless skipped)
     const cacheKey = `park:integrated:${park.id}`;
-    const cached = await this.redis.get(cacheKey);
 
-    if (cached) {
-      const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
+    if (!skipCache) {
+      const cached = await this.redis.get(cacheKey);
 
-      // Self-Healing: Check if cache is "corrupted" (missing relations that exist in DB)
-      // This fixes the issue where a cold start cached an incomplete response
-      const hasShowsInDb = park.shows && park.shows.length > 0;
-      const hasRestaurantsInDb =
-        park.restaurants && park.restaurants.length > 0;
+      if (cached) {
+        const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
 
-      const missingShowsInCache =
-        hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
-      const missingRestaurantsInCache =
-        hasRestaurantsInDb &&
-        (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
+        // Self-Healing: Check if cache is "corrupted" (missing relations that exist in DB)
+        // This fixes the issue where a cold start cached an incomplete response
+        const hasShowsInDb = park.shows && park.shows.length > 0;
+        const hasRestaurantsInDb =
+          park.restaurants && park.restaurants.length > 0;
 
-      if (missingShowsInCache || missingRestaurantsInCache) {
-        this.logger.warn(
-          `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`,
-        );
-        // Fall through to rebuild logic below
-      } else {
-        // Implement stale-while-revalidate pattern
-        const ttl = await this.redis.ttl(cacheKey);
-        if (ttl < 60 && ttl > 0) {
-          // Cache expires in less than 1 minute, refresh in background
-          this.refreshCacheInBackground(park).catch((err) =>
-            this.logger.warn(
-              `Background cache refresh failed for ${park.slug}:`,
-              err,
-            ),
+        const missingShowsInCache =
+          hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
+        const missingRestaurantsInCache =
+          hasRestaurantsInDb &&
+          (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
+
+        if (missingShowsInCache || missingRestaurantsInCache) {
+          this.logger.warn(
+            `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`,
           );
+          // Fall through to rebuild logic below
+        } else {
+          // Implement stale-while-revalidate pattern
+          const ttl = await this.redis.ttl(cacheKey);
+          if (ttl < 60 && ttl > 0) {
+            // Cache expires in less than 1 minute, refresh in background
+            this.refreshCacheInBackground(park).catch((err) =>
+              this.logger.warn(
+                `Background cache refresh failed for ${park.slug}:`,
+                err,
+              ),
+            );
+          }
+          return cachedDto;
         }
-        return cachedDto;
       }
     }
 
