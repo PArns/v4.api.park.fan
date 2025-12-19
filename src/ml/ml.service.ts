@@ -174,6 +174,36 @@ export class MLService {
 
       const attractionIds = attractions.map((a) => a.id);
 
+      // 2a. Filter: Only predict for attractions with data in last 90 days
+      // This prevents generating predictions for attractions that are closed for season or invalid
+      const activeAttractions = await this.queueDataRepository
+        .createQueryBuilder("q")
+        .select("DISTINCT q.attractionId", "id")
+        .where("q.attractionId IN (:...ids)", { ids: attractionIds })
+        .andWhere("q.timestamp > :cutoff", {
+          cutoff: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+        })
+        .getRawMany();
+
+      const activeIdSet = new Set(activeAttractions.map((a) => a.id));
+      const activeAttractionIds = attractionIds.filter((id) =>
+        activeIdSet.has(id),
+      );
+
+      if (activeAttractionIds.length === 0) {
+        this.logger.debug(
+          `No active attractions (with data in last 90d) for park ${parkId}`,
+        );
+        return { predictions: [], count: 0, modelVersion: "none" };
+      }
+
+      const skippedCount = attractionIds.length - activeAttractionIds.length;
+      if (skippedCount > 0) {
+        this.logger.debug(
+          `Skipping ${skippedCount} inactive attractions for park ${parkId}`,
+        );
+      }
+
       // 3. Fetch hourly weather forecast (cached by WeatherService)
       let weatherForecast: WeatherForecastItemDto[] = [];
       try {
@@ -190,7 +220,7 @@ export class MLService {
           const latestData = await this.queueDataRepository
             .createQueryBuilder("q")
             .distinctOn(["q.attractionId"])
-            .where("q.attractionId = ANY(:ids)", { ids: attractionIds })
+            .where("q.attractionId = ANY(:ids)", { ids: activeAttractionIds })
             .andWhere("q.timestamp >= :recent", {
               recent: new Date(Date.now() - 60 * 60 * 1000), // Last hour
             })
@@ -212,8 +242,8 @@ export class MLService {
 
       // 5. Call ML Service via POST (Bulk Prediction)
       const payload: PredictionRequestDto = {
-        attractionIds,
-        parkIds: attractionIds.map(() => parkId), // Same length as attractionIds
+        attractionIds: activeAttractionIds,
+        parkIds: activeAttractionIds.map(() => parkId), // Same length as activeAttractionIds
         predictionType,
         weatherForecast, // Empty array if failed or no coords
         currentWaitTimes,
