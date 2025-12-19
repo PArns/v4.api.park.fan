@@ -29,7 +29,7 @@ export class WeatherService {
     private parkRepository: Repository<Park>,
     private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Get hourly weather forecast for a park
@@ -138,7 +138,7 @@ export class WeatherService {
                 Math.round(
                   ((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange +
                     minTemp) *
-                  10,
+                    10,
                 ) / 10;
 
               synthesizedForecast.push({

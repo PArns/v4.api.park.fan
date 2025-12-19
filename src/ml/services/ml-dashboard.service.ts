@@ -1,4 +1,4 @@
-import { Injectable, Logger, HttpException, HttpStatus } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { MLModelService } from "./ml-model.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
@@ -62,11 +62,99 @@ export class MLDashboardService {
 
     // Validate: must have an active model
     if (!currentModel) {
-      this.logger.error("No active model found");
-      throw new HttpException(
-        "No active model found. Train a model first.",
-        HttpStatus.NOT_FOUND,
-      );
+      this.logger.warn("No active model found, returning initialization state");
+      // Return initialization state instead of 404
+      return {
+        currentModel: {
+          version: "none",
+          trainedAt: new Date().toISOString(),
+          fileSizeBytes: 0,
+          fileSizeMB: 0,
+          modelSize: "0 MB",
+          modelType: "none",
+          isActive: false,
+          trainingMetrics: {
+            mae: 0,
+            rmse: 0,
+            mape: 0,
+            r2Score: 0,
+          },
+          trainingData: {
+            startDate: new Date().toISOString(),
+            endDate: new Date().toISOString(),
+            totalSamples: 0,
+            trainSamples: 0,
+            validationSamples: 0,
+            dataDurationDays: 0,
+          },
+          configuration: {
+            featuresUsed: [],
+            featureCount: 0,
+            hyperparameters: {},
+          },
+        },
+        systemAccuracy: {
+          overall: {
+            mae: 0,
+            rmse: 0,
+            mape: 0,
+            r2Score: 0,
+            totalPredictions: 0,
+            matchedPredictions: 0,
+            coveragePercent: 0,
+            uniqueAttractions: 0,
+            uniqueParks: 0,
+            badge: "insufficient_data",
+          },
+          byPredictionType: {
+            HOURLY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
+            DAILY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
+          },
+          topPerformers: [],
+          bottomPerformers: [],
+        },
+        trends: {
+          modelComparison: {
+            current: {
+              version: "none",
+              mae: 0,
+              r2: 0,
+              trainedAt: new Date().toISOString(),
+            },
+            previous: {
+              version: "none",
+              mae: 0,
+              r2: 0,
+              trainedAt: new Date().toISOString(),
+            },
+            improvement: {
+              maeDelta: 0,
+              maePercentChange: 0,
+              isImproving: false,
+            },
+          },
+          dailyAccuracy: [],
+          byHourOfDay: [],
+          byDayOfWeek: [],
+        },
+        systemHealth: {
+          lastTrainingJob: {
+            completedAt: new Date().toISOString(),
+            durationSeconds: 0,
+            status: "unknown",
+          },
+          lastAccuracyCheck: {
+            completedAt: new Date().toISOString(),
+            newComparisonsAdded: 0,
+          },
+          nextScheduledTraining: this.getNextScheduledTraining(),
+          modelAge: {
+            days: 0,
+            hours: 0,
+            minutes: 0,
+          },
+        },
+      };
     }
 
     // Calculate accuracy badge

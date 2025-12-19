@@ -4,8 +4,7 @@ import { MLService } from "./ml.service";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
-import { PredictionAccuracyController } from "./controllers/prediction-accuracy.controller";
-import { MLDashboardController } from "./controllers/ml-dashboard.controller";
+import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
 import {
   WaitTimePrediction,
@@ -41,11 +40,7 @@ import { forwardRef } from "@nestjs/common";
     MLModelService,
     MLDashboardService,
   ],
-  controllers: [
-    PredictionAccuracyController,
-    MLDashboardController,
-    MLHealthController,
-  ],
+  controllers: [MLController, MLHealthController],
   exports: [
     MLService,
     PredictionAccuracyService,

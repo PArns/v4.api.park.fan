@@ -91,6 +91,13 @@ export class CurrentModelDto {
   })
   fileSizeMB: number | null;
 
+  @ApiProperty({
+    example: "2.34 MB",
+    nullable: true,
+    description: "Formatted model file size",
+  })
+  modelSize: string | null;
+
   @ApiProperty({ example: "CATBOOST", description: "Model type" })
   modelType: string;
 
@@ -153,6 +160,15 @@ export class SystemAccuracyOverallDto {
     description: "Percentage of predictions matched (%)",
   })
   coveragePercent: number;
+
+  @ApiProperty({
+    example: 150,
+    description: "Number of unique attractions predicted",
+  })
+  uniqueAttractions: number;
+
+  @ApiProperty({ example: 4, description: "Number of unique parks predicted" })
+  uniqueParks: number;
 }
 
 export class PredictionTypeBreakdownDto {
@@ -226,6 +242,9 @@ export class ModelVersionInfoDto {
 
   @ApiProperty({ example: 10.98, description: "Mean Absolute Error (minutes)" })
   mae: number;
+
+  @ApiProperty({ example: 0.85, description: "R² score" })
+  r2: number;
 
   @ApiProperty({ description: "Training completion timestamp (ISO 8601)" })
   trainedAt: string;
@@ -381,6 +400,12 @@ export class ModelAgeDto {
     description: "Hours since model was trained (excluding full days)",
   })
   hours: number;
+
+  @ApiProperty({
+    example: 45,
+    description: "Minutes since model was trained (excluding hours)",
+  })
+  minutes: number;
 }
 
 export class SystemHealthDto {

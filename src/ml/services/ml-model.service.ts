@@ -83,6 +83,7 @@ export class MLModelService {
       trainedAt: model.trainedAt.toISOString(),
       fileSizeBytes,
       fileSizeMB,
+      modelSize: fileSizeMB ? `${fileSizeMB} MB` : null,
       modelType: model.modelType,
       isActive: model.isActive,
       trainingMetrics: {
@@ -158,6 +159,7 @@ export class MLModelService {
     const currentInfo: ModelVersionInfoDto = {
       version: current.version,
       mae: current.mae ? parseFloat(current.mae.toFixed(2)) : 0,
+      r2: current.r2Score ? parseFloat(current.r2Score.toFixed(2)) : 0,
       trainedAt: current.trainedAt.toISOString(),
     };
 
@@ -168,6 +170,7 @@ export class MLModelService {
       previousInfo = {
         version: previous.version,
         mae: previous.mae ? parseFloat(previous.mae.toFixed(2)) : 0,
+        r2: previous.r2Score ? parseFloat(previous.r2Score.toFixed(2)) : 0,
         trainedAt: previous.trainedAt.toISOString(),
       };
 
@@ -204,9 +207,13 @@ export class MLModelService {
    * - Remaining hours
    *
    * @param {Date} trainedAt - Model training timestamp
-   * @returns {{ days: number; hours: number }} Model age breakdown
+   * @returns {{ days: number; hours: number; minutes: number }} Model age breakdown
    */
-  getModelAge(trainedAt: Date): { days: number; hours: number } {
+  getModelAge(trainedAt: Date): {
+    days: number;
+    hours: number;
+    minutes: number;
+  } {
     const now = new Date();
     const ageMs = now.getTime() - trainedAt.getTime();
 
@@ -214,8 +221,9 @@ export class MLModelService {
     const hours = Math.floor(
       (ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60),
     );
+    const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
 
-    return { days, hours };
+    return { days, hours, minutes };
   }
 
   /**
