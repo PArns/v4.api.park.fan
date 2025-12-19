@@ -1,5 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * Open-Meteo Weather API Client
@@ -25,8 +28,12 @@ export class OpenMeteoClient {
   private readonly client: AxiosInstance;
   private readonly baseUrl = "https://api.open-meteo.com/v1";
   private rateLimitedUntil: Date | null = null; // Track when rate limit expires
+  private readonly CACHE_TTL = 3600; // 1 hour
 
-  constructor() {
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
@@ -129,6 +136,18 @@ export class OpenMeteoClient {
     longitude: number,
     forecastDays: number = 2, // Default to 2 days (48h) enough for hourly prediction
   ): Promise<HourlyWeatherResponse> {
+    // Check cache first
+    const cacheKey = `weather:hourly:${latitude}:${longitude}`; // Simple key
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) {
+        // this.logger.debug(`Cache hit for weather at ${latitude},${longitude}`); // Too noisy
+        return JSON.parse(cached);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Redis cache error: ${err.message}`);
+    }
+
     // Skip if we're currently rate limited (don't spam the logdur)
     if (this.rateLimitedUntil && new Date() < this.rateLimitedUntil) {
       throw new Error(
@@ -156,7 +175,22 @@ export class OpenMeteoClient {
 
       // Reset rate limit on successful request
       this.rateLimitedUntil = null;
-      return this.transformHourlyResponse(response.data);
+
+      const result = this.transformHourlyResponse(response.data);
+
+      // Cache the successful result
+      try {
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          this.CACHE_TTL,
+        );
+      } catch (err: any) {
+        this.logger.warn(`Failed to cache weather response: ${err.message}`);
+      }
+
+      return result;
     } catch (error: unknown) {
       // Enhanced error logging with context
       if (axios.isAxiosError(error)) {

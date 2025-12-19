@@ -1,5 +1,5 @@
 import { Processor, Process } from "@nestjs/bull";
-import { Logger } from "@nestjs/common";
+import { Logger, OnModuleInit } from "@nestjs/common";
 import { Job } from "bull";
 import { MLService } from "../../ml/ml.service";
 import { ParksService } from "../../parks/parks.service";
@@ -9,32 +9,29 @@ import { CacheWarmupService } from "../services/cache-warmup.service";
  * Prediction Generator Processor
  *
  * Generates and stores ML predictions for all attractions.
- *
- * Two types of predictions:
- * 1. Hourly: Next 24 hours (for today's planning)
- * 2. Daily: Next 30 days (for trip planning)
- *
- * Schedule:
- * - Hourly predictions: Every hour (fresh data)
- * - Daily predictions: Once per day at 1am (long-term forecast)
- *
- * Stored predictions are used for:
- * - Fast API responses (no ML service call needed)
- * - Accuracy tracking (feedback loop)
+ * With BATCH processing to ensure stability.
  */
 @Processor("predictions")
-export class PredictionGeneratorProcessor {
+export class PredictionGeneratorProcessor implements OnModuleInit {
   private readonly logger = new Logger(PredictionGeneratorProcessor.name);
 
   constructor(
     private mlService: MLService,
     private parksService: ParksService,
     private cacheWarmupService: CacheWarmupService,
-  ) {}
+  ) {
+    this.logger.log("🔧 PredictionGeneratorProcessor CONSTRUCTED");
+  }
+
+  onModuleInit() {
+    this.logger.log("🔧 PredictionGeneratorProcessor INITIALIZED");
+  }
 
   @Process("generate-hourly")
   async handleGenerateHourly(_job: Job): Promise<void> {
-    this.logger.log("⏰ Generating hourly predictions for all parks...");
+    this.logger.log(
+      "⏰ Generating hourly predictions for all parks (BATCHED)...",
+    );
 
     try {
       const allParks = await this.parksService.findAll();
@@ -45,10 +42,10 @@ export class PredictionGeneratorProcessor {
       const statusMap = await this.parksService.getBatchParkStatus(parkIds);
 
       // Filter to parks that are operating OR might operate soon
-      // Note: Parks without schedules default to true via isParkOperatingToday
       const parks = [];
       for (const park of allParks) {
-        const isOperating = statusMap.get(park.id) === "OPERATING";
+        const status = statusMap.get(park.id);
+        const isOperating = status === "OPERATING";
 
         if (isOperating) {
           parks.push(park);
@@ -71,41 +68,63 @@ export class PredictionGeneratorProcessor {
       let successParks = 0;
       let failedParks = 0;
 
-      for (const park of parks) {
-        try {
-          // Get hourly predictions for next 24h
-          const response = await this.mlService.getParkPredictions(
-            park.id,
-            "hourly",
-          );
+      // BATCHED PROCESSING (Size 5)
+      // Process in small batches to prevent 429s (Weather API) and Timeouts (ML Service)
+      const BATCH_SIZE = 5;
 
-          if (response.predictions.length > 0) {
-            // OPTIMIZATION: Delete old hourly predictions for this park before storing new ones
-            // This prevents duplicate predictions for the same time slots
-            await this.mlService.deduplicatePredictions(park.id, "hourly");
+      for (let i = 0; i < parks.length; i += BATCH_SIZE) {
+        const batch = parks.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(parks.length / BATCH_SIZE);
 
-            // Store predictions in database
-            await this.mlService.storePredictions(response.predictions);
-            totalPredictions += response.predictions.length;
-            successParks++;
-          } else {
-            this.logger.warn(
-              `No hourly predictions returned for park: ${park.name}`,
-            );
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          this.logger.warn(
-            `Failed to generate hourly predictions for park ${park.name}: ${errorMessage}`,
-          );
-          failedParks++;
+        this.logger.log(
+          `Processing batch ${batchNum}/${totalBatches} (${batch.length} parks)...`,
+        );
+
+        // Process batch in parallel
+        await Promise.all(
+          batch.map(async (park) => {
+            try {
+              // Get hourly predictions for next 24h
+              const response = await this.mlService.getParkPredictions(
+                park.id,
+                "hourly",
+              );
+
+              if (response.predictions.length > 0) {
+                // OPTIMIZATION: Delete old hourly predictions for this park before storing new ones
+                await this.mlService.deduplicatePredictions(park.id, "hourly");
+
+                // Store predictions in database
+                await this.mlService.storePredictions(response.predictions);
+                totalPredictions += response.predictions.length;
+                successParks++;
+              } else {
+                this.logger.debug(
+                  `No hourly predictions returned for park: ${park.name}`,
+                );
+              }
+            } catch (error) {
+              const errorMessage =
+                error instanceof Error ? error.message : String(error);
+              this.logger.warn(
+                `Failed to generate hourly predictions for park ${park.name}: ${errorMessage}`,
+              );
+              failedParks++;
+            }
+          }),
+        );
+
+        // Small delay between batches to be nice to external APIs
+        if (i + BATCH_SIZE < parks.length) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
       this.logger.log(
         `✅ Hourly predictions complete: ${totalPredictions} predictions for ${successParks}/${parks.length} parks`,
       );
+
       if (failedParks > 0) {
         this.logger.warn(
           `⚠️  ${failedParks} parks failed to generate predictions`,
@@ -113,7 +132,6 @@ export class PredictionGeneratorProcessor {
       }
 
       // Cache Warmup: Prepopulate cache for parks opening in next 12h
-      // Important for trip planning - users look at tomorrow's data
       this.logger.log("🔥 Starting cache warmup for upcoming parks...");
       try {
         await this.cacheWarmupService.warmupUpcomingParks();
@@ -121,7 +139,6 @@ export class PredictionGeneratorProcessor {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         this.logger.warn(`Cache warmup failed: ${errorMessage}`);
-        // Don't throw - warmup failure shouldn't fail the entire generation
       }
     } catch (error) {
       const errorMessage =
@@ -133,7 +150,9 @@ export class PredictionGeneratorProcessor {
 
   @Process("generate-daily")
   async handleGenerateDaily(_job: Job): Promise<void> {
-    this.logger.log("📅 Generating daily predictions for all parks...");
+    this.logger.log(
+      "📅 Generating daily predictions for all parks (BATCHED)...",
+    );
 
     try {
       const parks = await this.parksService.findAll();
@@ -141,34 +160,50 @@ export class PredictionGeneratorProcessor {
       let successParks = 0;
       let failedParks = 0;
 
-      for (const park of parks) {
-        try {
-          // Get daily predictions for next 30 days
-          const response = await this.mlService.getParkPredictions(
-            park.id,
-            "daily",
-          );
+      // BATCHED PROCESSING (Size 5)
+      const BATCH_SIZE = 5;
 
-          if (response.predictions.length > 0) {
-            // OPTIMIZATION: Delete old daily predictions for this park before storing new ones
-            await this.mlService.deduplicatePredictions(park.id, "daily");
+      for (let i = 0; i < parks.length; i += BATCH_SIZE) {
+        const batch = parks.slice(i, i + BATCH_SIZE);
+        this.logger.log(
+          `Processing daily batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(parks.length / BATCH_SIZE)}...`,
+        );
 
-            // Store predictions in database
-            await this.mlService.storePredictions(response.predictions);
-            totalPredictions += response.predictions.length;
-            successParks++;
-          } else {
-            this.logger.warn(
-              `No daily predictions returned for park: ${park.name}`,
-            );
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          this.logger.warn(
-            `Failed to generate daily predictions for park ${park.name}: ${errorMessage}`,
-          );
-          failedParks++;
+        await Promise.all(
+          batch.map(async (park) => {
+            try {
+              // Get daily predictions for next 30 days
+              const response = await this.mlService.getParkPredictions(
+                park.id,
+                "daily",
+              );
+
+              if (response.predictions.length > 0) {
+                // OPTIMIZATION: Delete old daily predictions for this park before storing new ones
+                await this.mlService.deduplicatePredictions(park.id, "daily");
+
+                // Store predictions in database
+                await this.mlService.storePredictions(response.predictions);
+                totalPredictions += response.predictions.length;
+                successParks++;
+              } else {
+                this.logger.debug(
+                  `No daily predictions returned for park: ${park.name}`,
+                );
+              }
+            } catch (error) {
+              const errorMessage =
+                error instanceof Error ? error.message : String(error);
+              this.logger.warn(
+                `Failed to generate daily predictions for park ${park.name}: ${errorMessage}`,
+              );
+              failedParks++;
+            }
+          }),
+        );
+
+        if (i + BATCH_SIZE < parks.length) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 

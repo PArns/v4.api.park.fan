@@ -95,6 +95,42 @@ services:
       retries: 3
       start_period: 40s
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: parkfan_api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: parkfan
+      DB_PASSWORD: parkfan_dev_password
+      DB_DATABASE: parkfan
+      DB_SYNCHRONIZE: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ML_SERVICE_URL: http://ml-service:8000
+      BULL_PREFIX: parkfan
+      NODE_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   pgdata:
     driver: local

@@ -400,9 +400,7 @@ export class MLService {
     }
 
     // Get unique attraction IDs to look up their parkIds
-    const attractionIds = [
-      ...new Set(predictions.map((p) => p.attractionId)),
-    ];
+    const attractionIds = [...new Set(predictions.map((p) => p.attractionId))];
 
     // Fetch attractions with their parkIds
     const attractions = await this.attractionRepository.find({

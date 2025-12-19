@@ -25,7 +25,7 @@ export class PredictionAccuracyService {
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) { }
+  ) {}
 
   /**
    * Record prediction for accuracy tracking
@@ -65,8 +65,8 @@ export class PredictionAccuracyService {
       const cleanupResult = await this.accuracyRepository
         .createQueryBuilder()
         .delete()
-        .where('targetTime < :sevenDaysAgo', { sevenDaysAgo })
-        .andWhere('actualWaitTime IS NULL')
+        .where("targetTime < :sevenDaysAgo", { sevenDaysAgo })
+        .andWhere("actualWaitTime IS NULL")
         .execute();
 
       if (cleanupResult.affected && cleanupResult.affected > 0) {
@@ -75,7 +75,7 @@ export class PredictionAccuracyService {
         );
       }
     } catch (error) {
-      this.logger.warn('Failed to cleanup old predictions:', error);
+      this.logger.warn("Failed to cleanup old predictions:", error);
       // Continue with comparison even if cleanup fails
     }
 
@@ -208,7 +208,9 @@ export class PredictionAccuracyService {
     );
 
     if (notFound > 0) {
-      const notFoundPercentage = Math.round((notFound / pendingAccuracy.length) * 100);
+      const notFoundPercentage = Math.round(
+        (notFound / pendingAccuracy.length) * 100,
+      );
       this.logger.warn(
         `⚠️ ${notFoundPercentage}% of predictions had no matching queue data. This may indicate timing issues or missing data.`,
       );
@@ -263,9 +265,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE (Root Mean Square Error)
@@ -458,9 +460,7 @@ export class PredictionAccuracyService {
       })),
       successRate: {
         last7Days:
-          total7Days > 0
-            ? Math.round((completed7Days / total7Days) * 100)
-            : 0,
+          total7Days > 0 ? Math.round((completed7Days / total7Days) * 100) : 0,
         last30Days:
           total30Days > 0
             ? Math.round((completed30Days / total30Days) * 100)
@@ -978,8 +978,8 @@ export class PredictionAccuracyService {
     const coveragePercent =
       allRecords.length > 0
         ? parseFloat(
-          ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
-        )
+            ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
+          )
         : 0;
 
     // Breakdown by prediction type
@@ -1011,8 +1011,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             hourlyAll.length > 0
               ? parseFloat(
-                ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
-              )
+                  ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
+                )
               : 0,
         },
         DAILY: {
@@ -1021,8 +1021,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             dailyAll.length > 0
               ? parseFloat(
-                ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
-              )
+                  ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
+                )
               : 0,
         },
       },
@@ -1142,11 +1142,11 @@ export class PredictionAccuracyService {
       coveragePercent:
         parseInt(r.totalCount, 10) > 0
           ? parseFloat(
-            (
-              (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
-              100
-            ).toFixed(1),
-          )
+              (
+                (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
+                100
+              ).toFixed(1),
+            )
           : 0,
     }));
 
@@ -1283,9 +1283,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // R² (Coefficient of Determination)
@@ -1380,9 +1380,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE
@@ -1473,9 +1473,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-          (sum, r) => sum + (r.percentageError || 0),
-          0,
-        ) / validPercentageErrors.length
+            (sum, r) => sum + (r.percentageError || 0),
+            0,
+          ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE
