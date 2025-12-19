@@ -34,7 +34,7 @@ export class CacheWarmupService {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Warm up cache for a single park
@@ -129,7 +129,7 @@ export class CacheWarmupService {
       );
 
       // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
-      const BATCH_SIZE = 5;
+      const BATCH_SIZE = 3; // Reduced from 5 to avoid 429s (Open-Meteo limit)
       let warmedCount = 0;
 
       for (let i = 0; i < operatingParkIds.length; i += BATCH_SIZE) {
@@ -145,9 +145,9 @@ export class CacheWarmupService {
           }
         });
 
-        // Small delay between batches to be nice to APIs
+        // Delay between batches to be nice to APIs
         if (i + BATCH_SIZE < operatingParkIds.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
 
@@ -199,7 +199,7 @@ export class CacheWarmupService {
       this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
 
       // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
-      const BATCH_SIZE = 5;
+      const BATCH_SIZE = 3; // Reduced from 5
       let warmedCount = 0;
 
       for (let i = 0; i < upcomingParks.length; i += BATCH_SIZE) {
@@ -215,9 +215,9 @@ export class CacheWarmupService {
           }
         });
 
-        // Small delay between batches
+        // Delay between batches
         if (i + BATCH_SIZE < upcomingParks.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
 
@@ -319,9 +319,9 @@ export class CacheWarmupService {
 
       this.logger.verbose(`Found ${topAttractions.length} top attractions`);
 
-      // Batch processing to avoid connection timeouts
+      // Batch processing to avoid connection timeouts and rate limits
       // 100 concurrent requests can exhaust the connection pool
-      const BATCH_SIZE = 10;
+      const BATCH_SIZE = 5; // Reduced from 10
       let warmedCount = 0;
 
       for (let i = 0; i < topAttractions.length; i += BATCH_SIZE) {
@@ -342,6 +342,11 @@ export class CacheWarmupService {
         this.logger.verbose(
           `Progress: ${progress}/${topAttractions.length} attractions warmed`,
         );
+
+        // Small delay between batches to be nice to APIs
+        if (i + BATCH_SIZE < topAttractions.length) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
