@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, Between } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { WeatherData } from "./entities/weather-data.entity";
@@ -29,7 +29,7 @@ export class WeatherService {
     private parkRepository: Repository<Park>,
     private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Get hourly weather forecast for a park
@@ -95,8 +95,65 @@ export class WeatherService {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Failed to fetch hourly weather for park ${parkId}: ${errorMessage}`,
+        `Failed to fetch hourly weather for park ${parkId}: ${errorMessage}. Attempting DB fallback...`,
       );
+
+      // Fallback: Try to synthesize hourly data from stored daily data
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const next7Days = new Date(today);
+        next7Days.setDate(next7Days.getDate() + 7);
+
+        const dailyData = await this.weatherDataRepository.find({
+          where: {
+            parkId,
+            date: Between(today, next7Days),
+          },
+          order: { date: "ASC" },
+        });
+
+        if (dailyData.length > 0) {
+          const synthesizedForecast: WeatherForecastItemDto[] = [];
+
+          for (const day of dailyData) {
+            // Create 24 hours for each day
+            const dateStr = day.date instanceof Date
+              ? day.date.toISOString().split('T')[0]
+              : day.date; // Handle string/date discrepancies
+
+            for (let hour = 0; hour < 24; hour++) {
+              // Simple sinusoidal interpolation for temperature
+              // Min at 4am, Max at 2pm (14:00)
+              const minTemp = Number(day.temperatureMin || 15);
+              const maxTemp = Number(day.temperatureMax || 25);
+              const tempRange = maxTemp - minTemp;
+
+              // Shift curve so peak is at 14:00
+              // cos((h - 14) / 12 * PI) gives peak at 14, trough at 2/26
+              // simplified interpolation
+              const normalizedTime = (hour - 14) / 12 * Math.PI;
+              const temp = Math.round(((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange + minTemp) * 10) / 10;
+
+              synthesizedForecast.push({
+                time: `${dateStr}T${hour.toString().padStart(2, '0')}:00`,
+                temperature: temp,
+                precipitation: Number(day.precipitationSum || 0) / 24, // Distribute evenly (naive)
+                rain: Number(day.rainSum || 0) / 24,
+                snowfall: Number(day.snowfallSum || 0) / 24,
+                weatherCode: day.weatherCode || 0,
+                windSpeed: Number(day.windSpeedMax || 0) / 2, // Assume avg is half max
+              });
+            }
+          }
+
+          this.logger.log(`✓ Bootstrapped ${synthesizedForecast.length} hourly weather points from DB for park ${parkId}`);
+          return synthesizedForecast;
+        }
+      } catch (dbError) {
+        this.logger.warn(`DB fallback failed: ${dbError}`);
+      }
+
       return [];
     }
   }
