@@ -27,7 +27,7 @@ export class MLDashboardController {
     private dashboardService: MLDashboardService,
     private modelService: MLModelService,
     private accuracyService: PredictionAccuracyService,
-  ) {}
+  ) { }
 
   /**
    * Main ML Dashboard Endpoint
@@ -248,6 +248,71 @@ export class MLDashboardController {
     return {
       byHourOfDay: hourly,
       byDayOfWeek: dayOfWeek,
+    };
+  }
+
+  /**
+   * Prediction Accuracy Health Check
+   *
+   * GET /v1/ml/accuracy/health
+   *
+   * Returns diagnostic information about the prediction accuracy system:
+   * - Count of pending comparisons (predictions waiting to be matched with actuals)
+   * - Count of completed comparisons in last 7 days
+   * - Sample of recent comparisons
+   * - Statistics on comparison success rate
+   *
+   * Useful for diagnosing if the compareWithActuals job is running properly
+   */
+  @Get("accuracy/health")
+  @ApiOperation({
+    summary: "Get prediction accuracy system health",
+    description:
+      "Returns diagnostic information about the prediction accuracy system including pending and completed comparisons",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Health check completed successfully",
+  })
+  async getAccuracyHealth() {
+    return this.accuracyService.getHealthStatus();
+  }
+
+  /**
+   * Manually Trigger Prediction Accuracy Comparison
+   *
+   * POST /v1/ml/accuracy/compare-now
+   *
+   * Manually triggers the compareWithActuals() job for immediate testing
+   * Returns detailed results of the comparison
+   *
+   * Useful for:
+   * - Testing the comparison logic without waiting for the scheduled job
+   * - Debugging why comparisons aren't happening
+   * - Immediately processing pending comparisons
+   */
+  @Get("accuracy/compare-now")
+  @ApiOperation({
+    summary: "Manually trigger prediction accuracy comparison",
+    description:
+      "Immediately compares pending predictions with actual data and returns detailed results",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Comparison completed successfully",
+  })
+  async triggerCompareNow() {
+    const startTime = Date.now();
+    await this.accuracyService.compareWithActuals();
+    const duration = Date.now() - startTime;
+
+    // Get updated health status after comparison
+    const health = await this.accuracyService.getHealthStatus();
+
+    return {
+      message: "Comparison completed successfully",
+      duration: `${duration}ms`,
+      health,
     };
   }
 }
