@@ -77,6 +77,8 @@ services:
       - DB_HOST=postgres
       - REDIS_HOST=redis
       - ML_SERVICE_URL=http://ml-service:8000
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=4096
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

@@ -114,8 +114,7 @@ services:
       REDIS_PORT: 6379
       ML_SERVICE_URL: http://ml-service:8000
       BULL_PREFIX: parkfan
-      NODE_ENV: production
-      NODE_OPTIONS: "--max-old-space-size=4096"
+      NODE_ENV: development
     depends_on:
       postgres:
         condition: service_healthy
