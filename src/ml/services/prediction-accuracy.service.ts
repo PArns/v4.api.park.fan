@@ -25,7 +25,7 @@ export class PredictionAccuracyService {
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) {}
+  ) { }
 
   /**
    * Record prediction for accuracy tracking
@@ -48,169 +48,184 @@ export class PredictionAccuracyService {
 
   /**
    * Compare predictions with actual wait times
-   * Run this periodically (e.g., hourly) to update accuracy records
+   * Optimized with batch processing and smart retries
+   *
+   * Period: Checks predictions from last 7 days
+   * Retries: Only retries for 2 hours after target time, then marks as MISSED
    */
   async compareWithActuals(): Promise<void> {
     const startTime = Date.now();
     this.logger.log("🔄 Comparing predictions with actual wait times...");
 
     const now = new Date();
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    // CLEANUP: Delete old predictions that will never be compared
-    // These are predictions older than 7 days with no actualWaitTime
-    // This prevents table bloat (on live we had 5.2M pending records!)
-    try {
-      const cleanupResult = await this.accuracyRepository
-        .createQueryBuilder()
-        .delete()
-        .where("targetTime < :sevenDaysAgo", { sevenDaysAgo })
-        .andWhere("actualWaitTime IS NULL")
-        .execute();
+    // Look back 7 days for pending predictions
+    const lookbackWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-      if (cleanupResult.affected && cleanupResult.affected > 0) {
-        this.logger.log(
-          `🧹 Cleaned up ${cleanupResult.affected} old predictions (>7 days, never compared)`,
-        );
-      }
-    } catch (error) {
-      this.logger.warn("Failed to cleanup old predictions:", error);
-      // Continue with comparison even if cleanup fails
-    }
+    // 1. Find PENDING predictions that have passed their target time
+    // Buffer: Wait 20 mins after target time to ensure queue data has arrived
+    const readyToCompare = new Date(Date.now() - 20 * 60 * 1000);
 
-    // Find all predictions that have passed but don't have actual wait times yet
-    this.logger.debug(
-      `Searching for pending comparisons between ${sevenDaysAgo.toISOString()} and ${now.toISOString()}`,
-    );
-
-    const pendingAccuracy = await this.accuracyRepository.find({
+    const pendingPredictions = await this.accuracyRepository.find({
+      select: [
+        "id",
+        "attractionId",
+        "targetTime",
+        "predictedWaitTime",
+        "predictionType",
+        "features",
+      ], // Select only needed fields
       where: {
-        targetTime: Between(sevenDaysAgo, now),
-        actualWaitTime: IsNull(), // Not yet compared
+        comparisonStatus: "PENDING",
+        targetTime: Between(lookbackWindow, readyToCompare),
       },
       order: {
         targetTime: "ASC",
       },
-      take: 1000, // Process in batches of 1000
+      take: 1000,
     });
 
-    if (pendingAccuracy.length === 0) {
-      this.logger.log("✅ No pending predictions to compare");
+    if (pendingPredictions.length === 0) {
+      this.logger.log("✅ No pending predictions ready to compare");
       return;
     }
 
     this.logger.log(
-      `📊 Found ${pendingAccuracy.length} pending predictions to compare`,
+      `📊 Processing ${pendingPredictions.length} pending predictions...`,
     );
+
+    // 2. Prepare for batch fetching actual data
+    // We need data for the time range of our batch
+    const minTime = pendingPredictions[0].targetTime;
+    const maxTime = pendingPredictions[pendingPredictions.length - 1].targetTime;
+
+    // Expand window by 15 mins
+    const dataWindowStart = new Date(minTime.getTime() - 15 * 60 * 1000);
+    const dataWindowEnd = new Date(maxTime.getTime() + 15 * 60 * 1000);
+
+    // Get all attraction IDs in this batch
+    const attractionIds = [
+      ...new Set(pendingPredictions.map((p) => p.attractionId)),
+    ];
+
     this.logger.debug(
-      `Date range: ${pendingAccuracy[0].targetTime.toISOString()} to ${pendingAccuracy[pendingAccuracy.length - 1].targetTime.toISOString()}`,
+      `Fetching ACTUAL queue data for ${attractionIds.length} attractions between ${dataWindowStart.toISOString()} and ${dataWindowEnd.toISOString()}`,
     );
 
-    let updated = 0;
-    let notFound = 0;
-    let closureDetected = 0;
+    // 3. Batch fetch Actual Queue Data
+    // Fetch all potentially relevant queue data in one query
+    const actualDataRecords = await this.queueDataRepository
+      .createQueryBuilder("qd")
+      .select([
+        "qd.attractionId",
+        "qd.timestamp",
+        "qd.waitTime",
+        "qd.status",
+        "qd.queueType",
+      ])
+      .where("qd.attractionId IN (:...attractionIds)", { attractionIds })
+      .andWhere("qd.timestamp BETWEEN :start AND :end", {
+        start: dataWindowStart,
+        end: dataWindowEnd,
+      })
+      .andWhere("qd.queueType = :queueType", { queueType: "STANDBY" })
+      .orderBy("qd.timestamp", "ASC")
+      .getMany();
 
-    for (let i = 0; i < pendingAccuracy.length; i++) {
-      const accuracy = pendingAccuracy[i];
+    this.logger.debug(`Fetched ${actualDataRecords.length} queue data records`);
 
-      // Log first 3 as samples for debugging
-      const isSample = i < 3;
-      if (isSample) {
-        this.logger.debug(
-          `Sample ${i + 1}: Checking prediction for attraction ${accuracy.attractionId}, target time ${accuracy.targetTime.toISOString()}, predicted wait: ${accuracy.predictedWaitTime}min`,
-        );
+    // Index queue data strategies for fast lookup: attractionId -> timestamp[] -> record
+    // Using a Map of Maps for O(1) access
+    const queueDataMap = new Map<string, QueueData[]>();
+    for (const record of actualDataRecords) {
+      if (!queueDataMap.has(record.attractionId)) {
+        queueDataMap.set(record.attractionId, []);
       }
+      queueDataMap.get(record.attractionId)!.push(record);
+    }
 
-      // Find actual wait time at the target time (±15 minutes window)
-      const windowStart = new Date(
-        accuracy.targetTime.getTime() - 15 * 60 * 1000,
-      );
-      const windowEnd = new Date(
-        accuracy.targetTime.getTime() + 15 * 60 * 1000,
-      );
+    // 4. Match Predictions
+    let completed = 0;
+    let missed = 0;
+    let unplannedClosures = 0;
+    const updates = [];
 
-      if (isSample) {
-        this.logger.debug(
-          `Sample ${i + 1}: Search window ${windowStart.toISOString()} to ${windowEnd.toISOString()}`,
-        );
-      }
+    for (const prediction of pendingPredictions) {
+      const targetTimeMs = prediction.targetTime.getTime();
+      const records = queueDataMap.get(prediction.attractionId) || [];
 
-      const actualData = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .where("qd.attractionId = :attractionId", {
-          attractionId: accuracy.attractionId,
-        })
-        .andWhere("qd.timestamp BETWEEN :start AND :end", {
-          start: windowStart,
-          end: windowEnd,
-        })
-        .andWhere("qd.queueType = :queueType", { queueType: "STANDBY" })
-        // REMOVED: Status filter - we want to detect unplanned closures
-        .orderBy("qd.timestamp", "ASC")
-        .getOne();
+      // Find best match within ±15 minutes
+      // Since records are sorted by time, we can find the closest one
+      let bestMatch: QueueData | null = null;
+      let minDiff = 15 * 60 * 1000 + 1; // Start just outside window
 
-      if (actualData && actualData.waitTime !== null) {
-        // Normal case: attraction was operating
-        accuracy.actualWaitTime = actualData.waitTime;
-        accuracy.wasUnplannedClosure = false;
-
-        // Calculate error metrics
-        const absoluteError = Math.abs(
-          accuracy.predictedWaitTime - actualData.waitTime,
-        );
-        const percentageError =
-          actualData.waitTime > 0
-            ? (absoluteError / actualData.waitTime) * 100
-            : null;
-
-        accuracy.absoluteError = absoluteError;
-        if (percentageError !== null) {
-          accuracy.percentageError = percentageError;
+      for (const record of records) {
+        const diff = Math.abs(record.timestamp.getTime() - targetTimeMs);
+        if (diff <= 15 * 60 * 1000) {
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestMatch = record;
+            // Optimization: if diff is very small (e.g., < 1 min), we can stop
+            if (diff < 60 * 1000) break;
+          }
         }
+      }
 
-        await this.accuracyRepository.save(accuracy);
-        updated++;
+      if (bestMatch) {
+        // MATCH FOUND
+        prediction.comparisonStatus = "COMPLETED";
 
-        if (isSample) {
-          this.logger.debug(
-            `Sample ${i + 1}: ✅ Match found! Actual wait: ${actualData.waitTime}min, Error: ${absoluteError}min (${Math.round(percentageError || 0)}%)`,
+        if (bestMatch.status === "OPERATING" && bestMatch.waitTime !== null) {
+          prediction.actualWaitTime = bestMatch.waitTime;
+          prediction.wasUnplannedClosure = false;
+          prediction.absoluteError = Math.abs(
+            prediction.predictedWaitTime - bestMatch.waitTime,
           );
+          if (bestMatch.waitTime > 0) {
+            prediction.percentageError =
+              (prediction.absoluteError / bestMatch.waitTime) * 100;
+          } else {
+            prediction.percentageError = null;
+          }
+        } else {
+          // Unplanned Closure (predicted operating, but was closed/down)
+          prediction.wasUnplannedClosure = true;
+          prediction.actualWaitTime = 0; // Effectively 0 wait time, but not "free"
+          prediction.absoluteError = prediction.predictedWaitTime; // Full error
+          prediction.percentageError = null;
+          unplannedClosures++;
         }
-      } else if (actualData && actualData.status !== "OPERATING") {
-        // Unplanned closure: We predicted a wait time, but attraction was closed
-        // This is a prediction error that we want to track
-        accuracy.actualWaitTime = 0;
-        accuracy.wasUnplannedClosure = true;
-        accuracy.absoluteError = accuracy.predictedWaitTime; // Error = predicted wait time
-        accuracy.percentageError = null; // Cannot calculate % error when actual is 0
-
-        await this.accuracyRepository.save(accuracy);
-        updated++;
-        closureDetected++;
-
-        this.logger.debug(
-          `Detected unplanned closure for ${accuracy.attractionId} at ${accuracy.targetTime.toISOString()}`,
-        );
+        completed++;
       } else {
-        notFound++;
-        if (isSample) {
-          this.logger.debug(
-            `Sample ${i + 1}: ⚠️ No matching queue data found in search window`,
-          );
+        // NO MATCH FOUND
+        // Check timeout: If prediction is older than 2 hours, mark as MISSED
+        const timeSinceTarget = Date.now() - targetTimeMs;
+        if (timeSinceTarget > 2 * 60 * 60 * 1000) {
+          prediction.comparisonStatus = "MISSED";
+          missed++;
         }
+        // Else: Leave as PENDING (try again next batch)
       }
+
+      // Add to updates if changed
+      if (prediction.comparisonStatus !== "PENDING") {
+        updates.push(prediction);
+      }
+    }
+
+    // 5. Save Updates in Bulk
+    if (updates.length > 0) {
+      await this.accuracyRepository.save(updates, { chunk: 100 });
     }
 
     const duration = Date.now() - startTime;
     this.logger.log(
-      `✅ Prediction accuracy comparison complete: ${updated} updated (${closureDetected} closures detected), ${notFound} no actual data found. Duration: ${duration}ms`,
+      `✅ Batch complete: Processed ${pendingPredictions.length}, Saved ${updates.length} updates. ` +
+      `Completed: ${completed} (${unplannedClosures} closures), Missed: ${missed}. Duration: ${duration}ms`,
     );
 
-    if (notFound > 0) {
-      const notFoundPercentage = Math.round(
-        (notFound / pendingAccuracy.length) * 100,
-      );
-      this.logger.warn(
-        `⚠️ ${notFoundPercentage}% of predictions had no matching queue data. This may indicate timing issues or missing data.`,
+    if (missed > 0) {
+      this.logger.log(
+        `ℹ️ ${missed} predictions marked as MISSED (no data found after 2 hours)`,
       );
     }
   }
@@ -263,9 +278,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-            (sum, r) => sum + (r.percentageError || 0),
-            0,
-          ) / validPercentageErrors.length
+          (sum, r) => sum + (r.percentageError || 0),
+          0,
+        ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE (Root Mean Square Error)
@@ -976,8 +991,8 @@ export class PredictionAccuracyService {
     const coveragePercent =
       allRecords.length > 0
         ? parseFloat(
-            ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
-          )
+          ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
+        )
         : 0;
 
     // Breakdown by prediction type
@@ -1009,8 +1024,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             hourlyAll.length > 0
               ? parseFloat(
-                  ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
-                )
+                ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
+              )
               : 0,
         },
         DAILY: {
@@ -1019,8 +1034,8 @@ export class PredictionAccuracyService {
           coveragePercent:
             dailyAll.length > 0
               ? parseFloat(
-                  ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
-                )
+                ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
+              )
               : 0,
         },
       },
@@ -1140,11 +1155,11 @@ export class PredictionAccuracyService {
       coveragePercent:
         parseInt(r.totalCount, 10) > 0
           ? parseFloat(
-              (
-                (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
-                100
-              ).toFixed(1),
-            )
+            (
+              (parseInt(r.matchedCount, 10) / parseInt(r.totalCount, 10)) *
+              100
+            ).toFixed(1),
+          )
           : 0,
     }));
 
@@ -1281,9 +1296,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-            (sum, r) => sum + (r.percentageError || 0),
-            0,
-          ) / validPercentageErrors.length
+          (sum, r) => sum + (r.percentageError || 0),
+          0,
+        ) / validPercentageErrors.length
         : 0;
 
     // R² (Coefficient of Determination)
@@ -1378,9 +1393,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-            (sum, r) => sum + (r.percentageError || 0),
-            0,
-          ) / validPercentageErrors.length
+          (sum, r) => sum + (r.percentageError || 0),
+          0,
+        ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE
@@ -1471,9 +1486,9 @@ export class PredictionAccuracyService {
     const mape =
       validPercentageErrors.length > 0
         ? validPercentageErrors.reduce(
-            (sum, r) => sum + (r.percentageError || 0),
-            0,
-          ) / validPercentageErrors.length
+          (sum, r) => sum + (r.percentageError || 0),
+          0,
+        ) / validPercentageErrors.length
         : 0;
 
     // Calculate RMSE

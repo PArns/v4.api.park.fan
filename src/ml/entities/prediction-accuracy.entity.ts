@@ -69,6 +69,14 @@ export class PredictionAccuracy {
   @Column({ type: "boolean", default: false })
   wasUnplannedClosure: boolean;
 
+  @Column({
+    type: "enum",
+    enum: ["PENDING", "COMPLETED", "MISSED"],
+    default: "PENDING",
+  })
+  @Index() // Index for fast lookup of pending records
+  comparisonStatus: "PENDING" | "COMPLETED" | "MISSED";
+
   @CreateDateColumn()
   createdAt: Date;
 }
