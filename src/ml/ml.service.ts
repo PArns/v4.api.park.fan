@@ -1,6 +1,6 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, In, MoreThan } from "typeorm";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
@@ -389,9 +389,100 @@ export class MLService {
    * Used by queue jobs for pre-computing daily predictions
    *
    * Also records predictions in PredictionAccuracy table for feedback loop
+   *
+   * OPTIMIZATION: Filters out predictions for times when park is closed
+   * to prevent storing predictions that will never have matching queue_data
    */
   async storePredictions(predictions: PredictionDto[]): Promise<void> {
-    const entities = predictions.map((pred) => {
+    if (predictions.length === 0) {
+      this.logger.warn("No predictions to store");
+      return;
+    }
+
+    // Get unique attraction IDs to look up their parkIds
+    const attractionIds = [
+      ...new Set(predictions.map((p) => p.attractionId)),
+    ];
+
+    // Fetch attractions with their parkIds
+    const attractions = await this.attractionRepository.find({
+      where: { id: In(attractionIds) },
+      select: ["id", "parkId"],
+    });
+
+    // Create map: attractionId -> parkId
+    const attractionToPark = new Map<string, string>();
+    for (const attraction of attractions) {
+      attractionToPark.set(attraction.id, attraction.parkId);
+    }
+
+    // Group predictions by parkId
+    const predictionsByPark = new Map<string, PredictionDto[]>();
+    for (const pred of predictions) {
+      const parkId = attractionToPark.get(pred.attractionId);
+      if (!parkId) {
+        this.logger.warn(
+          `Could not find park for attraction ${pred.attractionId}, skipping`,
+        );
+        continue;
+      }
+
+      if (!predictionsByPark.has(parkId)) {
+        predictionsByPark.set(parkId, []);
+      }
+      predictionsByPark.get(parkId)!.push(pred);
+    }
+
+    // Get park statuses in batch
+    const parkIds = Array.from(predictionsByPark.keys());
+    const parks = await this.parkRepository.find({
+      where: { id: In(parkIds) },
+      select: ["id"],
+    });
+
+    // Get current live status for each park
+    const validPredictions: PredictionDto[] = [];
+    let filteredCount = 0;
+
+    for (const [parkId, parkPredictions] of predictionsByPark) {
+      const park = parks.find((p) => p.id === parkId);
+      if (!park) {
+        filteredCount += parkPredictions.length;
+        continue;
+      }
+
+      // Check if park is currently operating by looking at recent queue data
+      // If park has recent queue data, it's operating
+      const recentQueueData = await this.queueDataRepository.findOne({
+        where: {
+          attractionId: In(
+            parkPredictions.map((p) => p.attractionId).slice(0, 10),
+          ), // Check first 10 attractions
+          timestamp: MoreThan(new Date(Date.now() - 30 * 60 * 1000)), // Last 30 min
+        },
+        order: { timestamp: "DESC" },
+      });
+
+      if (recentQueueData) {
+        validPredictions.push(...parkPredictions);
+      } else {
+        filteredCount += parkPredictions.length;
+      }
+    }
+
+    if (filteredCount > 0) {
+      this.logger.log(
+        `🕒 Filtered ${filteredCount}/${predictions.length} predictions (parks closed/not operating)`,
+      );
+    }
+
+    if (validPredictions.length === 0) {
+      this.logger.warn("No valid predictions to store (all parks closed)");
+      return;
+    }
+
+    // Convert to entities
+    const entities = validPredictions.map((pred) => {
       const entity = new WaitTimePrediction();
       entity.attractionId = pred.attractionId;
       entity.predictedTime = new Date(pred.predictedTime);

@@ -59,19 +59,19 @@ export class PredictionAccuracyService {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     // CLEANUP: Delete old predictions that will never be compared
-    // These are predictions older than 30 days with no actualWaitTime
+    // These are predictions older than 7 days with no actualWaitTime
     // This prevents table bloat (on live we had 5.2M pending records!)
     try {
       const cleanupResult = await this.accuracyRepository
         .createQueryBuilder()
         .delete()
-        .where('targetTime < :thirtyDaysAgo', { thirtyDaysAgo })
+        .where('targetTime < :sevenDaysAgo', { sevenDaysAgo })
         .andWhere('actualWaitTime IS NULL')
         .execute();
 
       if (cleanupResult.affected && cleanupResult.affected > 0) {
         this.logger.log(
-          `🧹 Cleaned up ${cleanupResult.affected} old predictions (>30 days, never compared)`,
+          `🧹 Cleaned up ${cleanupResult.affected} old predictions (>7 days, never compared)`,
         );
       }
     } catch (error) {
