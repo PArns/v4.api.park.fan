@@ -39,193 +39,192 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) { }
-}
+  ) {}
 
   /**
    * Runs after all modules initialized.
    * Triggers initial data fetch jobs (non-blocking).
    */
-  async onModuleInit(): Promise < void> {
-  // Non-blocking: fire and forget
-  this.bootstrapQueues().catch((err) => {
-    this.logger.error("Queue bootstrap failed", err);
-  });
-}
+  async onModuleInit(): Promise<void> {
+    // Non-blocking: fire and forget
+    this.bootstrapQueues().catch((err) => {
+      this.logger.error("Queue bootstrap failed", err);
+    });
+  }
 
   /**
    * Checks database state and triggers appropriate jobs.
    */
-  private async bootstrapQueues(): Promise < void> {
-  this.logger.log("🚀 Queue bootstrap starting...");
+  private async bootstrapQueues(): Promise<void> {
+    this.logger.log("🚀 Queue bootstrap starting...");
 
-  // Clean up old jobs from all queues
-  await this.cleanupQueues();
+    // Clean up old jobs from all queues
+    await this.cleanupQueues();
 
-  // Check if parks exist in database
-  const parkCount = await this.parkRepository.count();
-  const isEmpty = parkCount === 0;
+    // Check if parks exist in database
+    const parkCount = await this.parkRepository.count();
+    const isEmpty = parkCount === 0;
 
-  this.logger.log(`Database status: ${parkCount} parks found`);
+    this.logger.log(`Database status: ${parkCount} parks found`);
 
-  if(isEmpty) {
-    // Priority 1: Fetch park metadata first
-    const parkJobActive = await this.isJobActiveOrWaiting(
-      this.parkMetadataQueue,
-      "sync-all-parks",
-    );
-
-    if (!parkJobActive) {
-      await this.parkMetadataQueue.add(
+    if (isEmpty) {
+      // Priority 1: Fetch park metadata first
+      const parkJobActive = await this.isJobActiveOrWaiting(
+        this.parkMetadataQueue,
         "sync-all-parks",
-        {},
-        {
-          priority: 1,
-          jobId: "bootstrap-parks", // Prevent duplicates
-          removeOnComplete: true,
-        },
-      );
-      this.logger.log("✅ Park metadata job queued");
-    } else {
-      this.logger.log("⏭️  Park metadata job already running, skipping");
-    }
-    this.logger.log("No data found. Triggering initial metadata fetch...");
-
-    // Phase 6.2: Use COMBINED children-metadata job instead of 3 separate jobs
-    // This reduces API requests by 67% (105 requests instead of 315)
-    const childrenJobActive = await this.isJobActiveOrWaiting(
-      this.childrenQueue,
-      "fetch-all-children",
-    );
-
-    if (!childrenJobActive) {
-      // Priority 2: Fetch ALL children (attractions, shows, restaurants) in ONE job
-      await this.childrenQueue.add(
-        "fetch-all-children",
-        {},
-        {
-          priority: 1,
-          jobId: "bootstrap-children", // Prevent duplicates
-          removeOnComplete: true,
-        },
-      );
-      this.logger.log(
-        "✅ Combined children metadata job queued (Attractions + Shows + Restaurants)",
-      );
-    } else {
-      this.logger.log(
-        "⏭️  Combined children metadata job already running, skipping",
-      );
-    }
-  } else {
-    this.logger.log("Data exists. Checking data freshness...");
-
-    // Optimization: Check if we have recent queue data (last 5 minutes)
-    // If so, skip immediate fetch to prevent "double fetch" with cron job
-    const latestData = await this.queueDataRepository.findOne({
-      where: {},
-      order: { timestamp: "DESC" },
-      select: ["timestamp"],
-    });
-
-    const isFresh =
-      latestData &&
-      Date.now() - latestData.timestamp.getTime() < 5 * 60 * 1000;
-
-    if(isFresh) {
-      this.logger.log(
-        `✅ Data is fresh (${latestData?.timestamp.toISOString()}). Skipping immediate wait times update.`,
-      );
-    } else {
-      this.logger.log("Data is stale. Triggering wait times update...");
-
-      // Check if wait-times job is already active/waiting
-      const waitTimesJobActive = await this.isJobActiveOrWaiting(
-        this.waitTimesQueue,
-        "fetch-wait-times",
       );
 
-      if(!waitTimesJobActive) {
-        // Trigger immediate wait times update
-        await this.waitTimesQueue.add(
-          "fetch-wait-times",
+      if (!parkJobActive) {
+        await this.parkMetadataQueue.add(
+          "sync-all-parks",
           {},
           {
-            priority: 2,
-            jobId: "bootstrap-wait-times", // Prevent duplicates
+            priority: 1,
+            jobId: "bootstrap-parks", // Prevent duplicates
             removeOnComplete: true,
           },
         );
-        this.logger.log("✅ Wait times update job queued");
+        this.logger.log("✅ Park metadata job queued");
       } else {
-        this.logger.log("⏭️  Wait times job already running, skipping");
+        this.logger.log("⏭️  Park metadata job already running, skipping");
+      }
+      this.logger.log("No data found. Triggering initial metadata fetch...");
+
+      // Phase 6.2: Use COMBINED children-metadata job instead of 3 separate jobs
+      // This reduces API requests by 67% (105 requests instead of 315)
+      const childrenJobActive = await this.isJobActiveOrWaiting(
+        this.childrenQueue,
+        "fetch-all-children",
+      );
+
+      if (!childrenJobActive) {
+        // Priority 2: Fetch ALL children (attractions, shows, restaurants) in ONE job
+        await this.childrenQueue.add(
+          "fetch-all-children",
+          {},
+          {
+            priority: 1,
+            jobId: "bootstrap-children", // Prevent duplicates
+            removeOnComplete: true,
+          },
+        );
+        this.logger.log(
+          "✅ Combined children metadata job queued (Attractions + Shows + Restaurants)",
+        );
+      } else {
+        this.logger.log(
+          "⏭️  Combined children metadata job already running, skipping",
+        );
+      }
+    } else {
+      this.logger.log("Data exists. Checking data freshness...");
+
+      // Optimization: Check if we have recent queue data (last 5 minutes)
+      // If so, skip immediate fetch to prevent "double fetch" with cron job
+      const latestData = await this.queueDataRepository.findOne({
+        where: {},
+        order: { timestamp: "DESC" },
+        select: ["timestamp"],
+      });
+
+      const isFresh =
+        latestData &&
+        Date.now() - latestData.timestamp.getTime() < 5 * 60 * 1000;
+
+      if (isFresh) {
+        this.logger.log(
+          `✅ Data is fresh (${latestData?.timestamp.toISOString()}). Skipping immediate wait times update.`,
+        );
+      } else {
+        this.logger.log("Data is stale. Triggering wait times update...");
+
+        // Check if wait-times job is already active/waiting
+        const waitTimesJobActive = await this.isJobActiveOrWaiting(
+          this.waitTimesQueue,
+          "fetch-wait-times",
+        );
+
+        if (!waitTimesJobActive) {
+          // Trigger immediate wait times update
+          await this.waitTimesQueue.add(
+            "fetch-wait-times",
+            {},
+            {
+              priority: 2,
+              jobId: "bootstrap-wait-times", // Prevent duplicates
+              removeOnComplete: true,
+            },
+          );
+          this.logger.log("✅ Wait times update job queued");
+        } else {
+          this.logger.log("⏭️  Wait times job already running, skipping");
+        }
       }
     }
   }
-}
 
   /**
    * Check if a job with the given name is already active or waiting.
    */
   private async isJobActiveOrWaiting(
-  queue: Queue,
-  jobName: string,
-): Promise < boolean > {
-  const [activeJobs, waitingJobs] = await Promise.all([
-    queue.getActive(),
-    queue.getWaiting(),
-  ]);
+    queue: Queue,
+    jobName: string,
+  ): Promise<boolean> {
+    const [activeJobs, waitingJobs] = await Promise.all([
+      queue.getActive(),
+      queue.getWaiting(),
+    ]);
 
-  const hasActiveJob = activeJobs.some((job) => job.name === jobName);
-  const hasWaitingJob = waitingJobs.some((job) => job.name === jobName);
+    const hasActiveJob = activeJobs.some((job) => job.name === jobName);
+    const hasWaitingJob = waitingJobs.some((job) => job.name === jobName);
 
-  return hasActiveJob || hasWaitingJob;
-}
+    return hasActiveJob || hasWaitingJob;
+  }
 
   /**
    * Clean up old completed and failed jobs from all queues.
    * This prevents job accumulation and keeps Redis memory usage low.
    */
-  private async cleanupQueues(): Promise < void> {
-  this.logger.log("🧹 Cleaning up old jobs from queues...");
+  private async cleanupQueues(): Promise<void> {
+    this.logger.log("🧹 Cleaning up old jobs from queues...");
 
-  const queues = [
-    { name: "wait-times", queue: this.waitTimesQueue },
-    { name: "park-metadata", queue: this.parkMetadataQueue },
-    { name: "children-metadata", queue: this.childrenQueue }, // Phase 6.2: Combined
-    { name: "occupancy-calculation", queue: this.occupancyQueue },
-    { name: "weather", queue: this.weatherQueue },
-    { name: "holidays", queue: this.holidaysQueue },
-  ];
+    const queues = [
+      { name: "wait-times", queue: this.waitTimesQueue },
+      { name: "park-metadata", queue: this.parkMetadataQueue },
+      { name: "children-metadata", queue: this.childrenQueue }, // Phase 6.2: Combined
+      { name: "occupancy-calculation", queue: this.occupancyQueue },
+      { name: "weather", queue: this.weatherQueue },
+      { name: "holidays", queue: this.holidaysQueue },
+    ];
 
-  let totalCleaned = 0;
+    let totalCleaned = 0;
 
-  for(const { name, queue } of queues) {
-    try {
-      // Clean completed jobs (keep last 10)
-      const completed = await queue.clean(0, "completed", 10);
-      // Clean failed jobs (keep last 50 for debugging)
-      const failed = await queue.clean(0, "failed", 50);
+    for (const { name, queue } of queues) {
+      try {
+        // Clean completed jobs (keep last 10)
+        const completed = await queue.clean(0, "completed", 10);
+        // Clean failed jobs (keep last 50 for debugging)
+        const failed = await queue.clean(0, "failed", 50);
 
-      const cleaned = completed.length + failed.length;
-      totalCleaned += cleaned;
+        const cleaned = completed.length + failed.length;
+        totalCleaned += cleaned;
 
-      if (cleaned > 0) {
-        this.logger.log(
-          `  ✓ Queue [${name}]: cleaned ${completed.length} completed, ${failed.length} failed jobs`,
-        );
+        if (cleaned > 0) {
+          this.logger.log(
+            `  ✓ Queue [${name}]: cleaned ${completed.length} completed, ${failed.length} failed jobs`,
+          );
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Failed to clean queue [${name}]: ${errorMessage}`);
       }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to clean queue [${name}]: ${errorMessage}`);
     }
-  }
 
-    if(totalCleaned > 0) {
-  this.logger.log(`✅ Cleaned ${totalCleaned} old jobs from queues`);
-} else {
-  this.logger.log("✅ No old jobs to clean");
-}
+    if (totalCleaned > 0) {
+      this.logger.log(`✅ Cleaned ${totalCleaned} old jobs from queues`);
+    } else {
+      this.logger.log("✅ No old jobs to clean");
+    }
   }
 }

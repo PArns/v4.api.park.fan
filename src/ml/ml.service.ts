@@ -469,13 +469,13 @@ export class MLService {
     }
 
     if (filteredCount > 0) {
-      this.logger.log(
+      this.logger.debug(
         `🕒 Filtered ${filteredCount}/${predictions.length} predictions (parks closed/not operating)`,
       );
     }
 
     if (validPredictions.length === 0) {
-      this.logger.warn("No valid predictions to store (all parks closed)");
+      this.logger.verbose("No valid predictions to store (all parks closed)");
       return;
     }
 
@@ -495,7 +495,7 @@ export class MLService {
     });
 
     const savedPredictions = await this.predictionRepository.save(entities);
-    this.logger.log(
+    this.logger.debug(
       `Stored ${savedPredictions.length} predictions in database`,
     );
 
@@ -508,7 +508,6 @@ export class MLService {
     );
 
     let recordedCount = 0;
-    const totalCount = validPredictionsForFeedback.length;
 
     if (validPredictionsForFeedback.length < savedPredictions.length) {
       this.logger.debug(
@@ -522,13 +521,6 @@ export class MLService {
           validPredictionsForFeedback[i],
         );
         recordedCount++;
-
-        // Progress logging every 100 predictions (similar to wait-times processor)
-        if ((i + 1) % 100 === 0 || i + 1 === totalCount) {
-          this.logger.debug(
-            `Progress: ${i + 1}/${totalCount} (${Math.round(((i + 1) / totalCount) * 100)}%) recorded`,
-          );
-        }
       } catch (error) {
         // Log error but don't fail the whole operation
         const errorMessage =
@@ -538,7 +530,8 @@ export class MLService {
         );
       }
     }
-    this.logger.log(
+
+    this.logger.verbose(
       `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} OPERATING predictions for accuracy tracking`,
     );
   }

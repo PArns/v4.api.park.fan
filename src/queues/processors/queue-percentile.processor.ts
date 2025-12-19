@@ -192,7 +192,6 @@ export class QueuePercentileProcessor {
 
         const batchRows = result[0]?.count || 0;
         totalRows += batchRows;
-        this.logger.log(`   ✅ Batch complete: ${batchRows} aggregates`);
 
         currentDate = actualEnd;
       }

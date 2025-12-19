@@ -56,8 +56,6 @@ export class PredictionAccuracyService {
 
     const now = new Date();
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
     // CLEANUP: Delete old predictions that will never be compared
     // These are predictions older than 7 days with no actualWaitTime
     // This prevents table bloat (on live we had 5.2M pending records!)
