@@ -24,6 +24,7 @@ export class OpenMeteoClient {
   private readonly logger = new Logger(OpenMeteoClient.name);
   private readonly client: AxiosInstance;
   private readonly baseUrl = "https://api.open-meteo.com/v1";
+  private rateLimitedUntil: Date | null = null; // Track when rate limit expires
 
   constructor() {
     this.client = axios.create({
@@ -128,6 +129,13 @@ export class OpenMeteoClient {
     longitude: number,
     forecastDays: number = 2, // Default to 2 days (48h) enough for hourly prediction
   ): Promise<HourlyWeatherResponse> {
+    // Skip if we're currently rate limited (don't spam the logdur)
+    if (this.rateLimitedUntil && new Date() < this.rateLimitedUntil) {
+      throw new Error(
+        `Open-Meteo API: Rate limited until ${this.rateLimitedUntil.toISOString()}`,
+      );
+    }
+
     try {
       const response = await this.client.get<OpenMeteoResponse>("/forecast", {
         params: {
@@ -146,6 +154,8 @@ export class OpenMeteoClient {
         },
       });
 
+      // Reset rate limit on successful request
+      this.rateLimitedUntil = null;
       return this.transformHourlyResponse(response.data);
     } catch (error: unknown) {
       // Enhanced error logging with context
@@ -158,6 +168,18 @@ export class OpenMeteoClient {
           code: error.code,
           message: error.message,
         };
+
+        // Special handling for rate limits (429)
+        if (error.response?.status === 429) {
+          // Set rate limit expiry (60 seconds from now)
+          this.rateLimitedUntil = new Date(Date.now() + 60 * 1000);
+
+          this.logger.warn(
+            `⏸️  Open-Meteo API rate limited (HTTP 429). Skipping weather requests for 60s.`,
+          );
+
+          throw new Error(`Open-Meteo API: HTTP 429 Too Many Requests`);
+        }
 
         this.logger.error(
           `Open-Meteo API request failed: ${JSON.stringify(details)}`,
