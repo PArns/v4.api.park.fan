@@ -98,6 +98,18 @@ export class ParkMetadataProcessor {
     }
   }
 
+  @Process("fill-all-gaps")
+  async handleFillAllGaps(_job: Job): Promise<void> {
+    this.logger.log("🔄 Starting global schedule gap filling...");
+    try {
+      await this.parksService.fillAllParksGaps();
+      this.logger.log("✅ Global schedule gap filling complete!");
+    } catch (error) {
+      this.logger.error("❌ Global schedule gap filling failed", error);
+      throw error;
+    }
+  }
+
   /**
    * Process a park that exists in BOTH sources
    */

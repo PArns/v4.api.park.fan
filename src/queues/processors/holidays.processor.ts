@@ -1,6 +1,6 @@
-import { Processor, Process } from "@nestjs/bull";
+import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
-import { Job } from "bull";
+import { Job, Queue } from "bull";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { NagerDateClient } from "../../external-apis/nager-date/nager-date.client";
 import { ParksService } from "../../parks/parks.service";
@@ -27,6 +27,8 @@ export class HolidaysProcessor {
     private holidaysService: HolidaysService,
     private nagerDateClient: NagerDateClient,
     private parksService: ParksService,
+    @InjectQueue("park-metadata")
+    private parkMetadataQueue: Queue,
   ) {}
 
   @Process("fetch-holidays")
@@ -108,6 +110,10 @@ export class HolidaysProcessor {
           `🗑️  Cleaned up ${deletedCount} old holidays (before ${cleanupDate.getFullYear()})`,
         );
       }
+
+      // After everything is synced, trigger global gap filling to apply new holidays to schedules
+      this.logger.log("🔄 Triggering global schedule gap filling...");
+      await this.parkMetadataQueue.add("fill-all-gaps", {}, { priority: 5 });
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
