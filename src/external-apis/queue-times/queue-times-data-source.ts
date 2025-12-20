@@ -31,7 +31,7 @@ export class QueueTimesDataSource implements IDataSource {
   readonly name = "queue-times";
   readonly completeness = 5;
 
-  constructor(private readonly client: QueueTimesClient) { }
+  constructor(private readonly client: QueueTimesClient) {}
 
   async fetchAllParks(): Promise<ParkMetadata[]> {
     const parkGroups = await this.client.getParks();

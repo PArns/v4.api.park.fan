@@ -53,24 +53,16 @@ export class DestinationsService {
         const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
         mappedData.slug = uniqueSlug;
 
-        // Insert new destination
-        try {
-          await this.destinationRepository.save(mappedData);
-        } catch (error: unknown) {
-          // Handle race condition where another process created the destination
-          if (
-            error instanceof Error &&
-            error.message.includes("duplicate key")
-          ) {
-            this.logger.warn(
-              `Destination ${mappedData.name} already exists (race condition), skipping`,
-            );
-            // Already exists, skip this iteration
-            continue;
-          } else {
-            throw error;
-          }
-        }
+        // Insert new destination with ON CONFLICT DO NOTHING
+        // This prevents race condition errors when multiple processes
+        // try to create the same destination simultaneously
+        await this.destinationRepository
+          .createQueryBuilder()
+          .insert()
+          .into(Destination)
+          .values(mappedData)
+          .orIgnore() // PostgreSQL: ON CONFLICT DO NOTHING
+          .execute();
       }
 
       syncedCount++;

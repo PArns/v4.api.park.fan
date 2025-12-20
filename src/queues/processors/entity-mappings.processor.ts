@@ -234,7 +234,7 @@ export class EntityMappingsProcessor {
         match.entity2.landName &&
         !entity.landName // Only update if missing (don't overwrite Wiki if present)
       ) {
-        this.logger.log(
+        this.logger.debug(
           `🌱 Enriching attraction "${entity.name}" with land "${match.entity2.landName}" from ${source2Name}`,
         );
         await this.attractionsService.updateLandInfo(
