@@ -5,6 +5,7 @@ import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import {
   PredictionRequestDto,
   ModelInfoDto,
@@ -141,9 +142,19 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
   ): Promise<BulkPredictionResponseDto> {
-    // Try cache first (include date to invalidate daily)
-    const today = new Date().toISOString().split("T")[0];
-    const cacheKey = `ml: park:${parkId}:${predictionType}:${today} `;
+    // Get park timezone for cache key
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park) {
+      throw new Error(`Park not found: ${parkId}`);
+    }
+
+    // Try cache first (include date in park timezone to invalidate daily)
+    const today = getCurrentDateInTimezone(park.timezone);
+    const cacheKey = `ml:park:${parkId}:${predictionType}:${today}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -165,11 +176,8 @@ export class MLService {
     }
 
     try {
-      // 1. Fetch park to get coordinates
-      const park = await this.parkRepository.findOne({ where: { id: parkId } });
-      if (!park) {
-        throw new Error(`Park not found: ${parkId} `);
-      }
+      // 1. Fetch park with timezone (already fetched above for cache key)
+      // Park timezone is already loaded
 
       // 2. Fetch all attractions for this park
       const attractions = await this.attractionRepository.find({
@@ -393,7 +401,15 @@ export class MLService {
       // 3. Get downtime cache from Redis
       let downtimeCache: Record<string, number> = {};
       try {
-        const today = new Date().toISOString().split("T")[0];
+        // Get park timezone for downtime cache keys
+        const parkForDowntime = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: ["id", "timezone"],
+        });
+
+        const today = parkForDowntime?.timezone
+          ? getCurrentDateInTimezone(parkForDowntime.timezone)
+          : new Date().toISOString().split("T")[0];
         const keys = attractionIds.map((id) => `downtime:daily:${id}:${today}`);
 
         const downtimeValues = await this.redis.mget(...keys);
@@ -477,9 +493,19 @@ export class MLService {
   async getParkPredictionsYearly(
     parkId: string,
   ): Promise<BulkPredictionResponseDto> {
-    // Separate cache key for yearly predictions
-    const today = new Date().toISOString().split("T")[0];
-    const cacheKey = `ml: park:${parkId}: yearly:${today} `;
+    // Get park timezone for cache key
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park) {
+      throw new Error(`Park not found: ${parkId}`);
+    }
+
+    // Separate cache key for yearly predictions (timezone-aware)
+    const today = getCurrentDateInTimezone(park.timezone);
+    const cacheKey = `ml:park:${parkId}:yearly:${today}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
