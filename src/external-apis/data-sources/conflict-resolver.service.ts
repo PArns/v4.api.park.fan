@@ -30,11 +30,11 @@ export class ConflictResolverService {
       this.compareWaitTimes(wiki, qt);
 
       // MERGE entities from both sources
-      this.logger.debug(
+      this.logger.verbose(
         `Merging entities: Wiki=${wiki.entities.length}, QT=${qt.entities.length}`,
       );
       const mergedEntities = this.mergeEntities(wiki.entities, qt.entities);
-      this.logger.debug(`Merged result: ${mergedEntities.length} total entities`);
+      this.logger.verbose(`Merged result: ${mergedEntities.length} total entities`);
 
       // Return aggregated data
       return {

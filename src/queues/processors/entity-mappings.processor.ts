@@ -36,6 +36,7 @@ import { EntityMetadata } from "../../external-apis/data-sources/interfaces/data
 @Processor("entity-mappings")
 export class EntityMappingsProcessor {
   private readonly logger = new Logger(EntityMappingsProcessor.name);
+  private processedParksCount = 0;
 
   constructor(
     @InjectRepository(ExternalEntityMapping)
@@ -93,7 +94,7 @@ export class EntityMappingsProcessor {
     }
 
     const park = await this.parksService.findById(parkId);
-    this.logger.debug(`🔗 Syncing entity mappings for park ${park?.name}...`);
+    this.logger.verbose(`🔗 Syncing entity mappings for park ${park?.name}...`);
 
     // Fetch entities from both sources
     const wikiSource = this.orchestrator.getSource("themeparks-wiki");
@@ -151,9 +152,16 @@ export class EntityMappingsProcessor {
       "queue-times",
     );
 
-    this.logger.debug(
+    this.logger.verbose(
       `✅ Created ${mappingsCreated} mappings for park ${park?.name}`,
     );
+
+    this.processedParksCount++;
+    if (this.processedParksCount % 10 === 0) {
+      this.logger.log(
+        `Progress: Processed ${this.processedParksCount} parks for entity mappings`,
+      );
+    }
     return mappingsCreated;
   }
 
