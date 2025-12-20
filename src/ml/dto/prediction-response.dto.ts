@@ -53,6 +53,36 @@ export class PredictionDto {
 
   @ApiProperty({ required: false })
   status?: string;
+
+  // Confidence Downgrade fields (Phase 1)
+  @ApiProperty({
+    description: "Current actual wait time (if deviation detected)",
+    required: false,
+  })
+  currentWaitTime?: number;
+
+  @ApiProperty({
+    description: "Adjusted confidence score when deviation detected (0-1)",
+    required: false,
+  })
+  confidenceAdjusted?: number;
+
+  @ApiProperty({
+    description: "Whether a deviation from prediction was detected",
+    required: false,
+  })
+  deviationDetected?: boolean;
+
+  @ApiProperty({
+    description: "Deviation details",
+    required: false,
+  })
+  deviationInfo?: {
+    message: string;
+    deviation: number;
+    percentageDeviation: number;
+    detectedAt: string;
+  };
 }
 
 export class PredictionItemDto {

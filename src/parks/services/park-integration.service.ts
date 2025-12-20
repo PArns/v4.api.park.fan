@@ -13,6 +13,7 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
+import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
@@ -52,6 +53,7 @@ export class ParkIntegrationService {
     private readonly analyticsService: AnalyticsService,
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
+    private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -245,11 +247,20 @@ export class ParkIntegrationService {
 
           // Attach ML predictions
           const mlPreds = hourlyPredictions[attraction.id] || [];
-          attraction.hourlyForecast = mlPreds.map((p) => ({
+
+          // Enrich predictions with deviation data (Confidence Downgrade)
+          const enrichedPreds = await this.enrichPredictionsWithDeviations(
+            attraction.id,
+            mlPreds,
+          );
+
+          attraction.hourlyForecast = enrichedPreds.map((p) => ({
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
-            confidencePercentage: p.confidence,
+            confidencePercentage: p.confidenceAdjusted ?? p.confidence,
             trend: p.trend,
+            currentWaitTime: p.currentWaitTime,
+            deviationDetected: p.deviationDetected,
           }));
 
           // Attach Prediction Accuracy (Feedback Loop)
@@ -758,5 +769,57 @@ export class ParkIntegrationService {
     }
 
     return result.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
+   * Enrich predictions with deviation data (Confidence Downgrade strategy)
+   *
+   * Checks Redis for deviation flags and adjusts confidence if detected
+   *
+   * @param attractionId - Attraction ID
+   * @param predictions - Raw predictions from ML service
+   * @returns Enriched predictions with deviation data
+   */
+  private async enrichPredictionsWithDeviations(
+    attractionId: string,
+    predictions: any[],
+  ): Promise<any[]> {
+    if (!predictions || predictions.length === 0) {
+      return predictions;
+    }
+
+    try {
+      // Get deviation flag from Redis
+      const deviationFlag =
+        await this.predictionDeviationService.getDeviationFlag(attractionId);
+
+      if (deviationFlag) {
+        // Deviation detected - enrich all predictions for this attraction
+        return predictions.map((p) => ({
+          ...p,
+          currentWaitTime: deviationFlag.actualWaitTime,
+          confidenceAdjusted: p.confidence * 0.5, // Halve confidence
+          deviationDetected: true,
+          deviationInfo: {
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
+            deviation: deviationFlag.deviation,
+            percentageDeviation: deviationFlag.percentageDeviation,
+            detectedAt: deviationFlag.detectedAt,
+          },
+        }));
+      }
+
+      // No deviation - return predictions unchanged
+      return predictions;
+    } catch (error) {
+      // Don't fail request if enrichment fails
+      this.logger.warn(
+        `Failed to enrich predictions for ${attractionId}:`,
+        error,
+      );
+      return predictions;
+    }
   }
 }

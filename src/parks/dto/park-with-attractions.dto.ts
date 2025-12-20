@@ -36,6 +36,18 @@ export class ParkAttractionPredictionDto {
     nullable: true,
   })
   confidencePercentage: number | null;
+
+  @ApiProperty({
+    description: "Current actual wait time (if deviation detected)",
+    required: false,
+  })
+  currentWaitTime?: number;
+
+  @ApiProperty({
+    description: "Whether a deviation from prediction was detected",
+    required: false,
+  })
+  deviationDetected?: boolean;
 }
 
 export class ParkLoadDto {
