@@ -20,11 +20,13 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 
 import { WeatherModule } from "../external-apis/weather/weather.module";
 import { ParksModule } from "../parks/parks.module";
+import { AnalyticsModule } from "../analytics/analytics.module";
 import { forwardRef } from "@nestjs/common";
 
 @Module({
   imports: [
     WeatherModule,
+    AnalyticsModule,
     forwardRef(() => ParksModule),
     TypeOrmModule.forFeature([
       WaitTimePrediction,
@@ -53,4 +55,4 @@ import { forwardRef } from "@nestjs/common";
     PredictionDeviationService,
   ],
 })
-export class MLModule {}
+export class MLModule { }
