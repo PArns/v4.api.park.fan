@@ -759,7 +759,7 @@ export class ParksService {
             const dateStr = formatInParkTimezone(h.date, park.timezone);
             // If multiple holidays on same day, just picking first or specific one?
             if (!holidayMap.has(dateStr)) {
-              holidayMap.set(dateStr, h.localName || h.name);
+              holidayMap.set(dateStr, h.name || h.localName || "");
             }
           }
         }
@@ -807,7 +807,7 @@ export class ParksService {
         purchases: entry.purchases || null,
         isHoliday: isHoliday,
         holidayName: holidayName,
-        isBridgeDay: isBridgeDay,
+        isBridgeDay: isHoliday ? false : isBridgeDay,
       };
 
       // Check if entry exists for this park, date, and type
@@ -903,7 +903,9 @@ export class ParksService {
     for (const h of holidays) {
       if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
         const d = formatInParkTimezone(h.date, park.timezone);
-        if (!holidayMap.has(d)) holidayMap.set(d, h.localName || h.name);
+        if (!holidayMap.has(d)) {
+          holidayMap.set(d, h.name || h.localName || "");
+        }
         holidayDatesSet.add(d);
       }
     }
@@ -956,7 +958,7 @@ export class ParksService {
             scheduleType: ScheduleType.UNKNOWN,
             isHoliday,
             holidayName,
-            isBridgeDay,
+            isBridgeDay: isHoliday ? false : isBridgeDay,
             openingTime: null,
             closingTime: null,
           });
@@ -989,9 +991,11 @@ export class ParksService {
       .where("park.latitude IS NOT NULL")
       .andWhere("park.longitude IS NOT NULL")
       .andWhere(
-        "(park.continent IS NULL OR park.country IS NULL OR park.city IS NULL)",
+        "(park.continent IS NULL OR park.country IS NULL OR park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL)",
       )
-      .andWhere("park.geocodingAttemptedAt IS NULL") // Skip already attempted parks
+      .andWhere(
+        "(park.geocodingAttemptedAt IS NULL OR (park.metadataRetryCount < 3 AND (park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL)))",
+      )
       .getMany();
 
     // Filter out parks with imprecise coordinates (rounded to whole numbers)

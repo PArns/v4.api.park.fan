@@ -449,10 +449,14 @@ export class ParkMetadataProcessor {
               updates.country = geoData.country;
               updates.countryCode = geoData.countryCode; // Now available directly from geocoding
               updates.continent = geoData.continent;
-
-              // Save region data
               if (geoData.region) updates.region = geoData.region;
               if (geoData.regionCode) updates.regionCode = geoData.regionCode;
+
+              // Reset retry count only if we got the most important fields back
+              // (regionCode might be missing for some countries, but countryCode and city are usually there)
+              if (geoData.countryCode && geoData.city) {
+                updates.metadataRetryCount = 0;
+              }
 
               updates.geocodingAttemptedAt = new Date();
               needsUpdate = true;

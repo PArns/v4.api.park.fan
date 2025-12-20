@@ -144,6 +144,9 @@ export class Park {
   @UpdateDateColumn()
   updatedAt: Date;
 
+  @Column({ type: "int", default: 0 })
+  metadataRetryCount: number;
+
   @BeforeInsert()
   @BeforeUpdate()
   generateSlug(): void {

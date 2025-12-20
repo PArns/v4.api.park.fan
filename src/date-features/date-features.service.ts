@@ -137,19 +137,24 @@ export class DateFeaturesService {
     dayOfWeek: number;
     isWeekend: boolean;
     isHoliday: boolean;
+    isBridgeDay: boolean;
     isPeakDay: boolean;
     countryCode: string;
     region?: string;
   }> {
     const isWeekend = this.isWeekend(date, countryCode);
     const isHoliday = await this.isHoliday(date, countryCode, region);
-    const isPeakDay = isWeekend || isHoliday;
+    const isBridgeDay =
+      !isHoliday &&
+      (await this.holidaysService.isBridgeDay(date, countryCode, region));
+    const isPeakDay = isWeekend || isHoliday || isBridgeDay;
 
     return {
       date: date.toISOString().split("T")[0], // YYYY-MM-DD
       dayOfWeek: date.getDay(),
       isWeekend,
       isHoliday,
+      isBridgeDay,
       isPeakDay,
       countryCode,
       ...(region && { region }),
