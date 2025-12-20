@@ -106,17 +106,46 @@ export class EntityMatcherService {
 
     // 2. Geographic proximity (40% weight)
     let geoSim = 0;
-    if (
-      wiki.latitude !== undefined &&
-      wiki.longitude !== undefined &&
-      qt.latitude !== undefined &&
-      qt.longitude !== undefined
-    ) {
+
+    // Check for valid coordinates (ignore 0,0)
+    const hasValidWikiGeo =
+      wiki.latitude &&
+      wiki.longitude &&
+      (Math.abs(wiki.latitude) > 0.1 || Math.abs(wiki.longitude) > 0.1);
+    const hasValidQtGeo =
+      qt.latitude &&
+      qt.longitude &&
+      (Math.abs(qt.latitude) > 0.1 || Math.abs(qt.longitude) > 0.1);
+
+    if (hasValidWikiGeo && hasValidQtGeo) {
       const distance = this.haversineDistance(
-        { latitude: wiki.latitude, longitude: wiki.longitude },
-        { latitude: qt.latitude, longitude: qt.longitude },
+        { latitude: wiki.latitude!, longitude: wiki.longitude! },
+        { latitude: qt.latitude!, longitude: qt.longitude! },
       );
-      geoSim = (1 - Math.min(distance / 10, 1)) * 0.4;
+
+      // Smart Sign Correction: Check if flipping longitude fixes the match
+      // This handles cases where one source has East positive vs West negative error
+      if (distance > 1000) {
+        const flippedDist = this.haversineDistance(
+          { latitude: wiki.latitude!, longitude: wiki.longitude! },
+          { latitude: qt.latitude!, longitude: -qt.longitude! }, // Try flipping sign
+        );
+
+        if (flippedDist < 100) {
+          this.logger.debug(
+            `Found sign error match for ${wiki.name}: ${distance}km -> ${flippedDist}km`,
+          );
+          // Use the flipped distance
+          geoSim = (1 - Math.min(flippedDist / 10, 1)) * 0.4;
+        } else {
+          geoSim = (1 - Math.min(distance / 10, 1)) * 0.4;
+        }
+      } else {
+        geoSim = (1 - Math.min(distance / 10, 1)) * 0.4;
+      }
+    } else {
+      // Fallback if one or both missing valid geo: Name is 100% of score
+      return nameSim / 0.6;
     }
 
     return nameSim + geoSim;

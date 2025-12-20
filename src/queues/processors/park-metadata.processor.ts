@@ -121,10 +121,11 @@ export class ParkMetadataProcessor {
 
     if (!park) {
       // Create park using Wiki data (richer)
+      const bestName = wiki.name.length > qt.name.length ? wiki.name : qt.name;
       park = await this.parkRepository.save({
         externalId: wiki.externalId,
-        name: wiki.name,
-        slug: generateSlug(wiki.name),
+        name: bestName,
+        slug: generateSlug(bestName),
         destinationId: destination?.id || undefined,
         timezone: wiki.timezone,
         latitude: wiki.latitude,
@@ -141,6 +142,15 @@ export class ParkMetadataProcessor {
       park.primaryDataSource = "multi-source";
       park.wikiEntityId = wiki.externalId;
       park.queueTimesEntityId = qt.externalId;
+
+      // Prefer longer name if available (e.g. "Universals Epic Universe" > "Epic Universe")
+      const bestName = wiki.name.length > qt.name.length ? wiki.name : qt.name;
+      if (bestName.length > park.name.length) {
+        this.logger.log(`Updating park name: "${park.name}" -> "${bestName}"`);
+        park.name = bestName;
+        park.slug = generateSlug(bestName);
+      }
+
       await this.parkRepository.save(park);
       this.logger.debug(`✓ Updated matched park: ${park.name} (${park.id})`);
     }
