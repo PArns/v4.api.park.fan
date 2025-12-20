@@ -60,10 +60,10 @@ export class Attraction {
   longitude: number;
 
   // Land/Area (from Queue-Times)
-  @Column({ name: "land_name", type: "varchar", nullable: true })
+  @Column({ name: "land_name", type: "text", nullable: true })
   landName: string | null; // e.g., "Tomorrowland", "Adventureland"
 
-  @Column({ name: "land_external_id", type: "varchar", nullable: true })
+  @Column({ name: "land_external_id", type: "text", nullable: true })
   landExternalId: string | null; // Queue-Times land ID
 
   @Column({ nullable: true })

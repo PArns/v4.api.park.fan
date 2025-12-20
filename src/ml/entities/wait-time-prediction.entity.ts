@@ -26,7 +26,7 @@ export class WaitTimePrediction {
   @PrimaryColumn("uuid")
   id: string;
 
-  @PrimaryColumn({ type: "timestamp" })
+  @PrimaryColumn({ type: "timestamptz" })
   createdAt: Date; // When prediction was made
 
   @Column()
@@ -37,7 +37,7 @@ export class WaitTimePrediction {
   @JoinColumn({ name: "attractionId" })
   attraction: Attraction;
 
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamptz" })
   predictedTime: Date; // Time being predicted for
 
   @Column({ type: "int" })
@@ -74,7 +74,7 @@ export class WaitTimePrediction {
     | "extreme"
     | "closed";
 
-  @Column({ type: "varchar", nullable: true })
+  @Column({ type: "text", nullable: true })
   status: string | null;
 
   @Column({ type: "float", nullable: true })

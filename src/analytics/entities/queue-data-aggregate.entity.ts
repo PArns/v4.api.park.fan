@@ -37,7 +37,7 @@ export class QueueDataAggregate {
   @PrimaryColumn("uuid")
   id: string;
 
-  @PrimaryColumn({ type: "timestamp" })
+  @PrimaryColumn({ type: "timestamptz" })
   hour: Date; // Hourly bucket (e.g., 2025-01-15 14:00:00)
 
   @Column()

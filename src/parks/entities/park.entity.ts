@@ -132,10 +132,10 @@ export class Park {
   dataSources: string[]; // ['themeparks-wiki', 'queue-times']
 
   // Explicit Source IDs (User Request)
-  @Column({ name: "wiki_entity_id", type: "varchar", nullable: true })
+  @Column({ name: "wiki_entity_id", type: "text", nullable: true })
   wikiEntityId: string | null; // The UUID from ThemeParks.wiki
 
-  @Column({ name: "queue_times_entity_id", type: "varchar", nullable: true })
+  @Column({ name: "queue_times_entity_id", type: "text", nullable: true })
   queueTimesEntityId: string | null; // The ID from Queue-Times (e.g. "8")
 
   @CreateDateColumn()

@@ -63,13 +63,13 @@ export class QueueData {
   waitTime: number; // minutes
 
   // Virtual Queue / Return Time fields
-  @Column({ type: "varchar", nullable: true })
+  @Column({ type: "text", nullable: true })
   state: string;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   returnStart: Date;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   returnEnd: Date;
 
   // Paid options (Lightning Lane, etc.)
@@ -81,7 +81,7 @@ export class QueueData {
   };
 
   // Boarding Groups fields
-  @Column({ nullable: true })
+  @Column({ type: "text", nullable: true })
   allocationStatus: string;
 
   @Column({ nullable: true })
@@ -94,14 +94,14 @@ export class QueueData {
   estimatedWait: number;
 
   // API timestamp: when ThemeParks.wiki last updated this data
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   lastUpdated: Date | null;
 
   // Multi-source tracking
-  @Column({ name: "data_source", default: "themeparks-wiki" })
+  @Column({ type: "text", name: "data_source", default: "themeparks-wiki" })
   dataSource: string; // 'themeparks-wiki', 'queue-times'
 
-  @PrimaryColumn({ type: "timestamp" })
+  @PrimaryColumn({ type: "timestamptz" })
   timestamp: Date;
 
   @BeforeInsert()

@@ -51,8 +51,8 @@ export class Holiday {
    * Holiday name in local language (if different from English)
    * Examples: "Tag der Deutschen Einheit", "Día de la Independencia"
    */
-  @Column({ type: "varchar", nullable: true })
-  localName: string;
+  @Column({ type: "text", nullable: true })
+  localName: string | null;
 
   /**
    * ISO 3166-1 alpha-2 country code
@@ -66,8 +66,8 @@ export class Holiday {
    * Examples: "US-FL" (Florida), "DE-BY" (Bavaria)
    * Used for region-specific holidays (e.g., school holidays)
    */
-  @Column({ type: "varchar", nullable: true })
-  region: string;
+  @Column({ type: "text", nullable: true })
+  region: string | null;
 
   /**
    * Holiday type

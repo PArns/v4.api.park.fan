@@ -57,7 +57,7 @@ export class RestaurantLiveData {
   waitTime: number | null; // minutes (similar to attraction wait times)
 
   // API timestamp: when ThemeParks.wiki last updated this data
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   lastUpdated: Date | null;
 
   @Column({ type: "jsonb", nullable: true })
@@ -67,7 +67,7 @@ export class RestaurantLiveData {
     endTime: string;
   }> | null;
 
-  @PrimaryColumn({ type: "timestamp" })
+  @PrimaryColumn({ type: "timestamptz" })
   timestamp: Date;
 
   @BeforeInsert()

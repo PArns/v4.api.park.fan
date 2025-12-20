@@ -39,7 +39,7 @@ export class ForecastData {
   @Column({ type: "int", nullable: true })
   confidencePercentage: number | null;
 
-  @Column({ type: "varchar", default: "themeparks_wiki" })
+  @Column({ type: "text", default: "themeparks_wiki" })
   source: string; // 'themeparks_wiki' or 'our_ml_model' (future)
 
   @PrimaryColumn({ type: "timestamp" })
