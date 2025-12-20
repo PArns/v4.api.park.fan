@@ -27,7 +27,7 @@ export class HolidaysController {
   constructor(
     private readonly holidaysService: HolidaysService,
     private readonly parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/holidays
@@ -159,9 +159,9 @@ export class HolidaysController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    if (!park.country) {
+    if (!park.countryCode) {
       throw new BadRequestException(
-        `Park "${park.name}" has no country data available`,
+        `Park "${park.name}" has no country code data available`,
       );
     }
 
@@ -177,19 +177,19 @@ export class HolidaysController {
     const toDate = new Date(targetYear, 11, 31, 23, 59, 59, 999); // December 31st
 
     // Get holidays for park's country
-    // Note: park.country stores ISO code now (from holidays processor)
     let holidays = await this.holidaysService.getHolidays(
-      park.country,
+      park.countryCode,
       fromDate,
       toDate,
     );
 
-    // Apply region filter if park has region data
-    // This filters to regional holidays + nationwide holidays
-    if (park.city) {
-      // For now, we don't filter by region since parks don't have region codes yet
-      // Future: Add region field to parks or map city → region
-      // holidays = holidays.filter((h) => h.isNationwide || h.region === parkRegion);
+    // Filter by Region if available (e.g., DE-BW for Europa-Park)
+    // Nager.Date returns region specific holidays with a region code
+    if (park.regionCode) {
+      const parkRegion = park.regionCode; // e.g., "DE-BW"
+      holidays = holidays.filter(
+        (h) => h.isNationwide || h.region === parkRegion,
+      );
     }
 
     return {
