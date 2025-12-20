@@ -399,9 +399,17 @@ export class AnalyticsService {
 
   /**
    * Get current average wait time across all operating attractions in a park
+   *
+   * @param parkId - Park ID
+   * @param minWaitTime - Minimum wait time threshold (default: 5 min to exclude walk-ons)
+   * @returns Average wait time or null if no data
+   *
+   * NOTE: Filters out walk-on attractions (< 5 min) by default for more realistic
+   * crowd level calculations. Falls back to including all attractions if < 3 meet threshold.
    */
   private async getCurrentAverageWaitTime(
     parkId: string,
+    minWaitTime: number = 5,
   ): Promise<number | null> {
     // Use 30 minutes to accommodate sync intervals (not all parks sync every 5 min)
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
@@ -409,14 +417,24 @@ export class AnalyticsService {
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
       .select("AVG(qd.waitTime)", "avgWait")
+      .addSelect("COUNT(*)", "count") // Add count for fallback logic
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
       .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime > 0")
+      .andWhere("qd.waitTime >= :minWaitTime", { minWaitTime })
       .andWhere("qd.queueType = 'STANDBY'") // Only consider standby queues
       .getRawOne();
+
+    // Fallback: If < 3 attractions meet threshold and we're using > 0, use all (> 0)
+    // This ensures small parks or quiet times still return meaningful data
+    if (result?.count && parseInt(result.count) < 3 && minWaitTime > 0) {
+      this.logger.verbose(
+        `Park ${parkId}: Only ${result.count} attractions with >= ${minWaitTime} min wait. Falling back to all attractions (> 0).`,
+      );
+      return this.getCurrentAverageWaitTime(parkId, 0); // Recursive with 0 threshold
+    }
 
     return result?.avgWait ? parseFloat(result.avgWait) : null;
   }
