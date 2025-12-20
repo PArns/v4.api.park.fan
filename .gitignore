@@ -36,6 +36,13 @@ lerna-debug.log*
 .env
 .env.*
 
+# Debug scripts with DB credentials (keep local only)
+scripts/*-live.ts
+scripts/check-live-*.ts
+scripts/update-*.ts
+scripts/force-*.ts
+scripts/clear-cache-*.ts
+
 # Docker
 docker/data/
 pgdata/

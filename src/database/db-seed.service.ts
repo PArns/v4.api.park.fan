@@ -59,12 +59,20 @@ export class DbSeedService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // Delay seeding by 10 minutes to ensure all dependencies (Redis, Postgres, Bull queues)
+    // are fully initialized and prevent race conditions during server startup
+    const SEED_DELAY_MS = 10 * 60 * 1000; // 10 minutes
+
+    this.logger.log(
+      `⏰ Database seeding will start in ${SEED_DELAY_MS / 1000 / 60} minutes to ensure all dependencies are ready`,
+    );
+
     // Run async to not block app startup
     setTimeout(() => {
       this.checkAndSeed().catch((err) => {
         this.logger.error("Failed to auto-seed database", err);
       });
-    }, 2000); // Wait 2s for DB to be fully ready
+    }, SEED_DELAY_MS);
   }
 
   /**

@@ -6,6 +6,10 @@ import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  parseDateInTimezone,
+  getTimezoneForCountry,
+} from "../common/utils/timezone.util";
 
 /**
  * Holidays Service
@@ -27,12 +31,24 @@ export class HolidaysService {
    * Save holidays from Nager.Date API
    *
    * Uses upsert to avoid duplicates (based on externalId).
+   *
+   * IMPORTANT: Holidays are stored as UTC timestamps representing midnight
+   * in the country's local timezone. For example, Christmas (2025-12-25) in
+   * Germany (UTC+1) is stored as 2025-12-24T23:00:00.000Z.
    */
   async saveHolidaysFromApi(
     holidays: NagerPublicHoliday[],
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
+
+    // Get timezone for this country
+    const timezone = getTimezoneForCountry(countryCode);
+    if (!timezone) {
+      this.logger.warn(
+        `No timezone mapping found for country: ${countryCode}, using UTC`,
+      );
+    }
 
     for (const holiday of holidays) {
       try {
@@ -41,11 +57,16 @@ export class HolidaysService {
         // Determine holiday type
         const holidayType = this.mapHolidayType(holiday.types);
 
+        // Convert date string to Date object at midnight in country's timezone
+        const holidayDate = timezone
+          ? parseDateInTimezone(holiday.date, timezone)
+          : new Date(holiday.date);
+
         // Create or update holiday
         await this.holidayRepository.upsert(
           {
             externalId,
-            date: new Date(holiday.date),
+            date: holidayDate,
             name: holiday.name,
             localName: holiday.localName || undefined,
             country: countryCode,

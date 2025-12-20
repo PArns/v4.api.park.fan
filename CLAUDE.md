@@ -365,6 +365,54 @@ npm run build
 
 **Detailed Analysis**: `/Users/patrick/.gemini/antigravity/brain/1d7ea1a7-5bf7-42a4-94db-1af8d68ee61c/todo-analysis.md`
 
+#### Sprint 0 (Priority -1) - NEW - 6-7 Days
+
+##### ⭐ P-1: Wartezeiten.app Integration [6-7 days] - Impact: ⭐⭐⭐⭐⭐
+**Status:** ✅ Planning Complete - Ready for Implementation
+
+**Goal**: Integrate Wartezeiten.app as third data source for improved data coverage, cross-validation, and unique crowd level metrics.
+
+**Implementation Plan**: `/Users/patrick/.gemini/antigravity/brain/6dc38f4a-7609-4996-b085-a2e1d6674c9b/implementation_plan.md`
+
+**Benefits**:
+- 46 parks with wait times, opening hours, crowd levels
+- 3-way wait time validation (Wiki ↔ QT ↔ Wartezeiten)
+- Unique crowd level metric for ~30-35 overlapping parks
+- Improved data reliability through multi-source averaging
+
+**Key Features**:
+- New `WartezeitenDataSource` implementing `IDataSource`
+- 3-way entity matching in `EntityMatcherService`
+- Extended conflict resolution for 3 sources
+- `Park.wartezeitenEntityId` + `Park.currentCrowdLevel` fields
+- Rate limit compliant (100 req/min API limit)
+
+**Components** (6 new files, 6 modified):
+```
+NEW:  src/external-apis/wartezeiten/wartezeiten.types.ts
+NEW:  src/external-apis/wartezeiten/wartezeiten.client.ts  
+NEW:  src/external-apis/wartezeiten/wartezeiten-data-source.ts
+NEW:  src/external-apis/wartezeiten/wartezeiten.module.ts
+NEW:  src/external-apis/wartezeiten/wartezeiten.client.spec.ts
+NEW:  src/external-apis/wartezeiten/wartezeiten-data-source.spec.ts
+
+MOD:  src/external-apis/data-sources/entity-matcher.service.ts
+MOD:  src/external-apis/data-sources/conflict-resolver.service.ts  
+MOD:  src/parks/entities/park.entity.ts
+MOD:  src/queues/processors/park-metadata.processor.ts
+MOD:  src/queues/processors/wait-times.processor.ts
+MOD:  src/external-apis/data-sources/data-sources.module.ts
+```
+
+**Open Questions**:
+1. Crowd level storage: Real-time only OR historical hypertable?
+2. Rate limiting: All parks every 5min OR tiered (active: 5min, inactive: 15min)?
+3. Wait time strategy: Average 3 sources OR Wiki priority?
+4. Park scope: All 46 Wartezeiten parks OR only Wiki/QT overlap?
+5. Completeness score: 6 between QT (5) and Wiki (10)?
+
+---
+
 #### Sprint 1 (Priority 0-1) - 2-3 Days
 
 ##### ⭐ P0: Real-Time Prediction Updates [3h] - Impact: ⭐⭐⭐⭐⭐ - ✅ **COMPLETE**

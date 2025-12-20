@@ -65,6 +65,7 @@
     "@testcontainers/postgresql": "^10.28.0",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/luxon": "^3.7.1",
     "@types/node": "^24.10.1",
     "@types/pg": "^8.11.10",
     "@types/string-similarity": "^4.0.2",
