@@ -8,6 +8,7 @@ import { Holiday } from "../holidays/entities/holiday.entity";
 import { WeatherData } from "../parks/entities/weather-data.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
+import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 
 /**
  * Database Module
@@ -20,7 +21,14 @@ import { MLModel } from "../ml/entities/ml-model.entity";
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Park, Holiday, WeatherData, QueueData, MLModel]),
+    TypeOrmModule.forFeature([
+      Park,
+      Holiday,
+      WeatherData,
+      QueueData,
+      MLModel,
+      ScheduleEntry,
+    ]),
     BullModule.registerQueue(
       { name: "park-metadata" },
       { name: "children-metadata" },

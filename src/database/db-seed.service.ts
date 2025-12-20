@@ -8,6 +8,7 @@ import { Holiday } from "../holidays/entities/holiday.entity";
 import { WeatherData } from "../parks/entities/weather-data.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
+import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 
 /**
  * Database Seeding Service
@@ -41,6 +42,8 @@ export class DbSeedService implements OnModuleInit {
     private queueDataRepository: Repository<QueueData>,
     @InjectRepository(MLModel)
     private mlModelRepository: Repository<MLModel>,
+    @InjectRepository(ScheduleEntry)
+    private scheduleRepository: Repository<ScheduleEntry>,
     @InjectQueue("park-metadata")
     private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata")
@@ -145,7 +148,25 @@ export class DbSeedService implements OnModuleInit {
       );
     }
 
-    // 5. ML Model (trigger training if no active model exists)
+    // 5. Schedules/Gaps (ensure holidays are applied)
+    if (checks.needsSchedules) {
+      this.logger.log("❌ Schedules/Gaps: Missing or incomplete");
+      jobsToQueue.push({
+        name: "Schedule Gaps",
+        priority: 5,
+        fn: async () => {
+          await this.parkMetadataQueue.add(
+            "fill-all-gaps",
+            {},
+            { priority: 5 },
+          );
+        },
+      });
+    } else {
+      this.logger.log(`✅ Schedules: ${checks.scheduleCount} entries found`);
+    }
+
+    // 6. ML Model (trigger training if no active model exists)
     if (checks.needsMLModel) {
       this.logger.log("❌ ML Model: No active model found");
       jobsToQueue.push({
@@ -203,6 +224,8 @@ export class DbSeedService implements OnModuleInit {
     latestQueueTime: Date | null;
     needsMLModel: boolean;
     mlModelVersion: string | null;
+    needsSchedules: boolean;
+    scheduleCount: number;
   }> {
     // Check Parks
     const parkCount = await this.parkRepository.count();
@@ -261,6 +284,11 @@ export class DbSeedService implements OnModuleInit {
 
     const needsMLModel = !activeModel;
 
+    // Check Schedules
+    const scheduleCount = await this.scheduleRepository.count();
+    // We expect a baseline of schedule entries for operating parks
+    const needsSchedules = scheduleCount < parkCount * 7; // At least one week for each park
+
     return {
       needsParks,
       parkCount,
@@ -274,6 +302,8 @@ export class DbSeedService implements OnModuleInit {
       latestQueueTime: latestQueue?.timestamp || null,
       needsMLModel,
       mlModelVersion: activeModel?.version || null,
+      needsSchedules,
+      scheduleCount,
     };
   }
 }
