@@ -303,6 +303,108 @@ export class ParksService {
             longitude: mappedData.longitude,
             timezone: mappedData.timezone,
           });
+
+          // Check for "Ghost Parks" (duplicates by Queue-Times ID)
+          // This fixes the "Split Brain" issue where we have one park from Wiki and another from Queue-Times
+          const qtId =
+            mappedData.queueTimesEntityId || existing.queueTimesEntityId;
+
+          if (qtId) {
+            // Look for any OTHER park that has this Queue-Times ID
+            // or has an externalId matching 'qt-{id}'
+            const ghostPark = await this.parkRepository
+              .createQueryBuilder("park")
+              .where("park.id != :currentId", { currentId: existing.id })
+              .andWhere(
+                "(park.queue_times_entity_id = :qtId OR park.externalId = :qtExternalId)",
+                {
+                  qtId: qtId,
+                  qtExternalId: `qt-${qtId}`,
+                },
+              )
+              .getOne();
+
+            if (ghostPark) {
+              this.logger.log(
+                `👻 Found Ghost Park "${ghostPark.name}" (ID: ${ghostPark.id}) matching Queue-Times ID ${qtId}`,
+              );
+              this.logger.log(
+                `🔀 Merging Ghost Park "${ghostPark.name}" into "${existing.name}"`,
+              );
+
+              // Migrate child entities with collision handling
+              await this.parkRepository.manager.transaction(
+                async (transactionalEntityManager) => {
+                  // 1. Handle Attraction Collisions
+                  // Fetch attractions from both parks to compare
+                  const existingAttractions =
+                    await transactionalEntityManager.query(
+                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+                      [existing.id],
+                    );
+                  const ghostAttractions =
+                    await transactionalEntityManager.query(
+                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+                      [ghostPark.id],
+                    );
+
+                  for (const ghostAttr of ghostAttractions) {
+                    const match = existingAttractions.find(
+                      (a: any) => a.slug === ghostAttr.slug,
+                    );
+
+                    if (match) {
+                      // COLLISION: Merge data into existing attraction, then delete ghost attraction
+                      // We specifically want the Land Info and Queue-Times ID from the ghost
+                      await transactionalEntityManager.query(
+                        `UPDATE attractions 
+                         SET "land_name" = COALESCE($1, "land_name"),
+                             "land_external_id" = COALESCE($2, "land_external_id"),
+                             "queue_times_entity_id" = COALESCE($3, "queue_times_entity_id")
+                         WHERE id = $4`,
+                        [
+                          ghostAttr.land_name,
+                          ghostAttr.land_external_id,
+                          ghostAttr.queue_times_entity_id,
+                          match.id,
+                        ],
+                      );
+                      // Delete the ghost attraction since we merged its useful data
+                      await transactionalEntityManager.query(
+                        `DELETE FROM attractions WHERE id = $1`,
+                        [ghostAttr.id],
+                      );
+                      this.logger.log(
+                        `    Merges attraction data: ${ghostAttr.slug}`,
+                      );
+                    } else {
+                      // NO COLLISION: Move attraction to new park
+                      await transactionalEntityManager.query(
+                        `UPDATE attractions SET "parkId" = $1 WHERE id = $2`,
+                        [existing.id, ghostAttr.id],
+                      );
+                    }
+                  }
+
+                  // 2. Migrate Shows (Blind update OK if slugs distinctive, else duplicate logic needed? mostly safe for now)
+                  await transactionalEntityManager.query(
+                    `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+                    [existing.id, ghostPark.id],
+                  );
+
+                  // 3. Migrate Restaurants
+                  await transactionalEntityManager.query(
+                    `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+                    [existing.id, ghostPark.id],
+                  );
+
+                  // 4. Delete the ghost park
+                  await transactionalEntityManager.delete(Park, ghostPark.id);
+                },
+              );
+              this.logger.log(`✅ Ghost Park merged and deleted successfully.`);
+            }
+          }
         } else {
           // Generate unique slug for this destination
           const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
@@ -353,7 +455,153 @@ export class ParksService {
     }
 
     this.logger.log(`✅ Synced ${syncedCount} parks`);
+
+    // Run self-repair to clean up any duplicates (e.g. Wiki vs Queue-Times split)
+    await this.repairDuplicates();
+
     return syncedCount;
+  }
+
+  /**
+   * Scans for and merges duplicate parks based on shared Queue-Times IDs.
+   * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
+   */
+  async repairDuplicates(): Promise<void> {
+    this.logger.log("🔧 Running Duplicate Park Repair...");
+
+    // Find all Queue-Times IDs that are used by more than one park
+    const duplicates = await this.parkRepository.query(`
+      SELECT "queue_times_entity_id"
+      FROM parks
+      WHERE "queue_times_entity_id" IS NOT NULL
+      GROUP BY "queue_times_entity_id"
+      HAVING COUNT(*) > 1
+    `);
+
+    this.logger.log(`Found ${duplicates.length} duplicate sets to repair.`);
+
+    for (const dup of duplicates) {
+      const qtId = dup.queue_times_entity_id;
+
+      // Get all parks with this ID
+      const parks = await this.parkRepository.find({
+        where: { queueTimesEntityId: qtId },
+        order: { createdAt: "ASC" }, // Oldest first usually, but we prefer Wiki-sourced
+      });
+
+      if (parks.length < 2) continue;
+
+      // Identify Primary (Winner) and Ghost (Loser)
+      // Preference: Park with Wiki ID > Oldest Park
+      let primary = parks.find((p) => p.wikiEntityId !== null);
+      if (!primary) primary = parks[0]; // Fallback to first one
+
+      const ghosts = parks.filter((p) => p.id !== primary!.id);
+
+      for (const ghostPark of ghosts) {
+        this.logger.log(
+          `🔀 Merging Ghost Park "${ghostPark.name}" into "${primary!.name}" (Shared QT ID: ${qtId})`,
+        );
+
+        await this.parkRepository.manager.transaction(
+          async (transactionalEntityManager) => {
+            // 1. Handle Attraction Collisions
+            const existingAttractions = await transactionalEntityManager.query(
+              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+              [primary!.id],
+            );
+            const ghostAttractions = await transactionalEntityManager.query(
+              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+              [ghostPark.id],
+            );
+
+            for (const ghostAttr of ghostAttractions) {
+              const match = existingAttractions.find(
+                (a: any) => a.slug === ghostAttr.slug,
+              );
+
+              if (match) {
+                // COLLISION: Merge data, move mappings, delete ghost attraction
+
+                // 1. Copy Land Data if missing in primary
+                await transactionalEntityManager.query(
+                  `UPDATE attractions 
+                   SET "land_name" = COALESCE("land_name", $1),
+                       "land_external_id" = COALESCE("land_external_id", $2)
+                   WHERE id = $3`,
+                  [ghostAttr.land_name, ghostAttr.land_external_id, match.id],
+                );
+
+                // 2. Move External Mappings (Queue-Times ID mappings) from Ghost to Primary
+                await transactionalEntityManager.query(
+                  `UPDATE external_entity_mapping 
+                   SET "internal_entity_id" = $1 
+                   WHERE "internal_entity_id" = $2`,
+                  [match.id, ghostAttr.id],
+                );
+
+                // 3. Move Queue Data (Wait Times History)
+                await transactionalEntityManager.query(
+                  `UPDATE queue_data 
+                   SET "attractionId" = $1 
+                   WHERE "attractionId" = $2`,
+                  [match.id, ghostAttr.id],
+                );
+
+                // 4. Move Wait Time Predictions
+                await transactionalEntityManager.query(
+                  `UPDATE wait_time_predictions 
+                   SET "attractionId" = $1 
+                   WHERE "attractionId" = $2`,
+                  [match.id, ghostAttr.id],
+                );
+
+                // 5. Move Prediction Accuracy Records
+                await transactionalEntityManager.query(
+                  `UPDATE prediction_accuracy 
+                   SET "attractionId" = $1 
+                   WHERE "attractionId" = $2`,
+                  [match.id, ghostAttr.id],
+                );
+
+                // 6. Delete the ghost attraction
+                await transactionalEntityManager.query(
+                  `DELETE FROM attractions WHERE id = $1`,
+                  [ghostAttr.id],
+                );
+                this.logger.log(
+                  `    Merged attraction data & mappings: ${ghostAttr.slug}`,
+                );
+              } else {
+                // NO COLLISION: Move
+                await transactionalEntityManager.query(
+                  `UPDATE attractions SET "parkId" = $1 WHERE id = $2`,
+                  [primary!.id, ghostAttr.id],
+                );
+              }
+            }
+
+            // 2. Migrate Shows
+            await transactionalEntityManager.query(
+              `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+              [primary!.id, ghostPark.id],
+            );
+
+            // 3. Migrate Restaurants
+            await transactionalEntityManager.query(
+              `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+              [primary!.id, ghostPark.id],
+            );
+
+            // 4. Delete the ghost park
+            await transactionalEntityManager.delete(Park, ghostPark.id);
+          },
+        );
+        this.logger.log(
+          `✅ Ghost Park "${ghostPark.name}" merged and deleted.`,
+        );
+      }
+    }
   }
 
   /**

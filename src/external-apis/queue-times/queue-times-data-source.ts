@@ -149,6 +149,8 @@ export class QueueTimesDataSource implements IDataSource {
             // Check if it's available in ride object?
             latitude: undefined,
             longitude: undefined,
+            landName: land.name,
+            landId: land.id.toString(),
           });
         }
       }

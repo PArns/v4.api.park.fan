@@ -76,6 +76,8 @@ export interface EntityMetadata {
   name: string;
   latitude?: number;
   longitude?: number;
+  landName?: string;
+  landId?: string;
 }
 
 /**

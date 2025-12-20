@@ -193,7 +193,11 @@ export class EntityMappingsProcessor {
           parkId,
           externalId: match.entity1.externalId,
         },
+        relations: [], // Ensure we don't fetch unnecessary relations
       });
+      // Note: We need landName in the entity to check if it's missing.
+      // Ensure entity returned by repository has landName.
+      // TypeORM findOne returns all columns by default, so 'landName' should be present.
 
       if (!entity) {
         // Try finding via mapping if direct externalId match fails
@@ -223,6 +227,22 @@ export class EntityMappingsProcessor {
         "geographic", // Was 'name+location'
       );
       mappingsCreated++;
+
+      // ENRICHMENT: If this is an attraction and source2 (QT) has land data, update our internal entity
+      if (
+        entityType === "attraction" &&
+        match.entity2.landName &&
+        !entity.landName // Only update if missing (don't overwrite Wiki if present)
+      ) {
+        this.logger.log(
+          `🌱 Enriching attraction "${entity.name}" with land "${match.entity2.landName}" from ${source2Name}`,
+        );
+        await this.attractionsService.updateLandInfo(
+          entity.id,
+          match.entity2.landName,
+          match.entity2.landId || null,
+        );
+      }
     }
 
     return mappingsCreated;
