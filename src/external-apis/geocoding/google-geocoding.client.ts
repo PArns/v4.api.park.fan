@@ -72,15 +72,27 @@ export class GoogleGeocodingClient {
     // Try cache first - ALWAYS check cache before calling Google API!
     const cached = await this.redis.get(cacheKey);
     if (cached) {
-      this.logger.debug(
-        `Cache hit for geocoding: ${latRounded}, ${lngRounded}`,
+      const data = JSON.parse(cached) as GeographicData;
+
+      // Smart Cache Check:
+      // If we have cached data but it's missing new fields (region/countryCode),
+      // we treat it as a cache miss to get the enhanced data from Google.
+      // This performs a "lazy migration" of our cache.
+      if (data.countryCode && (data.region || data.region === undefined)) {
+        this.logger.debug(
+          `Cache hit for geocoding: ${latRounded}, ${lngRounded}`,
+        );
+        return data;
+      }
+
+      this.logger.log(
+        `Cache upgrade needed (missing fields) for: ${latRounded}, ${lngRounded}`,
       );
-      return JSON.parse(cached);
     }
 
-    // Cache miss - call Google API (costs money!)
+    // Cache miss or upgrade needed - call Google API (costs money!)
     this.logger.log(
-      `Cache miss - calling Google Geocoding API for: ${latRounded}, ${lngRounded}`,
+      `Calling Google Geocoding API for: ${latRounded}, ${lngRounded}`,
     );
     const result = await this.reverseGeocodeWithRetry(latitude, longitude);
 
@@ -206,23 +218,18 @@ export class GoogleGeocodingClient {
 
   /**
    * Extract geographic data from Google Geocoding API results
-   *
-   * Strategy:
-   * 1. Check for major metro areas (administrative_area_level_2) - e.g., "Tokyo" for Tokyo Disney
-   * 2. Find the result with 'locality' type for city name
-   * 3. Fall back to administrative_area_level_3, sublocality, or postal_town
-   * 4. Extract country from any result
-   * 5. Map country to continent
-   *
-   * @param results - Array of geocoding results
-   * @returns Geographic data or null if extraction failed
+   * Includes region/state extraction for holiday filtering
    */
   private extractGeographicData(
     results: GeocodingResult[],
   ): GeographicData | null {
     let city: string | null = null;
     let country: string | null = null;
+    let countryCode: string | null = null;
+    let region: string | null = null;
+    let regionCode: string | null = null;
 
+    // ... (city extraction logic same as before) ...
     // Known metropolitan areas that should override specific locality names
     const knownMetroAreas = [
       "Tokyo",
@@ -235,7 +242,6 @@ export class GoogleGeocodingClient {
     ];
 
     // First, check for major metropolitan areas (administrative_area_level_2)
-    // This ensures "Tokyo" is used instead of "Urayasu" for Tokyo Disney, etc.
     for (const result of results) {
       const metroComponent = result.address_components.find((component) =>
         component.types.includes("administrative_area_level_2"),
@@ -246,7 +252,6 @@ export class GoogleGeocodingClient {
           metroComponent.long_name.includes(metro),
         )
       ) {
-        // Extract the metro name (e.g., "Tokyo" from "Tokyo")
         const matchedMetro = knownMetroAreas.find((metro) =>
           metroComponent.long_name.includes(metro),
         );
@@ -257,7 +262,7 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // If no metro area found, try locality (city) - prefer results with 'locality' type
+    // If no metro area found, try locality (city)
     if (!city) {
       const localityResult = results.find((result) =>
         result.types.includes("locality"),
@@ -289,21 +294,37 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // Extract country from any result
+    // Extract Country & Region from the most specific result containing them
     for (const result of results) {
-      const countryComponent = result.address_components.find((component) =>
-        component.types.includes("country"),
-      );
-      if (countryComponent) {
-        country = countryComponent.long_name;
-        break;
+      // Extract Country
+      if (!country) {
+        const countryComponent = result.address_components.find((component) =>
+          component.types.includes("country"),
+        );
+        if (countryComponent) {
+          country = countryComponent.long_name;
+          countryCode = countryComponent.short_name; // ISO 3166-1 alpha-2
+        }
       }
+
+      // Extract Region (State/Province/Bundesland)
+      if (!region) {
+        const regionComponent = result.address_components.find((component) =>
+          component.types.includes("administrative_area_level_1"),
+        );
+        if (regionComponent) {
+          region = regionComponent.long_name; // e.g. "Florida"
+          regionCode = regionComponent.short_name; // e.g. "FL"
+        }
+      }
+
+      if (country && region) break;
     }
 
-    // Validate we have both city and country
-    if (!city || !country) {
+    // Validate we have essential data
+    if (!city || !country || !countryCode) {
       this.logger.warn(
-        `Incomplete geographic data: city=${city}, country=${country}`,
+        `Incomplete geographic data: city=${city}, country=${country}, code=${countryCode}`,
       );
       return null;
     }
@@ -319,7 +340,10 @@ export class GoogleGeocodingClient {
     return {
       city,
       country,
+      countryCode,
       continent,
+      region: region || undefined,
+      regionCode: regionCode || undefined,
     };
   }
 

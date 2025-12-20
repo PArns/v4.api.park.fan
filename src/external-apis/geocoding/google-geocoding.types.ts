@@ -54,5 +54,8 @@ export interface GoogleGeocodingResponse {
 export interface GeographicData {
   continent: string;
   country: string;
+  countryCode: string; // ISO 3166-1 alpha-2
   city: string;
+  region?: string; // e.g. "Florida", "Baden-Württemberg"
+  regionCode?: string; // e.g. "FL", "BW" (ISO 3166-2 compatible)
 }

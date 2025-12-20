@@ -57,7 +57,7 @@ export class DateFeaturesService {
   async isHoliday(
     date: Date,
     countryCode: string,
-    _region?: string,
+    region?: string,
   ): Promise<boolean> {
     // Normalize date to start of day (ignore time)
     const normalizedDate = new Date(
@@ -66,14 +66,14 @@ export class DateFeaturesService {
       date.getDate(),
     );
 
-    // Check via HolidaysService
+    // Check if it's a holiday in the specific region (or national holiday)
+    // If region is provided, strict filtering is applied (National OR Region-Specific).
+    // If no region provided, it checks generally for the country.
     const isHolidayResult = await this.holidaysService.isHoliday(
       normalizedDate,
       countryCode,
+      region,
     );
-
-    // TODO: Add region-specific filtering if region is provided
-    // For now, we check at country level only
 
     return isHolidayResult;
   }

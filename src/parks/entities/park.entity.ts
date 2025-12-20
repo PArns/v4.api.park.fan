@@ -84,6 +84,16 @@ export class Park {
   @Index()
   countrySlug: string; // URL-safe: "united-states", "germany", "china"
 
+  // Region/State/Province (e.g. "Florida", "Baden-Württemberg")
+  @Column({ nullable: true })
+  region: string;
+
+  // Region Code (ISO 3166-2 compatible, e.g. "FL", "BW", "CA")
+  // Used for regional holiday filtering
+  @Column({ nullable: true, length: 10 })
+  @Index()
+  regionCode: string;
+
   @Column({ nullable: true })
   city: string;
 

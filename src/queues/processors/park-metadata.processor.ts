@@ -246,7 +246,18 @@ export class ParkMetadataProcessor {
       if (!park.queueTimesEntityId) {
         park.queueTimesEntityId = qt.externalId;
         park.wikiEntityId = null;
-        await this.parkRepository.save(park);
+        try {
+          await this.parkRepository.save(park);
+        } catch (error: any) {
+          // Handle race condition where another sync created the park
+          if (error.message && error.message.includes("duplicate key")) {
+            this.logger.warn(
+              `Park ${park.name} already exists (race condition), updating instead`,
+            );
+            return;
+          }
+          throw error;
+        }
         this.logger.debug(
           `✓ Backfilled columns for qt-only park: ${park.name}`,
         );
@@ -406,21 +417,71 @@ export class ParkMetadataProcessor {
     let geocodedCount = 0;
 
     for (const park of parksWithoutGeodata) {
-      try {
-        const geodata = await this.geocodingClient.reverseGeocode(
-          Number(park.latitude),
-          Number(park.longitude),
-        );
+      // Initialize an object to hold updates for the park
+      const updates: Partial<Park> = {};
+      let needsUpdate = false;
 
-        if (geodata) {
-          await this.parksService.updateGeodata(park.id, geodata);
-          geocodedCount++;
-        } else {
-          await this.parksService.markGeocodingAttempted(park.id);
+      // 3. Reverse Geocoding (if coordinates exist)
+      if (park.latitude && park.longitude) {
+        // Smart Check: If we have coordinates but no region data, we should try to geocode again
+        // regardless of geocodingAttemptedAt, because we might have cached data without regions.
+        // The GoogleGeocodingClient handles the smart caching (fetch only if missing in cache).
+        const missingRegionData = !park.region || !park.regionCode;
+
+        const shouldGeocode =
+          !park.city ||
+          !park.country ||
+          !park.geocodingAttemptedAt ||
+          missingRegionData; // Retry if we are missing regional data
+
+        if (shouldGeocode) {
+          try {
+            const geoData = await this.geocodingClient.reverseGeocode(
+              Number(park.latitude),
+              Number(park.longitude),
+            );
+
+            if (geoData) {
+              updates.city = geoData.city;
+              updates.country = geoData.country;
+              updates.countryCode = geoData.countryCode; // Now available directly from geocoding
+              updates.continent = geoData.continent;
+
+              // Save region data
+              if (geoData.region) updates.region = geoData.region;
+              if (geoData.regionCode) updates.regionCode = geoData.regionCode;
+
+              updates.geocodingAttemptedAt = new Date();
+              needsUpdate = true;
+              this.logger.debug(
+                `Geocoded ${park.name}: ${geoData.city}, ${geoData.regionCode || geoData.region || ""}, ${geoData.country} (${geoData.continent})`,
+              );
+            } else {
+              // Mark as attempted even if failed to avoid constant retries (unless smart retry logic overrides)
+              if (!missingRegionData) {
+                updates.geocodingAttemptedAt = new Date();
+                needsUpdate = true;
+              }
+            }
+          } catch (error: any) {
+            this.logger.warn(
+              `Geocoding failed for ${park.name}: ${error.message}`,
+            );
+            // Mark as attempted even if failed to avoid constant retries (unless smart retry logic overrides)
+            if (!missingRegionData) {
+              updates.geocodingAttemptedAt = new Date();
+              needsUpdate = true;
+            }
+          }
         }
-      } catch (error) {
+      }
+
+      if (needsUpdate) {
+        await this.parksService.updateGeodata(park.id, updates);
+        geocodedCount++;
+      } else if (!park.geocodingAttemptedAt) {
+        // If no geocoding was performed and it was never attempted, mark it as attempted
         await this.parksService.markGeocodingAttempted(park.id);
-        this.logger.error(`Failed to geocode ${park.name}: ${error}`);
       }
 
       // Rate limiting (100ms delay)

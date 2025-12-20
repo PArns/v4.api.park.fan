@@ -818,50 +818,11 @@ export class ParksService {
    * @param parkId - Park ID (UUID)
    * @param geodata - Geographic data (continent, country, city)
    */
-  async updateGeodata(
-    parkId: string,
-    geodata: { continent: string; country: string; city: string },
-  ): Promise<void> {
-    // Load current park data to check what's already set
-    const park = await this.parkRepository.findOne({ where: { id: parkId } });
-
-    if (!park) {
-      this.logger.warn(`Park ${parkId} not found, skipping geodata update`);
-      return;
-    }
-
-    // Only update fields that are currently NULL (preserve manually set data)
-    let hasChanges = false;
-
-    if (!park.continent) {
-      park.continent = geodata.continent;
-      park.continentSlug = generateSlug(geodata.continent);
-      hasChanges = true;
-    }
-    if (!park.country) {
-      park.country = geodata.country;
-      park.countrySlug = generateSlug(geodata.country);
-      hasChanges = true;
-    }
-    if (!park.city) {
-      park.city = geodata.city;
-      park.citySlug = generateSlug(geodata.city);
-      hasChanges = true;
-    }
-
-    // Always mark as attempted
-    park.geocodingAttemptedAt = new Date();
-
-    // Use save() instead of update() to ensure entity is properly persisted
-    // (though we're generating slugs manually, this is more explicit)
-    if (hasChanges) {
-      await this.parkRepository.save(park);
-    } else {
-      // Just update the attempt timestamp
-      await this.parkRepository.update(parkId, {
-        geocodingAttemptedAt: new Date(),
-      });
-    }
+  async updateGeodata(parkId: string, geodata: Partial<Park>): Promise<void> {
+    await this.parkRepository.update(parkId, {
+      ...geodata,
+      geocodingAttemptedAt: new Date(),
+    });
   }
 
   /**
