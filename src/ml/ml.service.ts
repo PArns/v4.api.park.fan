@@ -21,6 +21,8 @@ import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { HolidaysService } from "../holidays/holidays.service";
+import { forwardRef } from "@nestjs/common";
 
 @Injectable()
 export class MLService {
@@ -47,6 +49,8 @@ export class MLService {
     private predictionAccuracyService: PredictionAccuracyService,
     private weatherService: WeatherService,
     private analyticsService: AnalyticsService,
+    @Inject(forwardRef(() => HolidaysService))
+    private holidaysService: HolidaysService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     // ML service URL from environment or default
@@ -349,16 +353,6 @@ export class MLService {
 
   /**
    * Build feature context for Phase 2 ML features
-   *
-   * Gathers real-time operational data to enhance ML predictions:
-   * - Park occupancy percentage
-   * - Park opening times
-   * - Attraction downtime today
-   * - Virtual queue (boarding group) status
-   *
-   * @param parkId - Park ID
-   * @param attractionIds - List of attraction IDs
-   * @returns Feature context object for ML service
    */
   private async buildFeatureContext(
     parkId: string,
@@ -440,11 +434,32 @@ export class MLService {
         this.logger.warn(`Failed to get queue data: ${error}`);
       }
 
+      // 5. Get Bridge Day Status
+      let isBridgeDay: Record<string, boolean> = {};
+      try {
+        const park = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: ["id", "countryCode", "regionCode"],
+        });
+
+        if (park?.countryCode) {
+          const isBridge = await this.holidaysService.isBridgeDay(
+            new Date(),
+            park.countryCode,
+            park.regionCode,
+          );
+          isBridgeDay[parkId] = isBridge;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to check bridge day status: ${error}`);
+      }
+
       return {
         parkOccupancy,
         parkOpeningTimes,
         downtimeCache,
         queueData,
+        isBridgeDay,
       };
     } catch (error) {
       this.logger.warn(`Failed to build feature context: ${error}`);

@@ -27,7 +27,7 @@ export class HolidaysController {
   constructor(
     private readonly holidaysService: HolidaysService,
     private readonly parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * GET /v1/holidays

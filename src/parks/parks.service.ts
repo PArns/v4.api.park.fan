@@ -729,13 +729,17 @@ export class ParksService {
       select: ["id", "countryCode", "regionCode"],
     });
 
-    // 2. Pre-fetch holidays for the date range
-    const holidayMap = new Set<string>();
+    // 2. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
+    const holidayMap = new Map<string, string>(); // Date -> Name
     if (park?.countryCode) {
       try {
         const dates = scheduleData.map((e) => new Date(e.date).getTime());
         const minDate = new Date(Math.min(...dates));
         const maxDate = new Date(Math.max(...dates));
+
+        // Extend range by 1 day for bridge day detection
+        minDate.setDate(minDate.getDate() - 1);
+        maxDate.setDate(maxDate.getDate() + 1);
 
         const holidays = await this.holidaysService.getHolidays(
           park.countryCode,
@@ -750,7 +754,12 @@ export class ParksService {
         for (const h of holidays) {
           // Logic mirrors isHoliday: Nationwide OR region matches
           if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
-            holidayMap.add(h.date.toISOString().split("T")[0]);
+            const dateStr = h.date.toISOString().split("T")[0];
+            // If multiple holidays on same day, just picking first or specific one?
+            // Usually we pick the first one or concat? Let's pick first for now.
+            if (!holidayMap.has(dateStr)) {
+              holidayMap.set(dateStr, h.localName || h.name);
+            }
           }
         }
       } catch (error) {
@@ -763,8 +772,29 @@ export class ParksService {
     let savedCount = 0;
 
     for (const entry of scheduleData) {
-      const dateStr = new Date(entry.date).toISOString().split("T")[0];
-      const isHoliday = holidayMap.has(dateStr);
+      const dateObj = new Date(entry.date);
+      const dateStr = dateObj.toISOString().split("T")[0];
+      const holidayName = holidayMap.get(dateStr) || null;
+      const isHoliday = !!holidayName;
+
+      // Check Bridge Day Logic
+      // Friday (5) after Thursday Holiday OR Monday (1) before Tuesday Holiday
+      let isBridgeDay = false;
+      const dayOfWeek = dateObj.getDay();
+
+      if (dayOfWeek === 5) {
+        // Friday
+        const prevDate = new Date(dateObj);
+        prevDate.setDate(dateObj.getDate() - 1);
+        const prevDateStr = prevDate.toISOString().split("T")[0];
+        if (holidayMap.has(prevDateStr)) isBridgeDay = true;
+      } else if (dayOfWeek === 1) {
+        // Monday
+        const nextDate = new Date(dateObj);
+        nextDate.setDate(dateObj.getDate() + 1);
+        const nextDateStr = nextDate.toISOString().split("T")[0];
+        if (holidayMap.has(nextDateStr)) isBridgeDay = true;
+      }
 
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
@@ -775,6 +805,8 @@ export class ParksService {
         description: entry.description || null,
         purchases: entry.purchases || null,
         isHoliday: isHoliday,
+        holidayName: holidayName,
+        isBridgeDay: isBridgeDay,
       };
 
       // Check if entry exists for this park, date, and type
@@ -807,6 +839,135 @@ export class ParksService {
     }
 
     return savedCount;
+  }
+
+  /**
+   * Fills missing schedule entries for Holidays and Bridge Days
+   * Ensures that even if the park has no operating hours listed,
+   * we still expose the Holiday/Bridge Day status.
+   */
+  async fillScheduleGaps(parkId: string, lookAheadDays = 90): Promise<number> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "countryCode", "regionCode"],
+    });
+
+    if (!park?.countryCode) return 0;
+
+    const startDate = new Date();
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + lookAheadDays);
+
+    // 1. Fetch existing entries
+    const existingEntries = await this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .where("schedule.parkId = :parkId", { parkId })
+      .andWhere("schedule.date >= :startDate", { startDate })
+      .andWhere("schedule.date <= :endDate", { endDate })
+      .getMany();
+
+    const existingDates = new Set(
+      existingEntries.map((e) =>
+        e.date instanceof Date
+          ? e.date.toISOString().split("T")[0]
+          : String(e.date).split("T")[0],
+      ),
+    );
+
+    // 2. Fetch Holidays
+    // Extend range by 1 day for bridge day detection
+    const minDate = new Date(startDate);
+    minDate.setDate(minDate.getDate() - 1);
+    const maxDate = new Date(endDate);
+    maxDate.setDate(maxDate.getDate() + 1);
+
+    const holidays = await this.holidaysService.getHolidays(
+      park.countryCode,
+      minDate,
+      maxDate,
+    );
+
+    // Map Holidays by Date
+    const holidayMap = new Map<string, string>();
+    const fullRegion = park.regionCode
+      ? `${park.countryCode}-${park.regionCode}`
+      : "";
+
+    // Also store dates to check bridge logic efficiently
+    const holidayDatesSet = new Set<string>();
+
+    for (const h of holidays) {
+      if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
+        const d = h.date.toISOString().split("T")[0];
+        if (!holidayMap.has(d)) holidayMap.set(d, h.localName || h.name);
+        holidayDatesSet.add(d);
+      }
+    }
+
+    let filledCount = 0;
+
+    // 3. Iterate all days in range
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+      const dateStr = currentDate.toISOString().split("T")[0];
+
+      // If no entry exists for this date
+      if (!existingDates.has(dateStr)) {
+        let shouldInsert = false;
+        let holidayName: string | null = null;
+        let isBridgeDay = false;
+        let isHoliday = false;
+
+        // Check Holiday
+        if (holidayMap.has(dateStr)) {
+          shouldInsert = true;
+          isHoliday = true;
+          holidayName = holidayMap.get(dateStr)!;
+        }
+
+        // Check Bridge Day
+        const dayOfWeek = currentDate.getDay();
+        if (dayOfWeek === 5) {
+          // Friday -> Check Thursday
+          const prev = new Date(currentDate);
+          prev.setDate(currentDate.getDate() - 1);
+          const prevStr = prev.toISOString().split("T")[0];
+          if (holidayDatesSet.has(prevStr)) {
+            shouldInsert = true;
+            isBridgeDay = true;
+          }
+        } else if (dayOfWeek === 1) {
+          // Monday -> Check Tuesday
+          const next = new Date(currentDate);
+          next.setDate(currentDate.getDate() + 1);
+          const nextStr = next.toISOString().split("T")[0];
+          if (holidayDatesSet.has(nextStr)) {
+            shouldInsert = true;
+            isBridgeDay = true;
+          }
+        }
+
+        if (shouldInsert) {
+          // Create entry with UNKNOWN type
+          await this.scheduleRepository.save({
+            parkId,
+            date: new Date(currentDate),
+            scheduleType: ScheduleType.UNKNOWN,
+            isHoliday,
+            holidayName,
+            isBridgeDay,
+            openingTime: null,
+            closingTime: null,
+          });
+          filledCount++;
+        }
+      }
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    this.logger.log(`Filled ${filledCount} schedule gaps for Park ${parkId}`);
+    return filledCount;
   }
 
   /**

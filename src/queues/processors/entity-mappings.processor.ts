@@ -47,7 +47,7 @@ export class EntityMappingsProcessor {
     private parksService: ParksService,
     private orchestrator: MultiSourceOrchestrator,
     private entityMatcher: EntityMatcherService,
-  ) { }
+  ) {}
 
   @Process("sync-park-mappings")
   async handleSyncMappings(job: Job<{ parkId: string }>): Promise<void> {

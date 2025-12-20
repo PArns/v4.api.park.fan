@@ -620,6 +620,97 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
     return df_resampled
 
 
+
+def add_bridge_day_feature(
+    df: pd.DataFrame,
+    parks_metadata: pd.DataFrame,
+    start_date: datetime,
+    end_date: datetime,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add bridge day feature
+    
+    Bridge Day = Friday after a Thursday holiday OR Monday before a Tuesday holiday.
+    Significantly affects crowds (families take long weekends).
+    
+    Args:
+        df: DataFrame
+        parks_metadata: Metadata
+        start_date: Start date for holiday fetch
+        end_date: End date for holiday fetch
+        feature_context: Optional context for real-time override
+    """
+    df = df.copy()
+    df['is_bridge_day'] = 0
+    
+    # 1. Use Feature Context if available (Inference)
+    if feature_context and 'isBridgeDay' in feature_context:
+        bridge_map = feature_context['isBridgeDay']
+        for park_id, is_bridge in bridge_map.items():
+            mask = df['parkId'] == park_id
+            df.loc[mask, 'is_bridge_day'] = int(is_bridge)
+        return df
+
+    # 2. Compare with historical holidays (Training)
+    # Be robust: Fetch holidays 5 days before/after range to cover boundary conditions
+    search_start = start_date - timedelta(days=5)
+    search_end = end_date + timedelta(days=5)
+    
+    # Get relevant countries
+    all_countries = set()
+    for _, row in parks_metadata.iterrows():
+        all_countries.add(row['country'])
+    
+    holidays_df = fetch_holidays(list(all_countries), search_start, search_end)
+    
+    if holidays_df.empty:
+        return df
+        
+    holidays_df['date'] = pd.to_datetime(holidays_df['date']).dt.date
+    
+    # Lookup: {(country, date): type}
+    holiday_lookup = {}
+    for _, row in holidays_df.iterrows():
+        # Only care about public holidays for bridge days
+        if row['holiday_type'] == 'public':
+            holiday_lookup[(row['country'], row['date'])] = True
+
+    # Vectorized check is hard because parks have different countries
+    # Use iteration for correctness
+    
+    # Optimize: Pre-compute bridge dates per country? 
+    # Or just iterate rows. Iteration is acceptable for the volume we have.
+    
+    def check_bridge(row):
+        # Local date
+        date = row['date_local']
+        day_of_week = row['day_of_week'] # 0=Mon, 4=Fri
+        
+        # Get country
+        park_info = parks_metadata[parks_metadata['park_id'] == row['parkId']]
+        if park_info.empty:
+            return 0
+        country = park_info.iloc[0]['country']
+        
+        # Check Friday (4) -> Thursday (date - 1)
+        if day_of_week == 4:
+            prev_day = date - timedelta(days=1)
+            if holiday_lookup.get((country, prev_day)):
+                return 1
+                
+        # Check Monday (0) -> Tuesday (date + 1)
+        elif day_of_week == 0:
+            next_day = date + timedelta(days=1)
+            if holiday_lookup.get((country, next_day)):
+                return 1
+                
+        return 0
+
+    df['is_bridge_day'] = df.apply(check_bridge, axis=1)
+    return df
+
+
 def engineer_features(
     df: pd.DataFrame,
     start_date: datetime,
@@ -648,6 +739,7 @@ def engineer_features(
     df = add_time_features(df, parks_metadata)  # Region-specific weekends
     df = add_weather_features(df)
     df = add_holiday_features(df, parks_metadata, start_date, end_date)
+    df = add_bridge_day_feature(df, parks_metadata, start_date, end_date, feature_context)
     df = add_park_schedule_features(df, start_date, end_date)
     df = add_historical_features(df)
     df = add_percentile_features(df)  # Weather extremes
@@ -670,7 +762,7 @@ def engineer_features(
 
 
 def get_feature_columns() -> List[str]:
-    """Return list of feature column names (in order) - Complete 41 feature set"""
+    """Return list of feature column names (in order) - Complete 42 feature set"""
     return [
         # IDs (categorical)
         'parkId',
@@ -702,6 +794,7 @@ def get_feature_columns() -> List[str]:
         'is_holiday_neighbor_3',  # Border parks (Europa-Park → France, etc.)
         'holiday_count_total',
         'school_holiday_count_total',
+        'is_bridge_day',          # Extended weekends
 
         # Park schedule features
         'is_park_open',

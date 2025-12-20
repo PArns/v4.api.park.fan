@@ -157,6 +157,47 @@ export class HolidaysService {
   }
 
   /**
+   * Check if a date is a bridge day (Brückentag)
+   *
+   * Logic:
+   * - If Friday AND Thursday is a holiday -> Bridge Day
+   * - If Monday AND Tuesday is a holiday -> Bridge Day
+   */
+  async isBridgeDay(
+    date: Date,
+    countryCode: string,
+    regionCode?: string,
+  ): Promise<boolean> {
+    const dayOfWeek = date.getDay(); // 0 = Sun, 1 = Mon, ..., 5 = Fri, 6 = Sat
+
+    // Case 1: Friday (5) bridging Thursday Holiday
+    if (dayOfWeek === 5) {
+      const thursday = new Date(date);
+      thursday.setDate(date.getDate() - 1);
+      const isThuHoliday = await this.isHoliday(
+        thursday,
+        countryCode,
+        regionCode,
+      );
+      if (isThuHoliday) return true;
+    }
+
+    // Case 2: Monday (1) bridging Tuesday Holiday
+    if (dayOfWeek === 1) {
+      const tuesday = new Date(date);
+      tuesday.setDate(date.getDate() + 1);
+      const isTueHoliday = await this.isHoliday(
+        tuesday,
+        countryCode,
+        regionCode,
+      );
+      if (isTueHoliday) return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Get all unique countries in the database
    */
   async getUniqueCountries(): Promise<string[]> {

@@ -70,6 +70,7 @@ export class PredictionRequestDto {
     parkOpeningTimes?: Record<string, string>; // parkId -> opening time ISO string
     downtimeCache?: Record<string, number>; // attractionId -> downtime minutes
     queueData?: Record<string, any>; // attractionId -> queue info
+    isBridgeDay?: Record<string, boolean>; // parkId -> is bridge day?
   };
 }
 

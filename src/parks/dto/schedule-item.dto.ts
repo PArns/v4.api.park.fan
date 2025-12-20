@@ -59,6 +59,19 @@ export class ScheduleItemDto {
   })
   isHoliday: boolean;
 
+  @ApiProperty({
+    description: "Name of the holiday (if any)",
+    required: false,
+    nullable: true,
+  })
+  holidayName: string | null;
+
+  @ApiProperty({
+    description: "Indicates if this date is a bridge day",
+    required: false,
+  })
+  isBridgeDay: boolean;
+
   static fromEntity(schedule: {
     date: Date | string;
     scheduleType: ScheduleType;
@@ -67,6 +80,8 @@ export class ScheduleItemDto {
     description: string | null;
     purchases: any | null;
     isHoliday?: boolean;
+    holidayName?: string | null;
+    isBridgeDay?: boolean;
   }): ScheduleItemDto {
     const dto = new ScheduleItemDto();
     // Handle both Date objects and string dates
@@ -88,6 +103,8 @@ export class ScheduleItemDto {
     dto.description = schedule.description;
     dto.purchases = schedule.purchases;
     dto.isHoliday = schedule.isHoliday || false;
+    dto.holidayName = schedule.holidayName || null;
+    dto.isBridgeDay = schedule.isBridgeDay || false;
     return dto;
   }
 }

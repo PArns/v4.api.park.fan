@@ -543,13 +543,27 @@ def create_prediction_features(
             add_park_occupancy_feature,
             add_time_since_park_open,
             add_downtime_features,
-            add_virtual_queue_feature
+            add_virtual_queue_feature,
+            add_bridge_day_feature
         )
         
         df = add_park_occupancy_feature(df, feature_context)
         df = add_time_since_park_open(df, feature_context)
         df = add_downtime_features(df, feature_context)
         df = add_virtual_queue_feature(df, feature_context)
+        
+        # Bridge day needs metadata refetch ideally, but for inference we rely on feature_context
+        # If feature_context has it, great. If not, add_bridge_day_feature will attempt fallback or skip.
+        # But add_bridge_day_feature requires parks_metadata, start_date, end_date for fallback.
+        # For inference, if we lack context, we might skip expensive fallback or fetch metadata.
+        # Let's pass what we have.
+        # Note: add_bridge_day_feature signature: (df, parks_metadata, start_date, end_date, feature_context)
+        # We need to fetch metadata if not available.
+        from db import fetch_parks_metadata
+        parks_metadata = fetch_parks_metadata()
+        start = df['timestamp'].min()
+        end = df['timestamp'].max()
+        df = add_bridge_day_feature(df, parks_metadata, start, end, feature_context)
     else:
         # Defaults if no feature_context provided
         df['park_occupancy_pct'] = 100.0

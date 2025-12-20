@@ -22,6 +22,7 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
 import { ParksModule } from "../parks/parks.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { forwardRef } from "@nestjs/common";
+import { HolidaysModule } from "../holidays/holidays.module";
 import { BullModule } from "@nestjs/bull";
 
 @Module({
@@ -40,8 +41,10 @@ import { BullModule } from "@nestjs/bull";
       Attraction,
       QueueData,
       Park, // For JOIN queries in getTopBottomPerformers
+      Park, // For JOIN queries in getTopBottomPerformers
       ScheduleEntry, // For Phase 2 feature context
     ]),
+    forwardRef(() => HolidaysModule),
   ],
   providers: [
     MLService,
@@ -59,4 +62,4 @@ import { BullModule } from "@nestjs/bull";
     PredictionDeviationService,
   ],
 })
-export class MLModule { }
+export class MLModule {}

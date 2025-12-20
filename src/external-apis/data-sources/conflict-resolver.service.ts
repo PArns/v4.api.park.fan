@@ -34,7 +34,9 @@ export class ConflictResolverService {
         `Merging entities: Wiki=${wiki.entities.length}, QT=${qt.entities.length}`,
       );
       const mergedEntities = this.mergeEntities(wiki.entities, qt.entities);
-      this.logger.verbose(`Merged result: ${mergedEntities.length} total entities`);
+      this.logger.verbose(
+        `Merged result: ${mergedEntities.length} total entities`,
+      );
 
       // Return aggregated data
       return {
@@ -112,7 +114,7 @@ export class ConflictResolverService {
           if (waitDiff > 15) {
             this.logger.warn(
               `⚠️ Wait time discrepancy for "${wikiEntity.name}": ` +
-              `wiki=${wikiEntity.waitTime}min, qt=${qtEntity.waitTime}min (diff: ${waitDiff}min)`,
+                `wiki=${wikiEntity.waitTime}min, qt=${qtEntity.waitTime}min (diff: ${waitDiff}min)`,
             );
           }
         }

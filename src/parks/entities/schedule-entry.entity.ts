@@ -28,6 +28,7 @@ export enum ScheduleType {
   INFO = "INFO",
   MAINTENANCE = "MAINTENANCE",
   CLOSED = "CLOSED",
+  UNKNOWN = "UNKNOWN", // For holidays/bridge days without specific hours
 }
 
 @Entity("schedule_entries")
@@ -80,6 +81,12 @@ export class ScheduleEntry {
 
   @Column({ type: "boolean", default: false })
   isHoliday: boolean;
+
+  @Column({ type: "text", nullable: true })
+  holidayName: string | null;
+
+  @Column({ type: "boolean", default: false })
+  isBridgeDay: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

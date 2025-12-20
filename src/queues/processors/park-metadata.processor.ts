@@ -393,6 +393,9 @@ export class ParkMetadataProcessor {
           scheduleResponse.schedule,
         );
         totalScheduleEntries += savedEntries;
+
+        // Fill gaps for Holidays/Bridge Days
+        await this.parksService.fillScheduleGaps(park.id);
       } catch (error) {
         this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
       }
