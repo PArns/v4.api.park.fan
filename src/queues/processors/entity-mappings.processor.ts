@@ -46,7 +46,7 @@ export class EntityMappingsProcessor {
     private parksService: ParksService,
     private orchestrator: MultiSourceOrchestrator,
     private entityMatcher: EntityMatcherService,
-  ) {}
+  ) { }
 
   @Process("sync-park-mappings")
   async handleSyncMappings(job: Job<{ parkId: string }>): Promise<void> {
@@ -93,7 +93,7 @@ export class EntityMappingsProcessor {
     }
 
     const park = await this.parksService.findById(parkId);
-    this.logger.log(`🔗 Syncing entity mappings for park ${park?.name}...`);
+    this.logger.debug(`🔗 Syncing entity mappings for park ${park?.name}...`);
 
     // Fetch entities from both sources
     const wikiSource = this.orchestrator.getSource("themeparks-wiki");
@@ -151,7 +151,7 @@ export class EntityMappingsProcessor {
       "queue-times",
     );
 
-    this.logger.log(
+    this.logger.debug(
       `✅ Created ${mappingsCreated} mappings for park ${park?.name}`,
     );
     return mappingsCreated;
