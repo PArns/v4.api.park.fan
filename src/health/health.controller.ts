@@ -198,10 +198,12 @@ export class HealthController {
 
   private async getLatestWaitTime(): Promise<Date | null> {
     try {
-      const latest = await this.queueDataRepository.findOne({
-        order: { timestamp: "DESC" },
-        select: ["timestamp"],
-      });
+      const latest = await this.queueDataRepository
+        .createQueryBuilder("qd")
+        .select("qd.timestamp")
+        .orderBy("qd.timestamp", "DESC")
+        .limit(1)
+        .getOne();
       return latest?.timestamp || null;
     } catch {
       return null;
@@ -210,10 +212,12 @@ export class HealthController {
 
   private async getLatestParkUpdate(): Promise<Date | null> {
     try {
-      const latest = await this.parkRepository.findOne({
-        order: { updatedAt: "DESC" },
-        select: ["updatedAt"],
-      });
+      const latest = await this.parkRepository
+        .createQueryBuilder("park")
+        .select("park.updatedAt")
+        .orderBy("park.updatedAt", "DESC")
+        .limit(1)
+        .getOne();
       return latest?.updatedAt || null;
     } catch {
       return null;
