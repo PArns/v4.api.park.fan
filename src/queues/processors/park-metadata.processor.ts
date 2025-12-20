@@ -287,6 +287,7 @@ export class ParkMetadataProcessor {
 
   /**
    * Create an external entity mapping
+   * Automatically resolves conflicts by updating stale mappings
    */
   private async createMapping(
     internalEntityId: string,
@@ -296,7 +297,7 @@ export class ParkMetadataProcessor {
     matchConfidence: number,
     matchMethod: "exact" | "fuzzy" | "manual" | "geographic",
   ): Promise<void> {
-    // Check if mapping already exists
+    // Check if mapping already exists for this external entity
     const existing = await this.mappingRepository.findOne({
       where: {
         externalSource,
@@ -305,12 +306,37 @@ export class ParkMetadataProcessor {
     });
 
     if (existing) {
-      this.logger.debug(
-        `Mapping already exists: ${externalSource}:${externalEntityId}`,
+      // Check if it points to the correct internal entity
+      if (existing.internalEntityId === internalEntityId) {
+        this.logger.debug(
+          `Mapping already exists: ${externalSource}:${externalEntityId}`,
+        );
+        return;
+      }
+
+      // CONFLICT: External ID is mapped to a different internal entity
+      // This happens when park IDs rotate or parks merge/split
+      this.logger.warn(
+        `⚠️ Mapping conflict detected: ${externalSource}:${externalEntityId} ` +
+          `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
+          `Updating mapping...`,
+      );
+
+      // Update the existing mapping to point to the correct entity
+      existing.internalEntityId = internalEntityId;
+      existing.internalEntityType = internalEntityType;
+      existing.matchConfidence = matchConfidence;
+      existing.matchMethod = matchMethod;
+      existing.verified = matchMethod === "exact" || matchMethod === "manual";
+
+      await this.mappingRepository.save(existing);
+      this.logger.log(
+        `✅ Resolved mapping conflict: ${externalSource}:${externalEntityId} now correctly maps to ${internalEntityId}`,
       );
       return;
     }
 
+    // No conflict, create new mapping
     await this.mappingRepository.save({
       internalEntityId,
       internalEntityType,
