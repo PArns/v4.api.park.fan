@@ -3,7 +3,7 @@ FastAPI ML Service for Wait Time Predictions
 """
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
 
