@@ -53,16 +53,21 @@ export class ParkMetadataProcessor {
 
       // Step 2: Discover parks from ALL sources
       this.logger.log("🔍 Discovering parks from all sources...");
-      const { matched, wikiOnly, qtOnly } =
+      const { matched, wikiOnly, qtOnly, wzOnly } =
         await this.orchestrator.discoverAllParks();
 
       this.logger.log(
-        `📊 Discovery complete: ${matched.length} matched, ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only`,
+        `📊 Discovery complete: ${matched.length} matched, ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only, ${wzOnly.length} wz-only`,
       );
 
       // Step 3: Process matched parks (exists in BOTH sources)
       for (const match of matched) {
-        await this.processMatchedPark(match.wiki, match.qt, match.confidence);
+        await this.processMatchedPark(
+          match.wiki,
+          match.qt,
+          match.wz,
+          match.confidence,
+        );
       }
 
       // Step 4: Process wiki-only parks
@@ -75,27 +80,32 @@ export class ParkMetadataProcessor {
         await this.processQueueTimesOnlyPark(parkMeta);
       }
 
-      // Step 6: Sync schedules for all parks
+      // Step 6: Process Wartezeiten-only parks
+      for (const parkMeta of wzOnly) {
+        await this.processWartezeitenOnlyPark(parkMeta);
+      }
+
+      // Step 7: Sync schedules for all parks
       await this.syncSchedulesForAllParks();
 
-      // Step 7: Geocode parks that need it
+      // Step 8: Geocode parks that need it
       await this.geocodeParks();
 
       this.logger.log("🎉 Multi-source park metadata sync complete!");
 
-      // Step 8: Enrich parks with ISO codes and influencing countries
+      // Step 9: Enrich parks with ISO codes and influencing countries
       this.logger.log("🌍 Triggering park enrichment...");
       await this.enrichmentQueue.add("enrich-all", {}, { priority: 3 });
 
-      // Step 9: Trigger holidays sync (AFTER parks are ready)
+      // Step 10: Trigger holidays sync (AFTER parks are ready)
       this.logger.log("🎉 Triggering holidays sync...");
       await this.holidaysQueue.add("fetch-holidays", {}, { priority: 4 });
 
-      // Step 10: Trigger children metadata sync
+      // Step 11: Trigger children metadata sync
       this.logger.log("🎢 Triggering children metadata sync...");
       await this.childrenQueue.add("fetch-all-children", {}, { priority: 2 });
 
-      // Step 11: Trigger weather sync
+      // Step 12: Trigger weather sync
       await this.weatherQueue.add("fetch-weather", {}, { priority: 2 });
     } catch (error) {
       this.logger.error("❌ Park metadata sync failed", error);
@@ -116,52 +126,86 @@ export class ParkMetadataProcessor {
   }
 
   /**
-   * Process a park that exists in BOTH sources
+   * Process a park that exists in Wiki + others (or just QT+WZ)
    */
   private async processMatchedPark(
-    wiki: ParkMetadata,
-    qt: ParkMetadata,
+    wiki: ParkMetadata | undefined,
+    qt: ParkMetadata | undefined,
+    wz: ParkMetadata | undefined,
     confidence: number,
   ): Promise<void> {
-    // Find or create destination (from wiki data)
+    // Determine "Anchor" source (Wiki > QT > WZ)
+    const anchor = wiki || qt || wz;
+    if (!anchor) return; // Should not happen based on calling logic
+
+    // Find or create destination (from wiki data if available)
     let destination = null;
-    if (wiki.destinationId) {
+    if (wiki?.destinationId) {
       destination = await this.destinationsService.findByExternalId(
         wiki.destinationId,
       );
     }
 
-    // Check if park already exists
+    // Check if park already exists (using Anchor's external ID)
+    // NOTE: This assumes we use the Anchor's ID as the park's externalId
+    // If we have Wiki, we use Wiki ID.
+    // If no Wiki, we use QT ID (prefixed?) or WZ ID (prefixed?)
+    // This aligns with processQueueTimesOnlyPark / processWartezeitenOnlyPark logic
+
+    let parkExternalId = anchor.externalId;
+    if (!wiki) {
+      if (qt) parkExternalId = `qt-${qt.externalId}`;
+      else if (wz) parkExternalId = `wz-${wz.externalId}`;
+    }
+
     let park = await this.parkRepository.findOne({
-      where: { externalId: wiki.externalId },
+      where: { externalId: parkExternalId },
     });
 
+    // Helper to get best name
+    const candidates: ParkMetadata[] = [];
+    if (wiki) candidates.push(wiki);
+    if (qt) candidates.push(qt);
+    if (wz) candidates.push(wz);
+
+    // Pick longest name usually implies most formal
+    const bestName = candidates.reduce((prev, curr) =>
+      curr.name.length > prev.name.length ? curr : prev,
+    ).name;
+
+    // Collect Data Sources
+    const dataSourceList: string[] = [];
+    if (wiki) dataSourceList.push("themeparks-wiki");
+    if (qt) dataSourceList.push("queue-times");
+    if (wz) dataSourceList.push("wartezeiten-app");
+
+    // Determine Primary Source
+    const effectivePrimary =
+      dataSourceList.length > 1 ? "multi-source" : dataSourceList[0];
+
     if (!park) {
-      // Create park using Wiki data (richer)
-      const bestName = wiki.name.length > qt.name.length ? wiki.name : qt.name;
+      // Create park
       park = await this.parkRepository.save({
-        externalId: wiki.externalId,
+        externalId: parkExternalId,
         name: bestName,
         slug: generateSlug(bestName),
         destinationId: destination?.id || undefined,
-        timezone: wiki.timezone,
-        latitude: wiki.latitude,
-        longitude: wiki.longitude,
-        primaryDataSource: "multi-source",
-        dataSources: ["themeparks-wiki", "queue-times"],
-        wikiEntityId: wiki.externalId,
-        queueTimesEntityId: qt.externalId,
+        timezone: anchor.timezone, // Use anchor's timezone (Wiki preferred)
+        latitude: anchor.latitude,
+        longitude: anchor.longitude,
+        primaryDataSource: effectivePrimary,
+        dataSources: dataSourceList,
+        wikiEntityId: wiki?.externalId || null,
+        queueTimesEntityId: qt?.externalId || null,
       });
       this.logger.verbose(`✓ Created matched park: ${park.name} (${park.id})`);
     } else {
-      // Update existing park with multi-source info
-      park.dataSources = ["themeparks-wiki", "queue-times"];
-      park.primaryDataSource = "multi-source";
-      park.wikiEntityId = wiki.externalId;
-      park.queueTimesEntityId = qt.externalId;
+      // Update existing park
+      park.dataSources = dataSourceList;
+      park.primaryDataSource = effectivePrimary;
+      if (wiki) park.wikiEntityId = wiki.externalId;
+      if (qt) park.queueTimesEntityId = qt.externalId;
 
-      // Prefer longer name if available (e.g. "Universals Epic Universe" > "Epic Universe")
-      const bestName = wiki.name.length > qt.name.length ? wiki.name : qt.name;
       if (bestName.length > park.name.length) {
         this.logger.log(`Updating park name: "${park.name}" -> "${bestName}"`);
         park.name = bestName;
@@ -169,26 +213,43 @@ export class ParkMetadataProcessor {
       }
 
       await this.parkRepository.save(park);
-      // this.logger.verbose(`✓ Updated matched park: ${park.name} (${park.id})`);
     }
 
-    // Create external mappings for BOTH sources (with conflict handling)
-    await this.createMapping(
-      park.id,
-      "park",
-      "themeparks-wiki",
-      wiki.externalId,
-      1.0,
-      "exact",
-    );
-    await this.createMapping(
-      park.id,
-      "park",
-      "queue-times",
-      qt.externalId,
-      confidence,
-      "fuzzy",
-    );
+    // 1. Create Wiki mapping
+    if (wiki) {
+      await this.createMapping(
+        park.id,
+        "park",
+        "themeparks-wiki",
+        wiki.externalId,
+        1.0,
+        "exact",
+      );
+    }
+
+    // 2. Create QT mapping
+    if (qt) {
+      await this.createMapping(
+        park.id,
+        "park",
+        "queue-times",
+        qt.externalId,
+        confidence,
+        "fuzzy",
+      );
+    }
+
+    // 3. Create WZ mapping
+    if (wz) {
+      await this.createMapping(
+        park.id,
+        "park",
+        "wartezeiten-app",
+        wz.externalId,
+        confidence,
+        "fuzzy",
+      );
+    }
   }
 
   /**
@@ -211,7 +272,6 @@ export class ParkMetadataProcessor {
           `✓ Backfilled columns for wiki-only park: ${park.name}`,
         );
       }
-      // this.logger.debug(`✓ Park already exists: ${park.name}`);
       return;
     }
 
@@ -266,20 +326,12 @@ export class ParkMetadataProcessor {
         try {
           await this.parkRepository.save(park);
         } catch (error: any) {
-          // Handle race condition where another sync created the park
           if (error.message && error.message.includes("duplicate key")) {
-            this.logger.warn(
-              `Park ${park.name} already exists (race condition), updating instead`,
-            );
             return;
           }
           throw error;
         }
-        this.logger.debug(
-          `✓ Backfilled columns for qt-only park: ${park.name}`,
-        );
       }
-      // this.logger.debug(`✓ Park already exists: ${park.name}`);
       return;
     }
 
@@ -287,7 +339,6 @@ export class ParkMetadataProcessor {
       externalId: qtExternalId,
       name: qt.name,
       slug: generateSlug(qt.name),
-      // destinationId will be null by default (nullable column)
       timezone: qt.timezone,
       latitude: qt.latitude,
       longitude: qt.longitude,
@@ -311,6 +362,55 @@ export class ParkMetadataProcessor {
     );
 
     this.logger.debug(`✓ Created qt-only park: ${park.name}`);
+  }
+
+  /**
+   * Process a park that exists ONLY in Wartezeiten.app
+   */
+  private async processWartezeitenOnlyPark(wz: ParkMetadata): Promise<void> {
+    const wzExternalId = `wz-${wz.externalId}`; // Prefix to avoid collision
+
+    // Check if park already exists
+    let park = await this.parkRepository.findOne({
+      where: { externalId: wzExternalId },
+    });
+
+    if (park) {
+      // Just assume it's set up correctly if it exists
+      return;
+    }
+
+    // Wartezeiten doesn't provide lat/lng/timezone for parks typically, or it's limited
+    // But we save what we have
+    // Note: WZ parks have name, country. No lat/lng/timezone usually.
+
+    park = await this.parkRepository.save({
+      externalId: wzExternalId,
+      name: wz.name,
+      slug: generateSlug(wz.name),
+      timezone: wz.timezone, // might be undefined
+      latitude: wz.latitude, // might be undefined
+      longitude: wz.longitude, // might be undefined
+      continent: wz.continent,
+      continentSlug: wz.continent ? generateSlug(wz.continent) : undefined,
+      country: wz.country,
+      countrySlug: wz.country ? generateSlug(wz.country) : undefined,
+      primaryDataSource: "wartezeiten-app",
+      dataSources: ["wartezeiten-app"],
+      wikiEntityId: null,
+      queueTimesEntityId: null,
+    });
+
+    await this.createMapping(
+      park.id,
+      "park",
+      "wartezeiten-app",
+      wz.externalId,
+      1.0,
+      "exact",
+    );
+
+    this.logger.debug(`✓ Created wz-only park: ${park.name}`);
   }
 
   /**

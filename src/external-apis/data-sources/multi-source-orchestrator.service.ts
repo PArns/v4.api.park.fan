@@ -54,12 +54,14 @@ export class MultiSourceOrchestrator {
    */
   async discoverAllParks(): Promise<{
     matched: Array<{
-      wiki: ParkMetadata;
-      qt: ParkMetadata;
+      wiki?: ParkMetadata;
+      qt?: ParkMetadata;
+      wz?: ParkMetadata;
       confidence: number;
     }>;
     wikiOnly: ParkMetadata[];
     qtOnly: ParkMetadata[];
+    wzOnly: ParkMetadata[];
   }> {
     this.logger.log("Starting park discovery from all sources...");
 
@@ -80,18 +82,121 @@ export class MultiSourceOrchestrator {
       }
     });
 
-    // Match parks (currently supports Wiki + QueueTimes)
+    // 1. Get raw lists
     const wikiParks = parksBySource.get("themeparks-wiki") || [];
     const qtParks = parksBySource.get("queue-times") || [];
+    const wzParks = parksBySource.get("wartezeiten-app") || [];
 
-    const matchResult = this.entityMatcher.matchParks(wikiParks, qtParks);
+    // 2. Match Wiki vs Queue-Times
+    // Result: matched (Wiki+QT), wikiOnly (Wiki-QT), qtOnly (QT-Wiki)
+    const qtMatchResult = this.entityMatcher.matchParks(wikiParks, qtParks);
 
-    this.logger.log(
-      `Park discovery complete: ${matchResult.matched.length} matched, ` +
-        `${matchResult.wikiOnly.length} wiki-only, ${matchResult.qtOnly.length} qt-only`,
+    // 3. Match Wiki vs Wartezeiten.app
+    // Result: matched (Wiki+WZ), wikiOnly (Wiki-WZ), qtOnly (WZ-Wiki)
+    const wzMatchResult = this.entityMatcher.matchParks(wikiParks, wzParks);
+
+    // 4. Match Remaining QT vs Remaining WZ (Parks NOT in Wiki)
+    // We use the "unmatched" lists from previous steps
+    const qtNoWiki = qtMatchResult.qtOnly;
+    const wzNoWiki = wzMatchResult.qtOnly;
+
+    // Use matchParks but interpret the result carefully:
+    // "wiki" arg -> QT parks
+    // "qt" arg -> WZ parks
+    const noWikiMatchResult = this.entityMatcher.matchParks(qtNoWiki, wzNoWiki);
+    // matched.wiki -> QT
+    // matched.qt -> WZ
+
+    // 5. Construct Unified Result
+    const mergedMatches: Array<{
+      wiki?: ParkMetadata;
+      qt?: ParkMetadata;
+      wz?: ParkMetadata;
+      confidence: number;
+    }> = [];
+
+    // Map by Wiki External ID for easy merging of Wiki-based matches
+    const wikiMap = new Map<
+      string,
+      {
+        wiki: ParkMetadata;
+        qt?: ParkMetadata;
+        wz?: ParkMetadata;
+        confidence: number;
+      }
+    >();
+
+    // Start with all Wiki parks as potential base
+    for (const wiki of wikiParks) {
+      wikiMap.set(wiki.externalId, { wiki, confidence: 1.0 });
+    }
+
+    // Merge QT matches
+    for (const m of qtMatchResult.matched) {
+      const entry = wikiMap.get(m.wiki.externalId)!;
+      entry.qt = m.qt;
+      entry.confidence = m.confidence;
+    }
+
+    // Merge WZ matches
+    for (const m of wzMatchResult.matched) {
+      const entry = wikiMap.get(m.wiki.externalId)!;
+      entry.wz = m.qt; // standard matchParks puts 2nd arg in 'qt' prop
+      // Average confidence if both exist?
+      if (entry.qt) {
+        entry.confidence = (entry.confidence + m.confidence) / 2;
+      } else {
+        entry.confidence = m.confidence;
+      }
+    }
+
+    // Filter wikiMap for entries that have >1 source
+    // These are "Matched" parks involving Wiki
+    for (const entry of wikiMap.values()) {
+      if (entry.qt || entry.wz) {
+        mergedMatches.push(entry);
+      }
+    }
+
+    // Add No-Wiki Matches (QT + WZ)
+    for (const m of noWikiMatchResult.matched) {
+      mergedMatches.push({
+        wiki: undefined,
+        qt: m.wiki, // First arg was QT
+        wz: m.qt, // Second arg was WZ
+        confidence: m.confidence,
+      });
+    }
+
+    // 6. Calculate Residuals (Truly Single Source)
+    // Wiki Only: Parks in wikiParks that are NOT in mergedMatches
+    // Helper set of processed IDs
+    const processedWikiIds = new Set(
+      mergedMatches.filter((m) => m.wiki).map((m) => m.wiki!.externalId),
+    );
+    const finalWikiOnly = wikiParks.filter(
+      (p) => !processedWikiIds.has(p.externalId),
     );
 
-    return matchResult;
+    // QT Only: From noWikiMatchResult.wikiOnly (since we passed matching QT as first arg)
+    const finalQtOnly = noWikiMatchResult.wikiOnly;
+
+    // WZ Only: From noWikiMatchResult.qtOnly (since we passed matching WZ as second arg)
+    const finalWzOnly = noWikiMatchResult.qtOnly;
+
+    this.logger.log(
+      `Park discovery complete: ${mergedMatches.length} combined, ` +
+        `${finalWikiOnly.length} wiki-only, ` +
+        `${finalQtOnly.length} qt-only, ` +
+        `${finalWzOnly.length} wz-only`,
+    );
+
+    return {
+      matched: mergedMatches,
+      wikiOnly: finalWikiOnly,
+      qtOnly: finalQtOnly,
+      wzOnly: finalWzOnly,
+    };
   }
 
   /**
