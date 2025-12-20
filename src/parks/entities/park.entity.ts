@@ -90,7 +90,7 @@ export class Park {
 
   // Region Code (ISO 3166-2 compatible, e.g. "FL", "BW", "CA")
   // Used for regional holiday filtering
-  @Column({ nullable: true, length: 10 })
+  @Column({ nullable: true, length: 50 })
   @Index()
   regionCode: string;
 
