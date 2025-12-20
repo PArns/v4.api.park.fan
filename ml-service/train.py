@@ -101,6 +101,10 @@ def train_model(version: str = None) -> None:
     print()
 
     # Data sufficiency check
+    if len(df) == 0:
+        print("❌ No data available for training after validation/cleaning.")
+        return
+
     if len(df) < 10:
         print("⚠️  WARNING: Very limited data (< 10 rows). Model will have poor accuracy.")
         print("   Training anyway - model will improve as more data accumulates.")

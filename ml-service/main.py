@@ -69,6 +69,8 @@ class PredictionRequest(BaseModel):
     baseTime: Optional[str] = None  # ISO format, defaults to now
     weatherForecast: Optional[List[WeatherForecastItem]] = None
     currentWaitTimes: Optional[Dict[str, int]] = None
+    recentWaitTimes: Optional[Dict[str, int]] = None  # ~30 mins ago for velocity
+    featureContext: Optional[Dict[str, Any]] = None   # Phase 2 features
 
 
 class PredictionResponse(BaseModel):
@@ -308,7 +310,9 @@ async def predict(request: PredictionRequest):
             request.predictionType,
             base_time,
             request.weatherForecast,
-            request.currentWaitTimes
+            request.currentWaitTimes,
+            request.recentWaitTimes,
+            request.featureContext
         )
         
         # Apply schedule filtering for both hourly and daily predictions

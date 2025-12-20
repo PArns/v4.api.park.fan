@@ -218,11 +218,12 @@ export class MLService {
         this.logger.warn(`Failed to fetch weather for prediction: ${error} `);
       }
 
-      // 4. Fetch current wait times for attractions (for input optimization)
       const currentWaitTimes: Record<string, number> = {};
+      const recentWaitTimes: Record<string, number> = {};
+
       if (predictionType === "hourly") {
         try {
-          // Get latest queue data for all attractions in park
+          // 4.1 Get latest queue data (Current)
           const latestData = await this.queueDataRepository
             .createQueryBuilder("q")
             .distinctOn(["q.attractionId"])
@@ -239,9 +240,48 @@ export class MLService {
               currentWaitTimes[item.attractionId] = item.waitTime;
             }
           }
+
+          // 4.2 Get recent queue data (~30 mins ago) for Velocity calculation
+          // Target: 30 minutes ago. Window: +/- 15 minutes.
+          const thirtyAgo = Date.now() - 30 * 60 * 1000;
+          const windowMin = new Date(thirtyAgo - 15 * 60 * 1000);
+          const windowMax = new Date(thirtyAgo + 15 * 60 * 1000);
+
+          const recentDataRaw = await this.queueDataRepository
+            .createQueryBuilder("q")
+            .select(["q.attractionId", "q.waitTime", "q.timestamp"])
+            .where("q.attractionId = ANY(:ids)", { ids: activeAttractionIds })
+            .andWhere("q.timestamp BETWEEN :min AND :max", {
+              min: windowMin,
+              max: windowMax,
+            })
+            .andWhere("q.waitTime IS NOT NULL")
+            .getMany();
+
+          // Process in memory to find the record closest to 30 mins ago for each attraction
+          const bestMatchMap = new Map<
+            string,
+            { diff: number; wait: number }
+          >();
+
+          for (const item of recentDataRaw) {
+            const diff = Math.abs(item.timestamp.getTime() - thirtyAgo);
+            const currentBest = bestMatchMap.get(item.attractionId);
+
+            if (!currentBest || diff < currentBest.diff) {
+              bestMatchMap.set(item.attractionId, {
+                diff,
+                wait: item.waitTime,
+              });
+            }
+          }
+
+          for (const [id, match] of bestMatchMap.entries()) {
+            recentWaitTimes[id] = match.wait;
+          }
         } catch (error) {
           this.logger.warn(
-            `Failed to fetch current wait times for prediction: ${error} `,
+            `Failed to fetch current/recent wait times for prediction: ${error} `,
           );
         }
       }
@@ -259,6 +299,7 @@ export class MLService {
         predictionType,
         weatherForecast, // Empty array if failed or no coords
         currentWaitTimes,
+        recentWaitTimes, // ~30 mins ago
         featureContext, // Phase 2: Real-time context features
       };
 

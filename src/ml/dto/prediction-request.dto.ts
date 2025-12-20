@@ -56,6 +56,12 @@ export class PredictionRequestDto {
   currentWaitTimes?: Record<string, number>;
 
   @ApiProperty({
+    description: "Wait times from ~30 mins ago for velocity calculation",
+    required: false,
+  })
+  recentWaitTimes?: Record<string, number>;
+
+  @ApiProperty({
     description: "Feature context for Phase 2 ML features",
     required: false,
   })

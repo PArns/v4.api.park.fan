@@ -132,6 +132,7 @@ def create_prediction_features(
     base_time: datetime,
     weather_forecast: List[Any] = None,
     current_wait_times: Dict[str, int] = None,
+    recent_wait_times: Dict[str, int] = None,
     feature_context: Dict[str, Any] = None
 ) -> pd.DataFrame:
     """
@@ -511,10 +512,23 @@ def create_prediction_features(
             if wait_time is not None:
                 mask = df['attractionId'] == str(attraction_id)
                 if mask.any():
-                    # Calculate velocity: current - recent average
-                    # Positive = queues building, Negative = queues clearing
-                    recent_avg = df.loc[mask, 'avg_wait_last_1h'].iloc[0]
-                    velocity = (float(wait_time) - recent_avg) / 6.0  # Normalize
+                    # Calculate velocity: 
+                    # Training uses: rolling(6).mean() of differences (avg change per 5 mins over 30 mins)
+                    # Inference approximation: (Current - Recent30min) / 6.0
+                    
+                    velocity = 0.0
+                    
+                    # 1. Try explicit recent wait time (passed from API, ~30 mins ago)
+                    if recent_wait_times and str(attraction_id) in recent_wait_times:
+                         recent_val = recent_wait_times[str(attraction_id)]
+                         if recent_val is not None:
+                             velocity = (float(wait_time) - float(recent_val)) / 6.0
+                    
+                    # 2. Fallback to using 1h avg from DB if explicit recent not available
+                    elif not pd.isna(df.loc[mask, 'avg_wait_last_1h'].iloc[0]):
+                        recent_avg = df.loc[mask, 'avg_wait_last_1h'].iloc[0]
+                        velocity = (float(wait_time) - recent_avg) / 6.0
+                    
                     df.loc[mask, 'wait_time_velocity'] = velocity
                     
                     # Now override the lag feature with current value
@@ -555,6 +569,7 @@ def predict_wait_times(
     base_time: datetime = None,
     weather_forecast: List[Any] = None,
     current_wait_times: Dict[str, int] = None,
+    recent_wait_times: Dict[str, int] = None,
     feature_context: Dict[str, Any] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -595,6 +610,7 @@ def predict_wait_times(
         base_time,
         weather_forecast,
         current_wait_times,
+        recent_wait_times,
         feature_context
     )
 
