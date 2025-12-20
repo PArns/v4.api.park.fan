@@ -13,18 +13,31 @@
 export const COUNTRY_NAME_TO_ISO_CODE: Record<string, string> = {
   // North America
   "United States": "US",
+  "United States of America": "US",
+  USA: "US",
+  "America": "US",
   Canada: "CA",
   Mexico: "MX",
 
   // Europe
   "United Kingdom": "GB",
+  "United Kingdom of Great Britain and Northern Ireland": "GB",
   England: "GB", // Geocoding alias for UK
+  Scotland: "GB",
+  Wales: "GB",
+  "Northern Ireland": "GB",
   Germany: "DE",
+  Deutschland: "DE",
   France: "FR",
   Spain: "ES",
+  España: "ES",
   Italy: "IT",
+  Italia: "IT",
   Netherlands: "NL",
+  "The Netherlands": "NL",
   Belgium: "BE",
+  België: "BE",
+  Belgique: "BE",
   Sweden: "SE",
   Denmark: "DK",
   Norway: "NO",
@@ -90,13 +103,23 @@ export const COUNTRY_NAME_TO_ISO_CODE: Record<string, string> = {
 };
 
 /**
- * Converts a country name to ISO 3166-1 alpha-2 code
+ * Converts a country name or code to ISO 3166-1 alpha-2 code
  *
- * @param countryName - Full country name (e.g., "United States")
+ * @param country - Full country name (e.g., "United States") or ISO code (e.g., "US")
  * @returns ISO code (e.g., "US") or null if not found
  */
-export function getCountryISOCode(countryName: string): string | null {
-  return COUNTRY_NAME_TO_ISO_CODE[countryName] || null;
+export function getCountryISOCode(country: string): string | null {
+  if (!country) return null;
+
+  const trimmed = country.trim();
+
+  // 1. If it's already a 2-letter code, return it (normalized)
+  if (trimmed.length === 2) {
+    return trimmed.toUpperCase();
+  }
+
+  // 2. Check mapping for full names or aliases
+  return COUNTRY_NAME_TO_ISO_CODE[trimmed] || null;
 }
 
 /**
