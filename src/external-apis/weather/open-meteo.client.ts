@@ -27,7 +27,8 @@ export class OpenMeteoClient {
   private readonly logger = new Logger(OpenMeteoClient.name);
   private readonly client: AxiosInstance;
   private readonly baseUrl = "https://api.open-meteo.com/v1";
-  private rateLimitedUntil: Date | null = null; // Track when rate limit expires
+  // Redis key for distributed rate limiting
+  private readonly BLOCKED_KEY = "ratelimit:openmeteo:blocked";
   private readonly CACHE_TTL = 3600; // 1 hour
 
   constructor(
@@ -38,6 +39,85 @@ export class OpenMeteoClient {
       baseURL: this.baseUrl,
       timeout: 10000,
     });
+  }
+
+  /**
+   * Execute request with retry logic for 429s and 5xx errors
+   */
+  private async requestWithRetry<T>(
+    url: string,
+    config: any,
+    retries = 3,
+    delay = 1000,
+  ): Promise<T> {
+    try {
+      // Check Global Redis Block
+      // Only check on first attempt or if we suspect a block
+      const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+      if (blockedUntil) {
+        const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+        // Wait if reasonable (under 65s)
+        if (ttl > 0 && ttl < 65) {
+          // this.logger.debug(`Waiting out distributed rate limit (${ttl}s)...`);
+          await new Promise((resolve) => setTimeout(resolve, ttl * 1000));
+        }
+      }
+
+      const response = await this.client.get<T>(url, config);
+
+      return response.data;
+    } catch (error: any) {
+      if (axios.isAxiosError(error) && error.response) {
+        const status = error.response.status;
+
+        // Handle 429 Rate Limit
+        if (status === 429) {
+          // Set Global Block (60s default)
+          await this.redis.set(this.BLOCKED_KEY, "true", "EX", 60);
+
+          if (retries > 0) {
+            this.logger.warn(
+              `⏸️ Open-Meteo Rate Limit (429). Retrying in 60s... (Attempts left: ${retries})`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 60000));
+            return this.requestWithRetry<T>(url, config, retries - 1, delay);
+          }
+        }
+
+        // Handle 5xx Server Errors
+        if (status >= 500 && status < 600) {
+          if (retries > 0) {
+            this.logger.warn(
+              `Open-Meteo Server Error (${status}). Retrying in ${delay}ms...`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            return this.requestWithRetry<T>(
+              url,
+              config,
+              retries - 1,
+              delay * 2,
+            );
+          }
+        }
+      }
+
+      // Handle Network Errors (ECONNRESET, etc.)
+      if (
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "ENOTFOUND"
+      ) {
+        if (retries > 0) {
+          this.logger.warn(
+            `Open-Meteo Network Error (${error.code}). Retrying in ${delay}ms...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return this.requestWithRetry<T>(url, config, retries - 1, delay * 2);
+        }
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -54,7 +134,7 @@ export class OpenMeteoClient {
     forecastDays: number = 16,
   ): Promise<DailyWeatherResponse> {
     try {
-      const response = await this.client.get<OpenMeteoResponse>("/forecast", {
+      const data = await this.requestWithRetry<OpenMeteoResponse>("/forecast", {
         params: {
           latitude,
           longitude,
@@ -72,7 +152,7 @@ export class OpenMeteoClient {
         },
       });
 
-      return this.transformResponse(response.data);
+      return this.transformResponse(data);
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -100,7 +180,7 @@ export class OpenMeteoClient {
     endDate: string,
   ): Promise<DailyWeatherResponse> {
     try {
-      const response = await this.client.get<OpenMeteoResponse>("/archive", {
+      const data = await this.requestWithRetry<OpenMeteoResponse>("/archive", {
         params: {
           latitude,
           longitude,
@@ -119,7 +199,7 @@ export class OpenMeteoClient {
         },
       });
 
-      return this.transformResponse(response.data);
+      return this.transformResponse(data);
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -148,15 +228,8 @@ export class OpenMeteoClient {
       this.logger.warn(`Redis cache error: ${err.message}`);
     }
 
-    // Skip if we're currently rate limited (don't spam the logdur)
-    if (this.rateLimitedUntil && new Date() < this.rateLimitedUntil) {
-      throw new Error(
-        `Open-Meteo API: Rate limited until ${this.rateLimitedUntil.toISOString()}`,
-      );
-    }
-
     try {
-      const response = await this.client.get<OpenMeteoResponse>("/forecast", {
+      const data = await this.requestWithRetry<OpenMeteoResponse>("/forecast", {
         params: {
           latitude,
           longitude,
@@ -173,10 +246,7 @@ export class OpenMeteoClient {
         },
       });
 
-      // Reset rate limit on successful request
-      this.rateLimitedUntil = null;
-
-      const result = this.transformHourlyResponse(response.data);
+      const result = this.transformHourlyResponse(data);
 
       // Cache the successful result
       try {
@@ -202,18 +272,6 @@ export class OpenMeteoClient {
           code: error.code,
           message: error.message,
         };
-
-        // Special handling for rate limits (429)
-        if (error.response?.status === 429) {
-          // Set rate limit expiry (60 seconds from now)
-          this.rateLimitedUntil = new Date(Date.now() + 60 * 1000);
-
-          this.logger.warn(
-            `⏸️  Open-Meteo API rate limited (HTTP 429). Skipping weather requests for 60s.`,
-          );
-
-          throw new Error(`Open-Meteo API: HTTP 429 Too Many Requests`);
-        }
 
         this.logger.error(
           `Open-Meteo API request failed: ${JSON.stringify(details)}`,

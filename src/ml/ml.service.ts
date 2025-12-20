@@ -217,9 +217,9 @@ export class MLService {
 
       const skippedCount = attractionIds.length - activeAttractionIds.length;
       if (skippedCount > 0) {
-        this.logger.debug(
-          `Skipping ${skippedCount} inactive attractions for park ${parkId}`,
-        );
+        // this.logger.debug(
+        //   `Skipping ${skippedCount} inactive attractions for park ${parkId}`,
+        // );
       }
 
       // 3. Fetch hourly weather forecast (cached by WeatherService)

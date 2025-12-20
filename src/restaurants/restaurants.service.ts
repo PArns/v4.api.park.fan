@@ -299,7 +299,7 @@ export class RestaurantsService {
         this.restaurantLiveDataRepository.create(restaurantLiveData);
       await this.restaurantLiveDataRepository.save(entry);
 
-      this.logger.log(`✅ Saved dining availability for ${liveData.name}`);
+      // this.logger.verbose(`✅ Saved dining availability for ${liveData.name}`);
       return 1;
     } catch (error) {
       const errorMessage =

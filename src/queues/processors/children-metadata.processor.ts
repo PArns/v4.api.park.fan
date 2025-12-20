@@ -183,9 +183,9 @@ export class ChildrenMetadataProcessor {
               // Invalidate integrated park cache to ensure new data (shows/restaurants) is visible immediately
               try {
                 await this.redis.del(`park:integrated:${park.id}`);
-                this.logger.debug(
-                  `🧹 Invalidated integrated cache for ${park.name} after sync`,
-                );
+                // this.logger.debug(
+                //   `🧹 Invalidated integrated cache for ${park.name} after sync`,
+                // );
               } catch (e) {
                 this.logger.warn(
                   `Failed to invalidate cache for ${park.name}: ${e}`,
@@ -224,9 +224,9 @@ export class ChildrenMetadataProcessor {
 
         // Delay between batches (except for last batch)
         if (i + BATCH_SIZE < parks.length) {
-          this.logger.log(
-            `⏸️  Pausing ${BATCH_DELAY_MS}ms before next batch...`,
-          );
+          // this.logger.verbose(
+          //   `⏸️  Pausing ${BATCH_DELAY_MS}ms before next batch...`,
+          // );
           await this.sleep(BATCH_DELAY_MS);
         }
       }

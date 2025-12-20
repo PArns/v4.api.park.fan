@@ -37,6 +37,8 @@ import { EntityMetadata } from "../../external-apis/data-sources/interfaces/data
 export class EntityMappingsProcessor {
   private readonly logger = new Logger(EntityMappingsProcessor.name);
   private processedParksCount = 0;
+  private skippedParksCount = 0;
+  private mappedCountBySource: Record<string, number> = {};
 
   constructor(
     @InjectRepository(ExternalEntityMapping)
@@ -70,6 +72,9 @@ export class EntityMappingsProcessor {
   /**
    * Sync entity mappings for a single park
    */
+  /**
+   * Sync entity mappings for a single park
+   */
   private async syncParkEntityMappings(parkId: string): Promise<number> {
     // Get park mappings to find external IDs
     const parkMappings = await this.mappingRepository.find({
@@ -85,86 +90,127 @@ export class EntityMappingsProcessor {
     const qtMapping = parkMappings.find(
       (m) => m.externalSource === "queue-times",
     );
+    const wzMapping = parkMappings.find(
+      (m) => m.externalSource === "wartezeiten-app",
+    );
 
-    if (!wikiMapping || !qtMapping) {
-      this.logger.debug(
-        `Skipping park ${parkId}: Missing multi-source mappings`,
-      );
-      return 0; // Park not in both sources
+    // Track total mappings
+    let totalMappings = 0;
+    const parkStats: Record<string, number> = {};
+
+    // Need at least Wiki (primary) + one other (secondary) to do ANY matching
+    if (!wikiMapping || (!qtMapping && !wzMapping)) {
+      this.skippedParksCount++;
+      return 0;
     }
 
-    const park = await this.parksService.findById(parkId);
-    this.logger.verbose(`🔗 Syncing entity mappings for park ${park?.name}...`);
-
-    // Fetch entities from both sources
     const wikiSource = this.orchestrator.getSource("themeparks-wiki");
     const qtSource = this.orchestrator.getSource("queue-times");
+    const wzSource = this.orchestrator.getSource("wartezeiten-app");
 
-    if (!wikiSource || !qtSource) {
-      this.logger.error(
-        `Skipping park ${parkId}: One or more data sources unavailable`,
+    // Fetch Wiki entities (Primary Source)
+    let wikiEntities: EntityMetadata[] = [];
+    if (wikiSource && wikiMapping) {
+      wikiEntities = await wikiSource.fetchParkEntities(
+        wikiMapping.externalEntityId,
       );
-      return 0;
     }
 
-    const wikiEntities = await wikiSource.fetchParkEntities(
-      wikiMapping.externalEntityId,
-    );
-    const qtEntities = await qtSource.fetchParkEntities(
-      qtMapping.externalEntityId,
-    );
-
-    if (wikiEntities.length === 0 || qtEntities.length === 0) {
-      this.logger.warn(
-        `Skipping park ${parkId}: No entities found from one or both sources`,
+    // Process Queue-Times (if available)
+    if (qtSource && qtMapping) {
+      const qtEntities = await qtSource.fetchParkEntities(
+        qtMapping.externalEntityId,
       );
-      return 0;
+
+      if (wikiEntities.length > 0 && qtEntities.length > 0) {
+        await this.processSourcePair(
+          parkId,
+          wikiEntities,
+          qtEntities,
+          "themeparks-wiki",
+          "queue-times",
+          parkStats,
+        );
+      }
     }
 
-    let mappingsCreated = 0;
+    // Process Wartezeiten.app (if available)
+    // NOTE: Wartezeiten only has attractions
+    if (wzSource && wzMapping) {
+      const wzEntities = await wzSource.fetchParkEntities(
+        wzMapping.externalEntityId,
+      );
 
-    // Filter by type and match
-    mappingsCreated += await this.matchAndMapEntities(
-      parkId,
-      wikiEntities.filter((e) => e.entityType === "ATTRACTION"),
-      qtEntities.filter((e) => e.entityType === "ATTRACTION"),
-      "attraction",
-      "themeparks-wiki",
-      "queue-times",
+      if (wikiEntities.length > 0 && wzEntities.length > 0) {
+        // Only process attractions for Wartezeiten
+        await this.matchAndMapEntities(
+          parkId,
+          wikiEntities.filter((e) => e.entityType === "ATTRACTION"),
+          wzEntities.filter((e) => e.entityType === "ATTRACTION"),
+          "attraction",
+          "themeparks-wiki",
+          "wartezeiten-app",
+          parkStats,
+        );
+      }
+    }
+
+    // Calculate totals from stats
+    totalMappings = Object.values(parkStats).reduce(
+      (sum, current) => sum + current,
+      0,
     );
 
-    // Shows and Restaurants likely only on wiki, but good to check
-    mappingsCreated += await this.matchAndMapEntities(
-      parkId,
-      wikiEntities.filter((e) => e.entityType === "SHOW"),
-      qtEntities.filter((e) => e.entityType === "SHOW"),
-      "show",
-      "themeparks-wiki",
-      "queue-times",
-    );
-
-    mappingsCreated += await this.matchAndMapEntities(
-      parkId,
-      wikiEntities.filter((e) => e.entityType === "RESTAURANT"),
-      qtEntities.filter((e) => e.entityType === "RESTAURANT"),
-      "restaurant",
-      "themeparks-wiki",
-      "queue-times",
-    );
-
-    this.logger.verbose(
-      `✅ Created ${mappingsCreated} mappings for park ${park?.name}`,
-    );
-
+    // Log progress periodically
     this.processedParksCount++;
+    // Aggregate stats only when reporting to avoid locking
+    Object.entries(parkStats).forEach(([source, count]) => {
+      this.mappedCountBySource[source] =
+        (this.mappedCountBySource[source] || 0) + count;
+    });
+
     if (this.processedParksCount % 10 === 0) {
+      const globalStatsStr = Object.entries(this.mappedCountBySource)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ");
       this.logger.log(
-        `Progress: Processed ${this.processedParksCount} parks for entity mappings`,
+        `Progress: Processed ${this.processedParksCount} parks (Skipped: ${this.skippedParksCount}) - Mapped: ${globalStatsStr}`,
       );
     }
-    return mappingsCreated;
+    return totalMappings;
   }
 
+  /**
+   * Helper to process Wiki <-> Other Source matching for all types
+   */
+  private async processSourcePair(
+    parkId: string,
+    source1Entities: EntityMetadata[],
+    source2Entities: EntityMetadata[],
+    source1Name: string,
+    source2Name: string,
+    stats: Record<string, number>,
+  ) {
+    const processType = async (type: "attraction" | "show" | "restaurant") => {
+      await this.matchAndMapEntities(
+        parkId,
+        source1Entities.filter((e) => e.entityType === type.toUpperCase()),
+        source2Entities.filter((e) => e.entityType === type.toUpperCase()),
+        type,
+        source1Name,
+        source2Name,
+        stats,
+      );
+    };
+
+    await processType("attraction");
+    await processType("show");
+    await processType("restaurant");
+  }
+
+  /**
+   * Match entities from two sources and create mappings
+   */
   /**
    * Match entities from two sources and create mappings
    */
@@ -175,9 +221,10 @@ export class EntityMappingsProcessor {
     entityType: "attraction" | "show" | "restaurant",
     source1Name: string,
     source2Name: string,
-  ): Promise<number> {
+    stats: Record<string, number>,
+  ): Promise<void> {
     if (source1Entities.length === 0 || source2Entities.length === 0) {
-      return 0;
+      return;
     }
 
     // Use EntityMatcher to find matches
@@ -185,8 +232,6 @@ export class EntityMappingsProcessor {
       source1Entities,
       source2Entities,
     );
-
-    let mappingsCreated = 0;
 
     // For each matched pair, find internal ID and create both mappings
     for (const match of matchResult.matched) {
@@ -222,9 +267,9 @@ export class EntityMappingsProcessor {
         1.0, // Source of Truth
         "exact", // Was 'seed-source'
       );
-      mappingsCreated++;
+      stats[source1Name] = (stats[source1Name] || 0) + 1;
 
-      // Create mapping for source2 (Queue-Times)
+      // Create mapping for source2 (Queue-Times OR Wartezeiten)
       // This is the NEW link we need!
       await this.createMapping(
         entity.id,
@@ -234,9 +279,9 @@ export class EntityMappingsProcessor {
         match.confidence,
         "geographic", // Was 'name+location'
       );
-      mappingsCreated++;
+      stats[source2Name] = (stats[source2Name] || 0) + 1;
 
-      // ENRICHMENT: If this is an attraction and source2 (QT) has land data, update our internal entity
+      // ENRICHMENT: If this is an attraction and source2 (QT/WZ) has land data, update our internal entity
       if (
         entityType === "attraction" &&
         match.entity2.landName &&
@@ -249,8 +294,6 @@ export class EntityMappingsProcessor {
         );
       }
     }
-
-    return mappingsCreated;
   }
 
   /**

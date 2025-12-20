@@ -4,6 +4,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { Park } from "../../parks/entities/park.entity";
 import { ParksService } from "../../parks/parks.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -63,6 +64,8 @@ export class WaitTimesProcessor {
     private queueDataRepository: Repository<QueueData>,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
+    @InjectRepository(Park)
+    private parkRepository: Repository<Park>,
     private parksService: ParksService,
     private attractionsService: AttractionsService,
     private showsService: ShowsService,
@@ -86,7 +89,7 @@ export class WaitTimesProcessor {
         return;
       }
 
-      this.logger.log(`Checking ${parks.length} parks...`);
+      this.logger.debug(`Checking ${parks.length} parks...`);
 
       // Processed counters (how many entities we looked at)
       let totalAttractions = 0;
@@ -124,6 +127,12 @@ export class WaitTimesProcessor {
               }
               if (park.queueTimesEntityId) {
                 parkExternalIdMap.set("queue-times", park.queueTimesEntityId);
+              }
+              if (park.wartezeitenEntityId) {
+                parkExternalIdMap.set(
+                  "wartezeiten-app",
+                  park.wartezeitenEntityId,
+                );
               }
 
               // OPTIMIZATION 3: Pre-fetch ALL entity mappings for this park
@@ -188,6 +197,55 @@ export class WaitTimesProcessor {
                 parkExternalIdMap,
               );
               apiCallsCount++;
+
+              // EXPERIMENTAL: Save crowd level from Wartezeiten.app (if available)
+              // NOTE: Data quality unverified - stored for analysis/comparison only
+              // Not exposed in API until validated against ML predictions
+              if (
+                liveData.crowdLevel !== undefined &&
+                liveData.crowdLevel !== null
+              ) {
+                try {
+                  await this.parkRepository.update(park.id, {
+                    currentCrowdLevel: liveData.crowdLevel,
+                  });
+                  this.logger.verbose(
+                    `📊 Updated crowd level for ${park.name}: ${liveData.crowdLevel.toFixed(1)}`,
+                  );
+                } catch (error) {
+                  this.logger.warn(
+                    `Failed to update crowd level for ${park.name}: ${error}`,
+                  );
+                }
+              }
+
+              // Persist Operating Hours (from Wartezeiten or Wiki live data)
+              // This ensures we have schedule data even if the bulk schedule sync missed it
+              if (
+                liveData.operatingHours &&
+                liveData.operatingHours.length > 0
+              ) {
+                try {
+                  const scheduleUpdates = liveData.operatingHours.map(
+                    (window) => ({
+                      date: window.open, // ISO string acts as date
+                      type: window.type,
+                      openingTime: window.open,
+                      closingTime: window.close,
+                      description: "Live update",
+                    }),
+                  );
+
+                  await this.parksService.saveScheduleData(
+                    park.id,
+                    scheduleUpdates,
+                  );
+                } catch (error) {
+                  this.logger.warn(
+                    `Failed to update schedule from live data for ${park.name}: ${error}`,
+                  );
+                }
+              }
 
               // Process land data if available
               if (liveData.lands && liveData.lands.length > 0) {
@@ -278,9 +336,9 @@ export class WaitTimesProcessor {
               } else {
                 // Park is OPEN but API returned no data
                 // → Mark all entities as OPERATING (fallback)
-                this.logger.warn(
-                  `⚠️  Park ${park.name} returned no live data - marking all entities as OPERATING (fallback)`,
-                );
+                // this.logger.verbose(
+                //   `⚠️  Park ${park.name} returned no live data - marking all entities as OPERATING (fallback)`,
+                // );
 
                 const [parkAttractions, parkShows, parkRestaurants] =
                   await Promise.all([
@@ -755,7 +813,7 @@ export class WaitTimesProcessor {
     }
 
     if (updatedCount > 0) {
-      this.logger.log(
+      this.logger.debug(
         `🏰 Updated land assignment for ${updatedCount} attractions in ${park.name}`,
       );
     }

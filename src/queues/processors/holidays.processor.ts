@@ -65,9 +65,9 @@ export class HolidaysProcessor {
             continue;
           }
 
-          this.logger.log(
-            `Fetching holidays for ${country} (${isoCode}) (${startYear}-${endYear})...`,
-          );
+          // this.logger.verbose(
+          //   `Fetching holidays for ${country} (${isoCode}) (${startYear}-${endYear})...`,
+          // );
 
           const holidays = await this.nagerDateClient.getHolidaysForYears(
             isoCode,
@@ -82,9 +82,9 @@ export class HolidaysProcessor {
 
           totalHolidaysSaved += savedCount;
 
-          this.logger.log(
-            `✅ Saved ${savedCount} holidays for ${country} (${isoCode})`,
-          );
+          // this.logger.verbose(
+          //   `✅ Saved ${savedCount} holidays for ${country} (${isoCode})`,
+          // );
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);

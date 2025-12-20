@@ -472,9 +472,9 @@ export class AnalyticsService {
     // Fallback: If < 3 attractions meet threshold and we're using > 0, use all (> 0)
     // This ensures small parks or quiet times still return meaningful data
     if (result?.count && parseInt(result.count) < 3 && minWaitTime > 0) {
-      this.logger.verbose(
-        `Park ${parkId}: Only ${result.count} attractions with >= ${minWaitTime} min wait. Falling back to all attractions (> 0).`,
-      );
+      // this.logger.verbose(
+      //   `Park ${parkId}: Only ${result.count} attractions with >= ${minWaitTime} min wait. Falling back to all attractions (> 0).`,
+      // );
       return this.getCurrentAverageWaitTime(parkId, 0); // Recursive with 0 threshold
     }
 

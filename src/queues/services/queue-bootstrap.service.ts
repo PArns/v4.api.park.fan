@@ -115,7 +115,7 @@ export class QueueBootstrapService implements OnModuleInit {
         Date.now() - latestData.timestamp.getTime() < 5 * 60 * 1000;
 
       if (isFresh) {
-        this.logger.log(
+        this.logger.debug(
           `✅ Data is fresh (${latestData?.timestamp.toISOString()}). Skipping immediate wait times update.`,
         );
       } else {
@@ -140,7 +140,7 @@ export class QueueBootstrapService implements OnModuleInit {
           );
           this.logger.log("✅ Wait times update job queued");
         } else {
-          this.logger.log("⏭️  Wait times job already running, skipping");
+          this.logger.debug("⏭️  Wait times job already running, skipping");
         }
       }
     }
@@ -165,7 +165,7 @@ export class QueueBootstrapService implements OnModuleInit {
       );
       this.logger.log("✅ Boot: Park metadata sync job queued (Force Sync)");
     } else {
-      this.logger.log(
+      this.logger.debug(
         "⏭️  Boot: Park metadata sync job already running, skipping",
       );
     }
@@ -235,7 +235,7 @@ export class QueueBootstrapService implements OnModuleInit {
     if (totalCleaned > 0) {
       this.logger.log(`✅ Cleaned ${totalCleaned} old jobs from queues`);
     } else {
-      this.logger.log("✅ No old jobs to clean");
+      this.logger.debug("✅ No old jobs to clean");
     }
   }
 }

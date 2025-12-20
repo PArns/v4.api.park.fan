@@ -152,7 +152,7 @@ export class ParkMetadataProcessor {
         wikiEntityId: wiki.externalId,
         queueTimesEntityId: qt.externalId,
       });
-      this.logger.debug(`✓ Created matched park: ${park.name} (${park.id})`);
+      this.logger.verbose(`✓ Created matched park: ${park.name} (${park.id})`);
     } else {
       // Update existing park with multi-source info
       park.dataSources = ["themeparks-wiki", "queue-times"];
@@ -169,7 +169,7 @@ export class ParkMetadataProcessor {
       }
 
       await this.parkRepository.save(park);
-      this.logger.debug(`✓ Updated matched park: ${park.name} (${park.id})`);
+      // this.logger.verbose(`✓ Updated matched park: ${park.name} (${park.id})`);
     }
 
     // Create external mappings for BOTH sources (with conflict handling)
@@ -211,7 +211,7 @@ export class ParkMetadataProcessor {
           `✓ Backfilled columns for wiki-only park: ${park.name}`,
         );
       }
-      this.logger.debug(`✓ Park already exists: ${park.name}`);
+      // this.logger.debug(`✓ Park already exists: ${park.name}`);
       return;
     }
 
@@ -279,7 +279,7 @@ export class ParkMetadataProcessor {
           `✓ Backfilled columns for qt-only park: ${park.name}`,
         );
       }
-      this.logger.debug(`✓ Park already exists: ${park.name}`);
+      // this.logger.debug(`✓ Park already exists: ${park.name}`);
       return;
     }
 
@@ -336,9 +336,9 @@ export class ParkMetadataProcessor {
     if (existing) {
       // Check if it points to the correct internal entity
       if (existing.internalEntityId === internalEntityId) {
-        this.logger.debug(
-          `Mapping already exists: ${externalSource}:${externalEntityId}`,
-        );
+        // this.logger.verbose(
+        //   `Mapping already exists: ${externalSource}:${externalEntityId}`,
+        // );
         return;
       }
 

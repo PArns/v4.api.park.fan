@@ -34,7 +34,7 @@ export class CacheWarmupService {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Warm up cache for a single park
@@ -74,9 +74,9 @@ export class CacheWarmupService {
       // Warm up cache by calling integration service (bypass cache read if forced)
       await this.parkIntegrationService.buildIntegratedResponse(park, force);
 
-      this.logger.debug(
-        `✓ Warmed cache for park: ${park.slug} (force=${force})`,
-      );
+      // this.logger.debug(
+      //   `✓ Warmed cache for park: ${park.slug} (force=${force})`,
+      // );
       return true;
     } catch (error: unknown) {
       const errorMessage =
@@ -279,7 +279,7 @@ export class CacheWarmupService {
         attraction,
       );
 
-      this.logger.debug(`✓ Warmed cache for attraction: ${attraction.slug}`);
+      // this.logger.debug(`✓ Warmed cache for attraction: ${attraction.slug}`);
       return true;
     } catch (error: unknown) {
       const errorMessage =

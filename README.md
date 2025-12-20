@@ -256,6 +256,7 @@ This project aggregates data from multiple sources:
 
 - **[Queue-Times.com](https://queue-times.com/)** — Real-time wait time data
 - **[ThemeParks.wiki](https://themeparks.wiki/)** — Comprehensive park information and live data
+- **[Wartezeiten.app](https://www.wartezeiten.app/)** — Wait times, crowd levels, and opening hours enrichment
 
 Special thanks to these services for making real-time theme park data accessible.
 

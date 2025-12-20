@@ -420,7 +420,7 @@ export class ParksService {
    * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
    */
   async repairDuplicates(): Promise<void> {
-    this.logger.log("🔧 Running Duplicate Park Repair...");
+    this.logger.debug("🔧 Running Duplicate Park Repair...");
 
     // Find all Queue-Times IDs that are used by more than one park
     const duplicates = await this.parkRepository.query(`
@@ -431,7 +431,13 @@ export class ParksService {
       HAVING COUNT(*) > 1
     `);
 
-    this.logger.log(`Found ${duplicates.length} duplicate sets to repair.`);
+    if (duplicates.length > 0) {
+      this.logger.warn(
+        `Found ${duplicates.length} duplicate sets into repair.`,
+      );
+    } else {
+      this.logger.debug("Found 0 duplicate sets to repair.");
+    }
 
     for (const dup of duplicates) {
       const qtId = dup.queue_times_entity_id;
@@ -942,10 +948,10 @@ export class ParksService {
 
     if (filledCount > 0) {
       await this.invalidateScheduleCache(parkId);
+      this.logger.log(
+        `Filled or updated ${filledCount} schedule entries for Park ${parkId}`,
+      );
     }
-    this.logger.log(
-      `Filled or updated ${filledCount} schedule entries for Park ${parkId}`,
-    );
     return filledCount;
   }
 
@@ -1461,9 +1467,9 @@ export class ParksService {
     const keys = await this.redis.keys(`schedule:*:${parkId}:*`);
     if (keys.length > 0) {
       await this.redis.del(...keys);
-      this.logger.debug(
-        `Cleared ${keys.length} schedule cache keys for park ${parkId}`,
-      );
+      // this.logger.debug(
+      //   `Cleared ${keys.length} schedule cache keys for park ${parkId}`,
+      // );
     }
   }
 }

@@ -1,4 +1,6 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 import {
   DestinationsApiResponse,
@@ -21,18 +23,61 @@ export class ThemeParksClient {
   private readonly logger = new Logger(ThemeParksClient.name);
   private readonly baseUrl = "https://api.themeparks.wiki/v1";
 
-  constructor() {}
+  // Redis key for distributed rate limiting
+  private readonly BLOCKED_KEY = "ratelimit:themeparks:blocked";
+
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
   /**
    * Helper to fetch with retry on 429
    */
   private async fetchWithRetry(url: string, attempt = 0): Promise<Response> {
+    // 1. Check Distributed Rate Limit
+    if (attempt === 0) {
+      // Check only on first attempt to avoid redundant checks during retry loop
+      const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+      if (blockedUntil) {
+        const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+        this.logger.warn(
+          `⏳ Global Rate Limit active. Waiting for ThemeParks API (${ttl}s)...`,
+        );
+        // Wait it out if it's short, otherwise throw?
+        // Since this is a retry-capable function, we can just wait if it's reasonable
+        if (ttl > 0 && ttl < 60) {
+          await new Promise((resolve) => setTimeout(resolve, ttl * 1000));
+        } else {
+          // If long block, maybe just throw to avoid holding connection
+          throw new Error(
+            `ThemeParks API: Global Rate Limit (blocked for ${ttl}s)`,
+          );
+        }
+      }
+    }
+
     const response = await fetch(url);
 
-    if (response.status === 429) {
-      // Too Many Requests
+    // Check for 429 (Too Many Requests) OR 5xx (Server Errors)
+    if (
+      response.status === 429 ||
+      (response.status >= 500 && response.status < 600)
+    ) {
+      // If 429, Set Distributed Lock
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        let unlockTime = 5; // Default 5s if unknown
+        if (retryAfter) {
+          const seconds = parseInt(retryAfter, 10);
+          if (!isNaN(seconds)) {
+            unlockTime = seconds;
+          }
+        }
+        await this.redis.set(this.BLOCKED_KEY, "true", "EX", unlockTime);
+      }
+
       if (attempt >= 5) {
-        throw new Error(`Rate limit exceeded after 5 attempts for ${url}`);
+        throw new Error(
+          `Request failed after 5 attempts for ${url} (Status: ${response.status})`,
+        );
       }
 
       const retryAfter = response.headers.get("Retry-After");
@@ -46,7 +91,7 @@ export class ThemeParksClient {
       }
 
       this.logger.warn(
-        `Rate limit hit for ${url}. Retrying in ${delay}ms (Attempt ${attempt + 1}/5)`,
+        `Rate limit or Server Error (${response.status}) for ${url}. Retrying in ${delay}ms (Attempt ${attempt + 1}/5)`,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
       return this.fetchWithRetry(url, attempt + 1);
