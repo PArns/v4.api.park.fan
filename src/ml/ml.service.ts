@@ -469,15 +469,17 @@ export class MLService {
 
       // Check if park is currently operating by looking at recent queue data
       // If park has recent queue data, it's operating
-      const recentQueueData = await this.queueDataRepository.findOne({
-        where: {
-          attractionId: In(
-            parkPredictions.map((p) => p.attractionId).slice(0, 10),
-          ), // Check first 10 attractions
-          timestamp: MoreThan(new Date(Date.now() - 30 * 60 * 1000)), // Last 30 min
-        },
-        order: { timestamp: "DESC" },
-      });
+      // Check if park is currently operating by looking at recent queue data
+      // If park has recent queue data, it's operating
+      // Use SQL-native time comparison to avoid timezone mismatches between Node process and DB
+      const recentQueueData = await this.queueDataRepository
+        .createQueryBuilder("q")
+        .where("q.attractionId IN (:...ids)", {
+          ids: parkPredictions.map((p) => p.attractionId).slice(0, 10),
+        }) // Check first 10 attractions
+        .andWhere("q.timestamp > NOW() - INTERVAL '30 minutes'")
+        .orderBy("q.timestamp", "DESC")
+        .getOne();
 
       if (recentQueueData) {
         validPredictions.push(...parkPredictions);

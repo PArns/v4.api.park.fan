@@ -34,7 +34,7 @@ export class ParksService {
     private themeParksMapper: ThemeParksMapper,
     private destinationsService: DestinationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -749,9 +749,9 @@ export class ParksService {
         // Update if times or description changed
         const hasChanges =
           existing.openingTime?.getTime() !==
-            scheduleEntry.openingTime?.getTime() ||
+          scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
-            scheduleEntry.closingTime?.getTime() ||
+          scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description;
 
         if (hasChanges) {
@@ -975,10 +975,14 @@ export class ParksService {
     days: number = 7,
   ): Promise<ScheduleEntry[]> {
     const today = new Date();
+    // Start from yesterday to ensure we capture schedules for parks in earlier timezones (e.g. US West Coast from Europe)
+    // and correctly handle late-night operating hours that cross midnight
+    today.setDate(today.getDate() - 1);
     today.setHours(0, 0, 0, 0);
 
     const endDate = new Date(today);
-    endDate.setDate(endDate.getDate() + days);
+    // Adjust end date calculation since we started 1 day earlier
+    endDate.setDate(endDate.getDate() + days + 1);
     endDate.setHours(23, 59, 59, 999);
 
     const cacheKey = `schedule:upcoming:${parkId}:${today.toISOString().split("T")[0]}:${days}`;
