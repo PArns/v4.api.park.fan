@@ -108,8 +108,8 @@ export class Park {
   longitude: number;
 
   // Track when geocoding was last attempted (to avoid retrying failed attempts)
-  @Column({ type: "timestamp", nullable: true })
-  geocodingAttemptedAt: Date;
+  @Column({ type: "timestamptz", nullable: true })
+  geocodingAttemptedAt: Date | null;
 
   @Column()
   timezone: string;

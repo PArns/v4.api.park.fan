@@ -30,7 +30,7 @@ export class ForecastData {
   @Column()
   attractionId: string;
 
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamptz" })
   predictedTime: Date;
 
   @Column({ type: "int" })
@@ -42,7 +42,7 @@ export class ForecastData {
   @Column({ type: "text", default: "themeparks_wiki" })
   source: string; // 'themeparks_wiki' or 'our_ml_model' (future)
 
-  @PrimaryColumn({ type: "timestamp" })
+  @PrimaryColumn({ type: "timestamptz" })
   createdAt: Date; // When this forecast was created/fetched
 
   @BeforeInsert()

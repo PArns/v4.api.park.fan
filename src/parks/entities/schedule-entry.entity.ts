@@ -60,10 +60,10 @@ export class ScheduleEntry {
   })
   scheduleType: ScheduleType;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   openingTime: Date | null;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: "timestamptz", nullable: true })
   closingTime: Date | null;
 
   @Column({ type: "text", nullable: true })

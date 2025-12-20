@@ -189,6 +189,45 @@ GET  /health                                # System health status
 - **Swagger**: ALL new endpoints must have `@ApiTags`, `@ApiOperation`, and `@ApiResponse` decorators.
 - **Return Codes**: Explicitly document success (200) and error (404, 400) responses.
 
+**TypeORM Column Types** (PostgreSQL Best Practices):
+- **Timestamps**: ALWAYS use `timestamptz` (timezone-aware), NEVER `timestamp`
+  ```typescript
+  @Column({ type: "timestamptz" })
+  createdAt: Date;
+  
+  @PrimaryColumn({ type: "timestamptz" })
+  timestamp: Date;
+  ```
+- **Text**: Use `text` instead of `varchar` (more flexible, same performance)
+  ```typescript
+  @Column({ type: "text", nullable: true })
+  description: string | null;
+  ```
+- **TimescaleDB Hypertables**: MUST have composite primary keys including timestamp column
+  ```typescript
+  // ✅ CORRECT (TimescaleDB-compatible)
+  @PrimaryColumn("uuid")
+  id: string;
+  
+  @PrimaryColumn({ type: "timestamptz" })
+  timestamp: Date;
+  
+  // ❌ WRONG (causes synchronization errors)
+  @PrimaryColumn("uuid")
+  id: string;
+  
+  @Column({ type: "timestamptz" })  // NOT in primary key
+  timestamp: Date;
+  ```
+- **Auto Timestamps**: Use `@CreateDateColumn()` and `@UpdateDateColumn()` (automatically uses timestamptz)
+  ```typescript
+  @CreateDateColumn()
+  createdAt: Date;
+  
+  @UpdateDateColumn()
+  updatedAt: Date;
+  ```
+
 
 ---
 

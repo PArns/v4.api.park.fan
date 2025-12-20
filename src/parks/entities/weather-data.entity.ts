@@ -85,8 +85,8 @@ export class WeatherData {
   @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
   windSpeedMax: number | null;
 
-  @Column({ type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
-  createdAt: Date; // When this data was fetched
+  @Column({ type: "timestamptz", default: () => "CURRENT_TIMESTAMP" })
+  lastUpdated: Date; // When this data was fetched
 
   @UpdateDateColumn()
   updatedAt: Date; // When this data was last updated

@@ -34,11 +34,11 @@ export class PredictionAccuracy {
   @JoinColumn({ name: "attractionId" })
   attraction: Attraction;
 
-  @Column({ type: "timestamp" })
-  predictionTime: Date; // When the prediction was made
+  @Column({ type: "timestamptz" })
+  predictionTime: Date;
 
-  @Column({ type: "timestamp" })
-  targetTime: Date; // The time that was being predicted
+  @Column({ type: "timestamptz" })
+  targetTime: Date;
 
   @Column({ type: "int" })
   predictedWaitTime: number;

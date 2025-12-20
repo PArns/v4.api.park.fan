@@ -41,13 +41,13 @@ export class MLModel {
   r2Score: number; // R² Score
 
   // Training metadata
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamptz" })
   trainedAt: Date;
 
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamptz" })
   trainDataStartDate: Date;
 
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamptz" })
   trainDataEndDate: Date;
 
   @Column({ type: "int" })
