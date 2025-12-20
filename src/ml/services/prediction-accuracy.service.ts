@@ -94,8 +94,10 @@ export class PredictionAccuracyService {
    *
    * Period: Checks predictions from last 7 days
    * Retries: Only retries for 2 hours after target time, then marks as MISSED
+   *
+   * @returns {Promise<{newComparisons: number}>} Number of new comparisons added
    */
-  async compareWithActuals(): Promise<void> {
+  async compareWithActuals(): Promise<{ newComparisons: number }> {
     const startTime = Date.now();
     this.logger.log("🔄 Comparing predictions with actual wait times...");
 
@@ -130,7 +132,7 @@ export class PredictionAccuracyService {
 
     if (pendingPredictions.length === 0) {
       this.logger.log("✅ No pending predictions ready to compare");
-      return;
+      return { newComparisons: 0 };
     }
 
     this.logger.log(
@@ -273,6 +275,9 @@ export class PredictionAccuracyService {
         `ℹ️ ${missed} predictions marked as MISSED (no data found after 2 hours)`,
       );
     }
+
+    // Return count of new comparisons for tracking
+    return { newComparisons: completed };
   }
 
   /**
@@ -1377,8 +1382,16 @@ export class PredictionAccuracyService {
       accuracyRecords.map((r) => r.attractionId),
     ).size;
 
-    // For parks, we'd need to join with attractions table, but let's estimate for now
-    const uniqueParks = 0; // TODO: Implement if needed
+    // Count unique parks by joining with attractions table
+    const uniqueParksResult = await this.accuracyRepository
+      .createQueryBuilder("pa")
+      .innerJoin("attractions", "a", "a.id = pa.attractionId")
+      .select("COUNT(DISTINCT a.parkId)", "count")
+      .where("pa.targetTime >= :startDate", { startDate })
+      .andWhere("pa.comparisonStatus = :status", { status: "COMPLETED" })
+      .getRawOne();
+
+    const uniqueParks = parseInt(uniqueParksResult?.count || "0", 10);
 
     return {
       totalPredictions: accuracyRecords.length,

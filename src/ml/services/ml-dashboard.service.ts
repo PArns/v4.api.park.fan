@@ -1,7 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
+import { Redis } from "ioredis";
 import { MLModelService } from "./ml-model.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * MLDashboardService
@@ -20,6 +24,8 @@ export class MLDashboardService {
   constructor(
     private mlModelService: MLModelService,
     private accuracyService: PredictionAccuracyService,
+    @InjectQueue("ml-training") private mlTrainingQueue: Queue,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /**
@@ -168,15 +174,25 @@ export class MLDashboardService {
       new Date(currentModel.trainedAt),
     );
 
+    // Fetch real system health metrics
+    const [lastTrainingDuration, lastAccuracyTimestamp, lastComparisonCount] =
+      await Promise.all([
+        this.getLastTrainingDuration(),
+        this.redis.get("ml:accuracy:last_run"),
+        this.redis.get("ml:accuracy:last_run_count"),
+      ]);
+
     const systemHealth = {
       lastTrainingJob: {
         completedAt: currentModel.trainedAt,
-        durationSeconds: 420, // TODO: Track actual job duration from Bull queue
+        durationSeconds: lastTrainingDuration || 0,
         status: "success" as const,
       },
       lastAccuracyCheck: {
-        completedAt: new Date().toISOString(), // TODO: Track from prediction-accuracy processor
-        newComparisonsAdded: 0, // TODO: Track incremental comparisons
+        completedAt: lastAccuracyTimestamp || new Date().toISOString(),
+        newComparisonsAdded: lastComparisonCount
+          ? parseInt(lastComparisonCount)
+          : 0,
       },
       nextScheduledTraining: this.getNextScheduledTraining(),
       modelAge,
@@ -209,6 +225,34 @@ export class MLDashboardService {
     );
 
     return dashboard;
+  }
+
+  /**
+   * Get duration of last completed training job from Bull queue
+   *
+   * @private
+   * @returns {Promise<number | null>} Duration in seconds, or null if no completed jobs
+   */
+  private async getLastTrainingDuration(): Promise<number | null> {
+    try {
+      const completedJobs = await this.mlTrainingQueue.getCompleted();
+      if (completedJobs.length === 0) {
+        return null;
+      }
+
+      // Get most recent completed job
+      const lastJob = completedJobs[completedJobs.length - 1];
+
+      if (lastJob.finishedOn && lastJob.processedOn) {
+        const durationMs = lastJob.finishedOn - lastJob.processedOn;
+        return Math.floor(durationMs / 1000); // Convert to seconds
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to get last training duration: ${error}`);
+      return null;
+    }
   }
 
   /**
