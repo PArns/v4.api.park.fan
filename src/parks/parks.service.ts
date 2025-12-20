@@ -822,18 +822,20 @@ export class ParksService {
         await this.scheduleRepository.save(scheduleEntry);
         savedCount++;
       } else {
-        // Update if times, description, or holiday status changed
+        // Update if times, description, or holiday/bridge status changed
         const hasChanges =
           existing.openingTime?.getTime() !==
             scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
             scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description ||
-          existing.isHoliday !== scheduleEntry.isHoliday;
+          existing.isHoliday !== scheduleEntry.isHoliday ||
+          existing.isBridgeDay !== scheduleEntry.isBridgeDay;
 
         if (hasChanges) {
           await this.scheduleRepository.update(existing.id, scheduleEntry);
           savedCount++;
+          await this.invalidateScheduleCache(parkId);
         }
       }
     }
@@ -965,6 +967,10 @@ export class ParksService {
       }
 
       currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    if (filledCount > 0) {
+      await this.invalidateScheduleCache(parkId);
     }
     this.logger.log(`Filled ${filledCount} schedule gaps for Park ${parkId}`);
     return filledCount;
@@ -1442,6 +1448,20 @@ export class ParksService {
       }
     }
 
+    // ... logic ...
     return statusMap;
+  }
+
+  /**
+   * Invalidates schedule cache for a park
+   */
+  async invalidateScheduleCache(parkId: string): Promise<void> {
+    const keys = await this.redis.keys(`schedule:*:${parkId}:*`);
+    if (keys.length > 0) {
+      await this.redis.del(...keys);
+      this.logger.debug(
+        `Cleared ${keys.length} schedule cache keys for park ${parkId}`,
+      );
+    }
   }
 }
