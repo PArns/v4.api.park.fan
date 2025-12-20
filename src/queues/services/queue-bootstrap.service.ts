@@ -169,6 +169,27 @@ export class QueueBootstrapService implements OnModuleInit {
         "⏭️  Boot: Park metadata sync job already running, skipping",
       );
     }
+
+    // ALWAYS trigger holiday sync on boot (non-blocking)
+    const holidayJobActive = await this.isJobActiveOrWaiting(
+      this.holidaysQueue,
+      "fetch-holidays",
+    );
+
+    if (!holidayJobActive) {
+      await this.holidaysQueue.add(
+        "fetch-holidays",
+        {},
+        {
+          priority: 2,
+          jobId: "bootstrap-holidays-sync",
+          removeOnComplete: true,
+        },
+      );
+      this.logger.log("✅ Boot: Holiday sync job queued");
+    } else {
+      this.logger.log("⏭️  Boot: Holiday sync job already running, skipping");
+    }
   }
 
   /**

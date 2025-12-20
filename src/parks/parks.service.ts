@@ -916,14 +916,13 @@ export class ParksService {
 
       // If no entry exists for this date
       if (!existingDates.has(dateStr)) {
-        let shouldInsert = false;
+        let shouldInsert = true; // Always fill gaps in the schedule range
         let holidayName: string | null = null;
         let isBridgeDay = false;
         let isHoliday = false;
 
         // Check Holiday
         if (holidayMap.has(dateStr)) {
-          shouldInsert = true;
           isHoliday = true;
           holidayName = holidayMap.get(dateStr)!;
         }
@@ -936,7 +935,6 @@ export class ParksService {
           prev.setDate(currentDate.getDate() - 1);
           const prevStr = prev.toISOString().split("T")[0];
           if (holidayDatesSet.has(prevStr)) {
-            shouldInsert = true;
             isBridgeDay = true;
           }
         } else if (dayOfWeek === 1) {
@@ -945,7 +943,6 @@ export class ParksService {
           next.setDate(currentDate.getDate() + 1);
           const nextStr = next.toISOString().split("T")[0];
           if (holidayDatesSet.has(nextStr)) {
-            shouldInsert = true;
             isBridgeDay = true;
           }
         }
