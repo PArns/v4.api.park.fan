@@ -16,6 +16,7 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 
 /**
  * Park Integration Service
@@ -168,12 +169,19 @@ export class ParkIntegrationService {
       // Filter hourly predictions:
       // - If park OPERATING: Show today's hourly predictions
       // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
+      // Use park's timezone to determine "today" and "tomorrow"
+      const todayInParkTz = park.timezone
+        ? getCurrentDateInTimezone(park.timezone)
+        : new Date().toISOString().split("T")[0];
+
+      const tomorrowDate = new Date();
+      tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+      const tomorrowInParkTz = park.timezone
+        ? getCurrentDateInTimezone(park.timezone)
+        : tomorrowDate.toISOString().split("T")[0];
+
       const targetDateStr =
-        dto.status === "OPERATING"
-          ? new Date().toISOString().split("T")[0] // Today
-          : new Date(Date.now() + 24 * 60 * 60 * 1000)
-              .toISOString()
-              .split("T")[0]; // Tomorrow
+        dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
 
       if (hourlyRes && hourlyRes.predictions) {
         for (const p of hourlyRes.predictions) {
