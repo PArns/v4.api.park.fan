@@ -16,8 +16,11 @@ import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
+import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
+import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
+import { AnalyticsService } from "../analytics/analytics.service";
 
 @Injectable()
 export class MLService {
@@ -38,9 +41,12 @@ export class MLService {
     private parkRepository: Repository<Park>,
     @InjectRepository(Attraction)
     private attractionRepository: Repository<Attraction>,
+    @InjectRepository(ScheduleEntry)
+    private scheduleEntryRepository: Repository<ScheduleEntry>,
     private configService: ConfigService,
     private predictionAccuracyService: PredictionAccuracyService,
     private weatherService: WeatherService,
+    private analyticsService: AnalyticsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     // ML service URL from environment or default
@@ -240,6 +246,12 @@ export class MLService {
         }
       }
 
+      // 4a. Build Phase 2 feature context
+      const featureContext = await this.buildFeatureContext(
+        parkId,
+        activeAttractionIds,
+      );
+
       // 5. Call ML Service via POST (Bulk Prediction)
       const payload: PredictionRequestDto = {
         attractionIds: activeAttractionIds,
@@ -247,6 +259,7 @@ export class MLService {
         predictionType,
         weatherForecast, // Empty array if failed or no coords
         currentWaitTimes,
+        featureContext, // Phase 2: Real-time context features
       };
 
       const response = await this.mlClient.post<BulkPredictionResponseDto>(
@@ -290,6 +303,111 @@ export class MLService {
         count: 0,
         modelVersion: "unavailable",
       };
+    }
+  }
+
+  /**
+   * Build feature context for Phase 2 ML features
+   *
+   * Gathers real-time operational data to enhance ML predictions:
+   * - Park occupancy percentage
+   * - Park opening times
+   * - Attraction downtime today
+   * - Virtual queue (boarding group) status
+   *
+   * @param parkId - Park ID
+   * @param attractionIds - List of attraction IDs
+   * @returns Feature context object for ML service
+   */
+  private async buildFeatureContext(
+    parkId: string,
+    attractionIds: string[],
+  ): Promise<any> {
+    try {
+      // 1. Get park occupancy percentage
+      let parkOccupancy: Record<string, number> = {};
+      try {
+        const occupancyPct =
+          await this.analyticsService.getCurrentOccupancy(parkId);
+        parkOccupancy[parkId] = occupancyPct;
+      } catch (error) {
+        this.logger.warn(`Failed to get park occupancy: ${error}`);
+      }
+
+      // 2. Get park opening time today
+      let parkOpeningTimes: Record<string, string> = {};
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const schedule = await this.scheduleEntryRepository.findOne({
+          where: {
+            parkId,
+            date: today,
+            scheduleType: ScheduleType.OPERATING,
+          },
+        });
+
+        if (schedule?.openingTime) {
+          parkOpeningTimes[parkId] = schedule.openingTime.toISOString();
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get park opening time: ${error}`);
+      }
+
+      // 3. Get downtime cache from Redis
+      let downtimeCache: Record<string, number> = {};
+      try {
+        const today = new Date().toISOString().split("T")[0];
+        const keys = attractionIds.map((id) => `downtime:daily:${id}:${today}`);
+
+        const downtimeValues = await this.redis.mget(...keys);
+
+        for (let i = 0; i < attractionIds.length; i++) {
+          if (downtimeValues[i]) {
+            const minutes = parseInt(downtimeValues[i]!);
+            if (minutes > 0) {
+              downtimeCache[attractionIds[i]] = minutes;
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get downtime cache: ${error}`);
+      }
+
+      // 4. Get queue data for virtual queue detection
+      let queueData: Record<string, any> = {};
+      try {
+        const latestQueueData = await this.queueDataRepository
+          .createQueryBuilder("q")
+          .distinctOn(["q.attractionId"])
+          .where("q.attractionId = ANY(:ids)", { ids: attractionIds })
+          .andWhere("q.timestamp >= :recent", {
+            recent: new Date(Date.now() - 60 * 60 * 1000),
+          })
+          .orderBy("q.attractionId")
+          .addOrderBy("q.timestamp", "DESC")
+          .getMany();
+
+        for (const item of latestQueueData) {
+          queueData[item.attractionId] = {
+            queueType: item.queueType,
+            status: item.status,
+          };
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get queue data: ${error}`);
+      }
+
+      return {
+        parkOccupancy,
+        parkOpeningTimes,
+        downtimeCache,
+        queueData,
+      };
+    } catch (error) {
+      this.logger.warn(`Failed to build feature context: ${error}`);
+      return {}; // Return empty context on error
     }
   }
 

@@ -239,6 +239,48 @@ export class AnalyticsService {
   }
 
   /**
+   * Get current park occupancy percentage for ML features
+   *
+   * Simplified version of calculateParkOccupancy that returns only the percentage
+   * Used by ML service for park-wide crowding predictions
+   *
+   * @param parkId - Park ID
+   * @returns Occupancy percentage (0-200%) or 100 if no data
+   *
+   * Example: 75 = park is at 75% of typical P90 wait times
+   */
+  async getCurrentOccupancy(parkId: string): Promise<number> {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentDayOfWeek = now.getDay();
+
+    // Get current average wait time
+    const currentAvgWait = await this.getCurrentAverageWaitTime(parkId);
+
+    if (currentAvgWait === null) {
+      return 100; // Default to 100% if no current data
+    }
+
+    // Calculate 90th percentile for this hour/weekday
+    const p90Baseline = await this.get90thPercentileOneYear(
+      parkId,
+      currentHour,
+      currentDayOfWeek,
+      "park",
+    );
+
+    if (p90Baseline === 0) {
+      return 100; // Default to 100% if no historical baseline
+    }
+
+    // Calculate occupancy as percentage of P90
+    const occupancyPercentage = (currentAvgWait / p90Baseline) * 100;
+
+    // Cap at 200% to prevent extreme outliers
+    return Math.round(Math.min(occupancyPercentage, 200));
+  }
+
+  /**
    * Get park-level percentiles for today
    * Uses pre-computed queue_data_aggregates for efficient calculation
    *

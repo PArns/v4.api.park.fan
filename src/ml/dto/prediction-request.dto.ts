@@ -54,6 +54,17 @@ export class PredictionRequestDto {
 
   @ApiProperty({ description: "Current wait times override", required: false })
   currentWaitTimes?: Record<string, number>;
+
+  @ApiProperty({
+    description: "Feature context for Phase 2 ML features",
+    required: false,
+  })
+  featureContext?: {
+    parkOccupancy?: Record<string, number>; // parkId -> occupancy %
+    parkOpeningTimes?: Record<string, string>; // parkId -> opening time ISO string
+    downtimeCache?: Record<string, number>; // attractionId -> downtime minutes
+    queueData?: Record<string, any>; // attractionId -> queue info
+  };
 }
 
 export class ParkPredictionRequestDto {
