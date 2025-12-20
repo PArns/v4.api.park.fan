@@ -158,7 +158,7 @@ export class QueueBootstrapService implements OnModuleInit {
         "sync-all-parks",
         {},
         {
-          priority: 1,
+          priority: 10, // Highest - runs first
           jobId: "bootstrap-parks-sync", // Unique ID for boot run
           removeOnComplete: true,
         },
@@ -181,7 +181,7 @@ export class QueueBootstrapService implements OnModuleInit {
         "fetch-holidays",
         {},
         {
-          priority: 2,
+          priority: 9, // After parks (priority 10)
           jobId: "bootstrap-holidays-sync",
           removeOnComplete: true,
         },
