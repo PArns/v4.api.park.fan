@@ -75,18 +75,20 @@ export class GoogleGeocodingClient {
       const data = JSON.parse(cached) as GeographicData;
 
       // Smart Cache Check:
-      // If we have cached data but it's missing new fields (region/countryCode),
-      // we treat it as a cache miss to get the enhanced data from Google.
-      // This performs a "lazy migration" of our cache.
-      if (data.countryCode && (data.region || data.region === undefined)) {
-        this.logger.debug(
-          `Cache hit for geocoding: ${latRounded}, ${lngRounded}`,
-        );
+      // ONLY re-fetch if ESSENTIAL fields are missing (countryCode, city, country, continent)
+      // Region/regionCode are OPTIONAL - not all countries have them
+      // This prevents expensive API re-calls for parks where region data doesn't exist
+      const hasEssentialFields =
+        data.countryCode && data.city && data.country && data.continent;
+
+      if (hasEssentialFields) {
+        // Cache is good enough - return it
         return data;
       }
 
-      this.logger.log(
-        `Cache upgrade needed (missing fields) for: ${latRounded}, ${lngRounded}`,
+      // Missing essential fields - need to upgrade
+      this.logger.warn(
+        `Cache missing essential fields for: ${latRounded}, ${lngRounded} - upgrading`,
       );
     }
 
@@ -103,9 +105,6 @@ export class GoogleGeocodingClient {
         JSON.stringify(result),
         "EX",
         this.TTL_GEOCODING,
-      );
-      this.logger.debug(
-        `Cached geocoding result for 90 days: ${latRounded}, ${lngRounded}`,
       );
     } else {
       // Cache null results for 7 days to avoid repeated API calls for bad coordinates
