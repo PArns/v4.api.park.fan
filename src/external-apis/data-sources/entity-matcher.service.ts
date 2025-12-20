@@ -4,6 +4,7 @@ import {
   ParkMetadata,
   EntityMetadata,
 } from "./interfaces/data-source.interface";
+import { MANUALLY_MATCHED_PARKS } from "./config/manual-park-matches";
 import { normalizeForMatching } from "../../common/utils/slug.util";
 
 /**
@@ -43,16 +44,39 @@ export class EntityMatcherService {
     const wikiOnly: ParkMetadata[] = [];
     const qtOnly = [...qtParks]; // Clone array
 
+    // Manual Overrides loaded from config
+    const manualOverrides = MANUALLY_MATCHED_PARKS;
+
     for (const wiki of wikiParks) {
       let bestMatch: ParkMetadata | null = null;
       let bestScore = 0;
 
-      for (const qt of qtOnly) {
-        const score = this.calculateParkSimilarity(wiki, qt);
-        if (score > bestScore && score > 0.75) {
-          // 75% threshold
-          bestScore = score;
-          bestMatch = qt;
+      const normWikiName = normalizeForMatching(wiki.name);
+
+      // 1. Check for manual override first
+      const aliases = manualOverrides[normWikiName] || [];
+      if (aliases.length > 0) {
+        // Look for an alias match in qtOnly
+        const overrideMatch = qtOnly.find(p =>
+          aliases.includes(normalizeForMatching(p.name))
+        );
+
+        if (overrideMatch) {
+          this.logger.log(`🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`);
+          bestMatch = overrideMatch;
+          bestScore = 1.0;
+        }
+      }
+
+      // 2. Fallback to fuzzy matching if no manual match found
+      if (!bestMatch) {
+        for (const qt of qtOnly) {
+          const score = this.calculateParkSimilarity(wiki, qt);
+          if (score > bestScore && score > 0.75) {
+            // 75% threshold
+            bestScore = score;
+            bestMatch = qt;
+          }
         }
       }
 
@@ -272,9 +296,9 @@ export class EntityMatcherService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos(this.toRad(p1.latitude)) *
-        Math.cos(this.toRad(p2.latitude)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos(this.toRad(p2.latitude)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
 
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
