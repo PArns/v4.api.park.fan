@@ -9,6 +9,7 @@ import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 @Injectable()
 export class RestaurantsService {
@@ -490,14 +491,7 @@ export class RestaurantsService {
   ): Promise<Map<string, RestaurantLiveData>> {
     // 1. Calculate Start of Day in Park's Timezone
     const now = new Date();
-    const parkDateStr = now.toLocaleDateString("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    // Format: MM/DD/YYYY -> YYYY-MM-DD
-    const [month, day, year] = parkDateStr.split("/");
+    const parkDate = formatInParkTimezone(now, timezone);
 
     // Simplified: Fetch all Operating data for the last 24h and filter in memory
     const lookbackHours = 26; // 24h + buffer
@@ -517,19 +511,10 @@ export class RestaurantsService {
     const result = new Map<string, RestaurantLiveData>();
 
     // Filter for "Today" in Park Time
-    const parkDate = `${year}-${month}-${day}`; // YYYY-MM-DD
-
     for (const item of data) {
       if (!result.has(item.restaurantId)) {
         // Check if this data point belongs to "today" in the park's timezone
-        const entryDateStr = item.timestamp.toLocaleDateString("en-US", {
-          timeZone: timezone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-        const [eMonth, eDay, eYear] = entryDateStr.split("/");
-        const entryDate = `${eYear}-${eMonth}-${eDay}`;
+        const entryDate = formatInParkTimezone(item.timestamp, timezone);
 
         if (entryDate === parkDate) {
           result.set(item.restaurantId, item);

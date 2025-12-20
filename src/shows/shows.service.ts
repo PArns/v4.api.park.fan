@@ -12,6 +12,7 @@ import {
 } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 @Injectable()
 export class ShowsService {
@@ -500,14 +501,8 @@ export class ShowsService {
     // 1. Calculate Start of Day in Park's Timezone
     // We want 00:00:00 in the park's timezone, converted to UTC
     const now = new Date();
-    const parkDateStr = now.toLocaleDateString("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    // Format: MM/DD/YYYY -> YYYY-MM-DD
-    const [month, day, year] = parkDateStr.split("/");
+    const parkDate = formatInParkTimezone(now, timezone);
+    // Format: YYYY-MM-DD
 
     // Create Date object (node assumes local time if no Z, but we need to trick it or use a library)
     // Better strategy: Use the timestamp from DB directly with a string comparison or raw query if needed.
@@ -541,19 +536,10 @@ export class ShowsService {
     const result = new Map<string, ShowLiveData>();
 
     // Filter for "Today" in Park Time
-    const parkDate = `${year}-${month}-${day}`; // YYYY-MM-DD
-
     for (const data of showData) {
       if (!result.has(data.showId)) {
         // Check if this data point belongs to "today" in the park's timezone
-        const entryDateStr = data.timestamp.toLocaleDateString("en-US", {
-          timeZone: timezone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-        const [eMonth, eDay, eYear] = entryDateStr.split("/");
-        const entryDate = `${eYear}-${eMonth}-${eDay}`;
+        const entryDate = formatInParkTimezone(data.timestamp, timezone);
 
         if (entryDate === parkDate) {
           result.set(data.showId, data);

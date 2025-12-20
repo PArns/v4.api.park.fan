@@ -9,6 +9,7 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { formatInParkTimezone } from "../common/utils/date.util";
 import {
   calculateNameSimilarity,
   calculateParkPriority,
@@ -726,7 +727,7 @@ export class ParksService {
     // 1. Fetch Park geo data for holiday checking
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "countryCode", "regionCode"],
+      select: ["id", "countryCode", "regionCode", "timezone"],
     });
 
     // 2. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
@@ -754,9 +755,9 @@ export class ParksService {
         for (const h of holidays) {
           // Logic mirrors isHoliday: Nationwide OR region matches
           if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
-            const dateStr = h.date.toISOString().split("T")[0];
+            // Use park's timezone to determine the holiday date string
+            const dateStr = formatInParkTimezone(h.date, park.timezone);
             // If multiple holidays on same day, just picking first or specific one?
-            // Usually we pick the first one or concat? Let's pick first for now.
             if (!holidayMap.has(dateStr)) {
               holidayMap.set(dateStr, h.localName || h.name);
             }
@@ -773,7 +774,7 @@ export class ParksService {
 
     for (const entry of scheduleData) {
       const dateObj = new Date(entry.date);
-      const dateStr = dateObj.toISOString().split("T")[0];
+      const dateStr = formatInParkTimezone(dateObj, park!.timezone);
       const holidayName = holidayMap.get(dateStr) || null;
       const isHoliday = !!holidayName;
 
@@ -786,13 +787,13 @@ export class ParksService {
         // Friday
         const prevDate = new Date(dateObj);
         prevDate.setDate(dateObj.getDate() - 1);
-        const prevDateStr = prevDate.toISOString().split("T")[0];
+        const prevDateStr = formatInParkTimezone(prevDate, park!.timezone);
         if (holidayMap.has(prevDateStr)) isBridgeDay = true;
       } else if (dayOfWeek === 1) {
         // Monday
         const nextDate = new Date(dateObj);
         nextDate.setDate(dateObj.getDate() + 1);
-        const nextDateStr = nextDate.toISOString().split("T")[0];
+        const nextDateStr = formatInParkTimezone(nextDate, park!.timezone);
         if (holidayMap.has(nextDateStr)) isBridgeDay = true;
       }
 
@@ -851,7 +852,7 @@ export class ParksService {
   async fillScheduleGaps(parkId: string, lookAheadDays = 90): Promise<number> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "countryCode", "regionCode"],
+      select: ["id", "countryCode", "regionCode", "timezone"],
     });
 
     if (!park?.countryCode) return 0;
@@ -901,7 +902,7 @@ export class ParksService {
 
     for (const h of holidays) {
       if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
-        const d = h.date.toISOString().split("T")[0];
+        const d = formatInParkTimezone(h.date, park.timezone);
         if (!holidayMap.has(d)) holidayMap.set(d, h.localName || h.name);
         holidayDatesSet.add(d);
       }
@@ -912,7 +913,7 @@ export class ParksService {
     // 3. Iterate all days in range
     const currentDate = new Date(startDate);
     while (currentDate <= endDate) {
-      const dateStr = currentDate.toISOString().split("T")[0];
+      const dateStr = formatInParkTimezone(currentDate, park.timezone);
 
       // If no entry exists for this date
       if (!existingDates.has(dateStr)) {
@@ -933,7 +934,7 @@ export class ParksService {
           // Friday -> Check Thursday
           const prev = new Date(currentDate);
           prev.setDate(currentDate.getDate() - 1);
-          const prevStr = prev.toISOString().split("T")[0];
+          const prevStr = formatInParkTimezone(prev, park.timezone);
           if (holidayDatesSet.has(prevStr)) {
             isBridgeDay = true;
           }
@@ -941,7 +942,7 @@ export class ParksService {
           // Monday -> Check Tuesday
           const next = new Date(currentDate);
           next.setDate(currentDate.getDate() + 1);
-          const nextStr = next.toISOString().split("T")[0];
+          const nextStr = formatInParkTimezone(next, park.timezone);
           if (holidayDatesSet.has(nextStr)) {
             isBridgeDay = true;
           }
@@ -1101,7 +1102,14 @@ export class ParksService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const cacheKey = `schedule:today:${parkId}:${today.toISOString().split("T")[0]}`;
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park) return [];
+
+    const cacheKey = `schedule:today:${parkId}:${formatInParkTimezone(today, park.timezone)}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1130,16 +1138,6 @@ export class ParksService {
     return schedule;
   }
 
-  /**
-   * Get upcoming schedule for a park (today + next N days)
-   *
-   * Returns schedule entries from today through the next N days.
-   * Used for trip planning - shows users when park will be open.
-   *
-   * @param parkId - Park ID (UUID)
-   * @param days - Number of days to fetch (default: 7)
-   * @returns Schedule entries for upcoming days
-   */
   async getUpcomingSchedule(
     parkId: string,
     days: number = 7,
@@ -1155,7 +1153,14 @@ export class ParksService {
     endDate.setDate(endDate.getDate() + days + 1);
     endDate.setHours(23, 59, 59, 999);
 
-    const cacheKey = `schedule:upcoming:${parkId}:${today.toISOString().split("T")[0]}:${days}`;
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park) return [];
+
+    const cacheKey = `schedule:upcoming:${parkId}:${formatInParkTimezone(today, park.timezone)}:${days}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {

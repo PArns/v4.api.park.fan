@@ -7,6 +7,7 @@ import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client"
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { DestinationsService } from "../destinations/destinations.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 
 describe("ParksService", () => {
@@ -79,6 +80,13 @@ describe("ParksService", () => {
     syncDestinations: jest.fn(),
   };
 
+  const mockHolidaysService = {
+    isHoliday: jest.fn(),
+    isBridgeDay: jest.fn(),
+    getHolidays: jest.fn(),
+    saveHolidaysFromApi: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -106,6 +114,10 @@ describe("ParksService", () => {
         {
           provide: REDIS_CLIENT,
           useValue: mockRedis,
+        },
+        {
+          provide: HolidaysService,
+          useValue: mockHolidaysService,
         },
       ],
     }).compile();

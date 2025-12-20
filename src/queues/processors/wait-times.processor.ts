@@ -24,6 +24,7 @@ import { In } from "typeorm";
 import { Inject } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { formatInParkTimezone } from "../../common/utils/date.util";
 
 /**
  * Wait Times Processor (OPTIMIZED + ENTITY ROUTING + CACHE WARMUP)
@@ -247,7 +248,11 @@ export class WaitTimesProcessor {
                       savedCount > 0 &&
                       entityLiveData.entityType === EntityType.ATTRACTION
                     ) {
-                      await this.trackDowntime(entityLiveData, mappingLookup);
+                      await this.trackDowntime(
+                        entityLiveData,
+                        mappingLookup,
+                        park.timezone,
+                      );
                     }
 
                     if (savedCount > 0) {
@@ -864,6 +869,7 @@ export class WaitTimesProcessor {
   private async trackDowntime(
     entityData: EntityLiveData,
     mappingLookup: Map<string, string>,
+    timezone: string = "UTC",
   ): Promise<void> {
     try {
       const lookupKey = `${entityData.source}:${entityData.externalId}`;
@@ -914,8 +920,8 @@ export class WaitTimesProcessor {
 
           if (downtimeMinutes > 0) {
             // Add to daily downtime total
-            const today = new Date().toISOString().split("T")[0];
-            const dailyKey = `downtime:daily:${attractionId}:${today}`;
+            const todayStr = formatInParkTimezone(new Date(), timezone);
+            const dailyKey = `downtime:daily:${attractionId}:${todayStr}`;
 
             const currentTotal = await this.redis.get(dailyKey);
             const newTotal = parseInt(currentTotal || "0") + downtimeMinutes;

@@ -10,6 +10,7 @@ import {
   OpenMeteoClient,
 } from "../external-apis/weather/open-meteo.client";
 import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 /**
  * Weather Service
@@ -326,6 +327,11 @@ export class WeatherService {
     current: WeatherData | null;
     forecast: WeatherData[];
   }> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
     const cacheKey = `weather:forecast:${parkId}`;
 
     // Try cache first
@@ -355,15 +361,18 @@ export class WeatherService {
       .orderBy("weather.date", "ASC")
       .getMany();
 
+    if (!park) {
+      return { current: null, forecast: [] };
+    }
+
+    const todayStr = formatInParkTimezone(today, park.timezone);
+
     // Separate current (today) from forecast (future)
     // Ensure date is converted to Date object if it's a string
     const current =
       allWeather.find((w) => {
         const weatherDate = new Date(w.date);
-        return (
-          weatherDate.toISOString().split("T")[0] ===
-          today.toISOString().split("T")[0]
-        );
+        return formatInParkTimezone(weatherDate, park.timezone) === todayStr;
       }) || null;
 
     const forecast = allWeather.filter((w) => {

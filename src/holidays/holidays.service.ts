@@ -5,6 +5,7 @@ import { Holiday } from "./entities/holiday.entity";
 import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 /**
  * Holidays Service
@@ -120,8 +121,11 @@ export class HolidaysService {
     date: Date,
     countryCode: string,
     regionCode?: string,
+    timezone?: string,
   ): Promise<boolean> {
-    const dateStr = date.toISOString().split("T")[0];
+    const dateStr = timezone
+      ? formatInParkTimezone(date, timezone)
+      : date.toISOString().split("T")[0];
     const cacheKey = `holiday:check:${countryCode}:${regionCode || "national"}:${dateStr}`;
 
     const cached = await this.redis.get(cacheKey);
@@ -132,7 +136,7 @@ export class HolidaysService {
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("holiday.date = :date", { date });
+      .andWhere("holiday.date = :dateStr", { dateStr });
 
     if (regionCode) {
       // Check for National Holidays OR Regional Holidays for this specific region
@@ -167,6 +171,7 @@ export class HolidaysService {
     date: Date,
     countryCode: string,
     regionCode?: string,
+    timezone?: string,
   ): Promise<boolean> {
     const dayOfWeek = date.getDay(); // 0 = Sun, 1 = Mon, ..., 5 = Fri, 6 = Sat
 
@@ -178,6 +183,7 @@ export class HolidaysService {
         thursday,
         countryCode,
         regionCode,
+        timezone,
       );
       if (isThuHoliday) return true;
     }
@@ -190,6 +196,7 @@ export class HolidaysService {
         tuesday,
         countryCode,
         regionCode,
+        timezone,
       );
       if (isTueHoliday) return true;
     }
