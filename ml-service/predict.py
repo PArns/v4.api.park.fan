@@ -131,7 +131,8 @@ def create_prediction_features(
     timestamps: List[datetime],
     base_time: datetime,
     weather_forecast: List[Any] = None,
-    current_wait_times: Dict[str, int] = None
+    current_wait_times: Dict[str, int] = None,
+    feature_context: Dict[str, Any] = None
 ) -> pd.DataFrame:
     """
     Create feature DataFrame for predictions with all features from DB
@@ -521,6 +522,27 @@ def create_prediction_features(
     
     # Add percentile features (Weather extremes)
     df = add_percentile_features(df)
+    
+    # Phase 2: Add real-time context features
+    if feature_context:
+        from features import (
+            add_park_occupancy_feature,
+            add_time_since_park_open,
+            add_downtime_features,
+            add_virtual_queue_feature
+        )
+        
+        df = add_park_occupancy_feature(df, feature_context)
+        df = add_time_since_park_open(df, feature_context)
+        df = add_downtime_features(df, feature_context)
+        df = add_virtual_queue_feature(df, feature_context)
+    else:
+        # Defaults if no feature_context provided
+        df['park_occupancy_pct'] = 100.0
+        df['time_since_park_open_mins'] = 0.0
+        df['had_downtime_today'] = 0
+        df['downtime_minutes_today'] = 0.0
+        df['has_virtual_queue'] = 0
 
     return df
 
@@ -532,7 +554,8 @@ def predict_wait_times(
     prediction_type: str = 'hourly',
     base_time: datetime = None,
     weather_forecast: List[Any] = None,
-    current_wait_times: Dict[str, int] = None
+    current_wait_times: Dict[str, int] = None,
+    feature_context: Dict[str, Any] = None
 ) -> List[Dict[str, Any]]:
     """
     Predict wait times for attractions
@@ -571,7 +594,8 @@ def predict_wait_times(
         timestamps,
         base_time,
         weather_forecast,
-        current_wait_times
+        current_wait_times,
+        feature_context
     )
 
     # Predict with uncertainty estimation

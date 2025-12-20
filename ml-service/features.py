@@ -63,10 +63,11 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
 
     # 2. Extract features from LOCAL time
     df['hour'] = df['local_timestamp'].dt.hour
-    df['day_of_week'] = df['local_timestamp'].dt.dayofweek
     df['month'] = df['local_timestamp'].dt.month
-
-    # Cyclical time encoding (preserves continuity, e.g. 23:00 -> 00:00)
+    df['day_of_week'] = df['local_timestamp'].dt.dayofweek  # 0=Monday, 6=Sunday
+    
+    # Cyclic encoding (essential for tree models to understand continuity)
+    # e.g., hour=23 and hour=0 are close, not 23 units apart
     df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
     df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
     df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
@@ -74,9 +75,9 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
     df['day_of_week_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
     df['day_of_week_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
     
-    # Season logic (simplified)
+    # Season (derived from month)
     def get_season(month):
-        if month in [12, 1, 2]: return 0 # Winter
+        if month in [12, 1, 2]: return 0  # Winter
         if month in [3, 4, 5]: return 1  # Spring
         if month in [6, 7, 8]: return 2  # Summer
         return 3                         # Fall
@@ -150,7 +151,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     if 'temperatureMax' in df.columns and 'temperatureMin' in df.columns:
         df['temperature_avg'] = (df['temperatureMax'] + df['temperatureMin']) / 2
 
-    # Binary rain indicator
+    # Binary rain indicator (explicit signal, valuable for ML)
     if 'precipitation' in df.columns:
         df['is_raining'] = (df['precipitation'] > 0).astype(int)
 
@@ -316,6 +317,155 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_park_occupancy_feature(
+    df: pd.DataFrame,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add park-wide occupancy percentage feature
+    
+    Occupancy % = (current avg wait / P90 baseline) * 100
+    Helps ML learn park-wide crowd patterns
+    
+    Args:
+        df: DataFrame with parkId column
+        feature_context: Optional dict with parkOccupancy data from API
+        
+    Returns:
+        DataFrame with park_occupancy_pct feature
+    """
+    df = df.copy()
+    
+    # Initialize with default (100% = typical)
+    df['park_occupancy_pct'] = 100.0
+    
+    if feature_context and 'parkOccupancy' in feature_context:
+        park_occupancy_map = feature_context['parkOccupancy']
+        
+        # Map occupancy to each row based on parkId
+        for park_id, occupancy_pct in park_occupancy_map.items():
+            mask = df['parkId'] == park_id
+            df.loc[mask, 'park_occupancy_pct'] = float(occupancy_pct)
+    
+    return df
+
+
+def add_time_since_park_open(
+    df: pd.DataFrame,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add time since park opening feature
+    
+    Helps capture morning rush vs evening patterns
+    
+    Args:
+        df: DataFrame with timestamp and parkId
+        feature_context: Optional dict with parkOpeningTimes data
+        
+    Returns:
+        DataFrame with time_since_park_open_mins feature
+    """
+    df = df.copy()
+    
+    # Initialize with 0 (unknown)
+    df['time_since_park_open_mins'] = 0.0
+    
+    if feature_context and 'parkOpeningTimes' in feature_context:
+        opening_times_map = feature_context['parkOpeningTimes']
+        
+        for park_id, opening_time_str in opening_times_map.items():
+            if not opening_time_str:
+                continue
+                
+            try:
+                # Parse opening time
+                opening_time = pd.to_datetime(opening_time_str)
+                
+                # Calculate minutes since opening for this park
+                mask = df['parkId'] == park_id
+                if mask.any():
+                    # Use local_timestamp if available, otherwise timestamp
+                    time_col = 'local_timestamp' if 'local_timestamp' in df.columns else 'timestamp'
+                    
+                    df.loc[mask, 'time_since_park_open_mins'] = (
+                        (df.loc[mask, time_col] - opening_time).dt.total_seconds() / 60
+                    ).clip(lower=0)  # Negative = park not yet open, clip to 0
+                    
+            except Exception as e:
+                print(f"⚠️  Failed to parse opening time for park {park_id}: {e}")
+    
+    return df
+
+
+def add_downtime_features(
+    df: pd.DataFrame,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add attraction downtime features
+    
+    Tracks if attraction was DOWN today and for how long
+    Helps capture pent-up demand after reopening
+    
+    Args:
+        df: DataFrame with attractionId column
+        feature_context: Optional dict with downtimeCache data
+        
+    Returns:
+        DataFrame with had_downtime_today and downtime_minutes_today features
+    """
+    df = df.copy()
+    
+    # Initialize with defaults (no downtime)
+    df['had_downtime_today'] = 0
+    df['downtime_minutes_today'] = 0.0
+    
+    if feature_context and 'downtimeCache' in feature_context:
+        downtime_map = feature_context['downtimeCache']
+        
+        for attraction_id, downtime_mins in downtime_map.items():
+            mask = df['attractionId'] == str(attraction_id)
+            if mask.any() and downtime_mins > 0:
+                df.loc[mask, 'had_downtime_today'] = 1
+                df.loc[mask, 'downtime_minutes_today'] = float(downtime_mins)
+    
+    return df
+
+
+def add_virtual_queue_feature(
+    df: pd.DataFrame,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add virtual queue (boarding group) feature
+    
+    Attractions with virtual queues typically have lower standby waits
+    
+    Args:
+        df: DataFrame with attractionId column
+        feature_context: Optional dict with queueData
+        
+    Returns:
+        DataFrame with has_virtual_queue feature
+    """
+    df = df.copy()
+    
+    # Initialize with default (no virtual queue)
+    df['has_virtual_queue'] = 0
+    
+    if feature_context and 'queueData' in feature_context:
+        queue_data_map = feature_context['queueData']
+        
+        for attraction_id, queue_info in queue_data_map.items():
+            # Check if this attraction has BOARDING_GROUP queue type
+            if queue_info and queue_info.get('queueType') == 'BOARDING_GROUP':
+                mask = df['attractionId'] == str(attraction_id)
+                df.loc[mask, 'has_virtual_queue'] = 1
+    
+    return df
+
+
 def add_park_schedule_features(
     df: pd.DataFrame,
     start_date: datetime,
@@ -473,7 +623,8 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
 def engineer_features(
     df: pd.DataFrame,
     start_date: datetime,
-    end_date: datetime
+    end_date: datetime,
+    feature_context: Dict = None
 ) -> pd.DataFrame:
     """
     Complete feature engineering pipeline
@@ -482,6 +633,7 @@ def engineer_features(
         df: Raw queue data from fetch_training_data()
         start_date: Training period start
         end_date: Training period end
+        feature_context: Optional dict with real-time feature data (Phase 2)
 
     Returns:
         DataFrame with all features engineered
@@ -499,18 +651,32 @@ def engineer_features(
     df = add_park_schedule_features(df, start_date, end_date)
     df = add_historical_features(df)
     df = add_percentile_features(df)  # Weather extremes
+    
+    # Phase 2: Add real-time context features
+    if feature_context:
+        df = add_park_occupancy_feature(df, feature_context)
+        df = add_time_since_park_open(df, feature_context)
+        df = add_downtime_features(df, feature_context)
+        df = add_virtual_queue_feature(df, feature_context)
+    else:
+        # Training mode: add defaults
+        df['park_occupancy_pct'] = 100.0
+        df['time_since_park_open_mins'] = 0.0
+        df['had_downtime_today'] = 0
+        df['downtime_minutes_today'] = 0.0
+        df['has_virtual_queue'] = 0
 
     return df
 
 
 def get_feature_columns() -> List[str]:
-    """Return list of feature column names (in order)"""
+    """Return list of feature column names (in order) - Complete 41 feature set"""
     return [
         # IDs (categorical)
         'parkId',
         'attractionId',
 
-        # Time features
+        # Time features (cyclic encoding preserves continuity: 23:00 → 00:00)
         'hour',
         'day_of_week',
         'month',
@@ -520,20 +686,20 @@ def get_feature_columns() -> List[str]:
         'season',
         'is_weekend',
 
-        # Weather features
+        # Weather features (all important for crowd patterns & ride closures)
         'temperature_avg',
         'precipitation',
-        'windSpeedMax',
-        'snowfallSum',
+        'windSpeedMax',          # Explains high ride closures
+        'snowfallSum',            # Explains outdoor ride closures
         'weatherCode',
-        'is_raining',
+        'is_raining',            # Explicit rain signal
 
-        # Holiday features
+        # Holiday features (cross-border tourism!)
         'is_holiday_primary',
         'is_school_holiday_primary',
         'is_holiday_neighbor_1',
         'is_holiday_neighbor_2',
-        'is_holiday_neighbor_3',
+        'is_holiday_neighbor_3',  # Border parks (Europa-Park → France, etc.)
         'holiday_count_total',
         'school_holiday_count_total',
 
@@ -549,9 +715,16 @@ def get_feature_columns() -> List[str]:
         'rolling_avg_7d',
         'wait_time_velocity',  # Rate of change (momentum)
 
-        # Percentile-based features (Phase 3)
+        # Percentile-based features
         'is_temp_extreme',
-        'is_wind_extreme',
+        'is_wind_extreme',       # Extreme wind → ride closures
+        
+        # Phase 2: Real-time context features
+        'park_occupancy_pct',           # Park-wide crowding (0-200%)
+        'time_since_park_open_mins',    # Minutes since opening
+        'had_downtime_today',            # Boolean: was DOWN today
+        'downtime_minutes_today',        # Total downtime duration
+        'has_virtual_queue',             # Boolean: boarding groups active
     ]
 
 

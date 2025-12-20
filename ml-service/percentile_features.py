@@ -63,7 +63,8 @@ def add_percentile_features(df: pd.DataFrame) -> pd.DataFrame:
             # Update main dataframe
             df.loc[park_mask, 'is_temp_extreme'] = park_df['is_temp_extreme'].fillna(0)
     
-    # Wind extreme features
+    
+    # Wind extreme features (important for ride closures!)
     if 'windSpeedMax' in df.columns and 'parkId' in df.columns:
         print("   Adding wind extreme features...")
         for park_id in df['parkId'].unique():
