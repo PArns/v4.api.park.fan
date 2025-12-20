@@ -309,6 +309,38 @@ export class ParkMetadataProcessor {
   }
 
   /**
+   * Determine a best-guess timezone based on country code
+   */
+  private getTimezoneForCountry(countryCode: string | undefined): string {
+    if (!countryCode) return "UTC";
+
+    const normalizedCode = countryCode.toUpperCase();
+    const timezoneMap: Record<string, string> = {
+      DE: "Europe/Berlin",
+      FR: "Europe/Paris",
+      ES: "Europe/Madrid",
+      IT: "Europe/Rome",
+      NL: "Europe/Amsterdam",
+      BE: "Europe/Brussels",
+      DK: "Europe/Copenhagen",
+      SE: "Europe/Stockholm",
+      GB: "Europe/London",
+      UK: "Europe/London",
+      IE: "Europe/Dublin",
+      US: "America/New_York", // Default for US, hard to guess better without state
+      CA: "America/Toronto",
+      JP: "Asia/Tokyo",
+      CN: "Asia/Shanghai",
+      HK: "Asia/Hong_Kong",
+      SG: "Asia/Singapore",
+      AE: "Asia/Dubai",
+      AU: "Australia/Sydney",
+    };
+
+    return timezoneMap[normalizedCode] || "UTC";
+  }
+
+  /**
    * Process a park that exists ONLY in Queue-Times
    */
   private async processQueueTimesOnlyPark(qt: ParkMetadata): Promise<void> {
@@ -339,7 +371,7 @@ export class ParkMetadataProcessor {
       externalId: qtExternalId,
       name: qt.name,
       slug: generateSlug(qt.name),
-      timezone: qt.timezone || "UTC", // Default to UTC if missing
+      timezone: qt.timezone || this.getTimezoneForCountry(qt.country),
       latitude: qt.latitude,
       longitude: qt.longitude,
       continent: qt.continent,
@@ -388,7 +420,7 @@ export class ParkMetadataProcessor {
       externalId: wzExternalId,
       name: wz.name,
       slug: generateSlug(wz.name),
-      timezone: wz.timezone || "Europe/London", // Default if missing (most WZ parks are EU-centric, or use UTC)
+      timezone: wz.timezone || this.getTimezoneForCountry(wz.country),
       latitude: wz.latitude, // might be undefined
       longitude: wz.longitude, // might be undefined
       continent: wz.continent,
