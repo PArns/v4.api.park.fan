@@ -22,6 +22,17 @@ export class AttractionResponseDto {
   @ApiProperty({ description: "Current status", required: false })
   status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
 
+  @ApiProperty({
+    description:
+      "Themed land name (e.g. 'The Wizarding World of Harry Potter')",
+    required: false,
+    nullable: true,
+  })
+  land?: {
+    name: string;
+    externalId: string | null;
+  } | null;
+
   // Live Data
   @ApiProperty({
     description: "Current wait times (all queue types)",
@@ -140,6 +151,13 @@ export class AttractionResponseDto {
             continent: attraction.park.continent || null,
             country: attraction.park.country || null,
             city: attraction.park.city || null,
+          }
+        : null,
+
+      land: attraction.landName
+        ? {
+            name: attraction.landName,
+            externalId: attraction.landExternalId,
           }
         : null,
 

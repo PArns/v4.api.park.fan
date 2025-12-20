@@ -75,6 +75,16 @@ export class ParkAttractionDto {
   })
   queues?: QueueDataItemDto[];
 
+  @ApiProperty({
+    description: "Themed land name",
+    required: false,
+    nullable: true,
+  })
+  land?: {
+    name: string;
+    externalId: string | null;
+  } | null;
+
   @ApiProperty({ description: "Status", required: false })
   status?: string;
 
@@ -400,6 +410,12 @@ export class ParkWithAttractionsDto {
               attraction.latitude !== undefined ? attraction.latitude : null,
             longitude:
               attraction.longitude !== undefined ? attraction.longitude : null,
+            land: attraction.landName
+              ? {
+                  name: attraction.landName,
+                  externalId: attraction.landExternalId,
+                }
+              : null,
             // queue data, forecasts etc will be attached by service
           }))
         : [],

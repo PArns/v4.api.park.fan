@@ -69,26 +69,8 @@ export class QueueBootstrapService implements OnModuleInit {
     this.logger.log(`Database status: ${parkCount} parks found`);
 
     if (isEmpty) {
-      // Priority 1: Fetch park metadata first
-      const parkJobActive = await this.isJobActiveOrWaiting(
-        this.parkMetadataQueue,
-        "sync-all-parks",
-      );
+      // Priority 1: (moved to end of function to run always)
 
-      if (!parkJobActive) {
-        await this.parkMetadataQueue.add(
-          "sync-all-parks",
-          {},
-          {
-            priority: 1,
-            jobId: "bootstrap-parks", // Prevent duplicates
-            removeOnComplete: true,
-          },
-        );
-        this.logger.log("✅ Park metadata job queued");
-      } else {
-        this.logger.log("⏭️  Park metadata job already running, skipping");
-      }
       this.logger.log("No data found. Triggering initial metadata fetch...");
 
       // Phase 6.2: Use COMBINED children-metadata job instead of 3 separate jobs
@@ -161,6 +143,31 @@ export class QueueBootstrapService implements OnModuleInit {
           this.logger.log("⏭️  Wait times job already running, skipping");
         }
       }
+    }
+
+    // ALWAYS trigger park metadata sync on boot (non-blocking)
+    // This ensures code updates (e.g. slug changes, new matching logic) are applied immediately
+    // without waiting for the nightly 3AM job.
+    const parkJobActive = await this.isJobActiveOrWaiting(
+      this.parkMetadataQueue,
+      "sync-all-parks",
+    );
+
+    if (!parkJobActive) {
+      await this.parkMetadataQueue.add(
+        "sync-all-parks",
+        {},
+        {
+          priority: 1,
+          jobId: "bootstrap-parks-sync", // Unique ID for boot run
+          removeOnComplete: true,
+        },
+      );
+      this.logger.log("✅ Boot: Park metadata sync job queued (Force Sync)");
+    } else {
+      this.logger.log(
+        "⏭️  Boot: Park metadata sync job already running, skipping",
+      );
     }
   }
 
