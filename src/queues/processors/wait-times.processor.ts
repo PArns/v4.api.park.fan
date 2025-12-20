@@ -12,6 +12,7 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { CacheWarmupService } from "../services/cache-warmup.service";
+import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import {
   EntityLiveResponse,
   EntityType,
@@ -20,6 +21,9 @@ import {
 } from "../../external-apis/themeparks/themeparks.types";
 import { EntityLiveData } from "../../external-apis/data-sources/interfaces/data-source.interface";
 import { In } from "typeorm";
+import { Inject } from "@nestjs/common";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * Wait Times Processor (OPTIMIZED + ENTITY ROUTING + CACHE WARMUP)
@@ -65,6 +69,8 @@ export class WaitTimesProcessor {
     private queueDataService: QueueDataService,
     private readonly orchestrator: MultiSourceOrchestrator,
     private readonly cacheWarmupService: CacheWarmupService,
+    private readonly predictionDeviationService: PredictionDeviationService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   @Process("fetch-wait-times")
@@ -236,9 +242,25 @@ export class WaitTimesProcessor {
                         break;
                     }
 
+                    // Track status changes for downtime feature (Phase 2)
+                    if (
+                      savedCount > 0 &&
+                      entityLiveData.entityType === EntityType.ATTRACTION
+                    ) {
+                      await this.trackDowntime(entityLiveData, mappingLookup);
+                    }
+
                     if (savedCount > 0) {
                       const src = entityLiveData.source || "unknown";
                       sourceStats[src] = (sourceStats[src] || 0) + 1;
+
+                      // Check for prediction deviations (only for attractions)
+                      if (entityLiveData.entityType === EntityType.ATTRACTION) {
+                        await this.checkAndFlagDeviation(
+                          entityLiveData,
+                          mappingLookup,
+                        );
+                      }
                     }
                   } catch (error) {
                     const errorMessage =
@@ -773,5 +795,153 @@ export class WaitTimesProcessor {
       diningAvailability: entityData.diningAvailability,
       lastUpdated: entityData.lastUpdated,
     };
+  }
+
+  /**
+   * Check for prediction deviations and flag them
+   *
+   * This enables "Confidence Downgrade" strategy without regenerating predictions
+   *
+   * @param entityData - Live data from API
+   * @param mappingLookup - Entity ID mapping
+   */
+  private async checkAndFlagDeviation(
+    entityData: EntityLiveData,
+    mappingLookup: Map<string, string>,
+  ): Promise<void> {
+    try {
+      // Only check if we have a valid wait time
+      if (entityData.status !== "OPERATING" || !entityData.waitTime) {
+        return;
+      }
+
+      // Get internal attraction ID
+      const lookupKey = `${entityData.source}:${entityData.externalId}`;
+      const attractionId = mappingLookup.get(lookupKey);
+
+      if (!attractionId) {
+        return;
+      }
+
+      // Check for deviation
+      const result = await this.predictionDeviationService.checkDeviation(
+        attractionId,
+        entityData.waitTime,
+      );
+
+      // Flag if deviation detected
+      if (
+        result.hasDeviation &&
+        result.deviation &&
+        result.percentageDeviation &&
+        result.predictedWaitTime
+      ) {
+        await this.predictionDeviationService.flagDeviation(attractionId, {
+          actualWaitTime: entityData.waitTime,
+          predictedWaitTime: result.predictedWaitTime,
+          deviation: result.deviation,
+          percentageDeviation: result.percentageDeviation,
+          detectedAt: new Date(),
+        });
+      }
+    } catch (error) {
+      // Don't fail the job if deviation check fails
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to check deviation: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Track status changes for downtime feature (Phase 2)
+   *
+   * Detects OPERATING → DOWN/CLOSED/REFURB transitions and accumulates daily downtime minutes
+   * Stores in Redis: downtime:daily:{attractionId}:{date} with TTL of 25 hours
+   *
+   * @param entityData - Live entity data from API
+   * @param mappingLookup - External ID to internal ID mapping
+   */
+  private async trackDowntime(
+    entityData: EntityLiveData,
+    mappingLookup: Map<string, string>,
+  ): Promise<void> {
+    try {
+      const lookupKey = `${entityData.source}:${entityData.externalId}`;
+      const attractionId = mappingLookup.get(lookupKey);
+
+      if (!attractionId) {
+        return;
+      }
+
+      const currentStatus = entityData.status;
+      const statusKey = `downtime:status:${attractionId}`;
+      const downtimeStartKey = `downtime:start:${attractionId}`;
+
+      // Get previous status from Redis
+      const previousStatus = await this.redis.get(statusKey);
+
+      // Update status
+      await this.redis.set(statusKey, currentStatus, "EX", 3600); // 1h TTL
+
+      // Check for status change: OPERATING → DOWN/CLOSED/REFURB
+      if (
+        previousStatus === LiveStatus.OPERATING &&
+        (currentStatus === LiveStatus.DOWN ||
+          currentStatus === LiveStatus.CLOSED ||
+          currentStatus === LiveStatus.REFURBISHMENT)
+      ) {
+        // Start tracking downtime
+        const now = Date.now();
+        await this.redis.set(downtimeStartKey, now.toString(), "EX", 3600);
+        this.logger.debug(
+          `Downtime started for ${attractionId}: ${previousStatus} → ${currentStatus}`,
+        );
+      }
+
+      // Check for status change: DOWN/CLOSED/REFURB → OPERATING
+      if (
+        (previousStatus === LiveStatus.DOWN ||
+          previousStatus === LiveStatus.CLOSED ||
+          previousStatus === LiveStatus.REFURBISHMENT) &&
+        currentStatus === LiveStatus.OPERATING
+      ) {
+        // Calculate downtime duration
+        const startTimeStr = await this.redis.get(downtimeStartKey);
+        if (startTimeStr) {
+          const startTime = parseInt(startTimeStr);
+          const now = Date.now();
+          const downtimeMinutes = Math.round((now - startTime) / 60000); // Convert ms to minutes
+
+          if (downtimeMinutes > 0) {
+            // Add to daily downtime total
+            const today = new Date().toISOString().split("T")[0];
+            const dailyKey = `downtime:daily:${attractionId}:${today}`;
+
+            const currentTotal = await this.redis.get(dailyKey);
+            const newTotal = parseInt(currentTotal || "0") + downtimeMinutes;
+
+            // Store with 25h TTL (covers timezone edge cases)
+            await this.redis.set(
+              dailyKey,
+              newTotal.toString(),
+              "EX",
+              25 * 3600,
+            );
+
+            this.logger.debug(
+              `Downtime ended for ${attractionId}: ${downtimeMinutes}min (total today: ${newTotal}min)`,
+            );
+          }
+
+          // Clean up start timestamp
+          await this.redis.del(downtimeStartKey);
+        }
+      }
+    } catch (error) {
+      // Don't fail the job if downtime tracking fails
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to track downtime: ${errorMessage}`);
+    }
   }
 }
