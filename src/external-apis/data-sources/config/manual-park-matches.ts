@@ -12,14 +12,14 @@
  * happens at runtime, but keeping keys simple here helps.
  */
 export const MANUALLY_MATCHED_PARKS: Record<string, string[]> = {
-    // Disney Adventure World (Wartezeiten) <-> Walt Disney Studios Park (Wiki)
-    "walt disney studios park": ["disney adventure world"],
-    "disney adventure world": ["walt disney studios park"], // Bidirectional safety
+  // Disney Adventure World (Wartezeiten) <-> Walt Disney Studios Park (Wiki)
+  "walt disney studios park": ["disney adventure world"],
+  "disney adventure world": ["walt disney studios park"], // Bidirectional safety
 
-    // Other common divergences
-    "disneys hollywood studios": ["hollywood studios"],
-    "universal studios florida": ["universal studios orlando"],
-    "universal studios japan": ["universal studios japan usj"],
-    "movie park germany": ["movie park"],
-    "holiday park": ["holiday park pfalz"],
+  // Other common divergences
+  "disneys hollywood studios": ["hollywood studios"],
+  "universal studios florida": ["universal studios orlando"],
+  "universal studios japan": ["universal studios japan usj"],
+  "movie park germany": ["movie park"],
+  "holiday park": ["holiday park pfalz"],
 };

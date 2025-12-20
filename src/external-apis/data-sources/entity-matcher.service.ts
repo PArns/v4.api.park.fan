@@ -57,12 +57,14 @@ export class EntityMatcherService {
       const aliases = manualOverrides[normWikiName] || [];
       if (aliases.length > 0) {
         // Look for an alias match in qtOnly
-        const overrideMatch = qtOnly.find(p =>
-          aliases.includes(normalizeForMatching(p.name))
+        const overrideMatch = qtOnly.find((p) =>
+          aliases.includes(normalizeForMatching(p.name)),
         );
 
         if (overrideMatch) {
-          this.logger.log(`🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`);
+          this.logger.log(
+            `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
+          );
           bestMatch = overrideMatch;
           bestScore = 1.0;
         }
@@ -296,9 +298,9 @@ export class EntityMatcherService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos(this.toRad(p1.latitude)) *
-      Math.cos(this.toRad(p2.latitude)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+        Math.cos(this.toRad(p2.latitude)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
 
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }

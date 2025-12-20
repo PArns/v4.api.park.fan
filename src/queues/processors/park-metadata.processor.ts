@@ -39,7 +39,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
-  ) { }
+  ) {}
 
   @Process("sync-all-parks")
   async handleFetchParks(_job: Job): Promise<void> {
@@ -478,8 +478,8 @@ export class ParkMetadataProcessor {
       // This happens when park IDs rotate or parks merge/split
       this.logger.warn(
         `⚠️ Mapping conflict detected: ${externalSource}:${externalEntityId} ` +
-        `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
-        `Updating mapping...`,
+          `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
+          `Updating mapping...`,
       );
 
       // Update the existing mapping to point to the correct entity
