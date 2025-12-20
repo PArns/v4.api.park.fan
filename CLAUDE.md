@@ -21,7 +21,7 @@ This file provides guidance to Claude Code when working with this repository.
 # park.fan API
 
 **Tech Stack**: NestJS + PostgreSQL (TimescaleDB) + Redis + Bull Queue + TypeScript + Docker
-**Status**: ✅ Phase 6.6 Complete (Multi-Source Integration) | 🔄 Phase 6.7 Planned (Processor Integration)
+**Status**: ✅ Phase 6.6 Complete (Multi-Source Integration) | 🚀 Phase 6.7 In Progress (Regional Intelligence & Dashboard)
 
 Real-time theme park data aggregation API with multi-source integration, ML predictions, and optimized data collection.
 
@@ -251,7 +251,15 @@ npm run build
 - **Delta Statistics**: Logs now show "Updated" (actually saved) vs "Processed" counts
 - **ML Resampling**: Fixed feature engineering (`features.py`) to handle delta-compressed data gaps (5-min ffill)
 - **ML Timezone Awareness**: Model now trains on **Park-Local Time** (converted from UTC) for accurate daily patterns
+- **Wait-Time Velocity**: Added feature to capture short-term trends (delta over 30m) for better responsiveness
+- **Dashboard Optimization**: Refactored `getSystemAccuracyStats` to use efficient SQL aggregation (vs in-memory array)
 - **Manual Trigger**: Added `npm run job:ml-train` to manually trigger ML training
+
+**Regional Intelligence & Holidays**:
+- **Geocoding**: Enhanced to extract Region/State (Administrative Area Level 1)
+- **Holidays**: Integrated region-specific holiday data (e.g. "Baden-Württemberg" holidays only for Europa-Park)
+- **Schedules**: `ScheduleEntry` now includes `isHoliday` flag, computed during sync
+- **Smart Caching**: 24h Redis cache for holiday checks, persisted to DB for schedules
 
 ---
 
@@ -356,33 +364,20 @@ npm run build
 **Note:** Did NOT implement `prediction-update.processor.ts` as regeneration approach was replaced with superior confidence downgrade strategy.
 
 
-##### P1: ML Dashboard Metrics Tracking [3h] - Impact: ⭐⭐⭐⭐
-**Goal**: Implement missing TODO metrics in ML dashboard
-
-**Code TODOs** (`ml-dashboard.service.ts`):
-- Line 174: Track actual job duration from Bull queue
-- Line 178: Track completion time from prediction-accuracy processor
-- Line 179: Track incremental comparisons added
-
-**Implementation**:
-- Use Bull Queue job events for duration tracking
-- Store completion metrics in Redis
-- Add SQL query for unique parks count
-
-**Expected Impact**: Better production monitoring and debugging
+##### ⭐ P1: ML Dashboard Metrics Tracking [3h] - Impact: ⭐⭐⭐⭐ - ✅ **COMPLETE**
+**Status:** ✅ Implemented
+**Solution**: 
+- `MLDashboardService` reads job duration, last run, and comparison counts from Redis/Bull
+- `PredictionAccuracyProcessor` writes metrics to Redis on completion
+- `getSystemAccuracyStats` optimized to use SQL aggregation for performance
 
 #### Sprint 2 (Priority 2-3) - 2 Days
 
-##### P2: Dynamic Park Status Cache TTL [5h] - Impact: ⭐⭐⭐⭐
-**Goal**: Fix issue where CLOSED parks appear closed hours after opening
-
-**Current Issue**: Fixed 6h TTL for CLOSED status
-**Solution**: Dynamic TTL based on next opening/closing time
-
-**Files to Modify**:
-- `src/parks/parks.service.ts` - Implement dynamic TTL calculation
-
-**Expected Impact**: Accurate park status immediately after opening/closing
+##### ⭐ P2: Dynamic Park Status Cache TTL [5h] - Impact: ⭐⭐⭐⭐ - ✅ **COMPLETE**
+**Status:** ✅ Implemented in `ParkIntegrationService`
+**Solution**: 
+- OPERATING: 3 min TTL (Live data)
+- CLOSED: Dynamic TTL expires 5 min before next opening (prevents stale "closed" status)
 
 ##### P3: Weather Fallback Mechanism [4h] - Impact: ⭐⭐⭐
 **Goal**: Ensure ML predictions work even when Open-Meteo API fails
@@ -399,17 +394,17 @@ npm run build
 
 #### Sprint 3 (Priority 4-5) - 1 Day
 
-##### P4: Region-Specific Holiday Filter [2h] - Impact: ⭐⭐
-**Goal**: Filter holidays by park region for better ML features
+##### ⭐ P4: Region-Specific Holiday Filter [2h] - Impact: ⭐⭐ - ✅ **COMPLETE**
+**Status:** ✅ Implemented with Smart Geocoding + Holiday Service Caching
+**Solution**: 
+- `Park` entity now stores `region` and `regionCode`
+- `HolidaysService` filters by region code if provided
+- `ScheduleEntry` pre-calculates `isHoliday` on save
+- Swagger DTOs updated to expose regional metadata
 
-**Code TODO** (`date-features.service.ts` Line 75)
-**Expected Impact**: Cleaner API responses, better ML quality
-
-##### P5: Crowd Level Percentile Review [4h] - Impact: ⭐⭐⭐
-**Goal**: Review whether 5-min filter should apply to P90 baseline
-
-**Analysis Needed**: Compare occupancy calculations with/without filter
-**Expected Impact**: Potentially more accurate occupancy metrics
+##### P5: Crowd Level Percentile Review [4h] - Impact: ⭐⭐⭐ - ✅ **COMPLETE**
+**Status:** ✅ Implemented (Hybrid 5-min filter)
+**Solution**: Applied 5-minute wait time filter to occupancy calculations (`getCurrentAverageWaitTime`) with fallback for small parks.
 
 ---
 
