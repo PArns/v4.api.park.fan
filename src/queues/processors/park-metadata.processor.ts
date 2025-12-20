@@ -178,10 +178,12 @@ export class ParkMetadataProcessor {
    * Process a park that exists ONLY in ThemeParks.wiki
    */
   private async processWikiOnlyPark(wiki: ParkMetadata): Promise<void> {
-    // Check if park already exists
-    let park = await this.parkRepository.findOne({
-      where: { externalId: wiki.externalId },
-    });
+    // Check if park already exists (Try ID first, then fallback to Slug for self-healing)
+    let park = await this.findParkWithFallback(
+      wiki.externalId,
+      wiki.name,
+      "themeparks-wiki",
+    );
 
     if (park) {
       if (!park.wikiEntityId) {
@@ -402,6 +404,86 @@ export class ParkMetadataProcessor {
     this.logger.log(
       `✅ Geocoded ${geocodedCount}/${parksWithoutGeodata.length} parks`,
     );
+  }
+
+  /**
+   * Find a park by External ID, with fallback to Slug for self-healing
+   * If found by slug but ID differs, it updates the ID (Self-Healing)
+   */
+  private async findParkWithFallback(
+    externalId: string,
+    name: string,
+    source: string,
+  ): Promise<Park | null> {
+    // 1. Try finding by External ID (Fastest, Standard)
+    let park = await this.parkRepository.findOne({
+      where: { externalId },
+    });
+
+    if (park) {
+      return park;
+    }
+
+    // 2. Fallback: Try finding by Slug (Self-Healing for ID rotation)
+    // Only do this if the name is reasonably long to avoid false positives on overly generic names
+    if (name.length < 5) return null;
+
+    const slug = generateSlug(name);
+    park = await this.parkRepository.findOne({
+      where: { slug },
+    });
+
+    if (park) {
+      // 3. We found the park, but the ID has changed!
+      this.logger.warn(
+        `⚠️ Park ID rotation detected for "${park.name}" (${source}). Updating: ${park.externalId} -> ${externalId}`,
+      );
+
+      // Verify this isn't a collision with another valid park (sanity check)
+      // (The unique constraint on externalId would catch this on save, but good to check)
+
+      park.externalId = externalId;
+      if (source === "themeparks-wiki") {
+        park.wikiEntityId = externalId;
+      } else if (source === "queue-times") {
+        park.queueTimesEntityId = externalId;
+      }
+
+      await this.parkRepository.save(park);
+
+      // We must also update the mapping immediately to prevent unique constraint errors later
+      await this.updateMapping(park.id, source, externalId);
+    }
+
+    return park;
+  }
+
+  /**
+   * Update existing mapping for ID rotation
+   */
+  private async updateMapping(
+    internalEntityId: string,
+    externalSource: string,
+    newExternalId: string,
+  ): Promise<void> {
+    // Find any existing mapping for this internal entity + source
+    const existing = await this.mappingRepository.findOne({
+      where: {
+        internalEntityId,
+        externalSource,
+        internalEntityType: "park",
+      },
+    });
+
+    if (existing) {
+      this.logger.log(
+        `🔄 Updating mapping for ${internalEntityId} [${externalSource}]: ${existing.externalEntityId} -> ${newExternalId}`,
+      );
+      // Update the external ID
+      await this.mappingRepository.update(existing.id, {
+        externalEntityId: newExternalId,
+      });
+    }
   }
 
   private sleep(ms: number): Promise<void> {

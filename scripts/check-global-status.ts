@@ -10,7 +10,7 @@ async function run() {
   const dataSource = app.get(DataSource);
 
   // Check specific major parks
-  const majorParks = ['Disneyland Park'];
+  const majorParks = ['Magic Kingdom', 'Europa-Park', 'Disneyland Park', 'Universal Studios Florida', 'Phantasialand'];
 
   for (const name of majorParks) {
     const park = await dataSource.query(`SELECT id, name, timezone FROM parks WHERE name = $1`, [name]);

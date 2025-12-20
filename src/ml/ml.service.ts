@@ -1,6 +1,6 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In, MoreThan } from "typeorm";
+import { Repository, In } from "typeorm";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
@@ -56,10 +56,10 @@ export class MLService {
     });
 
     if (process.env.ML_SERVICE_URL) {
-      this.logger.log(`ML Service URL: ${this.ML_SERVICE_URL}`);
+      this.logger.log(`ML Service URL: ${this.ML_SERVICE_URL} `);
     } else {
       this.logger.warn(
-        `ML Service URL not configured (using default: ${this.ML_SERVICE_URL}). Set ML_SERVICE_URL env variable to enable ML predictions.`,
+        `ML Service URL not configured(using default: ${this.ML_SERVICE_URL}).Set ML_SERVICE_URL env variable to enable ML predictions.`,
       );
     }
   }
@@ -133,7 +133,7 @@ export class MLService {
   ): Promise<BulkPredictionResponseDto> {
     // Try cache first (include date to invalidate daily)
     const today = new Date().toISOString().split("T")[0];
-    const cacheKey = `ml:park:${parkId}:${predictionType}:${today}`;
+    const cacheKey = `ml: park:${parkId}:${predictionType}:${today} `;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -158,7 +158,7 @@ export class MLService {
       // 1. Fetch park to get coordinates
       const park = await this.parkRepository.findOne({ where: { id: parkId } });
       if (!park) {
-        throw new Error(`Park not found: ${parkId}`);
+        throw new Error(`Park not found: ${parkId} `);
       }
 
       // 2. Fetch all attractions for this park
@@ -192,7 +192,7 @@ export class MLService {
 
       if (activeAttractionIds.length === 0) {
         this.logger.debug(
-          `No active attractions (with data in last 90d) for park ${parkId}`,
+          `No active attractions(with data in last 90d) for park ${parkId}`,
         );
         return { predictions: [], count: 0, modelVersion: "none" };
       }
@@ -209,7 +209,7 @@ export class MLService {
       try {
         weatherForecast = await this.weatherService.getHourlyForecast(parkId);
       } catch (error) {
-        this.logger.warn(`Failed to fetch weather for prediction: ${error}`);
+        this.logger.warn(`Failed to fetch weather for prediction: ${error} `);
       }
 
       // 4. Fetch current wait times for attractions (for input optimization)
@@ -235,7 +235,7 @@ export class MLService {
           }
         } catch (error) {
           this.logger.warn(
-            `Failed to fetch current wait times for prediction: ${error}`,
+            `Failed to fetch current wait times for prediction: ${error} `,
           );
         }
       }
@@ -281,7 +281,7 @@ export class MLService {
 
       // Use WARN instead of ERROR since this is expected when ML service is not running
       this.logger.warn(
-        `ML service unavailable for park ${parkId}: ${errorMessage}`,
+        `ML service unavailable for park ${parkId}: ${errorMessage} `,
       );
 
       // Return empty response on error to handle gracefully in controller
@@ -305,7 +305,7 @@ export class MLService {
   ): Promise<BulkPredictionResponseDto> {
     // Separate cache key for yearly predictions
     const today = new Date().toISOString().split("T")[0];
-    const cacheKey = `ml:park:${parkId}:yearly:${today}`;
+    const cacheKey = `ml: park:${parkId}: yearly:${today} `;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -330,7 +330,7 @@ export class MLService {
         error instanceof Error ? error.message : String(error);
 
       this.logger.warn(
-        `ML service unavailable for park ${parkId} yearly predictions: ${errorMessage}`,
+        `ML service unavailable for park ${parkId} yearly predictions: ${errorMessage} `,
       );
 
       return {
@@ -368,7 +368,7 @@ export class MLService {
           attraction.parkId,
         );
       } catch (error) {
-        this.logger.warn(`Failed to fetch weather for prediction: ${error}`);
+        this.logger.warn(`Failed to fetch weather for prediction: ${error} `);
       }
     }
 
@@ -385,7 +385,7 @@ export class MLService {
           currentWaitTimes[attractionId] = latestData.waitTime;
         }
       } catch (error) {
-        this.logger.warn(`Failed to fetch current wait time: ${error}`);
+        this.logger.warn(`Failed to fetch current wait time: ${error} `);
       }
     }
 
@@ -490,7 +490,7 @@ export class MLService {
 
     if (filteredCount > 0) {
       this.logger.debug(
-        `🕒 Filtered ${filteredCount}/${predictions.length} predictions (parks closed/not operating)`,
+        `🕒 Filtered ${filteredCount} /${predictions.length} predictions (parks closed/not operating)`,
       );
     }
 
