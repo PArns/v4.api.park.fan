@@ -22,9 +22,13 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
 import { ParksModule } from "../parks/parks.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { forwardRef } from "@nestjs/common";
+import { BullModule } from "@nestjs/bull";
 
 @Module({
   imports: [
+    BullModule.registerQueue({
+      name: "ml-training",
+    }),
     WeatherModule,
     AnalyticsModule,
     forwardRef(() => ParksModule),
