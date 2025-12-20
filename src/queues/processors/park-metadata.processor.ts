@@ -38,6 +38,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
+    @InjectQueue("holidays") private holidaysQueue: Queue,
   ) {}
 
   @Process("sync-all-parks")
@@ -86,11 +87,15 @@ export class ParkMetadataProcessor {
       this.logger.log("🌍 Triggering park enrichment...");
       await this.enrichmentQueue.add("enrich-all", {}, { priority: 3 });
 
-      // Step 9: Trigger children metadata sync
+      // Step 9: Trigger holidays sync (AFTER parks are ready)
+      this.logger.log("🎉 Triggering holidays sync...");
+      await this.holidaysQueue.add("fetch-holidays", {}, { priority: 4 });
+
+      // Step 10: Trigger children metadata sync
       this.logger.log("🎢 Triggering children metadata sync...");
       await this.childrenQueue.add("fetch-all-children", {}, { priority: 2 });
 
-      // Step 10: Trigger weather sync
+      // Step 11: Trigger weather sync
       await this.weatherQueue.add("fetch-weather", {}, { priority: 2 });
     } catch (error) {
       this.logger.error("❌ Park metadata sync failed", error);
