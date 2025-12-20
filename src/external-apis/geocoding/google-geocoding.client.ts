@@ -208,9 +208,11 @@ export class GoogleGeocodingClient {
    * Extract geographic data from Google Geocoding API results
    *
    * Strategy:
-   * 1. Find the result with 'locality' type for city name (major cities)
-   * 2. Extract country from any result
-   * 3. Map country to continent
+   * 1. Check for major metro areas (administrative_area_level_2) - e.g., "Tokyo" for Tokyo Disney
+   * 2. Find the result with 'locality' type for city name
+   * 3. Fall back to administrative_area_level_3, sublocality, or postal_town
+   * 4. Extract country from any result
+   * 5. Map country to continent
    *
    * @param results - Array of geocoding results
    * @returns Geographic data or null if extraction failed
@@ -221,17 +223,53 @@ export class GoogleGeocodingClient {
     let city: string | null = null;
     let country: string | null = null;
 
-    // Find locality (city) - prefer results with 'locality' type
-    const localityResult = results.find((result) =>
-      result.types.includes("locality"),
-    );
+    // Known metropolitan areas that should override specific locality names
+    const knownMetroAreas = [
+      "Tokyo",
+      "Osaka",
+      "Greater London",
+      "Greater Paris",
+      "Greater Los Angeles",
+      "Greater New York",
+      "San Francisco Bay Area",
+    ];
 
-    if (localityResult) {
-      const localityComponent = localityResult.address_components.find(
-        (component) => component.types.includes("locality"),
+    // First, check for major metropolitan areas (administrative_area_level_2)
+    // This ensures "Tokyo" is used instead of "Urayasu" for Tokyo Disney, etc.
+    for (const result of results) {
+      const metroComponent = result.address_components.find((component) =>
+        component.types.includes("administrative_area_level_2"),
       );
-      if (localityComponent) {
-        city = localityComponent.long_name;
+      if (
+        metroComponent &&
+        knownMetroAreas.some((metro) =>
+          metroComponent.long_name.includes(metro),
+        )
+      ) {
+        // Extract the metro name (e.g., "Tokyo" from "Tokyo")
+        const matchedMetro = knownMetroAreas.find((metro) =>
+          metroComponent.long_name.includes(metro),
+        );
+        if (matchedMetro) {
+          city = matchedMetro;
+          break;
+        }
+      }
+    }
+
+    // If no metro area found, try locality (city) - prefer results with 'locality' type
+    if (!city) {
+      const localityResult = results.find((result) =>
+        result.types.includes("locality"),
+      );
+
+      if (localityResult) {
+        const localityComponent = localityResult.address_components.find(
+          (component) => component.types.includes("locality"),
+        );
+        if (localityComponent) {
+          city = localityComponent.long_name;
+        }
       }
     }
 
