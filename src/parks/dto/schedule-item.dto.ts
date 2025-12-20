@@ -53,6 +53,12 @@ export class ScheduleItemDto {
       }[]
     | null; // Lightning Lane pricing, etc.
 
+  @ApiProperty({
+    description: "Indicates if this date is a regional or national holiday",
+    required: false,
+  })
+  isHoliday: boolean;
+
   static fromEntity(schedule: {
     date: Date | string;
     scheduleType: ScheduleType;
@@ -60,6 +66,7 @@ export class ScheduleItemDto {
     closingTime: Date | string | null;
     description: string | null;
     purchases: any | null;
+    isHoliday?: boolean;
   }): ScheduleItemDto {
     const dto = new ScheduleItemDto();
     // Handle both Date objects and string dates
@@ -80,6 +87,7 @@ export class ScheduleItemDto {
       : null;
     dto.description = schedule.description;
     dto.purchases = schedule.purchases;
+    dto.isHoliday = schedule.isHoliday || false;
     return dto;
   }
 }

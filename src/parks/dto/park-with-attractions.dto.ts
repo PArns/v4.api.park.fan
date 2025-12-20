@@ -337,6 +337,12 @@ export class ParkWithAttractionsDto {
   })
   continent: string | null;
 
+  @ApiProperty({ description: "Region name", required: false, nullable: true })
+  region: string | null;
+
+  @ApiProperty({ description: "Region code", required: false, nullable: true })
+  regionCode: string | null;
+
   // Live Data
   @ApiProperty({
     description: "Current crowd load rating",
@@ -406,6 +412,8 @@ export class ParkWithAttractionsDto {
 
       country: park.country || null,
       city: park.city || null,
+      region: park.region || null,
+      regionCode: park.regionCode || null,
       continent: park.continent || null,
       timezone: park.timezone,
       status: "CLOSED", // Default to ensure order

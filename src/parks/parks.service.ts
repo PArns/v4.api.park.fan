@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Park } from "./entities/park.entity";
@@ -6,6 +6,7 @@ import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { DestinationsService } from "../destinations/destinations.service";
+import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import {
@@ -34,6 +35,8 @@ export class ParksService {
     private themeParksMapper: ThemeParksMapper,
     private destinationsService: DestinationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(forwardRef(() => HolidaysService))
+    private holidaysService: HolidaysService,
   ) {}
 
   /**
@@ -720,9 +723,49 @@ export class ParksService {
       return 0;
     }
 
+    // 1. Fetch Park geo data for holiday checking
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "countryCode", "regionCode"],
+    });
+
+    // 2. Pre-fetch holidays for the date range
+    const holidayMap = new Set<string>();
+    if (park?.countryCode) {
+      try {
+        const dates = scheduleData.map((e) => new Date(e.date).getTime());
+        const minDate = new Date(Math.min(...dates));
+        const maxDate = new Date(Math.max(...dates));
+
+        const holidays = await this.holidaysService.getHolidays(
+          park.countryCode,
+          minDate,
+          maxDate,
+        );
+
+        const fullRegion = park.regionCode
+          ? `${park.countryCode}-${park.regionCode}`
+          : "";
+
+        for (const h of holidays) {
+          // Logic mirrors isHoliday: Nationwide OR region matches
+          if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
+            holidayMap.add(h.date.toISOString().split("T")[0]);
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch holidays for schedule sync (Park ${parkId}): ${error}`,
+        );
+      }
+    }
+
     let savedCount = 0;
 
     for (const entry of scheduleData) {
+      const dateStr = new Date(entry.date).toISOString().split("T")[0];
+      const isHoliday = holidayMap.has(dateStr);
+
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
         date: new Date(entry.date),
@@ -731,6 +774,7 @@ export class ParksService {
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
         description: entry.description || null,
         purchases: entry.purchases || null,
+        isHoliday: isHoliday,
       };
 
       // Check if entry exists for this park, date, and type
@@ -746,13 +790,14 @@ export class ParksService {
         await this.scheduleRepository.save(scheduleEntry);
         savedCount++;
       } else {
-        // Update if times or description changed
+        // Update if times, description, or holiday status changed
         const hasChanges =
           existing.openingTime?.getTime() !==
             scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
             scheduleEntry.closingTime?.getTime() ||
-          existing.description !== scheduleEntry.description;
+          existing.description !== scheduleEntry.description ||
+          existing.isHoliday !== scheduleEntry.isHoliday;
 
         if (hasChanges) {
           await this.scheduleRepository.update(existing.id, scheduleEntry);

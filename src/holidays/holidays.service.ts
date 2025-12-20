@@ -1,8 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Holiday } from "./entities/holiday.entity";
 import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
  * Holidays Service
@@ -17,6 +19,7 @@ export class HolidaysService {
   constructor(
     @InjectRepository(Holiday)
     private holidayRepository: Repository<Holiday>,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /**
@@ -111,13 +114,21 @@ export class HolidaysService {
   }
 
   /**
-   * Check if a date is a holiday in a specific country
+   * Check if a date is a holiday in a specific country (Cached)
    */
   async isHoliday(
     date: Date,
     countryCode: string,
     regionCode?: string,
   ): Promise<boolean> {
+    const dateStr = date.toISOString().split("T")[0];
+    const cacheKey = `holiday:check:${countryCode}:${regionCode || "national"}:${dateStr}`;
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return cached === "true";
+    }
+
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
@@ -125,47 +136,24 @@ export class HolidaysService {
 
     if (regionCode) {
       // Check for National Holidays OR Regional Holidays for this specific region
-      // Holidays where region IS NULL are national.
-      // Holidays where region matches regionCode are regional.
-      // Holidays for OTHER regions should be excluded.
-
-      // Nager.Date region format usually includes country code (e.g. "US-FL", "DE-BW")
-      // Our database stores exactly what Nager returns.
-      // But let's be robust: check exact match.
-
-      // Since we store "US-FL" in DB, and pass "FL" or "US-FL" as regionCode...
-      // We should ideally ensure consistent formatting.
-      // Park entity has "FL". Nager returns "US-FL".
-      // Let's assume input regionCode is just "FL" from Park entity,
-      // so we might need to prefix it, OR match logic.
-
-      // Actually, Nager returns "DE-BW" in countys.
-      // Our Park entity stores "BW".
-      // So we should construct the full code: `${countryCode}-${regionCode}`
       const fullRegionCode = `${countryCode}-${regionCode}`;
-
       query.andWhere(
         "(holiday.isNationwide = true OR holiday.region = :fullRegionCode)",
         { fullRegionCode },
       );
     } else {
-      // If no region specified, assume we only care about National holidays?
-      // Or include ANY holiday?
-      // Previously we just checked count > 0, which meant ANY holiday in the country (even regional one elsewhere)
-      // This was a bit inaccurate (Bayern holiday counting for Hamburg park).
-      // Let's stick to National only if no region is provided, for strictness?
-      // OR keep backward compatibility: "If it's a holiday somewhere in the country, it's a holiday"
-      // The previous code was: .where("holiday.country ...").andWhere("date ...") -> checks ALL holidays.
-      // Let's keep it broad if no region provided (backward compat),
-      // but maybe strictly national is better?
-      // User Analysis said: "Regional holidays < 10% impact".
-      // So defaulting to National-Only might be cleaner if we want to avoid false positives.
-      // But for now, let's keep it as is (Any Holiday) to not break existing behavior,
-      // just adding region filter reduces false positives for specific regions.
+      // If no region specified, we only count Nationwide holidays to avoid false positives
+      // from regional holidays in other parts of the country.
+      query.andWhere("holiday.isNationwide = true");
     }
 
     const count = await query.getCount();
-    return count > 0;
+    const isHoliday = count > 0;
+
+    // Cache result (24 hours - holidays change rarely)
+    await this.redis.set(cacheKey, String(isHoliday), "EX", 24 * 60 * 60);
+
+    return isHoliday;
   }
 
   /**

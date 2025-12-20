@@ -35,6 +35,12 @@ export class ParkResponseDto {
   @ApiProperty({ description: "City name", required: false, nullable: true })
   city: string | null;
 
+  @ApiProperty({ description: "Region name", required: false, nullable: true })
+  region: string | null;
+
+  @ApiProperty({ description: "Region code", required: false, nullable: true })
+  regionCode: string | null;
+
   @ApiProperty({
     description: "Continent name",
     required: false,
@@ -129,6 +135,8 @@ export class ParkResponseDto {
 
       country: park.country || null,
       city: park.city || null,
+      region: park.region || null,
+      regionCode: park.regionCode || null,
       continent: park.continent || null,
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,

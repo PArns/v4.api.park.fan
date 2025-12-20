@@ -78,6 +78,9 @@ export class ScheduleEntry {
     };
   }> | null;
 
+  @Column({ type: "boolean", default: false })
+  isHoliday: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 
