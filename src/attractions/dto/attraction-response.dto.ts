@@ -30,7 +30,6 @@ export class AttractionResponseDto {
   })
   land?: {
     name: string;
-    externalId: string | null;
   } | null;
 
   // Live Data
@@ -157,7 +156,6 @@ export class AttractionResponseDto {
       land: attraction.landName
         ? {
             name: attraction.landName,
-            externalId: attraction.landExternalId,
           }
         : null,
 

@@ -82,7 +82,6 @@ export class ParkAttractionDto {
   })
   land?: {
     name: string;
-    externalId: string | null;
   } | null;
 
   @ApiProperty({ description: "Status", required: false })
@@ -413,7 +412,6 @@ export class ParkWithAttractionsDto {
             land: attraction.landName
               ? {
                   name: attraction.landName,
-                  externalId: attraction.landExternalId,
                 }
               : null,
             // queue data, forecasts etc will be attached by service
