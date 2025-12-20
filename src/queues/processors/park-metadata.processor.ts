@@ -39,7 +39,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
-  ) {}
+  ) { }
 
   @Process("sync-all-parks")
   async handleFetchParks(_job: Job): Promise<void> {
@@ -190,7 +190,7 @@ export class ParkMetadataProcessor {
         name: bestName,
         slug: generateSlug(bestName),
         destinationId: destination?.id || undefined,
-        timezone: anchor.timezone, // Use anchor's timezone (Wiki preferred)
+        timezone: anchor.timezone || "UTC", // Default to UTC if missing to avoid DB constraint error
         latitude: anchor.latitude,
         longitude: anchor.longitude,
         primaryDataSource: effectivePrimary,
@@ -339,7 +339,7 @@ export class ParkMetadataProcessor {
       externalId: qtExternalId,
       name: qt.name,
       slug: generateSlug(qt.name),
-      timezone: qt.timezone,
+      timezone: qt.timezone || "UTC", // Default to UTC if missing
       latitude: qt.latitude,
       longitude: qt.longitude,
       continent: qt.continent,
@@ -388,7 +388,7 @@ export class ParkMetadataProcessor {
       externalId: wzExternalId,
       name: wz.name,
       slug: generateSlug(wz.name),
-      timezone: wz.timezone, // might be undefined
+      timezone: wz.timezone || "Europe/London", // Default if missing (most WZ parks are EU-centric, or use UTC)
       latitude: wz.latitude, // might be undefined
       longitude: wz.longitude, // might be undefined
       continent: wz.continent,
@@ -446,8 +446,8 @@ export class ParkMetadataProcessor {
       // This happens when park IDs rotate or parks merge/split
       this.logger.warn(
         `⚠️ Mapping conflict detected: ${externalSource}:${externalEntityId} ` +
-          `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
-          `Updating mapping...`,
+        `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
+        `Updating mapping...`,
       );
 
       // Update the existing mapping to point to the correct entity
