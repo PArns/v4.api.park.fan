@@ -935,81 +935,125 @@ export class PredictionAccuracyService {
     };
   }> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    this.logger.debug(
+      `Calculating system accuracy stats for last ${days} days (SQL Optimized)`,
+    );
 
-    // Get all accuracy records in time range
-    const allRecords = await this.accuracyRepository.find({
-      where: {
-        targetTime: Between(startDate, new Date()),
-      },
-      relations: ["attraction"],
+    // 1. Get Overall Basic Counts
+    const totalPredictions = await this.accuracyRepository.count({
+      where: { targetTime: Between(startDate, new Date()) },
     });
 
-    const matchedRecords = allRecords.filter((r) => r.actualWaitTime !== null);
+    // 2. Get Aggregated Metrics for Matched Predictions
+    // Calculate sums needed for MAE, RMSE, MAPE, R2
+    const statsResult = await this.accuracyRepository
+      .createQueryBuilder("pa")
+      .select("COUNT(*)", "matchedCount")
+      .addSelect("AVG(pa.absoluteError)", "mae")
+      .addSelect("AVG(pa.percentageError)", "mape")
+      .addSelect("SUM(POWER(pa.absoluteError, 2))", "sumSqError") // For SSres / RMSE
+      .addSelect("SUM(pa.actualWaitTime)", "sumActual") // For Mean Actual
+      .addSelect("SUM(POWER(pa.actualWaitTime, 2))", "sumSqActual") // For SStot
+      .where("pa.targetTime >= :startDate", { startDate })
+      .andWhere("pa.actualWaitTime IS NOT NULL")
+      .getRawOne();
 
-    // Overall metrics
-    const overall = this.calculateMetricsFromRecords(matchedRecords);
-    const coveragePercent =
-      allRecords.length > 0
-        ? parseFloat(
-            ((matchedRecords.length / allRecords.length) * 100).toFixed(1),
-          )
+    const matchedCount = parseInt(statsResult.matchedCount || "0", 10);
+    const mae = parseFloat(parseFloat(statsResult.mae || "0").toFixed(1));
+    const mape = parseFloat(parseFloat(statsResult.mape || "0").toFixed(1));
+
+    // RMSE Calculation
+    const sumSqError = parseFloat(statsResult.sumSqError || "0");
+    const rmse =
+      matchedCount > 0
+        ? parseFloat(Math.sqrt(sumSqError / matchedCount).toFixed(1))
         : 0;
 
-    // Calculate unique counts
-    const uniqueAttractions = new Set(allRecords.map((r) => r.attractionId))
-      .size;
+    // R2 Calculation
+    // R2 = 1 - (SSres / SStot)
+    // SSres = sumSqError
+    // SStot = sumSqActual - (sumActual^2 / N)
+    let r2Score = 0;
+    if (matchedCount > 0) {
+      const sumActual = parseFloat(statsResult.sumActual || "0");
+      const sumSqActual = parseFloat(statsResult.sumSqActual || "0");
+      const ssRes = sumSqError;
+      const ssTot = sumSqActual - Math.pow(sumActual, 2) / matchedCount;
 
-    // Calculate unique parks (using attraction relation)
-    const uniqueParks = new Set(
-      allRecords.map((r) => r.attraction?.parkId).filter((id) => !!id),
-    ).size;
+      if (ssTot > 0) {
+        r2Score = parseFloat((1 - ssRes / ssTot).toFixed(2));
+      }
+    }
 
-    // Breakdown by prediction type
-    const hourlyRecords = matchedRecords.filter(
-      (r) => r.predictionType === "hourly",
-    );
-    const dailyRecords = matchedRecords.filter(
-      (r) => r.predictionType === "daily",
-    );
+    const coveragePercent =
+      totalPredictions > 0
+        ? parseFloat(((matchedCount / totalPredictions) * 100).toFixed(1))
+        : 0;
 
-    const hourlyAll = allRecords.filter((r) => r.predictionType === "hourly");
-    const dailyAll = allRecords.filter((r) => r.predictionType === "daily");
+    // 3. Get Unique Counts (Optimized)
+    const uniqueAttractionsResult = await this.accuracyRepository
+      .createQueryBuilder("pa")
+      .select("COUNT(DISTINCT pa.attractionId)", "count")
+      .where("pa.targetTime >= :startDate", { startDate })
+      .getRawOne();
 
-    this.logger.debug(
-      `System accuracy stats (${days} days): MAE ${overall.mae} min, coverage ${coveragePercent}%`,
-    );
+    const uniqueParksResult = await this.accuracyRepository
+      .createQueryBuilder("pa")
+      .innerJoin("attractions", "a", "pa.attractionId = a.id")
+      .select("COUNT(DISTINCT a.parkId)", "count")
+      .where("pa.targetTime >= :startDate", { startDate })
+      .getRawOne();
+
+    // 4. Breakdown by Prediction Type
+    const typeStatsRaw = await this.accuracyRepository
+      .createQueryBuilder("pa")
+      .select("pa.predictionType", "type")
+      .addSelect("COUNT(*)", "total")
+      .addSelect("COUNT(pa.actualWaitTime)", "matched")
+      .addSelect(
+        "AVG(CASE WHEN pa.actualWaitTime IS NOT NULL THEN pa.absoluteError ELSE NULL END)",
+        "mae",
+      )
+      .where("pa.targetTime >= :startDate", { startDate })
+      .groupBy("pa.predictionType")
+      .getRawMany();
+
+    // Initialize Default
+    const byType = {
+      HOURLY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
+      DAILY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
+    };
+
+    typeStatsRaw.forEach((row) => {
+      const type = row.type ? row.type.toUpperCase() : "UNKNOWN";
+      const total = parseInt(row.total || "0", 10);
+      const matched = parseInt(row.matched || "0", 10);
+      const typeMae = parseFloat(parseFloat(row.mae || "0").toFixed(1));
+      const cov =
+        total > 0 ? parseFloat(((matched / total) * 100).toFixed(1)) : 0;
+
+      if (type === "HOURLY" || type === "DAILY") {
+        byType[type as "HOURLY" | "DAILY"] = {
+          mae: typeMae,
+          totalPredictions: total,
+          coveragePercent: cov,
+        };
+      }
+    });
 
     return {
       overall: {
-        ...overall,
-        totalPredictions: allRecords.length,
-        matchedPredictions: matchedRecords.length,
+        mae,
+        rmse,
+        mape,
+        r2Score,
+        totalPredictions,
+        matchedPredictions: matchedCount,
         coveragePercent,
-        uniqueAttractions,
-        uniqueParks,
+        uniqueAttractions: parseInt(uniqueAttractionsResult.count || "0", 10),
+        uniqueParks: parseInt(uniqueParksResult.count || "0", 10),
       },
-      byPredictionType: {
-        HOURLY: {
-          mae: this.calculateMAE(hourlyRecords),
-          totalPredictions: hourlyAll.length,
-          coveragePercent:
-            hourlyAll.length > 0
-              ? parseFloat(
-                  ((hourlyRecords.length / hourlyAll.length) * 100).toFixed(1),
-                )
-              : 0,
-        },
-        DAILY: {
-          mae: this.calculateMAE(dailyRecords),
-          totalPredictions: dailyAll.length,
-          coveragePercent:
-            dailyAll.length > 0
-              ? parseFloat(
-                  ((dailyRecords.length / dailyAll.length) * 100).toFixed(1),
-                )
-              : 0,
-        },
-      },
+      byPredictionType: byType,
     };
   }
 
