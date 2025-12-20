@@ -22,52 +22,26 @@ export class MLHealthController {
    *
    * GET /v1/ml/health
    *
-   * Checks if the ML service (Python FastAPI) is reachable
+   * Returns comprehensive ML system health:
+   * - ML service (Python FastAPI) connectivity
+   * - Active model information and age
+   * - System operational status
    */
   @Get("health")
   @ApiOperation({
     summary: "Check ML service health",
-    description: "Verifies connectivity to the ML service",
+    description:
+      "Verifies ML service connectivity and returns active model status",
   })
   @ApiResponse({
     status: 200,
-    description: "ML service is healthy",
+    description: "ML service health status with model info",
   })
   @ApiResponse({
     status: 503,
     description: "ML service is unavailable",
   })
   async checkHealth() {
-    const isHealthy = await this.mlService.isHealthy();
-
-    return {
-      status: isHealthy ? "healthy" : "unhealthy",
-      service: "ML Service (Python FastAPI)",
-      timestamp: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Get ML System Status
-   *
-   * GET /v1/ml/status
-   *
-   * Returns overall ML system status including:
-   * - ML service connectivity
-   * - Active model information
-   * - Recent prediction activity
-   */
-  @Get("status")
-  @ApiOperation({
-    summary: "Get ML system status",
-    description:
-      "Returns comprehensive status including service health and model info",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Status retrieved successfully",
-  })
-  async getStatus() {
     const [isHealthy, activeModel] = await Promise.all([
       this.mlService.isHealthy(),
       this.modelService.getActiveModel(),
@@ -75,6 +49,7 @@ export class MLHealthController {
 
     return {
       timestamp: new Date().toISOString(),
+      status: isHealthy ? "healthy" : "unhealthy",
       mlService: {
         status: isHealthy ? "healthy" : "unhealthy",
         url: process.env.ML_SERVICE_URL || "http://ml-service:8000",
@@ -83,6 +58,7 @@ export class MLHealthController {
         ? {
             version: activeModel.version,
             trainedAt: activeModel.trainedAt,
+            age: this.modelService.getModelAge(new Date(activeModel.trainedAt)),
             isActive: activeModel.isActive,
             metrics: {
               mae: activeModel.mae,

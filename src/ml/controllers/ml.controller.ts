@@ -161,19 +161,6 @@ export class MLController {
   }
 
   /**
-   * Get Daily Accuracy Trends
-   */
-  @Get("accuracy/trends/daily")
-  @ApiOperation({
-    summary: "Get daily accuracy trends",
-  })
-  async getDailyTrends(
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
-  ) {
-    return this.accuracyService.getDailyAccuracyTrends(days);
-  }
-
-  /**
    * Get Hourly and Day-of-Week Patterns
    */
   @Get("accuracy/trends/hourly")
@@ -213,16 +200,5 @@ export class MLController {
       days,
       attractionId,
     );
-  }
-
-  /**
-   * Prediction Accuracy Health Check
-   */
-  @Get("accuracy/health")
-  @ApiOperation({
-    summary: "Get prediction accuracy system health",
-  })
-  async getAccuracyHealth() {
-    return this.accuracyService.getHealthStatus();
   }
 }
