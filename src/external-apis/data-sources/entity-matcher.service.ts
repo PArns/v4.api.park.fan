@@ -59,13 +59,8 @@ export class EntityMatcherService {
       if (bestMatch) {
         matched.push({ wiki, qt: bestMatch, confidence: bestScore });
         qtOnly.splice(qtOnly.indexOf(bestMatch), 1);
-
-        this.logger.log(
-          `✓ Matched: "${wiki.name}" ↔ "${bestMatch.name}" (${(bestScore * 100).toFixed(1)}%)`,
-        );
       } else {
         wikiOnly.push(wiki);
-        this.logger.log(`✗ No match for Wiki park: "${wiki.name}"`);
       }
     }
 

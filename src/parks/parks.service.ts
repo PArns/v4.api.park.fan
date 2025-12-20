@@ -11,7 +11,6 @@ import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import { formatInParkTimezone } from "../common/utils/date.util";
 import {
-  calculateNameSimilarity,
   calculateParkPriority,
   findDuplicatePark,
   hasScheduleData,
@@ -108,9 +107,7 @@ export class ParksService {
           );
 
           if (duplicate) {
-            this.logger.log(
-              `🔗 Found potential duplicate: "${mappedData.name}" matches "${duplicate.name}" (${Math.round(calculateNameSimilarity(mappedData.name!, duplicate.name) * 100)}% similar)`,
-            );
+            // Silent duplicate detection - log only if merging
 
             // Check which park has schedule data AND queue data
             const duplicateHasSchedule = await hasScheduleData(
@@ -137,18 +134,11 @@ export class ParksService {
               false,
             );
 
-            this.logger.log(
-              `📊 Priority scores - Existing: ${duplicatePriority} (schedule: ${duplicateHasSchedule}, queue: ${duplicateHasQueueData}), New: ${newParkPriority}`,
-            );
-
             // TRUE MERGE: Consolidate external IDs from both parks
             // Winner keeps its data + inherits missing IDs from loser
             // This ensures we get both schedule data AND queue-times capabilities
             if (duplicatePriority >= newParkPriority) {
-              // Keep existing park, merge new data into it
-              this.logger.log(
-                `✅ Merging into existing park "${duplicate.name}"`,
-              );
+              // Keep existing park, merge new data into it (silent)
 
               // Consolidate ALL external IDs from both sources
               const updateData: Partial<Park> = {};
@@ -156,9 +146,6 @@ export class ParksService {
               // Add Wiki ID if missing
               if (mappedData.wikiEntityId && !duplicate.wikiEntityId) {
                 updateData.wikiEntityId = mappedData.wikiEntityId;
-                this.logger.log(
-                  `  📝 Adding Wiki ID: ${mappedData.wikiEntityId}`,
-                );
               }
 
               // Add Queue-Times ID if missing (enables queue data)
@@ -167,9 +154,6 @@ export class ParksService {
                 !duplicate.queueTimesEntityId
               ) {
                 updateData.queueTimesEntityId = mappedData.queueTimesEntityId;
-                this.logger.log(
-                  `  🎢 Adding Queue-Times ID: ${mappedData.queueTimesEntityId}`,
-                );
               }
 
               // Update other fields to latest data
@@ -180,9 +164,6 @@ export class ParksService {
 
               if (Object.keys(updateData).length > 0) {
                 await this.parkRepository.update(duplicate.id, updateData);
-                this.logger.log(
-                  `🔄 Consolidated park "${duplicate.name}" - now has ${duplicate.wikiEntityId || updateData.wikiEntityId ? "Wiki" : ""} ${(duplicate.wikiEntityId || updateData.wikiEntityId) && (duplicate.queueTimesEntityId || updateData.queueTimesEntityId) ? "+" : ""} ${duplicate.queueTimesEntityId || updateData.queueTimesEntityId ? "Queue-Times" : ""} data`,
-                );
               }
 
               // TRUE MERGE: Migrate child entities (shows, restaurants)
@@ -192,9 +173,7 @@ export class ParksService {
               });
 
               if (losingPark && losingPark.id !== duplicate.id) {
-                this.logger.log(
-                  `🔀 Migrating child entities from "${losingPark.name}" to "${duplicate.name}"`,
-                );
+                // Silent migration - log only summary
 
                 let totalMigrated = 0;
 
@@ -203,36 +182,23 @@ export class ParksService {
                   `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
                   [duplicate.id, losingPark.id],
                 );
-                if (showCount[1] > 0) {
-                  this.logger.log(`  📺 Migrated ${showCount[1]} shows`);
-                  totalMigrated += showCount[1];
-                }
+                totalMigrated += showCount[1] || 0;
 
                 // Migrate Restaurants
                 const restaurantCount = await this.parkRepository.manager.query(
                   `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
                   [duplicate.id, losingPark.id],
                 );
-                if (restaurantCount[1] > 0) {
-                  this.logger.log(
-                    `  🍽️  Migrated ${restaurantCount[1]} restaurants`,
-                  );
-                  totalMigrated += restaurantCount[1];
-                }
+                totalMigrated += restaurantCount[1] || 0;
 
-                // Migrate Attractions (if any remain that weren't already handled)
+                // Migrate Attractions
                 const attractionCount = await this.parkRepository.manager.query(
                   `UPDATE attractions SET "parkId" = $1 WHERE "parkId" = $2`,
                   [duplicate.id, losingPark.id],
                 );
-                if (attractionCount[1] > 0) {
-                  this.logger.log(
-                    `  🎢 Migrated ${attractionCount[1]} attractions`,
-                  );
-                  totalMigrated += attractionCount[1];
-                }
+                totalMigrated += attractionCount[1] || 0;
 
-                // Check if losing park is now empty (all entities migrated)
+                // Check if losing park is now empty
                 const remaining = await this.parkRepository.manager.query(
                   `SELECT 
                     (SELECT COUNT(*) FROM shows WHERE "parkId" = $1) as shows,
@@ -250,45 +216,28 @@ export class ParksService {
                 if (isEmpty) {
                   // Safe to delete losing park - all entities have been migrated
                   await this.parkRepository.delete(losingPark.id);
-                  this.logger.log(
-                    `  🗑️  Deleted empty losing park "${losingPark.name}"`,
-                  );
-                } else {
-                  // Still has entities - will be re-checked next sync
-                  this.logger.log(
-                    `  ⏸️  Losing park "${losingPark.name}" still has entities - will re-check next sync`,
-                  );
                 }
 
                 if (totalMigrated > 0) {
                   this.logger.log(
-                    `  ✅ Migration complete (${totalMigrated} entities migrated)`,
+                    `🔀 Migrated ${totalMigrated} entities from "${losingPark.name}" to "${duplicate.name}"`,
                   );
                 }
               }
 
               existing = duplicate;
             } else {
-              // New park has higher priority - merge existing IDs into new park
-              this.logger.log(
-                `✅ New park has higher priority - consolidating data`,
-              );
+              // New park has higher priority -  silent merge
 
               // Inherit IDs from duplicate if new park doesn't have them
               if (duplicate.wikiEntityId && !mappedData.wikiEntityId) {
                 mappedData.wikiEntityId = duplicate.wikiEntityId;
-                this.logger.log(
-                  `  📝 Inheriting Wiki ID: ${duplicate.wikiEntityId}`,
-                );
               }
               if (
                 duplicate.queueTimesEntityId &&
                 !mappedData.queueTimesEntityId
               ) {
                 mappedData.queueTimesEntityId = duplicate.queueTimesEntityId;
-                this.logger.log(
-                  `  🎢 Inheriting Queue-Times ID: ${duplicate.queueTimesEntityId}`,
-                );
               }
 
               // In this case, we'd need to migrate FROM duplicate TO the new park

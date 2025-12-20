@@ -29,14 +29,8 @@ export class ConflictResolverService {
       // Compare wait times for validation
       this.compareWaitTimes(wiki, qt);
 
-      // MERGE entities from both sources
-      this.logger.verbose(
-        `Merging entities: Wiki=${wiki.entities.length}, QT=${qt.entities.length}`,
-      );
+      // MERGE entities from both sources (silent)
       const mergedEntities = this.mergeEntities(wiki.entities, qt.entities);
-      this.logger.verbose(
-        `Merged result: ${mergedEntities.length} total entities`,
-      );
 
       // Return aggregated data
       return {

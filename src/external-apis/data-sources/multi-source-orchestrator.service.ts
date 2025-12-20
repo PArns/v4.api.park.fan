@@ -63,20 +63,22 @@ export class MultiSourceOrchestrator {
   }> {
     this.logger.log("Starting park discovery from all sources...");
 
-    // Fetch parks from all sources
-    const parksBySource = new Map<string, ParkMetadata[]>();
+    // Fetch from all sources in parallel
+    const results = await Promise.allSettled(
+      this.sources.map((source) => source.fetchAllParks()),
+    );
 
-    for (const source of this.sources) {
-      try {
-        const parks = await source.fetchAllParks();
-        parksBySource.set(source.name, parks);
-        this.logger.log(`Fetched ${parks.length} parks from ${source.name}`);
-      } catch (error) {
+    const parksBySource = new Map<string, ParkMetadata[]>();
+    results.forEach((result, i) => {
+      const source = this.sources[i];
+      if (result.status === "fulfilled") {
+        parksBySource.set(source.name, result.value);
+      } else {
         this.logger.error(
-          `Failed to fetch parks from ${source.name}: ${error}`,
+          `Failed to fetch parks from ${source.name}: ${result.reason}`,
         );
       }
-    }
+    });
 
     // Match parks (currently supports Wiki + QueueTimes)
     const wikiParks = parksBySource.get("themeparks-wiki") || [];

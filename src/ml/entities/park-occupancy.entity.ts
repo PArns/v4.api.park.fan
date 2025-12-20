@@ -25,7 +25,7 @@ export class ParkOccupancy {
   id: string;
 
   @PrimaryColumn({ type: "timestamptz" })
-  date: Date;
+  timestamp: Date;
 
   @Column()
   @Index()
@@ -64,8 +64,8 @@ export class ParkOccupancy {
     if (!this.id) {
       this.id = uuidv4();
     }
-    if (!this.date) {
-      this.date = new Date();
+    if (!this.timestamp) {
+      this.timestamp = new Date();
     }
   }
 }
