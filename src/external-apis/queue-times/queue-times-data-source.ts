@@ -31,7 +31,7 @@ export class QueueTimesDataSource implements IDataSource {
   readonly name = "queue-times";
   readonly completeness = 5;
 
-  constructor(private readonly client: QueueTimesClient) {}
+  constructor(private readonly client: QueueTimesClient) { }
 
   async fetchAllParks(): Promise<ParkMetadata[]> {
     const parkGroups = await this.client.getParks();
@@ -41,7 +41,7 @@ export class QueueTimesDataSource implements IDataSource {
     for (const group of parkGroups) {
       for (const park of group.parks) {
         allParks.push({
-          externalId: park.id.toString(),
+          externalId: `qt-park-${park.id}`,
           source: this.name,
           name: park.name,
           country: park.country,
@@ -58,7 +58,7 @@ export class QueueTimesDataSource implements IDataSource {
   }
 
   async fetchParkLiveData(externalId: string): Promise<LiveDataResponse> {
-    const parkId = parseInt(externalId, 10);
+    const parkId = this.extractParkId(externalId);
     const queueData = await this.client.getParkQueueTimes(parkId);
 
     const entities: EntityLiveData[] = [];
@@ -68,10 +68,10 @@ export class QueueTimesDataSource implements IDataSource {
     for (const land of queueData.lands) {
       // Store land metadata
       lands.push({
-        externalId: land.id.toString(),
+        externalId: `qt-land-${land.id}`,
         source: this.name,
         name: land.name,
-        attractions: land.rides.map((r) => r.id.toString()),
+        attractions: land.rides.map((r) => `qt-ride-${r.id}`),
       });
 
       // Process rides in this land
@@ -99,7 +99,7 @@ export class QueueTimesDataSource implements IDataSource {
     landExternalId?: string,
   ): EntityLiveData {
     return {
-      externalId: ride.id.toString(),
+      externalId: `qt-ride-${ride.id}`,
       source: this.name,
       entityType: EntityType.ATTRACTION,
       name: ride.name,
@@ -131,7 +131,7 @@ export class QueueTimesDataSource implements IDataSource {
     import("../data-sources/interfaces/data-source.interface").EntityMetadata[]
   > {
     try {
-      const parkId = parseInt(externalId, 10);
+      const parkId = this.extractParkId(externalId);
       const queueData = await this.client.getParkQueueTimes(parkId);
 
       const entities: import("../data-sources/interfaces/data-source.interface").EntityMetadata[] =
@@ -141,7 +141,7 @@ export class QueueTimesDataSource implements IDataSource {
       for (const land of queueData.lands) {
         for (const ride of land.rides) {
           entities.push({
-            externalId: ride.id.toString(),
+            externalId: `qt-ride-${ride.id}`,
             source: this.name,
             entityType: EntityType.ATTRACTION,
             name: ride.name,
@@ -150,7 +150,7 @@ export class QueueTimesDataSource implements IDataSource {
             latitude: undefined,
             longitude: undefined,
             landName: land.name,
-            landId: land.id.toString(),
+            landId: `qt-land-${land.id}`,
           });
         }
       }
@@ -158,7 +158,7 @@ export class QueueTimesDataSource implements IDataSource {
       // Process orphan rides
       for (const ride of queueData.rides) {
         entities.push({
-          externalId: ride.id.toString(),
+          externalId: `qt-ride-${ride.id}`,
           source: this.name,
           entityType: EntityType.ATTRACTION,
           name: ride.name,
@@ -174,6 +174,20 @@ export class QueueTimesDataSource implements IDataSource {
       );
       return [];
     }
+  }
+
+  /**
+   * Extract numeric park ID from prefixed external ID
+   * @param externalId - Prefixed ID like "qt-park-56" or legacy "56"
+   * @returns Numeric park ID (56)
+   */
+  private extractParkId(externalId: string): number {
+    // Handle prefixed IDs
+    if (externalId.startsWith("qt-park-")) {
+      return parseInt(externalId.replace("qt-park-", ""), 10);
+    }
+    // Fallback for legacy non-prefixed IDs (backward compatibility)
+    return parseInt(externalId, 10);
   }
 
   async isHealthy(): Promise<boolean> {
