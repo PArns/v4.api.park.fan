@@ -520,9 +520,9 @@ def create_prediction_features(
                     
                     # 1. Try explicit recent wait time (passed from API, ~30 mins ago)
                     if recent_wait_times and str(attraction_id) in recent_wait_times:
-                         recent_val = recent_wait_times[str(attraction_id)]
-                         if recent_val is not None:
-                             velocity = (float(wait_time) - float(recent_val)) / 6.0
+                        recent_val = recent_wait_times[str(attraction_id)]
+                        if recent_val is not None:
+                            velocity = (float(wait_time) - float(recent_val)) / 6.0
                     
                     # 2. Fallback to using 1h avg from DB if explicit recent not available
                     elif not pd.isna(df.loc[mask, 'avg_wait_last_1h'].iloc[0]):
@@ -702,24 +702,24 @@ def predict_wait_times(
         # BUT, for single-point prediction (e.g. next 1h), we compare to current_wait_times!
         
         if current_wait_times and row['attractionId'] in current_wait_times:
-             current_actual = current_wait_times[row['attractionId']]
-             diff = pred_wait - current_actual
-             if diff > 5:
-                 results[-1]['trend'] = 'increasing'
-             elif diff < -5:
-                 results[-1]['trend'] = 'decreasing'
-             else:
-                 results[-1]['trend'] = 'stable'
+            current_actual = current_wait_times[row['attractionId']]
+            diff = pred_wait - current_actual
+            if diff > 5:
+                results[-1]['trend'] = 'increasing'
+            elif diff < -5:
+                results[-1]['trend'] = 'decreasing'
+            else:
+                results[-1]['trend'] = 'stable'
         elif idx > 0 and results[-2]['attractionId'] == row['attractionId']:
-             # If no current actual, compare to previous hour prediction
-             prev_pred = results[-2]['predictedWaitTime']
-             diff = pred_wait - prev_pred
-             if diff > 5:
-                 results[-1]['trend'] = 'increasing'
-             elif diff < -5:
-                 results[-1]['trend'] = 'decreasing'
-             else:
-                 results[-1]['trend'] = 'stable'
+            # If no current actual, compare to previous hour prediction
+            prev_pred = results[-2]['predictedWaitTime']
+            diff = pred_wait - prev_pred
+            if diff > 5:
+                results[-1]['trend'] = 'increasing'
+            elif diff < -5:
+                results[-1]['trend'] = 'decreasing'
+            else:
+                results[-1]['trend'] = 'stable'
         
         # Override if status is CLOSED
         if row['status'] == 'CLOSED':
