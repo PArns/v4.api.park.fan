@@ -759,7 +759,7 @@ export class ParksService {
             const dateStr = formatInParkTimezone(h.date, park.timezone);
             // If multiple holidays on same day, just picking first or specific one?
             if (!holidayMap.has(dateStr)) {
-              holidayMap.set(dateStr, h.name || h.localName || "");
+              holidayMap.set(dateStr, h.localName || h.name || "");
             }
           }
         }
@@ -872,9 +872,10 @@ export class ParksService {
 
     const existingDates = new Set(
       existingEntries.map((e) =>
-        e.date instanceof Date
-          ? e.date.toISOString().split("T")[0]
-          : String(e.date).split("T")[0],
+        formatInParkTimezone(
+          e.date instanceof Date ? e.date : new Date(e.date),
+          park.timezone,
+        ),
       ),
     );
 
@@ -904,7 +905,7 @@ export class ParksService {
       if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
         const d = formatInParkTimezone(h.date, park.timezone);
         if (!holidayMap.has(d)) {
-          holidayMap.set(d, h.name || h.localName || "");
+          holidayMap.set(d, h.localName || h.name || "");
         }
         holidayDatesSet.add(d);
       }
@@ -917,52 +918,73 @@ export class ParksService {
     while (currentDate <= endDate) {
       const dateStr = formatInParkTimezone(currentDate, park.timezone);
 
-      // If no entry exists for this date
+      let holidayName: string | null = null;
+      let isHoliday = false;
+      let isBridgeDay = false;
+
+      // Check Holiday
+      if (holidayMap.has(dateStr)) {
+        isHoliday = true;
+        holidayName = holidayMap.get(dateStr)!;
+      }
+
+      // Check Bridge Day
+      const dayOfWeek = currentDate.getDay();
+      if (dayOfWeek === 5) {
+        // Friday -> Check Thursday
+        const prev = new Date(currentDate);
+        prev.setDate(currentDate.getDate() - 1);
+        const prevStr = formatInParkTimezone(prev, park.timezone);
+        if (holidayDatesSet.has(prevStr)) {
+          isBridgeDay = true;
+        }
+      } else if (dayOfWeek === 1) {
+        // Monday -> Check Tuesday
+        const next = new Date(currentDate);
+        next.setDate(currentDate.getDate() + 1);
+        const nextStr = formatInParkTimezone(next, park.timezone);
+        if (holidayDatesSet.has(nextStr)) {
+          isBridgeDay = true;
+        }
+      }
+
+      const finalIsBridgeDay = isHoliday ? false : isBridgeDay;
+
+      // If no entry exists for this date, create it
       if (!existingDates.has(dateStr)) {
-        let shouldInsert = true; // Always fill gaps in the schedule range
-        let holidayName: string | null = null;
-        let isBridgeDay = false;
-        let isHoliday = false;
+        await this.scheduleRepository.save({
+          parkId,
+          date: new Date(currentDate),
+          scheduleType: ScheduleType.UNKNOWN,
+          isHoliday,
+          holidayName,
+          isBridgeDay: finalIsBridgeDay,
+          openingTime: null,
+          closingTime: null,
+        });
+        filledCount++;
+      } else {
+        // Entry exists, check if holiday info needs updating
+        const existing = existingEntries.find((e) => {
+          const eDateStr = formatInParkTimezone(
+            e.date instanceof Date ? e.date : new Date(e.date),
+            park.timezone,
+          );
+          return eDateStr === dateStr;
+        });
 
-        // Check Holiday
-        if (holidayMap.has(dateStr)) {
-          isHoliday = true;
-          holidayName = holidayMap.get(dateStr)!;
-        }
-
-        // Check Bridge Day
-        const dayOfWeek = currentDate.getDay();
-        if (dayOfWeek === 5) {
-          // Friday -> Check Thursday
-          const prev = new Date(currentDate);
-          prev.setDate(currentDate.getDate() - 1);
-          const prevStr = formatInParkTimezone(prev, park.timezone);
-          if (holidayDatesSet.has(prevStr)) {
-            isBridgeDay = true;
-          }
-        } else if (dayOfWeek === 1) {
-          // Monday -> Check Tuesday
-          const next = new Date(currentDate);
-          next.setDate(currentDate.getDate() + 1);
-          const nextStr = formatInParkTimezone(next, park.timezone);
-          if (holidayDatesSet.has(nextStr)) {
-            isBridgeDay = true;
-          }
-        }
-
-        if (shouldInsert) {
-          // Create entry with UNKNOWN type
-          await this.scheduleRepository.save({
-            parkId,
-            date: new Date(currentDate),
-            scheduleType: ScheduleType.UNKNOWN,
+        if (
+          existing &&
+          (existing.isHoliday !== isHoliday ||
+            existing.holidayName !== holidayName ||
+            existing.isBridgeDay !== finalIsBridgeDay)
+        ) {
+          await this.scheduleRepository.update(existing.id, {
             isHoliday,
             holidayName,
-            isBridgeDay: isHoliday ? false : isBridgeDay,
-            openingTime: null,
-            closingTime: null,
+            isBridgeDay: finalIsBridgeDay,
           });
-          filledCount++;
+          filledCount++; // Count updates too
         }
       }
 
@@ -972,8 +994,33 @@ export class ParksService {
     if (filledCount > 0) {
       await this.invalidateScheduleCache(parkId);
     }
-    this.logger.log(`Filled ${filledCount} schedule gaps for Park ${parkId}`);
+    this.logger.log(
+      `Filled or updated ${filledCount} schedule entries for Park ${parkId}`,
+    );
     return filledCount;
+  }
+
+  /**
+   * Refreshes holiday and bridge day metadata for ALL parks
+   */
+  async fillAllParksGaps(): Promise<number> {
+    this.logger.log("🔄 Starting gap filling for ALL parks...");
+    const parks = await this.parkRepository.find();
+    let totalUpdated = 0;
+
+    for (const park of parks) {
+      try {
+        const count = await this.fillScheduleGaps(park.id);
+        totalUpdated += count;
+      } catch (error) {
+        this.logger.error(`Failed gap filling for ${park.name}: ${error}`);
+      }
+    }
+
+    this.logger.log(
+      `✅ Completed gap filling. Total entries updated: ${totalUpdated}`,
+    );
+    return totalUpdated;
   }
 
   /**
