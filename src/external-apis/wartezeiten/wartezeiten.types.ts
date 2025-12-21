@@ -65,24 +65,3 @@ export interface WartezeitenErrorResponse {
   error?: string;
   message?: string;
 }
-
-/**
- * Country name to ISO code mapping
- * Wartezeiten uses country names instead of ISO codes
- */
-export const COUNTRY_NAME_TO_CODE: Record<string, string> = {
-  "Great Britain": "GB",
-  "United Kingdom": "GB",
-  "United States": "US",
-  Germany: "DE",
-  France: "FR",
-  Italy: "IT",
-  Spain: "ES",
-  Netherlands: "NL",
-  Belgium: "BE",
-  Austria: "AT",
-  Poland: "PL",
-  Denmark: "DK",
-  Sweden: "SE",
-  Switzerland: "CH",
-};

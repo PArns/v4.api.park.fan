@@ -22,4 +22,27 @@ export const MANUALLY_MATCHED_PARKS: Record<string, string[]> = {
   "universal studios japan": ["universal studios japan usj"],
   "movie park germany": ["movie park"],
   "holiday park": ["holiday park pfalz"],
+
+  // Wartezeiten-specific variations (European parks)
+  "europa park": ["europapark", "europa-park"],
+  phantasialand: ["phantasia land"],
+  efteling: ["de efteling"],
+  toverland: ["attractiepark toverland"],
+  "heide park": ["heide park resort"],
+  gardaland: ["gardaland resort"],
+  "disneyland paris": ["disneyland park paris"],
+  "port aventura": ["portaventura", "port aventura world"],
+  "thorpe park": ["thorpe park resort"],
+  "alton towers": ["alton towers resort"],
+  "legoland windsor": ["legoland windsor resort"],
+  "legoland deutschland": ["legoland germany"],
+  "parc asterix": ["asterix park"],
+  "walibi holland": ["walibi"],
+  liseberg: ["liseberg amusement park"],
+
+  // wzOnly parks from wartezeiten
+  "disneys animal kingdom theme park": ["disney animal kingdom"],
+  "disney animal kingdom": ["disneys animal kingdom theme park"], // Bidirectional
+  nigloland: ["parc nigloland"],
+  "plopsaland de panne": ["plopsa de panne", "plopsaland"],
 };

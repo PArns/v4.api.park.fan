@@ -16,7 +16,7 @@ export const COUNTRY_NAME_TO_ISO_CODE: Record<string, string> = {
   "United States of America": "US",
   "Vereinigte Staaten": "US",
   USA: "US",
-  "America": "US",
+  America: "US",
   Canada: "CA",
   Kanada: "CA",
   Mexico: "MX",
@@ -25,7 +25,8 @@ export const COUNTRY_NAME_TO_ISO_CODE: Record<string, string> = {
   // Europe
   "United Kingdom": "GB",
   "United Kingdom of Great Britain and Northern Ireland": "GB",
-  "Großbritannien": "GB",
+  "Great Britain": "GB", // Wartezeiten.app alias
+  Großbritannien: "GB",
   England: "GB", // Geocoding alias for UK
   Scotland: "GB",
   Wales: "GB",
@@ -112,9 +113,12 @@ export const COUNTRY_NAME_TO_ISO_CODE: Record<string, string> = {
   "South Africa": "ZA",
   Egypt: "EG",
   Morocco: "MA",
+  Tunisia: "TN",
 
   // Additional (for completeness)
   Russia: "RU",
+  Serbia: "RS",
+  Ukraine: "UA",
 };
 
 /**

@@ -80,9 +80,19 @@ export class ParkMetadataProcessor {
         await this.processQueueTimesOnlyPark(parkMeta);
       }
 
-      // Step 6: Process Wartezeiten-only parks
-      for (const parkMeta of wzOnly) {
-        await this.processWartezeitenOnlyPark(parkMeta);
+      // Step 6: Log wartezeiten-only parks (NOT creating them - enrichment only!)
+      if (wzOnly.length > 0) {
+        this.logger.warn(
+          `⚠️  Found ${wzOnly.length} parks only in Wartezeiten.app (not creating - enrichment only):`,
+        );
+        wzOnly.forEach((park) => {
+          this.logger.warn(
+            `   - ${park.name} (${park.country || "unknown country"})`,
+          );
+        });
+        this.logger.log(
+          `💡 Tip: These parks should be added to Wiki or Queue-Times first, then Wartezeiten can enrich them.`,
+        );
       }
 
       // Step 7: Sync schedules for all parks
@@ -394,55 +404,6 @@ export class ParkMetadataProcessor {
     );
 
     this.logger.debug(`✓ Created qt-only park: ${park.name}`);
-  }
-
-  /**
-   * Process a park that exists ONLY in Wartezeiten.app
-   */
-  private async processWartezeitenOnlyPark(wz: ParkMetadata): Promise<void> {
-    const wzExternalId = `wz-${wz.externalId}`; // Prefix to avoid collision
-
-    // Check if park already exists
-    let park = await this.parkRepository.findOne({
-      where: { externalId: wzExternalId },
-    });
-
-    if (park) {
-      // Just assume it's set up correctly if it exists
-      return;
-    }
-
-    // Wartezeiten doesn't provide lat/lng/timezone for parks typically, or it's limited
-    // But we save what we have
-    // Note: WZ parks have name, country. No lat/lng/timezone usually.
-
-    park = await this.parkRepository.save({
-      externalId: wzExternalId,
-      name: wz.name,
-      slug: generateSlug(wz.name),
-      timezone: wz.timezone || this.getTimezoneForCountry(wz.country),
-      latitude: wz.latitude, // might be undefined
-      longitude: wz.longitude, // might be undefined
-      continent: wz.continent,
-      continentSlug: wz.continent ? generateSlug(wz.continent) : undefined,
-      country: wz.country,
-      countrySlug: wz.country ? generateSlug(wz.country) : undefined,
-      primaryDataSource: "wartezeiten-app",
-      dataSources: ["wartezeiten-app"],
-      wikiEntityId: null,
-      queueTimesEntityId: null,
-    });
-
-    await this.createMapping(
-      park.id,
-      "park",
-      "wartezeiten-app",
-      wz.externalId,
-      1.0,
-      "exact",
-    );
-
-    this.logger.debug(`✓ Created wz-only park: ${park.name}`);
   }
 
   /**

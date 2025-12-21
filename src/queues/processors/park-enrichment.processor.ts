@@ -4,7 +4,7 @@ import { Job } from "bull";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
-import { getCountryISO } from "../../common/country-mapping";
+import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import { COUNTRY_INFLUENCES } from "../../common/country-influences";
 
 /**
@@ -92,7 +92,7 @@ export class ParkEnrichmentProcessor {
 
       // 2. Set countryCode from country name (if already available but code missing)
       if (park.country && !park.countryCode && !updates.countryCode) {
-        const iso = getCountryISO(park.country);
+        const iso = getCountryISOCode(park.country);
         if (iso) {
           updates.countryCode = iso;
           updates.metadataRetryCount = 0; // Reset on success

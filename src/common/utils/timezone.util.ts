@@ -1,92 +1,6 @@
 import { DateTime } from "luxon";
 
 /**
- * Country name to ISO code mapping
- * Maps full country names (from Google Geocoding) to ISO 3166-1 alpha-2 codes
- */
-export const COUNTRY_ISO_CODES: Record<string, string> = {
-  // North America
-  "United States": "US",
-  Canada: "CA",
-  Mexico: "MX",
-
-  // Europe
-  "United Kingdom": "GB",
-  England: "GB", // Geocoding alias
-  Germany: "DE",
-  France: "FR",
-  Spain: "ES",
-  Italy: "IT",
-  Netherlands: "NL",
-  Belgium: "BE",
-  Sweden: "SE",
-  Denmark: "DK",
-  Norway: "NO",
-  Finland: "FI",
-  Austria: "AT",
-  Switzerland: "CH",
-  Poland: "PL",
-  "Czech Republic": "CZ",
-  Portugal: "PT",
-  Ireland: "IE",
-  Greece: "GR",
-  Hungary: "HU",
-  Romania: "RO",
-  Slovakia: "SK",
-  Croatia: "HR",
-  Bulgaria: "BG",
-  Slovenia: "SI",
-
-  // Asia
-  China: "CN",
-  Japan: "JP",
-  "South Korea": "KR",
-  "Hong Kong": "HK",
-  Singapore: "SG",
-  Thailand: "TH",
-  India: "IN",
-  Indonesia: "ID",
-  Malaysia: "MY",
-  Philippines: "PH",
-  Vietnam: "VN",
-  Taiwan: "TW",
-
-  // Middle East
-  "United Arab Emirates": "AE",
-  "Saudi Arabia": "SA",
-  Israel: "IL",
-  Turkey: "TR",
-  Qatar: "QA",
-  Bahrain: "BH",
-  Kuwait: "KW",
-  Oman: "OM",
-  Jordan: "JO",
-
-  // Oceania
-  Australia: "AU",
-  "New Zealand": "NZ",
-
-  // South America
-  Brazil: "BR",
-  Argentina: "AR",
-  Chile: "CL",
-  Colombia: "CO",
-  Peru: "PE",
-  Uruguay: "UY",
-
-  // Africa
-  "South Africa": "ZA",
-  Egypt: "EG",
-  Morocco: "MA",
-  Tunisia: "TN",
-
-  // Additional
-  Russia: "RU",
-  Serbia: "RS",
-  Ukraine: "UA",
-};
-
-/**
  * Country to Timezone mapping
  * Maps country ISO codes to their primary timezone
  */
@@ -190,14 +104,4 @@ export function parseDateInTimezone(
  */
 export function getTimezoneForCountry(countryCode: string): string | null {
   return COUNTRY_TIMEZONES[countryCode] || null;
-}
-
-/**
- * Get ISO code for a country name
- *
- * @param countryName - Full country name (e.g., "Germany", "United States")
- * @returns ISO country code (e.g., "DE", "US") or null if not found
- */
-export function getCountryISOCode(countryName: string): string | null {
-  return COUNTRY_ISO_CODES[countryName] || null;
 }

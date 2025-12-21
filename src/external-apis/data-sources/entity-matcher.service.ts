@@ -169,7 +169,17 @@ export class EntityMatcherService {
       return nameSim / 0.6;
     }
 
-    return nameSim + geoSim;
+    // 3. Timezone validation (bonus/penalty)
+    let timezoneSim = 0;
+    if (wiki.timezone && qt.timezone) {
+      if (wiki.timezone === qt.timezone) {
+        timezoneSim = 0.05; // Boost for matching timezone
+      } else {
+        timezoneSim = -0.05; // Small penalty for mismatched timezone
+      }
+    }
+
+    return nameSim + geoSim + timezoneSim;
   }
 
   /**

@@ -10,10 +10,10 @@ import {
   EntityMetadata,
 } from "../data-sources/interfaces/data-source.interface";
 import { WartezeitenClient } from "./wartezeiten.client";
-import {
-  WartezeitenAttractionStatus,
-  COUNTRY_NAME_TO_CODE,
-} from "./wartezeiten.types";
+import { WartezeitenAttractionStatus } from "./wartezeiten.types";
+import { getCountryISOCode } from "../../common/constants/country-codes.constant";
+import { getTimezoneForCountry } from "../../common/utils/timezone.util";
+import { isWartezeitenParkExcluded } from "./wartezeiten-exclusions";
 
 /**
  * Wartezeiten.app Data Source
@@ -42,14 +42,29 @@ export class WartezeitenDataSource implements IDataSource {
   async fetchAllParks(): Promise<ParkMetadata[]> {
     const parks = await this.client.getParks("en");
 
-    const allParks: ParkMetadata[] = parks.map((park) => ({
-      externalId: park.uuid, // Use UUID (more stable than string ID)
-      source: this.name,
-      name: park.name,
-      country: COUNTRY_NAME_TO_CODE[park.land] || park.land, // Convert to ISO code if possible
-      // Note: No lat/lng, timezone, or continent in Wartezeiten API
-      // These will be enriched from Wiki data during matching
-    }));
+    // Filter out excluded parks
+    const filteredParks = parks.filter((park) => {
+      if (isWartezeitenParkExcluded(park.name)) {
+        this.logger.debug(`Excluding park from Wartezeiten: ${park.name}`);
+        return false;
+      }
+      return true;
+    });
+
+    const allParks: ParkMetadata[] = filteredParks.map((park) => {
+      const countryCode = getCountryISOCode(park.land);
+      return {
+        externalId: park.uuid, // Use UUID (more stable than string ID)
+        source: this.name,
+        name: park.name,
+        country: countryCode || park.land, // Convert to ISO code if possible
+        timezone: countryCode
+          ? (getTimezoneForCountry(countryCode) ?? undefined)
+          : undefined,
+        // Note: No lat/lng or continent in Wartezeiten API
+        // These will be enriched from Wiki data during matching
+      };
+    });
 
     this.logger.log(`Fetched ${allParks.length} parks from Wartezeiten.app`);
     return allParks;
