@@ -88,9 +88,9 @@ export class ScheduleEntry {
   @Column({ type: "boolean", default: false })
   isBridgeDay: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 }

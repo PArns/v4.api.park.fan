@@ -69,10 +69,10 @@ export class Show {
   @OneToMany(() => ShowLiveData, (liveData) => liveData.show)
   liveData: ShowLiveData[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 
   @BeforeInsert()

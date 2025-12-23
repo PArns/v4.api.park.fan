@@ -32,7 +32,7 @@ export class WeatherData {
   @JoinColumn({ name: "parkId" })
   park: Park;
 
-  @PrimaryColumn()
+  @PrimaryColumn({ type: "text" })
   parkId: string;
 
   @PrimaryColumn({ type: "date" })
@@ -88,6 +88,6 @@ export class WeatherData {
   @Column({ type: "timestamptz", default: () => "CURRENT_TIMESTAMP" })
   lastUpdated: Date; // When this data was fetched
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date; // When this data was last updated
 }

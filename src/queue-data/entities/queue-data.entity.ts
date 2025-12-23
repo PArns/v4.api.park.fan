@@ -43,7 +43,7 @@ export class QueueData {
   @JoinColumn({ name: "attractionId" })
   attraction: Attraction;
 
-  @Column()
+  @Column({ type: "text" })
   attractionId: string;
 
   @Column({

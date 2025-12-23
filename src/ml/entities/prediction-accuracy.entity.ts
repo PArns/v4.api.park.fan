@@ -22,34 +22,38 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 @Index(["attractionId", "targetTime"])
 @Index(["modelVersion", "createdAt"])
 @Index(["targetTime"])
+@Index("idx_pa_target_actual", ["targetTime", "actualWaitTime"], {
+  where: "actual_wait_time IS NOT NULL",
+})
+@Index("idx_pa_attraction_target", ["attractionId", "targetTime"])
 export class PredictionAccuracy {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column()
+  @Column({ name: "attraction_id" })
   @Index()
   attractionId: string;
 
   @ManyToOne(() => Attraction)
-  @JoinColumn({ name: "attractionId" })
+  @JoinColumn({ name: "attraction_id" })
   attraction: Attraction;
 
-  @Column({ type: "timestamptz" })
+  @Column({ name: "prediction_time", type: "timestamptz" })
   predictionTime: Date;
 
-  @Column({ type: "timestamptz" })
+  @Column({ name: "target_time", type: "timestamptz" })
   targetTime: Date;
 
-  @Column({ type: "int" })
+  @Column({ name: "predicted_wait_time", type: "int" })
   predictedWaitTime: number;
 
-  @Column({ type: "int", nullable: true })
+  @Column({ name: "actual_wait_time", type: "int", nullable: true })
   actualWaitTime: number | null; // Filled when actual data becomes available
 
-  @Column({ type: "int", nullable: true })
+  @Column({ name: "absolute_error", type: "int", nullable: true })
   absoluteError: number | null; // |predicted - actual|
 
-  @Column({ type: "float", nullable: true })
+  @Column({ name: "percentage_error", type: "float", nullable: true })
   percentageError: number | null; // (|predicted - actual| / actual) * 100
 
   @Column()
@@ -70,6 +74,7 @@ export class PredictionAccuracy {
   wasUnplannedClosure: boolean;
 
   @Column({
+    name: "comparison_status",
     type: "enum",
     enum: ["PENDING", "COMPLETED", "MISSED"],
     default: "PENDING",
@@ -77,6 +82,6 @@ export class PredictionAccuracy {
   @Index() // Index for fast lookup of pending records
   comparisonStatus: "PENDING" | "COMPLETED" | "MISSED";
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 }

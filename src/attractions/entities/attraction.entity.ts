@@ -72,10 +72,10 @@ export class Attraction {
   @OneToMany(() => QueueData, (queueData) => queueData.attraction)
   queueData: QueueData[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 
   @BeforeInsert()

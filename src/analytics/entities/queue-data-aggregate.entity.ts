@@ -40,11 +40,11 @@ export class QueueDataAggregate {
   @PrimaryColumn({ type: "timestamptz" })
   hour: Date; // Hourly bucket (e.g., 2025-01-15 14:00:00)
 
-  @Column()
+  @Column({ type: "text" })
   @Index()
   attractionId: string;
 
-  @Column()
+  @Column({ type: "text" })
   @Index()
   parkId: string;
 
@@ -81,10 +81,10 @@ export class QueueDataAggregate {
   @Column({ type: "int" })
   sampleCount: number; // Number of data points in this hour
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 
   @BeforeInsert()

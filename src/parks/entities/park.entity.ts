@@ -154,10 +154,10 @@ export class Park {
   })
   currentCrowdLevel: number | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 
   @Column({ type: "int", default: 0 })

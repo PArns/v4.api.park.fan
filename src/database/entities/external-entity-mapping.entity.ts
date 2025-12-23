@@ -48,6 +48,6 @@ export class ExternalEntityMapping {
   @Column({ default: false })
   verified: boolean;
 
-  @CreateDateColumn({ name: "created_at" })
+  @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 }

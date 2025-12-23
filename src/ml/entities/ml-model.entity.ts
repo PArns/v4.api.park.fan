@@ -70,6 +70,6 @@ export class MLModel {
   @Column({ type: "text", nullable: true })
   notes: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 }
