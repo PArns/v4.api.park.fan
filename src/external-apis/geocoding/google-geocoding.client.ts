@@ -93,7 +93,7 @@ export class GoogleGeocodingClient {
     }
 
     // Cache miss or upgrade needed - call Google API (costs money!)
-    this.logger.log(
+    this.logger.debug(
       `Calling Google Geocoding API for: ${latRounded}, ${lngRounded}`,
     );
     const result = await this.reverseGeocodeWithRetry(latitude, longitude);
@@ -114,7 +114,7 @@ export class GoogleGeocodingClient {
         "EX",
         7 * 24 * 60 * 60, // 7 days for failed lookups
       );
-      this.logger.debug(
+      this.logger.verbose(
         `Cached null result for 7 days: ${latRounded}, ${lngRounded}`,
       );
     }
@@ -150,8 +150,7 @@ export class GoogleGeocodingClient {
 
         const delay = 1000 * Math.pow(2, attempt);
         this.logger.warn(
-          `Google Geocoding API rate limit hit (OVER_QUERY_LIMIT). Retrying in ${delay}ms (Attempt ${
-            attempt + 1
+          `Google Geocoding API rate limit hit (OVER_QUERY_LIMIT). Retrying in ${delay}ms (Attempt ${attempt + 1
           }/5)`,
         );
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -160,8 +159,7 @@ export class GoogleGeocodingClient {
 
       if (response.data.status !== "OK") {
         this.logger.error(
-          `Google Geocoding API error: ${response.data.status} - ${
-            response.data.error_message || "Unknown error"
+          `Google Geocoding API error: ${response.data.status} - ${response.data.error_message || "Unknown error"
           }`,
         );
         return null;
@@ -176,7 +174,7 @@ export class GoogleGeocodingClient {
       const geodata = this.extractGeographicData(response.data.results);
 
       if (!geodata) {
-        this.logger.warn(
+        this.logger.verbose(
           `Could not extract geographic data for coordinates: ${latitude}, ${longitude}`,
         );
         return null;
@@ -193,8 +191,7 @@ export class GoogleGeocodingClient {
           }
           const delay = 1000 * Math.pow(2, attempt);
           this.logger.warn(
-            `HTTP 429 Rate limit hit. Retrying in ${delay}ms (Attempt ${
-              attempt + 1
+            `HTTP 429 Rate limit hit. Retrying in ${delay}ms (Attempt ${attempt + 1
             }/5)`,
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -322,7 +319,7 @@ export class GoogleGeocodingClient {
 
     // Validate we have essential data
     if (!city || !country || !countryCode) {
-      this.logger.warn(
+      this.logger.verbose(
         `Incomplete geographic data: city=${city}, country=${country}, code=${countryCode}`,
       );
       return null;

@@ -12,7 +12,7 @@ import * as packageJson from "../package.json";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: ["log", "error", "warn", "debug", "verbose"],
+    logger: ["log", "error", "warn"],
   });
 
   // Custom X-Powered-By header

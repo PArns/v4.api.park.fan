@@ -42,6 +42,7 @@ export class EntityMatcherService {
       qt: ParkMetadata;
       confidence: number;
     }> = [];
+    let manualMatchCount = 0;
     const wikiOnly: ParkMetadata[] = [];
     const qtOnly = [...qtParks]; // Clone array
 
@@ -65,9 +66,10 @@ export class EntityMatcherService {
         );
 
         if (overrideMatch) {
-          this.logger.log(
-            `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
-          );
+          // this.logger.debug(
+          //   `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
+          // );
+          manualMatchCount++;
           bestMatch = overrideMatch;
           bestScore = 1.0;
         }
@@ -94,7 +96,7 @@ export class EntityMatcherService {
     }
 
     this.logger.log(
-      `Park matching complete: ${matched.length} matched, ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only`,
+      `Park matching complete: ${matched.length} matched (including ${manualMatchCount} manual), ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only`,
     );
 
     return { matched, wikiOnly, qtOnly };

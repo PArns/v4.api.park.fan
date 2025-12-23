@@ -257,7 +257,7 @@ export class ParkMetadataProcessor {
 
       // Update name if changed (Prioritize Wiki truth, even if shorter)
       if (park.name !== bestName) {
-        this.logger.log(`Updating park name: "${park.name}" -> "${bestName}"`);
+        this.logger.verbose(`Updating park name: "${park.name}" -> "${bestName}"`);
         park.name = bestName;
         park.slug = generateSlug(bestName);
       }
@@ -491,7 +491,7 @@ export class ParkMetadataProcessor {
       existing.verified = matchMethod === "exact" || matchMethod === "manual";
 
       await this.mappingRepository.save(existing);
-      this.logger.log(
+      this.logger.verbose(
         `✅ Resolved mapping conflict: ${externalSource}:${externalEntityId} now correctly maps to ${internalEntityId}`,
       );
       return;
@@ -612,7 +612,7 @@ export class ParkMetadataProcessor {
 
               updates.geocodingAttemptedAt = new Date();
               needsUpdate = true;
-              this.logger.debug(
+              this.logger.verbose(
                 `Geocoded ${park.name}: ${geoData.city}, ${geoData.regionCode || geoData.region || ""}, ${geoData.country} (${geoData.continent})`,
               );
             } else {
