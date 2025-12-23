@@ -172,19 +172,36 @@ export class ConflictResolverService {
       if (entity.wzWaitTime) waitTimes.push(entity.wzWaitTime);
 
       if (waitTimes.length > 1) {
-        // Calculate median
-        waitTimes.sort((a, b) => a - b);
-        const mid = Math.floor(waitTimes.length / 2);
-        const median =
-          waitTimes.length % 2 === 0
-            ? (waitTimes[mid - 1] + waitTimes[mid]) / 2
-            : waitTimes[mid];
+        let finalWaitTime: number;
+
+        if (waitTimes.length === 3) {
+          // Sort for easier comparison
+          waitTimes.sort((a, b) => a - b);
+
+          // Check if 2 of 3 sources agree (consensus)
+          if (waitTimes[0] === waitTimes[1]) {
+            // First two agree: use consensus value
+            finalWaitTime = waitTimes[0];
+          } else if (waitTimes[1] === waitTimes[2]) {
+            // Last two agree: use consensus value
+            finalWaitTime = waitTimes[1];
+          } else {
+            // All 3 different: use median (robust against outliers)
+            finalWaitTime = waitTimes[1]; // Middle value after sorting
+          }
+        } else if (waitTimes.length === 2) {
+          // Use average (= median for 2 values)
+          finalWaitTime = (waitTimes[0] + waitTimes[1]) / 2;
+        } else {
+          // Single source (shouldn't happen in this branch, but for safety)
+          finalWaitTime = waitTimes[0];
+        }
 
         // Round to nearest 5 minutes
-        entity.waitTime = Math.round(median / 5) * 5;
+        entity.waitTime = Math.round(finalWaitTime / 5) * 5;
         // Log removed to reduce noise
         // this.logger.verbose(
-        //   `Multi-source wait time for "${entity.name}": [${waitTimes.join(", ")}] → median: ${median.toFixed(1)} → rounded: ${entity.waitTime} min`,
+        //   `Multi-source wait time for "${entity.name}": [${waitTimes.join(", ")}] → final: ${finalWaitTime.toFixed(1)} → rounded: ${entity.waitTime} min`,
         // );
       }
 
