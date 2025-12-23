@@ -18,6 +18,8 @@ import { MLModule } from "./ml/ml.module";
 import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
 import { DiscoveryModule } from "./discovery/discovery.module";
+import { AppController } from "./app.controller";
+import { AppService } from "./app.service";
 
 @Module({
   imports: [
@@ -61,5 +63,7 @@ import { DiscoveryModule } from "./discovery/discovery.module";
     // Geographic Discovery
     DiscoveryModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
