@@ -40,6 +40,8 @@ export class QueueSchedulerService implements OnModuleInit {
     private predictionAccuracyQueue: Queue,
     @InjectQueue("predictions") private predictionsQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
+    @InjectQueue("wartezeiten-schedule")
+    private wartezeitenScheduleQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -261,6 +263,25 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 2 * * *", // Daily at 2am
           },
           jobId: "percentiles-cron",
+        },
+      );
+    }
+
+    // Wartezeiten Opening Times: Daily at 6am
+    const hasWartezeitenScheduleCron = await this.hasRepeatableJob(
+      this.wartezeitenScheduleQueue,
+      "wartezeiten-schedule-cron",
+    );
+
+    if (!hasWartezeitenScheduleCron) {
+      await this.wartezeitenScheduleQueue.add(
+        "fetch-opening-times",
+        {},
+        {
+          repeat: {
+            cron: "0 6 * * *", // Daily at 6am
+          },
+          jobId: "wartezeiten-schedule-cron",
         },
       );
     }

@@ -21,6 +21,7 @@ import { PredictionGeneratorProcessor } from "./processors/prediction-generator.
 import { ParkEnrichmentProcessor } from "./processors/park-enrichment.processor";
 import { EntityMappingsProcessor } from "./processors/entity-mappings.processor";
 import { QueuePercentileProcessor } from "./processors/queue-percentile.processor";
+import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
 import { AttractionsModule } from "../attractions/attractions.module";
@@ -34,6 +35,7 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
 import { GeocodingModule } from "../external-apis/geocoding/geocoding.module";
 import { NagerDateModule } from "../external-apis/nager-date/nager-date.module";
 import { DataSourcesModule } from "../external-apis/data-sources/data-sources.module";
+import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -96,6 +98,7 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
       { name: "predictions" },
       { name: "park-enrichment" },
       { name: "analytics" },
+      { name: "wartezeiten-schedule" },
     ),
 
     // Feature modules for processors
@@ -112,6 +115,7 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
     DataSourcesModule,
     GeocodingModule,
     NagerDateModule,
+    WartezeitenModule,
     AnalyticsModule,
     RedisModule, // For cache warmup service
   ],
@@ -134,6 +138,7 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
     PredictionGeneratorProcessor,
     ParkEnrichmentProcessor,
     QueuePercentileProcessor,
+    WartezeitenScheduleProcessor,
   ],
   exports: [BullModule], // Export for use in other modules
 })
