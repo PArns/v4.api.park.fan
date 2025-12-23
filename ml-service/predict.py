@@ -4,7 +4,7 @@ Prediction logic for hourly and daily forecasts
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy import text
 
 from model import WaitTimeModel
