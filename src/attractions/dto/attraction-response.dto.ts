@@ -28,9 +28,7 @@ export class AttractionResponseDto {
     required: false,
     nullable: true,
   })
-  land?: {
-    name: string;
-  } | null;
+  land?: string | null;
 
   // Live Data
   @ApiProperty({
@@ -153,11 +151,7 @@ export class AttractionResponseDto {
           }
         : null,
 
-      land: attraction.landName
-        ? {
-            name: attraction.landName,
-          }
-        : null,
+      land: attraction.landName || null,
 
       hourlyForecast: [],
       forecasts: [],

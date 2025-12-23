@@ -92,9 +92,7 @@ export class ParkAttractionDto {
     required: false,
     nullable: true,
   })
-  land?: {
-    name: string;
-  } | null;
+  land?: string | null;
 
   @ApiProperty({ description: "Status", required: false })
   status?: string;
@@ -429,11 +427,7 @@ export class ParkWithAttractionsDto {
               attraction.latitude !== undefined ? attraction.latitude : null,
             longitude:
               attraction.longitude !== undefined ? attraction.longitude : null,
-            land: attraction.landName
-              ? {
-                  name: attraction.landName,
-                }
-              : null,
+            land: attraction.landName || null,
             // queue data, forecasts etc will be attached by service
           }))
         : [],
