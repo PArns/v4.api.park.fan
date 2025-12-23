@@ -112,6 +112,12 @@ services:
       - "coolify.managed=true"
       - "coolify.version=1.0.0"
       - "coolify.type=application"
+      - "coolify.healthcheck.enabled=true"
+      - "coolify.healthcheck.path=/v1/health"
+      - "coolify.healthcheck.port=3000"
+      - "coolify.healthcheck.interval=30s"
+      - "coolify.healthcheck.timeout=10s"
+      - "coolify.healthcheck.retries=3"
 
   bull-board:
     image: venatum/bull-board:latest
