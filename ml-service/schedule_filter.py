@@ -114,6 +114,11 @@ def filter_predictions_by_schedule(
                 "dates": [d.isoformat() for d in date_set]
             })
             schedules = result.fetchall()
+            
+            # Debug: Log schedules found
+            print(f"📅 Park {park_id}: Found {len(schedules)} schedule entries")
+            for s in schedules:
+                print(f"   - {s[0]}: {s[2]} to {s[3]}")
         
         if schedules:
             # PRIMARY LOGIC: Filter by schedule
@@ -170,9 +175,13 @@ def filter_predictions_by_schedule(
                             
                             # Keep predictions within operating hours (from opening up to, but NOT including, closing)
                             # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
+                            # Keep predictions within operating hours (from opening up to, but NOT including, closing)
+                            # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
                             if opening <= pred_time_local < closing:
                                 filtered_predictions.append(pred)
-                            # else: Prediction is at or after closing time, filter it out
+                            else:
+                                # Log dropped prediction for debugging
+                                print(f"❌ Dropping {pred_time_local} (Outside {opening.time()}-{closing.time()})")
                         # else: No schedule for this date - park might be closed today, skip prediction
                     except Exception as e:
                         print(f"⚠️  Error filtering prediction: {e}")
