@@ -39,6 +39,9 @@ RUN npm ci --only=production && \
 # Copy built application from builder
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 
+# Copy README.md for root endpoint
+COPY --chown=nestjs:nodejs README.md ./
+
 # Switch to non-root user
 USER nestjs
 
