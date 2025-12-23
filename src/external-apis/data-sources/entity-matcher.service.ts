@@ -156,7 +156,17 @@ export class EntityMatcherService {
       }
     }
 
-    // 3. Geographic proximity (30% weight, reduced from 40%)
+    // 3. Timezone validation (5% weight)
+    let timezoneSim = 0;
+    if (wiki.timezone && qt.timezone) {
+      if (wiki.timezone === qt.timezone) {
+        timezoneSim = 0.05; // Boost for matching timezone
+      } else {
+        timezoneSim = -0.05; // Small penalty for mismatched timezone
+      }
+    }
+
+    // 4. Geographic proximity (30% weight, reduced from 40%)
     let geoSim = 0;
 
     // Check for valid coordinates (ignore 0,0)
@@ -200,18 +210,11 @@ export class EntityMatcherService {
       }
     } else {
       // Fallback if one or both missing valid geo
-      // Don't normalize to 100% - missing geo is suspicious for a match
-      return nameSim + countrySim;
-    }
-
-    // 4. Timezone validation (5% weight - same as before)
-    let timezoneSim = 0;
-    if (wiki.timezone && qt.timezone) {
-      if (wiki.timezone === qt.timezone) {
-        timezoneSim = 0.05; // Boost for matching timezone
-      } else {
-        timezoneSim = -0.05; // Small penalty for mismatched timezone
-      }
+      // Since we lose the 30% geo weight, we must boost name importance
+      // logic: If name is very similar, we should match even without geo
+      // rawNameSim * 0.8 allows a perfect name match to reach 0.8 (above 0.75 threshold)
+      const boostedNameSim = rawNameSim * 0.8;
+      return boostedNameSim + countrySim + timezoneSim;
     }
 
     const totalScore = nameSim + countrySim + geoSim + timezoneSim;
