@@ -12,6 +12,7 @@ import { ExternalEntityMapping } from "../../database/entities/external-entity-m
 import { Park } from "../../parks/entities/park.entity";
 import { ParkMetadata } from "../../external-apis/data-sources/interfaces/data-source.interface";
 import { generateSlug } from "../../common/utils/slug.util";
+import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources/config/wartezeiten-only-parks";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -39,7 +40,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
-  ) { }
+  ) {}
 
   @Process("sync-all-parks")
   async handleFetchParks(_job: Job): Promise<void> {
@@ -88,7 +89,9 @@ export class ParkMetadataProcessor {
       }
 
       // 2b. Process Matched (QT-Anchored, No Wiki)
-      const qtMatched = matched.filter((m) => m.wiki === undefined && m.qt !== undefined);
+      const qtMatched = matched.filter(
+        (m) => m.wiki === undefined && m.qt !== undefined,
+      );
       for (const match of qtMatched) {
         await this.processMatchedPark(
           undefined, // No Wiki
@@ -102,7 +105,9 @@ export class ParkMetadataProcessor {
       this.logger.log("🔹 Phase 3: Processing Wartezeiten-based parks...");
 
       // 3a. Process Matched (WZ-Anchored, No Wiki, No QT - rare)
-      const wzMatched = matched.filter((m) => m.wiki === undefined && m.qt === undefined && m.wz !== undefined);
+      const wzMatched = matched.filter(
+        (m) => m.wiki === undefined && m.qt === undefined && m.wz !== undefined,
+      );
       for (const match of wzMatched) {
         await this.processMatchedPark(
           undefined,
@@ -112,12 +117,41 @@ export class ParkMetadataProcessor {
         );
       }
 
-      // 3b. Log wartezeiten-only parks (NOT creating them - enrichment only!)
-      if (wzOnly.length > 0) {
+      // 3b. Process Wartezeiten-only parks (Selective Creation)
+      // Some parks only exist in Wartezeiten but are valuable (e.g. Nigloland)
+      // We use a whitelist config to determine which ones to create and provide missing data (lat/lon)
+
+      const wzToCreate: ParkMetadata[] = [];
+      const wzIgnored: ParkMetadata[] = [];
+
+      for (const park of wzOnly) {
+        // Clean name for check (although DataSource handles most cases)
+        // Ensure "Nigloland (FR)" -> "Nigloland" just in case
+        const cleanedName = park.name.replace(/\s*\([A-Z]{2}\)$/, "").trim();
+
+        // Check if this park is in our whitelist (either by raw name or cleaned name)
+        const isWhitelisted =
+          WARTEZEITEN_CREATION_WHITELIST[cleanedName] !== undefined ||
+          WARTEZEITEN_CREATION_WHITELIST[park.name] !== undefined;
+
+        if (isWhitelisted) {
+          wzToCreate.push(park);
+        } else {
+          wzIgnored.push(park);
+        }
+      }
+
+      // Process Allowed Wartezeiten Parks
+      for (const park of wzToCreate) {
+        await this.processWartezeitenOnlyPark(park);
+      }
+
+      // Log ignored parks
+      if (wzIgnored.length > 0) {
         this.logger.warn(
-          `⚠️  Found ${wzOnly.length} parks only in Wartezeiten.app (not creating - enrichment only):`,
+          `⚠️  Found ${wzIgnored.length} parks only in Wartezeiten.app (not creating - enrichment only):`,
         );
-        wzOnly.forEach((park) => {
+        wzIgnored.forEach((park) => {
           this.logger.warn(
             `   - ${park.name} (${park.country || "unknown country"})`,
           );
@@ -257,7 +291,9 @@ export class ParkMetadataProcessor {
 
       // Update name if changed (Prioritize Wiki truth, even if shorter)
       if (park.name !== bestName) {
-        this.logger.verbose(`Updating park name: "${park.name}" -> "${bestName}"`);
+        this.logger.verbose(
+          `Updating park name: "${park.name}" -> "${bestName}"`,
+        );
         park.name = bestName;
         park.slug = generateSlug(bestName);
       }
@@ -447,6 +483,79 @@ export class ParkMetadataProcessor {
   }
 
   /**
+   * Process a park that exists ONLY in Wartezeiten.app
+   * (Allowed only for specific parks)
+   */
+  private async processWartezeitenOnlyPark(wz: ParkMetadata): Promise<void> {
+    const wzExternalId = `wz-${wz.externalId}`; // Prefix to avoid collision
+
+    // Check if park already exists
+    let park = await this.parkRepository.findOne({
+      where: { externalId: wzExternalId },
+    });
+
+    if (park) {
+      if (!park.wartezeitenEntityId) {
+        park.wartezeitenEntityId = wz.externalId;
+        try {
+          await this.parkRepository.save(park);
+        } catch (error: any) {
+          if (error.message && error.message.includes("duplicate key")) {
+            return;
+          }
+          throw error;
+        }
+      }
+      return;
+    }
+
+    // Determine Timezone & Coordinates from Whitelist/Config
+    const cleanedName = wz.name.replace(/\s*\([A-Z]{2}\)$/, "").trim();
+    const config =
+      WARTEZEITEN_CREATION_WHITELIST[cleanedName] ||
+      WARTEZEITEN_CREATION_WHITELIST[wz.name];
+
+    let timezone =
+      config?.timezone ||
+      wz.timezone ||
+      (wz.country ? this.getTimezoneForCountry(wz.country) : undefined);
+    let latitude = config?.latitude;
+    let longitude = config?.longitude;
+
+    // Clean name for the actual park entity (prioritize overrideName from config if present)
+    const name = config?.overrideName || cleanedName;
+
+    park = await this.parkRepository.save({
+      externalId: wzExternalId,
+      name: name,
+      slug: generateSlug(name),
+      timezone: timezone || "UTC",
+      latitude: latitude,
+      longitude: longitude,
+      country: wz.country,
+      countrySlug: wz.country ? generateSlug(wz.country) : undefined,
+      primaryDataSource: "wartezeiten-app",
+      dataSources: ["wartezeiten-app"],
+      wikiEntityId: null,
+      queueTimesEntityId: null,
+      wartezeitenEntityId: wz.externalId,
+    });
+
+    await this.createMapping(
+      park.id,
+      "park",
+      "wartezeiten-app",
+      wz.externalId,
+      1.0,
+      "exact",
+    );
+
+    this.logger.debug(
+      `✓ Created wz-only park: ${park.name} (with hardcoded Geo: ${!!latitude})`,
+    );
+  }
+
+  /**
    * Create an external entity mapping
    * Automatically resolves conflicts by updating stale mappings
    */
@@ -479,8 +588,8 @@ export class ParkMetadataProcessor {
       // This happens when park IDs rotate or parks merge/split
       this.logger.warn(
         `⚠️ Mapping conflict detected: ${externalSource}:${externalEntityId} ` +
-        `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
-        `Updating mapping...`,
+          `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
+          `Updating mapping...`,
       );
 
       // Update the existing mapping to point to the correct entity

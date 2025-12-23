@@ -37,7 +37,7 @@ export class WartezeitenDataSource implements IDataSource {
   readonly name = "wartezeiten-app";
   readonly completeness = 6;
 
-  constructor(private readonly client: WartezeitenClient) { }
+  constructor(private readonly client: WartezeitenClient) {}
 
   async fetchAllParks(): Promise<ParkMetadata[]> {
     const parks = await this.client.getParks("en");
@@ -76,7 +76,10 @@ export class WartezeitenDataSource implements IDataSource {
       } else if (name.includes("(")) {
         // Debugging: Failed to match suffix but has parenthesis
         // Log char codes to detect hidden characters (NBSP, etc.)
-        const codes = name.split('').map(c => c.charCodeAt(0)).join(',');
+        const codes = name
+          .split("")
+          .map((c) => c.charCodeAt(0))
+          .join(",");
         this.logger.warn(`Failed to clean name '${name}' (Codes: ${codes})`);
       }
 

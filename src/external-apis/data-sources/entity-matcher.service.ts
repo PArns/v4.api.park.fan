@@ -230,8 +230,8 @@ export class EntityMatcherService {
     if (totalScore > 0.6 && totalScore < 0.8) {
       this.logger.debug(
         `Borderline match: ${wiki.name} vs ${qt.name} = ${(totalScore * 100).toFixed(1)}% ` +
-        `(name: ${(rawNameSim * 100).toFixed(0)}%, country: ${countrySim > 0 ? "✓" : "✗"}, ` +
-        `distance: ${hasValidWikiGeo && hasValidQtGeo ? this.haversineDistance({ latitude: wiki.latitude!, longitude: wiki.longitude! }, { latitude: qt.latitude!, longitude: qt.longitude! }).toFixed(0) + "km" : "N/A"})`,
+          `(name: ${(rawNameSim * 100).toFixed(0)}%, country: ${countrySim > 0 ? "✓" : "✗"}, ` +
+          `distance: ${hasValidWikiGeo && hasValidQtGeo ? this.haversineDistance({ latitude: wiki.latitude!, longitude: wiki.longitude! }, { latitude: qt.latitude!, longitude: qt.longitude! }).toFixed(0) + "km" : "N/A"})`,
       );
     }
 
@@ -271,9 +271,7 @@ export class EntityMatcherService {
    * Strict normalization for manual match keys (remove all non-alphanumeric)
    */
   private normalizeByKey(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
+    return text.toLowerCase().replace(/[^a-z0-9]/g, "");
   }
 
   /**
@@ -402,9 +400,9 @@ export class EntityMatcherService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos(this.toRad(p1.latitude)) *
-      Math.cos(this.toRad(p2.latitude)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+        Math.cos(this.toRad(p2.latitude)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
 
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }

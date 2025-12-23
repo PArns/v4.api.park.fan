@@ -150,7 +150,8 @@ export class GoogleGeocodingClient {
 
         const delay = 1000 * Math.pow(2, attempt);
         this.logger.warn(
-          `Google Geocoding API rate limit hit (OVER_QUERY_LIMIT). Retrying in ${delay}ms (Attempt ${attempt + 1
+          `Google Geocoding API rate limit hit (OVER_QUERY_LIMIT). Retrying in ${delay}ms (Attempt ${
+            attempt + 1
           }/5)`,
         );
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -159,7 +160,8 @@ export class GoogleGeocodingClient {
 
       if (response.data.status !== "OK") {
         this.logger.error(
-          `Google Geocoding API error: ${response.data.status} - ${response.data.error_message || "Unknown error"
+          `Google Geocoding API error: ${response.data.status} - ${
+            response.data.error_message || "Unknown error"
           }`,
         );
         return null;
@@ -191,7 +193,8 @@ export class GoogleGeocodingClient {
           }
           const delay = 1000 * Math.pow(2, attempt);
           this.logger.warn(
-            `HTTP 429 Rate limit hit. Retrying in ${delay}ms (Attempt ${attempt + 1
+            `HTTP 429 Rate limit hit. Retrying in ${delay}ms (Attempt ${
+              attempt + 1
             }/5)`,
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
