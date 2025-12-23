@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { compareTwoStrings } from "string-similarity";
+import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import {
   ParkMetadata,
   EntityMetadata,
@@ -247,6 +248,13 @@ export class EntityMatcherService {
    * Normalize country name for comparison
    */
   private normalizeCountry(country: string): string {
+    // Try to resolve to ISO code first (e.g. "United States" -> "US")
+    const isoCode = getCountryISOCode(country);
+    if (isoCode) {
+      return isoCode.toLowerCase();
+    }
+
+    // Fallback: simple normalization
     return country
       .toLowerCase()
       .trim()
