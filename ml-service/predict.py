@@ -10,7 +10,7 @@ from sqlalchemy import text
 from model import WaitTimeModel
 from features import engineer_features, get_feature_columns
 from percentile_features import add_percentile_features
-from db import fetch_parks_metadata, get_db, fetch_holidays
+from db import fetch_parks_metadata, get_db, fetch_holidays, convert_df_types
 from config import get_settings
 
 settings = get_settings()
@@ -88,7 +88,7 @@ def fetch_recent_wait_times(attraction_ids: List[str], lookback_days: int = 730)
         })
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
-    return df
+    return convert_df_types(df)
 
 
 def generate_future_timestamps(
@@ -269,6 +269,7 @@ def create_prediction_features(
                 "month": prediction_month
             })
             weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            weather_df = convert_df_types(weather_df)
     
         # Merge weather data
         if not weather_df.empty:

@@ -201,4 +201,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    train_model(version=args.version)
+    try:
+        train_model(version=args.version)
+    except Exception as e:
+        print(f"\n❌ FATAL ERROR during training: {e}")
+        import traceback
+        traceback.print_exc()
+        exit(1)

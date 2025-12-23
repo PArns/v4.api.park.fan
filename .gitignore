@@ -58,3 +58,4 @@ temp/
 
 ml-service/__pycache__/
 ml-service/catboost_info/
+ml-service/models/

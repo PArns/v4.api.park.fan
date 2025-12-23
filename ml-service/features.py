@@ -808,19 +808,11 @@ def engineer_features(
     df = add_historical_features(df)
     df = add_percentile_features(df)  # Weather extremes
     
-    # Phase 2: Add real-time context features
-    if feature_context:
-        df = add_park_occupancy_feature(df, feature_context)
-        df = add_time_since_park_open(df, feature_context)
-        df = add_downtime_features(df, feature_context)
-        df = add_virtual_queue_feature(df, feature_context)
-    else:
-        # Training mode: add defaults (if not already handled)
-        # park_occupancy_pct - handled by add_park_occupancy_feature logic
-        # time_since_park_open_mins - handled by add_park_schedule_features
-        df['had_downtime_today'] = 0
-        df['downtime_minutes_today'] = 0.0
-        df['has_virtual_queue'] = 0
+    # Phase 2: Add context features (Training uses internal data, Inference uses feature_context)
+    df = add_park_occupancy_feature(df, feature_context)
+    df = add_time_since_park_open(df, feature_context)
+    df = add_downtime_features(df, feature_context)
+    df = add_virtual_queue_feature(df, feature_context)
 
     return df
 

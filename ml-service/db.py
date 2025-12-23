@@ -5,11 +5,47 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
 from typing import Generator, List, Dict, Any
-from datetime import datetime, timedelta
+import datetime
 import pandas as pd
+import decimal
+import uuid
 from config import get_settings
 
 settings = get_settings()
+
+
+def convert_df_types(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert problematic database types to ML-compatible formats.
+    - decimal.Decimal -> float
+    - uuid.UUID -> str
+    - datetime.date/datetime.datetime -> pd.to_datetime
+    """
+    if df.empty:
+        return df
+
+    for col in df.columns:
+        if df[col].dtype == "object":
+            sample = df[col].dropna()
+            if sample.empty:
+                continue
+                
+            first_val = sample.iloc[0]
+            
+            try:
+                # 1. Decimal -> Float
+                if isinstance(first_val, decimal.Decimal):
+                    df[col] = df[col].astype(float)
+                # 2. UUID -> String
+                elif isinstance(first_val, uuid.UUID):
+                    df[col] = df[col].astype(str)
+                # 3. Date/Datetime -> Timestamp (ML features need standard pandas types)
+                elif isinstance(first_val, (datetime.date, datetime.datetime)):
+                    df[col] = pd.to_datetime(df[col], utc=True, errors='ignore')
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to convert column {col}: {e}")
+                
+    return df
 
 
 def get_db_url() -> str:
@@ -34,7 +70,7 @@ def get_db() -> Generator:
         db.close()
 
 
-def fetch_training_data(start_date: datetime, end_date: datetime) -> pd.DataFrame:
+def fetch_training_data(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
     """
     Fetch historical queue data, weather, holidays for training
 
@@ -108,13 +144,12 @@ def fetch_training_data(start_date: datetime, end_date: datetime) -> pd.DataFram
             "end_date": end_date
         })
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
-
-    return df
+        return convert_df_types(df)
 
 
 def fetch_queue_aggregates(
     attraction_ids: List[str],
-    target_hour: datetime,
+    target_hour: datetime.datetime,
     lookback_hours: List[int] = None
 ) -> pd.DataFrame:
     """
@@ -146,7 +181,7 @@ def fetch_queue_aggregates(
     # Calculate exact timestamps to fetch
     target_timestamps = []
     for hours in lookback_hours:
-        ts = target_hour - timedelta(hours=hours)
+        ts = target_hour - datetime.timedelta(hours=hours)
         # Truncate to hour
         ts = ts.replace(minute=0, second=0, microsecond=0)
         target_timestamps.append(ts)
@@ -183,7 +218,7 @@ def fetch_queue_aggregates(
         )
         data = pd.DataFrame(result.fetchall(), columns=result.keys())
     
-    return data
+    return convert_df_types(data)
 
 
 def fetch_park_influencing_countries() -> Dict[str, List[str]]:
@@ -205,7 +240,7 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
         return {row.park_id: row.countries for row in result}
 
 
-def fetch_holidays(country_codes: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
     """
     Fetch holidays for specified countries
 
@@ -232,7 +267,8 @@ def fetch_holidays(country_codes: List[str], start_date: datetime, end_date: dat
             "start_date": start_date,
             "end_date": end_date
         })
-        return pd.DataFrame(result.fetchall(), columns=result.keys())
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        return convert_df_types(df)
 
 
 def fetch_parks_metadata() -> pd.DataFrame:
@@ -256,10 +292,11 @@ def fetch_parks_metadata() -> pd.DataFrame:
 
     with get_db() as db:
         result = db.execute(query)
-        return pd.DataFrame(result.fetchall(), columns=result.keys())
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        return convert_df_types(df)
 
 
-def fetch_park_schedules(start_date: datetime, end_date: datetime) -> pd.DataFrame:
+def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
     """
     Fetch park opening hours/schedules including special events
 
@@ -277,7 +314,9 @@ def fetch_park_schedules(start_date: datetime, end_date: datetime) -> pd.DataFra
             date,
             "scheduleType" as schedule_type,
             "openingTime" as opening_time,
-            "closingTime" as closing_time
+            "closingTime" as closing_time,
+            "isHoliday" as is_holiday,
+            "isBridgeDay" as is_bridge_day
         FROM schedule_entries
         WHERE date BETWEEN :start_date AND :end_date
             -- For park schedules: opening/closing must be present (OPERATING) 
@@ -294,7 +333,8 @@ def fetch_park_schedules(start_date: datetime, end_date: datetime) -> pd.DataFra
             "start_date": start_date.date(),
             "end_date": end_date.date()
         })
-        return pd.DataFrame(result.fetchall(), columns=result.keys())
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        return convert_df_types(df)
 
 
 def fetch_active_model_version() -> str:
