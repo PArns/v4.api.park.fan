@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:latest-pg18
     container_name: parkfan_postgres
     restart: unless-stopped
     environment:
@@ -22,7 +22,7 @@ services:
       - parkfan-network
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.4-alpine
     container_name: parkfan_redis
     restart: unless-stopped
     ports:

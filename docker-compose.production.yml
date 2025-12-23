@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb:latest-pg18
     restart: unless-stopped
     ports:
       - "${DB_PORT:-5433}:5432"
@@ -24,7 +24,7 @@ services:
       - "coolify.type=database"
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.4-alpine
     restart: unless-stopped
     volumes:
       - /data/parkfan/redis:/data
