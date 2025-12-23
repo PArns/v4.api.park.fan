@@ -11,9 +11,8 @@
  */
 export const WARTEZEITEN_EXCLUDED_PARKS: string[] = [
   // Temporary Halloween event in Germany
-  "Traumatica",
-  "traumatica",
-
+  // "Traumatica", // Re-enabled per user request
+  // "traumatica",
   // Add more exclusions here as needed
 ];
 

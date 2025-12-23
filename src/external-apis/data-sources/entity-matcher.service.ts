@@ -111,7 +111,20 @@ export class EntityMatcherService {
     const n1 = normalizeForMatching(wiki.name);
     const n2 = normalizeForMatching(qt.name);
 
-    // 1. Name similarity (60% weight)
+    // HARD CONSTRAINT: Different continents = instant rejection
+    // This prevents false matches like Everland (Asia) + Toverland (Europe)
+    if (wiki.continent && qt.continent) {
+      const c1 = this.normalizeContinent(wiki.continent);
+      const c2 = this.normalizeContinent(qt.continent);
+      if (c1 !== c2) {
+        this.logger.debug(
+          `Rejecting cross-continent match: ${wiki.name} (${c1}) vs ${qt.name} (${c2})`,
+        );
+        return 0.0; // Instant rejection
+      }
+    }
+
+    // 1. Name similarity (50% weight, reduced from 60%)
     let rawNameSim = compareTwoStrings(n1, n2);
 
     // Boost if one includes the other (e.g. "Animal Kingdom" in "Disney's Animal Kingdom")
@@ -123,9 +136,27 @@ export class EntityMatcherService {
       rawNameSim = Math.max(rawNameSim, 0.9);
     }
 
-    const nameSim = rawNameSim * 0.6;
+    const nameSim = rawNameSim * 0.5;
 
-    // 2. Geographic proximity (40% weight)
+    // 2. Country validation (15% weight - new!)
+    let countrySim = 0;
+    if (wiki.country && qt.country) {
+      const country1 = this.normalizeCountry(wiki.country);
+      const country2 = this.normalizeCountry(qt.country);
+
+      if (country1 === country2) {
+        countrySim = 0.15; // Boost for same country
+      } else {
+        // Strong penalty for different countries
+        // This prevents matches like parks in different EU countries
+        countrySim = -0.15;
+        this.logger.debug(
+          `Different countries: ${wiki.name} (${country1}) vs ${qt.name} (${country2})`,
+        );
+      }
+    }
+
+    // 3. Geographic proximity (30% weight, reduced from 40%)
     let geoSim = 0;
 
     // Check for valid coordinates (ignore 0,0)
@@ -157,19 +188,23 @@ export class EntityMatcherService {
             `Found sign error match for ${wiki.name}: ${distance}km -> ${flippedDist}km`,
           );
           // Use the flipped distance
-          geoSim = (1 - Math.min(flippedDist / 10, 1)) * 0.4;
+          geoSim = (1 - Math.min(flippedDist / 10, 1)) * 0.3;
         } else {
-          geoSim = (1 - Math.min(distance / 10, 1)) * 0.4;
+          // Different threshold based on country match
+          const threshold = wiki.country === qt.country ? 50 : 500;
+          geoSim = (1 - Math.min(distance / threshold, 1)) * 0.3;
         }
       } else {
-        geoSim = (1 - Math.min(distance / 10, 1)) * 0.4;
+        const threshold = wiki.country === qt.country ? 50 : 500;
+        geoSim = (1 - Math.min(distance / threshold, 1)) * 0.3;
       }
     } else {
-      // Fallback if one or both missing valid geo: Name is 100% of score
-      return nameSim / 0.6;
+      // Fallback if one or both missing valid geo
+      // Don't normalize to 100% - missing geo is suspicious for a match
+      return nameSim + countrySim;
     }
 
-    // 3. Timezone validation (bonus/penalty)
+    // 4. Timezone validation (5% weight - same as before)
     let timezoneSim = 0;
     if (wiki.timezone && qt.timezone) {
       if (wiki.timezone === qt.timezone) {
@@ -179,7 +214,40 @@ export class EntityMatcherService {
       }
     }
 
-    return nameSim + geoSim + timezoneSim;
+    const totalScore = nameSim + countrySim + geoSim + timezoneSim;
+
+    // Debug logging for close matches
+    if (totalScore > 0.6 && totalScore < 0.8) {
+      this.logger.debug(
+        `Borderline match: ${wiki.name} vs ${qt.name} = ${(totalScore * 100).toFixed(1)}% ` +
+          `(name: ${(rawNameSim * 100).toFixed(0)}%, country: ${countrySim > 0 ? "✓" : "✗"}, ` +
+          `distance: ${hasValidWikiGeo && hasValidQtGeo ? this.haversineDistance({ latitude: wiki.latitude!, longitude: wiki.longitude! }, { latitude: qt.latitude!, longitude: qt.longitude! }).toFixed(0) + "km" : "N/A"})`,
+      );
+    }
+
+    return totalScore;
+  }
+
+  /**
+   * Normalize continent name for comparison
+   */
+  private normalizeContinent(continent: string): string {
+    const normalized = continent.toLowerCase().trim();
+    const aliases: Record<string, string> = {
+      "north america": "north_america",
+      "south america": "south_america",
+    };
+    return aliases[normalized] || normalized.replace(/\s+/g, "_");
+  }
+
+  /**
+   * Normalize country name for comparison
+   */
+  private normalizeCountry(country: string): string {
+    return country
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z]/g, "");
   }
 
   /**
