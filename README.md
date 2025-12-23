@@ -89,7 +89,6 @@ Once running, you can access:
 - **API Root**: http://localhost:3000/ (this README)
 - **API Base**: http://localhost:3000/v1
 - **API Docs**: http://localhost:3000/api (Swagger)
-- **Bull Board**: http://localhost:3001 (queue monitoring)
 
 ---
 
@@ -421,7 +420,6 @@ REDIS_PASSWORD=                   # Optional, recommended for production
 
 # Bull Queue
 BULL_PREFIX=parkfan
-BULL_BOARD_PORT=3001              # Queue monitoring dashboard
 ```
 
 ### External APIs
@@ -487,6 +485,6 @@ Special thanks to these services for making real-time theme park data accessible
 
 Made with ❤️ for theme park enthusiasts worldwide
 
-**[View API Documentation](http://localhost:3000/api)** · **[Monitor Queues](http://localhost:3001)**
+**[API Documentation](https://api.park.fan/api)** · **[Frontend](https://park.fan)**
 
 </div>

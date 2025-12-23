@@ -5,40 +5,40 @@ import { join } from "path";
 
 @Injectable()
 export class AppService {
-  private cachedHtml: string | null = null;
+    private cachedHtml: string | null = null;
 
-  /**
-   * Get README.md content as styled HTML
-   * Uses in-memory cache for performance
-   */
-  getReadmeAsHtml(): string {
-    if (this.cachedHtml) {
-      return this.cachedHtml;
+    /**
+     * Get README.md content as styled HTML
+     * Uses in-memory cache for performance
+     */
+    getReadmeAsHtml(): string {
+        if (this.cachedHtml) {
+            return this.cachedHtml;
+        }
+
+        try {
+            // Read README.md from project root
+            const readmePath = join(process.cwd(), "README.md");
+            const markdown = readFileSync(readmePath, "utf-8");
+
+            // Convert Markdown to HTML
+            const contentHtml = marked.parse(markdown) as string;
+
+            // Wrap in styled HTML template
+            this.cachedHtml = this.wrapInHtmlTemplate(contentHtml);
+
+            return this.cachedHtml;
+        } catch (error) {
+            console.error("Error reading README.md:", error);
+            return this.getFallbackHtml();
+        }
     }
 
-    try {
-      // Read README.md from project root
-      const readmePath = join(process.cwd(), "README.md");
-      const markdown = readFileSync(readmePath, "utf-8");
-
-      // Convert Markdown to HTML
-      const contentHtml = marked.parse(markdown) as string;
-
-      // Wrap in styled HTML template
-      this.cachedHtml = this.wrapInHtmlTemplate(contentHtml);
-
-      return this.cachedHtml;
-    } catch (error) {
-      console.error("Error reading README.md:", error);
-      return this.getFallbackHtml();
-    }
-  }
-
-  /**
-   * Wrap markdown content in a styled HTML template
-   */
-  private wrapInHtmlTemplate(content: string): string {
-    return `
+    /**
+     * Wrap markdown content in a styled HTML template
+     */
+    private wrapInHtmlTemplate(content: string): string {
+        return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -259,8 +259,7 @@ export class AppService {
         <p>
             🚀 <strong>park.fan API v4</strong> — 
             <a href="/v1">API Base</a> · 
-            <a href="/api">Swagger Docs</a> · 
-            <a href="http://localhost:3001" target="_blank">Bull Board</a>
+            <a href="/api">Swagger Docs</a>
         </p>
         <p style="margin-top: 8px;">
             Powered by NestJS · TypeScript · PostgreSQL · Redis
@@ -269,13 +268,13 @@ export class AppService {
 </body>
 </html>
     `.trim();
-  }
+    }
 
-  /**
-   * Fallback HTML if README.md cannot be read
-   */
-  private getFallbackHtml(): string {
-    return `
+    /**
+     * Fallback HTML if README.md cannot be read
+     */
+    private getFallbackHtml(): string {
+        return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -335,5 +334,5 @@ export class AppService {
 </body>
 </html>
     `.trim();
-  }
+    }
 }
