@@ -10,7 +10,7 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-parkfan}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - /data/parkfan/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-parkfan} -d ${DB_DATABASE:-parkfan}"]
       interval: 10s
@@ -27,7 +27,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
-      - redisdata:/data
+      - /data/parkfan/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -61,7 +61,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       MODEL_DIR: ${MODEL_DIR:-/app/models}
     volumes:
-      - ml-models:/app/models
+      - /data/parkfan/ml-models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,14 +136,6 @@ services:
       - "coolify.managed=true"
       - "coolify.version=1.0.0"
       - "coolify.type=monitoring"
-
-volumes:
-  pgdata:
-    driver: local
-  redisdata:
-    driver: local
-  ml-models:
-    driver: local
 
 networks:
   parkfan-network:
