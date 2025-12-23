@@ -71,22 +71,11 @@ export class WartezeitenDataSource implements IDataSource {
   }
 
   async fetchParkLiveData(externalId: string): Promise<LiveDataResponse> {
-    // Fetch wait times, crowd level, and opening times in parallel
-    const [waitTimes, crowdLevel, openingTimes] = await Promise.all([
-      this.client.getWaitTimes(externalId, "en"),
-      this.client.getCrowdLevel(externalId).catch((error) => {
-        this.logger.warn(
-          `Failed to fetch crowd level for ${externalId}: ${error.message}`,
-        );
-        return null;
-      }),
-      this.client.getOpeningTimes(externalId).catch((error) => {
-        this.logger.warn(
-          `Failed to fetch opening times for ${externalId}: ${error.message}`,
-        );
-        return [];
-      }),
-    ]);
+    // OPTIMIZATION: Only fetch wait times during live sync
+    // CrowdLevel and OpeningTimes don't change frequently - fetch separately/less often
+    // This reduces API calls from 3 per park to 1 per park
+    // Result: 30 parks × 1 call = 30 calls/sync (instead of 90) = 6 calls/min
+    const waitTimes = await this.client.getWaitTimes(externalId, "en");
 
     const entities: EntityLiveData[] = waitTimes.map((attraction) => ({
       externalId: attraction.uuid,
@@ -98,29 +87,12 @@ export class WartezeitenDataSource implements IDataSource {
       lastUpdated: attraction.datetime,
     }));
 
-    // Map opening times
-    let operatingHours:
-      | { open: string; close: string; type: string }[]
-      | undefined;
-    if (openingTimes && openingTimes.length > 0) {
-      const today = openingTimes[0];
-      if (today.opened_today) {
-        operatingHours = [
-          {
-            open: today.open_from,
-            close: today.closed_from,
-            type: "OPERATING",
-          },
-        ];
-      }
-    }
-
     return {
       source: this.name,
       parkExternalId: externalId,
       entities,
-      crowdLevel: crowdLevel?.crowd_level ?? undefined, // UNIQUE DATA!
-      operatingHours,
+      // Note: crowdLevel and operatingHours can be fetched separately
+      // via dedicated jobs that run less frequently (e.g., hourly)
       fetchedAt: new Date(),
     };
   }

@@ -307,8 +307,10 @@ export class ConflictResolverService {
   private calculateConsensusWaitTime(waitTimes: number[]): number {
     if (waitTimes.length === 0) return 0;
     if (waitTimes.length === 1) {
-      return Math.round(waitTimes[0] / this.WAIT_TIME_ROUNDING_INTERVAL) *
-        this.WAIT_TIME_ROUNDING_INTERVAL;
+      return (
+        Math.round(waitTimes[0] / this.WAIT_TIME_ROUNDING_INTERVAL) *
+        this.WAIT_TIME_ROUNDING_INTERVAL
+      );
     }
 
     let finalWaitTime: number;
@@ -332,8 +334,10 @@ export class ConflictResolverService {
     }
 
     // Round to nearest interval (e.g., 5 minutes)
-    return Math.round(finalWaitTime / this.WAIT_TIME_ROUNDING_INTERVAL) *
-      this.WAIT_TIME_ROUNDING_INTERVAL;
+    return (
+      Math.round(finalWaitTime / this.WAIT_TIME_ROUNDING_INTERVAL) *
+      this.WAIT_TIME_ROUNDING_INTERVAL
+    );
   }
 
   /**
@@ -444,8 +448,8 @@ export class ConflictResolverService {
       if (openDiff || closeDiff) {
         this.logger.warn(
           `⚠️ Operating Hours Discrepancy for ${parkId}: ` +
-          `Wiki(${wikiWindow.open}-${wikiWindow.close}) vs ` +
-          `Wartezeiten(${wzWindow.open}-${wzWindow.close})`,
+            `Wiki(${wikiWindow.open}-${wikiWindow.close}) vs ` +
+            `Wartezeiten(${wzWindow.open}-${wzWindow.close})`,
         );
       }
     }
