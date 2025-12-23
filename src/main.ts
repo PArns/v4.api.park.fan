@@ -50,8 +50,10 @@ async function bootstrap(): Promise<void> {
     credentials: true,
   });
 
-  // API versioning prefix
-  app.setGlobalPrefix("v1");
+  // API versioning prefix (exclude root controller)
+  app.setGlobalPrefix("v1", {
+    exclude: ["/"],
+  });
 
   // Swagger/OpenAPI Documentation
   const config = new DocumentBuilder()
