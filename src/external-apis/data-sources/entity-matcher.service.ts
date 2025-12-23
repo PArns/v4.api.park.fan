@@ -52,14 +52,16 @@ export class EntityMatcherService {
       let bestMatch: ParkMetadata | null = null;
       let bestScore = 0;
 
-      const normWikiName = normalizeForMatching(wiki.name);
+      // Use strict normalization for keys to match config/manual-park-matches.ts
+      const normWikiName = this.normalizeByKey(wiki.name);
 
       // 1. Check for manual override first
       const aliases = manualOverrides[normWikiName] || [];
+
       if (aliases.length > 0) {
         // Look for an alias match in qtOnly
         const overrideMatch = qtOnly.find((p) =>
-          aliases.includes(normalizeForMatching(p.name)),
+          aliases.includes(this.normalizeByKey(p.name)),
         );
 
         if (overrideMatch) {
@@ -75,8 +77,8 @@ export class EntityMatcherService {
       if (!bestMatch) {
         for (const qt of qtOnly) {
           const score = this.calculateParkSimilarity(wiki, qt);
-          if (score > bestScore && score > 0.75) {
-            // 75% threshold
+          if (score > bestScore && score >= 0.7) {
+            // 70% threshold (lowered from 75% to catch exact name matches with minor data gaps)
             bestScore = score;
             bestMatch = qt;
           }
@@ -149,11 +151,13 @@ export class EntityMatcherService {
         countrySim = 0.15; // Boost for same country
       } else {
         // Strong penalty for different countries
-        // This prevents matches like parks in different EU countries
         countrySim = -0.15;
-        this.logger.debug(
-          `Different countries: ${wiki.name} (${country1}) vs ${qt.name} (${country2})`,
-        );
+        // Only log if names are similar, otherwise it's just noise
+        if (rawNameSim > 0.8) {
+          this.logger.debug(
+            `Different countries (Sim: ${(rawNameSim * 100).toFixed(0)}%): ${wiki.name} (${country1}) vs ${qt.name} (${country2})`,
+          );
+        }
       }
     }
 
@@ -259,6 +263,15 @@ export class EntityMatcherService {
       .toLowerCase()
       .trim()
       .replace(/[^a-z]/g, "");
+  }
+
+  /**
+   * Strict normalization for manual match keys (remove all non-alphanumeric)
+   */
+  private normalizeByKey(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
   }
 
   /**

@@ -107,7 +107,10 @@ export function generateUniqueSlug(
  * @returns Normalized text for comparison
  */
 export function normalizeForMatching(text: string): string {
-  return text
+  // Transliterate first to handle accents (e.g. Astérix -> Asterix)
+  const transliterated = transliterate(text);
+
+  return transliterated
     .toLowerCase()
     .replace(/[®™&'\-]/g, "")
     .replace(/\s+/g, " ")

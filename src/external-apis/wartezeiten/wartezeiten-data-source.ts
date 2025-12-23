@@ -37,7 +37,7 @@ export class WartezeitenDataSource implements IDataSource {
   readonly name = "wartezeiten-app";
   readonly completeness = 6;
 
-  constructor(private readonly client: WartezeitenClient) {}
+  constructor(private readonly client: WartezeitenClient) { }
 
   async fetchAllParks(): Promise<ParkMetadata[]> {
     const parks = await this.client.getParks("en");
@@ -56,23 +56,28 @@ export class WartezeitenDataSource implements IDataSource {
       let countryCode = getCountryISOCode(park.land);
 
       // Smart Extraction: Check for "Name (XX)" pattern
-      // Wartezeiten often uses this format: "Alton Towers (GB)", "Europa-Park (DE)"
-      // We extract the country code and clean the name for better matching
-      const countryMatch = name.match(/^(.*)\s+\(([A-Z]{2})\)$/);
-      if (countryMatch) {
-        name = countryMatch[1].trim(); // Clean name: "Alton Towers"
-        const extractedCode = countryMatch[2]; // Extracted country: "GB"
+      // Suffix Regex: Match "(XX)" at the end, allowing spaces inside/around parens
+      const suffixMatch = name.match(/\s*\(\s*([A-Z]{2})\s*\)\s*$/);
+
+      if (suffixMatch) {
+        // Found suffix! Clean name and extract code
+        const fullSuffix = suffixMatch[0];
+        name = name.substring(0, name.length - fullSuffix.length).trim();
+        const extractedCode = suffixMatch[1];
 
         if (!countryCode) {
           countryCode = extractedCode;
         } else if (countryCode !== extractedCode) {
-          // If extracted differs from explicit land, log it (but keep explicit land usually)
-          // In this case, the suffix is likely more accurate for these specific entries
           this.logger.debug(
             `Country mismatch for ${name}: land=${countryCode}, suffix=${extractedCode}. Using suffix.`,
           );
           countryCode = extractedCode;
         }
+      } else if (name.includes("(")) {
+        // Debugging: Failed to match suffix but has parenthesis
+        // Log char codes to detect hidden characters (NBSP, etc.)
+        const codes = name.split('').map(c => c.charCodeAt(0)).join(',');
+        this.logger.warn(`Failed to clean name '${name}' (Codes: ${codes})`);
       }
 
       return {

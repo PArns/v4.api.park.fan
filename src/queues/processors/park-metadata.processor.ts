@@ -39,7 +39,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
-  ) {}
+  ) { }
 
   @Process("sync-all-parks")
   async handleFetchParks(_job: Job): Promise<void> {
@@ -60,8 +60,17 @@ export class ParkMetadataProcessor {
         `📊 Discovery complete: ${matched.length} matched, ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only, ${wzOnly.length} wz-only`,
       );
 
-      // Step 3: Process matched parks (exists in BOTH sources)
-      for (const match of matched) {
+      // --- PHASE 1: THEMEPARKS.WIKI (The "Truth" Base) ---
+      this.logger.log("🔹 Phase 1: Processing Wiki-based parks...");
+
+      // 1a. Process Wiki-Only
+      for (const parkMeta of wikiOnly) {
+        await this.processWikiOnlyPark(parkMeta);
+      }
+
+      // 1b. Process Matched (Wiki-Anchored)
+      const wikiMatched = matched.filter((m) => m.wiki !== undefined);
+      for (const match of wikiMatched) {
         await this.processMatchedPark(
           match.wiki,
           match.qt,
@@ -70,17 +79,40 @@ export class ParkMetadataProcessor {
         );
       }
 
-      // Step 4: Process wiki-only parks
-      for (const parkMeta of wikiOnly) {
-        await this.processWikiOnlyPark(parkMeta);
-      }
+      // --- PHASE 2: QUEUE-TIMES (Fill gaps) ---
+      this.logger.log("🔹 Phase 2: Processing Queue-Times-based parks...");
 
-      // Step 5: Process Queue-Times-only parks
+      // 2a. Process QT-Only
       for (const parkMeta of qtOnly) {
         await this.processQueueTimesOnlyPark(parkMeta);
       }
 
-      // Step 6: Log wartezeiten-only parks (NOT creating them - enrichment only!)
+      // 2b. Process Matched (QT-Anchored, No Wiki)
+      const qtMatched = matched.filter((m) => m.wiki === undefined && m.qt !== undefined);
+      for (const match of qtMatched) {
+        await this.processMatchedPark(
+          undefined, // No Wiki
+          match.qt,
+          match.wz,
+          match.confidence,
+        );
+      }
+
+      // --- PHASE 3: WARTEZEITEN.APP (Enrichment / Leftovers) ---
+      this.logger.log("🔹 Phase 3: Processing Wartezeiten-based parks...");
+
+      // 3a. Process Matched (WZ-Anchored, No Wiki, No QT - rare)
+      const wzMatched = matched.filter((m) => m.wiki === undefined && m.qt === undefined && m.wz !== undefined);
+      for (const match of wzMatched) {
+        await this.processMatchedPark(
+          undefined,
+          undefined,
+          match.wz,
+          match.confidence,
+        );
+      }
+
+      // 3b. Log wartezeiten-only parks (NOT creating them - enrichment only!)
       if (wzOnly.length > 0) {
         this.logger.warn(
           `⚠️  Found ${wzOnly.length} parks only in Wartezeiten.app (not creating - enrichment only):`,
@@ -173,15 +205,20 @@ export class ParkMetadataProcessor {
     });
 
     // Helper to get best name
-    const candidates: ParkMetadata[] = [];
-    if (wiki) candidates.push(wiki);
-    if (qt) candidates.push(qt);
-    if (wz) candidates.push(wz);
+    // Priority: Wiki (Source of Truth) > Longest Name (Fallback)
+    let bestName = wiki?.name;
 
-    // Pick longest name usually implies most formal
-    const bestName = candidates.reduce((prev, curr) =>
-      curr.name.length > prev.name.length ? curr : prev,
-    ).name;
+    if (!bestName) {
+      const candidates: ParkMetadata[] = [];
+      if (qt) candidates.push(qt);
+      if (wz) candidates.push(wz);
+
+      if (candidates.length > 0) {
+        bestName = candidates.reduce((prev, curr) =>
+          curr.name.length > prev.name.length ? curr : prev,
+        ).name;
+      }
+    }
 
     // Collect Data Sources
     const dataSourceList: string[] = [];
@@ -192,6 +229,8 @@ export class ParkMetadataProcessor {
     // Determine Primary Source
     const effectivePrimary =
       dataSourceList.length > 1 ? "multi-source" : dataSourceList[0];
+
+    if (!bestName) return; // Safety check
 
     if (!park) {
       // Create park
@@ -216,7 +255,8 @@ export class ParkMetadataProcessor {
       if (wiki) park.wikiEntityId = wiki.externalId;
       if (qt) park.queueTimesEntityId = qt.externalId;
 
-      if (bestName.length > park.name.length) {
+      // Update name if changed (Prioritize Wiki truth, even if shorter)
+      if (park.name !== bestName) {
         this.logger.log(`Updating park name: "${park.name}" -> "${bestName}"`);
         park.name = bestName;
         park.slug = generateSlug(bestName);
@@ -439,8 +479,8 @@ export class ParkMetadataProcessor {
       // This happens when park IDs rotate or parks merge/split
       this.logger.warn(
         `⚠️ Mapping conflict detected: ${externalSource}:${externalEntityId} ` +
-          `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
-          `Updating mapping...`,
+        `currently maps to ${existing.internalEntityId} but should map to ${internalEntityId}. ` +
+        `Updating mapping...`,
       );
 
       // Update the existing mapping to point to the correct entity
