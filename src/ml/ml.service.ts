@@ -589,6 +589,33 @@ export class MLService {
       }
     }
 
+    // 3.5 Fetch recent wait times (for lag features)
+    const recentWaitTimes: Record<string, number> = {};
+    if (predictionType === "hourly") {
+      try {
+        const thirtyAgo = new Date(Date.now() - 30 * 60 * 1000);
+        // Window: +/- 15 minutes of 30 mins ago
+        const windowMin = new Date(thirtyAgo.getTime() - 15 * 60 * 1000);
+        const windowMax = new Date(thirtyAgo.getTime() + 15 * 60 * 1000);
+
+        // Find closest data point to 30 mins ago
+        const recentData = await this.queueDataRepository
+          .createQueryBuilder("q")
+          .where("q.attractionId = :attractionId", { attractionId })
+          .andWhere("q.timestamp >= :windowMin", { windowMin })
+          .andWhere("q.timestamp <= :windowMax", { windowMax })
+          .orderBy("ABS(EXTRACT(EPOCH FROM (q.timestamp - :target)))", "ASC")
+          .setParameter("target", thirtyAgo)
+          .getOne();
+
+        if (recentData && recentData.waitTime !== null) {
+          recentWaitTimes[attractionId] = recentData.waitTime;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to fetch recent wait time: ${error} `);
+      }
+    }
+
     // 4. Request predictions
     const request: PredictionRequestDto = {
       attractionIds: [attractionId],
@@ -596,6 +623,7 @@ export class MLService {
       predictionType,
       weatherForecast,
       currentWaitTimes,
+      recentWaitTimes,
     };
 
     const response = await this.getPredictions(request);
