@@ -212,9 +212,9 @@ export class ParkOccupancyDto {
 
   @ApiProperty({
     description: "Comparison status",
-    enum: ["lower", "typical", "higher"],
+    enum: ["lower", "typical", "higher", "closed"],
   })
-  comparisonStatus: "lower" | "typical" | "higher";
+  comparisonStatus: "lower" | "typical" | "higher" | "closed";
 
   @ApiProperty({ description: "Baseline 90th percentile" })
   baseline90thPercentile: number;

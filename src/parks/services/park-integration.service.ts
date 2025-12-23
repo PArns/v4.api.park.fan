@@ -561,7 +561,7 @@ export class ParkIntegrationService {
             current: 0, // No current occupancy
             trend: "stable",
             comparedToTypical: 0,
-            comparisonStatus: "typical",
+            comparisonStatus: "closed",
             baseline90thPercentile: p90Park || 0, // Show typical wait for this time
             updatedAt: new Date().toISOString(),
             breakdown: {
@@ -593,7 +593,7 @@ export class ParkIntegrationService {
             current: 0,
             trend: "stable",
             comparedToTypical: 0,
-            comparisonStatus: "typical",
+            comparisonStatus: "closed",
             baseline90thPercentile: 0,
             updatedAt: new Date().toISOString(),
             breakdown: {

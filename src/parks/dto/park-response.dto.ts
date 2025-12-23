@@ -102,7 +102,7 @@ export class ParkResponseDto {
       current: number;
       trend: "up" | "stable" | "down";
       comparedToTypical: number;
-      comparisonStatus: "lower" | "typical" | "higher";
+      comparisonStatus: "lower" | "typical" | "higher" | "closed";
       baseline90thPercentile: number;
       updatedAt: string;
     };
