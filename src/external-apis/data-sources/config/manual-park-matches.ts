@@ -43,6 +43,15 @@ export const MANUALLY_MATCHED_PARKS: Record<string, string[]> = {
   // wzOnly parks from wartezeiten
   "disneys animal kingdom theme park": ["disney animal kingdom"],
   "disney animal kingdom": ["disneys animal kingdom theme park"], // Bidirectional
-  nigloland: ["parc nigloland"],
-  "plopsaland de panne": ["plopsa de panne", "plopsaland"],
+  nigloland: ["parc nigloland", "nigloland"],
+  "plopsaland de panne": [
+    "plopsa de panne",
+    "plopsaland",
+    "plopsaland de panne",
+  ],
+  "disney california adventure": ["disney california adventure park"],
+  "disneyland park": ["disneyland"],
+  disneyland: ["disneyland park"],
+  "legoland california": ["legoland california resort"],
+  "legoland california resort": ["legoland california"],
 };
