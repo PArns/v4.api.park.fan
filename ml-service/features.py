@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List
-from db import fetch_holidays, fetch_parks_metadata
+from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
 from percentile_features import add_percentile_features
 
 
@@ -484,8 +484,6 @@ def add_park_schedule_features(
     Returns:
         DataFrame with schedule features added
     """
-    from db import fetch_park_schedules
-
     # Fetch park schedules
     schedules_df = fetch_park_schedules(start_date, end_date)
 

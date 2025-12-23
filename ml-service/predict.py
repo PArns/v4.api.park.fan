@@ -558,8 +558,7 @@ def create_prediction_features(
         # For inference, if we lack context, we might skip expensive fallback or fetch metadata.
         # Let's pass what we have.
         # Note: add_bridge_day_feature signature: (df, parks_metadata, start_date, end_date, feature_context)
-        # We need to fetch metadata if not available.
-        from db import fetch_parks_metadata
+        # We need to fetch metadata if not available (already imported at module level)
         parks_metadata = fetch_parks_metadata()
         start = df['timestamp'].min()
         end = df['timestamp'].max()
