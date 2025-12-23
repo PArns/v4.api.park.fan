@@ -4,7 +4,7 @@ FastAPI ML Service for Wait Time Predictions
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from model import WaitTimeModel
@@ -199,7 +199,7 @@ async def train_model_endpoint(request: TrainRequest):
     # Generate version if not provided
     version = request.version
     if not version:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
     
     # Start training in background thread
@@ -211,7 +211,7 @@ async def train_model_endpoint(request: TrainRequest):
         try:
             training_status["is_training"] = True
             training_status["current_version"] = version
-            training_status["started_at"] = datetime.utcnow().isoformat()
+            training_status["started_at"] = datetime.now(timezone.utc).isoformat()
             training_status["status"] = "training"
             training_status["error"] = None
             training_status["finished_at"] = None
@@ -220,7 +220,7 @@ async def train_model_endpoint(request: TrainRequest):
             train_model(version=version)
             
             training_status["status"] = "completed"
-            training_status["finished_at"] = datetime.utcnow().isoformat()
+            training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
             training_status["is_training"] = False
             
             logger.info(f"✅ Training completed for version {version}")
@@ -239,7 +239,7 @@ async def train_model_endpoint(request: TrainRequest):
             logger.error(f"❌ Training failed: {e}")
             training_status["status"] = "failed"
             training_status["error"] = str(e)
-            training_status["finished_at"] = datetime.utcnow().isoformat()
+            training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
             training_status["is_training"] = False
     
     # Start background thread

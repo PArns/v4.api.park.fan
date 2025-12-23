@@ -2,7 +2,7 @@
 Model training script
 """
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -65,7 +65,7 @@ def train_model(version: str = None) -> None:
     print(f"{'='*60}\n")
 
     # 1. Define training period (last 2 years + 1 day buffer for today's data)
-    end_date = datetime.utcnow() + timedelta(days=1)
+    end_date = datetime.now(timezone.utc) + timedelta(days=1)
     start_date = end_date - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
 
     print(f"📅 Training Period:")

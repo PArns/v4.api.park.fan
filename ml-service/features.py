@@ -527,11 +527,13 @@ def add_park_schedule_features(
                 opening = operating.iloc[0]['opening_time']
                 closing = operating.iloc[0]['closing_time']
 
-                # Compare local timestamp with opening/closing (which are timezone-naive but imply local time)
-                # Ensure timestamp is timezone-naive for comparison if necessary, or localize opening/closing
-                ts_naive = timestamp.replace(tzinfo=None)
+                # Compare local timestamp with opening/closing
+                # Ensure all timestamps are timezone-naive for comparison
+                ts_naive = timestamp.replace(tzinfo=None) if hasattr(timestamp, 'tzinfo') else timestamp
+                opening_naive = opening.replace(tzinfo=None) if hasattr(opening, 'tzinfo') and opening.tzinfo else opening
+                closing_naive = closing.replace(tzinfo=None) if hasattr(closing, 'tzinfo') and closing.tzinfo else closing
                 
-                if opening <= ts_naive <= closing:
+                if opening_naive <= ts_naive <= closing_naive:
                     df.at[idx, 'is_park_open'] = 1
 
             # Check for special events (typically attract more visitors)

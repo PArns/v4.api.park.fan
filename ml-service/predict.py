@@ -3,7 +3,7 @@ Prediction logic for hourly and daily forecasts
 """
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from sqlalchemy import text
 
@@ -238,7 +238,7 @@ def create_prediction_features(
     if not use_forecast:
         # Weather features (use seasonal averages from DB for better accuracy)
         # Get the month we're predicting for
-        prediction_month = timestamps[0].month if timestamps else datetime.utcnow().month
+        prediction_month = timestamps[0].month if timestamps else datetime.now(timezone.utc).month
         
         weather_query = text("""
             SELECT
@@ -611,7 +611,7 @@ def predict_wait_times(
         ]
     """
     if base_time is None:
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
 
     # Generate future timestamps
     timestamps = generate_future_timestamps(base_time, prediction_type)

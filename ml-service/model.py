@@ -7,7 +7,7 @@ import joblib
 from catboost import CatBoostRegressor, Pool
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from config import get_settings
 from features import get_feature_columns, get_categorical_features
 
@@ -113,7 +113,7 @@ class WaitTimeModel:
         # Store metadata
         self.metadata = {
             'version': self.version,
-            'trained_at': datetime.utcnow().isoformat(),
+            'trained_at': datetime.now(timezone.utc).isoformat(),
             'train_samples': len(X_train),
             'val_samples': len(X_val),
             'metrics': metrics,
