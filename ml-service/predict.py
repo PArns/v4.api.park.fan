@@ -213,13 +213,17 @@ def create_prediction_features(
             wf_df = pd.DataFrame(wf_data)
             wf_df['time'] = pd.to_datetime(wf_df['time'])
             
-            # Normalize both columns to timezone-naive UTC for merging
-            # Weather forecast times are UTC, convert to timezone-naive to match predictions
+            # Normalize both columns to timezone-naive UTC for robust merging
+            # 1. Handle Weather Forecast DataFrame
             if wf_df['time'].dt.tz is not None:
+                # Convert to UTC then remove timezone info
                 wf_df['time'] = wf_df['time'].dt.tz_convert('UTC').dt.tz_localize(None)
             
-            # Round prediction timestamp to nearest hour for joining
+            # 2. Handle Prediction DataFrame
+            # Create join_time and ensure it is also timezone-naive UTC
             df['join_time'] = df['timestamp'].dt.round('h')
+            if df['join_time'].dt.tz is not None:
+                df['join_time'] = df['join_time'].dt.tz_convert('UTC').dt.tz_localize(None)
             
             # Merge logic
             # Note: weather_forecast is assumed to apply to all parks in this batch (usually same park)
@@ -419,9 +423,20 @@ def create_prediction_features(
                         opening = operating.iloc[0]['openingTime']
                         closing = operating.iloc[0]['closingTime']
                         
-                        # Convert timestamp to timezone-aware for comparison with schedule times
-                        timestamp_tz = pd.Timestamp(timestamp, tz='UTC') if timestamp.tzinfo is None else timestamp
-                        is_open = opening <= timestamp_tz <= closing
+                        # Robust comparison handling mixed timezones
+                        ts_compare = timestamp
+                        
+                        # case 1: DB has timezone, we need to match it
+                        if getattr(opening, 'tzinfo', None) is not None:
+                            if ts_compare.tzinfo is None:
+                                ts_compare = pd.Timestamp(ts_compare).tz_localize('UTC')
+                            ts_compare = ts_compare.tz_convert(opening.tzinfo)
+                        # case 2: DB is naive, we must be naive (UTC)
+                        else:
+                            if ts_compare.tzinfo is not None:
+                                ts_compare = ts_compare.tz_convert('UTC').tz_localize(None)
+                        
+                        is_open = opening <= ts_compare <= closing
                         df.at[idx, 'is_park_open'] = int(is_open)
                         
                         if not is_open:
@@ -576,6 +591,7 @@ def create_prediction_features(
         df['had_downtime_today'] = 0
         df['downtime_minutes_today'] = 0.0
         df['has_virtual_queue'] = 0
+        df['is_bridge_day'] = 0
 
     return df
 
