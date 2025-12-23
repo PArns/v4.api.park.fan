@@ -52,11 +52,33 @@ export class WartezeitenDataSource implements IDataSource {
     });
 
     const allParks: ParkMetadata[] = filteredParks.map((park) => {
-      const countryCode = getCountryISOCode(park.land);
+      let name = park.name;
+      let countryCode = getCountryISOCode(park.land);
+
+      // Smart Extraction: Check for "Name (XX)" pattern
+      // Wartezeiten often uses this format: "Alton Towers (GB)", "Europa-Park (DE)"
+      // We extract the country code and clean the name for better matching
+      const countryMatch = name.match(/^(.*)\s+\(([A-Z]{2})\)$/);
+      if (countryMatch) {
+        name = countryMatch[1].trim(); // Clean name: "Alton Towers"
+        const extractedCode = countryMatch[2]; // Extracted country: "GB"
+
+        if (!countryCode) {
+          countryCode = extractedCode;
+        } else if (countryCode !== extractedCode) {
+          // If extracted differs from explicit land, log it (but keep explicit land usually)
+          // In this case, the suffix is likely more accurate for these specific entries
+          this.logger.debug(
+            `Country mismatch for ${name}: land=${countryCode}, suffix=${extractedCode}. Using suffix.`,
+          );
+          countryCode = extractedCode;
+        }
+      }
+
       return {
         externalId: park.uuid, // Use UUID (more stable than string ID)
         source: this.name,
-        name: park.name,
+        name: name,
         country: countryCode || park.land, // Convert to ISO code if possible
         timezone: countryCode
           ? (getTimezoneForCountry(countryCode) ?? undefined)
