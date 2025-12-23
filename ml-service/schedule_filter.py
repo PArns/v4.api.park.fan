@@ -179,9 +179,7 @@ def filter_predictions_by_schedule(
                             # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
                             if opening <= pred_time_local < closing:
                                 filtered_predictions.append(pred)
-                            else:
-                                # Log dropped prediction for debugging
-                                print(f"❌ Dropping {pred_time_local} (Outside {opening.time()}-{closing.time()})")
+                            # else: Prediction is at or after closing time, filter it out
                         # else: No schedule for this date - park might be closed today, skip prediction
                     except Exception as e:
                         print(f"⚠️  Error filtering prediction: {e}")
