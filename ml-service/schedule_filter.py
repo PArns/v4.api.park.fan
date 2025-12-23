@@ -160,10 +160,9 @@ def filter_predictions_by_schedule(
                         pred_time_local = pred_time_utc.astimezone(park_tz)
                         pred_date = pred_time_local.date()
                         
-                        # Only include predictions for TODAY in park's timezone
-                        if pred_date != today_park:
-                            # Skip predictions for other days (past or future)
-                            continue
+                        # Removed strict 'today only' check to allow next-day predictions
+                        # if pred_date != today_park:
+                        #     continue
                         
                         if pred_date in schedule_map:
                             opening = schedule_map[pred_date]['opening']
