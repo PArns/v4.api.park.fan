@@ -17,6 +17,7 @@ import { AnalyticsModule } from "./analytics/analytics.module";
 import { MLModule } from "./ml/ml.module";
 import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
+import { DiscoveryModule } from "./discovery/discovery.module";
 
 @Module({
   imports: [
@@ -56,6 +57,9 @@ import { RedisModule } from "./common/redis/redis.module";
 
     // Phase 6.3: Search & Filtering
     SearchModule,
+
+    // Geographic Discovery
+    DiscoveryModule,
   ],
 })
 export class AppModule {}
