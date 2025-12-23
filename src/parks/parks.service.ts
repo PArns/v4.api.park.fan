@@ -37,7 +37,7 @@ export class ParksService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
-  ) {}
+  ) { }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -781,9 +781,9 @@ export class ParksService {
         // Update if times, description, or holiday/bridge status changed
         const hasChanges =
           existing.openingTime?.getTime() !==
-            scheduleEntry.openingTime?.getTime() ||
+          scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
-            scheduleEntry.closingTime?.getTime() ||
+          scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description ||
           existing.isHoliday !== scheduleEntry.isHoliday ||
           existing.isBridgeDay !== scheduleEntry.isBridgeDay;
@@ -948,7 +948,7 @@ export class ParksService {
 
     if (filledCount > 0) {
       await this.invalidateScheduleCache(parkId);
-      this.logger.log(
+      this.logger.debug(
         `Filled or updated ${filledCount} schedule entries for Park ${parkId}`,
       );
     }
