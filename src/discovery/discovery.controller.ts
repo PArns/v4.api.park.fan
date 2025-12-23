@@ -37,13 +37,63 @@ export class DiscoveryController {
   @ApiOperation({
     summary: "Get complete geo structure",
     description:
-      "Returns hierarchical structure of continents → countries → cities → parks. " +
-      "Includes full URL paths for route generation. Cached for 24 hours.",
+      "Returns hierarchical structure of continents → countries → cities → parks → attractions. " +
+      "Includes full URL paths for route generation. Cached for 24 hours. " +
+      "Perfect for static site generation and building navigation menus.",
   })
   @ApiResponse({
     status: 200,
-    description: "Geographic structure",
+    description: "Geographic structure with attractions",
     type: GeoStructureDto,
+    example: {
+      continents: [
+        {
+          name: "Europe",
+          slug: "europe",
+          countryCount: 12,
+          parkCount: 45,
+          countries: [
+            {
+              name: "Germany",
+              slug: "germany",
+              code: "DE",
+              cityCount: 8,
+              parkCount: 15,
+              cities: [
+                {
+                  name: "Rust",
+                  slug: "rust",
+                  parkCount: 2,
+                  parks: [
+                    {
+                      id: "abc-123",
+                      name: "Europa-Park",
+                      slug: "europa-park",
+                      url: "/europe/germany/rust/europa-park",
+                      attractionCount: 15,
+                      attractions: [
+                        {
+                          id: "xyz-789",
+                          name: "Blue Fire Megacoaster",
+                          slug: "blue-fire-megacoaster",
+                          url: "/europe/germany/rust/europa-park/blue-fire-megacoaster",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      continentCount: 5,
+      countryCount: 32,
+      cityCount: 78,
+      parkCount: 139,
+      attractionCount: 2345,
+      generatedAt: "2024-01-15T10:00:00.000Z",
+    },
   })
   async getGeoStructure(): Promise<GeoStructureDto> {
     return this.discoveryService.getGeoStructure();
@@ -58,11 +108,13 @@ export class DiscoveryController {
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
   @ApiOperation({
     summary: "List all continents",
-    description: "Returns all continents with countries, cities, and parks.",
+    description:
+      "Returns all continents with countries, cities, parks, and attractions. " +
+      "Same data as /geo endpoint but without global summary counts.",
   })
   @ApiResponse({
     status: 200,
-    description: "List of continents",
+    description: "List of continents with full nested structure",
     type: [ContinentDto],
   })
   async getContinents(): Promise<ContinentDto[]> {
@@ -79,21 +131,27 @@ export class DiscoveryController {
   @ApiOperation({
     summary: "Get countries in continent",
     description:
-      "Returns all countries in a specific continent with cities and parks.",
+      "Returns all countries in a specific continent with cities, parks, and attractions. " +
+      "Useful for building continent-specific navigation or filtering.",
   })
   @ApiParam({
     name: "continentSlug",
-    description: "Continent slug",
+    description: "Continent slug (e.g., europe, north-america, asia)",
     example: "europe",
   })
   @ApiResponse({
     status: 200,
-    description: "List of countries",
+    description: "List of countries in the continent",
     type: [CountryDto],
   })
   @ApiResponse({
     status: 404,
     description: "Continent not found",
+    example: {
+      statusCode: 404,
+      message: 'Continent with slug "invalid-continent" not found',
+      error: "Not Found",
+    },
   })
   async getCountriesInContinent(
     @Param("continentSlug") continentSlug: string,
@@ -119,26 +177,34 @@ export class DiscoveryController {
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
   @ApiOperation({
     summary: "Get cities in country",
-    description: "Returns all cities in a specific country with parks.",
+    description:
+      "Returns all cities in a specific country with parks and attractions. " +
+      "Each park includes complete attraction listings with URLs for route generation.",
   })
   @ApiParam({
     name: "continentSlug",
-    description: "Continent slug",
+    description: "Continent slug (e.g., europe, north-america)",
     example: "europe",
   })
   @ApiParam({
     name: "countrySlug",
-    description: "Country slug",
+    description: "Country slug (e.g., germany, france, united-states)",
     example: "germany",
   })
   @ApiResponse({
     status: 200,
-    description: "List of cities",
+    description: "List of cities with parks and attractions",
     type: [CityDto],
   })
   @ApiResponse({
     status: 404,
     description: "Continent or country not found",
+    example: {
+      statusCode: 404,
+      message:
+        'Country with slug "invalid-country" not found in continent "europe"',
+      error: "Not Found",
+    },
   })
   async getCitiesInCountry(
     @Param("continentSlug") continentSlug: string,
