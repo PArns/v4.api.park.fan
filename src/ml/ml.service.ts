@@ -315,6 +315,16 @@ export class MLService {
         featureContext, // Phase 2: Real-time context features
       };
 
+      if (Object.keys(currentWaitTimes).length > 0) {
+        this.logger.debug(
+          `Sending ${Object.keys(currentWaitTimes).length} current wait times to ML service`,
+        );
+      } else {
+        this.logger.warn(
+          `No current wait times found for park ${parkId} (prediction won't use live data)`,
+        );
+      }
+
       const response = await this.mlClient.post<BulkPredictionResponseDto>(
         "/predict",
         payload,

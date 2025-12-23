@@ -133,7 +133,7 @@ def create_prediction_features(
     weather_forecast: List[Any] = None,
     current_wait_times: Dict[str, int] = None,
     recent_wait_times: Dict[str, int] = None,
-    feature_context: Dict[str, Any] = None
+    feature_context: Optional[Dict[str, Any]] = None
 ) -> pd.DataFrame:
     """
     Create feature DataFrame for predictions with all features from DB
@@ -150,6 +150,11 @@ def create_prediction_features(
         DataFrame with features ready for prediction
     """
     # Create base DataFrame
+    if current_wait_times:
+        print(f"📥 Received {len(current_wait_times)} current wait times")
+    else:
+        print("⚠️ No current wait times received")
+
     rows = []
     for attraction_id, park_id in zip(attraction_ids, park_ids):
         for ts in timestamps:
