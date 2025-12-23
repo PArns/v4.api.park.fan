@@ -1,83 +1,122 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { LiveDataResponse } from "./interfaces/data-source.interface";
+import {
+  LiveDataResponse,
+  OperatingWindow,
+} from "./interfaces/data-source.interface";
 import { normalizeForMatching } from "../../common/utils/slug.util";
+
+/**
+ * Merged Entity Structure
+ *
+ * Represents an entity (attraction, show, restaurant) that has been
+ * aggregated from multiple data sources with conflict resolution applied.
+ */
+interface MergedEntity {
+  name: string;
+  source: string; // Primary source
+  sources: string[]; // All sources that contributed
+  waitTime?: number; // Final calculated wait time
+  qtWaitTime?: number; // Temporary: Queue-Times wait time
+  wzWaitTime?: number; // Temporary: Wartezeiten wait time
+  [key: string]: any; // Additional properties from sources
+}
 
 /**
  * Conflict Resolver Service
  *
- * Aggregates complementary data from multiple sources
- * and resolves conflicts when the same entity exists in multiple sources.
+ * Aggregates and reconciles data from multiple theme park data sources:
+ * - **ThemeParks.wiki** (primary source, completeness: 10/10)
+ * - **Queue-Times** (land data, completeness: 5/10)
+ * - **Wartezeiten.app** (crowd levels, completeness: 6/10)
+ *
+ * ## Conflict Resolution Strategies
+ *
+ * ### Wait Times
+ * Uses consensus-based approach with outlier protection:
+ * - **3 sources, 2 agree**: Use consensus value (majority vote)
+ * - **3 sources, all different**: Use median (robust against outliers)
+ * - **2 sources**: Use average
+ * - **Always**: Round to nearest 5 minutes
+ *
+ * ### Operating Hours
+ * Priority-based fallback:
+ * 1. Wiki (preferred, most reliable)
+ * 2. Wartezeiten (enrichment when Wiki unavailable)
+ * 3. undefined (no data)
+ *
+ * ### Entities
+ * Name-based matching with multi-source merging:
+ * - Wiki provides rich metadata (base entity)
+ * - Queue-Times adds land assignments
+ * - Wartezeiten validates wait times
+ *
+ * ### Unique Data
+ * - **Crowd Level**: Exclusive to Wartezeiten
+ * - **Lands**: Exclusive to Queue-Times
+ *
+ * @see MultiSourceOrchestrator - Coordinates data fetching from sources
+ * @see WaitTimesProcessor - Consumes aggregated data
  */
 @Injectable()
 export class ConflictResolverService {
   private readonly logger = new Logger(ConflictResolverService.name);
 
+  // Constants for wait time processing
+  private readonly WAIT_TIME_ROUNDING_INTERVAL = 5; // minutes
+  private readonly WAIT_TIME_DISCREPANCY_THRESHOLD = 15; // minutes
+  private readonly TIMESTAMP_COMPARISON_WINDOW = 10 * 60 * 1000; // 10 minutes in ms
+
   /**
    * Aggregate park data from multiple sources
    *
-   * Strategy: Use complementary data from each source
-   * - ThemeParks.wiki: Wait times, schedules, shows, restaurants, forecasts (completeness: 10)
-   * - Wartezeiten: Crowd level (unique!), wait times validation (completeness: 6)
-   * - Queue-Times: Lands (unique!), wait times validation (completeness: 5)
+   * Combines data from up to 3 sources (Wiki, Queue-Times, Wartezeiten)
+   * and resolves conflicts using predefined strategies.
    *
-   * Wait time merging: Median of all sources + round to 5-minute intervals
+   * @param sources - Map of source name to LiveDataResponse
+   * @returns Aggregated LiveDataResponse with resolved conflicts
+   * @throws Error if no data sources are available
+   *
+   * @example
+   * ```ts
+   * const sources = new Map([
+   *   ['themeparks-wiki', wikiResponse],
+   *   ['queue-times', qtResponse],
+   * ]);
+   * const aggregated = service.aggregateParkData(sources);
+   * console.log(aggregated.entities.length); // Merged entities
+   * ```
    */
   aggregateParkData(sources: Map<string, LiveDataResponse>): LiveDataResponse {
     const wiki = sources.get("themeparks-wiki");
     const qt = sources.get("queue-times");
     const wz = sources.get("wartezeiten-app");
 
-    // If no data from any source, throw error
+    // Validate at least one source is available
     if (!wiki && !qt && !wz) {
       throw new Error("No data sources available");
     }
 
-    // Determine return values
+    // Extract unique data from each source
     const parkExternalId =
       wiki?.parkExternalId || qt?.parkExternalId || wz!.parkExternalId;
-    const lands = qt?.lands || [];
-    const crowdLevel = wz?.crowdLevel; // Unique to Wartezeiten!
+    const lands = qt?.lands || []; // Exclusive to Queue-Times
+    const crowdLevel = wz?.crowdLevel; // Exclusive to Wartezeiten
 
-    // Operating Hours Strategy:
-    // 1. If both sources have data: Compare and log discrepancies
-    // 2. Prefer Wiki (source of truth for schedules)
-    // 3. Fallback to Wartezeiten (Enrichment)
-    let operatingHours = undefined;
+    // Resolve operating hours with fallback strategy
+    const operatingHours = this.resolveOperatingHours(
+      parkExternalId || "unknown",
+      wiki?.operatingHours,
+      wz?.operatingHours,
+    );
 
-    const wikiHours =
-      wiki?.operatingHours && wiki.operatingHours.length > 0
-        ? wiki.operatingHours
-        : undefined;
-    const wzHours =
-      wz?.operatingHours && wz.operatingHours.length > 0
-        ? wz.operatingHours
-        : undefined;
-
-    if (wikiHours && wzHours) {
-      // SCENARIO: Both sources have data -> Compare
-      this.compareOperatingHours(
-        parkExternalId || "unknown",
-        wikiHours,
-        wzHours,
-      );
-      operatingHours = wikiHours; // Prefer Wiki
-    } else if (wikiHours) {
-      // SCENARIO: Only Wiki has data -> Use Wiki
-      operatingHours = wikiHours;
-    } else if (wzHours) {
-      // SCENARIO: Only Wartezeiten has data -> Enrich
-      operatingHours = wzHours;
-    }
-    // SCENARIO: No data -> undefined
-
-    // Merge entities from all sources
+    // Merge entities from all sources with conflict resolution
     const mergedEntities = this.mergeEntities(
       wiki?.entities || [],
       qt?.entities || [],
       wz?.entities || [],
     );
 
-    // Cross-validate wait times if multiple sources available
+    // Cross-validate wait times for quality assurance
     if (wiki && (qt || wz)) {
       this.compareWaitTimes(wiki, qt, wz);
     }
@@ -88,28 +127,66 @@ export class ConflictResolverService {
       entities: mergedEntities,
       lands,
       crowdLevel,
-      operatingHours, // Enriched data
+      operatingHours,
       fetchedAt: new Date(),
     };
+  }
+
+  /**
+   * Resolve operating hours from multiple sources
+   *
+   * Uses a priority-based fallback strategy:
+   * 1. Prefer Wiki (most reliable)
+   * 2. Fallback to Wartezeiten (enrichment)
+   * 3. Return undefined if no data
+   *
+   * Logs discrepancies when both sources have data.
+   *
+   * @param parkId - Park identifier for logging
+   * @param wikiHours - Operating hours from Wiki
+   * @param wzHours - Operating hours from Wartezeiten
+   * @returns Resolved operating hours or undefined
+   */
+  private resolveOperatingHours(
+    parkId: string,
+    wikiHours?: OperatingWindow[],
+    wzHours?: OperatingWindow[],
+  ): OperatingWindow[] | undefined {
+    const hasWiki = wikiHours && wikiHours.length > 0;
+    const hasWz = wzHours && wzHours.length > 0;
+
+    if (hasWiki && hasWz) {
+      // Both sources available: compare and prefer Wiki
+      this.compareOperatingHours(parkId, wikiHours, wzHours);
+      return wikiHours;
+    }
+
+    // Fallback: use whichever is available
+    return hasWiki ? wikiHours : hasWz ? wzHours : undefined;
   }
 
   /**
    * Merge entities from multiple sources (2 or 3 sources)
    *
    * Strategy:
-   * 1. Create lookup map by normalized name
-   * 2. For entities in multiple sources: Calculate median wait time and round to 5 minutes
-   * 3. Prefer Wiki for metadata (richer data)
-   * 4. Add source-only entities
+   * 1. Use Wiki entities as base (richest metadata)
+   * 2. Merge Queue-Times and Wartezeiten data by name matching
+   * 3. Apply consensus-based wait time resolution
+   * 4. Clean up temporary merge fields
+   *
+   * @param wikiEntities - Entities from ThemeParks.wiki
+   * @param qtEntities - Entities from Queue-Times
+   * @param wzEntities - Entities from Wartezeiten
+   * @returns Array of merged entities with resolved conflicts
    */
   private mergeEntities(
     wikiEntities: any[],
     qtEntities: any[],
     wzEntities: any[] = [],
   ): any[] {
-    const merged = new Map<string, any>();
+    const merged = new Map<string, MergedEntity>();
 
-    // Add all Wiki entities first (source of truth for rich data)
+    // Step 1: Add all Wiki entities (base/anchor)
     for (const entity of wikiEntities) {
       const key = normalizeForMatching(entity.name);
       merged.set(key, {
@@ -119,51 +196,17 @@ export class ConflictResolverService {
       });
     }
 
-    // Add/merge QT entities
+    // Step 2: Merge Queue-Times entities
     for (const qtEntity of qtEntities) {
-      const key = normalizeForMatching(qtEntity.name);
-
-      if (merged.has(key)) {
-        // Entity exists in Wiki: merge wait times
-        const existing = merged.get(key);
-        existing.sources.push("queue-times");
-
-        // If both have wait times, we'll merge them later
-        if (qtEntity.waitTime) {
-          existing.qtWaitTime = qtEntity.waitTime;
-        }
-      } else {
-        // QT-only entity: add it
-        merged.set(key, {
-          ...qtEntity,
-          source: "queue-times",
-          sources: ["queue-times"],
-        });
-      }
+      this.addOrMergeEntity(merged, qtEntity, "queue-times");
     }
 
-    // Add/merge Wartezeiten entities
+    // Step 3: Merge Wartezeiten entities
     for (const wzEntity of wzEntities) {
-      const key = normalizeForMatching(wzEntity.name);
-
-      if (merged.has(key)) {
-        // Entity exists: merge wait times
-        const existing = merged.get(key);
-        existing.sources.push("wartezeiten-app");
-
-        if (wzEntity.waitTime) {
-          existing.wzWaitTime = wzEntity.waitTime;
-        }
-      } else {
-        // Wartezeiten-only entity: add it
-        merged.set(key, {
-          ...wzEntity,
-          source: "wartezeiten-app",
-          sources: ["wartezeiten-app"],
-        });
-      }
+      this.addOrMergeEntity(merged, wzEntity, "wartezeiten-app");
     }
 
+    // Step 4: Resolve wait time conflicts
     for (const [_key, entity] of merged.entries()) {
       const waitTimes: number[] = [];
 
@@ -172,40 +215,10 @@ export class ConflictResolverService {
       if (entity.wzWaitTime) waitTimes.push(entity.wzWaitTime);
 
       if (waitTimes.length > 1) {
-        let finalWaitTime: number;
-
-        if (waitTimes.length === 3) {
-          // Sort for easier comparison
-          waitTimes.sort((a, b) => a - b);
-
-          // Check if 2 of 3 sources agree (consensus)
-          if (waitTimes[0] === waitTimes[1]) {
-            // First two agree: use consensus value
-            finalWaitTime = waitTimes[0];
-          } else if (waitTimes[1] === waitTimes[2]) {
-            // Last two agree: use consensus value
-            finalWaitTime = waitTimes[1];
-          } else {
-            // All 3 different: use median (robust against outliers)
-            finalWaitTime = waitTimes[1]; // Middle value after sorting
-          }
-        } else if (waitTimes.length === 2) {
-          // Use average (= median for 2 values)
-          finalWaitTime = (waitTimes[0] + waitTimes[1]) / 2;
-        } else {
-          // Single source (shouldn't happen in this branch, but for safety)
-          finalWaitTime = waitTimes[0];
-        }
-
-        // Round to nearest 5 minutes
-        entity.waitTime = Math.round(finalWaitTime / 5) * 5;
-        // Log removed to reduce noise
-        // this.logger.verbose(
-        //   `Multi-source wait time for "${entity.name}": [${waitTimes.join(", ")}] → final: ${finalWaitTime.toFixed(1)} → rounded: ${entity.waitTime} min`,
-        // );
+        entity.waitTime = this.calculateConsensusWaitTime(waitTimes);
       }
 
-      // Cleanup temporary fields
+      // Cleanup temporary merge fields
       delete entity.qtWaitTime;
       delete entity.wzWaitTime;
     }
@@ -214,7 +227,124 @@ export class ConflictResolverService {
   }
 
   /**
-   * Compare wait times from different sources for validation (2 or 3 sources)
+   * Add or merge entity into the merged entities map
+   *
+   * If entity already exists (matched by name), merges data.
+   * Otherwise, adds as new entity.
+   *
+   * @param merged - Map of normalized name to merged entity
+   * @param entity - Entity to add or merge
+   * @param sourceName - Source identifier (e.g., "queue-times")
+   */
+  private addOrMergeEntity(
+    merged: Map<string, MergedEntity>,
+    entity: any,
+    sourceName: string,
+  ): void {
+    const key = normalizeForMatching(entity.name);
+
+    if (merged.has(key)) {
+      // Entity exists: merge data
+      const existing = merged.get(key)!;
+      existing.sources.push(sourceName);
+
+      // Store source-specific wait time for later conflict resolution
+      if (entity.waitTime) {
+        const sourceKey = this.getSourceKey(sourceName);
+        existing[`${sourceKey}WaitTime`] = entity.waitTime;
+      }
+    } else {
+      // New entity: add to map
+      merged.set(key, {
+        ...entity,
+        source: sourceName,
+        sources: [sourceName],
+      });
+    }
+  }
+
+  /**
+   * Get short key for source name
+   *
+   * Maps full source names to abbreviated keys for temporary field names.
+   *
+   * @param sourceName - Full source name (e.g., "queue-times")
+   * @returns Abbreviated key (e.g., "qt")
+   */
+  private getSourceKey(sourceName: string): string {
+    const keyMap: Record<string, string> = {
+      "queue-times": "qt",
+      "wartezeiten-app": "wz",
+    };
+    return keyMap[sourceName] || sourceName;
+  }
+
+  /**
+   * Calculate wait time from multiple sources using consensus-based approach
+   *
+   * Strategy:
+   * - **3 sources, 2 agree**: Use consensus value (majority vote)
+   * - **3 sources, all different**: Use median (robust against outliers)
+   * - **2 sources**: Use average
+   * - **1 source**: Use that value
+   * - **Always**: Round to nearest 5 minutes
+   *
+   * @param waitTimes - Array of wait times from different sources (in minutes)
+   * @returns Calculated wait time rounded to nearest 5 minutes
+   *
+   * @example
+   * ```ts
+   * // Consensus: 2 of 3 agree
+   * calculateConsensusWaitTime([25, 25, 30]); // Returns 25
+   *
+   * // Outlier protection: all different
+   * calculateConsensusWaitTime([5, 10, 90]); // Returns 10 (median)
+   *
+   * // Average: 2 sources
+   * calculateConsensusWaitTime([20, 30]); // Returns 25
+   * ```
+   */
+  private calculateConsensusWaitTime(waitTimes: number[]): number {
+    if (waitTimes.length === 0) return 0;
+    if (waitTimes.length === 1) {
+      return Math.round(waitTimes[0] / this.WAIT_TIME_ROUNDING_INTERVAL) *
+        this.WAIT_TIME_ROUNDING_INTERVAL;
+    }
+
+    let finalWaitTime: number;
+
+    if (waitTimes.length === 3) {
+      // Sort for consensus detection and median calculation
+      const sorted = [...waitTimes].sort((a, b) => a - b);
+
+      // Check for consensus (2 of 3 agree)
+      if (sorted[0] === sorted[1]) {
+        finalWaitTime = sorted[0]; // First two agree
+      } else if (sorted[1] === sorted[2]) {
+        finalWaitTime = sorted[1]; // Last two agree
+      } else {
+        // All different: use median (robust against outliers)
+        finalWaitTime = sorted[1];
+      }
+    } else {
+      // 2 sources: use average (= median for 2 values)
+      finalWaitTime = waitTimes.reduce((a, b) => a + b, 0) / waitTimes.length;
+    }
+
+    // Round to nearest interval (e.g., 5 minutes)
+    return Math.round(finalWaitTime / this.WAIT_TIME_ROUNDING_INTERVAL) *
+      this.WAIT_TIME_ROUNDING_INTERVAL;
+  }
+
+  /**
+   * Compare wait times from different sources for validation
+   *
+   * Logs warnings when wait times from multiple sources differ significantly.
+   * Only compares if timestamps are within 10 minutes (ensures fresh data).
+   *
+   * @param wiki - Wiki live data response
+   * @param qt - Queue-Times live data response (optional)
+   * @param wz - Wartezeiten live data response (optional)
    */
   private compareWaitTimes(
     wiki: LiveDataResponse,
@@ -225,7 +355,7 @@ export class ConflictResolverService {
       const matches: { source: string; waitTime: number; lastUpdated: Date }[] =
         [];
 
-      // Find matching entities in other sources
+      // Find matching entities in other sources by name
       const qtEntity = qt?.entities.find(
         (e) =>
           normalizeForMatching(e.name) ===
@@ -237,6 +367,7 @@ export class ConflictResolverService {
           normalizeForMatching(wikiEntity.name),
       );
 
+      // Collect wait times from all available sources
       if (wikiEntity.waitTime) {
         matches.push({
           source: "wiki",
@@ -261,18 +392,20 @@ export class ConflictResolverService {
         });
       }
 
-      // Only compare if we have 2+ sources and timestamps are within 10 minutes
+      // Only compare if we have 2+ sources with recent data
       if (matches.length >= 2) {
         const timestamps = matches.map((m) => m.lastUpdated.getTime());
         const maxTimeDiff = Math.max(...timestamps) - Math.min(...timestamps);
 
-        if (maxTimeDiff <= 10 * 60 * 1000) {
+        // Ensure timestamps are within comparison window (10 minutes)
+        if (maxTimeDiff <= this.TIMESTAMP_COMPARISON_WINDOW) {
           const waitTimes = matches.map((m) => m.waitTime);
           const min = Math.min(...waitTimes);
           const max = Math.max(...waitTimes);
           const diff = max - min;
 
-          if (diff > 15) {
+          // Log warning if discrepancy exceeds threshold
+          if (diff > this.WAIT_TIME_DISCREPANCY_THRESHOLD) {
             const summary = matches
               .map((m) => `${m.source}=${m.waitTime}min`)
               .join(", ");
@@ -287,23 +420,32 @@ export class ConflictResolverService {
 
   /**
    * Compare operating hours from different sources
+   *
+   * Logs warnings when operating hours differ between Wiki and Wartezeiten.
+   * Used for quality assurance and data validation.
+   *
+   * @param parkId - Park identifier for logging
+   * @param wiki - Operating hours from Wiki
+   * @param wz - Operating hours from Wartezeiten
    */
   private compareOperatingHours(
     parkId: string,
-    wiki: import("./interfaces/data-source.interface").OperatingWindow[],
-    wz: import("./interfaces/data-source.interface").OperatingWindow[],
+    wiki: OperatingWindow[],
+    wz: OperatingWindow[],
   ): void {
-    const wOne = wiki[0];
-    const zOne = wz[0];
+    const wikiWindow = wiki[0];
+    const wzWindow = wz[0];
 
-    if (wOne && zOne) {
-      // Compare open/close times (simple string comparison for ISO timestamps)
-      const openDiff = wOne.open !== zOne.open;
-      const closeDiff = wOne.close !== zOne.close;
+    if (wikiWindow && wzWindow) {
+      // Compare open/close times (ISO timestamp comparison)
+      const openDiff = wikiWindow.open !== wzWindow.open;
+      const closeDiff = wikiWindow.close !== wzWindow.close;
 
       if (openDiff || closeDiff) {
         this.logger.warn(
-          `⚠️ Operating Hours Discrepancy for ${parkId}: Wiki(${wOne.open}-${wOne.close}) vs Wartezeiten(${zOne.open}-${zOne.close})`,
+          `⚠️ Operating Hours Discrepancy for ${parkId}: ` +
+          `Wiki(${wikiWindow.open}-${wikiWindow.close}) vs ` +
+          `Wartezeiten(${wzWindow.open}-${wzWindow.close})`,
         );
       }
     }
