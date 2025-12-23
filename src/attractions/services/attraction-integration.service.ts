@@ -31,7 +31,7 @@ export class AttractionIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated attraction response with live data

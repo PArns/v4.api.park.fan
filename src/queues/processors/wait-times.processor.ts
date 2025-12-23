@@ -306,10 +306,35 @@ export class WaitTimesProcessor {
                       savedCount > 0 &&
                       entityLiveData.entityType === EntityType.ATTRACTION
                     ) {
+                      // Determines closing time from operating hours if available
+                      let closingTime: Date | undefined;
+                      if (
+                        liveData.operatingHours &&
+                        liveData.operatingHours.length > 0
+                      ) {
+                        const todayStr = formatInParkTimezone(
+                          new Date(),
+                          park.timezone || "UTC",
+                        );
+                        // Find operating window for today
+                        const todayWindow = liveData.operatingHours.find(
+                          (w) =>
+                            formatInParkTimezone(
+                              new Date(w.open),
+                              park.timezone || "UTC",
+                            ) === todayStr,
+                        );
+
+                        if (todayWindow && todayWindow.close) {
+                          closingTime = new Date(todayWindow.close);
+                        }
+                      }
+
                       await this.trackDowntime(
                         entityLiveData,
                         mappingLookup,
                         park.timezone,
+                        closingTime,
                       );
                     }
 
@@ -923,11 +948,13 @@ export class WaitTimesProcessor {
    *
    * @param entityData - Live entity data from API
    * @param mappingLookup - External ID to internal ID mapping
+   * @param closingTime - Park closing time for today (to avoid false positives near close)
    */
   private async trackDowntime(
     entityData: EntityLiveData,
     mappingLookup: Map<string, string>,
     timezone: string = "UTC",
+    closingTime?: Date,
   ): Promise<void> {
     try {
       const lookupKey = `${entityData.source}:${entityData.externalId}`;
@@ -954,6 +981,24 @@ export class WaitTimesProcessor {
           currentStatus === LiveStatus.CLOSED ||
           currentStatus === LiveStatus.REFURBISHMENT)
       ) {
+        // Check if we should ignore this downtime (e.g., park closing)
+        if (closingTime) {
+          // If we are within 60 minutes of closing (or past closing), ignore downtime logging.
+          // Ride closures near park closing are normal operations, not failures.
+          const msUntilClose = closingTime.getTime() - Date.now();
+          const minsUntilClose = msUntilClose / 1000 / 60;
+
+          if (minsUntilClose <= 60) {
+            // Buffer: 60 mins before close + anytime after close
+            this.logger.debug(
+              `Ignoring downtime for ${attractionId} (Park closing soon: ${minsUntilClose.toFixed(
+                0,
+              )}m)`,
+            );
+            return;
+          }
+        }
+
         // Start tracking downtime
         const now = Date.now();
         await this.redis.set(downtimeStartKey, now.toString(), "EX", 3600);

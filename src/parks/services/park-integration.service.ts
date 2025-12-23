@@ -56,7 +56,7 @@ export class ParkIntegrationService {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -205,8 +205,9 @@ export class ParkIntegrationService {
 
     // Fetch current queue data for all attractions
     // OPTIMIZED: Always fetch queue data (even if schedule says CLOSED) to detect unpredicted openings
-    const queueDataMap =
-      await this.queueDataService.findCurrentStatusByPark(park.id);
+    const queueDataMap = await this.queueDataService.findCurrentStatusByPark(
+      park.id,
+    );
 
     let totalAttractionsCount = 0;
     let totalOperatingCount = 0;
@@ -218,7 +219,11 @@ export class ParkIntegrationService {
         const qData = queueDataMap.get(attraction.id);
         if (qData && qData.length > 0) {
           // Check if any queue indicates the ride is operating or has wait time
-          const active = qData.some(q => q.status === "OPERATING" || (q.waitTime !== null && q.waitTime > 0));
+          const active = qData.some(
+            (q) =>
+              q.status === "OPERATING" ||
+              (q.waitTime !== null && q.waitTime > 0),
+          );
           if (active) {
             anyLiveActivity = true;
             break;
@@ -229,7 +234,9 @@ export class ParkIntegrationService {
 
     // Status Override: If schedule says CLOSED but we found live activity, force OPERATING
     if (dto.status === "CLOSED" && anyLiveActivity) {
-      this.logger.log(`Park ${park.name} detected OPEN via live data override (Schedule missing or mismatch)`);
+      this.logger.log(
+        `Park ${park.name} detected OPEN via live data override (Schedule missing or mismatch)`,
+      );
       dto.status = "OPERATING";
     }
 
@@ -687,7 +694,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -830,8 +837,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
