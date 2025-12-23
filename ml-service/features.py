@@ -340,12 +340,38 @@ def add_park_occupancy_feature(
     df['park_occupancy_pct'] = 100.0
     
     if feature_context and 'parkOccupancy' in feature_context:
+        # Inference Mode: Use provided real-time context
         park_occupancy_map = feature_context['parkOccupancy']
         
         # Map occupancy to each row based on parkId
         for park_id, occupancy_pct in park_occupancy_map.items():
             mask = df['parkId'] == park_id
             df.loc[mask, 'park_occupancy_pct'] = float(occupancy_pct)
+            
+    else:
+        # Training Mode: Reconstruct historical occupancy from the data itself
+        # 1. Calculate Baseline (P90 of wait times per park)
+        # Using 90th percentile as a proxy for "Full Capacity"
+        park_baselines = df.groupby('parkId')['waitTime'].quantile(0.90)
+        
+        # 2. Calculate Instantaneous Park Average (per timestamp)
+        # Group by Park + Timestamp to get the average wait at that moment
+        # Transform ensures we get a value aligned with the original index
+        current_park_avg = df.groupby(['parkId', 'timestamp'])['waitTime'].transform('mean')
+        
+        # 3. Calculate Percentage
+        # We process per park to divide by the correct baseline
+        for park_id in df['parkId'].unique():
+            if park_id not in park_baselines: continue
+            
+            baseline = park_baselines[park_id]
+            if baseline == 0: baseline = 1 # Avoid div by zero
+            
+            mask = df['parkId'] == park_id
+            # Occupancy = (Current Avg / Baseline) * 100
+            # Clip to reasonable limits (0-150%)
+            occupancy = (current_park_avg.loc[mask] / baseline) * 100
+            df.loc[mask, 'park_occupancy_pct'] = occupancy.clip(0, 150)
     
     return df
 
@@ -503,6 +529,7 @@ def add_park_schedule_features(
     df['is_park_open'] = 0
     df['has_special_event'] = 0  # TICKETED_EVENT or PRIVATE_EVENT
     df['has_extra_hours'] = 0     # EXTRA_HOURS (typically busier)
+    df['time_since_park_open_mins'] = 0.0
 
     # For each row, check schedule
     for idx, row in df.iterrows():
@@ -533,6 +560,15 @@ def add_park_schedule_features(
                 
                 if opening_naive <= ts_naive <= closing_naive:
                     df.at[idx, 'is_park_open'] = 1
+                    
+                # Calculate time since open (minutes)
+                # Keep positive values even if closed (e.g. 1 hour after closing) to show "end of day"
+                # But typically we care about "how long has it been open".
+                # If before opening, it will be negative. Clip to 0? 
+                # Actually negative (before open) is useful info (crowds gathering). 
+                # But model expects 0-ish start. Let's clip to 0 for consistency with inference default.
+                mins_since = (ts_naive - opening_naive).total_seconds() / 60.0
+                df.at[idx, 'time_since_park_open_mins'] = max(0, mins_since)
 
             # Check for special events (typically attract more visitors)
             if any(schedules['schedule_type'].isin(['TICKETED_EVENT', 'PRIVATE_EVENT'])):
@@ -751,9 +787,9 @@ def engineer_features(
         df = add_downtime_features(df, feature_context)
         df = add_virtual_queue_feature(df, feature_context)
     else:
-        # Training mode: add defaults
-        df['park_occupancy_pct'] = 100.0
-        df['time_since_park_open_mins'] = 0.0
+        # Training mode: add defaults (if not already handled)
+        # park_occupancy_pct - handled by add_park_occupancy_feature logic
+        # time_since_park_open_mins - handled by add_park_schedule_features
         df['had_downtime_today'] = 0
         df['downtime_minutes_today'] = 0.0
         df['has_virtual_queue'] = 0
