@@ -10,6 +10,7 @@ import {
   CountryDto,
   CityDto,
   ParkReferenceDto,
+  AttractionReferenceDto,
 } from "./dto/geo-structure.dto";
 
 /**
@@ -21,7 +22,7 @@ import {
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
-  private readonly CACHE_KEY = "discovery:geo:structure:v1";
+  private readonly CACHE_KEY = "discovery:geo:structure:v2"; // v2: includes attractions
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
 
   constructor(
@@ -49,7 +50,7 @@ export class DiscoveryService {
 
     this.logger.log("Building geo structure from database");
 
-    // Fetch all parks with complete geographic data
+    // Fetch all parks with complete geographic data and attractions
     const parks = await this.parkRepository.find({
       where: {
         continent: Not(IsNull()),
@@ -59,6 +60,7 @@ export class DiscoveryService {
         countrySlug: Not(IsNull()),
         citySlug: Not(IsNull()),
       },
+      relations: ["attractions"],
       select: [
         "id",
         "name",
@@ -126,12 +128,25 @@ export class DiscoveryService {
         country.cities.push(city);
       }
 
-      // Add park reference
+      // Add park reference with attractions
+      const parkBaseUrl = `/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
+
+      const attractions: AttractionReferenceDto[] = (park.attractions || [])
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((attraction) => ({
+          id: attraction.id,
+          name: attraction.name,
+          slug: attraction.slug,
+          url: `${parkBaseUrl}/${attraction.slug}`,
+        }));
+
       const parkRef: ParkReferenceDto = {
         id: park.id,
         name: park.name,
         slug: park.slug,
-        url: `/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`,
+        url: parkBaseUrl,
+        attractions,
+        attractionCount: attractions.length,
       };
       city.parks.push(parkRef);
       city.parkCount++;
@@ -149,6 +164,26 @@ export class DiscoveryService {
     }
 
     // Build final response
+    const totalAttractions = continents.reduce(
+      (sum, continent) =>
+        sum +
+        continent.countries.reduce(
+          (countrySum, country) =>
+            countrySum +
+            country.cities.reduce(
+              (citySum, city) =>
+                citySum +
+                city.parks.reduce(
+                  (parkSum, park) => parkSum + park.attractionCount,
+                  0,
+                ),
+              0,
+            ),
+          0,
+        ),
+      0,
+    );
+
     const structure: GeoStructureDto = {
       continents,
       continentCount: continents.length,
@@ -159,6 +194,7 @@ export class DiscoveryService {
         0,
       ),
       parkCount: parks.length,
+      attractionCount: totalAttractions,
       generatedAt: new Date().toISOString(),
     };
 
@@ -170,7 +206,7 @@ export class DiscoveryService {
     );
 
     this.logger.log(
-      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks`,
+      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks, ${structure.attractionCount} attractions`,
     );
 
     return structure;

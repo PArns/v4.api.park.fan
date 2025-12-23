@@ -1,6 +1,37 @@
 import { ApiProperty } from "@nestjs/swagger";
 
 /**
+ * Attraction Reference DTO
+ *
+ * Minimal attraction information for route generation
+ */
+export class AttractionReferenceDto {
+  @ApiProperty({
+    description: "Attraction UUID",
+    example: "xyz789-abc123",
+  })
+  id: string;
+
+  @ApiProperty({
+    description: "Attraction name",
+    example: "Blue Fire Megacoaster",
+  })
+  name: string;
+
+  @ApiProperty({
+    description: "Attraction slug",
+    example: "blue-fire-megacoaster",
+  })
+  slug: string;
+
+  @ApiProperty({
+    description: "Full URL path to attraction",
+    example: "/europe/germany/rust/europa-park/blue-fire-megacoaster",
+  })
+  url: string;
+}
+
+/**
  * Park Reference DTO
  *
  * Minimal park information for route generation
@@ -29,6 +60,18 @@ export class ParkReferenceDto {
     example: "/europe/germany/rust/europa-park",
   })
   url: string;
+
+  @ApiProperty({
+    description: "Attractions in this park",
+    type: [AttractionReferenceDto],
+  })
+  attractions: AttractionReferenceDto[];
+
+  @ApiProperty({
+    description: "Number of attractions in this park",
+    example: 15,
+  })
+  attractionCount: number;
 }
 
 /**
@@ -177,6 +220,12 @@ export class GeoStructureDto {
     example: 156,
   })
   parkCount: number;
+
+  @ApiProperty({
+    description: "Total number of attractions",
+    example: 2345,
+  })
+  attractionCount: number;
 
   @ApiProperty({
     description: "Timestamp when this structure was generated",
