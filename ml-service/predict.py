@@ -423,26 +423,21 @@ def create_prediction_features(
                         opening = operating.iloc[0]['openingTime']
                         closing = operating.iloc[0]['closingTime']
                         
-                        try:
-                            # Robust comparison handling mixed timezones
-                            ts_compare = timestamp
-                            
-                            # case 1: DB has timezone, we need to match it
-                            if getattr(opening, 'tzinfo', None) is not None:
-                                if ts_compare.tzinfo is None:
-                                    ts_compare = pd.Timestamp(ts_compare).tz_localize('UTC')
-                                ts_compare = ts_compare.tz_convert(opening.tzinfo)
-                            # case 2: DB is naive, we must be naive (UTC)
-                            else:
-                                if ts_compare.tzinfo is not None:
-                                    ts_compare = ts_compare.tz_convert('UTC').tz_localize(None)
-                            
-                            is_open = opening <= ts_compare <= closing
-                            df.at[idx, 'is_park_open'] = int(is_open)
-                        except Exception as e:
-                            print(f"❌ Comparison Error: opening={opening} ({type(opening)}), closing={closing} ({type(closing)}), timestamp={timestamp} ({type(timestamp)})")
-                            print(f"❌ ts_compare={ts_compare} ({type(ts_compare)})")
-                            raise e
+                        # Robust comparison handling mixed timezones
+                        ts_compare = timestamp
+                        
+                        # case 1: DB has timezone, we need to match it
+                        if getattr(opening, 'tzinfo', None) is not None:
+                            if ts_compare.tzinfo is None:
+                                ts_compare = pd.Timestamp(ts_compare).tz_localize('UTC')
+                            ts_compare = ts_compare.tz_convert(opening.tzinfo)
+                        # case 2: DB is naive, we must be naive (UTC)
+                        else:
+                            if ts_compare.tzinfo is not None:
+                                ts_compare = ts_compare.tz_convert('UTC').tz_localize(None)
+                        
+                        is_open = opening <= ts_compare <= closing
+                        df.at[idx, 'is_park_open'] = int(is_open)
                         
                         if not is_open:
                             df.at[idx, 'status'] = 'CLOSED'
@@ -482,7 +477,10 @@ def create_prediction_features(
         recent_data['date'] = pd.to_datetime(recent_data['date'])
 
         # Convert base_time to pandas Timestamp for consistent comparisons
+        # Ensure it is timezone-naive UTC to match the SQL date output
         base_time_pd = pd.Timestamp(base_time)
+        if base_time_pd.tzinfo is not None:
+            base_time_pd = base_time_pd.tz_convert('UTC').tz_localize(None)
 
         for attraction_id in attraction_ids:
             attraction_data = recent_data[recent_data['attractionId'] == attraction_id]
