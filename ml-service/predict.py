@@ -213,7 +213,11 @@ def create_prediction_features(
             wf_df = pd.DataFrame(wf_data)
             wf_df['time'] = pd.to_datetime(wf_df['time'])
             
-            # Use UTC generic time handling or assume match
+            # Normalize both columns to timezone-naive UTC for merging
+            # Weather forecast times are UTC, convert to timezone-naive to match predictions
+            if wf_df['time'].dt.tz is not None:
+                wf_df['time'] = wf_df['time'].dt.tz_convert('UTC').dt.tz_localize(None)
+            
             # Round prediction timestamp to nearest hour for joining
             df['join_time'] = df['timestamp'].dt.round('h')
             
@@ -415,7 +419,9 @@ def create_prediction_features(
                         opening = operating.iloc[0]['openingTime']
                         closing = operating.iloc[0]['closingTime']
                         
-                        is_open = opening <= timestamp <= closing
+                        # Convert timestamp to timezone-aware for comparison with schedule times
+                        timestamp_tz = pd.Timestamp(timestamp, tz='UTC') if timestamp.tzinfo is None else timestamp
+                        is_open = opening <= timestamp_tz <= closing
                         df.at[idx, 'is_park_open'] = int(is_open)
                         
                         if not is_open:
