@@ -31,7 +31,7 @@ export class AttractionIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated attraction response with live data
@@ -145,7 +145,7 @@ export class AttractionIntegrationService {
         const predictions =
           await this.mlService.getAttractionPredictionsWithFallback(
             attraction.id,
-            "daily",
+            "hourly",
           );
 
         dto.hourlyForecast = predictions.map((p) => ({

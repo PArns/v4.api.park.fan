@@ -150,11 +150,6 @@ def create_prediction_features(
         DataFrame with features ready for prediction
     """
     # Create base DataFrame
-    if current_wait_times:
-        print(f"📥 Received {len(current_wait_times)} current wait times")
-    else:
-        print("⚠️ No current wait times received")
-
     rows = []
     for attraction_id, park_id in zip(attraction_ids, park_ids):
         for ts in timestamps:
