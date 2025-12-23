@@ -244,6 +244,7 @@ def fetch_parks_metadata() -> pd.DataFrame:
     query = text("""
         SELECT
             id as park_id,
+            name,
             "countryCode" as country,
             timezone,
             "influencingCountries",

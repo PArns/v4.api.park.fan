@@ -116,7 +116,8 @@ def filter_predictions_by_schedule(
             schedules = result.fetchall()
             
             # Debug: Log schedules found
-            print(f"📅 Park {park_id}: Found {len(schedules)} schedule entries")
+            park_name = park_info.iloc[0]['name'] if 'name' in park_info.columns else park_id
+            print(f"📅 Park {park_name} ({park_id}): Found {len(schedules)} schedule entries")
             for s in schedules:
                 print(f"   - {s[0]}: {s[2]} to {s[3]}")
         
