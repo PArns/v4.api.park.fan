@@ -37,11 +37,12 @@ lerna-debug.log*
 .env.*
 
 # Debug scripts with DB credentials (keep local only)
-scripts/*-live.ts
-scripts/check-live-*.ts
-scripts/update-*.ts
-scripts/force-*.ts
-scripts/clear-cache-*.ts
+scripts/
+
+# Temporary markdown files (keep README.md and DEPLOYMENT.md)
+*.md
+!README.md
+!DEPLOYMENT.md
 
 # Docker
 docker/data/
@@ -57,6 +58,3 @@ temp/
 
 ml-service/__pycache__/
 ml-service/catboost_info/
-
-*.md
-!readme.md.env.production
