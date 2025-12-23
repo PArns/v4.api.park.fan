@@ -493,90 +493,118 @@ def add_virtual_queue_feature(
 
 
 def add_park_schedule_features(
-    df: pd.DataFrame,
-    start_date: datetime,
-    end_date: datetime
+    df: pd.DataFrame, 
+    start_date: datetime, 
+    end_date: datetime,
+    feature_context: Dict = None 
 ) -> pd.DataFrame:
     """
-    Add park schedule features (is_park_open, has_special_event)
-
-    Special events like Wintertraum at Phantasialand typically have higher crowds.
-
+    Add features related to park operating schedule
+    
     Args:
-        df: DataFrame with timestamp and parkId columns
-        start_date: Training period start
-        end_date: Training period end
-
-    Returns:
-        DataFrame with schedule features added
+        df: DataFrame with timestamps and parkId
+        start_date: Query start date
+        end_date: Query end date
+        feature_context: Optional context for live data override
     """
-    # Fetch park schedules
+    df = df.copy()
+    
+    # Fetch park schedules (using DB helper)
     schedules_df = fetch_park_schedules(start_date, end_date)
-
-    if schedules_df.empty:
-        # No schedule data - assume park always open, no special events
-        df['is_park_open'] = 1
-        df['has_special_event'] = 0
-        df['has_extra_hours'] = 0
-        return df
-
-    # Convert to datetime for comparison
-    schedules_df['opening_time'] = pd.to_datetime(schedules_df['opening_time'])
-    schedules_df['closing_time'] = pd.to_datetime(schedules_df['closing_time'])
-    schedules_df['date'] = pd.to_datetime(schedules_df['date'])
-
+    
     # Initialize features
     df['is_park_open'] = 0
     df['has_special_event'] = 0  # TICKETED_EVENT or PRIVATE_EVENT
     df['has_extra_hours'] = 0     # EXTRA_HOURS (typically busier)
     df['time_since_park_open_mins'] = 0.0
 
+    if not schedules_df.empty:
+        # Pre-process schedule DF for faster lookup
+        schedules_df['date'] = pd.to_datetime(schedules_df['date'])
+        schedules_df['opening_time'] = pd.to_datetime(schedules_df['opening_time'])
+        schedules_df['closing_time'] = pd.to_datetime(schedules_df['closing_time'])
+
     # For each row, check schedule
     for idx, row in df.iterrows():
         park_id = row['parkId']
         # Use LOCAL timestamp and date for schedule comparison
-        # (Schedules in DB are stored as local dates/times)
-        timestamp = row['local_timestamp']
-        date = row['date_local']
+        # (Schedules in DB are stored as local dates/times and fetch_park_schedules preserves this)
+        # Note: 'local_timestamp' is added by engineer_features -> convert_to_local_time
+        if 'local_timestamp' in row:
+             timestamp = row['local_timestamp']
+             date = row['date_local']
+        else:
+             # Fallback if local_timestamp missing (shouldn't happen in pipeline)
+             timestamp = row['timestamp']
+             date = timestamp.date()
 
-        # Find all schedules for this park on this date
-        schedules = schedules_df[
-            (schedules_df['park_id'] == park_id) &
-            (schedules_df['date'].dt.date == date)
-        ]
+        schedule_found = False
 
-        if not schedules.empty:
-            # Check if park is open (OPERATING schedule type)
-            operating = schedules[schedules['schedule_type'] == 'OPERATING']
-            if not operating.empty:
-                opening = operating.iloc[0]['opening_time']
-                closing = operating.iloc[0]['closing_time']
+        if not schedules_df.empty:
+            # Find all schedules for this park on this date
+            # Filter for Park-Level schedules (attraction_id is Null/None)
+            # Nan filtering in pandas: isnull()
+            schedules = schedules_df[
+                (schedules_df['park_id'] == park_id) & 
+                (schedules_df['date'].dt.date == date)
+            ]
+            
+            # Use park-level schedules if available, otherwise fallback to any schedule
+            park_schedules = schedules[schedules['attraction_id'].isnull()]
+            if not park_schedules.empty:
+                schedules = park_schedules
 
-                # Compare local timestamp with opening/closing
-                # Ensure all timestamps are timezone-naive for comparison
-                ts_naive = timestamp.replace(tzinfo=None) if hasattr(timestamp, 'tzinfo') else timestamp
-                opening_naive = opening.replace(tzinfo=None) if hasattr(opening, 'tzinfo') and opening.tzinfo else opening
-                closing_naive = closing.replace(tzinfo=None) if hasattr(closing, 'tzinfo') and closing.tzinfo else closing
+            if not schedules.empty:
+                schedule_found = True
                 
-                if opening_naive <= ts_naive <= closing_naive:
-                    df.at[idx, 'is_park_open'] = 1
+                # Check if park is open (OPERATING schedule type)
+                operating = schedules[schedules['schedule_type'] == 'OPERATING']
+                if not operating.empty:
+                    # Use first operating schedule entry
+                    op_sched = operating.iloc[0]
+                    opening = op_sched['opening_time']
+                    closing = op_sched['closing_time']
+
+                    # Compare local timestamp with opening/closing
+                    # Ensure comparisons are compatible (both datetime objects)
+                    # Schedules are Naive or Aware? DB returns Naive usually (representing Local)
+                    # local_timestamp is Naive (representing Local)
                     
-                # Calculate time since open (minutes)
-                # Keep positive values even if closed (e.g. 1 hour after closing) to show "end of day"
-                # But typically we care about "how long has it been open".
-                # If before opening, it will be negative. Clip to 0? 
-                # Actually negative (before open) is useful info (crowds gathering). 
-                # But model expects 0-ish start. Let's clip to 0 for consistency with inference default.
-                mins_since = (ts_naive - opening_naive).total_seconds() / 60.0
-                df.at[idx, 'time_since_park_open_mins'] = max(0, mins_since)
+                    # Safety check for NaT
+                    if pd.notna(opening) and pd.notna(closing):
+                        if opening <= timestamp <= closing:
+                            df.at[idx, 'is_park_open'] = 1
+                        
+                        # Calculate time since open (minutes)
+                        mins_since = (timestamp - opening).total_seconds() / 60.0
+                        df.at[idx, 'time_since_park_open_mins'] = max(0, mins_since)
 
-            # Check for special events (typically attract more visitors)
-            if any(schedules['schedule_type'].isin(['TICKETED_EVENT', 'PRIVATE_EVENT'])):
-                df.at[idx, 'has_special_event'] = 1
+                # Check for special events
+                if any(schedules['schedule_type'].isin(['TICKETED_EVENT', 'PRIVATE_EVENT'])):
+                    df.at[idx, 'has_special_event'] = 1
+                    
+                if any(schedules['schedule_type'] == 'EXTRA_HOURS'):
+                    df.at[idx, 'has_extra_hours'] = 1
 
-            # Check for extra hours (extended operating, typically busier)
-            if 'EXTRA_HOURS' in schedules['schedule_type'].values:
-                df.at[idx, 'has_extra_hours'] = 1
+        # Correction Logic: Override "Closed" if we have evidence of "Open"
+        if df.at[idx, 'is_park_open'] == 0:
+            # 1. Training Override: Target data (waitTime) indicates open
+            if 'waitTime' in df.columns:
+                 wt = row['waitTime']
+                 if pd.notna(wt) and wt > 0:
+                     df.at[idx, 'is_park_open'] = 1
+            
+            # 2. Inference Override: Live Context (currentWaitTimes) indicates open
+            elif feature_context and 'currentWaitTimes' in feature_context:
+                # Check if this attraction has wait times
+                if 'attractionId' in row:
+                    attr_id = row['attractionId']
+                    cw = feature_context['currentWaitTimes'] # dict[attrId, waitTime]
+                    if attr_id in cw:
+                        curr_wt = cw[attr_id]
+                        if curr_wt is not None and curr_wt > 0:
+                            df.at[idx, 'is_park_open'] = 1
+                            # Also hints that Park is open, but we process per row
 
     return df
 

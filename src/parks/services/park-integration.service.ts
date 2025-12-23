@@ -56,7 +56,7 @@ export class ParkIntegrationService {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -204,8 +204,34 @@ export class ParkIntegrationService {
     dto.crowdForecast = dailyPredictions;
 
     // Fetch current queue data for all attractions
+    // OPTIMIZED: Always fetch queue data (even if schedule says CLOSED) to detect unpredicted openings
+    const queueDataMap =
+      await this.queueDataService.findCurrentStatusByPark(park.id);
+
     let totalAttractionsCount = 0;
     let totalOperatingCount = 0;
+    let anyLiveActivity = false;
+
+    // First pass: Check for live activity to potentially override status
+    if (park.attractions) {
+      for (const attraction of park.attractions) {
+        const qData = queueDataMap.get(attraction.id);
+        if (qData && qData.length > 0) {
+          // Check if any queue indicates the ride is operating or has wait time
+          const active = qData.some(q => q.status === "OPERATING" || (q.waitTime !== null && q.waitTime > 0));
+          if (active) {
+            anyLiveActivity = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Status Override: If schedule says CLOSED but we found live activity, force OPERATING
+    if (dto.status === "CLOSED" && anyLiveActivity) {
+      this.logger.log(`Park ${park.name} detected OPEN via live data override (Schedule missing or mismatch)`);
+      dto.status = "OPERATING";
+    }
 
     if (
       park.attractions &&
@@ -213,130 +239,120 @@ export class ParkIntegrationService {
       dto.attractions &&
       dto.attractions.length > 0
     ) {
-      // Only fetch live queue data if park is currently OPERATING
-      if (dto.status === "OPERATING") {
-        // OPTIMIZED: Fetch queue data for all attractions in a single bulk query
-        const queueDataMap =
-          await this.queueDataService.findCurrentStatusByPark(park.id);
+      for (const attraction of dto.attractions) {
+        totalAttractionsCount++;
 
-        for (const attraction of dto.attractions) {
-          totalAttractionsCount++;
+        // Get current queue data for this attraction from the bulk result
+        const queueData = queueDataMap.get(attraction.id) || [];
 
-          // Get current queue data for this attraction from the bulk result
-          const queueData = queueDataMap.get(attraction.id) || [];
-
-          if (queueData.length > 0) {
-            // Convert to DTOs (removed timestamp field)
-            attraction.queues = queueData.map((qd) => ({
-              queueType: qd.queueType,
-              status: qd.status,
-              waitTime: qd.waitTime ?? null,
-              state: qd.state ?? null,
-              returnStart: qd.returnStart ? qd.returnStart.toISOString() : null,
-              returnEnd: qd.returnEnd ? qd.returnEnd.toISOString() : null,
-              price: qd.price ?? null,
-              allocationStatus: qd.allocationStatus ?? null,
-              currentGroupStart: qd.currentGroupStart ?? null,
-              currentGroupEnd: qd.currentGroupEnd ?? null,
-              estimatedWait: qd.estimatedWait ?? null,
-              lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
-            }));
-
-            // Set overall status (use first queue's status as representative)
-            attraction.status = queueData[0].status;
-            if (attraction.status === "OPERATING") {
-              totalOperatingCount++;
-            }
-          } else {
-            // Fallback if no live data found
-            attraction.queues = [];
-            attraction.status = "CLOSED";
-          }
-
-          // Attach ML predictions
-          const mlPreds = hourlyPredictions[attraction.id] || [];
-
-          // Enrich predictions with deviation data (Confidence Downgrade)
-          const enrichedPreds = await this.enrichPredictionsWithDeviations(
-            attraction.id,
-            mlPreds,
-          );
-
-          attraction.hourlyForecast = enrichedPreds.map((p) => ({
-            predictedTime: p.predictedTime,
-            predictedWaitTime: p.predictedWaitTime,
-            confidencePercentage: p.confidenceAdjusted ?? p.confidence,
-            trend: p.trend,
-            currentWaitTime: p.currentWaitTime,
-            deviationDetected: p.deviationDetected,
+        if (queueData.length > 0) {
+          // Convert to DTOs (removed timestamp field)
+          attraction.queues = queueData.map((qd) => ({
+            queueType: qd.queueType,
+            status: qd.status,
+            waitTime: qd.waitTime ?? null,
+            state: qd.state ?? null,
+            returnStart: qd.returnStart ? qd.returnStart.toISOString() : null,
+            returnEnd: qd.returnEnd ? qd.returnEnd.toISOString() : null,
+            price: qd.price ?? null,
+            allocationStatus: qd.allocationStatus ?? null,
+            currentGroupStart: qd.currentGroupStart ?? null,
+            currentGroupEnd: qd.currentGroupEnd ?? null,
+            estimatedWait: qd.estimatedWait ?? null,
+            lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
           }));
 
-          // Attach Prediction Accuracy (Feedback Loop)
-          try {
-            const accuracy =
-              await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
-                attraction.id,
-              );
-
-            // Map to public DTO, excluding technical metrics
-            attraction.predictionAccuracy = {
-              badge: accuracy.badge,
-              last30Days: {
-                comparedPredictions: accuracy.last30Days.comparedPredictions,
-                totalPredictions: accuracy.last30Days.totalPredictions,
-              },
-              message: accuracy.message,
-            };
-          } catch (error) {
-            this.logger.error(
-              `Failed to fetch prediction accuracy for ${attraction.id}:`,
-              error,
-            );
-            attraction.predictionAccuracy = null;
+          // Set overall status (use first queue's status as representative)
+          attraction.status = queueData[0].status;
+          if (attraction.status === "OPERATING") {
+            totalOperatingCount++;
           }
-
-          // Attach Current Load Rating (Relative Wait Time)
-          // Only if we have live wait time data
-          const standbyQueue = attraction.queues.find(
-            (q) => q.queueType === "STANDBY" && q.waitTime !== null,
-          );
-
-          if (standbyQueue && typeof standbyQueue.waitTime === "number") {
-            try {
-              // Get 90th percentile baseline (1 year window)
-              const hour = new Date().getHours();
-              const day = new Date().getDay();
-
-              const p90 = await this.analyticsService.get90thPercentileOneYear(
-                attraction.id,
-                hour,
-                day,
-                "attraction",
-              );
-
-              const ratingResult = this.analyticsService.getLoadRating(
-                standbyQueue.waitTime,
-                p90,
-              );
-
-              attraction.currentLoad = {
-                crowdLevel: ratingResult.rating,
-                baseline: ratingResult.baseline,
-                currentWaitTime: standbyQueue.waitTime,
-              };
-            } catch (_error) {
-              // specific logging if needed, or silent fail
-            }
-          } else {
-            attraction.currentLoad = null;
-          }
-        }
-      } else {
-        // Park is CLOSED - set all attractions to CLOSED without queue data
-        for (const attraction of dto.attractions) {
-          totalAttractionsCount++;
+        } else {
+          // Fallback if no live data found
           attraction.queues = [];
+
+          // If park is OPERATING (via schedule or override), but this specific ride has no data,
+          // we default to CLOSED per ride, unless we want to be smarter.
+          // But existing logic was: if park closed, all closed.
+          // If park open, no data -> closed. This works.
           attraction.status = "CLOSED";
+        }
+
+        // Attach ML predictions
+        const mlPreds = hourlyPredictions[attraction.id] || [];
+
+        // Enrich predictions with deviation data (Confidence Downgrade)
+        const enrichedPreds = await this.enrichPredictionsWithDeviations(
+          attraction.id,
+          mlPreds,
+        );
+
+        attraction.hourlyForecast = enrichedPreds.map((p) => ({
+          predictedTime: p.predictedTime,
+          predictedWaitTime: p.predictedWaitTime,
+          confidencePercentage: p.confidenceAdjusted ?? p.confidence,
+          trend: p.trend,
+          currentWaitTime: p.currentWaitTime,
+          deviationDetected: p.deviationDetected,
+        }));
+
+        // Attach Prediction Accuracy (Feedback Loop)
+        try {
+          const accuracy =
+            await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
+              attraction.id,
+            );
+
+          // Map to public DTO, excluding technical metrics
+          attraction.predictionAccuracy = {
+            badge: accuracy.badge,
+            last30Days: {
+              comparedPredictions: accuracy.last30Days.comparedPredictions,
+              totalPredictions: accuracy.last30Days.totalPredictions,
+            },
+            message: accuracy.message,
+          };
+        } catch (error) {
+          this.logger.error(
+            `Failed to fetch prediction accuracy for ${attraction.id}:`,
+            error,
+          );
+          attraction.predictionAccuracy = null;
+        }
+
+        // Attach Current Load Rating (Relative Wait Time)
+        // Only if we have live wait time data
+        const standbyQueue = attraction.queues.find(
+          (q) => q.queueType === "STANDBY" && q.waitTime !== null,
+        );
+
+        if (standbyQueue && typeof standbyQueue.waitTime === "number") {
+          try {
+            // Get 90th percentile baseline (1 year window)
+            const hour = new Date().getHours();
+            const day = new Date().getDay();
+
+            const p90 = await this.analyticsService.get90thPercentileOneYear(
+              attraction.id,
+              hour,
+              day,
+              "attraction",
+            );
+
+            const ratingResult = this.analyticsService.getLoadRating(
+              standbyQueue.waitTime,
+              p90,
+            );
+
+            attraction.currentLoad = {
+              crowdLevel: ratingResult.rating,
+              baseline: ratingResult.baseline,
+              currentWaitTime: standbyQueue.waitTime,
+            };
+          } catch (_error) {
+            // specific logging if needed, or silent fail
+          }
+        } else {
           attraction.currentLoad = null;
         }
       }
@@ -392,13 +408,15 @@ export class ParkIntegrationService {
     // Fetch current status for shows
     if (park.shows && park.shows.length > 0) {
       let showLiveDataMap = new Map<string, any>();
-
+      // Always fetch to check for overrides?
+      // For shows/restaurants, less critical, but let's be consistent:
+      // If Park is now OPERATING (potentially via override), we fetch live data.
       if (dto.status === "OPERATING") {
         showLiveDataMap = await this.showsService.findCurrentStatusByPark(
           park.id,
         );
       } else {
-        // Park is CLOSED - Fetch "Today's" operating data to show schedule/times
+        // Park remains CLOSED
         showLiveDataMap = await this.showsService.findTodayOperatingDataByPark(
           park.id,
           park.timezone,
@@ -669,18 +687,21 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
     }
 
     // No next opening found (off-season or no schedule data)
-    // Fall back to default TTL
+    // Fall back to default CLOSED TTL
+    // OPTIMIZED: Use shorter TTL (30 mins instead of 6 hours) to re-check status more frequently
+    // This allows fast recovery if we missed an opening due to missing/late schedule
+    const fallbackTTL = 30 * 60; // 30 minutes
     this.logger.debug(
-      "No next opening time found, using default CLOSED TTL (6 hours)",
+      `No next opening time found, using fallback TTL (30 mins)`,
     );
-    return this.TTL_INTEGRATED_RESPONSE_CLOSED;
+    return fallbackTTL;
   }
 
   /**
@@ -809,9 +830,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
