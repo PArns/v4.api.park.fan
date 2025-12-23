@@ -331,6 +331,7 @@ async def predict(request: PredictionRequest):
         )
 
     except Exception as e:
+        logger.exception("Prediction error details:")
         logger.error(f"Prediction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

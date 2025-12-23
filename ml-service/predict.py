@@ -423,21 +423,26 @@ def create_prediction_features(
                         opening = operating.iloc[0]['openingTime']
                         closing = operating.iloc[0]['closingTime']
                         
-                        # Robust comparison handling mixed timezones
-                        ts_compare = timestamp
-                        
-                        # case 1: DB has timezone, we need to match it
-                        if getattr(opening, 'tzinfo', None) is not None:
-                            if ts_compare.tzinfo is None:
-                                ts_compare = pd.Timestamp(ts_compare).tz_localize('UTC')
-                            ts_compare = ts_compare.tz_convert(opening.tzinfo)
-                        # case 2: DB is naive, we must be naive (UTC)
-                        else:
-                            if ts_compare.tzinfo is not None:
-                                ts_compare = ts_compare.tz_convert('UTC').tz_localize(None)
-                        
-                        is_open = opening <= ts_compare <= closing
-                        df.at[idx, 'is_park_open'] = int(is_open)
+                        try:
+                            # Robust comparison handling mixed timezones
+                            ts_compare = timestamp
+                            
+                            # case 1: DB has timezone, we need to match it
+                            if getattr(opening, 'tzinfo', None) is not None:
+                                if ts_compare.tzinfo is None:
+                                    ts_compare = pd.Timestamp(ts_compare).tz_localize('UTC')
+                                ts_compare = ts_compare.tz_convert(opening.tzinfo)
+                            # case 2: DB is naive, we must be naive (UTC)
+                            else:
+                                if ts_compare.tzinfo is not None:
+                                    ts_compare = ts_compare.tz_convert('UTC').tz_localize(None)
+                            
+                            is_open = opening <= ts_compare <= closing
+                            df.at[idx, 'is_park_open'] = int(is_open)
+                        except Exception as e:
+                            print(f"❌ Comparison Error: opening={opening} ({type(opening)}), closing={closing} ({type(closing)}), timestamp={timestamp} ({type(timestamp)})")
+                            print(f"❌ ts_compare={ts_compare} ({type(ts_compare)})")
+                            raise e
                         
                         if not is_open:
                             df.at[idx, 'status'] = 'CLOSED'
