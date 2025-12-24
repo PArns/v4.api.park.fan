@@ -169,6 +169,10 @@ def create_prediction_features(
     # This matches the training pipeline in features.py::engineer_features()
     # Without this, hour/day_of_week/month features would be wrong (UTC instead of local)
     from features import convert_to_local_time
+    
+    # Fetch park metadata for timezone conversion (fetches all parks)
+    parks_metadata = fetch_parks_metadata()
+    
     df = convert_to_local_time(df, parks_metadata)
 
     # Add time features from LOCAL timestamp (not UTC!)
