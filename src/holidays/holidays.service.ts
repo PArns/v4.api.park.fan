@@ -21,7 +21,7 @@ export class HolidaysService {
     @InjectRepository(Holiday)
     private holidayRepository: Repository<Holiday>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Save holidays from Nager.Date API
@@ -125,6 +125,9 @@ export class HolidaysService {
 
   /**
    * Check if a date is a holiday in a specific country (Cached)
+   *
+   * Uses date-only string comparison (YYYY-MM-DD) to ensure timezone-safe matching.
+   * A holiday stored as "2025-12-25" will match December 25th regardless of timezone.
    */
   async isHoliday(
     date: Date,
@@ -145,7 +148,7 @@ export class HolidaysService {
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("holiday.date = :dateStr", { dateStr });
+      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr });
 
     if (regionCode) {
       // Check for National Holidays OR Regional Holidays for this specific region

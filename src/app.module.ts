@@ -18,6 +18,7 @@ import { MLModule } from "./ml/ml.module";
 import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
 import { DiscoveryModule } from "./discovery/discovery.module";
+import { AdminModule } from "./admin/admin.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 
@@ -62,8 +63,11 @@ import { AppService } from "./app.service";
 
     // Geographic Discovery
     DiscoveryModule,
+
+    // Admin utilities
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }
