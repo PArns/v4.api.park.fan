@@ -476,6 +476,9 @@ def create_prediction_features(
 
     if not recent_data.empty:
         recent_data['date'] = pd.to_datetime(recent_data['date'])
+        # Ensure timezone-naive for comparison with cutoff dates
+        if recent_data['date'].dt.tz is not None:
+            recent_data['date'] = recent_data['date'].dt.tz_localize(None)
 
         # Convert base_time to pandas Timestamp for consistent comparisons
         # Ensure it is timezone-naive UTC to match the SQL date output
