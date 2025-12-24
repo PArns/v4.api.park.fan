@@ -567,16 +567,20 @@ def add_park_schedule_features(
 
                     # Compare local timestamp with opening/closing
                     # Ensure comparisons are compatible (both datetime objects)
-                    # Schedules are Naive or Aware? DB returns Naive usually (representing Local)
-                    # local_timestamp is Naive (representing Local)
+                    # Convert DB datetime64 objects to pandas Timestamp for comparison
                     
                     # Safety check for NaT
                     if pd.notna(opening) and pd.notna(closing):
-                        if opening <= timestamp <= closing:
+                        # Convert to pandas Timestamp to handle datetime64 from DB
+                        opening = pd.Timestamp(opening)
+                        closing = pd.Timestamp(closing)
+                        timestamp_ts = pd.Timestamp(timestamp)
+                        
+                        if opening <= timestamp_ts <= closing:
                             df.at[idx, 'is_park_open'] = 1
                         
                         # Calculate time since open (minutes)
-                        mins_since = (timestamp - opening).total_seconds() / 60.0
+                        mins_since = (timestamp_ts - opening).total_seconds() / 60.0
                         df.at[idx, 'time_since_park_open_mins'] = max(0, mins_since)
 
                 # Check for special events

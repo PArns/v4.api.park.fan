@@ -5,6 +5,7 @@ from datetime import datetime, date as date_type
 from typing import List, Dict, Any
 from sqlalchemy import text
 import pytz
+import pandas as pd
 from collections import defaultdict
 
 from db import get_db, fetch_parks_metadata
@@ -138,15 +139,19 @@ def filter_predictions_by_schedule(
                     closing = schedule_row[3]  # closingTime (timestamp with tz)
                     
                     if opening and closing:
+                        # Convert to pandas Timestamp first to handle datetime64 from DB
+                        opening = pd.Timestamp(opening)
+                        closing = pd.Timestamp(closing)
+                        
                         # Ensure timezone aware
                         if opening.tzinfo is None:
-                            opening = pytz.UTC.localize(opening)
+                            opening = opening.tz_localize(pytz.UTC)
                         if closing.tzinfo is None:
-                            closing = pytz.UTC.localize(closing)
+                            closing = closing.tz_localize(pytz.UTC)
                         
                         # Convert to park timezone
-                        opening_local = opening.astimezone(park_tz)
-                        closing_local = closing.astimezone(park_tz)
+                        opening_local = opening.tz_convert(park_tz)
+                        closing_local = closing.tz_convert(park_tz)
                         
                         schedule_map[date] = {
                             'opening': opening_local,

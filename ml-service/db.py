@@ -41,7 +41,12 @@ def convert_df_types(df: pd.DataFrame) -> pd.DataFrame:
                     df[col] = df[col].astype(str)
                 # 3. Date/Datetime -> Timestamp (ML features need standard pandas types)
                 elif isinstance(first_val, (datetime.date, datetime.datetime)):
-                    df[col] = pd.to_datetime(df[col], utc=True, errors='ignore')
+                    try:
+                        df[col] = pd.to_datetime(df[col], utc=True)
+                    except Exception as conv_error:
+                        print(f"⚠️  Warning: Failed to convert datetime column {col}: {conv_error}")
+                        # Keep original values if conversion fails
+                        pass
             except Exception as e:
                 print(f"⚠️  Warning: Failed to convert column {col}: {e}")
                 
