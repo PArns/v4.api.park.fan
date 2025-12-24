@@ -120,7 +120,28 @@ def filter_predictions_by_schedule(
             park_name = park_info.iloc[0]['name'] if 'name' in park_info.columns else park_id
             print(f"📅 Park {park_name} ({park_id}): Found {len(schedules)} schedule entries")
             for s in schedules:
-                print(f"   - {s[0]}: {s[2]} to {s[3]}")
+                date_str = s[0]
+                opening_utc = s[2]
+                closing_utc = s[3]
+                
+                # Convert to local time for display
+                if opening_utc and closing_utc:
+                    opening_pd = pd.Timestamp(opening_utc)
+                    closing_pd = pd.Timestamp(closing_utc)
+                    
+                    # Ensure timezone aware
+                    if opening_pd.tzinfo is None:
+                        opening_pd = opening_pd.tz_localize(pytz.UTC)
+                    if closing_pd.tzinfo is None:
+                        closing_pd = closing_pd.tz_localize(pytz.UTC)
+                        
+                    # Convert to park timezone
+                    opening_local = opening_pd.tz_convert(park_tz)
+                    closing_local = closing_pd.tz_convert(park_tz)
+                    
+                    print(f"   - {date_str}: {opening_local.strftime('%H:%M')} to {closing_local.strftime('%H:%M')} {park_tz}")
+                else:
+                    print(f"   - {date_str}: No schedule")
         
         if schedules:
             # PRIMARY LOGIC: Filter by schedule
