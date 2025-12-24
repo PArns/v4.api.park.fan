@@ -165,30 +165,11 @@ def create_prediction_features(
     df['parkId'] = df['parkId'].astype(str)
     df['attractionId'] = df['attractionId'].astype(str)
 
-    # CRITICAL: Convert UTC timestamps to local park time
+    # CRITICAL: Convert UTC timestamps to local park time using helper function
     # This matches the training pipeline in features.py::engineer_features()
     # Without this, hour/day_of_week/month features would be wrong (UTC instead of local)
-    import pytz
-    
-    # Ensure timestamp is timezone-aware (UTC)
-    if df['timestamp'].dt.tz is None:
-        df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
-    else:
-        df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
-    
-    # Create timezone map {parkId: timezone_str}
-    tz_map = parks_metadata.set_index('park_id')['timezone'].to_dict()
-    
-    # Convert to local time per park
-    df['local_timestamp'] = df['timestamp']  # Default to UTC
-    for park_id in df['parkId'].unique():
-        tz_name = tz_map.get(park_id)
-        if tz_name:
-            try:
-                mask = df['parkId'] == park_id
-                df.loc[mask, 'local_timestamp'] = df.loc[mask, 'timestamp'].dt.tz_convert(tz_name)
-            except Exception as e:
-                print(f"⚠️  Timezone conversion failed for park {park_id} ({tz_name}): {e}")
+    from features import convert_to_local_time
+    df = convert_to_local_time(df, parks_metadata)
 
     # Add time features from LOCAL timestamp (not UTC!)
     df['hour'] = df['local_timestamp'].dt.hour
