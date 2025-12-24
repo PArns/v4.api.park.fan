@@ -8,6 +8,7 @@ import { AdminController } from "./admin.controller";
         RedisModule,
         BullModule.registerQueue({ name: "holidays" }),
         BullModule.registerQueue({ name: "park-metadata" }),
+        BullModule.registerQueue({ name: "ml-training" }),
     ],
     controllers: [AdminController],
 })

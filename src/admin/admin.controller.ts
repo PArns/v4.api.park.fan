@@ -17,6 +17,7 @@ export class AdminController {
     constructor(
         @InjectQueue("holidays") private holidaysQueue: Queue,
         @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
+        @InjectQueue("ml-training") private mlTrainingQueue: Queue,
         @Inject(REDIS_CLIENT) private readonly redis: Redis,
     ) { }
 
