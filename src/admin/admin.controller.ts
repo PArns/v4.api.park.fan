@@ -1,7 +1,9 @@
-import { Controller, Post, HttpCode, HttpStatus } from "@nestjs/common";
+import { Controller, Post, HttpCode, HttpStatus, Inject } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
  * Admin Controller
@@ -15,6 +17,7 @@ export class AdminController {
     constructor(
         @InjectQueue("holidays") private holidaysQueue: Queue,
         @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
+        @Inject(REDIS_CLIENT) private readonly redis: Redis,
     ) { }
 
     /**
@@ -74,6 +77,58 @@ export class AdminController {
         return {
             message: "Schedule gap filling job queued",
             jobId: job.id.toString(),
+        };
+    }
+
+    /**
+     * Flush park-related Redis cache
+     *
+     * Clears only park-related cached data (schedules, wait times, analytics, etc.)
+     * while preserving Bull queue jobs and system caches.
+     */
+    @Post("flush-cache")
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({
+        summary: "Flush park cache",
+        description:
+            "Clears park-related cached data (schedules, wait times, analytics) without affecting queue jobs",
+    })
+    @ApiResponse({
+        status: 200,
+        description: "Park cache flushed successfully",
+    })
+    async flushCache(): Promise<{ message: string; keysDeleted: number }> {
+        // Define park-related cache key patterns
+        const patterns = [
+            "schedule:*",
+            "park:*",
+            "parks:*",
+            "wait-times:*",
+            "analytics:*",
+            "occupancy:*",
+            "predictions:*",
+            "holiday:*",
+            "attraction:*",
+            "show:*",
+            "restaurant:*",
+            "weather:*",
+            "search:*",
+        ];
+
+        let totalDeleted = 0;
+
+        // Delete keys matching each pattern
+        for (const pattern of patterns) {
+            const keys = await this.redis.keys(pattern);
+            if (keys.length > 0) {
+                await this.redis.del(...keys);
+                totalDeleted += keys.length;
+            }
+        }
+
+        return {
+            message: "Park cache flushed successfully",
+            keysDeleted: totalDeleted,
         };
     }
 }
