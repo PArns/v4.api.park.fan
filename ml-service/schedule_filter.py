@@ -181,9 +181,9 @@ def filter_predictions_by_schedule(
                             
                             # Keep predictions within operating hours (from opening up to, but NOT including, closing)
                             # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
-                            # Keep predictions within operating hours (from opening up to, but NOT including, closing)
-                            # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
-                            if opening <= pred_time_local < closing:
+                            # Convert pred_time_local to pd.Timestamp to match opening/closing types
+                            pred_time_local_ts = pd.Timestamp(pred_time_local)
+                            if opening <= pred_time_local_ts < closing:
                                 filtered_predictions.append(pred)
                             # else: Prediction is at or after closing time, filter it out
                         # else: No schedule for this date - park might be closed today, skip prediction

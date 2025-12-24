@@ -331,7 +331,9 @@ async def predict(request: PredictionRequest):
         )
 
     except Exception as e:
+        import traceback
         logger.error(f"Prediction error: {e}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -369,7 +371,9 @@ async def predict_park(
         )
 
     except Exception as e:
+        import traceback
         logger.error(f"Park prediction error: {e}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
