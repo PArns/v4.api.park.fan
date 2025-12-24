@@ -32,7 +32,8 @@ export enum ScheduleType {
 }
 
 @Entity("schedule_entries")
-@Index(["park", "date"])
+@Index(["parkId", "date", "scheduleType"])
+@Index(["attractionId", "date"])
 export class ScheduleEntry {
   @PrimaryGeneratedColumn("uuid")
   id: string;

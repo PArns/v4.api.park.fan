@@ -40,6 +40,7 @@ export class Show {
   externalId: string; // ThemeParks.wiki ID
 
   @Column()
+  @Index()
   name: string;
 
   @Column()

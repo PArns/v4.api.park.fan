@@ -40,6 +40,7 @@ export class Restaurant {
   externalId: string; // ThemeParks.wiki ID
 
   @Column()
+  @Index()
   name: string;
 
   @Column()

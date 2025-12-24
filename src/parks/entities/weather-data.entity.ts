@@ -27,6 +27,7 @@ import { Park } from "./park.entity";
  */
 @Entity("weather_data")
 @Index(["park", "date"])
+@Index("weather_data_date_idx", ["date"])
 export class WeatherData {
   @ManyToOne(() => Park, { onDelete: "CASCADE" })
   @JoinColumn({ name: "parkId" })

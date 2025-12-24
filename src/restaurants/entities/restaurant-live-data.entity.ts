@@ -30,6 +30,7 @@ import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 @Entity("restaurant_live_data")
 @Index(["restaurantId", "timestamp"]) // For efficient time-series queries
 @Index(["status", "timestamp"]) // For filtering by status
+@Index("restaurant_live_data_timestamp_idx", ["timestamp"])
 export class RestaurantLiveData {
   @PrimaryColumn({ type: "uuid" })
   id: string;

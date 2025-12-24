@@ -43,6 +43,7 @@ export class Park {
   externalId: string; // ThemeParks.wiki ID
 
   @Column()
+  @Index()
   name: string;
 
   @Column()
@@ -133,12 +134,15 @@ export class Park {
 
   // Explicit Source IDs (User Request)
   @Column({ name: "wiki_entity_id", type: "text", nullable: true })
+  @Index()
   wikiEntityId: string | null; // The UUID from ThemeParks.wiki
 
   @Column({ name: "queue_times_entity_id", type: "text", nullable: true })
+  @Index()
   queueTimesEntityId: string | null; // The ID from Queue-Times (e.g. "8")
 
   @Column({ name: "wartezeiten_entity_id", type: "text", nullable: true })
+  @Index()
   wartezeitenEntityId: string | null; // The UUID from Wartezeiten.app
 
   // EXPERIMENTAL: Current crowd level from Wartezeiten.app (real-time)

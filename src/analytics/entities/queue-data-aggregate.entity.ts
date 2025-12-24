@@ -31,7 +31,7 @@ import { v4 as uuidv4 } from "uuid";
 @Entity("queue_data_aggregates")
 @Index(["attractionId", "hour"])
 @Index(["parkId", "hour"])
-@Index(["hour"])
+@Index("queue_data_aggregates_hour_idx", ["hour"])
 export class QueueDataAggregate {
   // Composite Primary Key (required for TimescaleDB)
   @PrimaryColumn("uuid")

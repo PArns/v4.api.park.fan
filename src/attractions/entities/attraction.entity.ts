@@ -39,7 +39,12 @@ export class Attraction {
   @Index()
   externalId: string; // ThemeParks.wiki ID
 
+  @Column({ name: "queue_times_entity_id", type: "text", nullable: true })
+  @Index()
+  queueTimesEntityId: string | null; // The ID from Queue-Times (e.g. "8")
+
   @Column()
+  @Index()
   name: string;
 
   @Column()

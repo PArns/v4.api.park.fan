@@ -35,6 +35,7 @@ import {
 @Entity("queue_data")
 @Index(["attractionId", "timestamp"]) // For efficient time-series queries
 @Index(["queueType", "timestamp"])
+@Index("queue_data_timestamp_idx", ["timestamp"])
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;

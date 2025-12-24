@@ -28,6 +28,7 @@ import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 @Entity("show_live_data")
 @Index(["showId", "timestamp"]) // For efficient time-series queries
 @Index(["status", "timestamp"]) // For filtering by status
+@Index("show_live_data_timestamp_idx", ["timestamp"])
 export class ShowLiveData {
   @PrimaryColumn({ type: "uuid" })
   id: string;
