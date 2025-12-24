@@ -82,6 +82,33 @@ export class AdminController {
     }
 
     /**
+     * Manually trigger ML model training
+     *
+     * Forces a complete model retraining with latest data.
+     */
+    @Post("train-ml-model")
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiOperation({
+        summary: "Trigger ML training",
+        description: "Manually triggers ML model training - takes 1-2 minutes",
+    })
+    @ApiResponse({
+        status: 202,
+        description: "ML training job queued successfully",
+    })
+    async triggerMLTraining(): Promise<{ message: string; jobId: string }> {
+        const job = await this.mlTrainingQueue.add(
+            "train-model",
+            {},
+            { priority: 10 },
+        );
+        return {
+            message: "ML training job queued",
+            jobId: job.id.toString(),
+        };
+    }
+
+    /**
      * Flush park-related Redis cache
      *
      * Clears only park-related cached data (schedules, wait times, analytics, etc.)
