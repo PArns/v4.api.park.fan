@@ -6,10 +6,6 @@ import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { formatInParkTimezone } from "../common/utils/date.util";
-import {
-  parseDateInTimezone,
-  getTimezoneForCountry,
-} from "../common/utils/timezone.util";
 
 /**
  * Holidays Service
@@ -32,23 +28,16 @@ export class HolidaysService {
    *
    * Uses upsert to avoid duplicates (based on externalId).
    *
-   * IMPORTANT: Holidays are stored as UTC timestamps representing midnight
-   * in the country's local timezone. For example, Christmas (2025-12-25) in
-   * Germany (UTC+1) is stored as 2025-12-24T23:00:00.000Z.
+   * IMPORTANT: Holidays are stored as pure calendar dates (YYYY-MM-DD)
+   * without timezone conversion. A holiday on "2025-12-25" is stored
+   * as 2025-12-25 00:00:00 UTC, ensuring it matches December 25th
+   * in any timezone when compared using date-only matching.
    */
   async saveHolidaysFromApi(
     holidays: NagerPublicHoliday[],
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
-
-    // Get timezone for this country
-    const timezone = getTimezoneForCountry(countryCode);
-    if (!timezone) {
-      this.logger.warn(
-        `No timezone mapping found for country: ${countryCode}, using UTC`,
-      );
-    }
 
     for (const holiday of holidays) {
       try {
@@ -57,10 +46,9 @@ export class HolidaysService {
         // Determine holiday type
         const holidayType = this.mapHolidayType(holiday.types);
 
-        // Convert date string to Date object at midnight in country's timezone
-        const holidayDate = timezone
-          ? parseDateInTimezone(holiday.date, timezone)
-          : new Date(holiday.date);
+        // Store date as-is (YYYY-MM-DD) without timezone conversion
+        // Holidays are calendar days, not timestamps, so we treat them as pure dates
+        const holidayDate = new Date(holiday.date + "T00:00:00.000Z");
 
         // Create or update holiday
         await this.holidayRepository.upsert(
