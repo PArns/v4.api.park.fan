@@ -19,7 +19,7 @@ import {
   AttractionStatisticsDto,
   GlobalStatsDto,
 } from "./dto";
-import { buildParkUrl } from "../common/utils/url.util";
+import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -1358,7 +1358,7 @@ export class AnalyticsService {
             name: openParks[0].name,
             slug: openParks[0].slug,
             averageWaitTime: Math.round(openParks[0].avg_wait),
-            url: buildParkUrl(openParks[0]) || `/v1/parks/${openParks[0].slug}`,
+            url: buildParkUrl(openParks[0]),
             crowdLevel: null,
           }
         : null;
@@ -1372,9 +1372,7 @@ export class AnalyticsService {
             averageWaitTime: Math.round(
               openParks[openParks.length - 1].avg_wait,
             ),
-            url:
-              buildParkUrl(openParks[openParks.length - 1]) ||
-              `/v1/parks/${openParks[openParks.length - 1].slug}`,
+            url: buildParkUrl(openParks[openParks.length - 1]),
             crowdLevel: null,
           }
         : null;
@@ -1422,7 +1420,15 @@ export class AnalyticsService {
             parkName: rideStats[0].parkName,
             parkSlug: rideStats[0].parkSlug,
             waitTime: rideStats[0].waitTime,
-            url: `/v1/parks/${rideStats[0].parkSlug}/attractions/${rideStats[0].slug}`,
+            url: buildAttractionUrl(
+              {
+                continentSlug: rideStats[0].continentSlug,
+                countrySlug: rideStats[0].countrySlug,
+                citySlug: rideStats[0].citySlug,
+                slug: rideStats[0].parkSlug,
+              },
+              { slug: rideStats[0].slug },
+            ),
             crowdLevel: null,
           }
         : null;
@@ -1436,7 +1442,15 @@ export class AnalyticsService {
             parkName: rideStats[rideStats.length - 1].parkName,
             parkSlug: rideStats[rideStats.length - 1].parkSlug,
             waitTime: rideStats[rideStats.length - 1].waitTime,
-            url: `/v1/parks/${rideStats[rideStats.length - 1].parkSlug}/attractions/${rideStats[rideStats.length - 1].slug}`,
+            url: buildAttractionUrl(
+              {
+                continentSlug: rideStats[rideStats.length - 1].continentSlug,
+                countrySlug: rideStats[rideStats.length - 1].countrySlug,
+                citySlug: rideStats[rideStats.length - 1].citySlug,
+                slug: rideStats[rideStats.length - 1].parkSlug,
+              },
+              { slug: rideStats[rideStats.length - 1].slug },
+            ),
             crowdLevel: null,
           }
         : null;
