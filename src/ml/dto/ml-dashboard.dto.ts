@@ -430,26 +430,88 @@ export class SystemHealthDto {
   modelAge: ModelAgeDto;
 }
 
-// ==================== MAIN DASHBOARD RESPONSE ====================
+// ==================== MAIN DASHBOARD V2 ====================
+
+/**
+ * New streamlined dashboard structure
+ * Organized into logical sections
+ */
+
+export class ModelSectionDto {
+  @ApiProperty({ description: "Current active model" })
+  current: {
+    version: string;
+    trainedAt: string;
+    trainingDurationSeconds: number | null;
+    modelType: string;
+    fileSizeMB: number | null;
+  };
+
+  @ApiProperty({ description: "Previous model for comparison", nullable: true })
+  previous: ModelVersionInfoDto | null;
+
+  @ApiProperty({ description: "Model configuration" })
+  configuration: ModelConfigurationDto;
+
+  @ApiProperty({ description: "Training data statistics" })
+  trainingData: TrainingDataInfoDto;
+}
+
+export class PerformanceSectionDto {
+  @ApiProperty({ description: "Training metrics (baseline)" })
+  training: ModelTrainingMetricsDto;
+
+  @ApiProperty({ description: "Live performance" })
+  live: SystemAccuracyOverallDto;
+
+  @ApiProperty({ description: "Model drift", nullable: true })
+  drift: MLDriftDto | null;
+
+  @ApiProperty({ description: "Improvement vs previous", nullable: true })
+  improvement: ModelImprovementDto | null;
+}
+
+export class InsightsSectionDto {
+  @ApiProperty({ type: [AttractionPerformanceDto] })
+  topPerformers: AttractionPerformanceDto[];
+
+  @ApiProperty({ type: [AttractionPerformanceDto] })
+  bottomPerformers: AttractionPerformanceDto[];
+
+  @ApiProperty()
+  byPredictionType: {
+    HOURLY?: PredictionTypeBreakdownDto;
+    DAILY?: PredictionTypeBreakdownDto;
+  };
+
+  @ApiProperty()
+  patterns: {
+    hourly: HourlyAccuracyDto[];
+    weekday: DayOfWeekAccuracyDto[];
+  };
+}
+
+export class SystemSectionDto {
+  @ApiProperty()
+  nextTraining: string;
+
+  @ApiProperty()
+  modelAge: ModelAgeDto;
+
+  @ApiProperty()
+  lastAccuracyCheck: LastAccuracyCheckDto;
+}
 
 export class MLDashboardDto {
-  @ApiProperty({ description: "Current model information with file size" })
-  currentModel: CurrentModelDto;
+  @ApiProperty({ description: "Model metadata and configuration" })
+  model: ModelSectionDto;
 
-  @ApiProperty({
-    description: "System accuracy statistics and trends",
-  })
-  systemAccuracy: SystemAccuracyDto;
+  @ApiProperty({ description: "Performance metrics and drift" })
+  performance: PerformanceSectionDto;
 
-  @ApiProperty({
-    description: "Model drift monitoring (performance degradation tracking)",
-    nullable: true,
-  })
-  modelDrift: MLDriftDto | null;
+  @ApiProperty({ description: "Actionable insights" })
+  insights: InsightsSectionDto;
 
-  @ApiProperty({ description: "Trends and model comparison" })
-  trends: TrendsDto;
-
-  @ApiProperty({ description: "System health and job status" })
-  systemHealth: SystemHealthDto;
+  @ApiProperty({ description: "System operational info" })
+  system: SystemSectionDto;
 }
