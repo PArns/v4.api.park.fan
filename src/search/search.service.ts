@@ -507,7 +507,13 @@ export class SearchService {
       countryCode: attraction.park?.countryCode || null,
       city: attraction.park?.city || null,
       resort: attraction.park?.destination?.name || null,
-      status: statusMap.get(attraction.id)?.status || null,
+      status:
+        (statusMap.get(attraction.id)?.status as
+          | "OPERATING"
+          | "CLOSED"
+          | "DOWN"
+          | "REFURBISHMENT"
+          | null) || null,
       load: this.determineAttractionLoad(waitTimesMap.get(attraction.id)),
       waitTime: waitTimesMap.get(attraction.id) || null,
       parentPark: attraction.park
