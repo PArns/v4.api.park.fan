@@ -1391,10 +1391,10 @@ export class AnalyticsService {
       SELECT DISTINCT ON (qd."attractionId")
         qd."attractionId",
         qd."waitTime",
-        a.name,
-        a.slug,
+        a.name as "attractionName",
+        a.slug as "attractionSlug",
         p.name as "parkName",
-        p.slug as "parkSlug",
+        p.slug,
         p."continentSlug",
         p."countrySlug",
         p."citySlug"
@@ -1415,20 +1415,14 @@ export class AnalyticsService {
       rideStats.length > 0
         ? {
             id: rideStats[0].attractionId,
-            name: rideStats[0].name,
-            slug: rideStats[0].slug,
+            name: rideStats[0].attractionName,
+            slug: rideStats[0].attractionSlug,
             parkName: rideStats[0].parkName,
-            parkSlug: rideStats[0].parkSlug,
+            parkSlug: rideStats[0].slug,
             waitTime: rideStats[0].waitTime,
-            url: buildAttractionUrl(
-              {
-                continentSlug: rideStats[0].continentSlug,
-                countrySlug: rideStats[0].countrySlug,
-                citySlug: rideStats[0].citySlug,
-                slug: rideStats[0].parkSlug,
-              },
-              { slug: rideStats[0].slug },
-            ),
+            url: buildAttractionUrl(rideStats[0], {
+              slug: rideStats[0].attractionSlug,
+            }),
             crowdLevel: null,
           }
         : null;
@@ -1437,20 +1431,14 @@ export class AnalyticsService {
       rideStats.length > 0
         ? {
             id: rideStats[rideStats.length - 1].attractionId,
-            name: rideStats[rideStats.length - 1].name,
-            slug: rideStats[rideStats.length - 1].slug,
+            name: rideStats[rideStats.length - 1].attractionName,
+            slug: rideStats[rideStats.length - 1].attractionSlug,
             parkName: rideStats[rideStats.length - 1].parkName,
-            parkSlug: rideStats[rideStats.length - 1].parkSlug,
+            parkSlug: rideStats[rideStats.length - 1].slug,
             waitTime: rideStats[rideStats.length - 1].waitTime,
-            url: buildAttractionUrl(
-              {
-                continentSlug: rideStats[rideStats.length - 1].continentSlug,
-                countrySlug: rideStats[rideStats.length - 1].countrySlug,
-                citySlug: rideStats[rideStats.length - 1].citySlug,
-                slug: rideStats[rideStats.length - 1].parkSlug,
-              },
-              { slug: rideStats[rideStats.length - 1].slug },
-            ),
+            url: buildAttractionUrl(rideStats[rideStats.length - 1], {
+              slug: rideStats[rideStats.length - 1].attractionSlug,
+            }),
             crowdLevel: null,
           }
         : null;
