@@ -390,6 +390,62 @@ export class SearchService {
   }
 
   /**
+   * Enrich show results with parent park info
+   */
+  private async enrichShowResults(
+    shows: any[],
+  ): Promise<SearchResultItemDto[]> {
+    return shows.map((show) => ({
+      type: "show" as const,
+      id: show.id,
+      name: show.name,
+      slug: show.slug,
+      url: null,
+      continent: show.park?.continent || null,
+      country: show.park?.country || null,
+      countryCode: show.park?.countryCode || null,
+      city: show.park?.city || null,
+      resort: show.park?.destination?.name || null,
+      parentPark: show.park
+        ? {
+            id: show.park.id,
+            name: show.park.name,
+            slug: show.park.slug,
+            url: buildParkUrl(show.park),
+          }
+        : null,
+    }));
+  }
+
+  /**
+   * Enrich restaurant results with parent park info
+   */
+  private async enrichRestaurantResults(
+    restaurants: any[],
+  ): Promise<SearchResultItemDto[]> {
+    return restaurants.map((restaurant) => ({
+      type: "restaurant" as const,
+      id: restaurant.id,
+      name: restaurant.name,
+      slug: restaurant.slug,
+      url: null,
+      continent: restaurant.park?.continent || null,
+      country: restaurant.park?.country || null,
+      countryCode: restaurant.park?.countryCode || null,
+      city: restaurant.park?.city || null,
+      resort: restaurant.park?.destination?.name || null,
+      parentPark: restaurant.park
+        ? {
+            id: restaurant.park.id,
+            name: restaurant.park.name,
+            slug: restaurant.park.slug,
+            url: buildParkUrl(restaurant.park),
+          }
+        : null,
+    }));
+  }
+
+  /**
    * Batch fetch load levels for parks from analytics cache
    */
   private async getBatchLoadLevels(
