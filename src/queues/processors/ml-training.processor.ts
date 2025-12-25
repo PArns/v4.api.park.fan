@@ -29,7 +29,7 @@ export class MLTrainingProcessor {
     private mlModelRepository: Repository<MLModel>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) {}
+  ) { }
 
   @Process("train-model")
   async handleTrainModels(_job: Job): Promise<void> {
@@ -150,6 +150,10 @@ export class MLTrainingProcessor {
       this.logger.log(`   MAE: ${metrics.mae?.toFixed(2)} min`);
       this.logger.log(`   RMSE: ${metrics.rmse?.toFixed(2)} min`);
       this.logger.log(`   R²: ${metrics.r2?.toFixed(4)}`);
+      this.logger.log(
+        `   Samples: ${metrics.trainSamples} train, ${metrics.valSamples} validation`,
+      );
+      this.logger.log(`   Features: ${modelInfo.features?.length || 0}`);
 
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();
