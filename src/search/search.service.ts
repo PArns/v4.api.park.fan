@@ -44,54 +44,68 @@ export class SearchService {
       return JSON.parse(cached);
     }
 
-    // Determine which entity types to search (max 5 per type)
+    // Determine which entity types to search
     const searchTypes =
       type && type.length > 0
         ? type
         : ["park", "attraction", "show", "restaurant"];
 
     const results: SearchResultItemDto[] = [];
-    let totalCount = 0;
+    const counts = {
+      park: { returned: 0, total: 0 },
+      attraction: { returned: 0, total: 0 },
+      show: { returned: 0, total: 0 },
+      restaurant: { returned: 0, total: 0 },
+    };
 
     // Search parks
     if (searchTypes.includes("park")) {
+      const totalParks = await this.countParks(q);
       const parks = await this.searchParks(q, limit);
       const enrichedParks = await this.enrichParkResults(parks);
       results.push(...enrichedParks);
-      totalCount += parks.length;
+      counts.park = { returned: enrichedParks.length, total: totalParks };
     }
 
     // Search attractions
     if (searchTypes.includes("attraction")) {
+      const totalAttractions = await this.countAttractions(q);
       const attractions = await this.searchAttractions(q, limit);
       const enrichedAttractions =
         await this.enrichAttractionResults(attractions);
       results.push(...enrichedAttractions);
-      totalCount += attractions.length;
+      counts.attraction = {
+        returned: enrichedAttractions.length,
+        total: totalAttractions,
+      };
     }
 
     // Search shows
     if (searchTypes.includes("show")) {
+      const totalShows = await this.countShows(q);
       const shows = await this.searchShows(q, limit);
       const enrichedShows = await this.enrichShowResults(shows);
       results.push(...enrichedShows);
-      totalCount += shows.length;
+      counts.show = { returned: enrichedShows.length, total: totalShows };
     }
 
     // Search restaurants
     if (searchTypes.includes("restaurant")) {
+      const totalRestaurants = await this.countRestaurants(q);
       const restaurants = await this.searchRestaurants(q, limit);
       const enrichedRestaurants =
         await this.enrichRestaurantResults(restaurants);
       results.push(...enrichedRestaurants);
-      totalCount += restaurants.length;
+      counts.restaurant = {
+        returned: enrichedRestaurants.length,
+        total: totalRestaurants,
+      };
     }
 
     const response: SearchResultDto = {
-      results,
-      total: totalCount,
       query: q,
-      searchTypes,
+      results,
+      counts,
     };
 
     // Cache for 5 minutes
@@ -106,6 +120,23 @@ export class SearchService {
   }
 
   /**
+   * Count parks matching query
+   */
+  private async countParks(query: string): Promise<number> {
+    return this.parkRepository
+      .createQueryBuilder("park")
+      .where(
+        new Brackets((qb) => {
+          qb.where("park.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
+      .getCount();
+  }
+
+  /**
    * Search parks by name, city, country, or continent
    */
   private async searchParks(
@@ -117,6 +148,8 @@ export class SearchService {
       | "id"
       | "slug"
       | "name"
+      | "latitude"
+      | "longitude"
       | "continentSlug"
       | "countrySlug"
       | "citySlug"
@@ -134,6 +167,8 @@ export class SearchService {
         "park.id",
         "park.slug",
         "park.name",
+        "park.latitude",
+        "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
         "park.citySlug",
@@ -159,6 +194,24 @@ export class SearchService {
   }
 
   /**
+   * Count attractions matching query
+   */
+  private async countAttractions(query: string): Promise<number> {
+    return this.attractionRepository
+      .createQueryBuilder("attraction")
+      .leftJoin("attraction.park", "park")
+      .where(
+        new Brackets((qb) => {
+          qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
+      .getCount();
+  }
+
+  /**
    * Search attractions by name OR by park location
    */
   private async searchAttractions(
@@ -171,6 +224,8 @@ export class SearchService {
         | "id"
         | "slug"
         | "name"
+        | "latitude"
+        | "longitude"
         | "continentSlug"
         | "countrySlug"
         | "citySlug"
@@ -193,6 +248,8 @@ export class SearchService {
         "park.id",
         "park.slug",
         "park.name",
+        "park.latitude",
+        "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
         "park.citySlug",
@@ -217,6 +274,24 @@ export class SearchService {
       .getMany();
   }
 
+  /**
+   * Count shows matching query
+   */
+  private async countShows(query: string): Promise<number> {
+    return this.showRepository
+      .createQueryBuilder("show")
+      .leftJoin("show.park", "park")
+      .where(
+        new Brackets((qb) => {
+          qb.where("show.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
+      .getCount();
+  }
+
   private async searchShows(
     query: string,
     limit: number,
@@ -227,6 +302,8 @@ export class SearchService {
         | "id"
         | "slug"
         | "name"
+        | "latitude"
+        | "longitude"
         | "continentSlug"
         | "countrySlug"
         | "citySlug"
@@ -249,6 +326,8 @@ export class SearchService {
         "park.id",
         "park.slug",
         "park.name",
+        "park.latitude",
+        "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
         "park.citySlug",
@@ -273,6 +352,24 @@ export class SearchService {
       .getMany();
   }
 
+  /**
+   * Count restaurants matching query
+   */
+  private async countRestaurants(query: string): Promise<number> {
+    return this.restaurantRepository
+      .createQueryBuilder("restaurant")
+      .leftJoin("restaurant.park", "park")
+      .where(
+        new Brackets((qb) => {
+          qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
+      .getCount();
+  }
+
   private async searchRestaurants(
     query: string,
     limit: number,
@@ -283,6 +380,8 @@ export class SearchService {
         | "id"
         | "slug"
         | "name"
+        | "latitude"
+        | "longitude"
         | "continentSlug"
         | "countrySlug"
         | "citySlug"
@@ -305,6 +404,8 @@ export class SearchService {
         "park.id",
         "park.slug",
         "park.name",
+        "park.latitude",
+        "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
         "park.citySlug",
@@ -349,6 +450,8 @@ export class SearchService {
       name: park.name,
       slug: park.slug,
       url: buildParkUrl(park),
+      latitude: park.latitude || null,
+      longitude: park.longitude || null,
       continent: park.continent || null,
       country: park.country || null,
       countryCode: park.countryCode || null,
@@ -373,6 +476,8 @@ export class SearchService {
       url: attraction.park
         ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
         : null,
+      latitude: attraction.park?.latitude || null,
+      longitude: attraction.park?.longitude || null,
       continent: attraction.park?.continent || null,
       country: attraction.park?.country || null,
       countryCode: attraction.park?.countryCode || null,
@@ -401,6 +506,8 @@ export class SearchService {
       name: show.name,
       slug: show.slug,
       url: null,
+      latitude: show.park?.latitude || null,
+      longitude: show.park?.longitude || null,
       continent: show.park?.continent || null,
       country: show.park?.country || null,
       countryCode: show.park?.countryCode || null,
@@ -429,6 +536,8 @@ export class SearchService {
       name: restaurant.name,
       slug: restaurant.slug,
       url: null,
+      latitude: restaurant.park?.latitude || null,
+      longitude: restaurant.park?.longitude || null,
       continent: restaurant.park?.continent || null,
       country: restaurant.park?.country || null,
       countryCode: restaurant.park?.countryCode || null,

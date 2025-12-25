@@ -24,6 +24,21 @@ export class SearchResultItemDto {
   })
   url?: string | null;
 
+  // Geographic coordinates
+  @ApiProperty({
+    description: "Latitude coordinate",
+    example: 48.8674,
+    required: false,
+  })
+  latitude?: number | null;
+
+  @ApiProperty({
+    description: "Longitude coordinate",
+    example: 2.7835,
+    required: false,
+  })
+  longitude?: number | null;
+
   // Location metadata
   @ApiProperty({
     description: "Continent name",
@@ -93,18 +108,28 @@ export class SearchResultItemDto {
 }
 
 export class SearchResultDto {
+  @ApiProperty({ description: "Original search query" })
+  query: string;
+
   @ApiProperty({
-    description: "List of matching entities",
+    description: "List of matching entities (max 5 per type)",
     type: [SearchResultItemDto],
   })
   results: SearchResultItemDto[];
 
-  @ApiProperty({ description: "Total number of matches" })
-  total: number;
-
-  @ApiProperty({ description: "Original search query" })
-  query: string;
-
-  @ApiProperty({ description: "Types filtered by" })
-  searchTypes: string[];
+  @ApiProperty({
+    description: "Result counts per type",
+    example: {
+      park: { returned: 5, total: 12 },
+      attraction: { returned: 5, total: 156 },
+      show: { returned: 3, total: 3 },
+      restaurant: { returned: 0, total: 0 },
+    },
+  })
+  counts: {
+    park: { returned: number; total: number };
+    attraction: { returned: number; total: number };
+    show: { returned: number; total: number };
+    restaurant: { returned: number; total: number };
+  };
 }
