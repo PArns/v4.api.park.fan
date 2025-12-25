@@ -101,9 +101,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=7200";
     }
 
-    // Search - short cache (2 min)
+    // Search - moderate cache (5 min) - matches Redis TTL
     if (path.includes("/search")) {
-      return "public, max-age=120, s-maxage=120, stale-while-revalidate=300";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Holidays - long cache (1 day)
