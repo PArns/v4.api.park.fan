@@ -100,6 +100,8 @@ class ModelInfoResponse(BaseModel):
     trainedAt: Optional[str]
     metrics: Optional[dict]
     features: Optional[List[str]]
+    train_samples: Optional[int] = None
+    val_samples: Optional[int] = None
 
 
 # Endpoints
@@ -135,7 +137,9 @@ async def get_model_info():
         version=model.version,
         trainedAt=model.metadata.get('trained_at'),
         metrics=model.metadata.get('metrics'),
-        features=model.metadata.get('features_used')
+        features=model.metadata.get('features_used'),
+        train_samples=model.metadata.get('train_samples'),  # Add samples
+        val_samples=model.metadata.get('val_samples'),  # Add samples
     )
 
 
