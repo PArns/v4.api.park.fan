@@ -44,6 +44,13 @@ export class MLModel {
   @Column({ type: "timestamptz" })
   trainedAt: Date;
 
+  @Column({
+    type: "int",
+    nullable: true,
+    comment: "Training duration in seconds",
+  })
+  trainingDurationSeconds: number;
+
   @Column({ type: "timestamptz" })
   trainDataStartDate: Date;
 
