@@ -6,9 +6,15 @@ import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
+import { ParksModule } from "../parks/parks.module";
+import { AnalyticsModule } from "../analytics/analytics.module";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Park, Attraction, Show, Restaurant])],
+  imports: [
+    TypeOrmModule.forFeature([Park, Attraction, Show, Restaurant]),
+    ParksModule,
+    AnalyticsModule,
+  ],
   controllers: [SearchController],
   providers: [SearchService],
   exports: [SearchService],
