@@ -2,19 +2,27 @@ import { ApiProperty } from "@nestjs/swagger";
 
 export class SearchResultItemDto {
   @ApiProperty({
-    description: "Type of the entity",
+    description: "Entity type",
     enum: ["park", "attraction", "show", "restaurant"],
+    example: "park",
   })
   type: "park" | "attraction" | "show" | "restaurant";
 
-  @ApiProperty({ description: "Unique identifier for the entity" })
+  @ApiProperty({ description: "Entity ID", example: "uuid-here" })
   id: string;
 
-  @ApiProperty({ description: "URL-friendly slug" })
+  @ApiProperty({ description: "Entity name", example: "Disneyland Park" })
+  name: string;
+
+  @ApiProperty({ description: "Entity slug", example: "disneyland-park" })
   slug: string;
 
-  @ApiProperty({ description: "Name of the entity" })
-  name: string;
+  @ApiProperty({
+    description: "Geocoded URL path (if available)",
+    example: "/v1/parks/europe/france/paris/disneyland-park",
+    required: false,
+  })
+  url?: string | null;
 }
 
 export class SearchResultDto {

@@ -7,6 +7,7 @@ import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto, SearchResultItemDto } from "./dto/search-result.dto";
+import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 
 @Injectable()
 export class SearchService {
@@ -42,6 +43,7 @@ export class SearchService {
           id: p.id,
           name: p.name,
           slug: p.slug,
+          url: buildParkUrl(p),
         })),
       );
       totalCount += parks.length;
@@ -56,6 +58,7 @@ export class SearchService {
           id: a.id,
           name: a.name,
           slug: a.slug,
+          url: a.park ? buildAttractionUrl(a.park, { slug: a.slug }) : null,
         })),
       );
       totalCount += attractions.length;
@@ -70,6 +73,7 @@ export class SearchService {
           id: s.id,
           name: s.name,
           slug: s.slug,
+          url: null, // Shows don't have geocoded URLs yet
         })),
       );
       totalCount += shows.length;
@@ -84,6 +88,7 @@ export class SearchService {
           id: r.id,
           name: r.name,
           slug: r.slug,
+          url: null, // Restaurants don't have geocoded URLs yet
         })),
       );
       totalCount += restaurants.length;
@@ -104,10 +109,22 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Park, "id" | "slug" | "name">[]> {
+  ): Promise<
+    Pick<
+      Park,
+      "id" | "slug" | "name" | "continentSlug" | "countrySlug" | "citySlug"
+    >[]
+  > {
     return this.parkRepository
       .createQueryBuilder("park")
-      .select(["park.id", "park.slug", "park.name"])
+      .select([
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.citySlug",
+      ])
       .where("park.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(park.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
@@ -120,10 +137,23 @@ export class SearchService {
     query: string,
     limit: number,
     offset: number,
-  ): Promise<Pick<Attraction, "id" | "slug" | "name">[]> {
+  ): Promise<
+    (Pick<Attraction, "id" | "slug" | "name"> & {
+      park?: Pick<Park, "slug" | "continentSlug" | "countrySlug" | "citySlug">;
+    })[]
+  > {
     return this.attractionRepository
       .createQueryBuilder("attraction")
-      .select(["attraction.id", "attraction.slug", "attraction.name"])
+      .leftJoinAndSelect("attraction.park", "park")
+      .select([
+        "attraction.id",
+        "attraction.slug",
+        "attraction.name",
+        "park.slug",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.citySlug",
+      ])
       .where("attraction.name ILIKE :query", { query: `%${query}%` })
       .orderBy("similarity(attraction.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
