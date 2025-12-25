@@ -26,7 +26,7 @@ export class MLDashboardService {
     private accuracyService: PredictionAccuracyService,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Get complete ML dashboard data
@@ -74,6 +74,7 @@ export class MLDashboardService {
         currentModel: {
           version: "none",
           trainedAt: new Date().toISOString(),
+          trainingDurationSeconds: null,
           fileSizeBytes: 0,
           fileSizeMB: 0,
           modelSize: "0 MB",
@@ -221,7 +222,7 @@ export class MLDashboardService {
 
     this.logger.log(
       `✅ Dashboard data ready - Model: ${currentModel.version}, ` +
-        `MAE: ${systemAccuracyStats.overall.mae} min, Badge: ${badge.badge}`,
+      `MAE: ${systemAccuracyStats.overall.mae} min, Badge: ${badge.badge}`,
     );
 
     return dashboard;
