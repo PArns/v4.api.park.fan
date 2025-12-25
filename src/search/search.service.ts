@@ -172,7 +172,7 @@ export class SearchService {
   }
 
   /**
-   * Search attractions by name
+   * Search attractions by name OR by park location
    */
   private async searchAttractions(
     query: string,
@@ -216,7 +216,14 @@ export class SearchService {
         "destination.id",
         "destination.name",
       ])
-      .where("attraction.name ILIKE :query", { query: `%${query}%` })
+      .where(
+        new Brackets((qb) => {
+          qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
       .orderBy("similarity(attraction.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
       .limit(limit)
