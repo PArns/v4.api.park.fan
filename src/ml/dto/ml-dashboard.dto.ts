@@ -78,6 +78,13 @@ export class CurrentModelDto {
   trainedAt: string;
 
   @ApiProperty({
+    example: 180,
+    nullable: true,
+    description: "Training duration in seconds",
+  })
+  trainingDurationSeconds: number | null;
+
+  @ApiProperty({
     example: 2457600,
     nullable: true,
     description: "Model file size in bytes",

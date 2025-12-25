@@ -29,7 +29,7 @@ export class MLTrainingProcessor {
     private mlModelRepository: Repository<MLModel>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) { }
+  ) {}
 
   @Process("train-model")
   async handleTrainModels(_job: Job): Promise<void> {
@@ -82,6 +82,11 @@ export class MLTrainingProcessor {
         throw new Error("Training timeout - exceeded 30 minutes");
       }
 
+      // Calculate training duration
+      const trainingDurationSeconds = Math.floor(
+        (Date.now() - startTime) / 1000,
+      );
+
       // Fetch training metrics from ML service
       const modelInfoResponse = await axios.get(`${mlServiceUrl}/model/info`);
       const modelInfo = modelInfoResponse.data;
@@ -127,6 +132,7 @@ export class MLTrainingProcessor {
         mape: metrics.mape,
         r2Score: metrics.r2,
         trainedAt: new Date(),
+        trainingDurationSeconds, // Add duration
         trainDataStartDate,
         trainDataEndDate,
         trainSamples: metrics.trainSamples || 0,
