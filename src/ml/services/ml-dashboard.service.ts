@@ -4,6 +4,8 @@ import { Queue } from "bull";
 import { Redis } from "ioredis";
 import { MLModelService } from "./ml-model.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
+import { PredictionDeviationService } from "./prediction-deviation.service";
+import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
@@ -24,9 +26,11 @@ export class MLDashboardService {
   constructor(
     private mlModelService: MLModelService,
     private accuracyService: PredictionAccuracyService,
+    private deviationService: PredictionDeviationService,
+    private driftService: MLDriftMonitoringService,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Get complete ML dashboard data
@@ -218,11 +222,12 @@ export class MLDashboardService {
         byDayOfWeek: dayOfWeekPatterns,
       },
       systemHealth,
+      modelDrift: await this.getDriftMetrics(),
     };
 
     this.logger.log(
       `✅ Dashboard data ready - Model: ${currentModel.version}, ` +
-        `MAE: ${systemAccuracyStats.overall.mae} min, Badge: ${badge.badge}`,
+      `MAE: ${systemAccuracyStats.overall.mae} min, Badge: ${badge.badge}`,
     );
 
     return dashboard;

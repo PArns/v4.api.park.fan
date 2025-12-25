@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { MLDriftDto } from "./ml-drift.dto";
 
 /**
  * ML Dashboard DTOs
@@ -436,9 +437,15 @@ export class MLDashboardDto {
   currentModel: CurrentModelDto;
 
   @ApiProperty({
-    description: "System-wide accuracy metrics and top/bottom performers",
+    description: "System accuracy statistics and trends",
   })
   systemAccuracy: SystemAccuracyDto;
+
+  @ApiProperty({
+    description: "Model drift monitoring (performance degradation tracking)",
+    nullable: true,
+  })
+  modelDrift: MLDriftDto | null;
 
   @ApiProperty({ description: "Trends and model comparison" })
   trends: TrendsDto;
