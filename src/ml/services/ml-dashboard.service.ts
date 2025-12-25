@@ -104,6 +104,7 @@ export class MLDashboardService {
             hyperparameters: {},
           },
         },
+        modelDrift: null,
         systemAccuracy: {
           overall: {
             mae: 0,
@@ -281,5 +282,19 @@ export class MLDashboardService {
     }
 
     return next.toISOString();
+  }
+
+  /**
+   * Get model drift metrics for dashboard
+   */
+  private async getDriftMetrics() {
+    try {
+      // Get last 30 days drift
+      return await this.driftService.getDriftMetrics(30);
+    } catch (error) {
+      this.logger.warn(`Could not fetch drift metrics: ${error}`);
+      // Return null if no data available yet
+      return null;
+    }
   }
 }
