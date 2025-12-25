@@ -42,7 +42,8 @@ export class SearchService {
   ) {}
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
-    const { q, type, limit = 5 } = query;
+    const { q, type } = query;
+    const limit = 5; // Fixed limit per type
 
     // Build cache key
     const typeKey = type && type.length > 0 ? type.join(",") : "all";

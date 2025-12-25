@@ -75,23 +75,24 @@ export class SearchResultItemDto {
   })
   resort?: string | null;
 
-  // Park-specific metadata
+  // Status & Load (for parks and attractions)
   @ApiProperty({
-    description: "Park operating status (parks only)",
-    enum: ["OPERATING", "CLOSED"],
+    description: "Current operating status (parks, attractions)",
+    enum: ["OPERATING", "CLOSED", "DOWN", "REFURBISHMENT"],
     example: "OPERATING",
     required: false,
   })
-  status?: "OPERATING" | "CLOSED" | null;
+  status?: "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null;
 
   @ApiProperty({
-    description: "Current crowd level (parks only)",
+    description: "Current crowd/wait level (parks, attractions)",
     enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
     example: "normal",
     required: false,
   })
   load?: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null;
 
+  // Park-specific metadata
   @ApiProperty({
     description: "Today's operating hours (parks only)",
     example: {
@@ -108,22 +109,6 @@ export class SearchResultItemDto {
   } | null;
 
   // Attraction-specific metadata
-  @ApiProperty({
-    description: "Current operating status (attractions, parks)",
-    enum: ["OPERATING", "CLOSED", "DOWN", "REFURBISHMENT"],
-    example: "OPERATING",
-    required: false,
-  })
-  status?: "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null;
-
-  @ApiProperty({
-    description: "Current crowd/wait level (attractions, parks)",
-    enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
-    example: "normal",
-    required: false,
-  })
-  load?: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null;
-
   @ApiProperty({
     description: "Current wait time in minutes (attractions only)",
     example: 45,
