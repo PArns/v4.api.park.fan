@@ -91,8 +91,8 @@ export class MLTrainingProcessor {
         rmse: modelInfo.metrics?.rmse || 0,
         mape: modelInfo.metrics?.mape || 0,
         r2: modelInfo.metrics?.r2 || 0,
-        trainSamples: modelInfo.metrics?.train_samples || 0,
-        valSamples: modelInfo.metrics?.val_samples || 0,
+        trainSamples: modelInfo.train_samples || 0, // From metadata root
+        valSamples: modelInfo.val_samples || 0, // From metadata root
       };
 
       // Deactivate old models
