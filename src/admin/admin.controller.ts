@@ -14,10 +14,10 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
  * Admin Controller
  *
  * ⚠️ SECURITY NOTICE:
- * These administrative endpoints are protected in production with bearer token authentication.
- * On development/local environments, endpoints are accessible without authentication.
+ * These administrative endpoints are protected in production via Cloudflare.
+ * Access requires `pass=XXX` query parameter with valid API key.
  *
- * Production deployment uses API Gateway authentication with JWT validation.
+ * On development/local environments, endpoints are accessible without authentication.
  */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
@@ -28,7 +28,7 @@ export class AdminController {
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Manually trigger holiday sync

@@ -115,15 +115,15 @@ async function bootstrap(): Promise<void> {
     // Admin tag with security notice
     .addTag(
       "admin",
-      "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION with API keys",
+      "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION via Cloudflare",
     )
-    // Security schemes
-    .addBearerAuth(
+    // Security schemes (Cloudflare API Key via query parameter)
+    .addApiKey(
       {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "JWT",
-        description: "Admin API key (production only)",
+        type: "apiKey",
+        name: "pass",
+        in: "query",
+        description: "Admin API key (Cloudflare protected - production only)",
       },
       "admin-auth",
     )
