@@ -90,6 +90,13 @@ export class SearchResultItemDto {
 
   // Attraction-specific metadata
   @ApiProperty({
+    description: "Current wait time in minutes (attractions only)",
+    example: 45,
+    required: false,
+  })
+  waitTime?: number | null;
+
+  @ApiProperty({
     description: "Parent park information (attractions only)",
     required: false,
     example: {

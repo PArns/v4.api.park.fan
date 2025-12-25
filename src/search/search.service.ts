@@ -10,6 +10,7 @@ import { SearchResultDto, SearchResultItemDto } from "./dto/search-result.dto";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { QueueDataService } from "../queue-data/queue-data.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -28,6 +29,7 @@ export class SearchService {
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
+    private readonly queueDataService: QueueDataService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -450,8 +452,8 @@ export class SearchService {
       name: park.name,
       slug: park.slug,
       url: buildParkUrl(park),
-      latitude: park.latitude || null,
-      longitude: park.longitude || null,
+      latitude: park.latitude ? parseFloat(park.latitude) : null,
+      longitude: park.longitude ? parseFloat(park.longitude) : null,
       continent: park.continent || null,
       country: park.country || null,
       countryCode: park.countryCode || null,
@@ -463,11 +465,15 @@ export class SearchService {
   }
 
   /**
-   * Enrich attraction results with parent park info
+   * Enrich attraction results with parent park info and wait times
    */
   private async enrichAttractionResults(
     attractions: any[],
   ): Promise<SearchResultItemDto[]> {
+    // Batch fetch wait times for all attractions
+    const attractionIds = attractions.map((a) => a.id);
+    const waitTimesMap = await this.getBatchWaitTimes(attractionIds);
+
     return attractions.map((attraction) => ({
       type: "attraction" as const,
       id: attraction.id,
@@ -476,13 +482,18 @@ export class SearchService {
       url: attraction.park
         ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
         : null,
-      latitude: attraction.park?.latitude || null,
-      longitude: attraction.park?.longitude || null,
+      latitude: attraction.park?.latitude
+        ? parseFloat(attraction.park.latitude)
+        : null,
+      longitude: attraction.park?.longitude
+        ? parseFloat(attraction.park.longitude)
+        : null,
       continent: attraction.park?.continent || null,
       country: attraction.park?.country || null,
       countryCode: attraction.park?.countryCode || null,
       city: attraction.park?.city || null,
       resort: attraction.park?.destination?.name || null,
+      waitTime: waitTimesMap.get(attraction.id) || null,
       parentPark: attraction.park
         ? {
             id: attraction.park.id,
@@ -506,8 +517,8 @@ export class SearchService {
       name: show.name,
       slug: show.slug,
       url: null,
-      latitude: show.park?.latitude || null,
-      longitude: show.park?.longitude || null,
+      latitude: show.park?.latitude ? parseFloat(show.park.latitude) : null,
+      longitude: show.park?.longitude ? parseFloat(show.park.longitude) : null,
       continent: show.park?.continent || null,
       country: show.park?.country || null,
       countryCode: show.park?.countryCode || null,
@@ -536,8 +547,12 @@ export class SearchService {
       name: restaurant.name,
       slug: restaurant.slug,
       url: null,
-      latitude: restaurant.park?.latitude || null,
-      longitude: restaurant.park?.longitude || null,
+      latitude: restaurant.park?.latitude
+        ? parseFloat(restaurant.park.latitude)
+        : null,
+      longitude: restaurant.park?.longitude
+        ? parseFloat(restaurant.park.longitude)
+        : null,
       continent: restaurant.park?.continent || null,
       country: restaurant.park?.country || null,
       countryCode: restaurant.park?.countryCode || null,
@@ -552,6 +567,40 @@ export class SearchService {
           }
         : null,
     }));
+  }
+
+  /**
+   * Batch fetch wait times for attractions
+   */
+  private async getBatchWaitTimes(
+    attractionIds: string[],
+  ): Promise<Map<string, number>> {
+    const waitTimesMap = new Map<string, number>();
+
+    await Promise.all(
+      attractionIds.map(async (attractionId) => {
+        try {
+          // Get current status (most recent queue data for all queue types)
+          const queueData =
+            await this.queueDataService.findCurrentStatusByAttraction(
+              attractionId,
+            );
+          // Find STANDBY queue (most common wait time)
+          const standbyQueue = queueData.find((q) => q.queueType === "STANDBY");
+          if (
+            standbyQueue &&
+            standbyQueue.waitTime !== null &&
+            standbyQueue.waitTime !== undefined
+          ) {
+            waitTimesMap.set(attractionId, standbyQueue.waitTime);
+          }
+        } catch {
+          // Skip attractions without wait time data
+        }
+      }),
+    );
+
+    return waitTimesMap;
   }
 
   /**

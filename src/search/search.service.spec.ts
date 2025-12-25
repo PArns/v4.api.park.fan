@@ -107,9 +107,9 @@ describe("SearchService", () => {
 
   describe("search", () => {
     it("should return empty results when no matches found", async () => {
-      const result = await service.search({ q: 'test', type: ['park'] });
+      const result = await service.search({ q: "test", type: ["park"] });
 
-      expect(result.query).toBe('test');
+      expect(result.query).toBe("test");
       expect(result.results).toEqual([]);
       expect(result.counts.park.returned).toBe(0);
       expect(result.counts.park.total).toBe(0);
