@@ -276,10 +276,17 @@ export class ParkMetadataProcessor {
         timezone: anchor.timezone || "UTC", // Default to UTC if missing to avoid DB constraint error
         latitude: anchor.latitude,
         longitude: anchor.longitude,
+        continent: anchor.continent,
+        continentSlug: anchor.continent
+          ? generateSlug(anchor.continent)
+          : undefined,
+        country: anchor.country,
+        countrySlug: anchor.country ? generateSlug(anchor.country) : undefined,
         primaryDataSource: effectivePrimary,
         dataSources: dataSourceList,
         wikiEntityId: wiki?.externalId || null,
         queueTimesEntityId: qt?.externalId || null,
+        wartezeitenEntityId: wz?.externalId || null,
       });
       this.logger.verbose(`✓ Created matched park: ${park.name} (${park.id})`);
     } else {
@@ -376,6 +383,10 @@ export class ParkMetadataProcessor {
       timezone: wiki.timezone,
       latitude: wiki.latitude,
       longitude: wiki.longitude,
+      continent: wiki.continent,
+      continentSlug: wiki.continent ? generateSlug(wiki.continent) : undefined,
+      country: wiki.country,
+      countrySlug: wiki.country ? generateSlug(wiki.country) : undefined,
       primaryDataSource: "themeparks-wiki",
       dataSources: ["themeparks-wiki"],
       wikiEntityId: wiki.externalId,

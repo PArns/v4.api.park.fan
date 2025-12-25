@@ -43,11 +43,11 @@ export class DestinationWithParksDto {
       slug: destination.slug,
       parks: destination.parks
         ? destination.parks.map((park) => ({
-          id: park.id,
-          name: park.name,
-          slug: park.slug,
-          timezone: park.timezone,
-        }))
+            id: park.id,
+            name: park.name,
+            slug: park.slug,
+            timezone: park.timezone,
+          }))
         : [],
     };
   }

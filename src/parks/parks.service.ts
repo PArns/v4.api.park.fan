@@ -1026,6 +1026,7 @@ export class ParksService {
    * Updates geographic data for a park
    *
    * Used after geocoding to populate continent, country, and city fields.
+   * Also generates corresponding slugs for continent, country, and city.
    * Also marks the park as attempted.
    *
    * IMPORTANT: Only updates fields that are currently NULL.
@@ -1035,10 +1036,23 @@ export class ParksService {
    * @param geodata - Geographic data (continent, country, city)
    */
   async updateGeodata(parkId: string, geodata: Partial<Park>): Promise<void> {
-    await this.parkRepository.update(parkId, {
+    const updates: Partial<Park> = {
       ...geodata,
       geocodingAttemptedAt: new Date(),
-    });
+    };
+
+    // Generate geographic slugs from their respective fields
+    if (geodata.continent) {
+      updates.continentSlug = generateSlug(geodata.continent);
+    }
+    if (geodata.country) {
+      updates.countrySlug = generateSlug(geodata.country);
+    }
+    if (geodata.city) {
+      updates.citySlug = generateSlug(geodata.city);
+    }
+
+    await this.parkRepository.update(parkId, updates);
   }
 
   /**

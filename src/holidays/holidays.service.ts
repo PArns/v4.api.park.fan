@@ -21,7 +21,7 @@ export class HolidaysService {
     @InjectRepository(Holiday)
     private holidayRepository: Repository<Holiday>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Save holidays from Nager.Date API

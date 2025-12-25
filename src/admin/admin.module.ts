@@ -4,12 +4,12 @@ import { RedisModule } from "../common/redis/redis.module";
 import { AdminController } from "./admin.controller";
 
 @Module({
-    imports: [
-        RedisModule,
-        BullModule.registerQueue({ name: "holidays" }),
-        BullModule.registerQueue({ name: "park-metadata" }),
-        BullModule.registerQueue({ name: "ml-training" }),
-    ],
-    controllers: [AdminController],
+  imports: [
+    RedisModule,
+    BullModule.registerQueue({ name: "holidays" }),
+    BullModule.registerQueue({ name: "park-metadata" }),
+    BullModule.registerQueue({ name: "ml-training" }),
+  ],
+  controllers: [AdminController],
 })
-export class AdminModule { }
+export class AdminModule {}
