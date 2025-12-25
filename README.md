@@ -265,19 +265,51 @@ GET /v1/restaurants/:slug   # Get restaurant details
 
 ---
 
-### 🔍 Search
+### 🔍 Intelligent Search
 
-Global search across parks, attractions, shows, and destinations.
+Global search with enriched results across parks, attractions, shows, and restaurants.
 
 ```http
-GET /v1/search?q=space+mountain
+GET /v1/search?q=disney               # Search all types
+GET /v1/search?q=thunder&type=attraction   # Filter by type
+GET /v1/search?q=paris                # Search by city
 ```
 
-**Search supports:**
-- Parks by name or location
-- Attractions by name
-- Shows and restaurants
-- Fuzzy matching for typos
+**Search Features:**
+- **Multi-entity search**: Parks, attractions, shows, restaurants
+- **Geographic search**: By city, country, or continent
+- **Per-type counts**: Shows returned vs total results
+- **Enriched results**: Coordinates, wait times, park hours, show times
+- **Smart filtering**: Type-based filtering with max 5 results per type
+- **Fast response**: Redis-cached for 5min, <3ms cached response
+
+**Response Structure:**
+```json
+{
+  "query": "disney",
+  "counts": {
+    "park": {"returned": 5, "total": 13},
+    "attraction": {"returned": 5, "total": 156}
+  },
+  "results": [
+    {
+      "type": "park",
+      "name": "Disneyland Park",
+      "status": "OPERATING",
+      "load": "normal",
+      "parkHours": {...},
+      "coordinates": {...}
+    },
+    {
+      "type": "attraction",
+      "name": "Space Mountain",
+      "waitTime": 45,
+      "load": "higher",
+      "parentPark": {...}
+    }
+  ]
+}
+```
 
 ---
 

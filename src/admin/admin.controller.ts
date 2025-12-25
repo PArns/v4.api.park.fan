@@ -1,5 +1,10 @@
 import { Controller, Post, HttpCode, HttpStatus, Inject } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiSecurity,
+} from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { Redis } from "ioredis";
@@ -8,10 +13,14 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 /**
  * Admin Controller
  *
- * Administrative endpoints for manual operations.
- * These endpoints should be protected in production.
+ * ⚠️ SECURITY NOTICE:
+ * These administrative endpoints are protected in production with bearer token authentication.
+ * On development/local environments, endpoints are accessible without authentication.
+ *
+ * Production deployment uses API Gateway authentication with JWT validation.
  */
 @ApiTags("admin")
+@ApiSecurity("admin-auth")
 @Controller("admin")
 export class AdminController {
   constructor(
@@ -19,7 +28,7 @@ export class AdminController {
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Manually trigger holiday sync

@@ -59,49 +59,73 @@ async function bootstrap(): Promise<void> {
   const config = new DocumentBuilder()
     .setTitle("park.fan API v4")
     .setDescription(
-      "Theme park wait times, predictions, and statistics API powered by ThemeParks.wiki and Queue-Times.com data",
+      "Real-time theme park intelligence powered by machine learning. " +
+        "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
+        "for optimal theme park experiences worldwide.",
     )
     .setVersion(packageJson.version)
+    .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")
+    .setLicense("UNLICENSED", "")
+    .setExternalDoc("Frontend Application", "https://park.fan")
+    // Core API tags
     .addTag(
       "health",
-      "System health checks, database connectivity status, and application monitoring endpoints",
+      "System health checks, database connectivity, and application monitoring",
     )
     .addTag(
       "parks",
-      "Core park data, including operating hours, metadata, and geographic details",
+      "Park metadata, operating hours, weather, and geographic details",
     )
     .addTag(
       "attractions",
-      "Detailed attraction information, live status, and wait time data",
+      "Attraction info, live status, wait times, and queue data",
     )
+    .addTag("shows", "Live entertainment schedules and showtimes")
+    .addTag("restaurants", "Dining options, menus, and operating hours")
+    // Data & Analytics tags
     .addTag(
       "queue-data",
-      "Historical wait time data, queue performance metrics, and ride availability history",
-    )
-    .addTag(
-      "predictions",
-      "Machine learning-powered crowd predictions and wait time forecasts",
+      "Historical wait times, queue performance, and ride availability",
     )
     .addTag(
       "stats",
-      "Park-wide analytics, crowd level statistics, and historical performance metrics",
+      "Park-wide analytics, crowd levels, and historical performance",
     )
+    .addTag(
+      "predictions",
+      "ML-powered crowd predictions and wait time forecasts",
+    )
+    // Utility tags
     .addTag(
       "search",
-      "Global search capabilities for finding parks, attractions, and resorts",
+      "Intelligent search across parks, attractions, shows, and restaurants",
     )
     .addTag(
-      "destinations",
-      "Resort-level destination data, grouping multiple parks and amenities",
+      "discovery",
+      "Geographic hierarchy for route generation (continents → countries → cities)",
     )
-    .addTag("restaurants", "Dining options, menus, and operating hours")
-    .addTag(
-      "shows",
-      "Live entertainment schedules, showtimes, and performance details",
-    )
+    .addTag("destinations", "Resort-level aggregation grouping multiple parks")
     .addTag(
       "holidays",
-      "Public holiday data affecting park crowds and operating hours",
+      "Public holiday data affecting crowds and operating hours",
+    )
+    // ML Service tags
+    .addTag("ML", "Machine learning predictions and model information")
+    .addTag("ML Dashboard", "ML service health, metrics, and model diagnostics")
+    // Admin tag with security notice
+    .addTag(
+      "admin",
+      "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION with API keys",
+    )
+    // Security schemes
+    .addBearerAuth(
+      {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description: "Admin API key (production only)",
+      },
+      "admin-auth",
     )
     .build();
 
