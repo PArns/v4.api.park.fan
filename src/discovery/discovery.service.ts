@@ -129,7 +129,7 @@ export class DiscoveryService {
       }
 
       // Add park reference with attractions
-      const parkBaseUrl = `/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
+      const parkBaseUrl = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
 
       const attractions: AttractionReferenceDto[] = (park.attractions || [])
         .sort((a, b) => a.name.localeCompare(b.name))
