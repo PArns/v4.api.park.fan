@@ -88,6 +88,21 @@ export class SearchResultItemDto {
   })
   load?: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null;
 
+  @ApiProperty({
+    description: "Today's operating hours (parks only)",
+    example: {
+      open: "2024-12-25T09:00:00.000Z",
+      close: "2024-12-25T22:00:00.000Z",
+      type: "OPERATING",
+    },
+    required: false,
+  })
+  parkHours?: {
+    open: string;
+    close: string;
+    type: string;
+  } | null;
+
   // Attraction-specific metadata
   @ApiProperty({
     description: "Current wait time in minutes (attractions only)",
@@ -95,6 +110,18 @@ export class SearchResultItemDto {
     required: false,
   })
   waitTime?: number | null;
+
+  // Show-specific metadata
+  @ApiProperty({
+    description: "Today's show times (shows only)",
+    example: [
+      "2024-12-25T14:00:00.000Z",
+      "2024-12-25T16:30:00.000Z",
+      "2024-12-25T19:00:00.000Z",
+    ],
+    required: false,
+  })
+  showTimes?: string[] | null;
 
   @ApiProperty({
     description: "Parent park information (attractions only)",

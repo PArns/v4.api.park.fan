@@ -1,16 +1,21 @@
 import { Injectable, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Brackets } from "typeorm";
+import { Repository, Brackets, Between } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
+import {
+  ScheduleEntry,
+  ScheduleType,
+} from "../parks/entities/schedule-entry.entity";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto, SearchResultItemDto } from "./dto/search-result.dto";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
+import { ShowsService } from "../shows/shows.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -27,9 +32,12 @@ export class SearchService {
     private readonly showRepository: Repository<Show>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(ScheduleEntry)
+    private readonly scheduleRepository: Repository<ScheduleEntry>,
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
     private readonly queueDataService: QueueDataService,
+    private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -446,6 +454,9 @@ export class SearchService {
     // Batch fetch occupancy/load
     const loadMap = await this.getBatchLoadLevels(parkIds);
 
+    // Batch fetch today's operating hours
+    const hoursMap = await this.getBatchParkHours(parkIds);
+
     return parks.map((park) => ({
       type: "park" as const,
       id: park.id,
@@ -461,6 +472,7 @@ export class SearchService {
       resort: park.destination?.name || null,
       status: statusMap.get(park.id) || "CLOSED",
       load: loadMap.get(park.id) || null,
+      parkHours: hoursMap.get(park.id) || null,
     }));
   }
 
@@ -506,11 +518,14 @@ export class SearchService {
   }
 
   /**
-   * Enrich show results with parent park info
+   * Enrich show results with parent park info and show times
    */
   private async enrichShowResults(
     shows: any[],
   ): Promise<SearchResultItemDto[]> {
+    // Batch fetch today's show times
+    const showIds = shows.map((s) => s.id);
+    const showTimesMap = await this.getBatchShowTimes(showIds);
     return shows.map((show) => ({
       type: "show" as const,
       id: show.id,
@@ -524,6 +539,7 @@ export class SearchService {
       countryCode: show.park?.countryCode || null,
       city: show.park?.city || null,
       resort: show.park?.destination?.name || null,
+      showTimes: showTimesMap.get(show.id) || null,
       parentPark: show.park
         ? {
             id: show.park.id,
@@ -601,6 +617,88 @@ export class SearchService {
     );
 
     return waitTimesMap;
+  }
+
+  /**
+   * Batch fetch today's operating hours for parks
+   */
+  private async getBatchParkHours(
+    parkIds: string[],
+  ): Promise<Map<string, { open: string; close: string; type: string }>> {
+    const hoursMap = new Map<
+      string,
+      { open: string; close: string; type: string }
+    >();
+
+    // Get today's date range in local timezone
+    const now = new Date();
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+
+    await Promise.all(
+      parkIds.map(async (parkId) => {
+        try {
+          const schedule = await this.scheduleRepository.findOne({
+            where: {
+              parkId,
+              date: Between(todayStart, todayEnd),
+              scheduleType: ScheduleType.OPERATING,
+            },
+            order: { date: "ASC" },
+          });
+
+          if (schedule && schedule.openingTime && schedule.closingTime) {
+            hoursMap.set(parkId, {
+              open: schedule.openingTime.toISOString(),
+              close: schedule.closingTime.toISOString(),
+              type: schedule.scheduleType,
+            });
+          }
+        } catch {
+          // Skip parks without schedule data
+        }
+      }),
+    );
+
+    return hoursMap;
+  }
+
+  /**
+   * Batch fetch today's show times for shows
+   */
+  private async getBatchShowTimes(
+    showIds: string[],
+  ): Promise<Map<string, string[]>> {
+    const showTimesMap = new Map<string, string[]>();
+
+    await Promise.all(
+      showIds.map(async (showId) => {
+        try {
+          // Get current status which includes showtimes
+          const liveData =
+            await this.showsService.findCurrentStatusByShow(showId);
+          if (liveData && liveData.showtimes && liveData.showtimes.length > 0) {
+            // Extract start times from showtime objects
+            const times = liveData.showtimes
+              .map((st: any) => st.startTime)
+              .filter(Boolean)
+              .sort();
+            if (times.length > 0) {
+              showTimesMap.set(showId, times);
+            }
+          }
+        } catch {
+          // Skip shows without showtime data
+        }
+      }),
+    );
+
+    return showTimesMap;
   }
 
   /**
