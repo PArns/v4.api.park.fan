@@ -131,7 +131,7 @@ export class MLTrainingProcessor {
         trainDataEndDate,
         trainSamples: metrics.trainSamples || 0,
         validationSamples: metrics.valSamples || 0,
-        featuresUsed: this.getFeaturesList(),
+        featuresUsed: modelInfo.features || [], // Use features from ML service API
         hyperparameters: {
           iterations: 1000,
           learning_rate: 0.03,
@@ -199,36 +199,6 @@ export class MLTrainingProcessor {
     if (valMatch) metrics.valSamples = parseInt(valMatch[1].replace(/,/g, ""));
 
     return metrics;
-  }
-
-  /**
-   * Get list of features used
-   */
-  private getFeaturesList(): string[] {
-    return [
-      "parkId",
-      "attractionId",
-      "hour",
-      "day_of_week",
-      "month",
-      "season",
-      "is_weekend",
-      "temperature_avg",
-      "precipitation",
-      "weatherCode",
-      "is_raining",
-      "is_holiday_primary",
-      "is_holiday_neighbor_1",
-      "is_holiday_neighbor_2",
-      "is_holiday_neighbor_3",
-      "holiday_count_total",
-      "is_park_open",
-      "has_special_event",
-      "has_extra_hours",
-      "avg_wait_last_24h",
-      "avg_wait_same_hour_last_week",
-      "rolling_avg_7d",
-    ];
   }
 
   /**
