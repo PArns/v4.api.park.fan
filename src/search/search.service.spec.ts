@@ -107,16 +107,12 @@ describe("SearchService", () => {
 
   describe("search", () => {
     it("should return empty results when no matches found", async () => {
-      const result = await service.search({
-        q: "nonexistent",
-        limit: 20,
-        offset: 0,
-      });
+      const result = await service.search({ q: 'test', type: ['park'] });
 
-      expect(result).toHaveProperty("results");
-      expect(result).toHaveProperty("total");
+      expect(result.query).toBe('test');
       expect(result.results).toEqual([]);
-      expect(result.total).toBe(0);
+      expect(result.counts.park.returned).toBe(0);
+      expect(result.counts.park.total).toBe(0);
     });
   });
 });
