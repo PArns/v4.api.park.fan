@@ -73,30 +73,17 @@ export class SearchService {
     // Search shows
     if (searchTypes.includes("show")) {
       const shows = await this.searchShows(q, limit);
-      results.push(
-        ...shows.map((s) => ({
-          type: "show" as const,
-          id: s.id,
-          name: s.name,
-          slug: s.slug,
-          url: null,
-        })),
-      );
+      const enrichedShows = await this.enrichShowResults(shows);
+      results.push(...enrichedShows);
       totalCount += shows.length;
     }
 
     // Search restaurants
     if (searchTypes.includes("restaurant")) {
       const restaurants = await this.searchRestaurants(q, limit);
-      results.push(
-        ...restaurants.map((r) => ({
-          type: "restaurant" as const,
-          id: r.id,
-          name: r.name,
-          slug: r.slug,
-          url: null,
-        })),
-      );
+      const enrichedRestaurants =
+        await this.enrichRestaurantResults(restaurants);
+      results.push(...enrichedRestaurants);
       totalCount += restaurants.length;
     }
 
@@ -233,11 +220,53 @@ export class SearchService {
   private async searchShows(
     query: string,
     limit: number,
-  ): Promise<Pick<Show, "id" | "slug" | "name">[]> {
+  ): Promise<
+    (Pick<Show, "id" | "slug" | "name"> & {
+      park?: Pick<
+        Park,
+        | "id"
+        | "slug"
+        | "name"
+        | "continentSlug"
+        | "countrySlug"
+        | "citySlug"
+        | "continent"
+        | "country"
+        | "countryCode"
+        | "city"
+        | "destination"
+      >;
+    })[]
+  > {
     return this.showRepository
       .createQueryBuilder("show")
-      .select(["show.id", "show.slug", "show.name"])
-      .where("show.name ILIKE :query", { query: `%${query}%` })
+      .leftJoinAndSelect("show.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "show.id",
+        "show.slug",
+        "show.name",
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.countryCode",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .where(
+        new Brackets((qb) => {
+          qb.where("show.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
       .orderBy("similarity(show.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
       .limit(limit)
@@ -247,11 +276,53 @@ export class SearchService {
   private async searchRestaurants(
     query: string,
     limit: number,
-  ): Promise<Pick<Restaurant, "id" | "slug" | "name">[]> {
+  ): Promise<
+    (Pick<Restaurant, "id" | "slug" | "name"> & {
+      park?: Pick<
+        Park,
+        | "id"
+        | "slug"
+        | "name"
+        | "continentSlug"
+        | "countrySlug"
+        | "citySlug"
+        | "continent"
+        | "country"
+        | "countryCode"
+        | "city"
+        | "destination"
+      >;
+    })[]
+  > {
     return this.restaurantRepository
       .createQueryBuilder("restaurant")
-      .select(["restaurant.id", "restaurant.slug", "restaurant.name"])
-      .where("restaurant.name ILIKE :query", { query: `%${query}%` })
+      .leftJoinAndSelect("restaurant.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "restaurant.id",
+        "restaurant.slug",
+        "restaurant.name",
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.countryCode",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .where(
+        new Brackets((qb) => {
+          qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
+            .orWhere("park.city ILIKE :query")
+            .orWhere("park.country ILIKE :query")
+            .orWhere("park.continent ILIKE :query");
+        }),
+      )
       .orderBy("similarity(restaurant.name, :exactQuery)", "DESC")
       .setParameter("exactQuery", query)
       .limit(limit)
