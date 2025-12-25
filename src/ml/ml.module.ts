@@ -5,6 +5,7 @@ import { PredictionAccuracyService } from "./services/prediction-accuracy.servic
 import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
 import { PredictionDeviationService } from "./services/prediction-deviation.service";
+import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service";
 import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
 import {
@@ -13,6 +14,7 @@ import {
   ParkOccupancy,
   PredictionAccuracy,
 } from "./entities";
+import { MLAccuracyComparison } from "./entities/ml-accuracy-comparison.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -38,9 +40,9 @@ import { BullModule } from "@nestjs/bull";
       MLModel,
       ParkOccupancy,
       PredictionAccuracy,
+      MLAccuracyComparison,
       Attraction,
       QueueData,
-      Park, // For JOIN queries in getTopBottomPerformers
       Park, // For JOIN queries in getTopBottomPerformers
       ScheduleEntry, // For Phase 2 feature context
     ]),
@@ -52,6 +54,7 @@ import { BullModule } from "@nestjs/bull";
     MLModelService,
     MLDashboardService,
     PredictionDeviationService,
+    MLDriftMonitoringService,
   ],
   controllers: [MLController, MLHealthController],
   exports: [
