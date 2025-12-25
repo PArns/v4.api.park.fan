@@ -57,7 +57,7 @@ export class MLDashboardService {
           trainedAt: currentModelData.trainedAt.toISOString(),
           trainingDurationSeconds: currentModelData.trainingDurationSeconds,
           modelType: currentModelData.modelType,
-          fileSizeMB: currentModelData.fileSizeMB,
+          fileSizeMB: await this.getModelFileSizeMB(currentModelData.filePath),
         },
         previous: modelComparison.previous,
         configuration: {
@@ -164,5 +164,16 @@ export class MLDashboardService {
     if (mae < 12) return "good";
     if (mae < 18) return "fair";
     return "poor";
+  }
+
+  private async getModelFileSizeMB(filePath: string): Promise<number | null> {
+    try {
+      const fs = await import('fs/promises');
+      const stats = await fs.stat(filePath);
+      return parseFloat((stats.size / (1024 * 1024)).toFixed(2));
+    } catch (error) {
+      this.logger.warn(`Could not get model file size: ${error}`);
+      return null;
+    }
   }
 }
