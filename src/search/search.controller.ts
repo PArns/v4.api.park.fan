@@ -1,5 +1,5 @@
 import { Controller, Get, Query } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from "@nestjs/swagger";
 import { SearchService } from "./search.service";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto } from "./dto/search-result.dto";
@@ -11,14 +11,33 @@ export class SearchController {
 
   @Get()
   @ApiOperation({
-    summary: "Search",
+    summary: "Intelligent search across all entities",
     description:
-      "Full-text search across parks, attractions, shows, and restaurants.",
+      "Search parks, attractions, shows, and restaurants by name, city, country, or continent. " +
+      "Returns enriched results with coordinates, wait times, park hours, show times, and more. " +
+      "Cached for 5 minutes for optimal performance.",
+  })
+  @ApiQuery({
+    name: "q",
+    description: "Search query (min 2 characters)",
+    example: "disney",
+  })
+  @ApiQuery({
+    name: "type",
+    required: false,
+    description: "Filter by entity type",
+    enum: ["park", "attraction", "show", "restaurant"],
+    isArray: true,
+    example: "park,attraction",
   })
   @ApiResponse({
     status: 200,
-    description: "Search results retrieved successfully",
+    description: "Search results with counts and enriched metadata",
     type: SearchResultDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid search query (too short)",
   })
   async search(@Query() query: SearchQueryDto): Promise<SearchResultDto> {
     return this.searchService.search(query);

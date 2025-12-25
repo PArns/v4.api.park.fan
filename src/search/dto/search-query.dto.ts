@@ -1,28 +1,22 @@
-import {
-  IsString,
-  MinLength,
-  IsOptional,
-  IsArray,
-  IsInt,
-  Min,
-} from "class-validator";
-import { Type, Transform } from "class-transformer";
+import { IsString, MinLength, IsOptional, IsArray } from "class-validator";
+import { Transform } from "class-transformer";
 import { ApiProperty } from "@nestjs/swagger";
 
 export class SearchQueryDto {
   @ApiProperty({
-    description: "Search query string (min 2 chars)",
+    description: "Search query (searches name, city, country, continent)",
     minLength: 2,
-    example: "space",
+    example: "disney",
   })
   @IsString()
   @MinLength(2, { message: "Search query must be at least 2 characters long" })
   q: string;
 
   @ApiProperty({
-    description: "Filter by entity type",
+    description: "Filter by entity type (returns max 5 results per type)",
     required: false,
     type: [String],
+    enum: ["park", "attraction", "show", "restaurant"],
     example: ["park", "attraction"],
   })
   @IsOptional()
@@ -31,28 +25,4 @@ export class SearchQueryDto {
   )
   @IsArray()
   type?: string[];
-
-  @ApiProperty({
-    description: "Max results to return",
-    required: false,
-    default: 20,
-    minimum: 1,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit?: number = 20;
-
-  @ApiProperty({
-    description: "Pagination offset",
-    required: false,
-    default: 0,
-    minimum: 0,
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  offset?: number = 0;
 }

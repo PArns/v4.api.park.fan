@@ -477,14 +477,15 @@ export class SearchService {
   }
 
   /**
-   * Enrich attraction results with parent park info and wait times
+   * Enrich attraction results with parent park info, wait times, status, and load
    */
   private async enrichAttractionResults(
     attractions: any[],
   ): Promise<SearchResultItemDto[]> {
-    // Batch fetch wait times for all attractions
+    // Batch fetch wait times and status for all attractions
     const attractionIds = attractions.map((a) => a.id);
     const waitTimesMap = await this.getBatchWaitTimes(attractionIds);
+    const statusMap = await this.getBatchAttractionStatus(attractionIds);
 
     return attractions.map((attraction) => ({
       type: "attraction" as const,
@@ -505,6 +506,8 @@ export class SearchService {
       countryCode: attraction.park?.countryCode || null,
       city: attraction.park?.city || null,
       resort: attraction.park?.destination?.name || null,
+      status: statusMap.get(attraction.id)?.status || null,
+      load: this.determineAttractionLoad(waitTimesMap.get(attraction.id)),
       waitTime: waitTimesMap.get(attraction.id) || null,
       parentPark: attraction.park
         ? {
@@ -617,6 +620,49 @@ export class SearchService {
     );
 
     return waitTimesMap;
+  }
+
+  /**
+   * Batch fetch attraction status from queue data
+   */
+  private async getBatchAttractionStatus(
+    attractionIds: string[],
+  ): Promise<Map<string, { status: string }>> {
+    const statusMap = new Map<string, { status: string }>();
+
+    await Promise.all(
+      attractionIds.map(async (attractionId) => {
+        try {
+          const queueData =
+            await this.queueDataService.findCurrentStatusByAttraction(
+              attractionId,
+            );
+          // Use first queue data status (usually STANDBY)
+          if (queueData && queueData.length > 0 && queueData[0].status) {
+            statusMap.set(attractionId, { status: queueData[0].status });
+          }
+        } catch {
+          // Skip attractions without status data
+        }
+      }),
+    );
+
+    return statusMap;
+  }
+
+  /**
+   * Determine attraction load level from wait time
+   */
+  private determineAttractionLoad(
+    waitTime: number | undefined,
+  ): "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null {
+    if (!waitTime) return null;
+    if (waitTime <= 10) return "very_low";
+    if (waitTime <= 20) return "low";
+    if (waitTime <= 40) return "normal";
+    if (waitTime <= 60) return "higher";
+    if (waitTime <= 90) return "high";
+    return "extreme";
   }
 
   /**

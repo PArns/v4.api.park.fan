@@ -55,17 +55,21 @@ export class SearchResultItemDto {
   country?: string | null;
 
   @ApiProperty({
-    description: "ISO country code",
+    description: "2-character ISO country code (ISO 3166-1 alpha-2)",
     example: "FR",
     required: false,
   })
   countryCode?: string | null;
 
-  @ApiProperty({ description: "City name", example: "Paris", required: false })
+  @ApiProperty({
+    description: "City name where the entity is located",
+    example: "Paris",
+    required: false,
+  })
   city?: string | null;
 
   @ApiProperty({
-    description: "Resort/Destination name",
+    description: "Resort/Destination name (theme park complex)",
     example: "Disneyland Paris",
     required: false,
   })
@@ -104,6 +108,22 @@ export class SearchResultItemDto {
   } | null;
 
   // Attraction-specific metadata
+  @ApiProperty({
+    description: "Current operating status (attractions, parks)",
+    enum: ["OPERATING", "CLOSED", "DOWN", "REFURBISHMENT"],
+    example: "OPERATING",
+    required: false,
+  })
+  status?: "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null;
+
+  @ApiProperty({
+    description: "Current crowd/wait level (attractions, parks)",
+    enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
+    example: "normal",
+    required: false,
+  })
+  load?: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null;
+
   @ApiProperty({
     description: "Current wait time in minutes (attractions only)",
     example: 45,
