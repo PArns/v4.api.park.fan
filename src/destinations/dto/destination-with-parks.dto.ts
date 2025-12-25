@@ -16,9 +16,6 @@ export class DestinationParkDto {
   @ApiProperty({ description: "URL-friendly slug for the park" })
   slug: string;
 
-  @ApiProperty({ description: "External identifier from source" })
-  externalId: string;
-
   @ApiProperty({ description: "Timezone of the park" })
   timezone: string;
 }
@@ -33,9 +30,6 @@ export class DestinationWithParksDto {
   @ApiProperty({ description: "URL-friendly slug for the destination" })
   slug: string;
 
-  @ApiProperty({ description: "External identifier from source" })
-  externalId: string;
-
   @ApiProperty({
     description: "List of parks within this destination",
     type: [DestinationParkDto],
@@ -47,15 +41,13 @@ export class DestinationWithParksDto {
       id: destination.id,
       name: destination.name,
       slug: destination.slug,
-      externalId: destination.externalId,
       parks: destination.parks
         ? destination.parks.map((park) => ({
-            id: park.id,
-            name: park.name,
-            slug: park.slug,
-            externalId: park.externalId,
-            timezone: park.timezone,
-          }))
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          timezone: park.timezone,
+        }))
         : [],
     };
   }
