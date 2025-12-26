@@ -39,7 +39,7 @@ export class SearchService {
     private readonly queueDataService: QueueDataService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
     const { q, type } = query;
@@ -198,8 +198,13 @@ export class SearchService {
             .orWhere("park.continent ILIKE :query");
         }),
       )
-      .orderBy("similarity(park.name, :exactQuery)", "DESC")
+      .orderBy(
+        "CASE WHEN LOWER(park.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        "ASC",
+      )
+      .addOrderBy("park.name", "ASC")
       .setParameter("exactQuery", query)
+      .setParameter("startsWith", `${query}%`)
       .limit(limit)
       .getMany();
   }
@@ -279,8 +284,13 @@ export class SearchService {
             .orWhere("park.continent ILIKE :query");
         }),
       )
-      .orderBy("similarity(attraction.name, :exactQuery)", "DESC")
+      .orderBy(
+        "CASE WHEN LOWER(attraction.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(attraction.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        "ASC",
+      )
+      .addOrderBy("attraction.name", "ASC")
       .setParameter("exactQuery", query)
+      .setParameter("startsWith", `${query}%`)
       .limit(limit)
       .getMany();
   }
@@ -357,8 +367,13 @@ export class SearchService {
             .orWhere("park.continent ILIKE :query");
         }),
       )
-      .orderBy("similarity(show.name, :exactQuery)", "DESC")
+      .orderBy(
+        "CASE WHEN LOWER(show.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(show.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        "ASC",
+      )
+      .addOrderBy("show.name", "ASC")
       .setParameter("exactQuery", query)
+      .setParameter("startsWith", `${query}%`)
       .limit(limit)
       .getMany();
   }
@@ -435,8 +450,13 @@ export class SearchService {
             .orWhere("park.continent ILIKE :query");
         }),
       )
-      .orderBy("similarity(restaurant.name, :exactQuery)", "DESC")
+      .orderBy(
+        "CASE WHEN LOWER(restaurant.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(restaurant.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        "ASC",
+      )
+      .addOrderBy("restaurant.name", "ASC")
       .setParameter("exactQuery", query)
+      .setParameter("startsWith", `${query}%`)
       .limit(limit)
       .getMany();
   }
@@ -518,11 +538,11 @@ export class SearchService {
       waitTime: waitTimesMap.get(attraction.id) || null,
       parentPark: attraction.park
         ? {
-            id: attraction.park.id,
-            name: attraction.park.name,
-            slug: attraction.park.slug,
-            url: buildParkUrl(attraction.park),
-          }
+          id: attraction.park.id,
+          name: attraction.park.name,
+          slug: attraction.park.slug,
+          url: buildParkUrl(attraction.park),
+        }
         : null,
     }));
   }
@@ -552,11 +572,11 @@ export class SearchService {
       showTimes: showTimesMap.get(show.id) || null,
       parentPark: show.park
         ? {
-            id: show.park.id,
-            name: show.park.name,
-            slug: show.park.slug,
-            url: buildParkUrl(show.park),
-          }
+          id: show.park.id,
+          name: show.park.name,
+          slug: show.park.slug,
+          url: buildParkUrl(show.park),
+        }
         : null,
     }));
   }
@@ -586,11 +606,11 @@ export class SearchService {
       resort: restaurant.park?.destination?.name || null,
       parentPark: restaurant.park
         ? {
-            id: restaurant.park.id,
-            name: restaurant.park.name,
-            slug: restaurant.park.slug,
-            url: buildParkUrl(restaurant.park),
-          }
+          id: restaurant.park.id,
+          name: restaurant.park.name,
+          slug: restaurant.park.slug,
+          url: buildParkUrl(restaurant.park),
+        }
         : null,
     }));
   }
