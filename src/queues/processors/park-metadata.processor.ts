@@ -716,9 +716,16 @@ export class ParkMetadataProcessor {
 
             if (geoData) {
               updates.city = geoData.city;
+              updates.citySlug = generateSlug(geoData.city);
               updates.country = geoData.country;
+              updates.countrySlug = geoData.country
+                ? generateSlug(geoData.country)
+                : undefined;
               updates.countryCode = geoData.countryCode; // Now available directly from geocoding
               updates.continent = geoData.continent;
+              updates.continentSlug = geoData.continent
+                ? generateSlug(geoData.continent)
+                : undefined;
               if (geoData.region) updates.region = geoData.region;
               if (geoData.regionCode) {
                 updates.regionCode = geoData.regionCode.substring(0, 50);
