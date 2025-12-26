@@ -56,7 +56,7 @@ export class ParkIntegrationService {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -284,6 +284,12 @@ export class ParkIntegrationService {
           // If park open, no data -> closed. This works.
           attraction.status = "CLOSED";
         }
+
+        // Calculate Effective Status
+        // If Park is CLOSED, all attractions are effectively CLOSED
+        // This prevents frontend from showing "Operating" rides when park is closed
+        attraction.effectiveStatus =
+          dto.status === "CLOSED" ? "CLOSED" : attraction.status;
 
         // Attach ML predictions
         const mlPreds = hourlyPredictions[attraction.id] || [];
@@ -694,7 +700,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -837,9 +843,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

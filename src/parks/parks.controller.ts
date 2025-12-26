@@ -67,7 +67,7 @@ export class ParksController {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parkIntegrationService: ParkIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/parks
@@ -1069,11 +1069,29 @@ export class ParksController {
       this.analyticsService.getBatchParkOccupancy(parkIds),
     ]);
 
+    // Fetch batch statistics to get correct attraction counts
+    // We can't do this in a single batch call yet effectively without a new service method,
+    // so we'll map concurrently for now.
+    // TODO: Add getBatchParkStatistics to AnalyticsService for better performance
+    const statisticsMap = new Map<string, any>();
+    await Promise.all(
+      parks.map(async (park) => {
+        try {
+          const stats = await this.analyticsService.getParkStatistics(park.id);
+          statisticsMap.set(park.id, stats);
+        } catch (e) {
+          // ignore error
+        }
+      }),
+    );
+
     return parks.map((park) => {
       const dto = ParkResponseDto.fromEntity(park);
       dto.status = statusMap.get(park.id) || "CLOSED";
 
       const occupancy = occupancyMap.get(park.id);
+      const stats = statisticsMap.get(park.id);
+
       if (occupancy) {
         dto.currentLoad = {
           crowdLevel: this.mapCrowdLevel(occupancy.current),
@@ -1092,12 +1110,12 @@ export class ParksController {
           },
           statistics: {
             avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-            avgWaitToday: 0, // Not fetched in batch
-            peakHour: null, // Not fetched in batch
+            avgWaitToday: stats?.avgWaitToday || 0,
+            peakHour: stats?.peakHour || null,
             crowdLevel: this.mapCrowdLevel(occupancy.current),
-            totalAttractions: 0,
-            operatingAttractions: 0,
-            closedAttractions: 0,
+            totalAttractions: stats?.totalAttractions || 0,
+            operatingAttractions: stats?.operatingAttractions || 0,
+            closedAttractions: stats?.closedAttractions || 0,
             timestamp: occupancy.updatedAt,
           },
         };

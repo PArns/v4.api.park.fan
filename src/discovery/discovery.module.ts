@@ -4,6 +4,8 @@ import { DiscoveryController } from "./discovery.controller";
 import { DiscoveryService } from "./discovery.service";
 import { Park } from "../parks/entities/park.entity";
 import { RedisModule } from "../common/redis/redis.module";
+import { ParksModule } from "../parks/parks.module";
+import { AnalyticsModule } from "../analytics/analytics.module";
 
 /**
  * Discovery Module
@@ -11,9 +13,14 @@ import { RedisModule } from "../common/redis/redis.module";
  * Provides geographic structure discovery for route generation
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([Park]), RedisModule],
+  imports: [
+    TypeOrmModule.forFeature([Park]),
+    RedisModule,
+    ParksModule,
+    AnalyticsModule,
+  ],
   controllers: [DiscoveryController],
   providers: [DiscoveryService],
   exports: [DiscoveryService],
 })
-export class DiscoveryModule {}
+export class DiscoveryModule { }

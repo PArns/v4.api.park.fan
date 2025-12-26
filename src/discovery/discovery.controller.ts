@@ -14,6 +14,12 @@ import {
   CityDto,
 } from "./dto/geo-structure.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { ParkIntegrationService } from "../parks/services/park-integration.service";
+import { ParksService } from "../parks/parks.service";
+import { ParkResponseDto } from "../parks/dto/park-response.dto";
+import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
+import { BreadcrumbDto } from "../common/dto/breadcrumb.dto";
+import { AnalyticsService } from "../analytics/analytics.service";
 
 /**
  * Discovery Controller
@@ -24,7 +30,12 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("discovery")
 @Controller("discovery")
 export class DiscoveryController {
-  constructor(private readonly discoveryService: DiscoveryService) {}
+  constructor(
+    private readonly discoveryService: DiscoveryService,
+    private readonly parkIntegrationService: ParkIntegrationService,
+    private readonly parksService: ParksService,
+    private readonly analyticsService: AnalyticsService,
+  ) { }
 
   /**
    * GET /v1/discovery/geo
@@ -155,7 +166,10 @@ export class DiscoveryController {
   })
   async getCountriesInContinent(
     @Param("continentSlug") continentSlug: string,
-  ): Promise<CountryDto[]> {
+  ): Promise<{
+    data: CountryDto[];
+    breadcrumbs: BreadcrumbDto[];
+  }> {
     const countries =
       await this.discoveryService.getCountriesInContinent(continentSlug);
 
@@ -165,7 +179,25 @@ export class DiscoveryController {
       );
     }
 
-    return countries;
+    // Generate breadcrumbs: Home > Continent
+    // Need proper name for continent? DTO usually has it.
+    // If we only have slug from param, we might need to lookup.
+    // However, countries[0] is not guaranteed if empty.
+    // Let's rely on cached structure or simple slug formatting if needed.
+    // Better: Helper in service. For now, simple standard breadcrumbs.
+    const continentName =
+      countries.length > 0
+        ? (await this.discoveryService.getContinents()).find(
+          (c) => c.slug === continentSlug,
+        )?.name || continentSlug
+        : continentSlug;
+
+    const breadcrumbs: BreadcrumbDto[] = [
+      { name: "Home", url: "/" },
+      { name: continentName, url: `/${continentSlug}` },
+    ];
+
+    return { data: countries, breadcrumbs };
   }
 
   /**
@@ -209,7 +241,10 @@ export class DiscoveryController {
   async getCitiesInCountry(
     @Param("continentSlug") continentSlug: string,
     @Param("countrySlug") countrySlug: string,
-  ): Promise<CityDto[]> {
+  ): Promise<{
+    data: CityDto[];
+    breadcrumbs: BreadcrumbDto[];
+  }> {
     const cities = await this.discoveryService.getCitiesInCountry(
       continentSlug,
       countrySlug,
@@ -221,6 +256,154 @@ export class DiscoveryController {
       );
     }
 
-    return cities;
+    // Breadcrumbs: Home > Continent > Country
+    const continents = await this.discoveryService.getContinents();
+    const continent = continents.find((c) => c.slug === continentSlug);
+    const country = continent?.countries.find((c) => c.slug === countrySlug);
+
+    const breadcrumbs: BreadcrumbDto[] = [
+      { name: "Home", url: "/" },
+      {
+        name: continent?.name || continentSlug,
+        url: `/${continentSlug}`,
+      },
+      {
+        name: country?.name || countrySlug,
+        url: `/${continentSlug}/${countrySlug}`,
+      },
+    ];
+
+    return { data: cities, breadcrumbs };
+  }
+
+  /**
+   * GET /v1/discovery/:continent/:country
+   * HYDRATED Discovery Endpoint
+   * Returns list of hydrated park objects for a country
+   */
+  @Get(":continent/:country")
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 mins cache for hydrated data
+  @ApiOperation({
+    summary: "Get hydrated parks in country",
+    description: "Returns fully hydrated park objects for a country.",
+  })
+  async getHydratedParksByCountry(
+    @Param("continent") continentSlug: string,
+    @Param("country") countrySlug: string,
+  ): Promise<{
+    data: ParkResponseDto[];
+    breadcrumbs: BreadcrumbDto[];
+  }> {
+    // 1. Find parks from DB (or ParksService)
+    const parks = await this.parksService.findByCountry(
+      continentSlug,
+      countrySlug,
+    );
+
+    if (parks.length === 0) {
+      throw new NotFoundException(
+        `No parks found in ${countrySlug}, ${continentSlug}`,
+      );
+    }
+
+    // 2. Hydrate them concurrently
+    // Use mapToResponseWithStatus logic from ParksController?
+    // Or better: buildIntegratedResponse if we want FULL details including attractions/weather?
+    // Requirement: "return fully hydrated park objects identical to the ParkResponse interface"
+    // ParkResponseDto usually implies the list view (which has stats/status).
+    // ParkWithAttractionsDto has nested attractions.
+    // "Response must show correct counts" implies ParkResponseDto (list view).
+    // Let's us ParkResponseDto but ensures stats are correct.
+
+    // Reuse logic from ParksController's mapToResponseWithStatus
+    // We can't import private methods. We should move that logic to a service if possible.
+    // For now, we replicate it or use ParkIntegrationService if it supports lists.
+    // ParkIntegrationService.buildIntegratedResponse is for SINGLE park with full details.
+    // For lists, we usually want simplified status/analytics.
+
+    // Let's fetch status/occupancy batch
+    const parkIds = parks.map((p) => p.id);
+    const [statusMap, occupancyMap] = await Promise.all([
+      this.parksService.getBatchParkStatus(parkIds),
+      this.analyticsService["getBatchParkOccupancy"](parkIds), // Accessed via public if possible, else we assume it's public
+    ]);
+
+    // Fetch batch statistics map
+    // TODO: move to service to avoid duplication
+    const statisticsMap = new Map<string, any>();
+    await Promise.all(
+      parks.map(async (park) => {
+        try {
+          const stats = await this.analyticsService.getParkStatistics(park.id);
+          statisticsMap.set(park.id, stats);
+        } catch (e) {
+          // ignore
+        }
+      }),
+    );
+
+    const hydrated = parks.map((park) => {
+      const dto = ParkResponseDto.fromEntity(park);
+      dto.status = statusMap.get(park.id) || "CLOSED";
+      const occupancy = occupancyMap.get(park.id);
+      const stats = statisticsMap.get(park.id);
+
+      if (occupancy) {
+        dto.currentLoad = {
+          crowdLevel: this.mapCrowdLevel(occupancy.current),
+          baseline: occupancy.baseline90thPercentile,
+          currentWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+        };
+
+        dto.analytics = {
+          occupancy: {
+            current: occupancy.current,
+            trend: occupancy.trend,
+            comparedToTypical: occupancy.comparedToTypical,
+            comparisonStatus: occupancy.comparisonStatus,
+            baseline90thPercentile: occupancy.baseline90thPercentile,
+            updatedAt: occupancy.updatedAt,
+          },
+          statistics: {
+            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+            avgWaitToday: stats?.avgWaitToday || 0,
+            peakHour: stats?.peakHour || null,
+            crowdLevel: this.mapCrowdLevel(occupancy.current),
+            totalAttractions: stats?.totalAttractions || 0,
+            operatingAttractions: stats?.operatingAttractions || 0,
+            closedAttractions: stats?.closedAttractions || 0,
+            timestamp: occupancy.updatedAt,
+          },
+        };
+      }
+      return dto;
+    });
+
+    // Breadcrumbs
+    const continents = await this.discoveryService.getContinents();
+    const continent = continents.find((c) => c.slug === continentSlug);
+    const country = continent?.countries.find((c) => c.slug === countrySlug);
+
+    const breadcrumbs: BreadcrumbDto[] = [
+      { name: "Home", url: "/" },
+      {
+        name: continent?.name || continentSlug,
+        url: `/${continentSlug}`,
+      },
+      {
+        name: country?.name || countrySlug,
+        url: `/${continentSlug}/${countrySlug}`,
+      },
+    ];
+
+    return { data: hydrated, breadcrumbs };
+  }
+
+  private mapCrowdLevel(occupancy: number): any {
+    if (occupancy < 30) return "very_low";
+    if (occupancy < 50) return "low";
+    if (occupancy < 75) return "moderate";
+    if (occupancy < 95) return "high";
+    return "very_high";
   }
 }

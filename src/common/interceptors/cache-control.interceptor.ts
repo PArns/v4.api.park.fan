@@ -7,10 +7,16 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Response } from "express";
+import * as crypto from "crypto";
 
 /**
  * Sets appropriate Cache-Control headers for Cloudflare caching
- * Based on endpoint patterns and data volatility
+ * Based on endpoint patterns and data volatility.
+ *
+ * NOW INCLUDES:
+ * - ETag generation (MD5 of body)
+ * - Last-Modified header
+ * - Respects existing Cache-Control headers (won't overwrite if set)
  */
 @Injectable()
 export class CacheControlInterceptor implements NestInterceptor {
@@ -19,16 +25,60 @@ export class CacheControlInterceptor implements NestInterceptor {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest();
     const path = request.url;
+    const method = request.method;
 
     return next.handle().pipe(
-      tap(() => {
-        const cacheHeader = this.getCacheHeaderForPath(path, request.method);
-        if (cacheHeader) {
-          response.setHeader("Cache-Control", cacheHeader);
-          response.setHeader("Vary", "Accept-Encoding");
+      tap((data) => {
+        // 1. Generate ETag if data is present and valid
+        if (data && typeof data === 'object') {
+          const etag = this.generateETag(data);
+          const clientETag = request.headers["if-none-match"];
+
+          // Check for conditional request match
+          if (clientETag === etag) {
+            response.status(304); // Not Modified - NestJS might handle this, but being explicit helps
+            return;
+          }
+          response.setHeader("ETag", etag);
+        }
+
+        // 2. Set Last-Modified (default to now if no data timestamp found)
+        // Try to find a logical "updatedAt" or "timestamp" in the data
+        const lastModified = this.extractLastModified(data);
+        response.setHeader("Last-Modified", lastModified.toUTCString());
+
+        // 3. Set Cache-Control ONLY if not already set by a local interceptor
+        if (!response.getHeader("Cache-Control")) {
+          const cacheHeader = this.getCacheHeaderForPath(path, method);
+          if (cacheHeader) {
+            response.setHeader("Cache-Control", cacheHeader);
+            response.setHeader("Vary", "Accept-Encoding");
+          }
         }
       }),
     );
+  }
+
+  private generateETag(data: any): string {
+    try {
+      const hash = crypto
+        .createHash("md5")
+        .update(JSON.stringify(data))
+        .digest("hex");
+      return `"${hash}"`;
+    } catch {
+      return '';
+    }
+  }
+
+  private extractLastModified(data: any): Date {
+    // Try common timestamp fields
+    if (data) {
+      if (data.lastUpdated) return new Date(data.lastUpdated);
+      if (data.updatedAt) return new Date(data.updatedAt);
+      if (data.timestamp) return new Date(data.timestamp);
+    }
+    return new Date();
   }
 
   private getCacheHeaderForPath(path: string, method: string): string | null {
