@@ -1327,7 +1327,20 @@ export class AnalyticsService {
           p."countrySlug",
           p."citySlug",
           AVG(lu."waitTime") as avg_wait,
-          COUNT(*) as active_rides
+          COUNT(*) as active_rides,
+          (SELECT COUNT(*) FROM attractions WHERE "parkId" = p.id) as total_attractions,
+          (SELECT COUNT(*)
+           FROM attractions a
+           LEFT JOIN LATERAL (
+             SELECT qd.status
+             FROM queue_data qd
+             WHERE qd."attractionId" = a.id
+               AND qd.timestamp > NOW() - INTERVAL '20 minutes'
+             ORDER BY timestamp DESC
+             LIMIT 1
+           ) latest_status ON true
+           WHERE a."parkId" = p.id AND latest_status.status = 'OPERATING'
+          ) as operating_attractions
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
         GROUP BY p.id, p.name, p.slug, p.city, p.country, p."continentSlug", p."countrySlug", p."citySlug"
@@ -1379,6 +1392,11 @@ export class AnalyticsService {
             country: openParks[0].country,
             averageWaitTime: Math.round(openParks[0].avg_wait),
             url: buildParkUrl(openParks[0]),
+            totalAttractions: openParks[0].total_attractions || 0,
+            operatingAttractions: openParks[0].operating_attractions || 0,
+            closedAttractions:
+              (openParks[0].total_attractions || 0) -
+              (openParks[0].operating_attractions || 0),
           }
         : null;
 
@@ -1394,6 +1412,13 @@ export class AnalyticsService {
               openParks[openParks.length - 1].avg_wait,
             ),
             url: buildParkUrl(openParks[openParks.length - 1]),
+            totalAttractions:
+              openParks[openParks.length - 1].total_attractions || 0,
+            operatingAttractions:
+              openParks[openParks.length - 1].operating_attractions || 0,
+            closedAttractions:
+              (openParks[openParks.length - 1].total_attractions || 0) -
+              (openParks[openParks.length - 1].operating_attractions || 0),
           }
         : null;
 
@@ -1415,6 +1440,8 @@ export class AnalyticsService {
         a.slug as "attractionSlug",
         p.name as "parkName",
         p.slug,
+        p.city,
+        p.country,
         p."continentSlug",
         p."countrySlug",
         p."citySlug"
@@ -1439,6 +1466,8 @@ export class AnalyticsService {
             slug: rideStats[0].attractionSlug,
             parkName: rideStats[0].parkName,
             parkSlug: rideStats[0].slug,
+            parkCity: rideStats[0].city,
+            parkCountry: rideStats[0].country,
             waitTime: rideStats[0].waitTime,
             url: buildAttractionUrl(rideStats[0], {
               slug: rideStats[0].attractionSlug,
@@ -1455,6 +1484,8 @@ export class AnalyticsService {
             slug: rideStats[rideStats.length - 1].attractionSlug,
             parkName: rideStats[rideStats.length - 1].parkName,
             parkSlug: rideStats[rideStats.length - 1].slug,
+            parkCity: rideStats[rideStats.length - 1].city,
+            parkCountry: rideStats[rideStats.length - 1].country,
             waitTime: rideStats[rideStats.length - 1].waitTime,
             url: buildAttractionUrl(rideStats[rideStats.length - 1], {
               slug: rideStats[rideStats.length - 1].attractionSlug,
@@ -1756,5 +1787,184 @@ export class AnalyticsService {
         last30d: rolling30d,
       },
     };
+  }
+
+  /**
+   * Get live geographic statistics for all continents/countries/cities
+   * Cached for 5 minutes
+   */
+  async getGeoLiveStats() {
+    const cacheKey = "analytics:geo_live_stats:v1";
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    // Get all parks with their current status and wait times
+    const parksData = await this.queueDataRepository.query(`
+      WITH park_status AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+          AND s."openingTime" <= NOW()
+          AND s."closingTime" > NOW()
+      ),
+      latest_updates AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime",
+          a."parkId",
+          qd.timestamp
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        JOIN park_status ps ON ps."parkId" = a."parkId"
+        WHERE qd.timestamp > NOW() - INTERVAL '60 minutes'
+        AND qd.status = 'OPERATING'
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      ),
+      park_stats AS (
+        SELECT
+          p.id as park_id,
+          p."continentSlug",
+          p."countrySlug",
+          p."citySlug",
+          AVG(lu."waitTime") as avg_wait
+        FROM latest_updates lu
+        JOIN parks p ON p.id = lu."parkId"
+        GROUP BY p.id, p."continentSlug", p."countrySlug", p."citySlug"
+      )
+      SELECT * FROM park_stats
+    `);
+
+    // Aggregate by continent > country > city
+    const continentMap = new Map<
+      string,
+      {
+        openParkCount: number;
+        totalWaitTime: number;
+        parkCount: number;
+        countries: Map<
+          string,
+          {
+            openParkCount: number;
+            totalWaitTime: number;
+            parkCount: number;
+            cities: Map<
+              string,
+              {
+                openParkCount: number;
+                totalWaitTime: number;
+                parkCount: number;
+              }
+            >;
+          }
+        >;
+      }
+    >();
+
+    for (const park of parksData) {
+      const continentSlug = park.continentSlug;
+      const countrySlug = park.countrySlug;
+      const citySlug = park.citySlug;
+
+      // Initialize continent
+      if (!continentMap.has(continentSlug)) {
+        continentMap.set(continentSlug, {
+          openParkCount: 0,
+          totalWaitTime: 0,
+          parkCount: 0,
+          countries: new Map(),
+        });
+      }
+
+      const continent = continentMap.get(continentSlug)!;
+      continent.openParkCount++;
+      continent.totalWaitTime += parseFloat(park.avg_wait || "0");
+      continent.parkCount++;
+
+      // Initialize country
+      if (!continent.countries.has(countrySlug)) {
+        continent.countries.set(countrySlug, {
+          openParkCount: 0,
+          totalWaitTime: 0,
+          parkCount: 0,
+          cities: new Map(),
+        });
+      }
+
+      const country = continent.countries.get(countrySlug)!;
+      country.openParkCount++;
+      country.totalWaitTime += parseFloat(park.avg_wait || "0");
+      country.parkCount++;
+
+      // Initialize city
+      if (!country.cities.has(citySlug)) {
+        country.cities.set(citySlug, {
+          openParkCount: 0,
+          totalWaitTime: 0,
+          parkCount: 0,
+        });
+      }
+
+      const city = country.cities.get(citySlug)!;
+      city.openParkCount++;
+      city.totalWaitTime += parseFloat(park.avg_wait || "0");
+      city.parkCount++;
+    }
+
+    // Build response structure
+    const continents = [];
+    for (const [continentSlug, continentData] of continentMap) {
+      const countries = [];
+      for (const [countrySlug, countryData] of continentData.countries) {
+        const cities = [];
+        for (const [citySlug, cityData] of countryData.cities) {
+          cities.push({
+            slug: citySlug,
+            openParkCount: cityData.openParkCount,
+            averageWaitTime:
+              cityData.parkCount > 0
+                ? Math.round(cityData.totalWaitTime / cityData.parkCount)
+                : null,
+          });
+        }
+
+        countries.push({
+          slug: countrySlug,
+          openParkCount: countryData.openParkCount,
+          averageWaitTime:
+            countryData.parkCount > 0
+              ? Math.round(countryData.totalWaitTime / countryData.parkCount)
+              : null,
+          cities,
+        });
+      }
+
+      continents.push({
+        slug: continentSlug,
+        openParkCount: continentData.openParkCount,
+        averageWaitTime:
+          continentData.parkCount > 0
+            ? Math.round(continentData.totalWaitTime / continentData.parkCount)
+            : null,
+        countries,
+      });
+    }
+
+    const response = {
+      continents,
+      generatedAt: new Date().toISOString(),
+    };
+
+    // Cache for 5 minutes
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(response),
+      "EX",
+      this.TTL_REALTIME,
+    );
+
+    return response;
   }
 }

@@ -44,6 +44,15 @@ export class ParkStatsItemDto {
     nullable: true,
   })
   comparedToTypical: string | null;
+
+  @ApiProperty({ description: "Total number of attractions in park" })
+  totalAttractions: number;
+
+  @ApiProperty({ description: "Number of currently operating attractions" })
+  operatingAttractions: number;
+
+  @ApiProperty({ description: "Number of currently closed attractions" })
+  closedAttractions: number;
 }
 
 export class AttractionStatsItemDto {
@@ -61,6 +70,12 @@ export class AttractionStatsItemDto {
 
   @ApiProperty()
   parkSlug: string;
+
+  @ApiProperty({ description: "City where the park is located" })
+  parkCity: string;
+
+  @ApiProperty({ description: "Country where the park is located" })
+  parkCountry: string;
 
   @ApiProperty()
   waitTime: number;

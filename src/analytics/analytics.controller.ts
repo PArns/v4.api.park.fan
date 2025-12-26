@@ -5,6 +5,7 @@ import {
   GlobalStatsDto,
   ParkPercentilesDto,
   AttractionPercentilesDto,
+  GeoLiveStatsDto,
 } from "./dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
@@ -59,5 +60,23 @@ export class AnalyticsController {
     return this.analyticsService.getAttractionPercentiles(
       attractionId,
     ) as Promise<AttractionPercentilesDto>;
+  }
+
+  @Get("geo-live")
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes
+  @ApiOperation({
+    summary: "Get live geographic statistics",
+    description:
+      "Returns real-time statistics (open park count and average wait time) " +
+      "for all continents, countries, and cities. Useful for showing live data " +
+      "on geographic navigation pages. Cached for 5 minutes.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Geographic live statistics with hierarchical structure",
+    type: GeoLiveStatsDto,
+  })
+  async getGeoLiveStats(): Promise<GeoLiveStatsDto> {
+    return this.analyticsService.getGeoLiveStats();
   }
 }
