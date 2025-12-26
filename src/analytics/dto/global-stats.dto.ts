@@ -10,6 +10,12 @@ export class ParkStatsItemDto {
   @ApiProperty()
   slug: string;
 
+  @ApiProperty({ description: "City where the park is located" })
+  city: string;
+
+  @ApiProperty({ description: "Country where the park is located" })
+  country: string;
+
   @ApiProperty({ description: "Average wait time in minutes", nullable: true })
   averageWaitTime: number;
 
@@ -24,6 +30,20 @@ export class ParkStatsItemDto {
     nullable: true,
   })
   crowdLevel: string | null;
+
+  @ApiProperty({
+    description: "Occupancy percentage (0-200+)",
+    example: 85,
+    nullable: true,
+  })
+  occupancy: number | null;
+
+  @ApiProperty({
+    description: "Comparison to typical levels",
+    enum: ["higher", "lower", "typical"],
+    nullable: true,
+  })
+  comparedToTypical: string | null;
 }
 
 export class AttractionStatsItemDto {
@@ -56,6 +76,19 @@ export class AttractionStatsItemDto {
     nullable: true,
   })
   crowdLevel: string | null;
+
+  @ApiProperty({
+    description: "90th percentile baseline for this hour/day",
+    nullable: true,
+  })
+  baseline: number | null;
+
+  @ApiProperty({
+    description:
+      "How current wait compares to baseline (e.g., 'busier', 'quieter', 'typical')",
+    nullable: true,
+  })
+  comparison: string | null;
 }
 
 export class GlobalCountsDto {

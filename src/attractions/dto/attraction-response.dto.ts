@@ -147,14 +147,14 @@ export class AttractionResponseDto {
 
       park: attraction.park
         ? {
-          id: attraction.park.id,
-          name: attraction.park.name,
-          slug: attraction.park.slug,
-          timezone: attraction.park.timezone,
-          continent: attraction.park.continent || null,
-          country: attraction.park.country || null,
-          city: attraction.park.city || null,
-        }
+            id: attraction.park.id,
+            name: attraction.park.name,
+            slug: attraction.park.slug,
+            timezone: attraction.park.timezone,
+            continent: attraction.park.continent || null,
+            country: attraction.park.country || null,
+            city: attraction.park.city || null,
+          }
         : null,
 
       land: attraction.landName || null,

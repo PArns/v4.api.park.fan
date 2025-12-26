@@ -23,4 +23,4 @@ import { AnalyticsModule } from "../analytics/analytics.module";
   providers: [DiscoveryService],
   exports: [DiscoveryService],
 })
-export class DiscoveryModule { }
+export class DiscoveryModule {}

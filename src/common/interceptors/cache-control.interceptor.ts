@@ -30,7 +30,7 @@ export class CacheControlInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap((data) => {
         // 1. Generate ETag if data is present and valid
-        if (data && typeof data === 'object') {
+        if (data && typeof data === "object") {
           const etag = this.generateETag(data);
           const clientETag = request.headers["if-none-match"];
 
@@ -67,7 +67,7 @@ export class CacheControlInterceptor implements NestInterceptor {
         .digest("hex");
       return `"${hash}"`;
     } catch {
-      return '';
+      return "";
     }
   }
 

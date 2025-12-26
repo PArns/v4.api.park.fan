@@ -67,7 +67,7 @@ export class ParksController {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parkIntegrationService: ParkIntegrationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * GET /v1/parks
