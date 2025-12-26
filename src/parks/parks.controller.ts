@@ -1079,7 +1079,7 @@ export class ParksController {
         try {
           const stats = await this.analyticsService.getParkStatistics(park.id);
           statisticsMap.set(park.id, stats);
-        } catch (e) {
+        } catch (_e) {
           // ignore error
         }
       }),

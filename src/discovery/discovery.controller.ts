@@ -17,7 +17,6 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { ParkIntegrationService } from "../parks/services/park-integration.service";
 import { ParksService } from "../parks/parks.service";
 import { ParkResponseDto } from "../parks/dto/park-response.dto";
-import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import { BreadcrumbDto } from "../common/dto/breadcrumb.dto";
 import { AnalyticsService } from "../analytics/analytics.service";
 
@@ -336,7 +335,7 @@ export class DiscoveryController {
         try {
           const stats = await this.analyticsService.getParkStatistics(park.id);
           statisticsMap.set(park.id, stats);
-        } catch (e) {
+        } catch (_e) {
           // ignore
         }
       }),
