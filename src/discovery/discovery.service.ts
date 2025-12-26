@@ -101,9 +101,29 @@ export class DiscoveryService {
       }
 
       // Get or create country
-      // FIX: Find by name to avoid duplicates (e.g. "France" with slug "france" vs "fr")
-      let country = continent.countries.find((c) => c.name === park.country);
-      if (!country) {
+      // Match by countryCode (primary) or Name (fallback)
+      let country = continent.countries.find(
+        (c) =>
+          (park.countryCode && c.code === park.countryCode) ||
+          c.name === park.country,
+      );
+
+      if (country) {
+        // If we found a match, check if we should upgrade to better metadata
+        // We prefer longer slugs (e.g. 'france' > 'fr')
+        if (
+          park.countrySlug &&
+          country.slug &&
+          park.countrySlug.length > country.slug.length
+        ) {
+          country.name = park.country;
+          country.slug = park.countrySlug;
+        }
+        // Ensure code is populated if missing
+        if (!country.code && park.countryCode) {
+          country.code = park.countryCode;
+        }
+      } else {
         country = {
           name: park.country,
           slug: park.countrySlug,

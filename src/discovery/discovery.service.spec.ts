@@ -48,6 +48,7 @@ describe("DiscoveryService Deduplication", () => {
         countrySlug: "france",
         city: "Marne-la-Vallée",
         citySlug: "marne-la-vallee",
+        countryCode: "FR",
         attractions: [],
       },
       {
@@ -56,8 +57,9 @@ describe("DiscoveryService Deduplication", () => {
         slug: "parc-asterix",
         continent: "Europe",
         continentSlug: "europe",
-        country: "France",
-        countrySlug: "fr", // Different slug, same name
+        country: "FR", // Different name (simulating DB inconsistency)
+        countrySlug: "fr",
+        countryCode: "FR", // Common key
         city: "Plailly",
         citySlug: "plailly",
         attractions: [],
