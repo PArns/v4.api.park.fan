@@ -9,6 +9,8 @@ import { AdminController } from "./admin.controller";
     BullModule.registerQueue({ name: "holidays" }),
     BullModule.registerQueue({ name: "park-metadata" }),
     BullModule.registerQueue({ name: "ml-training" }),
+    BullModule.registerQueue({ name: "wait-times" }),
+    BullModule.registerQueue({ name: "children-metadata" }),
   ],
   controllers: [AdminController],
 })

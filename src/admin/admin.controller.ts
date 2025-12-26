@@ -27,6 +27,8 @@ export class AdminController {
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
+    @InjectQueue("wait-times") private waitTimesQueue: Queue,
+    @InjectQueue("children-metadata") private childrenQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -150,6 +152,7 @@ export class AdminController {
       "restaurant:*",
       "weather:*",
       "search:*",
+      "discovery:*",
     ];
 
     let totalDeleted = 0;
@@ -166,6 +169,57 @@ export class AdminController {
     return {
       message: "Park cache flushed successfully",
       keysDeleted: totalDeleted,
+    };
+  }
+
+  /**
+   * Reset and Rebuild Cache
+   *
+   * Flushes all caches and triggers a full rebuild of the data
+   * (Holidays, Parks, Children, Wait Times).
+   */
+  @Post("cache/reset")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Reset and rebuild cache",
+    description:
+      "Flushes all caches and triggers full data rebuild (Holidays -> Parks -> Children -> Live Data)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Cache flushed and rebuild jobs triggered",
+  })
+  async resetCache(): Promise<{
+    message: string;
+    keysDeleted: number;
+    jobsTriggered: string[];
+  }> {
+    // 1. Flush Cache
+    const { keysDeleted } = await this.flushCache();
+
+    // 2. Trigger Rebuild Jobs
+    const jobsTriggered: string[] = [];
+
+    // - Holidays (Base metadata)
+    await this.holidaysQueue.add("fetch-holidays", {}, { priority: 100 });
+    jobsTriggered.push("fetch-holidays");
+
+    // - Park Metadata
+    await this.parkMetadataQueue.add("fetch-all-parks", {}, { priority: 90 });
+    jobsTriggered.push("fetch-all-parks");
+
+    // - Children Metadata (Attractions, Shows, Restaurants)
+    await this.childrenQueue.add("fetch-all-children", {}, { priority: 80 });
+    jobsTriggered.push("fetch-all-children");
+
+    // - Live Wait Times
+    await this.waitTimesQueue.add("fetch-wait-times", {}, { priority: 70 });
+    jobsTriggered.push("fetch-wait-times");
+
+    return {
+      message: "Cache reset and rebuild started",
+      keysDeleted,
+      jobsTriggered,
     };
   }
 }
