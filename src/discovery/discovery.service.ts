@@ -24,6 +24,8 @@ export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
   private readonly CACHE_KEY = "discovery:geo:structure:v2"; // v2: includes attractions
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
+  private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
+  private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes
 
   constructor(
     @InjectRepository(Park)
@@ -217,6 +219,64 @@ export class DiscoveryService {
       generatedAt: new Date().toISOString(),
     };
 
+    // Merge live statistics
+    const liveStats = await this.getLiveStats();
+
+    for (const continent of structure.continents) {
+      let continentOpenCount = 0;
+      let continentTotalWait = 0;
+      let continentWaitCount = 0;
+
+      for (const country of continent.countries) {
+        let countryOpenCount = 0;
+        let countryTotalWait = 0;
+        let countryWaitCount = 0;
+
+        for (const city of country.cities) {
+          let cityOpenCount = 0;
+          let cityTotalWait = 0;
+          let cityWaitCount = 0;
+
+          for (const park of city.parks) {
+            const stats = liveStats.get(park.id);
+            if (stats?.isOpen) {
+              cityOpenCount++;
+              if (stats.avgWait > 0) {
+                cityTotalWait += stats.avgWait;
+                cityWaitCount++;
+              }
+            }
+          }
+
+          city.openParkCount = cityOpenCount;
+          city.averageWaitTime =
+            cityWaitCount > 0
+              ? Math.round(cityTotalWait / cityWaitCount)
+              : undefined;
+
+          countryOpenCount += cityOpenCount;
+          countryTotalWait += cityTotalWait;
+          countryWaitCount += cityWaitCount;
+        }
+
+        country.openParkCount = countryOpenCount;
+        country.averageWaitTime =
+          countryWaitCount > 0
+            ? Math.round(countryTotalWait / countryWaitCount)
+            : undefined;
+
+        continentOpenCount += countryOpenCount;
+        continentTotalWait += continentTotalWait;
+        continentWaitCount += countryWaitCount;
+      }
+
+      continent.openParkCount = continentOpenCount;
+      continent.averageWaitTime =
+        continentWaitCount > 0
+          ? Math.round(continentTotalWait / continentWaitCount)
+          : undefined;
+    }
+
     // Cache the result
     await this.redis.setex(
       this.CACHE_KEY,
@@ -276,6 +336,74 @@ export class DiscoveryService {
 
     const country = continent.countries.find((c) => c.slug === countrySlug);
     return country ? country.cities : null;
+  }
+
+  /**
+   * Get live park statistics (open counts + wait times)
+   * Cached for 5 minutes, performant single query
+   *
+   * @returns Map of Park ID -> { isOpen, avgWait }
+   */
+  private async getLiveStats(): Promise<
+    Map<string, { isOpen: boolean; avgWait: number }>
+  > {
+    const cached = await this.redis.get(this.LIVE_STATS_CACHE_KEY);
+    if (cached) {
+      this.logger.debug("Returning cached live stats");
+      return new Map(JSON.parse(cached));
+    }
+
+    this.logger.log("Fetching live park statistics");
+
+    // ONE performant query for all parks
+    const result = await this.parkRepository.query(`
+      WITH park_status AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+          AND s."openingTime" <= NOW()
+          AND s."closingTime" > NOW()
+      ),
+      park_waits AS (
+        SELECT 
+          a."parkId",
+          AVG(qd."waitTime") as avg_wait
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        WHERE qd.timestamp > NOW() - INTERVAL '20 minutes'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+        GROUP BY a."parkId"
+      )
+      SELECT 
+        p.id,
+        CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END as is_open,
+        COALESCE(pw.avg_wait, 0) as avg_wait
+      FROM parks p
+      LEFT JOIN park_status ps ON ps."parkId" = p.id
+      LEFT JOIN park_waits pw ON pw."parkId" = p.id
+    `);
+
+    const stats = new Map<string, { isOpen: boolean; avgWait: number }>();
+    for (const row of result) {
+      stats.set(row.id, {
+        isOpen: row.is_open,
+        avgWait: Math.round(parseFloat(row.avg_wait || 0)),
+      });
+    }
+
+    // Cache for 5 minutes
+    await this.redis.setex(
+      this.LIVE_STATS_CACHE_KEY,
+      this.LIVE_STATS_TTL,
+      JSON.stringify(Array.from(stats.entries())),
+    );
+
+    this.logger.log(
+      `Fetched live stats for ${stats.size} parks (${Array.from(stats.values()).filter((s) => s.isOpen).length} open)`,
+    );
+
+    return stats;
   }
 
   /**

@@ -103,6 +103,20 @@ export class CityDto {
     example: 2,
   })
   parkCount: number;
+
+  @ApiProperty({
+    description: "Number of currently open parks",
+    nullable: true,
+    required: false,
+  })
+  openParkCount?: number;
+
+  @ApiProperty({
+    description: "Average wait time across all attractions (minutes)",
+    nullable: true,
+    required: false,
+  })
+  averageWaitTime?: number;
 }
 
 /**
@@ -146,6 +160,20 @@ export class CountryDto {
     example: 12,
   })
   parkCount: number;
+
+  @ApiProperty({
+    description: "Number of currently open parks",
+    nullable: true,
+    required: false,
+  })
+  openParkCount?: number;
+
+  @ApiProperty({
+    description: "Average wait time across all attractions (minutes)",
+    nullable: true,
+    required: false,
+  })
+  averageWaitTime?: number;
 }
 
 /**
@@ -183,6 +211,20 @@ export class ContinentDto {
     example: 45,
   })
   parkCount: number;
+
+  @ApiProperty({
+    description: "Number of currently open parks",
+    nullable: true,
+    required: false,
+  })
+  openParkCount?: number;
+
+  @ApiProperty({
+    description: "Average wait time across all attractions (minutes)",
+    nullable: true,
+    required: false,
+  })
+  averageWaitTime?: number;
 }
 
 /**
