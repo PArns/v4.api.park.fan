@@ -23,7 +23,7 @@ export class MLDashboardService {
     private driftService: MLDriftMonitoringService,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   async getDashboard(): Promise<MLDashboardDto> {
     this.logger.log("🔄 Fetching ML dashboard (V2 restructured)...");
@@ -80,7 +80,7 @@ export class MLDashboardService {
           dataDurationDays: Math.floor(
             (currentModelData.trainDataEndDate.getTime() -
               currentModelData.trainDataStartDate.getTime()) /
-            (1000 * 60 * 60 * 24),
+              (1000 * 60 * 60 * 24),
           ),
         },
       },
@@ -168,7 +168,7 @@ export class MLDashboardService {
 
   private async getModelFileSizeMB(filePath: string): Promise<number | null> {
     try {
-      const fs = await import('fs/promises');
+      const fs = await import("fs/promises");
       const stats = await fs.stat(filePath);
       return parseFloat((stats.size / (1024 * 1024)).toFixed(2));
     } catch (error) {

@@ -101,9 +101,8 @@ export class DiscoveryService {
       }
 
       // Get or create country
-      let country = continent.countries.find(
-        (c) => c.slug === park.countrySlug,
-      );
+      // FIX: Find by name to avoid duplicates (e.g. "France" with slug "france" vs "fr")
+      let country = continent.countries.find((c) => c.name === park.country);
       if (!country) {
         country = {
           name: park.country,

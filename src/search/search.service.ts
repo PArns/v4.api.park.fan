@@ -39,7 +39,7 @@ export class SearchService {
     private readonly queueDataService: QueueDataService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
     const { q, type } = query;
@@ -538,11 +538,11 @@ export class SearchService {
       waitTime: waitTimesMap.get(attraction.id) || null,
       parentPark: attraction.park
         ? {
-          id: attraction.park.id,
-          name: attraction.park.name,
-          slug: attraction.park.slug,
-          url: buildParkUrl(attraction.park),
-        }
+            id: attraction.park.id,
+            name: attraction.park.name,
+            slug: attraction.park.slug,
+            url: buildParkUrl(attraction.park),
+          }
         : null,
     }));
   }
@@ -572,11 +572,11 @@ export class SearchService {
       showTimes: showTimesMap.get(show.id) || null,
       parentPark: show.park
         ? {
-          id: show.park.id,
-          name: show.park.name,
-          slug: show.park.slug,
-          url: buildParkUrl(show.park),
-        }
+            id: show.park.id,
+            name: show.park.name,
+            slug: show.park.slug,
+            url: buildParkUrl(show.park),
+          }
         : null,
     }));
   }
@@ -606,11 +606,11 @@ export class SearchService {
       resort: restaurant.park?.destination?.name || null,
       parentPark: restaurant.park
         ? {
-          id: restaurant.park.id,
-          name: restaurant.park.name,
-          slug: restaurant.park.slug,
-          url: buildParkUrl(restaurant.park),
-        }
+            id: restaurant.park.id,
+            name: restaurant.park.name,
+            slug: restaurant.park.slug,
+            url: buildParkUrl(restaurant.park),
+          }
         : null,
     }));
   }
