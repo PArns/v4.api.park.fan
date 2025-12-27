@@ -32,7 +32,7 @@ export class DiscoveryService {
     private readonly parkRepository: Repository<Park>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Get complete geographic structure
@@ -427,7 +427,7 @@ export class DiscoveryService {
           COUNT(DISTINCT a.id) as operating_count
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
-        WHERE qd.timestamp > NOW() - INTERVAL '60 minutes'
+        WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
         GROUP BY a."parkId"
