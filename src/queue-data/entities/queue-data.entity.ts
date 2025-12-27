@@ -36,6 +36,9 @@ import {
 @Index(["attractionId", "timestamp"]) // For efficient time-series queries
 @Index(["queueType", "timestamp"])
 @Index("queue_data_timestamp_idx", ["timestamp"])
+@Index("idx_queue_data_operating", ["attractionId", "timestamp"], {
+  where: '"status" = \'OPERATING\'',
+}) // Partial index for status-based filtering (optimizes analytics queries)
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;
