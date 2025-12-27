@@ -28,6 +28,7 @@ export class EntityMatcherService {
   matchParks(
     wikiParks: ParkMetadata[],
     qtParks: ParkMetadata[],
+    knownMatches?: Map<string, string>, // Map<Source1_ID, Source2_ID>
   ): {
     matched: Array<{
       wiki: ParkMetadata;
@@ -43,6 +44,7 @@ export class EntityMatcherService {
       confidence: number;
     }> = [];
     let manualMatchCount = 0;
+    let dbMatchCount = 0;
     const wikiOnly: ParkMetadata[] = [];
     const qtOnly = [...qtParks]; // Clone array
 
@@ -56,33 +58,50 @@ export class EntityMatcherService {
       // Use strict normalization for keys to match config/manual-park-matches.ts
       const normWikiName = this.normalizeByKey(wiki.name);
 
-      // 1. Check for manual override first
-      const aliases = manualOverrides[normWikiName] || [];
+      // 1. Check for DB Known Match (Highest Priority)
+      if (knownMatches && knownMatches.has(wiki.externalId)) {
+        const targetId = knownMatches.get(wiki.externalId);
+        const dbMatch = qtOnly.find((p) => p.externalId === targetId);
 
-      if (aliases.length > 0) {
-        // Look for an alias match in qtOnly
-        const overrideMatch = qtOnly.find((p) =>
-          aliases.includes(this.normalizeByKey(p.name)),
-        );
-
-        if (overrideMatch) {
-          // this.logger.debug(
-          //   `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
-          // );
-          manualMatchCount++;
-          bestMatch = overrideMatch;
+        if (dbMatch) {
+          dbMatchCount++;
+          bestMatch = dbMatch;
           bestScore = 1.0;
+          this.logger.debug(
+            `🔒 DB Match applied: "${wiki.name}" ↔ "${dbMatch.name}"`,
+          );
         }
       }
 
-      // 2. Fallback to fuzzy matching if no manual match found
+      // 2. Check for manual override (Second Priority)
       if (!bestMatch) {
-        for (const qt of qtOnly) {
-          const score = this.calculateParkSimilarity(wiki, qt);
-          if (score > bestScore && score >= 0.7) {
-            // 70% threshold (lowered from 75% to catch exact name matches with minor data gaps)
-            bestScore = score;
-            bestMatch = qt;
+        const aliases = manualOverrides[normWikiName] || [];
+
+        if (aliases.length > 0) {
+          // Look for an alias match in qtOnly
+          const overrideMatch = qtOnly.find((p) =>
+            aliases.includes(this.normalizeByKey(p.name)),
+          );
+
+          if (overrideMatch) {
+            // this.logger.debug(
+            //   `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
+            // );
+            manualMatchCount++;
+            bestMatch = overrideMatch;
+            bestScore = 1.0;
+          }
+        }
+
+        // 2. Fallback to fuzzy matching if no manual match found
+        if (!bestMatch) {
+          for (const qt of qtOnly) {
+            const score = this.calculateParkSimilarity(wiki, qt);
+            if (score > bestScore && score >= 0.7) {
+              // 70% threshold (lowered from 75% to catch exact name matches with minor data gaps)
+              bestScore = score;
+              bestMatch = qt;
+            }
           }
         }
       }
@@ -96,7 +115,7 @@ export class EntityMatcherService {
     }
 
     this.logger.log(
-      `Park matching complete: ${matched.length} matched (including ${manualMatchCount} manual), ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only`,
+      `Park matching complete: ${matched.length} matched (including ${dbMatchCount} via DB, ${manualMatchCount} manual), ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only`,
     );
 
     return { matched, wikiOnly, qtOnly };

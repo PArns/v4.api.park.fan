@@ -52,10 +52,40 @@ export class ParkMetadataProcessor {
         await this.destinationsService.syncDestinations();
       this.logger.log(`✅ Synced ${destinationCount} destinations`);
 
-      // Step 2: Discover parks from ALL sources
+      // Step 2: Build Known Matches Map (DB-based)
+      this.logger.log("🔒 Building ID-based match maps from DB...");
+      const dbParks = await this.parkRepository.find();
+
+      const wikiToQt = new Map<string, string>();
+      const wikiToWz = new Map<string, string>();
+      const qtToWz = new Map<string, string>();
+
+      for (const p of dbParks) {
+        if (p.wikiEntityId) {
+          if (p.queueTimesEntityId) {
+            wikiToQt.set(p.wikiEntityId, p.queueTimesEntityId);
+          }
+          if (p.wartezeitenEntityId) {
+            wikiToWz.set(p.wikiEntityId, p.wartezeitenEntityId);
+          }
+        } else if (p.queueTimesEntityId && p.wartezeitenEntityId) {
+          // No Wiki, but QT <-> WZ match exists
+          qtToWz.set(p.queueTimesEntityId, p.wartezeitenEntityId);
+        }
+      }
+
+      this.logger.log(
+        `🔒 Found known matches: Wiki-QT=${wikiToQt.size}, Wiki-WZ=${wikiToWz.size}, QT-WZ=${qtToWz.size}`,
+      );
+
+      // Step 3: Discover parks from ALL sources
       this.logger.log("🔍 Discovering parks from all sources...");
       const { matched, wikiOnly, qtOnly, wzOnly } =
-        await this.orchestrator.discoverAllParks();
+        await this.orchestrator.discoverAllParks({
+          wikiToQt,
+          wikiToWz,
+          qtToWz,
+        });
 
       this.logger.log(
         `📊 Discovery complete: ${matched.length} matched, ${wikiOnly.length} wiki-only, ${qtOnly.length} qt-only, ${wzOnly.length} wz-only`,
@@ -295,6 +325,7 @@ export class ParkMetadataProcessor {
       park.primaryDataSource = effectivePrimary;
       if (wiki) park.wikiEntityId = wiki.externalId;
       if (qt) park.queueTimesEntityId = qt.externalId;
+      if (wz) park.wartezeitenEntityId = wz.externalId;
 
       // Update name if changed (Prioritize Wiki truth, even if shorter)
       if (park.name !== bestName) {

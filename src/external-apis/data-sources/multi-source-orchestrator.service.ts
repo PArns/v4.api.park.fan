@@ -47,12 +47,11 @@ export class MultiSourceOrchestrator {
     return this.sources.find((s) => s.name === name);
   }
 
-  /**
-   * Discover and match parks from all sources
-   *
-   * @returns All parks with matching information
-   */
-  async discoverAllParks(): Promise<{
+  async discoverAllParks(knownMatches?: {
+    wikiToQt?: Map<string, string>;
+    wikiToWz?: Map<string, string>;
+    qtToWz?: Map<string, string>;
+  }): Promise<{
     matched: Array<{
       wiki?: ParkMetadata;
       qt?: ParkMetadata;
@@ -89,11 +88,19 @@ export class MultiSourceOrchestrator {
 
     // 2. Match Wiki vs Queue-Times
     // Result: matched (Wiki+QT), wikiOnly (Wiki-QT), qtOnly (QT-Wiki)
-    const qtMatchResult = this.entityMatcher.matchParks(wikiParks, qtParks);
+    const qtMatchResult = this.entityMatcher.matchParks(
+      wikiParks,
+      qtParks,
+      knownMatches?.wikiToQt,
+    );
 
     // 3. Match Wiki vs Wartezeiten.app
     // Result: matched (Wiki+WZ), wikiOnly (Wiki-WZ), qtOnly (WZ-Wiki)
-    const wzMatchResult = this.entityMatcher.matchParks(wikiParks, wzParks);
+    const wzMatchResult = this.entityMatcher.matchParks(
+      wikiParks,
+      wzParks,
+      knownMatches?.wikiToWz,
+    );
 
     // 4. Match Remaining QT vs Remaining WZ (Parks NOT in Wiki)
     // We use the "unmatched" lists from previous steps
@@ -103,7 +110,11 @@ export class MultiSourceOrchestrator {
     // Use matchParks but interpret the result carefully:
     // "wiki" arg -> QT parks
     // "qt" arg -> WZ parks
-    const noWikiMatchResult = this.entityMatcher.matchParks(qtNoWiki, wzNoWiki);
+    const noWikiMatchResult = this.entityMatcher.matchParks(
+      qtNoWiki,
+      wzNoWiki,
+      knownMatches?.qtToWz,
+    );
     // matched.wiki -> QT
     // matched.qt -> WZ
 
