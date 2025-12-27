@@ -106,9 +106,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=2, s-maxage=2";
     }
 
-    // Wait times - very short cache (2 minutes)
+    // Wait times - moderate cache (5 minutes)
     if (path.includes("/wait-times")) {
-      return "public, max-age=120, s-maxage=120, stale-while-revalidate=300";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Parks metadata - moderate cache (5 min)
@@ -116,9 +116,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    //Queue data - short cache (30s)
+    //Queue data - moderate cache (5 minutes)
     if (path.includes("/queue-data")) {
-      return "public, max-age=30, s-maxage=30, stale-while-revalidate=60";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Predictions - depends on type
@@ -146,9 +146,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Discovery/geo endpoints - long cache (1 hour)
+    // Discovery/geo endpoints (5 min)
     if (path.includes("/discovery")) {
-      return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=7200";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Search - moderate cache (5 min) - matches Redis TTL
@@ -161,9 +161,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=86400, s-maxage=86400, stale-while-revalidate=172800";
     }
 
-    // Stats/analytics - short cache (1 min)
+    // Stats/analytics - moderate cache (5 minutes)
     if (path.includes("/stats") || path.includes("/analytics")) {
-      return "public, max-age=60, s-maxage=60, stale-while-revalidate=120";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Default - moderate cache for other endpoints

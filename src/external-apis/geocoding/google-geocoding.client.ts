@@ -258,6 +258,9 @@ export class GoogleGeocodingClient {
       // Paris Metropolitan Area
       "Marne-la-Vallée": "Paris", // Disneyland Paris
       Chessy: "Paris", // Disneyland Paris
+
+      // Lyon Metropolitan Area
+      "Les Avenières Veyrins-Thuellin": "Lyon", // Walibi Rhône-Alpes
     };
 
     // Step 1: Try "route" type results (often contains major cities instead of small localities)
