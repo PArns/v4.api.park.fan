@@ -34,7 +34,7 @@ export class DiscoveryController {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/discovery/geo
@@ -43,13 +43,12 @@ export class DiscoveryController {
    * Cached for 24 hours (HTTP + Redis).
    */
   @Get("geo")
-  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours HTTP cache
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes HTTP cache (live stats)
   @ApiOperation({
     summary: "Get complete geo structure",
     description:
       "Returns hierarchical structure of continents → countries → cities → parks → attractions. " +
-      "Includes full URL paths for route generation. Cached for 24 hours. " +
-      "Perfect for static site generation and building navigation menus.",
+      "Includes live statistics (crowd levels, wait times). Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -115,12 +114,12 @@ export class DiscoveryController {
    * Returns all continents with nested data.
    */
   @Get("continents")
-  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes for live stats
   @ApiOperation({
     summary: "List all continents",
     description:
       "Returns all continents with countries, cities, parks, and attractions. " +
-      "Same data as /geo endpoint but without global summary counts.",
+      "Includes live statistics. Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -137,7 +136,7 @@ export class DiscoveryController {
    * Returns countries in a specific continent.
    */
   @Get("continents/:continentSlug")
-  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
   @ApiOperation({
     summary: "Get countries in continent",
     description:
@@ -187,8 +186,8 @@ export class DiscoveryController {
     const continentName =
       countries.length > 0
         ? (await this.discoveryService.getContinents()).find(
-            (c) => c.slug === continentSlug,
-          )?.name || continentSlug
+          (c) => c.slug === continentSlug,
+        )?.name || continentSlug
         : continentSlug;
 
     const breadcrumbs: BreadcrumbDto[] = [
@@ -205,7 +204,7 @@ export class DiscoveryController {
    * Returns cities in a specific country.
    */
   @Get("continents/:continentSlug/:countrySlug")
-  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
   @ApiOperation({
     summary: "Get cities in country",
     description:
