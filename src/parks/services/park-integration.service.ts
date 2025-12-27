@@ -41,7 +41,7 @@ export class ParkIntegrationService {
   private readonly TTL_WEATHER_FORECAST = 6 * 60 * 60; // 6 hours (forecast updates every 12h)
   private readonly TTL_WEATHER_CURRENT = 6 * 60 * 60; // 6 hours (current updates every 12h)
   private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
-  private readonly TTL_QUEUE_DATA = 3 * 60; // 3 minutes (updates every 5min, cache slightly less)
+  private readonly TTL_QUEUE_DATA = 5 * 60; // 5 minutes (matches update frequency)
   private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
 
   constructor(

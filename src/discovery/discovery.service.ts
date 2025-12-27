@@ -32,7 +32,7 @@ export class DiscoveryService {
     private readonly parkRepository: Repository<Park>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Get complete geographic structure
@@ -420,17 +420,26 @@ export class DiscoveryService {
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
       ),
-      park_waits AS (
-        SELECT 
-          a."parkId",
-          AVG(qd."waitTime") as avg_wait,
-          COUNT(DISTINCT a.id) as operating_count
+      latest_attraction_data AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime",
+          qd."status",
+          a."parkId"
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-        GROUP BY a."parkId"
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      ),
+      park_waits AS (
+        SELECT 
+          lad."parkId",
+          AVG(lad."waitTime") as avg_wait,
+          COUNT(DISTINCT lad."attractionId") as operating_count
+        FROM latest_attraction_data lad
+        WHERE lad.status = 'OPERATING'
+          AND lad."waitTime" IS NOT NULL
+        GROUP BY lad."parkId"
       )
       SELECT 
         p.id,

@@ -705,7 +705,7 @@ export class MLService {
         .where("q.attractionId IN (:...ids)", {
           ids: parkPredictions.map((p) => p.attractionId).slice(0, 10),
         }) // Check first 10 attractions
-        .andWhere("q.timestamp > NOW() - INTERVAL '30 minutes'")
+        .andWhere("q.timestamp > NOW() - INTERVAL '24 hours'")
         .orderBy("q.timestamp", "DESC")
         .getOne();
 
