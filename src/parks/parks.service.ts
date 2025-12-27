@@ -37,7 +37,7 @@ export class ParksService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
-  ) {}
+  ) { }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -781,9 +781,9 @@ export class ParksService {
         // Update if times, description, or holiday/bridge status changed
         const hasChanges =
           existing.openingTime?.getTime() !==
-            scheduleEntry.openingTime?.getTime() ||
+          scheduleEntry.openingTime?.getTime() ||
           existing.closingTime?.getTime() !==
-            scheduleEntry.closingTime?.getTime() ||
+          scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description ||
           existing.isHoliday !== scheduleEntry.isHoliday ||
           existing.isBridgeDay !== scheduleEntry.isBridgeDay;
@@ -992,9 +992,9 @@ export class ParksService {
       .createQueryBuilder("park")
       .where("park.latitude IS NOT NULL")
       .andWhere("park.longitude IS NOT NULL")
-      .andWhere(
-        "(park.continent IS NULL OR park.country IS NULL OR park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL)",
-      )
+      // Remove strict missing data check to allow re-geocoding/verification of parks that have data (e.g. from Wiki)
+      // but haven't been processed by our geocoder yet (geocodingAttemptedAt IS NULL).
+      // This is crucial for applying Metro Mappings (e.g. fixing Bay Lake -> Orlando).
       .andWhere(
         "(park.geocodingAttemptedAt IS NULL OR (park.metadataRetryCount < 3 AND (park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL)))",
       )
