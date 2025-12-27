@@ -47,7 +47,7 @@ export class DiscoveryService {
     const cached = await this.redis.get(this.CACHE_KEY);
     if (cached) {
       this.logger.debug("Returning cached geo structure");
-      return JSON.parse(cached);
+      return this.hydrateStructure(JSON.parse(cached));
     }
 
     this.logger.log("Building geo structure from database");
@@ -168,6 +168,7 @@ export class DiscoveryService {
         url: parkBaseUrl,
         attractions,
         attractionCount: attractions.length,
+        status: "CLOSED", // Default, will be hydrated
       };
       city.parks.push(parkRef);
       city.parkCount++;
@@ -219,7 +220,27 @@ export class DiscoveryService {
       generatedAt: new Date().toISOString(),
     };
 
-    // Merge live statistics
+    // Cache the structure (skeleton) for 24h
+    await this.redis.setex(
+      this.CACHE_KEY,
+      this.CACHE_TTL,
+      JSON.stringify(structure),
+    );
+
+    this.logger.log(
+      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks, ${structure.attractionCount} attractions`,
+    );
+
+    // Apply Live Stats (Fresh)
+    return this.hydrateStructure(structure);
+  }
+
+  /**
+   * Hydrates the geographic structure with live data
+   */
+  private async hydrateStructure(
+    structure: GeoStructureDto,
+  ): Promise<GeoStructureDto> {
     const liveStats = await this.getLiveStats();
 
     for (const continent of structure.continents) {
@@ -239,12 +260,50 @@ export class DiscoveryService {
 
           for (const park of city.parks) {
             const stats = liveStats.get(park.id);
-            if (stats?.isOpen) {
-              cityOpenCount++;
-              if (stats.avgWait > 0) {
-                cityTotalWait += stats.avgWait;
-                cityWaitCount++;
+            if (stats) {
+              // Hydrate Park Status
+              park.status = stats.isOpen ? "OPERATING" : "CLOSED";
+
+              // Hydrate Analytics
+              park.analytics = {
+                statistics: {
+                  avgWaitTime: stats.avgWait,
+                  operatingAttractions: stats.operatingAttractions,
+                  totalAttractions: park.attractionCount,
+                },
+              };
+
+              // Hydrate Crowd Level
+              if (stats.crowdLevel !== null) {
+                // Map numeric crowd level to label
+                let level = "LOW";
+                if (stats.crowdLevel > 60) level = "HIGH";
+                else if (stats.crowdLevel > 30) level = "MODERATE";
+
+                park.currentLoad = {
+                  crowdLevel: level,
+                  value: stats.crowdLevel,
+                };
+              } else {
+                // Fallback if no crowd level data but waiting times exist
+                if (stats.avgWait > 30) {
+                  park.currentLoad = { crowdLevel: "MODERATE", value: 50 };
+                } else if (stats.avgWait > 60) {
+                  park.currentLoad = { crowdLevel: "HIGH", value: 80 };
+                }
               }
+
+              // City Aggregations
+              if (stats.isOpen) {
+                cityOpenCount++;
+                if (stats.avgWait > 0) {
+                  cityTotalWait += stats.avgWait;
+                  cityWaitCount++;
+                }
+              }
+            } else {
+              // Default offline status
+              park.status = "CLOSED";
             }
           }
 
@@ -276,17 +335,6 @@ export class DiscoveryService {
           ? Math.round(continentTotalWait / continentWaitCount)
           : undefined;
     }
-
-    // Cache the result
-    await this.redis.setex(
-      this.CACHE_KEY,
-      this.CACHE_TTL,
-      JSON.stringify(structure),
-    );
-
-    this.logger.log(
-      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks, ${structure.attractionCount} attractions`,
-    );
 
     return structure;
   }
@@ -339,13 +387,21 @@ export class DiscoveryService {
   }
 
   /**
-   * Get live park statistics (open counts + wait times)
+   * Get live park statistics (open counts + wait times + crowd levels)
    * Cached for 5 minutes, performant single query
    *
-   * @returns Map of Park ID -> { isOpen, avgWait }
+   * @returns Map of Park ID -> Stats
    */
   private async getLiveStats(): Promise<
-    Map<string, { isOpen: boolean; avgWait: number }>
+    Map<
+      string,
+      {
+        isOpen: boolean;
+        avgWait: number;
+        operatingAttractions: number;
+        crowdLevel: number | null;
+      }
+    >
   > {
     const cached = await this.redis.get(this.LIVE_STATS_CACHE_KEY);
     if (cached) {
@@ -367,7 +423,8 @@ export class DiscoveryService {
       park_waits AS (
         SELECT 
           a."parkId",
-          AVG(qd."waitTime") as avg_wait
+          AVG(qd."waitTime") as avg_wait,
+          COUNT(DISTINCT a.id) as operating_count
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
         WHERE qd.timestamp > NOW() - INTERVAL '20 minutes'
@@ -377,18 +434,32 @@ export class DiscoveryService {
       )
       SELECT 
         p.id,
+        p."current_crowd_level",
         CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END as is_open,
-        COALESCE(pw.avg_wait, 0) as avg_wait
+        COALESCE(pw.avg_wait, 0) as avg_wait,
+        COALESCE(pw.operating_count, 0) as operating_count
       FROM parks p
       LEFT JOIN park_status ps ON ps."parkId" = p.id
       LEFT JOIN park_waits pw ON pw."parkId" = p.id
     `);
 
-    const stats = new Map<string, { isOpen: boolean; avgWait: number }>();
+    const stats = new Map<
+      string,
+      {
+        isOpen: boolean;
+        avgWait: number;
+        operatingAttractions: number;
+        crowdLevel: number | null;
+      }
+    >();
     for (const row of result) {
       stats.set(row.id, {
         isOpen: row.is_open,
         avgWait: Math.round(parseFloat(row.avg_wait || 0)),
+        operatingAttractions: parseInt(row.operating_count || "0", 10),
+        crowdLevel: row.current_crowd_level
+          ? parseFloat(row.current_crowd_level)
+          : null,
       });
     }
 

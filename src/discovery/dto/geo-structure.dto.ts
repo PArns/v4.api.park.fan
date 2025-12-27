@@ -72,6 +72,42 @@ export class ParkReferenceDto {
     example: 15,
   })
   attractionCount: number;
+
+  @ApiProperty({
+    description: "Park operating status",
+    enum: ["OPERATING", "CLOSED", "REFURBISHMENT"],
+    example: "OPERATING",
+  })
+  status: "OPERATING" | "CLOSED" | "REFURBISHMENT";
+
+  @ApiProperty({
+    description: "Current crowd levels",
+    example: { crowdLevel: "MODERATE", value: 45 },
+    nullable: true,
+  })
+  currentLoad?: {
+    crowdLevel: string;
+    value: number;
+  };
+
+  @ApiProperty({
+    description: "Live park analytics",
+    example: {
+      statistics: {
+        avgWaitTime: 15,
+        operatingAttractions: 12,
+        totalAttractions: 15,
+      },
+    },
+    nullable: true,
+  })
+  analytics?: {
+    statistics: {
+      avgWaitTime: number;
+      operatingAttractions: number;
+      totalAttractions: number;
+    };
+  };
 }
 
 /**
