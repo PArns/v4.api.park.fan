@@ -1450,7 +1450,7 @@ export class ParksService {
           SELECT status
           FROM queue_data qd
           WHERE qd."attractionId" = a.id
-            AND qd.timestamp > NOW() - INTERVAL '20 minutes'
+            AND qd.timestamp > NOW() - INTERVAL '60 minutes'
           ORDER BY timestamp DESC
           LIMIT 1
         ) q ON true

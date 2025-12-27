@@ -1329,18 +1329,18 @@ export class AnalyticsService {
           AVG(lu."waitTime") as avg_wait,
           COUNT(*) as active_rides,
           (SELECT COUNT(*) FROM attractions WHERE "parkId" = p.id) as total_attractions,
-          (SELECT COUNT(*)
-           FROM attractions a
-           LEFT JOIN LATERAL (
-             SELECT qd.status
-             FROM queue_data qd
-             WHERE qd."attractionId" = a.id
-               AND qd.timestamp > NOW() - INTERVAL '20 minutes'
-             ORDER BY timestamp DESC
-             LIMIT 1
-           ) latest_status ON true
-           WHERE a."parkId" = p.id AND latest_status.status = 'OPERATING'
-          ) as operating_attractions
+           (SELECT COUNT(*)
+            FROM attractions a
+            LEFT JOIN LATERAL (
+              SELECT qd.status
+              FROM queue_data qd
+              WHERE qd."attractionId" = a.id
+                AND qd.timestamp > NOW() - INTERVAL '60 minutes'
+              ORDER BY timestamp DESC
+              LIMIT 1
+            ) latest_status ON true
+            WHERE a."parkId" = p.id AND latest_status.status = 'OPERATING'
+           ) as operating_attractions
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
         GROUP BY p.id, p.name, p.slug, p.city, p.country, p."continentSlug", p."countrySlug", p."citySlug"

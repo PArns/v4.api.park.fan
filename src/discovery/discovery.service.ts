@@ -427,7 +427,7 @@ export class DiscoveryService {
           COUNT(DISTINCT a.id) as operating_count
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
-        WHERE qd.timestamp > NOW() - INTERVAL '20 minutes'
+        WHERE qd.timestamp > NOW() - INTERVAL '60 minutes'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
         GROUP BY a."parkId"
