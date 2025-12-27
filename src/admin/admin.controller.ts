@@ -173,53 +173,59 @@ export class AdminController {
   }
 
   /**
-   * Reset and Rebuild Cache
+   * Complete Cache Reset and Rebuild
    *
-   * Flushes all caches and triggers a full rebuild of the data
-   * (Holidays, Parks, Children, Wait Times).
+   * ⚠️ WARNING: Performs FLUSHALL on Redis, clearing ALL cache data.
+   * Queue jobs are NOT affected (separate storage mechanism).
+   *
+   * Use when:
+   * - Discovery structure is corrupted or out of sync
+   * - Major database schema changes occurred
+   * - Cache contains stale/invalid data
+   *
+   * Pipeline order (by priority):
+   * 1. Holidays (100) - Base geographic/temporal metadata
+   * 2. Parks (90) - Park metadata, geocoding, matching
+   * 3. Children (80) - Attractions, Shows, Restaurants
+   * 4. Live Data (70) - Current wait times and schedules
    */
   @Post("cache/reset")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: "Reset and rebuild cache",
+    summary: "Complete cache reset and rebuild",
     description:
-      "Flushes all caches and triggers full data rebuild (Holidays -> Parks -> Children -> Live Data)",
+      "⚠️ Performs FLUSHALL on Redis and triggers complete data rebuild pipeline. Use with caution.",
   })
   @ApiResponse({
     status: 200,
-    description: "Cache flushed and rebuild jobs triggered",
+    description: "Cache completely flushed and rebuild jobs triggered",
   })
   async resetCache(): Promise<{
     message: string;
-    keysDeleted: number;
+    flushed: string;
     jobsTriggered: string[];
   }> {
-    // 1. COMPLETELY Flush ALL Redis (FLUSHALL)
+    // Perform complete Redis flush
     await this.redis.flushall();
-    const keysDeleted = 0; // FLUSHALL doesn't return count
 
-    // 2. Trigger Rebuild Jobs
+    // Trigger complete rebuild pipeline
     const jobsTriggered: string[] = [];
 
-    // - Holidays (Base metadata)
     await this.holidaysQueue.add("fetch-holidays", {}, { priority: 100 });
     jobsTriggered.push("fetch-holidays");
 
-    // - Park Metadata
     await this.parkMetadataQueue.add("fetch-all-parks", {}, { priority: 90 });
     jobsTriggered.push("fetch-all-parks");
 
-    // - Children Metadata (Attractions, Shows, Restaurants)
     await this.childrenQueue.add("fetch-all-children", {}, { priority: 80 });
     jobsTriggered.push("fetch-all-children");
 
-    // - Live Wait Times
     await this.waitTimesQueue.add("fetch-wait-times", {}, { priority: 70 });
     jobsTriggered.push("fetch-wait-times");
 
     return {
-      message: "Cache reset and rebuild started",
-      keysDeleted,
+      message: "Complete cache reset and rebuild started",
+      flushed: "ALL (FLUSHALL executed)",
       jobsTriggered,
     };
   }
