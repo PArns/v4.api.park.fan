@@ -194,8 +194,9 @@ export class AdminController {
     keysDeleted: number;
     jobsTriggered: string[];
   }> {
-    // 1. Flush Cache
-    const { keysDeleted } = await this.flushCache();
+    // 1. COMPLETELY Flush ALL Redis (FLUSHALL)
+    await this.redis.flushall();
+    const keysDeleted = 0; // FLUSHALL doesn't return count
 
     // 2. Trigger Rebuild Jobs
     const jobsTriggered: string[] = [];
