@@ -583,13 +583,15 @@ def create_prediction_features(
             add_time_since_park_open,
             add_downtime_features,
             add_virtual_queue_feature,
-            add_bridge_day_feature
+            add_bridge_day_feature,
+            add_park_has_schedule_feature
         )
         
         df = add_park_occupancy_feature(df, feature_context)
         df = add_time_since_park_open(df, feature_context)
         df = add_downtime_features(df, feature_context)
         df = add_virtual_queue_feature(df, feature_context)
+        df = add_park_has_schedule_feature(df, feature_context)  # NEW: Data quality indicator
         
         # Bridge day needs metadata refetch ideally, but for inference we rely on feature_context
         # If feature_context has it, great. If not, add_bridge_day_feature will attempt fallback or skip.
@@ -610,6 +612,7 @@ def create_prediction_features(
         df['downtime_minutes_today'] = 0.0
         df['has_virtual_queue'] = 0
         df['is_bridge_day'] = 0
+        df['park_has_schedule'] = 1  # NEW: Default to 1 (assume schedule exists for better quality)
 
     return df
 
