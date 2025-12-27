@@ -23,6 +23,7 @@ import { PredictionAccuracyService } from "./services/prediction-accuracy.servic
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
+import { ParksService } from "../parks/parks.service";
 import { forwardRef } from "@nestjs/common";
 
 @Injectable()
@@ -52,6 +53,8 @@ export class MLService {
     private analyticsService: AnalyticsService,
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
+    @Inject(forwardRef(() => ParksService))
+    private parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     // ML service URL from environment or default
@@ -470,12 +473,31 @@ export class MLService {
         this.logger.warn(`Failed to check bridge day status: ${error}`);
       }
 
+      // 6. Check if park has schedule data
+      // This helps ML understand data quality: Parks with schedules have more reliable patterns
+      let parkHasSchedule: Record<string, boolean> = {};
+      try {
+        const scheduleExists = await this.scheduleEntryRepository.findOne({
+          where: {
+            parkId,
+            scheduleType: ScheduleType.OPERATING,
+          },
+          select: ["id"],
+        });
+
+        parkHasSchedule[parkId] = !!scheduleExists;
+      } catch (error) {
+        this.logger.warn(`Failed to check schedule existence: ${error}`);
+        parkHasSchedule[parkId] = false; // Safe default
+      }
+
       return {
         parkOccupancy,
         parkOpeningTimes,
         downtimeCache,
         queueData,
         isBridgeDay,
+        parkHasSchedule, // NEW: ML can learn data quality patterns
       };
     } catch (error) {
       this.logger.warn(`Failed to build feature context: ${error}`);
@@ -677,39 +699,22 @@ export class MLService {
       predictionsByPark.get(parkId)!.push(pred);
     }
 
-    // Get park statuses in batch
+    // Get park statuses in batch using CONSOLIDATED function
+    // This ensures we don't store predictions for parks that are closed
     const parkIds = Array.from(predictionsByPark.keys());
-    const parks = await this.parkRepository.find({
-      where: { id: In(parkIds) },
-      select: ["id"],
-    });
 
-    // Get current live status for each park
+    // Use consolidated status calculation (hybrid: schedule + ride fallback)
+    const parkStatusMap = await this.parksService.getBatchParkStatus(parkIds);
+
+    // Filter predictions: Only keep predictions for OPERATING parks
     const validPredictions: PredictionDto[] = [];
     let filteredCount = 0;
 
     for (const [parkId, parkPredictions] of predictionsByPark) {
-      const park = parks.find((p) => p.id === parkId);
-      if (!park) {
-        filteredCount += parkPredictions.length;
-        continue;
-      }
+      const status = parkStatusMap.get(parkId);
 
-      // Check if park is currently operating by looking at recent queue data
-      // If park has recent queue data, it's operating
-      // Check if park is currently operating by looking at recent queue data
-      // If park has recent queue data, it's operating
-      // Use SQL-native time comparison to avoid timezone mismatches between Node process and DB
-      const recentQueueData = await this.queueDataRepository
-        .createQueryBuilder("q")
-        .where("q.attractionId IN (:...ids)", {
-          ids: parkPredictions.map((p) => p.attractionId).slice(0, 10),
-        }) // Check first 10 attractions
-        .andWhere("q.timestamp > NOW() - INTERVAL '24 hours'")
-        .orderBy("q.timestamp", "DESC")
-        .getOne();
-
-      if (recentQueueData) {
+      // Only store predictions for parks that are currently OPERATING
+      if (status === "OPERATING") {
         validPredictions.push(...parkPredictions);
       } else {
         filteredCount += parkPredictions.length;
@@ -718,7 +723,7 @@ export class MLService {
 
     if (filteredCount > 0) {
       this.logger.debug(
-        `🕒 Filtered ${filteredCount} /${predictions.length} predictions (parks closed/not operating)`,
+        `🕒 Filtered ${filteredCount}/${predictions.length} predictions (parks closed/not operating)`,
       );
     }
 

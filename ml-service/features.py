@@ -779,6 +779,70 @@ def add_bridge_day_feature(
     return df
 
 
+def add_park_has_schedule_feature(
+    df: pd.DataFrame,
+    feature_context: Dict = None
+) -> pd.DataFrame:
+    """
+    Add park_has_schedule feature
+    
+    Indicates whether a park has schedule data integration.
+    Parks WITH schedules have more reliable patterns (ML can trust them more).
+    Parks WITHOUT schedules rely on queue data only (more variability).
+    
+    This helps ML learn data quality patterns and adjust confidence accordingly.
+    
+    Args:
+        df: DataFrame with parkId column
+        feature_context: Optional dict with parkHasSchedule data from API
+        
+    Returns:
+        DataFrame with park_has_schedule feature
+    """
+    df = df.copy()
+    
+    # Initialize with default (assume schedule exists = better quality)
+    df['park_has_schedule'] = 1
+    
+    if feature_context and 'parkHasSchedule' in feature_context:
+        # Inference Mode: Use provided context from Node.js
+        park_schedule_map = feature_context['parkHasSchedule']
+        
+        # Map schedule existence to each row based on parkId
+        for park_id, has_schedule in park_schedule_map.items():
+            mask = df['parkId'] == park_id
+            df.loc[mask, 'park_has_schedule'] = int(has_schedule)
+    else:
+        # Training Mode: Check DB for schedule existence
+        # Query to check which parks have OPERATING schedules
+        from db import get_db
+        from sqlalchemy import text
+        
+        try:
+            park_ids = df['parkId'].unique().tolist()
+            
+            with get_db() as db:
+                query = text("""
+                    SELECT DISTINCT "parkId"::text
+                    FROM schedule_entries
+                    WHERE "parkId"::text = ANY(:park_ids)
+                      AND "scheduleType" = 'OPERATING'
+                """)
+                result = db.execute(query, {"park_ids": park_ids})
+                parks_with_schedule = set(row[0] for row in result.fetchall())
+            
+            # Set feature: 1 if has schedule, 0 if not
+            for park_id in park_ids:
+                mask = df['parkId'] == park_id
+                df.loc[mask, 'park_has_schedule'] = int(park_id in parks_with_schedule)
+                
+        except Exception as e:
+            print(f"⚠️  Failed to check schedule existence: {e}")
+            # Keep default (1) on error
+    
+    return df
+
+
 def engineer_features(
     df: pd.DataFrame,
     start_date: datetime,
@@ -817,6 +881,7 @@ def engineer_features(
     df = add_time_since_park_open(df, feature_context)
     df = add_downtime_features(df, feature_context)
     df = add_virtual_queue_feature(df, feature_context)
+    df = add_park_has_schedule_feature(df, feature_context)  # NEW: Data quality indicator
 
     return df
 
@@ -878,6 +943,7 @@ def get_feature_columns() -> List[str]:
         'had_downtime_today',            # Boolean: was DOWN today
         'downtime_minutes_today',        # Total downtime duration
         'has_virtual_queue',             # Boolean: boarding groups active
+        'park_has_schedule',             # NEW: Data quality indicator (1=has schedule, 0=no schedule)
     ]
 
 

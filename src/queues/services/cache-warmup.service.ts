@@ -189,7 +189,7 @@ export class CacheWarmupService {
       // Find parks with opening time in next 12h
       const upcomingParks = await this.parkRepository
         .createQueryBuilder("park")
-        .innerJoin("park.schedules", "schedule")
+        .innerJoin("schedule_entries", "schedule", "schedule.parkId = park.id")
         .where("schedule.scheduleType = :type", { type: "OPERATING" })
         .andWhere("schedule.openingTime >= :now", { now })
         .andWhere("schedule.openingTime <= :next12h", { next12h })

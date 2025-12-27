@@ -6,6 +6,7 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
+import { ParksService } from "../../parks/parks.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
@@ -30,6 +31,7 @@ export class AttractionIntegrationService {
     private readonly analyticsService: AnalyticsService,
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
+    private readonly parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -121,6 +123,29 @@ export class AttractionIntegrationService {
       // Set overall status (use first queue's status as representative)
       dto.status = queueData[0].status;
     }
+
+    // Check park status and calculate effectiveStatus
+    // Attractions inherit park's closed status to prevent showing operating rides when park is closed
+    let parkStatus: "OPERATING" | "CLOSED" = "CLOSED";
+    if (attraction.parkId) {
+      try {
+        const statusMap = await this.parksService.getBatchParkStatus([
+          attraction.parkId,
+        ]);
+        parkStatus = statusMap.get(attraction.parkId) || "CLOSED";
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch park status for attraction ${attraction.id}:`,
+          error,
+        );
+        // Safe default: assume closed
+        parkStatus = "CLOSED";
+      }
+    }
+
+    // Calculate effective status
+    // If park is CLOSED, attraction is effectively CLOSED regardless of queue data
+    dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
 
     // Fetch forecasts (ThemeParks.wiki - next 24 hours)
     const forecasts = await this.queueDataService.findForecastsByAttraction(

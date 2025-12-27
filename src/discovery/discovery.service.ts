@@ -412,24 +412,43 @@ export class DiscoveryService {
     this.logger.log("Fetching live park statistics");
 
     // ONE performant query for all parks
+    // Implements same hybrid logic as central utility:
+    // - Primary: Schedule-based (if schedule exists)
+    // - Fallback: Ride-based (for parks without schedules, using recent data)
     const result = await this.parkRepository.query(`
-      WITH park_status AS (
+      WITH park_schedules AS (
         SELECT DISTINCT s."parkId"
         FROM schedule_entries s
         WHERE s."scheduleType" = 'OPERATING'
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
       ),
+      parks_with_schedule AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+      ),
       latest_attraction_data AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
           qd."waitTime",
           qd."status",
+          qd."timestamp",
           a."parkId"
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
-        WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
+        WHERE qd.timestamp > NOW() - INTERVAL '30 minutes'
         ORDER BY qd."attractionId", qd.timestamp DESC
+      ),
+      park_ride_activity AS (
+        SELECT 
+          lad."parkId",
+          COUNT(*) FILTER (
+            WHERE lad.status = 'OPERATING' 
+              AND lad."waitTime" > 0
+          ) as active_rides
+        FROM latest_attraction_data lad
+        GROUP BY lad."parkId"
       ),
       park_waits AS (
         SELECT 
@@ -444,11 +463,20 @@ export class DiscoveryService {
       SELECT 
         p.id,
         p."current_crowd_level",
-        CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END as is_open,
+        CASE 
+          -- If park has schedule: Use schedule-based logic
+          WHEN pws."parkId" IS NOT NULL THEN 
+            CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END
+          -- If park has NO schedule: Use ride-based fallback
+          ELSE 
+            CASE WHEN COALESCE(pra.active_rides, 0) > 0 THEN true ELSE false END
+        END as is_open,
         COALESCE(pw.avg_wait, 0) as avg_wait,
         COALESCE(pw.operating_count, 0) as operating_count
       FROM parks p
-      LEFT JOIN park_status ps ON ps."parkId" = p.id
+      LEFT JOIN park_schedules ps ON ps."parkId" = p.id
+      LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
+      LEFT JOIN park_ride_activity pra ON pra."parkId" = p.id
       LEFT JOIN park_waits pw ON pw."parkId" = p.id
     `);
 

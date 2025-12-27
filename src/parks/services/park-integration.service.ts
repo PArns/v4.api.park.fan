@@ -141,18 +141,31 @@ export class ParkIntegrationService {
     const schedule = await this.parksService.getUpcomingSchedule(park.id, 7);
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
-    // Determine overall park status based on schedule
-    // Compare current UTC time with schedule's UTC timestamps
-    const now = new Date(); // Current time in UTC
-    const operatingSchedule = schedule.find(
-      (s) =>
-        s.scheduleType === "OPERATING" &&
-        s.openingTime &&
-        s.closingTime &&
-        now >= s.openingTime &&
-        now < s.closingTime,
+    // Fetch current queue data for all attractions
+    // ALWAYS fetch queue data to detect activity for parks without schedules
+    const queueDataMap = await this.queueDataService.findCurrentStatusByPark(
+      park.id,
     );
-    dto.status = operatingSchedule ? "OPERATING" : "CLOSED";
+
+    // Collect ride status data for fallback logic (parks without schedules)
+    const rideStatusData: import("../../common/utils/status-calculator.util").RideStatusData[] =
+      [];
+    for (const queueDataArray of queueDataMap.values()) {
+      for (const qd of queueDataArray) {
+        rideStatusData.push({
+          status: qd.status,
+          waitTime: qd.waitTime,
+          lastUpdated: qd.timestamp,
+        });
+      }
+    }
+
+    // Determine overall park status using CENTRAL UTILITY
+    // Hybrid strategy: Schedule-based (primary) + Ride-based fallback (for parks without schedules)
+    const { isParkOpen } =
+      await import("../../common/utils/status-calculator.util");
+    const isOpen = isParkOpen(schedule, rideStatusData);
+    dto.status = isOpen ? "OPERATING" : "CLOSED";
 
     // Fetch ML Predictions (Hourly for attractions, Daily for park)
     // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)
@@ -203,42 +216,9 @@ export class ParkIntegrationService {
 
     dto.crowdForecast = dailyPredictions;
 
-    // Fetch current queue data for all attractions
-    // OPTIMIZED: Always fetch queue data (even if schedule says CLOSED) to detect unpredicted openings
-    const queueDataMap = await this.queueDataService.findCurrentStatusByPark(
-      park.id,
-    );
-
+    // Initialize counters for attraction status tracking
     let totalAttractionsCount = 0;
     let totalOperatingCount = 0;
-    let anyLiveActivity = false;
-
-    // First pass: Check for live activity to potentially override status
-    if (park.attractions) {
-      for (const attraction of park.attractions) {
-        const qData = queueDataMap.get(attraction.id);
-        if (qData && qData.length > 0) {
-          // Check if any queue indicates the ride is operating or has wait time
-          const active = qData.some(
-            (q) =>
-              q.status === "OPERATING" ||
-              (q.waitTime !== null && q.waitTime > 0),
-          );
-          if (active) {
-            anyLiveActivity = true;
-            break;
-          }
-        }
-      }
-    }
-
-    // Status Override: If schedule says CLOSED but we found live activity, force OPERATING
-    if (dto.status === "CLOSED" && anyLiveActivity) {
-      this.logger.log(
-        `Park ${park.name} detected OPEN via live data override (Schedule missing or mismatch)`,
-      );
-      dto.status = "OPERATING";
-    }
 
     if (
       park.attractions &&
@@ -271,9 +251,6 @@ export class ParkIntegrationService {
 
           // Set overall status (use first queue's status as representative)
           attraction.status = queueData[0].status;
-          if (attraction.status === "OPERATING") {
-            totalOperatingCount++;
-          }
         } else {
           // Fallback if no live data found
           attraction.queues = [];
@@ -290,6 +267,12 @@ export class ParkIntegrationService {
         // This prevents frontend from showing "Operating" rides when park is closed
         attraction.effectiveStatus =
           dto.status === "CLOSED" ? "CLOSED" : attraction.status;
+
+        // Count operating attractions based on EFFECTIVE status
+        // This ensures closed parks show 0 operating attractions
+        if (attraction.effectiveStatus === "OPERATING") {
+          totalOperatingCount++;
+        }
 
         // Attach ML predictions
         const mlPreds = hourlyPredictions[attraction.id] || [];
