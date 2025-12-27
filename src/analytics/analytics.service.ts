@@ -1342,8 +1342,8 @@ export class AnalyticsService {
             WHERE a."parkId" = p.id AND latest_status.status = 'OPERATING'
            ) as operating_attractions
         FROM latest_updates lu
-        WHERE lu.status = 'OPERATING'
         JOIN parks p ON p.id = lu."parkId"
+        WHERE lu.status = 'OPERATING'
         GROUP BY p.id, p.name, p.slug, p.city, p.country, p."continentSlug", p."countrySlug", p."citySlug"
       )
       SELECT * FROM park_stats
@@ -1838,8 +1838,8 @@ export class AnalyticsService {
           p."citySlug",
           AVG(lu."waitTime") as avg_wait
         FROM latest_updates lu
-        WHERE lu.status = 'OPERATING'
         JOIN parks p ON p.id = lu."parkId"
+        WHERE lu.status = 'OPERATING'
         GROUP BY p.id, p."continentSlug", p."countrySlug", p."citySlug"
       )
       SELECT * FROM park_stats
