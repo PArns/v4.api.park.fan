@@ -263,7 +263,27 @@ export class GoogleGeocodingClient {
       "Les Avenières Veyrins-Thuellin": "Lyon", // Walibi Rhône-Alpes
     };
 
-    // Step 1: Try "route" type results (often contains major cities instead of small localities)
+    // Step 1: Try "premise" or "street_address" type results first (most specific)
+    // These contain the exact address and are most accurate for pinpointing the correct city
+    // Example: Toverland coords return "Toverlaan 2, 5975 MR Sevenum" in premise result
+    if (!city) {
+      const premiseResult = results.find(
+        (result) =>
+          result.types.includes("premise") ||
+          result.types.includes("street_address"),
+      );
+
+      if (premiseResult) {
+        const localityComponent = premiseResult.address_components.find(
+          (component) => component.types.includes("locality"),
+        );
+        if (localityComponent) {
+          city = localityComponent.long_name;
+        }
+      }
+    }
+
+    // Step 2: Try "route" type results (often contains major cities instead of small localities)
     // Example: Disney World coords return Orlando in route result, Bay Lake in plus_code
     if (!city) {
       const routeResult = results.find((result) =>
@@ -280,7 +300,7 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // Step 2: Try pure "locality" type results, but SKIP "plus_code" primary types
+    // Step 3: Try pure "locality" type results, but SKIP "plus_code" primary types
     if (!city) {
       const localityResult = results.find(
         (result) =>
@@ -298,7 +318,7 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // Step 3: Fallback to administrative_area_level_3, sublocality, or postal_town
+    // Step 4: Fallback to administrative_area_level_3, sublocality, or postal_town
     if (!city) {
       for (const result of results) {
         // Skip plus_code for now - we'll use it as absolute last resort
@@ -317,7 +337,7 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // Step 4: Last resort - use plus_code locality if nothing else found
+    // Step 5: Last resort - use plus_code locality if nothing else found
     // This ensures we still get a city for parks that only have plus_code results
     // (e.g., Universal Studios Hollywood → Los Angeles, Universal Japan → Osaka)
     if (!city) {
