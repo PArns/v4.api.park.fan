@@ -228,43 +228,61 @@ export class GoogleGeocodingClient {
     let region: string | null = null;
     let regionCode: string | null = null;
 
-    // ... (city extraction logic same as before) ...
-    // Known metropolitan areas that should override specific locality names
-    const knownMetroAreas = [
-      "Tokyo",
-      "Osaka",
-      "Greater London",
-      "Greater Paris",
-      "Greater Los Angeles",
-      "Greater New York",
-      "San Francisco Bay Area",
-    ];
+    // IMPROVED CITY EXTRACTION LOGIC
+    // Strategy: Prefer major cities over small localities by prioritizing result types
+    // and avoiding plus_code results which often contain small towns.
 
-    // First, check for major metropolitan areas (administrative_area_level_2)
-    for (const result of results) {
-      const metroComponent = result.address_components.find((component) =>
-        component.types.includes("administrative_area_level_2"),
+    // Metropolitan Area Mapping: Map suburbs/small cities to their major metro areas
+    // This provides better UX for users (e.g., "Tokyo" instead of "Urayasu")
+    const metroAreaMapping: Record<string, string> = {
+      // Tokyo Metropolitan Area
+      Urayasu: "Tokyo", // Tokyo Disneyland
+      Maihama: "Tokyo", // Tokyo Disneyland district
+
+      // Shanghai Metropolitan Area
+      Pudong: "Shanghai", // Shanghai Disneyland
+      "Pu Dong Xin Qu": "Shanghai", // Shanghai Disneyland (Chinese name)
+
+      // Seoul Metropolitan Area
+      "Songpa-gu": "Seoul", // Lotte World
+      Songpa: "Seoul", // Lotte World district
+
+      // Orlando Metropolitan Area
+      "Bay Lake": "Orlando", // Disney World
+      "Lake Buena Vista": "Orlando", // Disney World
+      "Winter Garden": "Orlando", // Disney area
+      Kissimmee: "Orlando", // Disney area
+
+      // Los Angeles Metropolitan Area
+
+      // Paris Metropolitan Area
+      "Marne-la-Vallée": "Paris", // Disneyland Paris
+      Chessy: "Paris", // Disneyland Paris
+    };
+
+    // Step 1: Try "route" type results (often contains major cities instead of small localities)
+    // Example: Disney World coords return Orlando in route result, Bay Lake in plus_code
+    if (!city) {
+      const routeResult = results.find((result) =>
+        result.types.includes("route"),
       );
-      if (
-        metroComponent &&
-        knownMetroAreas.some((metro) =>
-          metroComponent.long_name.includes(metro),
-        )
-      ) {
-        const matchedMetro = knownMetroAreas.find((metro) =>
-          metroComponent.long_name.includes(metro),
+
+      if (routeResult) {
+        const localityComponent = routeResult.address_components.find(
+          (component) => component.types.includes("locality"),
         );
-        if (matchedMetro) {
-          city = matchedMetro;
-          break;
+        if (localityComponent) {
+          city = localityComponent.long_name;
         }
       }
     }
 
-    // If no metro area found, try locality (city)
+    // Step 2: Try pure "locality" type results, but SKIP "plus_code" primary types
     if (!city) {
-      const localityResult = results.find((result) =>
-        result.types.includes("locality"),
+      const localityResult = results.find(
+        (result) =>
+          result.types.includes("locality") &&
+          !result.types.includes("plus_code"), // Skip plus_code results!
       );
 
       if (localityResult) {
@@ -277,9 +295,12 @@ export class GoogleGeocodingClient {
       }
     }
 
-    // If no locality found, try administrative_area_level_3 or sublocality
+    // Step 3: Fallback to administrative_area_level_3, sublocality, or postal_town
     if (!city) {
       for (const result of results) {
+        // Skip plus_code for now - we'll use it as absolute last resort
+        if (result.types.includes("plus_code")) continue;
+
         const fallbackComponent = result.address_components.find(
           (component) =>
             component.types.includes("administrative_area_level_3") ||
@@ -291,6 +312,30 @@ export class GoogleGeocodingClient {
           break;
         }
       }
+    }
+
+    // Step 4: Last resort - use plus_code locality if nothing else found
+    // This ensures we still get a city for parks that only have plus_code results
+    // (e.g., Universal Studios Hollywood → Los Angeles, Universal Japan → Osaka)
+    if (!city) {
+      const plusCodeResult = results.find((result) =>
+        result.types.includes("plus_code"),
+      );
+
+      if (plusCodeResult) {
+        const localityComponent = plusCodeResult.address_components.find(
+          (component) => component.types.includes("locality"),
+        );
+        if (localityComponent) {
+          city = localityComponent.long_name;
+        }
+      }
+    }
+
+    // Apply Metropolitan Area Mapping
+    // If the extracted city is a known suburb, map it to the major metro area
+    if (city && metroAreaMapping[city]) {
+      city = metroAreaMapping[city];
     }
 
     // Extract Country & Region from the most specific result containing them
