@@ -63,8 +63,8 @@ import { AppService } from "./app.service";
     SearchModule,
 
     // Geographic Discovery
-    DiscoveryModule,
     LocationModule,
+    DiscoveryModule,
 
     // Admin utilities
     AdminModule,
@@ -72,4 +72,4 @@ import { AppService } from "./app.service";
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

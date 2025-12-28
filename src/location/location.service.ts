@@ -40,7 +40,7 @@ export class LocationService {
     private readonly queueDataRepository: Repository<QueueData>,
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Find nearby parks or rides based on user location
@@ -53,7 +53,7 @@ export class LocationService {
   async findNearby(
     latitude: number,
     longitude: number,
-    radiusInMeters: number = 500,
+    radiusInMeters: number = 1000,
   ): Promise<NearbyResponseDto> {
     const userLocation: GeoCoordinate = { latitude, longitude };
 
@@ -211,9 +211,9 @@ export class LocationService {
           status: queueData?.status || "CLOSED",
           analytics: analytics
             ? {
-                p50: analytics.p50,
-                p90: analytics.p90,
-              }
+              p50: analytics.p50,
+              p90: analytics.p90,
+            }
             : undefined,
           url: buildAttractionUrl(park, attraction) || "",
         };
@@ -238,10 +238,10 @@ export class LocationService {
       status: parkStatus,
       analytics: parkAnalytics
         ? {
-            avgWaitTime: parkAnalytics.avgWaitTime,
-            crowdLevel: parkAnalytics.crowdLevel,
-            operatingAttractions: parkAnalytics.operatingAttractions,
-          }
+          avgWaitTime: parkAnalytics.avgWaitTime,
+          crowdLevel: parkAnalytics.crowdLevel,
+          operatingAttractions: parkAnalytics.operatingAttractions,
+        }
         : undefined,
     };
 
@@ -327,10 +327,10 @@ export class LocationService {
         operatingAttractions: stats?.operatingAttractions || 0,
         analytics: occupancy
           ? {
-              avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-              crowdLevel: this.mapCrowdLevel(occupancy.current),
-              occupancy: occupancy.current,
-            }
+            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+            crowdLevel: this.mapCrowdLevel(occupancy.current),
+            occupancy: occupancy.current,
+          }
           : undefined,
         url: buildParkUrl(park) || "",
       };

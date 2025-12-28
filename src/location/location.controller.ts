@@ -19,7 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("location")
 @Controller("discovery")
 export class LocationController {
-  constructor(private readonly locationService: LocationService) {}
+  constructor(private readonly locationService: LocationService) { }
 
   /**
    * GET /v1/discovery/nearby
@@ -32,8 +32,7 @@ export class LocationController {
   @UseInterceptors(new HttpCacheInterceptor(3 * 60)) // 3 minutes cache
   @ApiOperation({
     summary: "Find nearby parks or rides",
-    description:
-      "Returns rides if user is within a park (default 500m radius), " +
+    description: "Returns rides if user is within a park (default 1000m radius), " +
       "otherwise returns up to 5 nearest parks with live statistics. " +
       "Rides are sorted by distance from user position.",
   })
@@ -53,8 +52,8 @@ export class LocationController {
   })
   @ApiQuery({
     name: "radius",
-    description: "Radius in meters to consider 'in park' (default: 500)",
-    example: 500,
+    description: "Radius in meters to consider 'in park' (default: 1000)",
+    example: 1000,
     required: false,
     type: Number,
   })
@@ -166,7 +165,7 @@ export class LocationController {
     }
 
     // Parse and validate radius
-    let radiusInMeters = 500; // Default
+    let radiusInMeters = 1000; // Default: 1km to cover large parks
     if (radius) {
       radiusInMeters = parseInt(radius);
       if (
