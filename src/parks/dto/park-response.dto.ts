@@ -120,43 +120,6 @@ export class ParkResponseDto {
 
   // Additional Data
   @ApiProperty({
-    description: "Today's special events (parades, fireworks, seasonal events)",
-    required: false,
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        name: { type: "string", example: "Christmas Parade" },
-        type: {
-          type: "string",
-          enum: [
-            "holiday",
-            "parade",
-            "firework",
-            "character_meet",
-            "seasonal_event",
-            "special_show",
-            "festival",
-          ],
-          example: "parade",
-        },
-        startTime: { type: "string", example: "15:00" },
-        endTime: { type: "string", example: "15:30" },
-        location: { type: "string", example: "Main Street" },
-        description: { type: "string", example: "Magical Christmas parade" },
-      },
-    },
-  })
-  todayEvents?: Array<{
-    name: string;
-    type: string;
-    startTime?: string;
-    endTime?: string;
-    location?: string;
-    description?: string;
-  }>;
-
-  @ApiProperty({
     description: "Operating schedule",
     required: false,
     type: [ScheduleItemDto],

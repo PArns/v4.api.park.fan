@@ -22,7 +22,6 @@ import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
-import { EventsService } from "./services/events.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
@@ -74,7 +73,6 @@ export class ParksController {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
-    private readonly eventsService: EventsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 

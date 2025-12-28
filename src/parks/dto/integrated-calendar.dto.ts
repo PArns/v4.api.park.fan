@@ -65,67 +65,23 @@ export class WeatherSummary {
 /**
  * Calendar Event
  *
- * Supports holidays and special park events like parades, fireworks, seasonal events
+ * Currently only supports holidays from Nager.Date API
  */
 export class CalendarEvent {
-  @ApiProperty({ description: "Event name", example: "Christmas Parade" })
+  @ApiProperty({ description: "Event name", example: "Christmas Day" })
   name: string;
 
   @ApiProperty({
-    description: "Event type",
-    enum: [
-      "holiday",
-      "parade",
-      "firework",
-      "character_meet",
-      "seasonal_event",
-      "special_show",
-      "festival",
-    ],
-    example: "parade",
+    description: "Event type - currently only 'holiday' is supported",
+    example: "holiday",
   })
-  type:
-    | "holiday"
-    | "parade"
-    | "firework"
-    | "character_meet"
-    | "seasonal_event"
-    | "special_show"
-    | "festival";
+  type: "holiday";
 
   @ApiProperty({
-    description: "Event start time (HH:mm format), optional for all-day events",
-    required: false,
-    example: "15:00",
-  })
-  startTime?: string;
-
-  @ApiProperty({
-    description: "Event end time (HH:mm format)",
-    required: false,
-    example: "15:30",
-  })
-  endTime?: string;
-
-  @ApiProperty({
-    description: "Event location within the park",
-    required: false,
-    example: "Main Street",
-  })
-  location?: string;
-
-  @ApiProperty({
-    description: "Whether this is a nationwide holiday (only for type=holiday)",
+    description: "Whether this is a nationwide holiday",
     required: false,
   })
   isNationwide?: boolean;
-
-  @ApiProperty({
-    description: "Additional description or details",
-    required: false,
-    example: "Spectacular Christmas parade with Disney characters",
-  })
-  description?: string;
 }
 
 /**
