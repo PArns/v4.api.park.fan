@@ -19,6 +19,7 @@ import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
+import { CalendarService } from "./services/calendar.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
@@ -35,6 +36,7 @@ import { WeatherResponseDto } from "./dto/weather-response.dto";
 import { WeatherItemDto } from "./dto/weather-item.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
+import { IntegratedCalendarResponse } from "./dto/integrated-calendar.dto";
 import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { Park } from "./entities/park.entity";
@@ -68,6 +70,7 @@ export class ParksController {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
+    private readonly calendarService: CalendarService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -172,6 +175,107 @@ export class ParksController {
         city: !park.city,
       },
     }));
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/calendar
+   *
+   * Returns integrated calendar via geographic path.
+   *
+   * @param continent - Continent slug
+   * @param country - Country slug
+   * @param city - City slug
+   * @param parkSlug - Park slug
+   * @param from - Start date (YYYY-MM-DD, optional)
+   * @param to - End date (YYYY-MM-DD, optional)
+   * @param includeHourly - Which days should include hourly predictions
+   * @throws NotFoundException if park not found
+   * @throws BadRequestException if date format invalid or range > 90 days
+   */
+  @Get(":continent/:country/:city/:parkSlug/calendar")
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
+  @ApiOperation({
+    summary: "Get integrated calendar (geographic path)",
+    description:
+      "Returns unified calendar data via geographic path. Same functionality as slug-based endpoint.",
+  })
+  @ApiExtraModels(IntegratedCalendarResponse)
+  @ApiResponse({
+    status: 200,
+    description: "Integrated calendar data",
+    type: IntegratedCalendarResponse,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  @ApiResponse({ status: 400, description: "Invalid date range or format" })
+  async getCalendarByGeographicPath(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("includeHourly")
+    includeHourly?: "today+tomorrow" | "today" | "none" | "all",
+  ): Promise<IntegratedCalendarResponse> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    // Parse and validate date parameters
+    let fromDate: Date;
+    let toDate: Date;
+
+    if (from) {
+      fromDate = new Date(from);
+      if (isNaN(fromDate.getTime())) {
+        throw new BadRequestException(
+          'Invalid "from" date format. Use YYYY-MM-DD.',
+        );
+      }
+    } else {
+      fromDate = new Date();
+    }
+    fromDate.setHours(0, 0, 0, 0);
+
+    if (to) {
+      toDate = new Date(to);
+      if (isNaN(toDate.getTime())) {
+        throw new BadRequestException(
+          'Invalid "to" date format. Use YYYY-MM-DD.',
+        );
+      }
+    } else {
+      // Default: 30 days ahead
+      toDate = new Date(fromDate);
+      toDate.setDate(toDate.getDate() + 30);
+    }
+    toDate.setHours(23, 59, 59, 999);
+
+    // Validate range
+    const daysDiff = Math.ceil(
+      (toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (daysDiff > 90) {
+      throw new BadRequestException(
+        "Date range too large. Maximum allowed: 90 days.",
+      );
+    }
+
+    return this.calendarService.buildCalendarResponse(
+      park,
+      fromDate,
+      toDate,
+      includeHourly || "today+tomorrow",
+    );
   }
 
   /**
