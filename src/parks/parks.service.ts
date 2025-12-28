@@ -1165,7 +1165,7 @@ export class ParksService {
     const today = new Date();
     // Start from yesterday to ensure we capture schedules for parks in earlier timezones (e.g. US West Coast from Europe)
     // and correctly handle late-night operating hours that cross midnight
-    today.setDate(today.getDate() - 1);
+    today.setDate(today.getDate() - 2);
     today.setHours(0, 0, 0, 0);
 
     const endDate = new Date(today);

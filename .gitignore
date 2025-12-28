@@ -62,3 +62,4 @@ ml-service/models/
 
 *.bak
 *.bak*
+/.py

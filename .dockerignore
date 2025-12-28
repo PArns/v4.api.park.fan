@@ -10,9 +10,7 @@ coverage
 
 # Environment files
 .env
-.env.local
-.env.*.local
-.env.test
+.env.*
 
 # IDE
 .idea
@@ -61,3 +59,6 @@ scripts
 .claude
 .crush
 .gemini
+
+.md
+!README.md
