@@ -77,6 +77,17 @@ export class CalendarEvent {
 }
 
 /**
+ * Show Time
+ */
+export class ShowTime {
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  time: string;
+}
+
+/**
  * Hourly Prediction
  */
 export class HourlyPrediction {
@@ -135,6 +146,12 @@ export class CalendarDay {
 
   @ApiProperty({ type: [String], required: false })
   refurbishments?: string[];
+
+  @ApiProperty({ required: false })
+  recommendation?: string;
+
+  @ApiProperty({ type: () => [ShowTime], required: false })
+  showTimes?: ShowTime[];
 }
 
 /**

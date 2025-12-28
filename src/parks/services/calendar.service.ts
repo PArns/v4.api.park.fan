@@ -6,6 +6,7 @@ import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
+import { ShowsService } from "../../shows/shows.service";
 import {
   IntegratedCalendarResponse,
   CalendarDay,
@@ -13,6 +14,7 @@ import {
   WeatherSummary,
   CalendarEvent,
   HourlyPrediction,
+  ShowTime,
 } from "../dto/integrated-calendar.dto";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
@@ -43,6 +45,7 @@ export class CalendarService {
     private readonly mlService: MLService,
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
+    private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -295,6 +298,21 @@ export class CalendarService {
       day.refurbishments = refurbishments;
     }
 
+    // Add ML-generated recommendation (always generate for operating parks)
+    if (status === "OPERATING") {
+      day.recommendation = this.generateRecommendation(
+        mlPrediction?.crowdScore || mlPrediction?.crowdLevel,
+        isHoliday,
+        isBridgeDay,
+        weatherSummary,
+      );
+    }
+
+    // Add show times for today (if today)
+    if (dateStr === today && status === "OPERATING") {
+      day.showTimes = await this.getShowTimes(park.id, date);
+    }
+
     // Add hourly data if requested
     if (this.shouldIncludeHourly(date, includeHourly, park.timezone)) {
       day.hourly = await this.buildHourlyPredictions(
@@ -428,5 +446,102 @@ export class CalendarService {
     // TODO: Implement refurbishment detection from queue data status
     // Attractions don't have a persistent status field - it's determined by live data
     return [];
+  }
+
+  /**
+   * Generate ML-based recommendation for the day
+   */
+  private generateRecommendation(
+    crowdData?: number | string,
+    isHoliday?: boolean,
+    isBridgeDay?: boolean,
+    weather?: WeatherSummary | null,
+  ): string {
+    const recommendations: string[] = [];
+
+    // Convert crowd level to score if needed
+    let crowdScore: number | undefined;
+    if (typeof crowdData === "number") {
+      crowdScore = crowdData;
+    } else if (typeof crowdData === "string") {
+      // Map crowd level strings to scores
+      const levelMap: Record<string, number> = {
+        very_low: 20,
+        low: 35,
+        moderate: 50,
+        high: 70,
+        very_high: 85,
+        extreme: 95,
+      };
+      crowdScore = levelMap[crowdData] || 50;
+    }
+
+    // Crowd-based recommendations
+    if (crowdScore) {
+      if (crowdScore < 30) {
+        recommendations.push("Low crowds expected - excellent day to visit");
+      } else if (crowdScore > 75) {
+        recommendations.push("High crowds expected - arrive early");
+        if (isHoliday || isBridgeDay) {
+          recommendations.push("Consider visiting on a weekday instead");
+        }
+      } else if (crowdScore > 50 && crowdScore <= 75) {
+        recommendations.push("Moderate crowds expected");
+      } else if (crowdScore >= 30 && crowdScore <= 50) {
+        recommendations.push("Good crowd levels for most attractions");
+      }
+    }
+
+    // Weather-based recommendations
+    if (weather) {
+      if (weather.rainChance > 60) {
+        recommendations.push("Rain likely - indoor attractions recommended");
+      } else if (weather.tempMax > 30) {
+        recommendations.push("Hot day -stay hydrated");
+      } else if (weather.tempMax < 5) {
+        recommendations.push("Cold weather - dress warmly");
+      }
+    }
+
+    return recommendations.length > 0
+      ? recommendations.join(". ")
+      : "Good day for a park visit";
+  }
+
+  /**
+   * Get show times for a specific day
+   */
+  private async getShowTimes(parkId: string, _date: Date): Promise<ShowTime[]> {
+    try {
+      // Get current show status for this park
+      const showStatusMap =
+        await this.showsService.findCurrentStatusByPark(parkId);
+
+      const showTimes: ShowTime[] = [];
+
+      // Extract showtimes from each show's live data
+      for (const [_showId, liveData] of showStatusMap.entries()) {
+        if (liveData.showtimes && Array.isArray(liveData.showtimes)) {
+          for (const showtime of liveData.showtimes) {
+            if (showtime.startTime) {
+              showTimes.push({
+                name: liveData.show?.name || "Show",
+                time: showtime.startTime,
+              });
+            }
+          }
+        }
+      }
+
+      // Sort by time
+      showTimes.sort((a, b) => a.time.localeCompare(b.time));
+
+      return showTimes;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to fetch show times for park ${parkId}: ${error}`,
+      );
+      return [];
+    }
   }
 }
