@@ -93,6 +93,9 @@ export class ShowTime {
 
   @ApiProperty()
   time: string;
+
+  @ApiProperty({ required: false })
+  endTime?: string;
 }
 
 /**
@@ -107,6 +110,12 @@ export class HourlyPrediction {
 
   @ApiProperty()
   predictedWaitTime: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Probability/Confidence of prediction (0-1)",
+  })
+  probability?: number;
 }
 
 /**

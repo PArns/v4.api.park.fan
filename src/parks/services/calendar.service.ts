@@ -224,7 +224,7 @@ export class CalendarService {
           ? "CLOSED"
           : mlPrediction?.crowdLevel === "closed"
             ? "CLOSED"
-            : "OPERATING"; // Default optimistic
+            : "CLOSED"; // Default safety fallback (was OPERATING)
 
     // Build operating hours
     let hours: OperatingHours | null = null;
@@ -387,6 +387,7 @@ export class CalendarService {
             ? "very_low"
             : p.crowdLevel) as CrowdLevel,
           predictedWaitTime: Math.round(p.predictedWaitTime || 30),
+          probability: p.confidence,
         };
       });
     } catch (_error) {
@@ -527,6 +528,7 @@ export class CalendarService {
               showTimes.push({
                 name: liveData.show?.name || "Show",
                 time: showtime.startTime,
+                endTime: showtime.endTime,
               });
             }
           }
