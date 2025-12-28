@@ -14,6 +14,8 @@ import {
   ApiResponse,
   ApiExtraModels,
   getSchemaPath,
+  ApiParam,
+  ApiQuery,
 } from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
@@ -72,7 +74,7 @@ export class ParksController {
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/parks
@@ -182,13 +184,24 @@ export class ParksController {
    *
    * Returns integrated calendar via geographic path.
    *
+   * **Timezone Handling:**
+   * - All dates in the response are in the park's local timezone
+   * - The `meta.timezone` field specifies the IANA timezone (e.g., "Europe/Berlin")
+   * - Query parameters `from` and `to` are interpreted in the park's timezone
+   * - `isToday` and `isTomorrow` are calculated based on park's local time
+   *
+   * **Hourly Predictions:**
+   * - By default, hourly predictions are included for today and tomorrow
+   * - Use `includeHourly` parameter to customize this behavior
+   * - Hourly data includes crowd levels and predicted wait times per hour
+   *
    * @param continent - Continent slug
    * @param country - Country slug
    * @param city - City slug
    * @param parkSlug - Park slug
-   * @param from - Start date (YYYY-MM-DD, optional)
-   * @param to - End date (YYYY-MM-DD, optional)
-   * @param includeHourly - Which days should include hourly predictions
+   * @param from - Start date (YYYY-MM-DD, optional, default: today in park timezone)
+   * @param to - End date (YYYY-MM-DD, optional, default: today + 30 days in park timezone)
+   * @param includeHourly - Which days should include hourly predictions (default: "today+tomorrow")
    * @throws NotFoundException if park not found
    * @throws BadRequestException if date format invalid or range > 90 days
    */
@@ -197,7 +210,55 @@ export class ParksController {
   @ApiOperation({
     summary: "Get integrated calendar (geographic path)",
     description:
-      "Returns unified calendar data via geographic path. Same functionality as slug-based endpoint.",
+      "Returns unified calendar data combining schedule, weather forecasts, ML predictions, holidays, and events. " +
+      "All dates are in the park's local timezone. Includes hourly predictions for today/tomorrow by default. " +
+      "Cache TTL: 1 hour (HTTP + Redis) for fresh hourly predictions.",
+  })
+  @ApiParam({
+    name: "continent",
+    description: "Continent slug (e.g., 'europe', 'north-america')",
+    example: "europe",
+  })
+  @ApiParam({
+    name: "country",
+    description: "Country slug (e.g., 'germany', 'united-states')",
+    example: "germany",
+  })
+  @ApiParam({
+    name: "city",
+    description: "City slug (e.g., 'bruhl', 'orlando')",
+    example: "bruhl",
+  })
+  @ApiParam({
+    name: "parkSlug",
+    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
+    example: "phantasialand",
+  })
+  @ApiQuery({
+    name: "from",
+    required: false,
+    description:
+      "Start date (YYYY-MM-DD) in park's local timezone. Defaults to today.",
+    example: "2025-12-28",
+  })
+  @ApiQuery({
+    name: "to",
+    required: false,
+    description:
+      "End date (YYYY-MM-DD) in park's local timezone. Defaults to from + 30 days. Max range: 90 days.",
+    example: "2025-12-30",
+  })
+  @ApiQuery({
+    name: "includeHourly",
+    required: false,
+    enum: ["today+tomorrow", "today", "all", "none"],
+    description:
+      "Controls which days include hourly predictions. " +
+      "'today+tomorrow' (default): hourly data for today and tomorrow. " +
+      "'today': only today. " +
+      "'all': all days in range. " +
+      "'none': no hourly data.",
+    example: "today+tomorrow",
   })
   @ApiExtraModels(IntegratedCalendarResponse)
   @ApiResponse({
