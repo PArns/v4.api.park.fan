@@ -438,13 +438,11 @@ export class ParkIntegrationService {
         }
       }
 
-      // Filter out shows with empty showtimes if the park is operating
+      // Filter out shows with empty showtimes regardless of park status
       // This hides "broken" shows that should be running but have no data (e.g. missing upstream)
-      if (dto.status === "OPERATING") {
-        dto.shows = (dto.shows || []).filter(
-          (s) => s.showtimes && s.showtimes.length > 0,
-        );
-      }
+      dto.shows = (dto.shows || []).filter(
+        (s) => s.showtimes && s.showtimes.length > 0,
+      );
     }
 
     // Fetch current status for restaurants
