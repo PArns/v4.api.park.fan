@@ -6,6 +6,7 @@ import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { EventsService } from "./services/events.service";
 import { Park } from "./entities/park.entity";
 import { WeatherData } from "./entities/weather-data.entity";
 import { ScheduleEntry } from "./entities/schedule-entry.entity";
@@ -45,6 +46,7 @@ import { HolidaysModule } from "../holidays/holidays.module";
     ParkIntegrationService,
     ParkEnrichmentService,
     CalendarService,
+    EventsService,
   ],
   exports: [
     ParksService,
