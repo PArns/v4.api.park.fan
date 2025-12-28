@@ -167,6 +167,9 @@ export class CalendarDay {
   @ApiProperty({ required: false })
   recommendation?: string;
 
+  @ApiProperty({ type: [String], required: false })
+  advisoryKeys?: string[];
+
   @ApiProperty({ type: () => [ShowTime], required: false })
   showTimes?: ShowTime[];
 }

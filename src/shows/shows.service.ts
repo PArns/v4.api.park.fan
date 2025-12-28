@@ -469,8 +469,8 @@ export class ShowsService {
   ): Promise<Map<string, ShowLiveData>> {
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
-      .innerJoinAndSelect("sld.show", "show")
-      .where("show.parkId = :parkId", { parkId })
+      .innerJoinAndSelect("sld.show", "linked_show")
+      .where("linked_show.parkId = :parkId", { parkId })
       .andWhere(
         `sld.timestamp = (
           SELECT MAX(sld2.timestamp)

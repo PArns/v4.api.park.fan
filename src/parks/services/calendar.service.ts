@@ -300,12 +300,17 @@ export class CalendarService {
 
     // Add ML-generated recommendation (always generate for operating parks)
     if (status === "OPERATING") {
-      day.recommendation = this.generateRecommendation(
+      // Generate keys for localization
+      const advisoryKeys = this.generateAdvisoryKeys(
         mlPrediction?.crowdScore || mlPrediction?.crowdLevel,
         isHoliday,
         isBridgeDay,
         weatherSummary,
       );
+      day.advisoryKeys = advisoryKeys;
+
+      // Generate legacy string (keep for backward compatibility)
+      day.recommendation = this.generateRecommendationString(advisoryKeys);
     }
 
     // Add show times for today (if today)
@@ -450,22 +455,21 @@ export class CalendarService {
   }
 
   /**
-   * Generate ML-based recommendation for the day
+   * Generate advisory keys for localization
    */
-  private generateRecommendation(
+  private generateAdvisoryKeys(
     crowdData?: number | string,
     isHoliday?: boolean,
     isBridgeDay?: boolean,
     weather?: WeatherSummary | null,
-  ): string {
-    const recommendations: string[] = [];
+  ): string[] {
+    const keys: string[] = [];
 
     // Convert crowd level to score if needed
     let crowdScore: number | undefined;
     if (typeof crowdData === "number") {
       crowdScore = crowdData;
     } else if (typeof crowdData === "string") {
-      // Map crowd level strings to scores
       const levelMap: Record<string, number> = {
         very_low: 20,
         low: 35,
@@ -477,36 +481,56 @@ export class CalendarService {
       crowdScore = levelMap[crowdData] || 50;
     }
 
-    // Crowd-based recommendations
-    if (crowdScore) {
+    if (crowdScore !== undefined) {
       if (crowdScore < 30) {
-        recommendations.push("Low crowds expected - excellent day to visit");
+        keys.push("lowCrowds");
       } else if (crowdScore > 75) {
-        recommendations.push("High crowds expected - arrive early");
+        keys.push("highCrowds");
         if (isHoliday || isBridgeDay) {
-          recommendations.push("Consider visiting on a weekday instead");
+          keys.push("visitWeekday");
         }
       } else if (crowdScore > 50 && crowdScore <= 75) {
-        recommendations.push("Moderate crowds expected");
+        keys.push("moderateCrowds");
       } else if (crowdScore >= 30 && crowdScore <= 50) {
-        recommendations.push("Good crowd levels for most attractions");
+        keys.push("goodCrowds");
       }
     }
 
     // Weather-based recommendations
     if (weather) {
       if (weather.rainChance > 60) {
-        recommendations.push("Rain likely - indoor attractions recommended");
+        keys.push("rainLikely");
       } else if (weather.tempMax > 30) {
-        recommendations.push("Hot day -stay hydrated");
+        keys.push("hotDay");
       } else if (weather.tempMax < 5) {
-        recommendations.push("Cold weather - dress warmly");
+        keys.push("coldDay");
       }
     }
 
-    return recommendations.length > 0
-      ? recommendations.join(". ")
-      : "Good day for a park visit";
+    if (keys.length === 0) {
+      keys.push("goodDay");
+    }
+
+    return keys;
+  }
+
+  /**
+   * Generate legacy recommendation string from keys
+   */
+  private generateRecommendationString(keys: string[]): string {
+    const map: Record<string, string> = {
+      lowCrowds: "Low crowds expected - excellent day to visit",
+      highCrowds: "High crowds expected - arrive early",
+      visitWeekday: "Consider visiting on a weekday instead",
+      moderateCrowds: "Moderate crowds expected",
+      goodCrowds: "Good crowd levels for most attractions",
+      rainLikely: "Rain likely - indoor attractions recommended",
+      hotDay: "Hot day -stay hydrated",
+      coldDay: "Cold weather - dress warmly",
+      goodDay: "Good day for a park visit",
+    };
+
+    return keys.map((k) => map[k] || k).join(". ");
   }
 
   /**
@@ -521,16 +545,45 @@ export class CalendarService {
       const showTimes: ShowTime[] = [];
 
       // Extract showtimes from each show's live data
+      const now = new Date();
+      const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
       for (const [_showId, liveData] of showStatusMap.entries()) {
-        if (liveData.showtimes && Array.isArray(liveData.showtimes)) {
-          for (const showtime of liveData.showtimes) {
-            if (showtime.startTime) {
-              showTimes.push({
-                name: liveData.show?.name || "Show",
-                time: showtime.startTime,
-                endTime: showtime.endTime,
-              });
+        if (!liveData.showtimes || !Array.isArray(liveData.showtimes)) {
+          continue;
+        }
+
+        // Check for stale data
+        if (liveData.lastUpdated) {
+          const lastUpdated = new Date(liveData.lastUpdated);
+          const age = now.getTime() - lastUpdated.getTime();
+          if (age > STALE_THRESHOLD_MS) {
+            this.logger.debug(
+              `Skipping stale show data for ${liveData.show?.name} (Age: ${Math.round(age / 1000 / 60 / 60)}h)`,
+            );
+            continue;
+          }
+        }
+
+        for (const showtime of liveData.showtimes) {
+          // Strictly filter out invalid start times
+          if (showtime.startTime) {
+            // Determine best name to show
+            let showName = liveData.show?.name || "Show";
+            // If name is generic "Show" and we have a specific type, use type
+            if (
+              showName === "Show" &&
+              showtime.type &&
+              showtime.type !== "Performance"
+            ) {
+              showName = showtime.type;
             }
+
+            showTimes.push({
+              name: showName,
+              time: showtime.startTime,
+              endTime: showtime.endTime,
+            });
           }
         }
       }
