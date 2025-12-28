@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { CrowdLevel } from "../../common/types";
 
 export class SearchResultItemDto {
   @ApiProperty({
@@ -90,7 +91,7 @@ export class SearchResultItemDto {
     example: "normal",
     required: false,
   })
-  load?: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null;
+  load?: CrowdLevel | null;
 
   // Park-specific metadata
   @ApiProperty({

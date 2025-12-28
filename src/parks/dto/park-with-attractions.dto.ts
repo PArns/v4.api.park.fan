@@ -55,7 +55,7 @@ export class ParkLoadDto {
     description: "Crowd Level",
     enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
   })
-  crowdLevel: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+  crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
 
   @ApiProperty({ description: "Baseline wait time value" })
   baseline: number;

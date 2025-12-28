@@ -16,6 +16,7 @@ import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { ShowsService } from "../shows/shows.service";
+import { CrowdLevel } from "../common/types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -682,14 +683,13 @@ export class SearchService {
    */
   private determineAttractionLoad(
     waitTime: number | undefined,
-  ): "very_low" | "low" | "normal" | "higher" | "high" | "extreme" | null {
+  ): CrowdLevel | null {
     if (!waitTime) return null;
     if (waitTime <= 10) return "very_low";
     if (waitTime <= 20) return "low";
-    if (waitTime <= 40) return "normal";
-    if (waitTime <= 60) return "higher";
-    if (waitTime <= 90) return "high";
-    return "extreme";
+    if (waitTime <= 45) return "moderate";
+    if (waitTime <= 75) return "high";
+    return "very_high";
   }
 
   /**
@@ -779,13 +779,8 @@ export class SearchService {
    */
   private async getBatchLoadLevels(
     parkIds: string[],
-  ): Promise<
-    Map<string, "very_low" | "low" | "normal" | "higher" | "high" | "extreme">
-  > {
-    const loadMap = new Map<
-      string,
-      "very_low" | "low" | "normal" | "higher" | "high" | "extreme"
-    >();
+  ): Promise<Map<string, CrowdLevel>> {
+    const loadMap = new Map<string, CrowdLevel>();
 
     await Promise.all(
       parkIds.map(async (parkId) => {
@@ -804,16 +799,12 @@ export class SearchService {
 
   /**
    * Convert occupancy percentage to crowd level
-   * (from AnalyticsService.determineCrowdLevel)
    */
-  private determineCrowdLevel(
-    occupancy: number,
-  ): "very_low" | "low" | "normal" | "higher" | "high" | "extreme" {
-    if (occupancy <= 20) return "very_low";
-    if (occupancy <= 40) return "low";
-    if (occupancy <= 60) return "normal";
-    if (occupancy <= 80) return "higher";
-    if (occupancy <= 95) return "high";
-    return "extreme";
+  private determineCrowdLevel(occupancy: number): CrowdLevel {
+    if (occupancy < 20) return "very_low";
+    if (occupancy < 40) return "low";
+    if (occupancy < 70) return "moderate";
+    if (occupancy < 95) return "high";
+    return "very_high";
   }
 }

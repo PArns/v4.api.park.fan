@@ -78,7 +78,7 @@ export class ParkResponseDto {
     nullable: true,
   })
   currentLoad?: {
-    crowdLevel: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
     baseline: number;
     currentWaitTime: number;
   } | null;
