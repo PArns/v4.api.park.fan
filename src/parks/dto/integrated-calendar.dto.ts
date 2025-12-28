@@ -64,16 +64,68 @@ export class WeatherSummary {
 
 /**
  * Calendar Event
+ *
+ * Supports holidays and special park events like parades, fireworks, seasonal events
  */
 export class CalendarEvent {
-  @ApiProperty()
+  @ApiProperty({ description: "Event name", example: "Christmas Parade" })
   name: string;
 
-  @ApiProperty()
-  type: string;
+  @ApiProperty({
+    description: "Event type",
+    enum: [
+      "holiday",
+      "parade",
+      "firework",
+      "character_meet",
+      "seasonal_event",
+      "special_show",
+      "festival",
+    ],
+    example: "parade",
+  })
+  type:
+    | "holiday"
+    | "parade"
+    | "firework"
+    | "character_meet"
+    | "seasonal_event"
+    | "special_show"
+    | "festival";
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: "Event start time (HH:mm format), optional for all-day events",
+    required: false,
+    example: "15:00",
+  })
+  startTime?: string;
+
+  @ApiProperty({
+    description: "Event end time (HH:mm format)",
+    required: false,
+    example: "15:30",
+  })
+  endTime?: string;
+
+  @ApiProperty({
+    description: "Event location within the park",
+    required: false,
+    example: "Main Street",
+  })
+  location?: string;
+
+  @ApiProperty({
+    description: "Whether this is a nationwide holiday (only for type=holiday)",
+    required: false,
+  })
   isNationwide?: boolean;
+
+  @ApiProperty({
+    description: "Additional description or details",
+    required: false,
+    example: "Spectacular Christmas parade with Disney characters",
+  })
+  description?: string;
 }
 
 /**
