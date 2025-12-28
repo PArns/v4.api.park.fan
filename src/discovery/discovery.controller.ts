@@ -19,6 +19,7 @@ import { ParksService } from "../parks/parks.service";
 import { ParkResponseDto } from "../parks/dto/park-response.dto";
 import { BreadcrumbDto } from "../common/dto/breadcrumb.dto";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { ParkEnrichmentService } from "../parks/services/park-enrichment.service";
 
 /**
  * Discovery Controller
@@ -34,6 +35,7 @@ export class DiscoveryController {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
+    private readonly parkEnrichmentService: ParkEnrichmentService,
   ) {}
 
   /**
@@ -319,63 +321,9 @@ export class DiscoveryController {
     // ParkIntegrationService.buildIntegratedResponse is for SINGLE park with full details.
     // For lists, we usually want simplified status/analytics.
 
-    // Let's fetch status/occupancy batch
-    const parkIds = parks.map((p) => p.id);
-    const [statusMap, occupancyMap] = await Promise.all([
-      this.parksService.getBatchParkStatus(parkIds),
-      this.analyticsService["getBatchParkOccupancy"](parkIds), // Accessed via public if possible, else we assume it's public
-    ]);
-
-    // Fetch batch statistics map
-    // TODO: move to service to avoid duplication
-    const statisticsMap = new Map<string, any>();
-    await Promise.all(
-      parks.map(async (park) => {
-        try {
-          const stats = await this.analyticsService.getParkStatistics(park.id);
-          statisticsMap.set(park.id, stats);
-        } catch (_e) {
-          // ignore
-        }
-      }),
-    );
-
-    const hydrated = parks.map((park) => {
-      const dto = ParkResponseDto.fromEntity(park);
-      dto.status = statusMap.get(park.id) || "CLOSED";
-      const occupancy = occupancyMap.get(park.id);
-      const stats = statisticsMap.get(park.id);
-
-      if (occupancy) {
-        dto.currentLoad = {
-          crowdLevel: this.mapCrowdLevel(occupancy.current),
-          baseline: occupancy.baseline90thPercentile,
-          currentWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-        };
-
-        dto.analytics = {
-          occupancy: {
-            current: occupancy.current,
-            trend: occupancy.trend,
-            comparedToTypical: occupancy.comparedToTypical,
-            comparisonStatus: occupancy.comparisonStatus,
-            baseline90thPercentile: occupancy.baseline90thPercentile,
-            updatedAt: occupancy.updatedAt,
-          },
-          statistics: {
-            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-            avgWaitToday: stats?.avgWaitToday || 0,
-            peakHour: stats?.peakHour || null,
-            crowdLevel: this.mapCrowdLevel(occupancy.current),
-            totalAttractions: stats?.totalAttractions || 0,
-            operatingAttractions: stats?.operatingAttractions || 0,
-            closedAttractions: stats?.closedAttractions || 0,
-            timestamp: occupancy.updatedAt,
-          },
-        };
-      }
-      return dto;
-    });
+    // Hydrate parks with status and analytics using shared service
+    const hydrated =
+      await this.parkEnrichmentService.enrichParksWithLiveData(parks);
 
     // Breadcrumbs
     const continents = await this.discoveryService.getContinents();
@@ -395,13 +343,5 @@ export class DiscoveryController {
     ];
 
     return { data: hydrated, breadcrumbs };
-  }
-
-  private mapCrowdLevel(occupancy: number): any {
-    if (occupancy < 30) return "very_low";
-    if (occupancy < 50) return "low";
-    if (occupancy < 75) return "moderate";
-    if (occupancy < 95) return "high";
-    return "very_high";
   }
 }

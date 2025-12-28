@@ -18,6 +18,7 @@ import {
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
+import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
@@ -66,6 +67,7 @@ export class ParksController {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parkIntegrationService: ParkIntegrationService,
+    private readonly parkEnrichmentService: ParkEnrichmentService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -112,7 +114,8 @@ export class ParksController {
   }> {
     const { data: parks, total } =
       await this.parksService.findAllWithFilters(query);
-    const mappedParks = await this.mapToResponseWithStatus(parks);
+    const mappedParks =
+      await this.parkEnrichmentService.enrichParksWithLiveData(parks);
 
     return {
       data: mappedParks,
@@ -1055,81 +1058,11 @@ export class ParksController {
 
   /**
    * Helper: Map parks to response DTOs with status and analytics
+   * @deprecated Use ParkEnrichmentService.enrichParksWithLiveData instead
    */
   private async mapToResponseWithStatus(
     parks: Park[],
   ): Promise<ParkResponseDto[]> {
-    if (parks.length === 0) {
-      return [];
-    }
-
-    const parkIds = parks.map((p) => p.id);
-    const [statusMap, occupancyMap] = await Promise.all([
-      this.parksService.getBatchParkStatus(parkIds),
-      this.analyticsService.getBatchParkOccupancy(parkIds),
-    ]);
-
-    // Fetch batch statistics to get correct attraction counts
-    // We can't do this in a single batch call yet effectively without a new service method,
-    // so we'll map concurrently for now.
-    // TODO: Add getBatchParkStatistics to AnalyticsService for better performance
-    const statisticsMap = new Map<string, any>();
-    await Promise.all(
-      parks.map(async (park) => {
-        try {
-          const stats = await this.analyticsService.getParkStatistics(park.id);
-          statisticsMap.set(park.id, stats);
-        } catch (_e) {
-          // ignore error
-        }
-      }),
-    );
-
-    return parks.map((park) => {
-      const dto = ParkResponseDto.fromEntity(park);
-      dto.status = statusMap.get(park.id) || "CLOSED";
-
-      const occupancy = occupancyMap.get(park.id);
-      const stats = statisticsMap.get(park.id);
-
-      if (occupancy) {
-        dto.currentLoad = {
-          crowdLevel: this.mapCrowdLevel(occupancy.current),
-          baseline: occupancy.baseline90thPercentile,
-          currentWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-        };
-
-        dto.analytics = {
-          occupancy: {
-            current: occupancy.current,
-            trend: occupancy.trend,
-            comparedToTypical: occupancy.comparedToTypical,
-            comparisonStatus: occupancy.comparisonStatus,
-            baseline90thPercentile: occupancy.baseline90thPercentile,
-            updatedAt: occupancy.updatedAt,
-          },
-          statistics: {
-            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-            avgWaitToday: stats?.avgWaitToday || 0,
-            peakHour: stats?.peakHour || null,
-            crowdLevel: this.mapCrowdLevel(occupancy.current),
-            totalAttractions: stats?.totalAttractions || 0,
-            operatingAttractions: stats?.operatingAttractions || 0,
-            closedAttractions: stats?.closedAttractions || 0,
-            timestamp: occupancy.updatedAt,
-          },
-        };
-      }
-
-      return dto;
-    });
-  }
-
-  private mapCrowdLevel(occupancy: number): any {
-    if (occupancy < 30) return "very_low";
-    if (occupancy < 50) return "low";
-    if (occupancy < 75) return "moderate";
-    if (occupancy < 95) return "high";
-    return "very_high";
+    return this.parkEnrichmentService.enrichParksWithLiveData(parks);
   }
 }

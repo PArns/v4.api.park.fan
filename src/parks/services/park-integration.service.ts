@@ -341,7 +341,7 @@ export class ParkIntegrationService {
             );
 
             attraction.currentLoad = {
-              crowdLevel: ratingResult.rating,
+              crowdLevel: ratingResult.rating as any,
               baseline: ratingResult.baseline,
               currentWaitTime: standbyQueue.waitTime,
             };
@@ -389,7 +389,7 @@ export class ParkIntegrationService {
           );
 
           dto.currentLoad = {
-            crowdLevel: parkRating.rating,
+            crowdLevel: parkRating.rating as any,
             baseline: parkRating.baseline,
             currentWaitTime: currentAvgWait,
           };
