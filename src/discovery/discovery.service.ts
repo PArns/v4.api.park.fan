@@ -433,32 +433,32 @@ export class DiscoveryService {
           qd."attractionId",
           qd."waitTime",
           qd."status",
-          qd."timestamp",
-          a."parkId"
+          qd."timestamp"
         FROM queue_data qd
-        JOIN attractions a ON a.id = qd."attractionId"
+        INNER JOIN attractions a ON a.id = qd."attractionId"
         WHERE qd.timestamp > NOW() - INTERVAL '30 minutes'
+          AND qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
       ),
       park_ride_activity AS (
         SELECT 
-          lad."parkId",
+          a."parkId",
           COUNT(*) FILTER (
             WHERE lad.status = 'OPERATING' 
               AND lad."waitTime" > 0
           ) as active_rides
-        FROM latest_attraction_data lad
-        GROUP BY lad."parkId"
+        FROM attractions a
+        LEFT JOIN latest_attraction_data lad ON lad."attractionId" = a.id
+        GROUP BY a."parkId"
       ),
       park_waits AS (
         SELECT 
-          lad."parkId",
+          a."parkId",
           AVG(lad."waitTime") as avg_wait,
-          COUNT(DISTINCT lad."attractionId") as operating_count
-        FROM latest_attraction_data lad
-        WHERE lad.status = 'OPERATING'
-          AND lad."waitTime" IS NOT NULL
-        GROUP BY lad."parkId"
+          COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count
+        FROM attractions a
+        LEFT JOIN latest_attraction_data lad ON lad."attractionId" = a.id
+        GROUP BY a."parkId"
       )
       SELECT 
         p.id,
