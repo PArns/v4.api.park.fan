@@ -19,7 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("location")
 @Controller("discovery")
 export class LocationController {
-  constructor(private readonly locationService: LocationService) { }
+  constructor(private readonly locationService: LocationService) {}
 
   /**
    * GET /v1/discovery/nearby
@@ -32,7 +32,8 @@ export class LocationController {
   @UseInterceptors(new HttpCacheInterceptor(3 * 60)) // 3 minutes cache
   @ApiOperation({
     summary: "Find nearby parks or rides",
-    description: "Returns rides if user is within a park (default 1000m radius), " +
+    description:
+      "Returns rides if user is within a park (default 1000m radius), " +
       "otherwise returns up to 5 nearest parks with live statistics. " +
       "Rides are sorted by distance from user position.",
   })

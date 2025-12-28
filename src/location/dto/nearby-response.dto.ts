@@ -97,6 +97,20 @@ export class NearbyParkInfoDto {
     crowdLevel?: string;
     operatingAttractions?: number;
   };
+
+  @ApiProperty({ description: "Park timezone", example: "Europe/Berlin" })
+  timezone: string;
+
+  @ApiProperty({
+    description: "Today's operating schedule",
+    required: false,
+    nullable: true,
+  })
+  todaySchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
 }
 
 /**
@@ -172,6 +186,20 @@ export class ParkWithDistanceDto {
     example: "/europe/germany/bruehl/phantasialand",
   })
   url: string;
+
+  @ApiProperty({ description: "Park timezone", example: "Europe/Berlin" })
+  timezone: string;
+
+  @ApiProperty({
+    description: "Today's operating schedule",
+    required: false,
+    nullable: true,
+  })
+  todaySchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
 }
 
 /**

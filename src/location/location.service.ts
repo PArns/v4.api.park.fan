@@ -40,7 +40,7 @@ export class LocationService {
     private readonly queueDataRepository: Repository<QueueData>,
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Find nearby parks or rides based on user location
@@ -169,9 +169,10 @@ export class LocationService {
     });
 
     // Get park status and analytics
-    const [statusMap, parkAnalytics] = await Promise.all([
+    const [statusMap, parkAnalytics, todaySchedule] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getParkStatistics(parkId).catch(() => null),
+      this.parksService.getTodaySchedule(parkId).catch(() => []),
     ]);
 
     const parkStatus = statusMap.get(parkId) || "CLOSED";
@@ -211,9 +212,9 @@ export class LocationService {
           status: queueData?.status || "CLOSED",
           analytics: analytics
             ? {
-              p50: analytics.p50,
-              p90: analytics.p90,
-            }
+                p50: analytics.p50,
+                p90: analytics.p90,
+              }
             : undefined,
           url: buildAttractionUrl(park, attraction) || "",
         };
@@ -238,11 +239,20 @@ export class LocationService {
       status: parkStatus,
       analytics: parkAnalytics
         ? {
-          avgWaitTime: parkAnalytics.avgWaitTime,
-          crowdLevel: parkAnalytics.crowdLevel,
-          operatingAttractions: parkAnalytics.operatingAttractions,
-        }
+            avgWaitTime: parkAnalytics.avgWaitTime,
+            crowdLevel: parkAnalytics.crowdLevel,
+            operatingAttractions: parkAnalytics.operatingAttractions,
+          }
         : undefined,
+      timezone: park.timezone,
+      todaySchedule:
+        todaySchedule && todaySchedule.length > 0
+          ? {
+              openingTime: todaySchedule[0].openingTime?.toISOString() || "",
+              closingTime: todaySchedule[0].closingTime?.toISOString() || "",
+              scheduleType: todaySchedule[0].scheduleType,
+            }
+          : undefined,
     };
 
     return {
@@ -290,10 +300,11 @@ export class LocationService {
     // Get park IDs for batch queries
     const parkIds = sortedParks.map((p) => p.id);
 
-    // Batch fetch status and analytics
-    const [statusMap, occupancyMap] = await Promise.all([
+    // Batch fetch status, analytics, and schedules
+    const [statusMap, occupancyMap, schedulesMap] = await Promise.all([
       this.parksService.getBatchParkStatus(parkIds),
       this.analyticsService["getBatchParkOccupancy"](parkIds),
+      this.batchFetchSchedules(parkIds),
     ]);
 
     // Get statistics for each park
@@ -314,6 +325,7 @@ export class LocationService {
       const status = statusMap.get(park.id) || "CLOSED";
       const occupancy = occupancyMap.get(park.id);
       const stats = statisticsMap.get(park.id);
+      const schedule = schedulesMap.get(park.id);
 
       return {
         id: park.id,
@@ -327,12 +339,21 @@ export class LocationService {
         operatingAttractions: stats?.operatingAttractions || 0,
         analytics: occupancy
           ? {
-            avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-            crowdLevel: this.mapCrowdLevel(occupancy.current),
-            occupancy: occupancy.current,
-          }
+              avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+              crowdLevel: this.mapCrowdLevel(occupancy.current),
+              occupancy: occupancy.current,
+            }
           : undefined,
         url: buildParkUrl(park) || "",
+        timezone: park.timezone,
+        todaySchedule:
+          schedule && schedule.length > 0
+            ? {
+                openingTime: schedule[0].openingTime?.toISOString() || "",
+                closingTime: schedule[0].closingTime?.toISOString() || "",
+                scheduleType: schedule[0].scheduleType,
+              }
+            : undefined,
       };
     });
 
@@ -376,6 +397,19 @@ export class LocationService {
     }
 
     return resultMap;
+  }
+
+  /**
+   * Batch fetch schedules for multiple parks
+   * @private
+   */
+  private async batchFetchSchedules(parkIds: string[]) {
+    const results = await Promise.all(
+      parkIds.map((id) =>
+        this.parksService.getTodaySchedule(id).catch(() => []),
+      ),
+    );
+    return new Map(parkIds.map((id, i) => [id, results[i]]));
   }
 
   /**
