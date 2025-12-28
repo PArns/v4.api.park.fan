@@ -4,6 +4,7 @@ import { ParksController } from "./parks.controller";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
+import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { Park } from "./entities/park.entity";
 import { WeatherData } from "./entities/weather-data.entity";
 import { ScheduleEntry } from "./entities/schedule-entry.entity";
@@ -37,7 +38,17 @@ import { HolidaysModule } from "../holidays/holidays.module";
     forwardRef(() => HolidaysModule),
   ],
   controllers: [ParksController],
-  providers: [ParksService, WeatherService, ParkIntegrationService],
-  exports: [ParksService, WeatherService, ParkIntegrationService],
+  providers: [
+    ParksService,
+    WeatherService,
+    ParkIntegrationService,
+    ParkEnrichmentService,
+  ],
+  exports: [
+    ParksService,
+    WeatherService,
+    ParkIntegrationService,
+    ParkEnrichmentService,
+  ],
 })
 export class ParksModule {}
