@@ -460,16 +460,22 @@ export class ParkIntegrationService {
             p.predictedTime.startsWith(nowStr),
           );
 
-          if (currentPred && currentPred.crowdLevel) {
-            crowdLevel = currentPred.crowdLevel as any;
-          } else {
-            // Heuristic Fallback based on Wait Time
-            const wait = attraction.queues?.[0]?.waitTime ?? 0;
+          // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
+          const wait = attraction.queues?.[0]?.waitTime;
+          if (wait !== undefined && wait !== null) {
             if (wait < 10) crowdLevel = "very_low";
             else if (wait < 25) crowdLevel = "low";
             else if (wait < 45) crowdLevel = "moderate";
             else if (wait < 75) crowdLevel = "high";
             else crowdLevel = "very_high";
+          } else {
+            // 2. Fallback to ML Prediction if no live data
+            if (currentPred && currentPred.crowdLevel) {
+              crowdLevel = currentPred.crowdLevel as any;
+            } else {
+              // 3. Last resort default
+              crowdLevel = "very_low";
+            }
           }
         }
         attraction.crowdLevel = crowdLevel;
