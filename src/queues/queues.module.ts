@@ -37,6 +37,7 @@ import { NagerDateModule } from "../external-apis/nager-date/nager-date.module";
 import { DataSourcesModule } from "../external-apis/data-sources/data-sources.module";
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
+import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -115,6 +116,7 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
     DataSourcesModule,
     GeocodingModule,
     NagerDateModule,
+    OpenHolidaysModule,
     WartezeitenModule,
     AnalyticsModule,
     RedisModule, // For cache warmup service

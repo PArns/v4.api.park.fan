@@ -94,6 +94,115 @@ export class HolidaysService {
   }
 
   /**
+   * Generic upsert for any holiday (used by peak seasons sync)
+   */
+  async upsertHoliday(holiday: {
+    externalId: string;
+    date: Date;
+    name: string;
+    localName?: string;
+    country: string;
+    region?: string;
+    holidayType: "public" | "observance" | "school" | "bank";
+    isNationwide: boolean;
+  }): Promise<void> {
+    await this.holidayRepository.upsert(
+      {
+        externalId: holiday.externalId,
+        date: holiday.date,
+        name: holiday.name,
+        localName: holiday.localName,
+        country: holiday.country,
+        region: holiday.region,
+        holidayType: holiday.holidayType,
+        isNationwide: holiday.isNationwide,
+      },
+      ["externalId"],
+    );
+  }
+
+  /**
+   * Save school holidays from OpenHolidays API
+   *
+   * Expands date ranges (startDate -> endDate) into individual daily entries.
+   * Sets holidayType = 'school'.
+   */
+  async saveSchoolHolidaysFromApi(
+    entries: import("../external-apis/open-holidays/open-holidays.types").OpenHolidaysEntry[],
+    countryCode: string,
+  ): Promise<number> {
+    let savedCount = 0;
+
+    for (const entry of entries) {
+      // Parse dates
+      const start = new Date(entry.startDate);
+      const end = new Date(entry.endDate);
+
+      // Iterate from start to end
+      const current = new Date(start);
+      while (current <= end) {
+        try {
+          const dateStr = current.toISOString().split("T")[0]; // YYYY-MM-DD
+          const name =
+            entry.name.find((n) => n.language === countryCode)?.text ||
+            entry.name[0]?.text ||
+            "School Holiday";
+
+          // Generate external ID (unique per date + region + country)
+          // Uses 'openholidays' prefix to distinguish from 'nager'
+          // If regional, include region code. If national, include 'national'.
+          let regionsToCheck = entry.subdivisions?.map((s) => s.code) || [];
+          if (entry.regionalScope === "National" || entry.nationwide) {
+            regionsToCheck = [null] as any; // Cast to allow null, treating as nationwide
+          }
+
+          if (
+            regionsToCheck.length === 0 &&
+            entry.regionalScope !== "National"
+          ) {
+            // Maybe a specific group or unhandled scope, skip for now to be safe
+            // Or could default to country-wide if we want loose matching
+            current.setDate(current.getDate() + 1);
+            continue;
+          }
+
+          for (const regionCode of regionsToCheck) {
+            const regionPart = regionCode || "national";
+            const externalId = `openholidays:${countryCode}:${regionPart}:${dateStr}:${entry.id}`;
+
+            const holidayDate = new Date(current);
+            holidayDate.setUTCHours(0, 0, 0, 0);
+
+            await this.holidayRepository.upsert(
+              {
+                externalId,
+                date: holidayDate,
+                name: name,
+                localName: name,
+                country: countryCode,
+                region: regionCode || undefined, // null for nationwide
+                holidayType: "school",
+                isNationwide: !regionCode,
+              },
+              ["externalId"],
+            );
+            savedCount++;
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to save school holiday entry ${entry.id}: ${error}`,
+          );
+        }
+
+        // Next day
+        current.setDate(current.getDate() + 1);
+      }
+    }
+
+    return savedCount;
+  }
+
+  /**
    * Get holidays for a specific country and date range
    */
   async getHolidays(
@@ -170,6 +279,93 @@ export class HolidaysService {
     await this.redis.set(cacheKey, String(isHoliday), "EX", 24 * 60 * 60);
 
     return isHoliday;
+  }
+
+  /**
+   * Check explicitly if a date is a SCHOOL holiday
+   */
+  async isSchoolHoliday(
+    date: Date,
+    countryCode: string,
+    regionCode?: string,
+    timezone?: string,
+  ): Promise<boolean> {
+    const dateStr = timezone
+      ? formatInParkTimezone(date, timezone)
+      : date.toISOString().split("T")[0];
+    const cacheKey = `holiday:school:${countryCode}:${regionCode || "national"}:${dateStr}`;
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return cached === "true";
+    }
+
+    const query = this.holidayRepository
+      .createQueryBuilder("holiday")
+      .where("holiday.country = :countryCode", { countryCode })
+      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr })
+      .andWhere("holiday.holidayType = 'school'");
+
+    if (regionCode) {
+      const fullRegionCode = `${countryCode}-${regionCode}`;
+      query.andWhere(
+        "(holiday.isNationwide = true OR holiday.region = :fullRegionCode)",
+        { fullRegionCode },
+      );
+    } else {
+      query.andWhere("holiday.isNationwide = true");
+    }
+
+    const count = await query.getCount();
+    const isSchool = count > 0;
+
+    await this.redis.set(cacheKey, String(isSchool), "EX", 24 * 60 * 60);
+
+    return isSchool;
+  }
+
+  /**
+   * Check if any influencing region has a school holiday
+   * Used for ML features to detect cross-border holiday effects
+   */
+  async isSchoolHolidayInInfluenceZone(
+    date: Date,
+    localCountryCode: string,
+    localRegionCode: string | null,
+    timezone: string,
+    influencingRegions: {
+      countryCode: string;
+      regionCode: string | null;
+    }[] = [],
+  ): Promise<boolean> {
+    // 1. Check local region first
+    const isLocal = await this.isSchoolHoliday(
+      date,
+      localCountryCode,
+      localRegionCode || undefined,
+      timezone,
+    );
+
+    if (isLocal) return true;
+
+    // 2. Check influencing regions
+    if (!influencingRegions || influencingRegions.length === 0) {
+      return false;
+    }
+
+    // Check all influencing regions in parallel
+    const results = await Promise.all(
+      influencingRegions.map((region) =>
+        this.isSchoolHoliday(
+          date,
+          region.countryCode,
+          region.regionCode || undefined,
+          timezone, // Assuming influencing regions share similar timezone for "Is it holiday TODAY" check
+        ),
+      ),
+    );
+
+    return results.some((isHoliday) => isHoliday);
   }
 
   /**

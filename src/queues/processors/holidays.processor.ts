@@ -3,8 +3,13 @@ import { Logger } from "@nestjs/common";
 import { Job, Queue } from "bull";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { NagerDateClient } from "../../external-apis/nager-date/nager-date.client";
+import { OpenHolidaysClient } from "../../external-apis/open-holidays/open-holidays.client";
 import { ParksService } from "../../parks/parks.service";
 import { getCountryISOCode } from "../../common/constants/country-codes.constant";
+import {
+  PEAK_SEASONS_BY_COUNTRY,
+  getPeakSeasonHolidays,
+} from "../../common/peak-seasons";
 
 /**
  * Holidays Processor
@@ -26,6 +31,7 @@ export class HolidaysProcessor {
   constructor(
     private holidaysService: HolidaysService,
     private nagerDateClient: NagerDateClient,
+    private openHolidaysClient: OpenHolidaysClient,
     private parksService: ParksService,
     @InjectQueue("park-metadata")
     private parkMetadataQueue: Queue,
@@ -69,35 +75,111 @@ export class HolidaysProcessor {
           //   `Fetching holidays for ${country} (${isoCode}) (${startYear}-${endYear})...`,
           // );
 
-          const holidays = await this.nagerDateClient.getHolidaysForYears(
-            isoCode,
-            startYear,
-            endYear,
-          );
+          // 1. Public Holidays (Nager.Date)
+          try {
+            const holidays = await this.nagerDateClient.getHolidaysForYears(
+              isoCode,
+              startYear,
+              endYear,
+            );
 
-          const savedCount = await this.holidaysService.saveHolidaysFromApi(
-            holidays,
-            isoCode,
-          );
+            const savedCount = await this.holidaysService.saveHolidaysFromApi(
+              holidays,
+              isoCode,
+            );
+            totalHolidaysSaved += savedCount;
+          } catch (error) {
+            this.logger.error(
+              `Failed to fetch Nager public holidays for ${country}: ${error}`,
+            );
+          }
 
-          totalHolidaysSaved += savedCount;
+          // 2. School Holidays (OpenHolidays)
+          // OpenHolidays API rejects large date ranges (>1 year) with 400.
+          // Fetch year-by-year to avoid this.
+          try {
+            let totalSchoolForCountry = 0;
 
-          // this.logger.verbose(
-          //   `✅ Saved ${savedCount} holidays for ${country} (${isoCode})`,
-          // );
+            for (let year = startYear; year <= endYear; year++) {
+              const yearStart = `${year}-01-01`;
+              const yearEnd = `${year}-12-31`;
+
+              // Language: Use country code (often matches, e.g. DE, FR)
+              const schoolHolidays =
+                await this.openHolidaysClient.getSchoolHolidays(
+                  isoCode,
+                  isoCode, // language
+                  yearStart,
+                  yearEnd,
+                );
+
+              const savedSchoolCount =
+                await this.holidaysService.saveSchoolHolidaysFromApi(
+                  schoolHolidays,
+                  isoCode,
+                );
+              totalSchoolForCountry += savedSchoolCount;
+              totalHolidaysSaved += savedSchoolCount;
+            }
+
+            this.logger.log(
+              `Fetched school holidays for ${country}, expanded to ${totalSchoolForCountry} days.`,
+            );
+          } catch (error) {
+            this.logger.error(
+              `Failed to fetch school holidays for ${country}: ${error}`,
+            );
+          }
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
           this.logger.error(
             `Failed to fetch holidays for ${country}: ${errorMessage}`,
           );
-          // Continue with next country
         }
       }
 
       this.logger.log(
         `✅ Holidays sync complete! Saved ${totalHolidaysSaved} holidays across ${countries.length} countries`,
       );
+
+      // 3. Peak Seasons (Hardcoded for countries without API coverage)
+      // Sync peak seasons for US, UK, JP, CN, CA, KR, AU, DK
+      this.logger.log("📅 Syncing hardcoded peak seasons...");
+      let peakSeasonCount = 0;
+
+      for (const country of countries) {
+        const isoCode = getCountryISOCode(country);
+        if (!isoCode || !PEAK_SEASONS_BY_COUNTRY[isoCode]) continue;
+
+        const peakHolidays = getPeakSeasonHolidays(isoCode, startYear, endYear);
+        for (const holiday of peakHolidays) {
+          try {
+            const dateStr = holiday.date.toISOString().split("T")[0];
+            const externalId = `peak:${isoCode}:${dateStr}:${holiday.name.replace(/\s+/g, "-").toLowerCase()}`;
+
+            await this.holidaysService.upsertHoliday({
+              externalId,
+              date: holiday.date,
+              name: holiday.name,
+              localName: holiday.name,
+              country: isoCode,
+              region: undefined, // Nationwide
+              holidayType: "school",
+              isNationwide: true,
+            });
+            peakSeasonCount++;
+          } catch (_error) {
+            // Silently skip duplicates
+          }
+        }
+      }
+
+      if (peakSeasonCount > 0) {
+        this.logger.log(
+          `📅 Synced ${peakSeasonCount} peak season days for countries without API coverage`,
+        );
+      }
 
       // Cleanup old holidays (older than 3 years)
       const cleanupDate = new Date();
