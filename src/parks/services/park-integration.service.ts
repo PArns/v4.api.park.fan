@@ -440,6 +440,62 @@ export class ParkIntegrationService {
           deviationDetected: p.deviationDetected,
         }));
 
+        // Determine Current Crowd Level (Badge)
+        // 1. Try to use current prediction's crowd level if available
+        // 2. Fallback to wait time heuristic
+        let crowdLevel:
+          | "very_low"
+          | "low"
+          | "moderate"
+          | "high"
+          | "very_high"
+          | "closed" = "closed";
+
+        if (attraction.effectiveStatus === "CLOSED") {
+          crowdLevel = "closed";
+        } else {
+          // Find current hour prediction
+          const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
+          const currentPred = enrichedPreds.find((p) =>
+            p.predictedTime.startsWith(nowStr),
+          );
+
+          if (currentPred && currentPred.crowdLevel) {
+            crowdLevel = currentPred.crowdLevel as any;
+          } else {
+            // Heuristic Fallback based on Wait Time
+            const wait = attraction.queues?.[0]?.waitTime ?? 0;
+            if (wait < 10) crowdLevel = "very_low";
+            else if (wait < 25) crowdLevel = "low";
+            else if (wait < 45) crowdLevel = "moderate";
+            else if (wait < 75) crowdLevel = "high";
+            else crowdLevel = "very_high";
+          }
+        }
+        attraction.crowdLevel = crowdLevel;
+
+        // Determine Trend
+        // 1. Try to use trend from first queue (if calculated)
+        // 2. Fallback to ML trend
+        let trend: "up" | "stable" | "down" | null = null;
+        if (attraction.effectiveStatus === "OPERATING") {
+          const queueTrend = attraction.queues?.[0]?.trend?.direction;
+          if (queueTrend) {
+            trend =
+              queueTrend === "increasing"
+                ? "up"
+                : queueTrend === "decreasing"
+                  ? "down"
+                  : "stable";
+          } else if (
+            enrichedPreds.length > 0 &&
+            enrichedPreds[0].trend !== undefined
+          ) {
+            trend = enrichedPreds[0].trend;
+          }
+        }
+        attraction.trend = trend;
+
         // Attach Prediction Accuracy (Feedback Loop)
         try {
           const accuracy =

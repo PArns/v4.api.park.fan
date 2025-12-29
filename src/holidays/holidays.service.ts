@@ -192,10 +192,17 @@ export class HolidaysService {
       }
     }
 
-    if (holidaysToUpsert.length > 0) {
+    // Deduplicate by externalId before batch upsert
+    const uniqueHolidays = new Map<string, any>();
+    for (const h of holidaysToUpsert) {
+      uniqueHolidays.set(h.externalId, h);
+    }
+    const finalHolidays = Array.from(uniqueHolidays.values());
+
+    if (finalHolidays.length > 0) {
       // Bulk upsert in batches of 500
-      for (let i = 0; i < holidaysToUpsert.length; i += 500) {
-        const batch = holidaysToUpsert.slice(i, i + 500);
+      for (let i = 0; i < finalHolidays.length; i += 500) {
+        const batch = finalHolidays.slice(i, i + 500);
         await this.holidayRepository.upsert(batch, ["externalId"]);
         savedCount += batch.length;
       }

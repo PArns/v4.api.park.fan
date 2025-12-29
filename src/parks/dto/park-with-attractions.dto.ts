@@ -103,6 +103,27 @@ export class ParkAttractionDto {
     nullable: true,
   })
   predictionAccuracy?: ParkPredictioAccuracyDto | null;
+
+  @ApiProperty({
+    description: "Crowd level badge",
+    enum: ["very_low", "low", "moderate", "high", "very_high", "closed"],
+    required: false,
+  })
+  crowdLevel?:
+    | "very_low"
+    | "low"
+    | "moderate"
+    | "high"
+    | "very_high"
+    | "closed";
+
+  @ApiProperty({
+    description: "Wait time trend",
+    enum: ["up", "stable", "down"],
+    required: false,
+    nullable: true,
+  })
+  trend?: "up" | "stable" | "down" | null;
 }
 
 export class ParkShowDto {
