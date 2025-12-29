@@ -145,8 +145,11 @@ export class ParkIntegrationService {
 
     // Fetch current queue data for all attractions
     // ALWAYS fetch queue data to detect activity for parks without schedules
+    // Filter out stale data (> 6 hours old) to prevent "Ghost Closures" from yesterday
+    const MAX_AGE_MINUTES = 6 * 60; // 6 hours
     const queueDataMap = await this.queueDataService.findCurrentStatusByPark(
       park.id,
+      MAX_AGE_MINUTES,
     );
 
     // Collect ride status data for fallback logic (parks without schedules)
@@ -257,11 +260,15 @@ export class ParkIntegrationService {
           // Fallback if no live data found
           attraction.queues = [];
 
-          // If park is OPERATING (via schedule or override), but this specific ride has no data,
-          // we default to CLOSED per ride, unless we want to be smarter.
-          // But existing logic was: if park closed, all closed.
-          // If park open, no data -> closed. This works.
-          attraction.status = "CLOSED";
+          // Optimistic Fallback:
+          // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
+          // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
+          // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
+          if (dto.status === "OPERATING") {
+            attraction.status = "OPERATING";
+          } else {
+            attraction.status = "CLOSED";
+          }
         }
 
         // Calculate Effective Status
@@ -740,9 +747,25 @@ export class ParkIntegrationService {
       return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 5 minutes
     }
 
-    // Park is CLOSED - find next opening time
-    // Use UTC for comparison (schedule times are stored as UTC)
-    const now = new Date(); // Current time in UTC
+    // Park is CLOSED - check if we *should* be open (Unexpected Closure)
+    const now = new Date();
+    const isScheduledOpen = schedules.some(
+      (s) =>
+        s.scheduleType === "OPERATING" &&
+        s.openingTime &&
+        s.closingTime &&
+        s.openingTime <= now &&
+        s.closingTime > now,
+    );
+
+    if (isScheduledOpen) {
+      // Park is CLOSED but Schedule says OPEN -> Likely a temporary closure or data issue.
+      // Use short TTL to recover quickly if it reopens.
+      this.logger.debug(
+        "Park is CLOSED but within operating hours. Using short TTL.",
+      );
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 5 minutes
+    }
 
     // Find next OPERATING schedule entry
     const nextOpening = schedules

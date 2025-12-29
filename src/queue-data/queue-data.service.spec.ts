@@ -12,9 +12,12 @@ describe("QueueDataService", () => {
     find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
+    findAndCount: jest.fn(),
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
       leftJoin: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      innerJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -35,11 +38,25 @@ describe("QueueDataService", () => {
     findOne: jest.fn(),
     save: jest.fn(),
     createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      innerJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      distinctOn: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
+      getOne: jest.fn().mockResolvedValue(null),
+      getRawMany: jest.fn().mockResolvedValue([]),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      getCount: jest.fn().mockResolvedValue(0),
     })),
   };
 
@@ -70,27 +87,28 @@ describe("QueueDataService", () => {
   describe("findCurrentStatusByAttraction", () => {
     it("should return current queue data for all queue types", async () => {
       const attractionId = "attr-123";
-      const mockQueueData = [
-        {
-          id: "qd-1",
-          attractionId,
-          queueType: "STANDBY",
-          status: "OPERATING",
-          waitTime: 30,
-          timestamp: new Date(),
-        },
-      ];
+      const mockQueueData = {
+        id: "qd-1",
+        attractionId,
+        queueType: "STANDBY",
+        status: "OPERATING",
+        waitTime: 30,
+        timestamp: new Date(),
+      };
 
-      mockQueueDataRepository.query.mockResolvedValue(mockQueueData);
+      // Mock findOne to return data when called
+      mockQueueDataRepository.findOne.mockResolvedValue(mockQueueData);
 
       const result = await service.findCurrentStatusByAttraction(attractionId);
 
-      expect(result).toEqual(mockQueueData);
-      expect(mockQueueDataRepository.query).toHaveBeenCalled();
+      // Should return array of results (one per queue type found)
+      expect(result).toHaveLength(6); // 6 queue types checked
+      expect(result[0]).toEqual(mockQueueData);
+      expect(mockQueueDataRepository.findOne).toHaveBeenCalled();
     });
 
     it("should return empty array when no data available", async () => {
-      mockQueueDataRepository.query.mockResolvedValue([]);
+      mockQueueDataRepository.findOne.mockResolvedValue(null);
 
       const result = await service.findCurrentStatusByAttraction("attr-999");
 
@@ -112,9 +130,7 @@ describe("QueueDataService", () => {
         },
       ];
 
-      mockForecastDataRepository
-        .createQueryBuilder()
-        .getMany.mockResolvedValue(mockForecasts);
+      mockForecastDataRepository.find.mockResolvedValue(mockForecasts);
 
       const result = await service.findForecastsByAttraction(
         attractionId,
@@ -129,12 +145,7 @@ describe("QueueDataService", () => {
     it("should return wait times with pagination", async () => {
       const attractionId = "attr-123";
 
-      mockQueueDataRepository
-        .createQueryBuilder()
-        .getMany.mockResolvedValue([]);
-      mockQueueDataRepository
-        .createQueryBuilder()
-        .getCount.mockResolvedValue(0);
+      mockQueueDataRepository.findAndCount.mockResolvedValue([[], 0]);
 
       const result = await service.findWaitTimesByAttraction(attractionId);
 

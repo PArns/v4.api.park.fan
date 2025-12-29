@@ -319,6 +319,20 @@ export class ShowsService {
       return true;
     }
 
+    // Date changed → save (ensure at least one data point per day)
+    // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
+    if (latest.timestamp) {
+      const latestDate = new Date(latest.timestamp);
+      const currentDate = new Date(); // UTC or server time (ensure consistency)
+      if (
+        latestDate.getDate() !== currentDate.getDate() ||
+        latestDate.getMonth() !== currentDate.getMonth() ||
+        latestDate.getFullYear() !== currentDate.getFullYear()
+      ) {
+        return true;
+      }
+    }
+
     // No significant change
     return false;
   }

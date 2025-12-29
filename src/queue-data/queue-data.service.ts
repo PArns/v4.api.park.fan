@@ -325,6 +325,20 @@ export class QueueDataService {
       if (newEnd !== oldEnd) return true;
     }
 
+    // Date changed → save (ensure at least one data point per day)
+    // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
+    if (latest.timestamp) {
+      const latestDate = new Date(latest.timestamp);
+      const currentDate = new Date();
+      if (
+        latestDate.getDate() !== currentDate.getDate() ||
+        latestDate.getMonth() !== currentDate.getMonth() ||
+        latestDate.getFullYear() !== currentDate.getFullYear()
+      ) {
+        return true;
+      }
+    }
+
     // No significant change
     return false;
   }
@@ -419,18 +433,25 @@ export class QueueDataService {
    */
   async findCurrentStatusByPark(
     parkId: string,
+    maxAgeMinutes?: number,
   ): Promise<Map<string, QueueData[]>> {
     // Use DISTINCT ON to get latest timestamp for each (attractionId, queueType) combination
     // This replaces the O(n²) correlated subquery with a single index scan
-    const queueData = await this.queueDataRepository
+    const query = this.queueDataRepository
       .createQueryBuilder("qd")
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
       .distinctOn(["qd.attractionId", "qd.queueType"])
       .orderBy("qd.attractionId", "ASC")
       .addOrderBy("qd.queueType", "ASC")
-      .addOrderBy("qd.timestamp", "DESC") // Latest first within each group
-      .getMany();
+      .addOrderBy("qd.timestamp", "DESC"); // Latest first within each group
+
+    if (maxAgeMinutes) {
+      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+      query.andWhere("qd.timestamp >= :cutoff", { cutoff });
+    }
+
+    const queueData = await query.getMany();
 
     // Group by attractionId
     const result = new Map<string, QueueData[]>();

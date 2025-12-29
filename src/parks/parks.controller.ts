@@ -348,7 +348,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":slug/weather/forecast")
-  @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache (weather updates every 12h)
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache (weather updates every 12h, but we want faster cache invalidation)
   @ApiOperation({
     summary: "Get weather forecast",
     description: "Returns 16-day weather forecast.",
@@ -407,7 +407,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":slug/weather")
-  @UseInterceptors(new HttpCacheInterceptor(6 * 60 * 60)) // 6 hours HTTP cache
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get weather history/forecast",
     description: "Returns weather data within a date range.",
@@ -494,7 +494,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":slug/schedule")
-  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60)) // 12 hours HTTP cache
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get schedule range",
     description:
@@ -1065,7 +1065,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
-  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes HTTP cache (short for Cloudflare)
   @ApiOperation({
     summary: "Get park by location",
     description: "Returns a specific park by its geographic structure.",
@@ -1184,7 +1184,7 @@ export class ParksController {
    * @throws NotFoundException if neither park nor continent found
    */
   @Get(":slugOrContinent")
-  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes HTTP cache
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes HTTP cache (short for Cloudflare)
   @ApiOperation({
     summary: "Get park or continent",
     description:
