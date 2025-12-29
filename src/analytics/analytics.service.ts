@@ -1120,6 +1120,45 @@ export class AnalyticsService {
       previousAverage: Math.round(avgTwoToOne),
     };
   }
+
+  /**
+   * Get 90th percentile baselines for multiple attractions in parallel
+   * Used for calculating relative crowd levels (badges) in lists
+   */
+  async getBatchAttractionP90s(
+    attractionIds: string[],
+  ): Promise<Map<string, number>> {
+    const resultMap = new Map<string, number>();
+    const now = new Date();
+    const hour = now.getHours();
+    const dayOfWeek = now.getDay();
+
+    if (attractionIds.length === 0) {
+      return resultMap;
+    }
+
+    // Execute in parallel (leveraging Redis cache inside get90thPercentileOneYear)
+    const results = await Promise.all(
+      attractionIds.map(async (id) => {
+        try {
+          const p90 = await this.get90thPercentileOneYear(
+            id,
+            hour,
+            dayOfWeek,
+            "attraction",
+          );
+          return { id, p90 };
+        } catch (error) {
+          this.logger.warn(`Failed to get P90 for attraction ${id}:`, error);
+          return { id, p90: 0 };
+        }
+      }),
+    );
+
+    results.forEach((r) => resultMap.set(r.id, r.p90));
+    return resultMap;
+  }
+
   /**
    * Calculate 90th percentile wait time for specific hour/weekday over last 1 year
    * Uses Redis caching to avoid expensive DB queries
@@ -1361,7 +1400,7 @@ export class AnalyticsService {
   /**
    * Calculate load rating based on current wait vs 90th percentile baseline
    */
-  getLoadRating(
+  public getLoadRating(
     current: number,
     baseline: number,
   ): {

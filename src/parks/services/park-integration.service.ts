@@ -370,6 +370,11 @@ export class ParkIntegrationService {
       dto.attractions &&
       dto.attractions.length > 0
     ) {
+      // Batch fetch P90 baselines for all attractions (for relative crowd calculation)
+      const attractionIds = dto.attractions.map((a) => a.id);
+      const attractionP90s =
+        await this.analyticsService.getBatchAttractionP90s(attractionIds);
+
       for (const attraction of dto.attractions) {
         totalAttractionsCount++;
 
@@ -463,11 +468,10 @@ export class ParkIntegrationService {
           // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
-            if (wait < 10) crowdLevel = "very_low";
-            else if (wait < 25) crowdLevel = "low";
-            else if (wait < 45) crowdLevel = "moderate";
-            else if (wait < 75) crowdLevel = "high";
-            else crowdLevel = "very_high";
+            // Use historical P90 baseline for relative crowd level (context-aware)
+            const p90 = attractionP90s.get(attraction.id) || 0;
+            const { rating } = this.analyticsService.getLoadRating(wait, p90);
+            crowdLevel = rating;
           } else {
             // 2. Fallback to ML Prediction if no live data
             if (currentPred && currentPred.crowdLevel) {
