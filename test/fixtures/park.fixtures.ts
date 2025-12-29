@@ -26,7 +26,7 @@ export const createTestPark = (overrides?: Partial<Park>): Park => {
   park.countrySlug = "united-states";
   park.city = "Orlando";
   park.citySlug = "orlando";
-  park.influencingCountries = ["US"];
+  park.influencingRegions = [{ countryCode: "US", regionCode: null }];
   park.influenceRadiusKm = 200;
 
   return Object.assign(park, overrides);

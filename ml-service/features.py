@@ -158,6 +158,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
 def add_holiday_features(
     df: pd.DataFrame,
     parks_metadata: pd.DataFrame,
@@ -165,11 +166,11 @@ def add_holiday_features(
     end_date: datetime
 ) -> pd.DataFrame:
     """
-    Add multi-country holiday features
+    Add multi-country and regional holiday features
 
     For each park, checks holidays in:
-    - Primary country (park's country)
-    - Neighbor countries (from influencingCountries)
+    - Primary country/region (park's location)
+    - Influencing regions (from influencingRegions JSON)
     """
     df = df.copy()
 
@@ -181,85 +182,155 @@ def add_holiday_features(
     df['is_holiday_neighbor_3'] = 0
     df['holiday_count_total'] = 0
     df['school_holiday_count_total'] = 0
+    df['is_school_holiday_any'] = 0 # Consolidated signal (matches Node.js inference feature)
 
     # Merge park metadata
     df = df.merge(
-        parks_metadata[['park_id', 'country', 'influencingCountries']],
+        parks_metadata[['park_id', 'country', 'region_code', 'influencingRegions', 'influencingCountries']],
         left_on='parkId',
         right_on='park_id',
         how='left'
     )
 
-    # Get unique countries we need holidays for
+    # Get unique countries to fetch holidays for
     all_countries = set()
     for _, row in parks_metadata.iterrows():
         all_countries.add(row['country'])
-        if row['influencingCountries']:
-            all_countries.update(row['influencingCountries'])
+        
+        # Add countries from influencingRegions JSON
+        if isinstance(row['influencingRegions'], list):
+            for region in row['influencingRegions']:
+                if isinstance(region, dict) and 'countryCode' in region:
+                    all_countries.add(region['countryCode'])
+        
+        # Fallback: Add countries from legacy array
+        elif isinstance(row['influencingCountries'], list):
+             all_countries.update(row['influencingCountries'])
 
     # Fetch all holidays
     holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
 
-    # Convert date column to datetime if needed
+    # Convert date column to datetime
     if not holidays_df.empty:
-        holidays_df['date'] = pd.to_datetime(holidays_df['date'])
+        holidays_df['date'] = pd.to_datetime(holidays_df['date']).dt.date
 
-    # Create holiday lookup: {(country, date): type}
-    # type can be 'public', 'school', 'observance', 'bank'
-    holiday_lookup = {}
+    # Create optimized holiday lookup
+    # Key: (country, region, date) -> holiday_type
+    # Also separate lookup for Nationwide holidays: (country, date) -> type
+    holiday_map_regional = {}
+    holiday_map_national = {}
+    
     if not holidays_df.empty:
         for _, row in holidays_df.iterrows():
-            key = (row['country'], row['date'].date())
-            # prioritize public over others if duplicates (simple approach) or store list
-            # simple lookup: store the implementation type
-            holiday_lookup[key] = row['holiday_type']
+            h_date = row['date']
+            h_country = row['country']
+            h_type = row['holiday_type']
+            h_region = row['region']
+            is_nationwide = row['is_nationwide']
 
-    # Process each row
-
+            # Store in National Map if nationwide
+            if is_nationwide:
+                holiday_map_national[(h_country, h_date)] = h_type
+            
+            # Store in Regional Map if region specific
+            if h_region:
+                 holiday_map_regional[(h_country, h_region, h_date)] = h_type
 
     def check_holidays(row):
         # Use LOCAL date for holiday lookup
+        if pd.isna(row['date_local']):
+             return row
+             
         date = row['date_local']
         primary_country = row['country']
-        influencing = row['influencingCountries'] or []
+        primary_region = row['region_code'] # e.g. "DE-BW"
+        
+        # 1. Primary Location Holiday Check
+        primary_type = None
+        
+        # Check specific region match first
+        if primary_region:
+            primary_type = holiday_map_regional.get((primary_country, primary_region, date))
+        
+        # If no regional match, check national (fallback/additive)
+        if not primary_type:
+            primary_type = holiday_map_national.get((primary_country, date))
 
-        # Primary country holiday
-        h_type = holiday_lookup.get((primary_country, date))
-        row['is_holiday_primary'] = int(h_type == 'public')
-        row['is_school_holiday_primary'] = int(h_type == 'school')
+        # Assign primary features
+        row['is_holiday_primary'] = int(primary_type == 'public')
+        row['is_school_holiday_primary'] = int(primary_type == 'school')
 
-        # Neighbor holidays (count public holidays)
-        # We focus on public holidays for neighbors as school holidays are less impactful across borders usually,
-        # but for high impact we could count them. For now let's just count public/school mixed or just public?
-        # User asked "School holidays exactly so?". 
-        # Let's count public holidays for neighbors as 'is_holiday_neighbor_X'
+        # 2. Influencing Regions Check
+        # Parse influencing regions from JSON or fallback
+        influencing_list = []
         
-        neighbor_types = [holiday_lookup.get((country, date)) for country in influencing[:3]]
-        
-        holiday_flags = [int(t == 'public') for t in neighbor_types]
-        
-        if len(holiday_flags) > 0:
-            row['is_holiday_neighbor_1'] = holiday_flags[0]
-        if len(holiday_flags) > 1:
-            row['is_holiday_neighbor_2'] = holiday_flags[1]
-        if len(holiday_flags) > 2:
-            row['is_holiday_neighbor_3'] = holiday_flags[2]
+        raw_regions = row['influencingRegions']
+        if isinstance(raw_regions, list) and len(raw_regions) > 0:
+            # Use new granular config
+            influencing_list = raw_regions # list of {countryCode, regionCode}
+        else:
+            # Fallback to old country list
+            raw_countries = row['influencingCountries']
+            if isinstance(raw_countries, list):
+                influencing_list = [{'countryCode': c, 'regionCode': None} for c in raw_countries]
 
-        # Total holiday count (Public)
-        row['holiday_count_total'] = sum([row['is_holiday_primary']] + holiday_flags)
+        # Check first 3 neighbors
+        neighbor_flags = []
+        neighbor_school_flags = []
         
-        # Total school holiday count (Primary + Neighbors school holidays)
-        school_flags = [int(t == 'school') for t in neighbor_types]
-        row['school_holiday_count_total'] = sum([row['is_school_holiday_primary']] + school_flags)
+        for region_def in influencing_list[:3]:
+            try:
+                # Handle both object (new) and string (bad data) cases safely
+                if not isinstance(region_def, dict): continue
+                
+                n_country = region_def.get('countryCode')
+                n_region = region_def.get('regionCode') # Can be None
+                
+                n_type = None
+                
+                # Check region specific
+                if n_region:
+                    n_type = holiday_map_regional.get((n_country, n_region, date))
+                
+                # Check national if no regional hit or if region is None (nationwide influence)
+                if not n_type:
+                    n_type = holiday_map_national.get((n_country, date))
+                
+                neighbor_flags.append(int(n_type == 'public'))
+                neighbor_school_flags.append(int(n_type == 'school'))
+                
+            except Exception:
+                # Safely skip bad entries
+                neighbor_flags.append(0)
+                neighbor_school_flags.append(0)
+
+        # Assign neighbor features
+        if len(neighbor_flags) > 0: row['is_holiday_neighbor_1'] = neighbor_flags[0]
+        if len(neighbor_flags) > 1: row['is_holiday_neighbor_2'] = neighbor_flags[1]
+        if len(neighbor_flags) > 2: row['is_holiday_neighbor_3'] = neighbor_flags[2]
+
+        # Totals
+        row['holiday_count_total'] = row['is_holiday_primary'] + sum(neighbor_flags)
+        
+        # "Any School Holiday" Logic (Critical for ML parity)
+        # Matches Node.js isSchoolHolidayInInfluenceZone: true if ANY influenced region has school holiday
+        # OR if local region has school holiday
+        has_local_school = (row['is_school_holiday_primary'] == 1)
+        has_neighbor_school = (sum(neighbor_school_flags) > 0)
+        
+        row['school_holiday_count_total'] = row['is_school_holiday_primary'] + sum(neighbor_school_flags)
+        row['is_school_holiday_any'] = int(has_local_school or has_neighbor_school)
 
         return row
 
     df = df.apply(check_holidays, axis=1)
 
     # Drop temporary merge columns
-    df = df.drop(columns=['park_id', 'country', 'influencingCountries'], errors='ignore')
+    drop_cols = ['park_id', 'country', 'region_code', 'influencingRegions', 'influencingCountries']
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
 
     return df
+
 
 
 def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -919,6 +990,7 @@ def get_feature_columns() -> List[str]:
         'is_holiday_neighbor_3',  # Border parks (Europa-Park → France, etc.)
         'holiday_count_total',
         'school_holiday_count_total',
+        'is_school_holiday_any',  # Consolidated school holiday signal (matches inference)
         'is_bridge_day',          # Extended weekends
 
         # Park schedule features

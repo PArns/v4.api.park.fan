@@ -245,6 +245,7 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
         return {row.park_id: row.countries for row in result}
 
 
+
 def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
     """
     Fetch holidays for specified countries
@@ -252,6 +253,7 @@ def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_
     Returns DataFrame with columns:
     - date
     - country
+    - region (Nullable)
     - holiday_type
     - is_nationwide
     """
@@ -259,6 +261,7 @@ def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_
         SELECT
             date,
             country,
+            region,
             "holidayType" as holiday_type,
             "isNationwide" as is_nationwide
         FROM holidays
@@ -278,7 +281,7 @@ def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_
 
 def fetch_parks_metadata() -> pd.DataFrame:
     """
-    Fetch park metadata (country code, influencing countries, etc.)
+    Fetch park metadata (country code, influencing regions, etc.)
 
     Returns DataFrame with park details
     """
@@ -287,8 +290,10 @@ def fetch_parks_metadata() -> pd.DataFrame:
             id as park_id,
             name,
             "countryCode" as country,
+            "regionCode" as region_code,
             timezone,
-            "influencingCountries",
+            "influencingRegions", 
+            "influencingCountries", -- Keep for backward compat fallback
             "influenceRadiusKm",
             latitude,
             longitude
@@ -299,6 +304,7 @@ def fetch_parks_metadata() -> pd.DataFrame:
         result = db.execute(query)
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         return convert_df_types(df)
+
 
 
 def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:

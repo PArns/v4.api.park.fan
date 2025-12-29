@@ -491,13 +491,45 @@ export class MLService {
         parkHasSchedule[parkId] = false; // Safe default
       }
 
+      // 7. Check if park has school holiday
+      // This is a NEW feature for ML to improve predictions during school breaks
+      // It considers both the park's local region AND influencing regions (e.g. neighboring states)
+      let isSchoolHoliday: Record<string, boolean> = {};
+      try {
+        const park = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: [
+            "id",
+            "countryCode",
+            "regionCode",
+            "timezone",
+            "influencingRegions",
+          ],
+        });
+
+        if (park?.countryCode) {
+          const isSchool =
+            await this.holidaysService.isSchoolHolidayInInfluenceZone(
+              new Date(),
+              park.countryCode,
+              park.regionCode,
+              park.timezone,
+              park.influencingRegions || [],
+            );
+          isSchoolHoliday[parkId] = isSchool;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to check school holiday status: ${error}`);
+      }
+
       return {
         parkOccupancy,
         parkOpeningTimes,
         downtimeCache,
         queueData,
         isBridgeDay,
-        parkHasSchedule, // NEW: ML can learn data quality patterns
+        parkHasSchedule,
+        isSchoolHoliday,
       };
     } catch (error) {
       this.logger.warn(`Failed to build feature context: ${error}`);

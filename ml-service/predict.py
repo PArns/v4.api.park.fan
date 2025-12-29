@@ -306,19 +306,42 @@ def create_prediction_features(
     all_countries = set()
     for _, park in parks_metadata.iterrows():
         all_countries.add(park['country'])
-        if park['influencingCountries']:
+        
+        # Legacy fallback
+        if park.get('influencingCountries'):
             all_countries.update(park['influencingCountries'])
+            
+        # New JSON support
+        raw_influences = park.get('influencingRegions')
+        import json
+        if isinstance(raw_influences, str):
+            try:
+                regions = json.loads(raw_influences)
+                if regions:
+                    all_countries.update([r['countryCode'] for r in regions if r.get('countryCode')])
+            except:
+                pass
+        elif isinstance(raw_influences, list):
+             all_countries.update([r['countryCode'] for r in raw_influences if r.get('countryCode')])
 
     holidays_df = fetch_holidays(list(all_countries), df_start, df_end)
 
     if not holidays_df.empty:
         holidays_df['date'] = pd.to_datetime(holidays_df['date'])
         
-        # Create lookup with type: {(country, date): type}
+        # Create lookup with type: {(country, region, date): type} AND {(country, date): type}
         holiday_lookup = {}
         for _, row in holidays_df.iterrows():
-            key = (row['country'], row['date'].date())
-            holiday_lookup[key] = row['holiday_type']
+            # Key 1: With specific region (if available) -> (country, region, date)
+            if row.get('region'):
+                key_regional = (row['country'], row['region'], row['date'].date())
+                holiday_lookup[key_regional] = row['holiday_type']
+            else:
+                # Key 2: National holiday (no region) -> (country, None, date)?? 
+                # Actually, my new loop checks (country, region, date) then (country, date).
+                # So we should populate (country, date) for national holidays.
+                key_national = (row['country'], row['date'].date())
+                holiday_lookup[key_national] = row['holiday_type']
     else:
         holiday_lookup = {}
 
@@ -330,6 +353,7 @@ def create_prediction_features(
     df['is_holiday_neighbor_3'] = 0
     df['holiday_count_total'] = 0
     df['school_holiday_count_total'] = 0
+    df['is_school_holiday_any'] = 0  # NEW: Consolidated signal
 
     # Check holidays for each row
     for idx, row in df.iterrows():
@@ -339,27 +363,80 @@ def create_prediction_features(
 
         if not park_info.empty:
             primary_country = park_info.iloc[0]['country']
-            influencing = park_info.iloc[0]['influencingCountries'] or []
+            
+            # Parse influencing regions (JSON) or fallback to countries list
+            influencing_regions = []
+            raw_influences = park_info.iloc[0].get('influencingRegions')
+            
+            if isinstance(raw_influences, list):
+                influencing_regions = raw_influences
+            elif isinstance(raw_influences, str):
+                import json
+                try:
+                    influencing_regions = json.loads(raw_influences)
+                except:
+                    influencing_regions = []
+            
+            # Fallback for backward compatibility (older DB records)
+            if not influencing_regions:
+                influencing_countries = park_info.iloc[0].get('influencingCountries') or []
+                influencing_regions = [{"countryCode": c, "regionCode": None} for c in influencing_countries]
 
             # Primary country holiday
-            h_type = holiday_lookup.get((primary_country, date))
-            df.at[idx, 'is_holiday_primary'] = int(h_type == 'public')
-            df.at[idx, 'is_school_holiday_primary'] = int(h_type == 'school')
+            # Note: For prediction, we might not always have granular region for the park itself in metadata
+            # unless we fetched it. db.fetch_parks_metadata was updated to include region_code.
+            primary_region = park_info.iloc[0].get('region_code')
+            
+            primary_type = None
+            # Check specific region match first
+            if primary_region:
+                primary_type = holiday_lookup.get((primary_country, primary_region, date)) # Need to update lookup keys first!
 
-            # Neighbor holidays (Public only for now for neighbors)
-            neighbor_types = [holiday_lookup.get((country, date)) for country in influencing[:3]]
-            neighbor_flags = [int(t == 'public') for t in neighbor_types]
-            school_flags = [int(t == 'school') for t in neighbor_types]
+            # If no regional match, check national (fallback/additive)
+            if not primary_type:
+                # Fallback to (country, None) or (country, date) depending on lookup structure
+                # The existing lookup in predict.py (lines 318-321) uses (country, date). 
+                # We need to update that lookup construction too!
+                primary_type = holiday_lookup.get((primary_country, date))
 
-            if len(neighbor_flags) > 0:
-                df.at[idx, 'is_holiday_neighbor_1'] = neighbor_flags[0]
-            if len(neighbor_flags) > 1:
-                df.at[idx, 'is_holiday_neighbor_2'] = neighbor_flags[1]
-            if len(neighbor_flags) > 2:
-                df.at[idx, 'is_holiday_neighbor_3'] = neighbor_flags[2]
+            df.at[idx, 'is_holiday_primary'] = int(primary_type == 'public')
+            df.at[idx, 'is_school_holiday_primary'] = int(primary_type == 'school')
 
-            df.at[idx, 'holiday_count_total'] = sum([df.at[idx, 'is_holiday_primary']] + neighbor_flags)
-            df.at[idx, 'school_holiday_count_total'] = sum([df.at[idx, 'is_school_holiday_primary']] + school_flags)
+            # Neighbor holidays
+            neighbor_public_flags = []
+            neighbor_school_flags = []
+            
+            for region in influencing_regions[:3]:
+                r_country = region['countryCode']
+                r_code = region['regionCode']
+                
+                # Check specific region
+                h_type = None
+                if r_code:
+                    h_type = holiday_lookup.get((r_country, r_code, date))
+                
+                # Fallback to national
+                if not h_type:
+                    h_type = holiday_lookup.get((r_country, date))
+                
+                neighbor_public_flags.append(int(h_type == 'public'))
+                neighbor_school_flags.append(int(h_type == 'school'))
+
+            # Fill neighbor columns (up to 3)
+            if len(neighbor_public_flags) > 0:
+                df.at[idx, 'is_holiday_neighbor_1'] = neighbor_public_flags[0]
+            if len(neighbor_public_flags) > 1:
+                df.at[idx, 'is_holiday_neighbor_2'] = neighbor_public_flags[1]
+            if len(neighbor_public_flags) > 2:
+                df.at[idx, 'is_holiday_neighbor_3'] = neighbor_public_flags[2]
+
+            df.at[idx, 'holiday_count_total'] = sum([df.at[idx, 'is_holiday_primary']] + neighbor_public_flags)
+            df.at[idx, 'school_holiday_count_total'] = sum([df.at[idx, 'is_school_holiday_primary']] + neighbor_school_flags)
+            
+            # "Any School Holiday" Logic (Critical for ML parity)
+            has_local_school = (df.at[idx, 'is_school_holiday_primary'] == 1)
+            has_neighbor_school = (sum(neighbor_school_flags) > 0)
+            df.at[idx, 'is_school_holiday_any'] = int(has_local_school or has_neighbor_school)
 
     # Park schedule features (check if park is open at predicted time)
     schedule_query = text("""

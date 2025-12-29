@@ -116,12 +116,12 @@ export class Park {
   timezone: string;
 
   // Multi-country influence for ML predictions (holidays/school breaks)
-  // Example: Europapark attracts visitors from DE, FR, CH
-  @Column("simple-array", { nullable: true })
-  influencingCountries: string[]; // ISO country codes: ['DE', 'FR', 'CH']
+  // Structure: [{ countryCode: 'DE', regionCode: 'DE-NRW' }, { countryCode: 'NL', regionCode: null }]
+  @Column("jsonb", { nullable: true })
+  influencingRegions: { countryCode: string; regionCode: string | null }[];
 
   // Radius in km to auto-detect neighboring countries (default: 200km)
-  // Used as fallback if influencingCountries is not manually set
+  // Used as fallback if influencingRegions is not manually set
   @Column({ type: "int", default: 200 })
   influenceRadiusKm: number;
 
