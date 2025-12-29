@@ -47,7 +47,7 @@ export class CalendarService {
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated calendar response
@@ -246,8 +246,11 @@ export class CalendarService {
           });
         }
 
-        localHolidayFound = true;
-        if (h.holidayType === "school") {
+        // Only set localHolidayFound for regular holidays, not school holidays
+        if (h.holidayType !== 'school') {
+          localHolidayFound = true;
+        }
+        if (h.holidayType === 'school') {
           localSchoolVacationFound = true;
         }
         if (h.metadata?.isBridgeDay) {
@@ -302,18 +305,18 @@ export class CalendarService {
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
       ? {
-          condition: weather.weatherCode
-            ? getWeatherDescription(weather.weatherCode)
-            : "Unknown",
-          icon: weather.weatherCode || 0,
-          tempMin: weather.temperatureMin || 0,
-          tempMax: weather.temperatureMax || 0,
-          rainChance: Math.round(
-            (weather.precipitationSum || 0) > 0
-              ? Math.min((weather.precipitationSum / 10) * 100, 100)
-              : 0,
-          ),
-        }
+        condition: weather.weatherCode
+          ? getWeatherDescription(weather.weatherCode)
+          : "Unknown",
+        icon: weather.weatherCode || 0,
+        tempMin: weather.temperatureMin || 0,
+        tempMax: weather.temperatureMax || 0,
+        rainChance: Math.round(
+          (weather.precipitationSum || 0) > 0
+            ? Math.min((weather.precipitationSum / 10) * 100, 100)
+            : 0,
+        ),
+      }
       : null;
 
     // Build calendar day
