@@ -47,7 +47,7 @@ export class CalendarService {
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated calendar response
@@ -257,18 +257,18 @@ export class CalendarService {
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
       ? {
-          condition: weather.weatherCode
-            ? getWeatherDescription(weather.weatherCode)
-            : "Unknown",
-          icon: weather.weatherCode || 0,
-          tempMin: weather.temperatureMin || 0,
-          tempMax: weather.temperatureMax || 0,
-          rainChance: Math.round(
-            (weather.precipitationSum || 0) > 0
-              ? Math.min((weather.precipitationSum / 10) * 100, 100)
-              : 0,
-          ),
-        }
+        condition: weather.weatherCode
+          ? getWeatherDescription(weather.weatherCode)
+          : "Unknown",
+        icon: weather.weatherCode || 0,
+        tempMin: weather.temperatureMin || 0,
+        tempMax: weather.temperatureMax || 0,
+        rainChance: Math.round(
+          (weather.precipitationSum || 0) > 0
+            ? Math.min((weather.precipitationSum / 10) * 100, 100)
+            : 0,
+        ),
+      }
       : null;
 
     // Build events array (deduplicated)
@@ -330,8 +330,8 @@ export class CalendarService {
       day.recommendation = this.generateRecommendationString(advisoryKeys);
     }
 
-    // Add show times for today (if today)
-    if (dateStr === today && status === "OPERATING") {
+    // Add show times for the day (if operating)
+    if (status === "OPERATING") {
       day.showTimes = await this.getShowTimes(park.id, date);
     }
 
@@ -553,7 +553,11 @@ export class CalendarService {
   /**
    * Get show times for a specific day
    */
-  private async getShowTimes(parkId: string, _date: Date): Promise<ShowTime[]> {
+  /**
+   * Get show times for a specific target date
+   * Projects current/stale data to the target date if the show is Operating
+   */
+  private async getShowTimes(parkId: string, targetDate: Date): Promise<ShowTime[]> {
     try {
       // Get current show status for this park
       const showStatusMap =
@@ -565,29 +569,59 @@ export class CalendarService {
       const now = new Date();
       const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+      // We need to project times to the target date
+      // targetDate might be Today, Tomorrow, etc.
+      // We assume the daily schedule is consistent if status is OPERATING
+      // (Static Schedule Assumption)
+
+      // Fetch park to get timezone (needed for accurate date string construction)
+      // Optimization: Pass timezone in or fetch once preferably
+      // For now we get it from the show entity if relations are loaded
+
       for (const [_showId, liveData] of showStatusMap.entries()) {
         if (!liveData.showtimes || !Array.isArray(liveData.showtimes)) {
           continue;
         }
 
+        const isOperating = liveData.status === "OPERATING";
+
         // Check for stale data
-        if (liveData.lastUpdated) {
+        // If Operating, we are more lenient (allow stale data projection)
+        if (liveData.lastUpdated && !isOperating) {
           const lastUpdated = new Date(liveData.lastUpdated);
           const age = now.getTime() - lastUpdated.getTime();
           if (age > STALE_THRESHOLD_MS) {
             this.logger.debug(
-              `Skipping stale show data for ${liveData.show?.name} (Age: ${Math.round(age / 1000 / 60 / 60)}h)`,
+              `Skipping stale show data for ${liveData.show?.name} (Age: ${Math.round(age / 1000 / 60 / 60)}h) - Not Operating`,
             );
             continue;
           }
         }
 
+        // Find timezone from show relation (loaded in findCurrentStatusByPark)
+        const timezone = liveData.show?.park?.timezone || "UTC";
+        const targetDateStr = formatInParkTimezone(targetDate, timezone);
+
         for (const showtime of liveData.showtimes) {
-          // Strictly filter out invalid start times
           if (showtime.startTime) {
+            // Project to Target Date
+            // Extract Time Part from original ISO: T11:00:00+01:00
+            const iso = showtime.startTime;
+            const timePart = iso.substring(10); // Start at 'T' (index 10)
+
+            // Construct new ISO for Target Date
+            const newIso = targetDateStr + timePart;
+
+            // For EndTime
+            let newEndIso: string | undefined;
+            if (showtime.endTime) {
+              const endIso = showtime.endTime;
+              const endTimePart = endIso.substring(10);
+              newEndIso = targetDateStr + endTimePart;
+            }
+
             // Determine best name to show
             let showName = liveData.show?.name || "Show";
-            // If name is generic "Show" and we have a specific type, use type
             if (
               showName === "Show" &&
               showtime.type &&
@@ -596,10 +630,13 @@ export class CalendarService {
               showName = showtime.type;
             }
 
+            // Only add if we confirmed operating or data is fresh
+            // If stale but operating -> Project
+            // If fresh -> Project (to target date, because data might be for "Today")
             showTimes.push({
               name: showName,
-              time: showtime.startTime,
-              endTime: showtime.endTime,
+              time: newIso,
+              endTime: newEndIso,
             });
           }
         }
