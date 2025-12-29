@@ -68,7 +68,7 @@ export class ParkIntegrationService {
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -503,6 +503,10 @@ export class ParkIntegrationService {
     }
 
     // Calculate Park-level Current Load
+    let currentAvgWaitCalculated: number | null = null;
+    let p90ParkCalculated: number | null = null;
+    // totalWaitAttractionsCount removed as it is unused currently in this local scope for DTO mapping
+
     if (dto.status === "OPERATING" && totalOperatingCount > 0) {
       try {
         // Calculate current average wait time from the data we just fetched
@@ -520,26 +524,28 @@ export class ParkIntegrationService {
         }
 
         if (count > 0) {
-          const currentAvgWait = Math.round(totalWait / count);
+          currentAvgWaitCalculated = Math.round(totalWait / count);
+          // totalWaitAttractionsCount = count; // Removed as it is unused currently in this local scope for DTO mapping
           const hour = new Date().getHours();
           const day = new Date().getDay();
 
-          const p90Park = await this.analyticsService.get90thPercentileOneYear(
-            park.id,
-            hour,
-            day,
-            "park",
-          );
+          p90ParkCalculated =
+            await this.analyticsService.get90thPercentileOneYear(
+              park.id,
+              hour,
+              day,
+              "park",
+            );
 
           const parkRating = this.analyticsService.getLoadRating(
-            currentAvgWait,
-            p90Park,
+            currentAvgWaitCalculated,
+            p90ParkCalculated || 0,
           );
 
           dto.currentLoad = {
             crowdLevel: parkRating.rating as any,
             baseline: parkRating.baseline,
-            currentWaitTime: currentAvgWait,
+            currentWaitTime: currentAvgWaitCalculated,
           };
         }
       } catch (_error) {
@@ -682,21 +688,64 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
+        // Recalculate occupancy metrics if we have local data
+        let occupancyCurrent = occupancy.current;
+        let comparedToTypical = occupancy.comparedToTypical;
+        let comparisonStatus = occupancy.comparisonStatus;
+
+        if (currentAvgWaitCalculated !== null && p90ParkCalculated) {
+          occupancyCurrent = Math.round(
+            (currentAvgWaitCalculated / p90ParkCalculated) * 100,
+          );
+
+          // Get typical average wait time for comparison
+          const typicalAvgWait = occupancy.breakdown?.typicalAvgWait || 0;
+          comparedToTypical = Math.round(
+            currentAvgWaitCalculated - typicalAvgWait,
+          );
+          comparisonStatus = "typical";
+          if (Math.abs(comparedToTypical) > 10) {
+            comparisonStatus = comparedToTypical > 0 ? "higher" : "lower";
+          }
+        }
+
+        // Map occupancy Current to crowdLevel
+        const getCrowdLevel = (
+          occ: number,
+        ): "very_low" | "low" | "moderate" | "high" | "very_high" => {
+          if (occ <= 20) return "very_low";
+          if (occ <= 40) return "low";
+          if (occ <= 60) return "moderate";
+          if (occ <= 85) return "high";
+          return "very_high";
+        };
+
         dto.analytics = {
           occupancy: {
-            current: occupancy.current,
+            current: occupancyCurrent,
             trend: occupancy.trend,
-            comparedToTypical: occupancy.comparedToTypical,
-            comparisonStatus: occupancy.comparisonStatus,
-            baseline90thPercentile: occupancy.baseline90thPercentile,
+            comparedToTypical: comparedToTypical,
+            comparisonStatus: comparisonStatus,
+            baseline90thPercentile:
+              p90ParkCalculated || occupancy.baseline90thPercentile,
             updatedAt: occupancy.updatedAt,
-            breakdown: occupancy.breakdown,
+            breakdown: {
+              currentAvgWait:
+                currentAvgWaitCalculated !== null
+                  ? currentAvgWaitCalculated
+                  : occupancy.breakdown?.currentAvgWait || 0,
+              typicalAvgWait: occupancy.breakdown?.typicalAvgWait || 0,
+              activeAttractions: totalOperatingCount, // Consistent with statistics
+            },
           },
           statistics: {
-            avgWaitTime: statistics.avgWaitTime,
+            avgWaitTime:
+              currentAvgWaitCalculated !== null
+                ? currentAvgWaitCalculated
+                : statistics.avgWaitTime,
             avgWaitToday: statistics.avgWaitToday,
             peakHour: statistics.peakHour,
-            crowdLevel: statistics.crowdLevel,
+            crowdLevel: getCrowdLevel(occupancyCurrent),
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
             closedAttractions: totalAttractionsCount - totalOperatingCount,
@@ -853,8 +902,6 @@ export class ParkIntegrationService {
       }
     }
 
-
-
     // Cache the complete response with dynamic TTL
     // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data
     // For OPERATING parks: Short 3-minute TTL for live data
@@ -948,7 +995,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1091,8 +1138,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

@@ -453,8 +453,8 @@ export class AnalyticsService {
     parkId: string,
     minWaitTime: number = 5,
   ): Promise<number | null> {
-    // Use 30 minutes to accommodate sync intervals (not all parks sync every 5 min)
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    // Use 120 minutes (2 hours) to accommodate sync intervals and sparse data
+    const windowAgo = new Date(Date.now() - 120 * 60 * 1000);
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
@@ -462,7 +462,7 @@ export class AnalyticsService {
       .addSelect("COUNT(*)", "count") // Add count for fallback logic
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
+      .andWhere("qd.timestamp >= :windowAgo", { windowAgo })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
       .andWhere("qd.waitTime >= :minWaitTime", { minWaitTime })
@@ -569,15 +569,15 @@ export class AnalyticsService {
    * Get count of currently operating attractions
    */
   private async getActiveAttractionsCount(parkId: string): Promise<number> {
-    // Use 30 minutes to accommodate sync intervals
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    // Use 120 minutes (2 hours) to accommodate sync intervals
+    const windowAgo = new Date(Date.now() - 120 * 60 * 1000);
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
       .select("COUNT(DISTINCT qd.attractionId)", "count")
       .innerJoin("qd.attraction", "attraction")
       .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
+      .andWhere("qd.timestamp >= :windowAgo", { windowAgo })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .getRawOne();
 
@@ -598,7 +598,7 @@ export class AnalyticsService {
    */
   async getParkStatistics(parkId: string): Promise<ParkStatisticsDto> {
     const now = new Date();
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const windowAgo = new Date(Date.now() - 120 * 60 * 1000); // 2 hours window for current stats
     const startOfDay = new Date(now);
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -616,7 +616,7 @@ export class AnalyticsService {
         INNER JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = $1
           AND qd."queueType" = 'STANDBY'
-          AND qd.timestamp >= $2  -- Last 30 min
+          AND qd.timestamp >= $2  -- Last 2 hours window
         ORDER BY qd."attractionId", qd.timestamp DESC
       ),
       today_hourly AS (
@@ -664,7 +664,7 @@ export class AnalyticsService {
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1
       `,
-      [parkId, thirtyMinutesAgo, startOfDay, now],
+      [parkId, windowAgo, startOfDay, now],
     );
 
     const stats = result[0];
@@ -683,12 +683,12 @@ export class AnalyticsService {
           INNER JOIN attractions a ON a.id = qd."attractionId"
           WHERE a."parkId" = $1
             AND qd."queueType" = 'STANDBY'
-            AND qd.timestamp >= $2
+            AND qd.timestamp >= $2 -- 2 hours window
             AND qd."waitTime" > 0
           ORDER BY qd."attractionId", qd.timestamp DESC
         ) lq
         `,
-        [parkId, thirtyMinutesAgo],
+        [parkId, windowAgo],
       );
       currentAvgWait = fallbackResult[0]?.avg_wait || 0;
     }

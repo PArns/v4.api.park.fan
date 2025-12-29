@@ -437,7 +437,7 @@ export class MLService {
           .distinctOn(["q.attractionId"])
           .where("q.attractionId = ANY(:ids)", { ids: attractionIds })
           .andWhere("q.timestamp >= :recent", {
-            recent: new Date(Date.now() - 60 * 60 * 1000),
+            recent: new Date(Date.now() - 120 * 60 * 1000), // 2 hours window
           })
           .orderBy("q.attractionId")
           .addOrderBy("q.timestamp", "DESC")

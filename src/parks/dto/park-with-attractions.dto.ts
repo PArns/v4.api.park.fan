@@ -407,8 +407,6 @@ export class ParkWithAttractionsDto {
   })
   crowdForecast?: ParkDailyPredictionDto[];
 
-
-
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,
@@ -428,40 +426,40 @@ export class ParkWithAttractionsDto {
 
       attractions: park.attractions
         ? park.attractions.map((attraction) => ({
-          id: attraction.id,
-          name: attraction.name,
-          slug: attraction.slug,
-          latitude:
-            attraction.latitude !== undefined ? attraction.latitude : null,
-          longitude:
-            attraction.longitude !== undefined ? attraction.longitude : null,
-          land: attraction.landName || null,
-          // queue data, forecasts etc will be attached by service
-        }))
+            id: attraction.id,
+            name: attraction.name,
+            slug: attraction.slug,
+            latitude:
+              attraction.latitude !== undefined ? attraction.latitude : null,
+            longitude:
+              attraction.longitude !== undefined ? attraction.longitude : null,
+            land: attraction.landName || null,
+            // queue data, forecasts etc will be attached by service
+          }))
         : [],
       shows: park.shows
         ? park.shows.map((show) => ({
-          id: show.id,
-          name: show.name,
-          slug: show.slug,
-          status: "CLOSED", // Default to ensure order
-          latitude: show.latitude !== undefined ? show.latitude : null,
-          longitude: show.longitude !== undefined ? show.longitude : null,
-        }))
+            id: show.id,
+            name: show.name,
+            slug: show.slug,
+            status: "CLOSED", // Default to ensure order
+            latitude: show.latitude !== undefined ? show.latitude : null,
+            longitude: show.longitude !== undefined ? show.longitude : null,
+          }))
         : [],
       restaurants: park.restaurants
         ? park.restaurants.map((restaurant) => ({
-          id: restaurant.id,
-          name: restaurant.name,
-          slug: restaurant.slug,
-          status: "CLOSED", // Default to ensure order
-          latitude:
-            restaurant.latitude !== undefined ? restaurant.latitude : null,
-          longitude:
-            restaurant.longitude !== undefined ? restaurant.longitude : null,
-          cuisineType: restaurant.cuisineType || null,
-          requiresReservation: restaurant.requiresReservation,
-        }))
+            id: restaurant.id,
+            name: restaurant.name,
+            slug: restaurant.slug,
+            status: "CLOSED", // Default to ensure order
+            latitude:
+              restaurant.latitude !== undefined ? restaurant.latitude : null,
+            longitude:
+              restaurant.longitude !== undefined ? restaurant.longitude : null,
+            cuisineType: restaurant.cuisineType || null,
+            requiresReservation: restaurant.requiresReservation,
+          }))
         : [],
     };
   }

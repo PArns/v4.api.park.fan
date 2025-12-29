@@ -154,6 +154,14 @@ export class QueueBootstrapService implements OnModuleInit {
     );
 
     if (!parkJobActive) {
+      // Remove stale job first (to ensure ID is available)
+      const existingJob = await this.parkMetadataQueue.getJob(
+        "bootstrap-parks-sync",
+      );
+      if (existingJob) {
+        await existingJob.remove().catch(() => {});
+      }
+
       await this.parkMetadataQueue.add(
         "sync-all-parks",
         {},
@@ -178,12 +186,18 @@ export class QueueBootstrapService implements OnModuleInit {
     );
 
     if (!holidayJobActive) {
+      // Remove stale job first if any (completed/failed)
+      const existingJob = await this.holidaysQueue.getJob("bootstrap-holidays");
+      if (existingJob) {
+        await existingJob.remove().catch(() => {});
+      }
+
       await this.holidaysQueue.add(
         "fetch-holidays",
         {},
         {
           priority: 5,
-          jobId: "bootstrap-holidays", // Prevent duplicates
+          jobId: "bootstrap-holidays",
           removeOnComplete: true,
         },
       );
@@ -234,10 +248,9 @@ export class QueueBootstrapService implements OnModuleInit {
 
     for (const { name, queue } of queues) {
       try {
-        // Clean completed jobs (keep last 10)
-        const completed = await queue.clean(0, "completed", 10);
-        // Clean failed jobs (keep last 50 for debugging)
-        const failed = await queue.clean(0, "failed", 50);
+        // More aggressive cleanup: Limit increased to 1000
+        const completed = await queue.clean(0, "completed", 1000);
+        const failed = await queue.clean(0, "failed", 1000);
 
         const cleaned = completed.length + failed.length;
         totalCleaned += cleaned;

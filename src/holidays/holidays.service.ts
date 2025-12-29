@@ -38,43 +38,33 @@ export class HolidaysService {
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
-
+    const holidaysToUpsert: any[] = [];
     for (const holiday of holidays) {
-      try {
-        const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
+      const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
+      const holidayType = this.mapHolidayType(holiday.types);
+      const holidayDate = new Date(holiday.date + "T00:00:00.000Z");
 
-        // Determine holiday type
-        const holidayType = this.mapHolidayType(holiday.types);
+      holidaysToUpsert.push({
+        externalId,
+        date: holidayDate,
+        name: holiday.name,
+        localName: holiday.localName || undefined,
+        country: countryCode,
+        region:
+          holiday.counties && holiday.counties.length > 0
+            ? holiday.counties[0]
+            : undefined,
+        holidayType,
+        isNationwide: holiday.global,
+      });
+    }
 
-        // Store date as-is (YYYY-MM-DD) without timezone conversion
-        // Holidays are calendar days, not timestamps, so we treat them as pure dates
-        const holidayDate = new Date(holiday.date + "T00:00:00.000Z");
-
-        // Create or update holiday
-        await this.holidayRepository.upsert(
-          {
-            externalId,
-            date: holidayDate,
-            name: holiday.name,
-            localName: holiday.localName || undefined,
-            country: countryCode,
-            region:
-              holiday.counties && holiday.counties.length > 0
-                ? holiday.counties[0]
-                : undefined,
-            holidayType,
-            isNationwide: holiday.global,
-          },
-          ["externalId"],
-        );
-
-        savedCount++;
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `Failed to save holiday ${holiday.name}: ${errorMessage}`,
-        );
+    if (holidaysToUpsert.length > 0) {
+      // Bulk upsert in batches of 500 to avoid long-running single queries
+      for (let i = 0; i < holidaysToUpsert.length; i += 500) {
+        const batch = holidaysToUpsert.slice(i, i + 500);
+        await this.holidayRepository.upsert(batch, ["externalId"]);
+        savedCount += batch.length;
       }
     }
 
@@ -132,36 +122,30 @@ export class HolidaysService {
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
+    const holidaysToUpsert: any[] = [];
 
     for (const entry of entries) {
-      // Parse dates
       const start = new Date(entry.startDate);
       const end = new Date(entry.endDate);
-
-      // Iterate from start to end
       const current = new Date(start);
+
       while (current <= end) {
         try {
-          const dateStr = current.toISOString().split("T")[0]; // YYYY-MM-DD
+          const dateStr = current.toISOString().split("T")[0];
           const name =
             entry.name.find((n) => n.language === countryCode)?.text ||
             entry.name[0]?.text ||
             "School Holiday";
 
-          // Generate external ID (unique per date + region + country)
-          // Uses 'openholidays' prefix to distinguish from 'nager'
-          // If regional, include region code. If national, include 'national'.
           let regionsToCheck = entry.subdivisions?.map((s) => s.code) || [];
           if (entry.regionalScope === "National" || entry.nationwide) {
-            regionsToCheck = [null] as any; // Cast to allow null, treating as nationwide
+            regionsToCheck = [null] as any;
           }
 
           if (
             regionsToCheck.length === 0 &&
             entry.regionalScope !== "National"
           ) {
-            // Maybe a specific group or unhandled scope, skip for now to be safe
-            // Or could default to country-wide if we want loose matching
             current.setDate(current.getDate() + 1);
             continue;
           }
@@ -173,29 +157,32 @@ export class HolidaysService {
             const holidayDate = new Date(current);
             holidayDate.setUTCHours(0, 0, 0, 0);
 
-            await this.holidayRepository.upsert(
-              {
-                externalId,
-                date: holidayDate,
-                name: name,
-                localName: name,
-                country: countryCode,
-                region: regionCode || undefined, // null for nationwide
-                holidayType: "school",
-                isNationwide: !regionCode,
-              },
-              ["externalId"],
-            );
-            savedCount++;
+            holidaysToUpsert.push({
+              externalId,
+              date: holidayDate,
+              name,
+              localName: name,
+              country: countryCode,
+              region: regionCode || undefined,
+              holidayType: "school",
+              isNationwide: !regionCode,
+            });
           }
         } catch (error) {
           this.logger.warn(
-            `Failed to save school holiday entry ${entry.id}: ${error}`,
+            `Failed to process school holiday entry ${entry.id}: ${error}`,
           );
         }
-
-        // Next day
         current.setDate(current.getDate() + 1);
+      }
+    }
+
+    if (holidaysToUpsert.length > 0) {
+      // Bulk upsert in batches of 500
+      for (let i = 0; i < holidaysToUpsert.length; i += 500) {
+        const batch = holidaysToUpsert.slice(i, i + 500);
+        await this.holidayRepository.upsert(batch, ["externalId"]);
+        savedCount += batch.length;
       }
     }
 

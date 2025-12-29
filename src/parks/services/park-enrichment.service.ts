@@ -25,7 +25,7 @@ export class ParkEnrichmentService {
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
     private readonly holidaysService: HolidaysService,
-  ) { }
+  ) {}
 
   /**
    * Enrich parks with status, analytics, and statistics

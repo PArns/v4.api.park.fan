@@ -54,10 +54,12 @@ export class HolidaysProcessor {
       // Fetch holidays for each country
       let totalHolidaysSaved = 0;
       const currentYear = new Date().getFullYear();
-
-      // Fetch 2 years back + current year + 2 years ahead = 5 years total
-      const startYear = currentYear - 2;
+      const startYear = currentYear - 1; // Corrected: only need last year + current + next 2
       const endYear = currentYear + 2;
+
+      this.logger.log(
+        `Syncing holidays for period: ${startYear} to ${endYear}`,
+      );
 
       for (const country of countries) {
         try {
@@ -140,7 +142,7 @@ export class HolidaysProcessor {
       }
 
       this.logger.log(
-        `✅ Holidays sync complete! Saved ${totalHolidaysSaved} holidays across ${countries.length} countries`,
+        `✅ Holidays sync complete! Saved ${totalHolidaysSaved} holiday-days across ${countries.length} countries`,
       );
 
       // 3. Peak Seasons (Hardcoded for countries without API coverage)
