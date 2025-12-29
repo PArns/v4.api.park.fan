@@ -6,13 +6,14 @@ import { Repository } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
 import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import { COUNTRY_INFLUENCES } from "../../common/country-influences";
+import { getInfluencingRegions } from "../../common/region-influences";
 
 /**
  * ParkEnrichmentProcessor
  *
  * Enriches park data after sync:
  * - Converts country names to ISO codes
- * - Populates influencingCountries for cross-border tourism
+ * - Populates influencingRegions for cross-border tourism
  *
  * Runs after park-metadata sync to ensure data consistency
  */
@@ -48,7 +49,7 @@ export class ParkEnrichmentProcessor {
         "regionCode",
         "latitude",
         "longitude",
-        "influencingCountries",
+        "influencingRegions",
         "metadataRetryCount",
       ],
     });
@@ -101,15 +102,46 @@ export class ParkEnrichmentProcessor {
         }
       }
 
-      // 3. Set influencingCountries
+      // 3. Set influencingRegions
       const currentCountryCode = updates.countryCode || park.countryCode;
+      const currentRegionCode = updates.regionCode || park.regionCode;
+
       if (
         currentCountryCode &&
-        (!park.influencingCountries || park.influencingCountries.length === 0)
+        (!park.influencingRegions || park.influencingRegions.length === 0)
       ) {
-        const influences = COUNTRY_INFLUENCES[currentCountryCode];
-        if (influences && influences.length > 0) {
-          updates.influencingCountries = influences.slice(0, 3);
+        let newInfluences: {
+          countryCode: string;
+          regionCode: string | null;
+        }[] = [];
+
+        // A. Try Regional Specific Configuration (First Priority)
+        // e.g. DE-BW -> [DE-RP, DE-BY, CH, FR...]
+        if (currentRegionCode) {
+          const regionInfluences = getInfluencingRegions(
+            currentCountryCode,
+            currentRegionCode,
+          );
+          if (regionInfluences.length > 0) {
+            newInfluences = regionInfluences;
+          }
+        }
+
+        // B. Fallback to Country Neighbors (Second Priority)
+        // If no specific regional config exists, use the country's neighbors
+        if (newInfluences.length === 0) {
+          const influencingCountryCodes =
+            COUNTRY_INFLUENCES[currentCountryCode];
+          if (influencingCountryCodes && influencingCountryCodes.length > 0) {
+            newInfluences = influencingCountryCodes.slice(0, 3).map((code) => ({
+              countryCode: code,
+              regionCode: null,
+            }));
+          }
+        }
+
+        if (newInfluences.length > 0) {
+          updates.influencingRegions = newInfluences;
           needsUpdate = true;
           updatedInfluences++;
         }

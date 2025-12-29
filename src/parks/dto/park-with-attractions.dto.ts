@@ -407,6 +407,12 @@ export class ParkWithAttractionsDto {
   })
   crowdForecast?: ParkDailyPredictionDto[];
 
+  @ApiProperty({
+    description: "Whether today is a school vacation day",
+    required: false,
+  })
+  isSchoolVacation?: boolean;
+
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,

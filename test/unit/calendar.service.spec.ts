@@ -1,12 +1,13 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { CalendarService } from "../src/parks/services/calendar.service";
-import { ParksService } from "../src/parks/parks.service";
-import { WeatherService } from "../src/parks/weather.service";
-import { MLService } from "../src/ml/ml.service";
-import { HolidaysService } from "../src/holidays/holidays.service";
-import { AttractionsService } from "../src/attractions/attractions.service";
+import { CalendarService } from "../../src/parks/services/calendar.service";
+import { ParksService } from "../../src/parks/parks.service";
+import { WeatherService } from "../../src/parks/weather.service";
+import { MLService } from "../../src/ml/ml.service";
+import { HolidaysService } from "../../src/holidays/holidays.service";
+import { AttractionsService } from "../../src/attractions/attractions.service";
+import { ShowsService } from "../../src/shows/shows.service";
 import { Redis } from "ioredis";
-import { REDIS_CLIENT } from "../src/common/redis/redis.module";
+import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 
 /**
  * Simple verification test for CalendarService
@@ -39,10 +40,15 @@ describe("CalendarService - Basic Verification", () => {
       getHolidays: jest.fn().mockResolvedValue([]),
       isHoliday: jest.fn().mockResolvedValue(false),
       isBridgeDay: jest.fn().mockResolvedValue(false),
+      isSchoolHoliday: jest.fn().mockResolvedValue(false),
     };
 
     const mockAttractionsService = {
       findByParkId: jest.fn().mockResolvedValue({ data: [], total: 0 }),
+    };
+
+    const mockShowsService = {
+      findCurrentStatusByPark: jest.fn().mockResolvedValue(new Map()),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -53,6 +59,7 @@ describe("CalendarService - Basic Verification", () => {
         { provide: MLService, useValue: mockMLService },
         { provide: HolidaysService, useValue: mockHolidaysService },
         { provide: AttractionsService, useValue: mockAttractionsService },
+        { provide: ShowsService, useValue: mockShowsService },
         { provide: REDIS_CLIENT, useValue: mockRedis },
       ],
     }).compile();

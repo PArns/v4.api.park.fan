@@ -216,6 +216,14 @@ export class CalendarService {
       park.timezone,
     );
 
+    // Check if school vacation
+    const isSchoolVacation = await this.holidaysService.isSchoolHoliday(
+      date,
+      park.countryCode,
+      park.regionCode,
+      park.timezone,
+    );
+
     // Determine park status
     const status: ParkStatus =
       schedule?.scheduleType === ScheduleType.OPERATING
@@ -263,18 +271,27 @@ export class CalendarService {
         }
       : null;
 
-    // Build events array
+    // Build events array (deduplicated)
     const events: CalendarEvent[] = [];
+    const seenEvents = new Set<string>();
+
     const dayHolidays = holidays.filter(
       (h) => formatInParkTimezone(h.date, park.timezone) === dateStr,
     );
-    dayHolidays.forEach((h) => {
-      events.push({
-        type: "holiday",
-        name: h.name,
-        isNationwide: h.isNationwide,
-      });
-    });
+
+    for (const h of dayHolidays) {
+      const type = h.holidayType === "school" ? "school-holiday" : "holiday";
+      const key = `${type}:${h.name}`;
+
+      if (!seenEvents.has(key)) {
+        seenEvents.add(key);
+        events.push({
+          type,
+          name: h.name,
+          isNationwide: h.isNationwide,
+        });
+      }
+    }
 
     // Build calendar day
     const day: CalendarDay = {
@@ -290,7 +307,7 @@ export class CalendarService {
       events,
       isHoliday,
       isBridgeDay,
-      isSchoolVacation: false, // TODO: Implement school vacation detection
+      isSchoolVacation,
     };
 
     // Add refurbishments if any

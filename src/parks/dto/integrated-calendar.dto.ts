@@ -72,10 +72,11 @@ export class CalendarEvent {
   name: string;
 
   @ApiProperty({
-    description: "Event type - currently only 'holiday' is supported",
+    description: "Event type",
     example: "holiday",
+    enum: ["holiday", "school-holiday"],
   })
-  type: "holiday";
+  type: "holiday" | "school-holiday";
 
   @ApiProperty({
     description: "Whether this is a nationwide holiday",

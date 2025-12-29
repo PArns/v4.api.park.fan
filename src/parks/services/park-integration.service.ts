@@ -17,6 +17,7 @@ import { PredictionDeviationService } from "../../ml/services/prediction-deviati
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { HolidaysService } from "../../holidays/holidays.service";
 
 /**
  * Park Integration Service
@@ -55,6 +56,7 @@ export class ParkIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
+    private readonly holidaysService: HolidaysService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -610,6 +612,22 @@ export class ParkIntegrationService {
           percentiles: undefined,
         };
       }
+    }
+
+    // Fetch school holiday status for today
+    try {
+      dto.isSchoolVacation = await this.holidaysService.isSchoolHoliday(
+        new Date(),
+        park.countryCode,
+        park.regionCode,
+        park.timezone,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to check school holiday for ${park.slug}:`,
+        error,
+      );
+      dto.isSchoolVacation = false;
     }
 
     // Cache the complete response with dynamic TTL
