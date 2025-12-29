@@ -22,7 +22,7 @@ export class AttractionsService {
     private wartezeitenClient: WartezeitenClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -57,7 +57,10 @@ export class AttractionsService {
     for (const park of parks) {
       // 1. Queue-Times Sync
       if (park.externalId && park.externalId.startsWith("qt-")) {
-        const qtId = parseInt(park.externalId.replace("qt-", "qt-park-").replace("qt-park-", ""), 10);
+        const qtId = parseInt(
+          park.externalId.replace("qt-", "qt-park-").replace("qt-park-", ""),
+          10,
+        );
         if (!isNaN(qtId)) {
           await this.syncFromQueueTimes(park, qtId);
           syncedCount++; // Count park as synced (simplification)
@@ -341,7 +344,9 @@ export class AttractionsService {
         });
       }
     } catch (error) {
-      this.logger.error(`Failed to sync QT attractions for ${park.name}: ${error}`);
+      this.logger.error(
+        `Failed to sync QT attractions for ${park.name}: ${error}`,
+      );
     }
   }
 
@@ -361,7 +366,9 @@ export class AttractionsService {
         });
       }
     } catch (error) {
-      this.logger.error(`Failed to sync WZ attractions for ${park.name}: ${error}`);
+      this.logger.error(
+        `Failed to sync WZ attractions for ${park.name}: ${error}`,
+      );
     }
   }
 

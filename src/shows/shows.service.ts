@@ -26,7 +26,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
