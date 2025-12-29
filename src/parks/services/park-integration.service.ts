@@ -614,6 +614,69 @@ export class ParkIntegrationService {
       }
     }
 
+    // Enrich schedule with holiday data (covers weekends that might be missing in scraped data)
+    if (dto.schedule && dto.schedule.length > 0) {
+      try {
+        // Find date range
+        const dates = dto.schedule.map((s) => s.date).sort();
+        const minDate = new Date(dates[0]);
+        const maxDate = new Date(dates[dates.length - 1]);
+
+        // Fetch all holidays for this range
+        const holidays = await this.holidaysService.getHolidays(
+          park.countryCode,
+          minDate,
+          maxDate,
+        );
+
+        // Map for fast lookup: "YYYY-MM-DD" -> Holiday
+        const holidayMap = new Map<string, any>();
+        for (const h of holidays) {
+          // Filter by region: Only include if nationwide OR matches park region
+          // Note: School holidays often have region set (e.g. DE-NW), need to match park region (e.g. NW)
+          if (
+            h.isNationwide ||
+            !h.region ||
+            h.region === park.regionCode ||
+            (park.regionCode &&
+              h.region &&
+              h.region.endsWith(`-${park.regionCode}`))
+          ) {
+            // TypeORM might return date as string "YYYY-MM-DD" or Date object
+            const dateStr =
+              h.date instanceof Date
+                ? h.date.toISOString().split("T")[0]
+                : (h.date as unknown as string);
+
+            // Prioritize public holidays over school holidays for naming if collision
+            // But always keep record if any holiday exists
+            if (
+              !holidayMap.has(dateStr) ||
+              h.holidayType === "public" ||
+              h.holidayType === "bank"
+            ) {
+              holidayMap.set(dateStr, h);
+            }
+          }
+        }
+        // Apply to schedule items
+        for (const item of dto.schedule) {
+          const holiday = holidayMap.get(item.date);
+          if (holiday) {
+            item.isHoliday = true;
+            // Only overwrite name if it's currently null or we have a better name (e.g. specific holiday vs generic)
+            if (!item.holidayName) {
+              item.holidayName = holiday.name;
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to enrich schedule with holidays for ${park.slug}: ${error}`,
+        );
+      }
+    }
+
     // Fetch school holiday status for today
     try {
       dto.isSchoolVacation = await this.holidaysService.isSchoolHoliday(
