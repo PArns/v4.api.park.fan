@@ -22,6 +22,8 @@ import {
 } from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
+import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
+import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 
 /**
@@ -63,8 +65,10 @@ export class ParkIntegrationService {
     private readonly predictionDeviationService: PredictionDeviationService,
     private readonly holidaysService: HolidaysService,
     private readonly themeParksClient: ThemeParksClient,
+    private readonly queueTimesClient: QueueTimesClient,
+    private readonly wartezeitenClient: WartezeitenClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -170,51 +174,107 @@ export class ParkIntegrationService {
     // B. Fallback: Check Live Data for Operating Hours (if Schedule missing or Closed)
     // Sometimes the schedule API is empty/stale, but the Live API returns "Operating" with hours
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
-    if (
-      status === "CLOSED" &&
-      park.externalId &&
-      !park.externalId.startsWith("qt-") &&
-      !park.externalId.startsWith("wz-")
-    ) {
+    if (status === "CLOSED" && park.externalId) {
       try {
-        // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
-        const liveDataList = await this.themeParksClient.getParkLiveData(
-          park.externalId,
-        );
-        const liveData =
-          liveDataList.find((x) => x.id === park.externalId) || liveDataList[0];
+        const eid = park.externalId;
 
-        if (
-          liveData &&
-          liveData.status === "OPERATING" &&
-          liveData.operatingHours &&
-          liveData.operatingHours.length > 0
-        ) {
-          // Found live hours! Use them.
-          // But first: Project stale dates to Today
-          const now = new Date();
-          const todayDateString = formatInParkTimezone(now, park.timezone); // YYYY-MM-DD
+        // --- STRATEGY 1: Queue-Times (qt-) ---
+        if (eid.startsWith("qt-")) {
+          // Extract ID (e.g. "qt-51" -> 51)
+          const qtIdStr = eid.replace("qt-", "");
+          const qtId = parseInt(qtIdStr, 10);
 
-          // Pick the first operating rule (usually there's only one for the day)
-          const rule = liveData.operatingHours[0];
+          if (!isNaN(qtId)) {
+            const qtData = await this.queueTimesClient.getParkQueueTimes(qtId);
+            // If ANY ride is open, the park is operating
+            // We iterate lands and rides
+            const allRides = [
+              ...qtData.rides,
+              ...qtData.lands.flatMap((l) => l.rides),
+            ];
 
-          if (rule.startTime && rule.endTime) {
-            // Project Start Time
-            // Format: 2025-11-13T10:00:00+01:00 -> 2025-12-29T10:00:00+01:00
-            const startIso = rule.startTime;
-            const startTimePart = startIso.substring(11); // HH:mm:ss...
-            const newStartIso = todayDateString + "T" + startTimePart;
+            if (allRides.some((r) => r.is_open)) {
+              status = "OPERATING";
+              this.logger.debug(
+                `Recovered OPERATING status from Queue-Times for ${park.name} (Active Rides found)`,
+              );
+              // Note: Queue-Times doesn't provide closing time, so we leave hours undefined (implied open)
+            }
+          }
+        }
 
-            // Project End Time
-            const endIso = rule.endTime;
-            const endTimePart = endIso.substring(11);
-            const newEndIso = todayDateString + "T" + endTimePart;
+        // --- STRATEGY 2: Wartezeiten (wz-) ---
+        else if (eid.startsWith("wz-")) {
+          // Extract ID (e.g. "wz-phantasialand" -> "phantasialand")
+          const wzId = eid.replace("wz-", "");
+          const openingTimes =
+            await this.wartezeitenClient.getOpeningTimes(wzId);
 
+          if (
+            openingTimes &&
+            openingTimes.length > 0 &&
+            openingTimes[0].opened_today
+          ) {
+            const ot = openingTimes[0];
             status = "OPERATING";
+            // Check if we have times
+            if (ot.open_from && ot.closed_from) {
+              // Parse dates. API returns ISO strings like "2025-12-29T09:00:00+01:00"
+              // We need to project them to Today string if needed?
+              // Actually, getOpeningTimes returns "opened_today", so the dates should be for today.
+              // Logic to extract HH:mm if needed, but for now just logging.
+              // We don't have a place to put "Operating Hours" in the DTO unless we mock a schedule entry?
+              // But 'status' OPERATING is enough for the client to show it as open.
+              this.logger.debug(
+                `Recovered OPERATING status from Wartezeiten for ${park.name}: ${ot.open_from} - ${ot.closed_from}`,
+              );
+            }
+          }
+        }
 
-            this.logger.debug(
-              `Recovered operating hours from Live Data for ${park.name}: ${newStartIso} - ${newEndIso}`,
-            );
+        // --- STRATEGY 3: ThemeParks.wiki (others) ---
+        else {
+          // Default behavior for pure ThemeParks IDs (UUIDs)
+          // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
+          const liveDataList = await this.themeParksClient.getParkLiveData(
+            park.externalId,
+          );
+          const liveData =
+            liveDataList.find((x) => x.id === park.externalId) ||
+            liveDataList[0];
+
+          if (
+            liveData &&
+            liveData.status === "OPERATING" &&
+            liveData.operatingHours &&
+            liveData.operatingHours.length > 0
+          ) {
+            // Found live hours! Use them.
+            // But first: Project stale dates to Today
+            const now = new Date();
+            const todayDateString = formatInParkTimezone(now, park.timezone); // YYYY-MM-DD
+
+            // Pick the first operating rule (usually there's only one for the day)
+            const rule = liveData.operatingHours[0];
+
+            if (rule.startTime && rule.endTime) {
+              // Project Start Time
+              // Format: 2025-11-13T10:00:00+01:00 -> 2025-12-29T10:00:00+01:00
+              const startIso = rule.startTime;
+              const startTimePart = startIso.substring(11); // HH:mm:ss...
+              const newStartIso = todayDateString + "T" + startTimePart;
+
+              // Project End Time
+              const endIso = rule.endTime;
+              const endTimePart = endIso.substring(11);
+              const newEndIso = todayDateString + "T" + endTimePart;
+
+              status = "OPERATING";
+
+              this.logger.debug(
+                `Recovered operating hours from Live Data for ${park.name}: ${newStartIso} - ${newEndIso}`,
+              );
+            }
           }
         }
       } catch (err) {
@@ -902,7 +962,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1045,8 +1105,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

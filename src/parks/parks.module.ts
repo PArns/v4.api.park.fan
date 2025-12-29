@@ -21,6 +21,8 @@ import { GeocodingModule } from "../external-apis/geocoding/geocoding.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { WeatherModule } from "../external-apis/weather/weather.module";
 import { HolidaysModule } from "../holidays/holidays.module";
+import { QueueTimesModule } from "../external-apis/queue-times/queue-times.module";
+import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { HolidaysModule } from "../holidays/holidays.module";
     RedisModule,
     WeatherModule,
     forwardRef(() => HolidaysModule),
+    QueueTimesModule,
+    WartezeitenModule,
   ],
   controllers: [ParksController],
   providers: [
