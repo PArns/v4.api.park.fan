@@ -26,7 +26,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -262,6 +262,65 @@ export class ShowsService {
           : null,
         operatingHours: liveData.operatingHours || null,
       };
+
+      // Fix: Serialize/Normalize Showtimes
+      // If we receive stale dates (e.g. from last month) but status is OPERATING,
+      // project them to "Today" to ensure they show up in the schedule.
+      if (
+        showLiveData.status === "OPERATING" &&
+        showLiveData.showtimes &&
+        showLiveData.showtimes.length > 0
+      ) {
+        // Fetch show to get park timezone
+        const show = await this.showRepository.findOne({
+          where: { id: showId },
+          relations: ["park"],
+        });
+
+        if (show && show.park && show.park.timezone) {
+          const timezone = show.park.timezone;
+          const now = new Date();
+          const todayDateString = formatInParkTimezone(now, timezone); // YYYY-MM-DD
+
+          showLiveData.showtimes = showLiveData.showtimes.map((st) => {
+            if (!st.startTime) return st;
+
+            const stDate = new Date(st.startTime);
+            const stDateString = formatInParkTimezone(stDate, timezone);
+
+            // If date is NOT today (e.g. old data), project to today
+            if (stDateString !== todayDateString) {
+              // Extract time part from original ISO string or Date object
+              // Robust way: Use the time component from the Date object corresponding to the parsed startTime
+              // Note: st.startTime is an ISO string. modifying it directly is risky if offsets differ.
+              // Best approach: Construct new ISO string using Today's Date + Original Time part.
+
+              // Parse original time parts
+              const iso = st.startTime;
+              const timePart = iso.substring(11); // HH:mm:ss... or HH:mm:ss+ZZ:ZZ
+
+              // Construct new timestamp: Today's YYYY-MM-DD + T + Original Time Part
+              // We rely on the fact that "todayDateString" is YYYY-MM-DD compatible with ISO
+              // However, we must be careful about Timezones.
+              // If we just swap the date part of the ISO string, it preserves the offset.
+
+              // Example: 2025-11-13T11:30:00+01:00 -> 2025-12-29T11:30:00+01:00
+              // This works if strictly replacing YYYY-MM-DD.
+              const newIso = todayDateString + iso.substring(10);
+
+              return {
+                ...st,
+                startTime: newIso,
+                // adjust endTime similarly if present
+                endTime: st.endTime
+                  ? todayDateString + st.endTime.substring(10)
+                  : st.endTime,
+              };
+            }
+            return st;
+          });
+        }
+      }
 
       // Use create() to trigger @BeforeInsert hooks
       const entry = this.showLiveDataRepository.create(showLiveData);
