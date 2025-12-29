@@ -2,6 +2,28 @@ import { ApiProperty } from "@nestjs/swagger";
 import { ScheduleType } from "../entities/schedule-entry.entity";
 
 /**
+ * Structured holiday information from a neighbor/influencing region
+ */
+export class InfluencingHoliday {
+  @ApiProperty({ description: "English name of the holiday" })
+  name: string;
+
+  @ApiProperty({
+    description: "The region/country that influences this day",
+  })
+  source: {
+    countryCode: string;
+    regionCode?: string | null;
+  };
+
+  @ApiProperty({
+    description: "Type of holiday",
+    enum: ["public", "school", "bank"],
+  })
+  holidayType: string;
+}
+
+/**
  * Schedule Item DTO
  *
  * Represents a single schedule entry for a park
@@ -72,6 +94,13 @@ export class ScheduleItemDto {
   })
   isBridgeDay: boolean;
 
+  @ApiProperty({
+    description: "Holidays from neighbor regions that might influence crowds",
+    type: [InfluencingHoliday],
+    required: false,
+  })
+  influencingHolidays?: InfluencingHoliday[];
+
   static fromEntity(schedule: {
     date: Date | string;
     scheduleType: ScheduleType;
@@ -105,6 +134,7 @@ export class ScheduleItemDto {
     dto.isHoliday = schedule.isHoliday || false;
     dto.holidayName = schedule.holidayName || null;
     dto.isBridgeDay = schedule.isBridgeDay || false;
+    dto.influencingHolidays = (schedule as any).influencingHolidays || [];
     return dto;
   }
 }

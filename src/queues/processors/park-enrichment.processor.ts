@@ -102,14 +102,11 @@ export class ParkEnrichmentProcessor {
         }
       }
 
-      // 3. Set influencingRegions
+      // 3. Set influencingRegions (Always recalculate from config)
       const currentCountryCode = updates.countryCode || park.countryCode;
       const currentRegionCode = updates.regionCode || park.regionCode;
 
-      if (
-        currentCountryCode &&
-        (!park.influencingRegions || park.influencingRegions.length === 0)
-      ) {
+      if (currentCountryCode) {
         let newInfluences: {
           countryCode: string;
           regionCode: string | null;
@@ -140,10 +137,17 @@ export class ParkEnrichmentProcessor {
           }
         }
 
+        // Always update if calculated influences differ from current
         if (newInfluences.length > 0) {
-          updates.influencingRegions = newInfluences;
-          needsUpdate = true;
-          updatedInfluences++;
+          const currentInfluences = park.influencingRegions || [];
+          const influencesChanged =
+            JSON.stringify(newInfluences) !== JSON.stringify(currentInfluences);
+
+          if (influencesChanged) {
+            updates.influencingRegions = newInfluences;
+            needsUpdate = true;
+            updatedInfluences++;
+          }
         }
       }
 

@@ -847,53 +847,98 @@ export class ParkIntegrationService {
         const minDate = new Date(dates[0]);
         const maxDate = new Date(dates[dates.length - 1]);
 
-        // Fetch all holidays for this range
-        const holidays = await this.holidaysService.getHolidays(
-          park.countryCode,
-          minDate,
-          maxDate,
+        // Fetch all holidays for this range (Home Country + Influencing Regions)
+        const relevantRegions = [
+          { countryCode: park.countryCode, regionCode: park.regionCode },
+          ...(park.influencingRegions || []),
+        ];
+
+        const countryCodes = [
+          ...new Set(relevantRegions.map((r) => r.countryCode)),
+        ];
+        const allHolidays = await Promise.all(
+          countryCodes.map((cc) =>
+            this.holidaysService.getHolidays(cc, minDate, maxDate),
+          ),
         );
+        const holidays = allHolidays.flat();
 
         // Map for fast lookup: "YYYY-MM-DD" -> Holiday
         const holidayMap = new Map<string, any>();
+        const influencingMap = new Map<string, any[]>();
+
         for (const h of holidays) {
-          // Filter by region: Only include if nationwide OR matches park region
-          // Note: School holidays often have region set (e.g. DE-NW), need to match park region (e.g. NW)
-          if (
-            h.isNationwide ||
-            !h.region ||
-            h.region === park.regionCode ||
-            (park.regionCode &&
-              h.region &&
-              h.region.endsWith(`-${park.regionCode}`))
-          ) {
-            // TypeORM might return date as string "YYYY-MM-DD" or Date object
+          // Check if this holiday is relevant for the park's specific regions or is nationwide
+          const isRelevant = relevantRegions.some((reg) => {
+            if (reg.countryCode !== h.country) return false;
+
+            // Nationwide always matches
+            if (h.isNationwide || !h.region) return true;
+
+            // Region matches if it's explicitly the park's region (NW, BW)
+            return (
+              h.region === reg.regionCode ||
+              (reg.regionCode && h.region.endsWith(`-${reg.regionCode}`))
+            );
+          });
+
+          if (isRelevant) {
             const dateStr =
               h.date instanceof Date
                 ? h.date.toISOString().split("T")[0]
                 : (h.date as unknown as string);
 
-            // Prioritize public holidays over school holidays for naming if collision
-            // But always keep record if any holiday exists
-            if (
-              !holidayMap.has(dateStr) ||
-              h.holidayType === "public" ||
-              h.holidayType === "bank"
-            ) {
-              holidayMap.set(dateStr, h);
+            const isHomeCountry = h.country === park.countryCode;
+
+            if (isHomeCountry) {
+              // Local holiday: determines isHoliday and holidayName
+              const existing = holidayMap.get(dateStr);
+              const isBetterType =
+                h.holidayType === "public" || h.holidayType === "bank";
+
+              if (
+                !existing ||
+                (isBetterType && existing.holidayType === "school")
+              ) {
+                holidayMap.set(dateStr, h);
+              }
+            } else {
+              // Influencing holiday: added to a list for context
+              const currentInfluencing = influencingMap.get(dateStr) || [];
+              currentInfluencing.push({
+                name: h.name,
+                source: {
+                  countryCode: h.country,
+                  regionCode: h.region ? h.region.split("-").pop() : null,
+                },
+                holidayType: h.holidayType,
+              });
+              influencingMap.set(dateStr, currentInfluencing);
             }
           }
         }
+
         // Apply to schedule items
-        for (const item of dto.schedule) {
-          const holiday = holidayMap.get(item.date);
-          if (holiday) {
+        for (const item of (dto as any).schedule) {
+          const dateStr = item.date;
+          const localHoliday = holidayMap.get(dateStr);
+          const localInfluencing = influencingMap.get(dateStr) || [];
+
+          if (localHoliday) {
             item.isHoliday = true;
-            // Only overwrite name if it's currently null or we have a better name (e.g. specific holiday vs generic)
-            if (!item.holidayName) {
-              item.holidayName = holiday.name;
+            item.holidayName = localHoliday.name;
+
+            if (localHoliday.metadata?.isBridgeDay) {
+              item.isBridgeDay = true;
             }
+          } else {
+            // Ensure flag is false if no LOCAL holiday found
+            item.isHoliday = false;
+            item.holidayName = null;
           }
+
+          // Always attach influencing holidays if any exist
+          item.influencingHolidays = localInfluencing;
         }
       } catch (error) {
         this.logger.warn(

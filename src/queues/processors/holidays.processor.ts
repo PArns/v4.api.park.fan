@@ -5,7 +5,6 @@ import { HolidaysService } from "../../holidays/holidays.service";
 import { NagerDateClient } from "../../external-apis/nager-date/nager-date.client";
 import { OpenHolidaysClient } from "../../external-apis/open-holidays/open-holidays.client";
 import { ParksService } from "../../parks/parks.service";
-import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import {
   PEAK_SEASONS_BY_COUNTRY,
   getPeakSeasonHolidays,
@@ -42,9 +41,11 @@ export class HolidaysProcessor {
     this.logger.log("🎉 Starting holidays sync...");
 
     try {
-      // Get unique countries from parks
-      const countries = await this.parksService.getUniqueCountries();
-      this.logger.log(`Found ${countries.length} unique countries with parks`);
+      // Get relevant country codes (with parks OR as influencers)
+      const countries = await this.parksService.getSyncCountryCodes();
+      this.logger.log(
+        `Found ${countries.length} relevant countries for holiday sync`,
+      );
 
       if (countries.length === 0) {
         this.logger.warn("No countries found. Skipping holiday sync.");
@@ -54,29 +55,15 @@ export class HolidaysProcessor {
       // Fetch holidays for each country
       let totalHolidaysSaved = 0;
       const currentYear = new Date().getFullYear();
-      const startYear = currentYear - 1; // Corrected: only need last year + current + next 2
+      const startYear = currentYear - 1;
       const endYear = currentYear + 2;
 
       this.logger.log(
         `Syncing holidays for period: ${startYear} to ${endYear}`,
       );
 
-      for (const country of countries) {
+      for (const isoCode of countries) {
         try {
-          // Convert country name to ISO code
-          const isoCode = getCountryISOCode(country);
-
-          if (!isoCode) {
-            this.logger.warn(
-              `No ISO code mapping found for country: ${country}, skipping`,
-            );
-            continue;
-          }
-
-          // this.logger.verbose(
-          //   `Fetching holidays for ${country} (${isoCode}) (${startYear}-${endYear})...`,
-          // );
-
           // 1. Public Holidays (Nager.Date)
           try {
             const holidays = await this.nagerDateClient.getHolidaysForYears(
@@ -92,13 +79,11 @@ export class HolidaysProcessor {
             totalHolidaysSaved += savedCount;
           } catch (error) {
             this.logger.error(
-              `Failed to fetch Nager public holidays for ${country}: ${error}`,
+              `Failed to fetch Nager public holidays for ${isoCode}: ${error}`,
             );
           }
 
           // 2. School Holidays (OpenHolidays)
-          // OpenHolidays API rejects large date ranges (>1 year) with 400.
-          // Fetch year-by-year to avoid this.
           try {
             let totalSchoolForCountry = 0;
 
@@ -106,7 +91,6 @@ export class HolidaysProcessor {
               const yearStart = `${year}-01-01`;
               const yearEnd = `${year}-12-31`;
 
-              // Language: Use country code (often matches, e.g. DE, FR)
               const schoolHolidays =
                 await this.openHolidaysClient.getSchoolHolidays(
                   isoCode,
@@ -124,18 +108,16 @@ export class HolidaysProcessor {
             }
 
             this.logger.log(
-              `Fetched school holidays for ${country}, expanded to ${totalSchoolForCountry} days.`,
+              `Fetched school holidays for ${isoCode}, expanded to ${totalSchoolForCountry} days.`,
             );
           } catch (error) {
             this.logger.error(
-              `Failed to fetch school holidays for ${country}: ${error}`,
+              `Failed to fetch school holidays for ${isoCode}: ${error}`,
             );
           }
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
           this.logger.error(
-            `Failed to fetch holidays for ${country}: ${errorMessage}`,
+            `Failed to fetch holidays for ${isoCode}: ${error}`,
           );
         }
       }
@@ -149,9 +131,8 @@ export class HolidaysProcessor {
       let totalPeakHolidaysSaved = 0;
       const peakHolidaysToUpsert: any[] = [];
 
-      for (const country of countries) {
-        const isoCode = getCountryISOCode(country);
-        if (!isoCode || !PEAK_SEASONS_BY_COUNTRY[isoCode]) continue;
+      for (const isoCode of countries) {
+        if (!PEAK_SEASONS_BY_COUNTRY[isoCode]) continue;
 
         const peakHolidays = getPeakSeasonHolidays(isoCode, startYear, endYear);
         for (const holiday of peakHolidays) {

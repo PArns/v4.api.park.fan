@@ -1502,6 +1502,34 @@ export class ParksService {
   }
 
   /**
+   * Gets all unique country codes relevant for holiday sync
+   * Includes countries with parks AND all unique influencing countries
+   */
+  async getSyncCountryCodes(): Promise<string[]> {
+    const parks = await this.parkRepository.find({
+      select: ["countryCode", "influencingRegions"],
+    });
+
+    const codes = new Set<string>();
+
+    for (const park of parks) {
+      if (park.countryCode) {
+        codes.add(park.countryCode);
+      }
+
+      if (park.influencingRegions) {
+        for (const reg of park.influencingRegions) {
+          if (reg.countryCode) {
+            codes.add(reg.countryCode);
+          }
+        }
+      }
+    }
+
+    return [...codes];
+  }
+
+  /**
    * Invalidates schedule cache for a park
    */
   async invalidateScheduleCache(parkId: string): Promise<void> {

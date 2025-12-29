@@ -99,14 +99,26 @@ export class CalendarService {
           );
           return { predictions: [] };
         }),
-        this.holidaysService
-          .getHolidays(park.countryCode, fromDate, toDate)
-          .catch((err) => {
-            this.logger.warn(
-              `Holidays data unavailable for ${park.countryCode}: ${err.message}`,
-            );
-            return [];
-          }),
+        (() => {
+          const countries = [
+            park.countryCode,
+            ...(park.influencingRegions || []).map((r) => r.countryCode),
+          ];
+          const uniqueCountries = [...new Set(countries)];
+
+          return Promise.all(
+            uniqueCountries.map((cc) =>
+              this.holidaysService.getHolidays(cc, fromDate, toDate),
+            ),
+          )
+            .then((res) => res.flat())
+            .catch((err) => {
+              this.logger.warn(
+                `Holidays data partially unavailable for ${park.slug}: ${err.message}`,
+              );
+              return [];
+            });
+        })(),
         this.getRefurbishmentsList(park.id).catch((err) => {
           this.logger.warn(
             `Refurbishments data unavailable for ${park.slug}: ${err.message}`,
@@ -200,29 +212,63 @@ export class CalendarService {
         ) === dateStr,
     );
 
-    // Check if holiday
-    const isHoliday = await this.holidaysService.isHoliday(
-      date,
-      park.countryCode,
-      park.regionCode,
-      park.timezone,
+    // Build events array (deduplicated) and separate local/influencing holidays
+    const events: CalendarEvent[] = [];
+    const influencingHolidays: any[] = [];
+    const seenEvents = new Set<string>();
+
+    const dayHolidays = holidays.filter(
+      (h) => formatInParkTimezone(h.date, park.timezone) === dateStr,
     );
 
-    // Check if bridge day
-    const isBridgeDay = await this.holidaysService.isBridgeDay(
-      date,
-      park.countryCode,
-      park.regionCode,
-      park.timezone,
-    );
+    let localHolidayFound = false;
+    let localBridgeDayFound = false;
+    let localSchoolVacationFound = false;
 
-    // Check if school vacation
-    const isSchoolVacation = await this.holidaysService.isSchoolHoliday(
-      date,
-      park.countryCode,
-      park.regionCode,
-      park.timezone,
-    );
+    for (const h of dayHolidays) {
+      const type = h.holidayType === "school" ? "school-holiday" : "holiday";
+      const key = `${type}:${h.name}`;
+
+      const isLocal =
+        h.country === park.countryCode &&
+        (h.isNationwide ||
+          !h.region ||
+          h.region === park.regionCode ||
+          (park.regionCode && h.region.endsWith(`-${park.regionCode}`)));
+
+      if (isLocal) {
+        if (!seenEvents.has(key)) {
+          seenEvents.add(key);
+          events.push({
+            name: h.name,
+            type: type as any,
+            isNationwide: h.isNationwide,
+          });
+        }
+
+        localHolidayFound = true;
+        if (h.holidayType === "school") {
+          localSchoolVacationFound = true;
+        }
+        if (h.metadata?.isBridgeDay) {
+          localBridgeDayFound = true;
+        }
+      } else {
+        // Influencing but not local
+        influencingHolidays.push({
+          name: h.name,
+          source: {
+            countryCode: h.country,
+            regionCode: h.region ? h.region.split("-").pop() : null,
+          },
+          holidayType: h.holidayType,
+        });
+      }
+    }
+
+    const isHoliday = localHolidayFound;
+    const isBridgeDay = localBridgeDayFound;
+    const isSchoolVacation = localSchoolVacationFound;
 
     // Determine park status
     const status: ParkStatus =
@@ -232,7 +278,7 @@ export class CalendarService {
           ? "CLOSED"
           : mlPrediction?.crowdLevel === "closed"
             ? "CLOSED"
-            : "CLOSED"; // Default safety fallback (was OPERATING)
+            : "CLOSED";
 
     // Build operating hours
     let hours: OperatingHours | null = null;
@@ -244,7 +290,6 @@ export class CalendarService {
         isInferred: false,
       };
     } else if (status === "OPERATING" && mlPrediction) {
-      // Infer hours from ML (park likely open but no official schedule)
       hours = await this.inferOperatingHours(park, date);
     }
 
@@ -271,28 +316,6 @@ export class CalendarService {
         }
       : null;
 
-    // Build events array (deduplicated)
-    const events: CalendarEvent[] = [];
-    const seenEvents = new Set<string>();
-
-    const dayHolidays = holidays.filter(
-      (h) => formatInParkTimezone(h.date, park.timezone) === dateStr,
-    );
-
-    for (const h of dayHolidays) {
-      const type = h.holidayType === "school" ? "school-holiday" : "holiday";
-      const key = `${type}:${h.name}`;
-
-      if (!seenEvents.has(key)) {
-        seenEvents.add(key);
-        events.push({
-          type,
-          name: h.name,
-          isNationwide: h.isNationwide,
-        });
-      }
-    }
-
     // Build calendar day
     const day: CalendarDay = {
       date: dateStr,
@@ -300,7 +323,7 @@ export class CalendarService {
       isToday: dateStr === today,
       isTomorrow: dateStr === tomorrow,
       hours: hours || undefined,
-      crowdLevel: (crowdLevel || "moderate") as CrowdLevel,
+      crowdLevel,
       crowdScore:
         status === "CLOSED" ? undefined : mlPrediction?.crowdScore || undefined,
       weather: weatherSummary || undefined,
@@ -308,6 +331,8 @@ export class CalendarService {
       isHoliday,
       isBridgeDay,
       isSchoolVacation,
+      influencingHolidays:
+        influencingHolidays.length > 0 ? influencingHolidays : undefined,
     };
 
     // Add refurbishments if any
@@ -315,9 +340,8 @@ export class CalendarService {
       day.refurbishments = refurbishments;
     }
 
-    // Add ML-generated recommendation (always generate for operating parks)
+    // Add ML-generated recommendation
     if (status === "OPERATING") {
-      // Generate keys for localization
       const advisoryKeys = this.generateAdvisoryKeys(
         mlPrediction?.crowdScore || mlPrediction?.crowdLevel,
         isHoliday,
@@ -325,13 +349,7 @@ export class CalendarService {
         weatherSummary,
       );
       day.advisoryKeys = advisoryKeys;
-
-      // Generate legacy string (keep for backward compatibility)
       day.recommendation = this.generateRecommendationString(advisoryKeys);
-    }
-
-    // Add show times for the day (if operating)
-    if (status === "OPERATING") {
       day.showTimes = await this.getShowTimes(park.id, date);
     }
 

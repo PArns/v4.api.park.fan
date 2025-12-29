@@ -2,6 +2,7 @@ import { ApiProperty } from "@nestjs/swagger";
 import { ParkStatus } from "../../common/types/status.type";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { ScheduleType } from "../entities/schedule-entry.entity";
+import { InfluencingHoliday } from "./schedule-item.dto";
 
 /**
  * Calendar Metadata
@@ -139,7 +140,7 @@ export class CalendarDay {
   hours?: OperatingHours;
 
   @ApiProperty()
-  crowdLevel: CrowdLevel;
+  crowdLevel: CrowdLevel | "closed";
 
   @ApiProperty({ required: false })
   crowdScore?: number;
@@ -158,6 +159,13 @@ export class CalendarDay {
 
   @ApiProperty()
   isSchoolVacation: boolean;
+
+  @ApiProperty({
+    description: "Holidays from neighbor regions that might influence crowds",
+    type: [InfluencingHoliday],
+    required: false,
+  })
+  influencingHolidays?: InfluencingHoliday[];
 
   @ApiProperty({ type: () => [HourlyPrediction], required: false })
   hourly?: HourlyPrediction[];
