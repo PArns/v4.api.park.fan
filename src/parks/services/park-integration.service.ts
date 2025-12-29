@@ -68,7 +68,7 @@ export class ParkIntegrationService {
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -853,21 +853,7 @@ export class ParkIntegrationService {
       }
     }
 
-    // Fetch school holiday status for today
-    try {
-      dto.isSchoolVacation = await this.holidaysService.isSchoolHoliday(
-        new Date(),
-        park.countryCode,
-        park.regionCode,
-        park.timezone,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to check school holiday for ${park.slug}:`,
-        error,
-      );
-      dto.isSchoolVacation = false;
-    }
+
 
     // Cache the complete response with dynamic TTL
     // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data
@@ -962,7 +948,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1105,9 +1091,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

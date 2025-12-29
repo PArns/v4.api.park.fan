@@ -4,6 +4,7 @@ import { ParkResponseDto } from "../dto/park-response.dto";
 import { ParksService } from "../parks.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { OccupancyDto, ParkStatisticsDto } from "../../analytics/dto";
+import { HolidaysService } from "../../holidays/holidays.service";
 
 /**
  * Park Enrichment Service
@@ -23,7 +24,8 @@ export class ParkEnrichmentService {
   constructor(
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
-  ) {}
+    private readonly holidaysService: HolidaysService,
+  ) { }
 
   /**
    * Enrich parks with status, analytics, and statistics
@@ -45,17 +47,56 @@ export class ParkEnrichmentService {
 
     const parkIds = parks.map((p) => p.id);
 
-    // Batch fetch all data in parallel (3 queries total regardless of park count)
-    const [statusMap, occupancyMap, statisticsMap] = await Promise.all([
-      this.parksService.getBatchParkStatus(parkIds),
-      this.analyticsService.getBatchParkOccupancy(parkIds),
-      this.analyticsService.getBatchParkStatistics(parkIds),
-    ]);
+    // Batch fetch all data in parallel (4 queries total regardless of park count)
+    const [statusMap, occupancyMap, statisticsMap, schoolHolidayMap] =
+      await Promise.all([
+        this.parksService.getBatchParkStatus(parkIds),
+        this.analyticsService.getBatchParkOccupancy(parkIds),
+        this.analyticsService.getBatchParkStatistics(parkIds),
+        this.getBatchSchoolHolidayStatus(parks),
+      ]);
 
     // Map each park using fetched data
     return parks.map((park) =>
-      this.mapParkToDto(park, statusMap, occupancyMap, statisticsMap),
+      this.mapParkToDto(
+        park,
+        statusMap,
+        occupancyMap,
+        statisticsMap,
+        schoolHolidayMap,
+      ),
     );
+  }
+
+  /**
+   * Helper to fetch school holiday status for multiple parks in parallel
+   * @private
+   */
+  private async getBatchSchoolHolidayStatus(
+    parks: Park[],
+  ): Promise<Map<string, boolean>> {
+    const today = new Date();
+    const results = await Promise.all(
+      parks.map(async (park) => {
+        if (!park.countryCode) return { id: park.id, isSchoolHoliday: false };
+        try {
+          const isSchoolHoliday = await this.holidaysService.isSchoolHoliday(
+            today,
+            park.countryCode,
+            park.regionCode,
+            park.timezone,
+          );
+          return { id: park.id, isSchoolHoliday };
+        } catch (error) {
+          this.logger.warn(
+            `Failed to check school holiday for ${park.name}: ${error}`,
+          );
+          return { id: park.id, isSchoolHoliday: false };
+        }
+      }),
+    );
+
+    return new Map(results.map((r) => [r.id, r.isSchoolHoliday]));
   }
 
   /**
@@ -67,11 +108,15 @@ export class ParkEnrichmentService {
     statusMap: Map<string, string>,
     occupancyMap: Map<string, OccupancyDto>,
     statisticsMap: Map<string, ParkStatisticsDto>,
+    schoolHolidayMap: Map<string, boolean>,
   ): ParkResponseDto {
     const dto = ParkResponseDto.fromEntity(park);
 
     // Status
     dto.status = (statusMap.get(park.id) as "OPERATING" | "CLOSED") || "CLOSED";
+
+    // School Holiday
+    dto.isSchoolVacation = schoolHolidayMap.get(park.id) || false;
 
     // Occupancy & Analytics
     const occupancy = occupancyMap.get(park.id);
