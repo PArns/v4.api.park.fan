@@ -697,9 +697,9 @@ export class ParkIntegrationService {
             avgWaitToday: statistics.avgWaitToday,
             peakHour: statistics.peakHour,
             crowdLevel: statistics.crowdLevel,
-            totalAttractions: statistics.totalAttractions,
-            operatingAttractions: statistics.operatingAttractions,
-            closedAttractions: statistics.closedAttractions,
+            totalAttractions: totalAttractionsCount,
+            operatingAttractions: totalOperatingCount,
+            closedAttractions: totalAttractionsCount - totalOperatingCount,
             timestamp: statistics.timestamp.toISOString(),
           },
           percentiles: percentiles || undefined, // Only include if data available

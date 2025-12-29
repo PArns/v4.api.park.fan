@@ -117,12 +117,6 @@ export class ParkResponseDto {
       timestamp: string;
     };
   } | null;
-  @ApiProperty({
-    description: "Whether today is a school vacation day",
-    required: false,
-    example: true,
-  })
-  isSchoolVacation?: boolean;
 
   // Additional Data
   @ApiProperty({
