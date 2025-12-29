@@ -3,6 +3,8 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
+import { QueueTimesClient } from "../external-apis/queue-times/queue-times.client";
+import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
@@ -16,6 +18,8 @@ export class AttractionsService {
     @InjectRepository(Attraction)
     private attractionRepository: Repository<Attraction>,
     private themeParksClient: ThemeParksClient,
+    private queueTimesClient: QueueTimesClient,
+    private wartezeitenClient: WartezeitenClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
   ) { }
@@ -51,15 +55,25 @@ export class AttractionsService {
     let syncedCount = 0;
 
     for (const park of parks) {
-      // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
-      if (
-        !park.externalId ||
-        park.externalId.startsWith("qt-") ||
-        park.externalId.startsWith("wz-")
-      ) {
+      // 1. Queue-Times Sync
+      if (park.externalId && park.externalId.startsWith("qt-")) {
+        const qtId = parseInt(park.externalId.replace("qt-", "qt-park-").replace("qt-park-", ""), 10);
+        if (!isNaN(qtId)) {
+          await this.syncFromQueueTimes(park, qtId);
+          syncedCount++; // Count park as synced (simplification)
+        }
         continue;
       }
 
+      // 2. Wartezeiten Sync
+      if (park.externalId && park.externalId.startsWith("wz-")) {
+        const wzId = park.externalId.replace("wz-", "");
+        await this.syncFromWartezeiten(park, wzId);
+        syncedCount++;
+        continue;
+      }
+
+      // 3. ThemeParks.wiki Sync (Default)
       // Fetch children (attractions, shows, restaurants, etc.)
       const childrenResponse = await this.themeParksClient.getEntityChildren(
         park.externalId,
@@ -307,5 +321,98 @@ export class AttractionsService {
     });
 
     return true; // Updated
+  }
+
+  /**
+   * Sync attractions from Queue-Times
+   */
+  private async syncFromQueueTimes(park: any, qtId: number) {
+    try {
+      const data = await this.queueTimesClient.getParkQueueTimes(qtId);
+      const allRides = [...data.rides, ...data.lands.flatMap((l) => l.rides)];
+
+      for (const ride of allRides) {
+        const externalId = `qt-ride-${ride.id}`;
+        await this.upsertAttraction(park, {
+          externalId,
+          name: ride.name,
+          attractionType: "ROW", // Generic type
+          // QT doesn't provide lat/lon in this endpoint usually
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Failed to sync QT attractions for ${park.name}: ${error}`);
+    }
+  }
+
+  /**
+   * Sync attractions from Wartezeiten.app
+   */
+  private async syncFromWartezeiten(park: any, wzId: string) {
+    try {
+      const waitTimes = await this.wartezeitenClient.getWaitTimes(wzId);
+
+      for (const item of waitTimes) {
+        const externalId = item.uuid; // WZ UUIDs are unique
+        await this.upsertAttraction(park, {
+          externalId,
+          name: item.name,
+          attractionType: "ROW", // Generic type
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Failed to sync WZ attractions for ${park.name}: ${error}`);
+    }
+  }
+
+  /**
+   * Unified Upsert Logic
+   */
+  private async upsertAttraction(
+    park: any,
+    data: {
+      externalId: string;
+      name: string;
+      attractionType?: string;
+      latitude?: number;
+      longitude?: number;
+    },
+  ) {
+    // Check if attraction exists
+    const existing = await this.attractionRepository.findOne({
+      where: { externalId: data.externalId },
+    });
+
+    if (existing) {
+      // Update
+      await this.attractionRepository.update(existing.id, {
+        name: data.name,
+        // Only update lat/lon if provided (QT/WZ usually don't have it)
+        ...(data.latitude && { latitude: data.latitude }),
+        ...(data.longitude && { longitude: data.longitude }),
+      });
+    } else {
+      // Create
+      const baseSlug = generateSlug(data.name);
+
+      // Get existing slugs context
+      // Note: This query inside a loop is slightly inefficient but safe for uniqueness
+      const existingAttractions = await this.attractionRepository.find({
+        where: { parkId: park.id },
+        select: ["slug"],
+      });
+      const existingSlugs = existingAttractions.map((a) => a.slug);
+      const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+
+      await this.attractionRepository.save({
+        parkId: park.id,
+        externalId: data.externalId,
+        name: data.name,
+        slug: uniqueSlug,
+        attractionType: data.attractionType || "UNKNOWN",
+        latitude: data.latitude,
+        longitude: data.longitude,
+      });
+    }
   }
 }

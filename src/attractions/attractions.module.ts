@@ -10,6 +10,8 @@ import { QueueDataModule } from "../queue-data/queue-data.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { MLModule } from "../ml/ml.module";
 import { RedisModule } from "../common/redis/redis.module";
+import { QueueTimesModule } from "../external-apis/queue-times/queue-times.module";
+import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 
 @Module({
   imports: [
@@ -20,9 +22,11 @@ import { RedisModule } from "../common/redis/redis.module";
     AnalyticsModule,
     MLModule,
     RedisModule,
+    QueueTimesModule,
+    WartezeitenModule,
   ],
   controllers: [AttractionsController],
   providers: [AttractionsService, AttractionIntegrationService],
   exports: [AttractionsService, AttractionIntegrationService],
 })
-export class AttractionsModule {}
+export class AttractionsModule { }
