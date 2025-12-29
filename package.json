@@ -36,6 +36,7 @@
     "job:clear-cache": "ts-node scripts/clear-cache.ts"
   },
   "dependencies": {
+    "@nestjs/axios": "^4.0.1",
     "@nestjs/bull": "^11.0.4",
     "@nestjs/common": "^11.1.10",
     "@nestjs/config": "^4.0.2",
