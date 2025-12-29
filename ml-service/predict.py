@@ -308,8 +308,7 @@ def create_prediction_features(
         all_countries.add(park['country'])
         
         # Legacy fallback
-        if park.get('influencingCountries'):
-            all_countries.update(park['influencingCountries'])
+
             
         # New JSON support
         raw_influences = park.get('influencingRegions')
@@ -378,9 +377,7 @@ def create_prediction_features(
                     influencing_regions = []
             
             # Fallback for backward compatibility (older DB records)
-            if not influencing_regions:
-                influencing_countries = park_info.iloc[0].get('influencingCountries') or []
-                influencing_regions = [{"countryCode": c, "regionCode": None} for c in influencing_countries]
+
 
             # Primary country holiday
             # Note: For prediction, we might not always have granular region for the park itself in metadata

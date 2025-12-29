@@ -186,7 +186,7 @@ def add_holiday_features(
 
     # Merge park metadata
     df = df.merge(
-        parks_metadata[['park_id', 'country', 'region_code', 'influencingRegions', 'influencingCountries']],
+        parks_metadata[['park_id', 'country', 'region_code', 'influencingRegions']],
         left_on='parkId',
         right_on='park_id',
         how='left'
@@ -203,9 +203,7 @@ def add_holiday_features(
                 if isinstance(region, dict) and 'countryCode' in region:
                     all_countries.add(region['countryCode'])
         
-        # Fallback: Add countries from legacy array
-        elif isinstance(row['influencingCountries'], list):
-             all_countries.update(row['influencingCountries'])
+
 
     # Fetch all holidays
     holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
@@ -268,11 +266,7 @@ def add_holiday_features(
         if isinstance(raw_regions, list) and len(raw_regions) > 0:
             # Use new granular config
             influencing_list = raw_regions # list of {countryCode, regionCode}
-        else:
-            # Fallback to old country list
-            raw_countries = row['influencingCountries']
-            if isinstance(raw_countries, list):
-                influencing_list = [{'countryCode': c, 'regionCode': None} for c in raw_countries]
+
 
         # Check first 3 neighbors
         neighbor_flags = []
@@ -326,7 +320,7 @@ def add_holiday_features(
     df = df.apply(check_holidays, axis=1)
 
     # Drop temporary merge columns
-    drop_cols = ['park_id', 'country', 'region_code', 'influencingRegions', 'influencingCountries']
+    drop_cols = ['park_id', 'country', 'region_code', 'influencingRegions']
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
 
     return df

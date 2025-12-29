@@ -37,7 +37,7 @@ def test_feature_engineering():
         'park_id': ['p1'],
         'country': ['DE'],
         'timezone': ['Europe/Berlin'],
-        'influencingCountries': [['FR', 'NL']],
+        'influencingRegions': [[{'countryCode': 'FR', 'regionCode': None}, {'countryCode': 'NL', 'regionCode': None}]],
         'latitude': [50.0],
         'longitude': [10.0]
     })

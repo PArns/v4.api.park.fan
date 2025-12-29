@@ -293,7 +293,7 @@ def fetch_parks_metadata() -> pd.DataFrame:
             "regionCode" as region_code,
             timezone,
             "influencingRegions", 
-            "influencingCountries", -- Keep for backward compat fallback
+
             "influenceRadiusKm",
             latitude,
             longitude
