@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { Park } from "../entities/park.entity";
-import { ScheduleEntry } from "../entities/schedule-entry.entity";
+import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
 import { WeatherItemDto } from "../dto/weather-item.dto";
 import { ScheduleItemDto } from "../dto/schedule-item.dto";
@@ -16,8 +16,11 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { getCurrentDateInTimezone, formatInParkTimezone } from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
+import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
+import { ParkStatus } from "../../common/types/status.type";
+import { OperatingHours } from "../dto/integrated-calendar.dto";
 
 /**
  * Park Integration Service
@@ -57,8 +60,9 @@ export class ParkIntegrationService {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
     private readonly holidaysService: HolidaysService,
+    private readonly themeParksClient: ThemeParksClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -143,7 +147,80 @@ export class ParkIntegrationService {
     const schedule = await this.parksService.getUpcomingSchedule(park.id, 7);
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
-    // Fetch current queue data for all attractions
+    // 4. Determine Park Status & Hours
+    let status: ParkStatus = "CLOSED";
+    let operatingHours: OperatingHours | undefined;
+
+    // A. Try Official Schedule First
+    // Find today's schedule entry
+    const todaySchedule = schedule.find((s) => {
+      const scheduleDate = formatInParkTimezone(s.date, park.timezone);
+      const todayDate = formatInParkTimezone(new Date(), park.timezone);
+      return scheduleDate === todayDate;
+    });
+
+    if (todaySchedule && todaySchedule.scheduleType === ScheduleType.OPERATING) {
+      status = "OPERATING";
+      operatingHours = {
+        openingTime: todaySchedule.openingTime?.toISOString() || "",
+        closingTime: todaySchedule.closingTime?.toISOString() || "",
+        type: todaySchedule.scheduleType,
+        isInferred: false,
+      };
+    }
+
+    // B. Fallback: Check Live Data for Operating Hours (if Schedule missing or Closed)
+    // Sometimes the schedule API is empty/stale, but the Live API returns "Operating" with hours
+    // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
+    if (status === "CLOSED" && park.externalId) {
+      try {
+        // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
+        const liveDataList = await this.themeParksClient.getParkLiveData(park.externalId);
+        const liveData = liveDataList.find(x => x.id === park.externalId) || liveDataList[0];
+
+        if (
+          liveData &&
+          liveData.status === "OPERATING" &&
+          liveData.operatingHours &&
+          liveData.operatingHours.length > 0
+        ) {
+          // Found live hours! Use them.
+          // But first: Project stale dates to Today
+          const now = new Date();
+          const todayDateString = formatInParkTimezone(now, park.timezone); // YYYY-MM-DD
+
+          // Pick the first operating rule (usually there's only one for the day)
+          const rule = liveData.operatingHours[0];
+
+          if (rule.startTime && rule.endTime) {
+            // Project Start Time
+            // Format: 2025-11-13T10:00:00+01:00 -> 2025-12-29T10:00:00+01:00
+            const startIso = rule.startTime;
+            const startTimePart = startIso.substring(11); // HH:mm:ss...
+            const newStartIso = todayDateString + "T" + startTimePart;
+
+            // Project End Time
+            const endIso = rule.endTime;
+            const endTimePart = endIso.substring(11);
+            const newEndIso = todayDateString + "T" + endTimePart;
+
+            status = "OPERATING";
+            operatingHours = {
+              openingTime: newStartIso,
+              closingTime: newEndIso,
+              type: ScheduleType.OPERATING,
+              isInferred: true, // Inferred from Live Data
+            };
+
+            this.logger.debug(
+              `Recovered operating hours from Live Data for ${park.name}: ${newStartIso} - ${newEndIso}`,
+            );
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to fetch fallback live data for ${park.name}: ${err}`);
+      }
+    }
     // ALWAYS fetch queue data to detect activity for parks without schedules
     // Filter out stale data (> 6 hours old) to prevent "Ghost Closures" from yesterday
     const MAX_AGE_MINUTES = 6 * 60; // 6 hours
@@ -793,7 +870,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -936,9 +1013,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
