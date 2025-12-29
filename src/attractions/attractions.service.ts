@@ -18,7 +18,7 @@ export class AttractionsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -51,6 +51,15 @@ export class AttractionsService {
     let syncedCount = 0;
 
     for (const park of parks) {
+      // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
+      if (
+        !park.externalId ||
+        park.externalId.startsWith("qt-") ||
+        park.externalId.startsWith("wz-")
+      ) {
+        continue;
+      }
+
       // Fetch children (attractions, shows, restaurants, etc.)
       const childrenResponse = await this.themeParksClient.getEntityChildren(
         park.externalId,
