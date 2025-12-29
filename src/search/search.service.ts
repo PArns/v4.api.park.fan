@@ -22,7 +22,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 @Injectable()
 export class SearchService {
-  private readonly CACHE_TTL = 300; // 5 minutes
+  private readonly CACHE_TTL = 60; // 1 minute (aligned with frontend revalidation)
 
   constructor(
     @InjectRepository(Park)
@@ -504,48 +504,87 @@ export class SearchService {
   private async enrichAttractionResults(
     attractions: any[],
   ): Promise<SearchResultItemDto[]> {
-    // Batch fetch wait times and status for all attractions
-    const attractionIds = attractions.map((a) => a.id);
-    const waitTimesMap = await this.getBatchWaitTimes(attractionIds);
-    const statusMap = await this.getBatchAttractionStatus(attractionIds);
+    // 1. Batch fetch park statuses first (to filter out closed parks)
+    const parkStatusMap = await this.getParkStatusMap(attractions);
 
-    return attractions.map((attraction) => ({
-      type: "attraction" as const,
-      id: attraction.id,
-      name: attraction.name,
-      slug: attraction.slug,
-      url: attraction.park
-        ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
-        : null,
-      latitude: attraction.park?.latitude
-        ? parseFloat(attraction.park.latitude)
-        : null,
-      longitude: attraction.park?.longitude
-        ? parseFloat(attraction.park.longitude)
-        : null,
-      continent: attraction.park?.continent || null,
-      country: attraction.park?.country || null,
-      countryCode: attraction.park?.countryCode || null,
-      city: attraction.park?.city || null,
-      resort: attraction.park?.destination?.name || null,
-      status:
-        (statusMap.get(attraction.id)?.status as
-          | "OPERATING"
-          | "CLOSED"
-          | "DOWN"
-          | "REFURBISHMENT"
-          | null) || null,
-      load: this.determineAttractionLoad(waitTimesMap.get(attraction.id)),
-      waitTime: waitTimesMap.get(attraction.id) || null,
-      parentPark: attraction.park
-        ? {
-            id: attraction.park.id,
-            name: attraction.park.name,
-            slug: attraction.park.slug,
-            url: buildParkUrl(attraction.park),
-          }
-        : null,
-    }));
+    // 2. Identify attractions in OPERATING parks
+    const operatingAttractionIds: string[] = [];
+    attractions.forEach((attraction) => {
+      const parkStatus = attraction.park
+        ? parkStatusMap.get(attraction.park.id)
+        : "CLOSED";
+      if (parkStatus === "OPERATING") {
+        operatingAttractionIds.push(attraction.id);
+      }
+    });
+
+    // 3. Batch fetch wait times and status ONLY for operating attractions
+    // This replicates the logic in ParksController to avoid stale data
+    let waitTimesMap = new Map<string, number>();
+    let statusMap = new Map<string, { status: string }>();
+
+    if (operatingAttractionIds.length > 0) {
+      waitTimesMap = await this.getBatchWaitTimes(operatingAttractionIds);
+      statusMap = await this.getBatchAttractionStatus(operatingAttractionIds);
+    }
+
+    return attractions.map((attraction) => {
+      const parkStatus = attraction.park
+        ? parkStatusMap.get(attraction.park.id)
+        : "CLOSED";
+      const isParkOpen = parkStatus === "OPERATING";
+
+      // If park is closed, force attraction status to CLOSED and wait time to null
+      const status = isParkOpen
+        ? statusMap.get(attraction.id)?.status
+        : "CLOSED";
+
+      const waitTime = isParkOpen
+        ? waitTimesMap.get(attraction.id) || null
+        : null;
+
+      const load = isParkOpen
+        ? this.determineAttractionLoad(waitTime ?? undefined)
+        : null;
+
+      return {
+        type: "attraction" as const,
+        id: attraction.id,
+        name: attraction.name,
+        slug: attraction.slug,
+        url: attraction.park
+          ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
+          : null,
+        latitude: attraction.park?.latitude
+          ? parseFloat(attraction.park.latitude)
+          : null,
+        longitude: attraction.park?.longitude
+          ? parseFloat(attraction.park.longitude)
+          : null,
+        continent: attraction.park?.continent || null,
+        country: attraction.park?.country || null,
+        countryCode: attraction.park?.countryCode || null,
+        city: attraction.park?.city || null,
+        resort: attraction.park?.destination?.name || null,
+        status:
+          (status as
+            | "OPERATING"
+            | "CLOSED"
+            | "DOWN"
+            | "REFURBISHMENT"
+            | null) || "CLOSED",
+        load,
+        waitTime,
+        parentPark: attraction.park
+          ? {
+              id: attraction.park.id,
+              name: attraction.park.name,
+              slug: attraction.park.slug,
+              url: buildParkUrl(attraction.park),
+            }
+          : null,
+      };
+    });
   }
 
   /**
@@ -554,32 +593,54 @@ export class SearchService {
   private async enrichShowResults(
     shows: any[],
   ): Promise<SearchResultItemDto[]> {
-    // Batch fetch today's show times
-    const showIds = shows.map((s) => s.id);
-    const showTimesMap = await this.getBatchShowTimes(showIds);
-    return shows.map((show) => ({
-      type: "show" as const,
-      id: show.id,
-      name: show.name,
-      slug: show.slug,
-      url: null,
-      latitude: show.park?.latitude ? parseFloat(show.park.latitude) : null,
-      longitude: show.park?.longitude ? parseFloat(show.park.longitude) : null,
-      continent: show.park?.continent || null,
-      country: show.park?.country || null,
-      countryCode: show.park?.countryCode || null,
-      city: show.park?.city || null,
-      resort: show.park?.destination?.name || null,
-      showTimes: showTimesMap.get(show.id) || null,
-      parentPark: show.park
-        ? {
-            id: show.park.id,
-            name: show.park.name,
-            slug: show.park.slug,
-            url: buildParkUrl(show.park),
-          }
-        : null,
-    }));
+    // 1. Batch fetch park statuses first (to filter out closed parks)
+    const parkStatusMap = await this.getParkStatusMap(shows);
+
+    // 2. Identify shows in OPERATING parks
+    const operatingShowIds: string[] = [];
+    shows.forEach((show) => {
+      const parkStatus = show.park ? parkStatusMap.get(show.park.id) : "CLOSED";
+      if (parkStatus === "OPERATING") {
+        operatingShowIds.push(show.id);
+      }
+    });
+
+    // 3. Batch fetch show times ONLY for operating shows
+    let showTimesMap = new Map<string, string[]>();
+    if (operatingShowIds.length > 0) {
+      showTimesMap = await this.getBatchShowTimes(operatingShowIds);
+    }
+
+    return shows.map((show) => {
+      const parkStatus = show.park ? parkStatusMap.get(show.park.id) : "CLOSED";
+      const isParkOpen = parkStatus === "OPERATING";
+
+      return {
+        type: "show" as const,
+        id: show.id,
+        name: show.name,
+        slug: show.slug,
+        url: null,
+        latitude: show.park?.latitude ? parseFloat(show.park.latitude) : null,
+        longitude: show.park?.longitude
+          ? parseFloat(show.park.longitude)
+          : null,
+        continent: show.park?.continent || null,
+        country: show.park?.country || null,
+        countryCode: show.park?.countryCode || null,
+        city: show.park?.city || null,
+        resort: show.park?.destination?.name || null,
+        showTimes: isParkOpen ? showTimesMap.get(show.id) || null : null,
+        parentPark: show.park
+          ? {
+              id: show.park.id,
+              name: show.park.name,
+              slug: show.park.slug,
+              url: buildParkUrl(show.park),
+            }
+          : null,
+      };
+    });
   }
 
   /**
@@ -795,6 +856,23 @@ export class SearchService {
     );
 
     return loadMap;
+  }
+
+  /**
+   * Batch fetch park statuses for a list of entities with optional park reference
+   */
+  private async getParkStatusMap(
+    entities: { park?: { id: string } }[],
+  ): Promise<Map<string, string>> {
+    const parkIds = [
+      ...new Set(
+        entities.map((e) => e.park?.id).filter((id): id is string => !!id),
+      ),
+    ];
+    if (parkIds.length === 0) {
+      return new Map();
+    }
+    return this.parksService.getBatchParkStatus(parkIds);
   }
 
   /**
