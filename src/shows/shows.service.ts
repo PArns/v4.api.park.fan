@@ -26,7 +26,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -297,7 +297,6 @@ export class ShowsService {
 
               // Parse original time parts
               const iso = st.startTime;
-              const timePart = iso.substring(11); // HH:mm:ss... or HH:mm:ss+ZZ:ZZ
 
               // Construct new timestamp: Today's YYYY-MM-DD + T + Original Time Part
               // We rely on the fact that "todayDateString" is YYYY-MM-DD compatible with ISO
@@ -543,6 +542,7 @@ export class ShowsService {
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
       .innerJoinAndSelect("sld.show", "linked_show")
+      .leftJoinAndSelect("linked_show.park", "linked_park")
       .where("linked_show.parkId = :parkId", { parkId })
       .andWhere(
         `sld.timestamp = (
@@ -584,7 +584,7 @@ export class ShowsService {
           // Reconstruct: Today's YYYY-MM-DD + Original Time Part (T...)
           // We use the original ISO string's time part to preserve offset and time
           // Assumption: park timezone offset hasn't changed significantly or we accept the slight error
-          // closer match: todayDateString is YYYY-MM-DD. 
+          // closer match: todayDateString is YYYY-MM-DD.
           // We need to keep the T... part.
 
           // Safer: Check if the date string part needs updating
@@ -594,7 +594,9 @@ export class ShowsService {
             return {
               ...st,
               startTime: newIso,
-              endTime: st.endTime ? todayDateString + st.endTime.substring(10) : st.endTime,
+              endTime: st.endTime
+                ? todayDateString + st.endTime.substring(10)
+                : st.endTime,
             };
           }
           return st;

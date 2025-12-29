@@ -16,11 +16,13 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { getCurrentDateInTimezone, formatInParkTimezone } from "../../common/utils/date.util";
+import {
+  getCurrentDateInTimezone,
+  formatInParkTimezone,
+} from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
 import { ParkStatus } from "../../common/types/status.type";
-import { OperatingHours } from "../dto/integrated-calendar.dto";
 
 /**
  * Park Integration Service
@@ -62,7 +64,7 @@ export class ParkIntegrationService {
     private readonly holidaysService: HolidaysService,
     private readonly themeParksClient: ThemeParksClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -149,7 +151,6 @@ export class ParkIntegrationService {
 
     // 4. Determine Park Status & Hours
     let status: ParkStatus = "CLOSED";
-    let operatingHours: OperatingHours | undefined;
 
     // A. Try Official Schedule First
     // Find today's schedule entry
@@ -159,14 +160,11 @@ export class ParkIntegrationService {
       return scheduleDate === todayDate;
     });
 
-    if (todaySchedule && todaySchedule.scheduleType === ScheduleType.OPERATING) {
+    if (
+      todaySchedule &&
+      todaySchedule.scheduleType === ScheduleType.OPERATING
+    ) {
       status = "OPERATING";
-      operatingHours = {
-        openingTime: todaySchedule.openingTime?.toISOString() || "",
-        closingTime: todaySchedule.closingTime?.toISOString() || "",
-        type: todaySchedule.scheduleType,
-        isInferred: false,
-      };
     }
 
     // B. Fallback: Check Live Data for Operating Hours (if Schedule missing or Closed)
@@ -175,8 +173,11 @@ export class ParkIntegrationService {
     if (status === "CLOSED" && park.externalId) {
       try {
         // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
-        const liveDataList = await this.themeParksClient.getParkLiveData(park.externalId);
-        const liveData = liveDataList.find(x => x.id === park.externalId) || liveDataList[0];
+        const liveDataList = await this.themeParksClient.getParkLiveData(
+          park.externalId,
+        );
+        const liveData =
+          liveDataList.find((x) => x.id === park.externalId) || liveDataList[0];
 
         if (
           liveData &&
@@ -205,12 +206,6 @@ export class ParkIntegrationService {
             const newEndIso = todayDateString + "T" + endTimePart;
 
             status = "OPERATING";
-            operatingHours = {
-              openingTime: newStartIso,
-              closingTime: newEndIso,
-              type: ScheduleType.OPERATING,
-              isInferred: true, // Inferred from Live Data
-            };
 
             this.logger.debug(
               `Recovered operating hours from Live Data for ${park.name}: ${newStartIso} - ${newEndIso}`,
@@ -218,7 +213,9 @@ export class ParkIntegrationService {
           }
         }
       } catch (err) {
-        this.logger.warn(`Failed to fetch fallback live data for ${park.name}: ${err}`);
+        this.logger.warn(
+          `Failed to fetch fallback live data for ${park.name}: ${err}`,
+        );
       }
     }
     // ALWAYS fetch queue data to detect activity for parks without schedules
@@ -515,6 +512,36 @@ export class ParkIntegrationService {
           // If park is OPERATING, use live status. If CLOSED, force CLOSED but show times.
           show.status = dto.status === "OPERATING" ? liveData.status : "CLOSED";
           show.lastUpdated = liveData.lastUpdated?.toISOString();
+
+          // FIX: Force project dates to Today if Operating (Fallback for ShowsService)
+          if (
+            show.status === "OPERATING" &&
+            show.showtimes &&
+            show.showtimes.length > 0
+          ) {
+            const now = new Date();
+            const todayStr = formatInParkTimezone(now, park.timezone);
+
+            show.showtimes = show.showtimes.map((st) => {
+              if (!st.startTime) return st;
+
+              // Project to Today
+              const iso = st.startTime;
+              const currentDatePart = iso.substring(0, 10);
+
+              if (currentDatePart !== todayStr) {
+                const newIso = todayStr + iso.substring(10);
+                return {
+                  ...st,
+                  startTime: newIso,
+                  endTime: st.endTime
+                    ? todayStr + st.endTime.substring(10)
+                    : st.endTime,
+                };
+              }
+              return st;
+            });
+          }
         } else {
           // No live data available
           show.showtimes = [];
@@ -870,7 +897,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1013,8 +1040,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

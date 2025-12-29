@@ -47,7 +47,7 @@ export class CalendarService {
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated calendar response
@@ -257,18 +257,18 @@ export class CalendarService {
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
       ? {
-        condition: weather.weatherCode
-          ? getWeatherDescription(weather.weatherCode)
-          : "Unknown",
-        icon: weather.weatherCode || 0,
-        tempMin: weather.temperatureMin || 0,
-        tempMax: weather.temperatureMax || 0,
-        rainChance: Math.round(
-          (weather.precipitationSum || 0) > 0
-            ? Math.min((weather.precipitationSum / 10) * 100, 100)
-            : 0,
-        ),
-      }
+          condition: weather.weatherCode
+            ? getWeatherDescription(weather.weatherCode)
+            : "Unknown",
+          icon: weather.weatherCode || 0,
+          tempMin: weather.temperatureMin || 0,
+          tempMax: weather.temperatureMax || 0,
+          rainChance: Math.round(
+            (weather.precipitationSum || 0) > 0
+              ? Math.min((weather.precipitationSum / 10) * 100, 100)
+              : 0,
+          ),
+        }
       : null;
 
     // Build events array (deduplicated)
@@ -557,7 +557,10 @@ export class CalendarService {
    * Get show times for a specific target date
    * Projects current/stale data to the target date if the show is Operating
    */
-  private async getShowTimes(parkId: string, targetDate: Date): Promise<ShowTime[]> {
+  private async getShowTimes(
+    parkId: string,
+    targetDate: Date,
+  ): Promise<ShowTime[]> {
     try {
       // Get current show status for this park
       const showStatusMap =
