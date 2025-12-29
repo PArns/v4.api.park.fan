@@ -81,16 +81,6 @@ export class ParkReferenceDto {
   status: "OPERATING" | "CLOSED" | "REFURBISHMENT";
 
   @ApiProperty({
-    description: "Current crowd levels",
-    example: { crowdLevel: "MODERATE", value: 45 },
-    nullable: true,
-  })
-  currentLoad?: {
-    crowdLevel: string;
-    value: number;
-  };
-
-  @ApiProperty({
     description: "Live park analytics",
     example: {
       statistics: {

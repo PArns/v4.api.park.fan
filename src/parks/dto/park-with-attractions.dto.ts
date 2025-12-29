@@ -50,20 +50,6 @@ export class ParkAttractionPredictionDto {
   deviationDetected?: boolean;
 }
 
-export class ParkLoadDto {
-  @ApiProperty({
-    description: "Crowd Level",
-    enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
-  })
-  crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
-
-  @ApiProperty({ description: "Baseline wait time value" })
-  baseline: number;
-
-  @ApiProperty({ description: "Current wait time value" })
-  currentWaitTime: number;
-}
-
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
   id: string;
@@ -117,14 +103,6 @@ export class ParkAttractionDto {
     nullable: true,
   })
   predictionAccuracy?: ParkPredictioAccuracyDto | null;
-
-  @ApiProperty({
-    description: "Current load",
-    type: ParkLoadDto,
-    required: false,
-    nullable: true,
-  })
-  currentLoad?: ParkLoadDto | null;
 }
 
 export class ParkShowDto {
@@ -348,13 +326,6 @@ export class ParkWithAttractionsDto {
   regionCode: string | null;
 
   // Live Data
-  @ApiProperty({
-    description: "Current crowd load rating",
-    type: ParkLoadDto,
-    required: false,
-    nullable: true,
-  })
-  currentLoad?: ParkLoadDto | null;
 
   @ApiProperty({ description: "Weather information", required: false })
   weather?: {

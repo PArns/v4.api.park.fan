@@ -1,5 +1,4 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types";
 import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
@@ -44,17 +43,6 @@ export class AttractionResponseDto {
     type: [QueueDataItemDto],
   })
   queues?: QueueDataItemDto[];
-
-  @ApiProperty({
-    description: "Current load rating",
-    required: false,
-    nullable: true,
-  })
-  currentLoad?: {
-    crowdLevel: CrowdLevel;
-    baseline: number;
-    message?: string;
-  } | null;
 
   @ApiProperty({
     description: "Hourly ML predictions (internal model)",

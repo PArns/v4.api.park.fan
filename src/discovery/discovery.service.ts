@@ -273,26 +273,6 @@ export class DiscoveryService {
                 },
               };
 
-              // Hydrate Crowd Level
-              if (stats.crowdLevel !== null) {
-                // Map numeric crowd level to label
-                let level = "LOW";
-                if (stats.crowdLevel > 60) level = "HIGH";
-                else if (stats.crowdLevel > 30) level = "MODERATE";
-
-                park.currentLoad = {
-                  crowdLevel: level,
-                  value: stats.crowdLevel,
-                };
-              } else {
-                // Fallback if no crowd level data but waiting times exist
-                if (stats.avgWait > 30) {
-                  park.currentLoad = { crowdLevel: "MODERATE", value: 50 };
-                } else if (stats.avgWait > 60) {
-                  park.currentLoad = { crowdLevel: "HIGH", value: 80 };
-                }
-              }
-
               // City Aggregations
               if (stats.isOpen) {
                 cityOpenCount++;

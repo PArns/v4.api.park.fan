@@ -1365,36 +1365,35 @@ export class AnalyticsService {
     current: number,
     baseline: number,
   ): {
-    rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+    rating: "very_low" | "low" | "moderate" | "high" | "very_high";
     baseline: number;
   } {
     // If baseline is 0 (no historical data), use absolute thresholds
     if (baseline === 0) {
-      let rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme";
+      let rating: "very_low" | "low" | "moderate" | "high" | "very_high";
 
       if (current === 0) rating = "very_low";
       else if (current <= 15) rating = "low";
-      else if (current <= 30) rating = "normal";
-      else if (current <= 45) rating = "higher";
-      else if (current <= 60) rating = "high";
-      else rating = "extreme";
+      else if (current <= 30) rating = "moderate";
+      else if (current <= 50) rating = "high";
+      else rating = "very_high";
 
       return { rating, baseline };
     }
 
     const ratio = current / baseline;
 
-    let rating: "very_low" | "low" | "normal" | "higher" | "high" | "extreme" =
-      "normal";
+    let rating: "very_low" | "low" | "moderate" | "high" | "very_high" =
+      "moderate";
 
-    // Adjusted thresholds: ratio = 1.0 (current == baseline) should be "normal"
+    // Unified thresholds matching DTO enums
     if (ratio <= 0.3) rating = "very_low";
     else if (ratio <= 0.6) rating = "low";
-    else if (ratio <= 1.05)
-      rating = "normal"; // Up to 5% above baseline is still normal
-    else if (ratio <= 1.3) rating = "higher";
-    else if (ratio <= 1.6) rating = "high";
-    else rating = "extreme";
+    else if (ratio <= 1.1)
+      rating = "moderate"; // Up to 10% above baseline is moderate
+    else if (ratio <= 1.4)
+      rating = "high"; // Merged "higher" and "high"
+    else rating = "very_high"; // Replaced "extreme"
 
     return { rating, baseline };
   }

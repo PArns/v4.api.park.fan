@@ -463,93 +463,6 @@ export class ParkIntegrationService {
           );
           attraction.predictionAccuracy = null;
         }
-
-        // Attach Current Load Rating (Relative Wait Time)
-        // Only if we have live wait time data
-        const standbyQueue = attraction.queues.find(
-          (q) => q.queueType === "STANDBY" && q.waitTime !== null,
-        );
-
-        if (standbyQueue && typeof standbyQueue.waitTime === "number") {
-          try {
-            // Get 90th percentile baseline (1 year window)
-            const hour = new Date().getHours();
-            const day = new Date().getDay();
-
-            const p90 = await this.analyticsService.get90thPercentileOneYear(
-              attraction.id,
-              hour,
-              day,
-              "attraction",
-            );
-
-            const ratingResult = this.analyticsService.getLoadRating(
-              standbyQueue.waitTime,
-              p90,
-            );
-
-            attraction.currentLoad = {
-              crowdLevel: ratingResult.rating as any,
-              baseline: ratingResult.baseline,
-              currentWaitTime: standbyQueue.waitTime,
-            };
-          } catch (_error) {
-            // specific logging if needed, or silent fail
-          }
-        } else {
-          attraction.currentLoad = null;
-        }
-      }
-    }
-
-    // Calculate Park-level Current Load
-    let currentAvgWaitCalculated: number | null = null;
-    let p90ParkCalculated: number | null = null;
-    // totalWaitAttractionsCount removed as it is unused currently in this local scope for DTO mapping
-
-    if (dto.status === "OPERATING" && totalOperatingCount > 0) {
-      try {
-        // Calculate current average wait time from the data we just fetched
-        let totalWait = 0;
-        let count = 0;
-
-        for (const attr of dto.attractions) {
-          const standby = attr.queues?.find(
-            (q) => q.queueType === "STANDBY" && q.waitTime !== null,
-          );
-          if (standby && typeof standby.waitTime === "number") {
-            totalWait += standby.waitTime;
-            count++;
-          }
-        }
-
-        if (count > 0) {
-          currentAvgWaitCalculated = Math.round(totalWait / count);
-          // totalWaitAttractionsCount = count; // Removed as it is unused currently in this local scope for DTO mapping
-          const hour = new Date().getHours();
-          const day = new Date().getDay();
-
-          p90ParkCalculated =
-            await this.analyticsService.get90thPercentileOneYear(
-              park.id,
-              hour,
-              day,
-              "park",
-            );
-
-          const parkRating = this.analyticsService.getLoadRating(
-            currentAvgWaitCalculated,
-            p90ParkCalculated || 0,
-          );
-
-          dto.currentLoad = {
-            crowdLevel: parkRating.rating as any,
-            baseline: parkRating.baseline,
-            currentWaitTime: currentAvgWaitCalculated,
-          };
-        }
-      } catch (_error) {
-        // Silent fail for optional metadata
       }
     }
 
@@ -688,64 +601,21 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // Recalculate occupancy metrics if we have local data
-        let occupancyCurrent = occupancy.current;
-        let comparedToTypical = occupancy.comparedToTypical;
-        let comparisonStatus = occupancy.comparisonStatus;
-
-        if (currentAvgWaitCalculated !== null && p90ParkCalculated) {
-          occupancyCurrent = Math.round(
-            (currentAvgWaitCalculated / p90ParkCalculated) * 100,
-          );
-
-          // Get typical average wait time for comparison
-          const typicalAvgWait = occupancy.breakdown?.typicalAvgWait || 0;
-          comparedToTypical = Math.round(
-            currentAvgWaitCalculated - typicalAvgWait,
-          );
-          comparisonStatus = "typical";
-          if (Math.abs(comparedToTypical) > 10) {
-            comparisonStatus = comparedToTypical > 0 ? "higher" : "lower";
-          }
-        }
-
-        // Map occupancy Current to crowdLevel
-        const getCrowdLevel = (
-          occ: number,
-        ): "very_low" | "low" | "moderate" | "high" | "very_high" => {
-          if (occ <= 20) return "very_low";
-          if (occ <= 40) return "low";
-          if (occ <= 60) return "moderate";
-          if (occ <= 85) return "high";
-          return "very_high";
-        };
-
         dto.analytics = {
           occupancy: {
-            current: occupancyCurrent,
+            current: occupancy.current,
             trend: occupancy.trend,
-            comparedToTypical: comparedToTypical,
-            comparisonStatus: comparisonStatus,
-            baseline90thPercentile:
-              p90ParkCalculated || occupancy.baseline90thPercentile,
+            comparedToTypical: occupancy.comparedToTypical,
+            comparisonStatus: occupancy.comparisonStatus,
+            baseline90thPercentile: occupancy.baseline90thPercentile,
             updatedAt: occupancy.updatedAt,
-            breakdown: {
-              currentAvgWait:
-                currentAvgWaitCalculated !== null
-                  ? currentAvgWaitCalculated
-                  : occupancy.breakdown?.currentAvgWait || 0,
-              typicalAvgWait: occupancy.breakdown?.typicalAvgWait || 0,
-              activeAttractions: totalOperatingCount, // Consistent with statistics
-            },
+            breakdown: occupancy.breakdown,
           },
           statistics: {
-            avgWaitTime:
-              currentAvgWaitCalculated !== null
-                ? currentAvgWaitCalculated
-                : statistics.avgWaitTime,
+            avgWaitTime: statistics.avgWaitTime,
             avgWaitToday: statistics.avgWaitToday,
             peakHour: statistics.peakHour,
-            crowdLevel: getCrowdLevel(occupancyCurrent),
+            crowdLevel: statistics.crowdLevel,
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
             closedAttractions: totalAttractionsCount - totalOperatingCount,

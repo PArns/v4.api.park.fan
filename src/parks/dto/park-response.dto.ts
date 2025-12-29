@@ -73,17 +73,6 @@ export class ParkResponseDto {
 
   // Analytics / Live Data
   @ApiProperty({
-    description: "Current load rating",
-    required: false,
-    nullable: true,
-  })
-  currentLoad?: {
-    crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
-    baseline: number;
-    currentWaitTime: number;
-  } | null;
-
-  @ApiProperty({
     description: "Weather information (current and forecast)",
     required: false,
   })

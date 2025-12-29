@@ -123,12 +123,6 @@ export class ParkEnrichmentService {
     const stats = statisticsMap.get(park.id);
 
     if (occupancy) {
-      dto.currentLoad = {
-        crowdLevel: this.mapCrowdLevel(occupancy.current),
-        baseline: occupancy.baseline90thPercentile,
-        currentWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-      };
-
       dto.analytics = {
         occupancy: {
           current: occupancy.current,
