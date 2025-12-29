@@ -64,7 +64,7 @@ export class ParkIntegrationService {
     private readonly holidaysService: HolidaysService,
     private readonly themeParksClient: ThemeParksClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -170,7 +170,12 @@ export class ParkIntegrationService {
     // B. Fallback: Check Live Data for Operating Hours (if Schedule missing or Closed)
     // Sometimes the schedule API is empty/stale, but the Live API returns "Operating" with hours
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
-    if (status === "CLOSED" && park.externalId) {
+    if (
+      status === "CLOSED" &&
+      park.externalId &&
+      !park.externalId.startsWith("qt-") &&
+      !park.externalId.startsWith("wz-")
+    ) {
       try {
         // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
         const liveDataList = await this.themeParksClient.getParkLiveData(
@@ -897,7 +902,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1040,9 +1045,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
