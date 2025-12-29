@@ -110,7 +110,6 @@ export class HolidaysProcessor {
               const schoolHolidays =
                 await this.openHolidaysClient.getSchoolHolidays(
                   isoCode,
-                  isoCode, // language
                   yearStart,
                   yearEnd,
                 );
@@ -146,9 +145,9 @@ export class HolidaysProcessor {
       );
 
       // 3. Peak Seasons (Hardcoded for countries without API coverage)
-      // Sync peak seasons for US, UK, JP, CN, CA, KR, AU, DK
       this.logger.log("📅 Syncing hardcoded peak seasons...");
-      let peakSeasonCount = 0;
+      let totalPeakHolidaysSaved = 0;
+      const peakHolidaysToUpsert: any[] = [];
 
       for (const country of countries) {
         const isoCode = getCountryISOCode(country);
@@ -156,30 +155,31 @@ export class HolidaysProcessor {
 
         const peakHolidays = getPeakSeasonHolidays(isoCode, startYear, endYear);
         for (const holiday of peakHolidays) {
-          try {
-            const dateStr = holiday.date.toISOString().split("T")[0];
-            const externalId = `peak:${isoCode}:${dateStr}:${holiday.name.replace(/\s+/g, "-").toLowerCase()}`;
+          const dateStr = holiday.date.toISOString().split("T")[0];
+          const externalId = `peak:${isoCode}:${dateStr}:${holiday.name.replace(/\s+/g, "-").toLowerCase()}`;
 
-            await this.holidaysService.upsertHoliday({
-              externalId,
-              date: holiday.date,
-              name: holiday.name,
-              localName: holiday.name,
-              country: isoCode,
-              region: undefined, // Nationwide
-              holidayType: "school",
-              isNationwide: true,
-            });
-            peakSeasonCount++;
-          } catch (_error) {
-            // Silently skip duplicates
-          }
+          peakHolidaysToUpsert.push({
+            externalId,
+            date: holiday.date,
+            name: holiday.name,
+            localName: holiday.name,
+            country: isoCode,
+            region: undefined,
+            holidayType: "school",
+            isNationwide: true,
+          });
         }
       }
 
-      if (peakSeasonCount > 0) {
+      if (peakHolidaysToUpsert.length > 0) {
+        // Bulk upsert in batches of 500
+        for (let i = 0; i < peakHolidaysToUpsert.length; i += 500) {
+          const batch = peakHolidaysToUpsert.slice(i, i + 500);
+          await this.holidaysService.saveRawHolidays(batch);
+          totalPeakHolidaysSaved += batch.length;
+        }
         this.logger.log(
-          `📅 Synced ${peakSeasonCount} peak season days for countries without API coverage`,
+          `✅ Synced ${totalPeakHolidaysSaved} peak season days for countries without API coverage`,
         );
       }
 

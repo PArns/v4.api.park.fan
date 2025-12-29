@@ -40,21 +40,28 @@ export class OpenHolidaysClient {
    */
   async getSchoolHolidays(
     countryIsoCode: string,
-    languageIsoCode: string,
     validFrom: string,
     validTo: string,
+    languageIsoCode?: string,
   ): Promise<OpenHolidaysEntry[]> {
     try {
+      this.logger.debug(
+        `Fetching school holidays for ${countryIsoCode} (${validFrom} to ${validTo}, lang: ${languageIsoCode})`,
+      );
+      const params: any = {
+        countryIsoCode,
+        validFrom,
+        validTo,
+      };
+      if (languageIsoCode) {
+        params.languageIsoCode = languageIsoCode;
+      }
       const response = await this.client.get<OpenHolidaysEntry[]>(
         "/SchoolHolidays",
-        {
-          params: {
-            countryIsoCode,
-            languageIsoCode,
-            validFrom,
-            validTo,
-          },
-        },
+        { params },
+      );
+      this.logger.debug(
+        `Fetched ${response.data.length} entries for ${countryIsoCode}`,
       );
       return response.data;
     } catch (error) {

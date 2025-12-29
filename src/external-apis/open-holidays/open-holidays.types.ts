@@ -18,6 +18,7 @@ export interface OpenHolidaysEntry {
   temporalScope: "FullDay" | "HalfDay";
   nationwide: boolean;
   subdivisions?: OpenHolidaysSubdivision[];
+  groups?: OpenHolidaysSubdivision[]; // Some countries (e.g. BE) use groups instead
   comment?: OpenHolidaysName[];
 }
 

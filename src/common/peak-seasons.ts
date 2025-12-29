@@ -326,6 +326,33 @@ export const DK_PEAK_SEASONS: PeakSeasonPeriod[] = [
   { name: "Christmas", startMonth: 12, startDay: 20, endMonth: 1, endDay: 3 },
 ];
 
+// Brazil Peak Seasons (Southern Hemisphere)
+export const BR_PEAK_SEASONS: PeakSeasonPeriod[] = [
+  // Summer Break / End of Year
+  {
+    name: "Summer Break",
+    startMonth: 12,
+    startDay: 15,
+    endMonth: 1,
+    endDay: 31,
+  },
+  // Carnival (Varies, but usually in Feb/Mar window)
+  { name: "Carnival", startMonth: 2, startDay: 15, endMonth: 3, endDay: 10 },
+  // Winter Break (Mid-year)
+  { name: "Winter Break", startMonth: 7, startDay: 1, endMonth: 7, endDay: 31 },
+  // October Break (Children's Day week)
+  {
+    name: "October Break",
+    startMonth: 10,
+    startDay: 10,
+    endMonth: 10,
+    endDay: 15,
+  },
+];
+
+// Hong Kong (Similar to China but with some specific colonial/western influence)
+export const HK_PEAK_SEASONS: PeakSeasonPeriod[] = [...CN_PEAK_SEASONS];
+
 // Map country codes to peak seasons
 export const PEAK_SEASONS_BY_COUNTRY: Record<string, PeakSeasonPeriod[]> = {
   US: US_PEAK_SEASONS,
@@ -336,6 +363,8 @@ export const PEAK_SEASONS_BY_COUNTRY: Record<string, PeakSeasonPeriod[]> = {
   KR: KR_PEAK_SEASONS,
   AU: AU_PEAK_SEASONS,
   DK: DK_PEAK_SEASONS,
+  BR: BR_PEAK_SEASONS,
+  HK: HK_PEAK_SEASONS,
 };
 
 /**
