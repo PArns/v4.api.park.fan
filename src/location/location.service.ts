@@ -4,6 +4,7 @@ import { Repository, Not, IsNull } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
+import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
 import {
@@ -36,8 +37,7 @@ export class LocationService {
     private readonly parkRepository: Repository<Park>,
     @InjectRepository(Attraction)
     private readonly attractionRepository: Repository<Attraction>,
-    @InjectRepository(QueueData)
-    private readonly queueDataRepository: Repository<QueueData>,
+    private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
   ) {}
@@ -365,6 +365,7 @@ export class LocationService {
 
   /**
    * Get latest queue data for multiple attractions (batch query)
+   * Uses shared QueueDataService for consistent queue type prioritization
    *
    * @param attractionIds - Attraction IDs
    * @returns Map of attraction ID to latest queue data
@@ -376,27 +377,32 @@ export class LocationService {
       return new Map();
     }
 
-    // Use 30 minutes to accommodate sync intervals
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    // Get park ID from first attraction
+    const attraction = await this.attractionRepository.findOne({
+      where: { id: attractionIds[0] },
+      select: ["id", "parkId"],
+    });
 
-    const latestData = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select(["qd.attractionId", "qd.waitTime", "qd.status", "qd.timestamp"])
-      .where("qd.attractionId IN (:...attractionIds)", { attractionIds })
-      .andWhere("qd.timestamp >= :thirtyMinutesAgo", { thirtyMinutesAgo })
-      .andWhere("qd.queueType = :queueType", { queueType: "STANDBY" })
-      .orderBy("qd.timestamp", "DESC")
-      .getMany();
+    if (!attraction) {
+      return new Map();
+    }
 
-    // Group by attraction ID and take the latest
-    const resultMap = new Map<string, QueueData>();
-    for (const data of latestData) {
-      if (!resultMap.has(data.attractionId)) {
-        resultMap.set(data.attractionId, data);
+    // Use shared service with STANDBY prioritization + fallback
+    const allQueues = await this.queueDataService.findPrioritizedStatusByPark(
+      attraction.parkId,
+      30, // 30 minutes max age
+    );
+
+    // Filter to requested attractions only
+    const result = new Map<string, QueueData>();
+    for (const attractionId of attractionIds) {
+      const queueData = allQueues.get(attractionId);
+      if (queueData) {
+        result.set(attractionId, queueData);
       }
     }
 
-    return resultMap;
+    return result;
   }
 
   /**

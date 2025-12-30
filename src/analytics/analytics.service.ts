@@ -883,17 +883,23 @@ export class AnalyticsService {
     return "much_higher"; // 50%+ above typical
   }
   /**
-   * Convert crowd level rating to comparison text for rides
+   * Convert crowd level rating to comparison text
+   * Maps ratings to 5-level comparison (matching determineComparisonStatus)
    */
-  private getComparisonText(rating: string): string {
+  public getComparisonText(
+    rating: string,
+  ): "much_lower" | "lower" | "typical" | "higher" | "much_higher" {
     switch (rating) {
       case "very_low":
+        return "much_lower"; // <= 30% of baseline
       case "low":
-        return "quieter";
-      case "higher":
+        return "lower"; // 30-60% of baseline
+      case "moderate":
+        return "typical"; // 60-110% of baseline
       case "high":
-      case "extreme":
-        return "busier";
+        return "higher"; // 110-140% of baseline
+      case "very_high":
+        return "much_higher"; // > 140% of baseline
       default:
         return "typical";
     }

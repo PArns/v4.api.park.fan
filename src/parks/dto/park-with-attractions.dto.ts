@@ -124,6 +124,28 @@ export class ParkAttractionDto {
     nullable: true,
   })
   trend?: "up" | "stable" | "down" | null;
+
+  @ApiProperty({
+    description:
+      "90th percentile baseline wait time for this hour/day (minutes)",
+    required: false,
+    nullable: true,
+  })
+  baseline?: number | null;
+
+  @ApiProperty({
+    description: "How current wait compares to baseline",
+    enum: ["much_lower", "lower", "typical", "higher", "much_higher"],
+    required: false,
+    nullable: true,
+  })
+  comparison?:
+    | "much_lower"
+    | "lower"
+    | "typical"
+    | "higher"
+    | "much_higher"
+    | null;
 }
 
 export class ParkShowDto {

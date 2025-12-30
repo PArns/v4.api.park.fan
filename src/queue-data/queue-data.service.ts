@@ -501,6 +501,37 @@ export class QueueDataService {
   }
 
   /**
+   * Get prioritized queue data for attractions (STANDBY preferred, fallback to others)
+   *
+   * Returns one QueueData per attraction, prioritizing STANDBY queue type.
+   * Falls back to other queue types if STANDBY not available.
+   * This ensures rides with only virtual queues (RETURN_TIME, BOARDING_GROUP, etc.) are counted.
+   *
+   * @param parkId - Park ID
+   * @param maxAgeMinutes - Maximum age of queue data in minutes (optional)
+   * @returns Map of attractionId -> QueueData (single prioritized queue per attraction)
+   */
+  async findPrioritizedStatusByPark(
+    parkId: string,
+    maxAgeMinutes?: number,
+  ): Promise<Map<string, QueueData>> {
+    // Get all queue types
+    const allQueues = await this.findCurrentStatusByPark(parkId, maxAgeMinutes);
+
+    const result = new Map<string, QueueData>();
+
+    for (const [attractionId, queues] of allQueues.entries()) {
+      if (queues.length === 0) continue;
+
+      // Prioritize STANDBY, fallback to first available queue type
+      const standby = queues.find((q) => q.queueType === QueueType.STANDBY);
+      result.set(attractionId, standby || queues[0]);
+    }
+
+    return result;
+  }
+
+  /**
    * Find forecasts for an attraction
    *
    * @param attractionId - Attraction ID

@@ -546,6 +546,28 @@ export class ParkIntegrationService {
         }
         attraction.trend = trend;
 
+        // Determine Baseline and Comparison using AnalyticsService
+        if (attraction.effectiveStatus === "OPERATING") {
+          const wait = attraction.queues?.[0]?.waitTime;
+          const p90 = attractionP90s.get(attraction.id) || 0;
+
+          if (wait !== undefined && wait !== null && p90 > 0) {
+            const loadRating = this.analyticsService.getLoadRating(wait, p90);
+
+            // Use baseline from loadRating (consistent with analytics)
+            attraction.baseline = loadRating.baseline;
+            attraction.comparison = this.analyticsService.getComparisonText(
+              loadRating.rating,
+            );
+          } else {
+            attraction.baseline = null;
+            attraction.comparison = null;
+          }
+        } else {
+          attraction.baseline = null;
+          attraction.comparison = null;
+        }
+
         // Attach Prediction Accuracy (from pre-aggregated stats table)
         const accuracy = accuracyMap.get(attraction.id);
         if (accuracy) {

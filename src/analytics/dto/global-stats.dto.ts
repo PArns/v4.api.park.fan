@@ -100,10 +100,17 @@ export class AttractionStatsItemDto {
 
   @ApiProperty({
     description:
-      "How current wait compares to baseline (e.g., 'busier', 'quieter', 'typical')",
+      "How current wait compares to baseline: much_lower, lower, typical, higher, much_higher",
     nullable: true,
+    enum: ["much_lower", "lower", "typical", "higher", "much_higher"],
   })
-  comparison: string | null;
+  comparison:
+    | "much_lower"
+    | "lower"
+    | "typical"
+    | "higher"
+    | "much_higher"
+    | null;
 }
 
 export class GlobalCountsDto {

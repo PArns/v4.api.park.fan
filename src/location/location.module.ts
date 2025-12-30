@@ -4,9 +4,9 @@ import { LocationController } from "./location.controller";
 import { LocationService } from "./location.service";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
-import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { ParksModule } from "../parks/parks.module";
+import { QueueDataModule } from "../queue-data/queue-data.module";
 
 /**
  * Location Module
@@ -15,9 +15,10 @@ import { ParksModule } from "../parks/parks.module";
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Park, Attraction, QueueData]),
+    TypeOrmModule.forFeature([Park, Attraction]),
     AnalyticsModule,
     ParksModule,
+    QueueDataModule,
   ],
   controllers: [LocationController],
   providers: [LocationService],
