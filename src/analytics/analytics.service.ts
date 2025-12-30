@@ -1575,7 +1575,7 @@ export class AnalyticsService {
           AVG(lu."waitTime") as avg_wait,
           COUNT(*) as active_rides,
           (SELECT COUNT(*) FROM attractions WHERE "parkId" = p.id) as total_attractions,
-           (SELECT COUNT(*)
+            (SELECT COUNT(*)
             FROM attractions a
             LEFT JOIN LATERAL (
               SELECT qd.status
@@ -1585,8 +1585,8 @@ export class AnalyticsService {
               ORDER BY timestamp DESC
               LIMIT 1
             ) latest_status ON true
-            WHERE a."parkId" = p.id AND latest_status.status = 'OPERATING'
-           ) as operating_attractions
+            WHERE a."parkId" = p.id AND (latest_status.status IS NULL OR latest_status.status != 'OPERATING')
+           ) as explicitly_closed_attractions
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
         WHERE lu.status = 'OPERATING'
@@ -1650,12 +1650,14 @@ export class AnalyticsService {
             averageWaitTime: Math.round(openParks[0].avg_wait),
             url: buildParkUrl(openParks[0]),
             totalAttractions: parseInt(openParks[0].total_attractions || "0"),
-            operatingAttractions: parseInt(
-              openParks[0].operating_attractions || "0",
-            ),
-            closedAttractions:
+            operatingAttractions: Math.max(
+              0,
               parseInt(openParks[0].total_attractions || "0") -
-              parseInt(openParks[0].operating_attractions || "0"),
+                parseInt(openParks[0].explicitly_closed_attractions || "0"),
+            ),
+            closedAttractions: parseInt(
+              openParks[0].explicitly_closed_attractions || "0",
+            ),
           }
         : null;
 
@@ -1675,16 +1677,20 @@ export class AnalyticsService {
             totalAttractions: parseInt(
               openParks[openParks.length - 1].total_attractions || "0",
             ),
-            operatingAttractions: parseInt(
-              openParks[openParks.length - 1].operating_attractions || "0",
-            ),
-            closedAttractions:
+            operatingAttractions: Math.max(
+              0,
               parseInt(
                 openParks[openParks.length - 1].total_attractions || "0",
               ) -
-              parseInt(
-                openParks[openParks.length - 1].operating_attractions || "0",
-              ),
+                parseInt(
+                  openParks[openParks.length - 1]
+                    .explicitly_closed_attractions || "0",
+                ),
+            ),
+            closedAttractions: parseInt(
+              openParks[openParks.length - 1].explicitly_closed_attractions ||
+                "0",
+            ),
           }
         : null;
 
