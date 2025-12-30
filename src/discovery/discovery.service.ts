@@ -268,9 +268,16 @@ export class DiscoveryService {
               park.analytics = {
                 statistics: {
                   avgWaitTime: stats.avgWait,
-                  operatingAttractions: stats.operatingAttractions,
+                  // Optimistic Calculation: Total - Explicitly Closed (if status is OPERATING)
+                  operatingAttractions:
+                    stats.isOpen && stats.explicitlyClosedCount !== undefined // Safety check
+                      ? Math.max(
+                          0,
+                          park.attractionCount - stats.explicitlyClosedCount,
+                        )
+                      : 0,
                   closedAttractions:
-                    park.attractionCount - stats.operatingAttractions,
+                    stats.explicitlyClosedCount ?? park.attractionCount,
                   totalAttractions: park.attractionCount,
                 },
               };
@@ -381,6 +388,7 @@ export class DiscoveryService {
         isOpen: boolean;
         avgWait: number;
         operatingAttractions: number;
+        explicitlyClosedCount: number;
         crowdLevel: number | null;
       }
     >
@@ -436,7 +444,10 @@ export class DiscoveryService {
               AND lad."waitTime" > 0
           ) as active_rides,
           AVG(lad."waitTime") as avg_wait,
-          COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count
+          -- Only count attractions with status OPERATING (includes those with waitTime=0)
+          -- This matches the actual operational state from recent data
+          COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
+          COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
         FROM latest_attraction_data lad
         GROUP BY lad."parkId"
       )
@@ -452,7 +463,8 @@ export class DiscoveryService {
             CASE WHEN COALESCE(stats.active_rides, 0) > 0 THEN true ELSE false END
         END as is_open,
         COALESCE(stats.avg_wait, 0) as avg_wait,
-        COALESCE(stats.operating_count, 0) as operating_count
+        COALESCE(stats.operating_count, 0) as operating_conf_count,
+        COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count
       FROM parks p
       LEFT JOIN park_schedules ps ON ps."parkId" = p.id
       LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
@@ -464,7 +476,8 @@ export class DiscoveryService {
       {
         isOpen: boolean;
         avgWait: number;
-        operatingAttractions: number;
+        operatingAttractions: number; // This will now be dynamic in hydration
+        explicitlyClosedCount: number;
         crowdLevel: number | null;
       }
     >();
@@ -472,7 +485,8 @@ export class DiscoveryService {
       stats.set(row.id, {
         isOpen: row.is_open,
         avgWait: Math.round(parseFloat(row.avg_wait || 0)),
-        operatingAttractions: parseInt(row.operating_count || "0", 10),
+        operatingAttractions: parseInt(row.operating_conf_count || "0", 10), // Keep raw count for fallback
+        explicitlyClosedCount: parseInt(row.explicitly_closed_count || "0", 10),
         crowdLevel: row.current_crowd_level
           ? parseFloat(row.current_crowd_level)
           : null,
