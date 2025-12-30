@@ -56,6 +56,7 @@ export class Attraction {
   park: Park;
 
   @Column()
+  @Index() // Optimize relation loading when fetching attractions by park
   parkId: string;
 
   @Column({ type: "decimal", precision: 10, scale: 7, nullable: true })

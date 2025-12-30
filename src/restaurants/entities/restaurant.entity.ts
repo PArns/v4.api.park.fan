@@ -52,6 +52,7 @@ export class Restaurant {
   park: Park;
 
   @Column()
+  @Index() // Optimize relation loading when fetching restaurants by park
   parkId: string;
 
   @Column({ type: "decimal", precision: 10, scale: 7, nullable: true })

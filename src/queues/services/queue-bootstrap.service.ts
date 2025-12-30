@@ -37,6 +37,8 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("occupancy-calculation") private occupancyQueue: Queue,
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
+    @InjectQueue("ml-training") private mlTrainingQueue: Queue,
+    @InjectQueue("prediction-accuracy") private predictionAccuracyQueue: Queue,
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
@@ -208,6 +210,29 @@ export class QueueBootstrapService implements OnModuleInit {
 
     // NOTE: Holidays sync is now triggered AFTER park metadata completes
     // (from park-metadata.processor.ts) to ensure all parks have country data
+
+    // Trigger ML training check immediately
+    try {
+      await this.mlTrainingQueue.add(
+        "check-training-needed",
+        {},
+        {
+          removeOnComplete: true,
+        },
+      );
+
+      // Trigger prediction accuracy aggregation immediately (Phase 2 optimization)
+      // This ensures the attraction_accuracy_stats table is populated on startup
+      await this.predictionAccuracyQueue.add(
+        "aggregate-stats",
+        {},
+        {
+          removeOnComplete: true,
+        },
+      );
+    } catch (e) {
+      this.logger.warn(`Failed to trigger ML jobs: ${e}`);
+    }
   }
 
   /**

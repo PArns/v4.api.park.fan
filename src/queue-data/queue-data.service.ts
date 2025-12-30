@@ -420,6 +420,41 @@ export class QueueDataService {
   }
 
   /**
+   * Find current status for multiple attractions (batch query)
+   *
+   * @param attractionIds - Array of Attraction IDs
+   * @returns Map of attractionId -> QueueData[]
+   */
+  async findCurrentStatusByAttractionIds(
+    attractionIds: string[],
+  ): Promise<Map<string, QueueData[]>> {
+    if (attractionIds.length === 0) {
+      return new Map();
+    }
+
+    // Use DISTINCT ON optimization like findCurrentStatusByPark
+    const query = this.queueDataRepository
+      .createQueryBuilder("qd")
+      .where("qd.attractionId IN (:...attractionIds)", { attractionIds })
+      .distinctOn(["qd.attractionId", "qd.queueType"])
+      .orderBy("qd.attractionId", "ASC")
+      .addOrderBy("qd.queueType", "ASC")
+      .addOrderBy("qd.timestamp", "DESC");
+
+    const queueData = await query.getMany();
+
+    const result = new Map<string, QueueData[]>();
+    for (const data of queueData) {
+      if (!result.has(data.attractionId)) {
+        result.set(data.attractionId, []);
+      }
+      result.get(data.attractionId)!.push(data);
+    }
+
+    return result;
+  }
+
+  /**
    * Find current status for all attractions in a park (bulk query optimization)
    *
    * This is a performance-optimized version that fetches queue data for all attractions

@@ -1122,7 +1122,8 @@ export class AnalyticsService {
   }
 
   /**
-   * Get 90th percentile baselines for multiple attractions in parallel
+   * Get 90th percentile baselines for multiple attractions in a single batched query
+   * OPTIMIZED: Uses single SQL query with IN clause instead of N individual queries
    * Used for calculating relative crowd levels (badges) in lists
    */
   async getBatchAttractionP90s(
@@ -1137,25 +1138,89 @@ export class AnalyticsService {
       return resultMap;
     }
 
-    // Execute in parallel (leveraging Redis cache inside get90thPercentileOneYear)
-    const results = await Promise.all(
-      attractionIds.map(async (id) => {
-        try {
-          const p90 = await this.get90thPercentileOneYear(
-            id,
-            hour,
-            dayOfWeek,
-            "attraction",
-          );
-          return { id, p90 };
-        } catch (error) {
-          this.logger.warn(`Failed to get P90 for attraction ${id}:`, error);
-          return { id, p90: 0 };
-        }
-      }),
+    // Check Redis cache first for all attractions
+    const cacheKeys = attractionIds.map(
+      (id) => `analytics:percentile:attraction:${id}:${hour}:${dayOfWeek}`,
     );
+    const cachedValues = await this.redis.mget(...cacheKeys);
 
-    results.forEach((r) => resultMap.set(r.id, r.p90));
+    const uncachedIds: string[] = [];
+    attractionIds.forEach((id, index) => {
+      if (cachedValues[index] !== null) {
+        resultMap.set(id, parseInt(cachedValues[index] as string, 10));
+      } else {
+        uncachedIds.push(id);
+      }
+    });
+
+    // If all values were cached, return early
+    if (uncachedIds.length === 0) {
+      return resultMap;
+    }
+
+    // Single batched query for all uncached attractions
+    // Uses PostgreSQL percentile_cont for efficient P90 calculation
+    const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); // 1 year
+
+    try {
+      const results = await this.queueDataRepository.query(
+        `
+        WITH attraction_wait_times AS (
+          SELECT 
+            qd."attractionId",
+            qd."waitTime"
+          FROM queue_data qd
+          WHERE qd."attractionId" = ANY($1)
+            AND qd.timestamp >= $2
+            AND EXTRACT(HOUR FROM qd.timestamp) = $3
+            AND EXTRACT(DOW FROM qd.timestamp) = $4
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."queueType" = 'STANDBY'
+        )
+        SELECT 
+          "attractionId",
+          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY "waitTime") as p90,
+          COUNT(*) as sample_count
+        FROM attraction_wait_times
+        GROUP BY "attractionId"
+        `,
+        [uncachedIds, cutoff, hour, dayOfWeek],
+      );
+
+      // Process results and cache them
+      const pipeline = this.redis.pipeline();
+
+      for (const row of results) {
+        const p90Value = row.p90 ? Math.round(parseFloat(row.p90)) : 0;
+        resultMap.set(row.attractionId, p90Value);
+
+        // Cache the value
+        const cacheKey = `analytics:percentile:attraction:${row.attractionId}:${hour}:${dayOfWeek}`;
+        const ttl = p90Value === 0 ? 60 * 60 : this.TTL_PERCENTILES;
+        pipeline.set(cacheKey, p90Value.toString(), "EX", ttl);
+      }
+
+      // Set 0 for attractions with no data found
+      for (const id of uncachedIds) {
+        if (!resultMap.has(id)) {
+          resultMap.set(id, 0);
+          const cacheKey = `analytics:percentile:attraction:${id}:${hour}:${dayOfWeek}`;
+          pipeline.set(cacheKey, "0", "EX", 60 * 60); // Short TTL for 0 values
+        }
+      }
+
+      await pipeline.exec();
+    } catch (error) {
+      this.logger.warn(`Failed to batch fetch P90s:`, error);
+      // Fallback: set 0 for all uncached attractions
+      for (const id of uncachedIds) {
+        if (!resultMap.has(id)) {
+          resultMap.set(id, 0);
+        }
+      }
+    }
+
     return resultMap;
   }
 

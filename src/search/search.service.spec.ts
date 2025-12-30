@@ -5,6 +5,12 @@ import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
+import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
+import { ParksService } from "../parks/parks.service";
+import { AnalyticsService } from "../analytics/analytics.service";
+import { QueueDataService } from "../queue-data/queue-data.service";
+import { ShowsService } from "../shows/shows.service";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("SearchService", () => {
   let service: SearchService;
@@ -12,6 +18,8 @@ describe("SearchService", () => {
   const mockParkRepository = {
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       orWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -20,6 +28,7 @@ describe("SearchService", () => {
       offset: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
     })),
@@ -28,6 +37,8 @@ describe("SearchService", () => {
   const mockAttractionRepository = {
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       orWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -36,6 +47,7 @@ describe("SearchService", () => {
       offset: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
     })),
@@ -44,6 +56,8 @@ describe("SearchService", () => {
   const mockShowRepository = {
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       orWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -52,6 +66,7 @@ describe("SearchService", () => {
       offset: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
     })),
@@ -60,6 +75,8 @@ describe("SearchService", () => {
   const mockRestaurantRepository = {
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       orWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -68,6 +85,7 @@ describe("SearchService", () => {
       offset: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
     })),
@@ -92,6 +110,37 @@ describe("SearchService", () => {
         {
           provide: getRepositoryToken(Restaurant),
           useValue: mockRestaurantRepository,
+        },
+        {
+          provide: getRepositoryToken(ScheduleEntry),
+          useValue: { findOne: jest.fn() },
+        },
+        {
+          provide: ParksService,
+          useValue: {
+            getBatchParkStatus: jest.fn().mockResolvedValue(new Map()),
+          },
+        },
+        {
+          provide: AnalyticsService,
+          useValue: { getBatchAttractionP90s: jest.fn() },
+        },
+        {
+          provide: QueueDataService,
+          useValue: {
+            findCurrentStatusByAttraction: jest.fn(),
+            findCurrentStatusByAttractionIds: jest
+              .fn()
+              .mockResolvedValue(new Map()),
+          },
+        },
+        {
+          provide: ShowsService,
+          useValue: {},
+        },
+        {
+          provide: REDIS_CLIENT,
+          useValue: { get: jest.fn(), set: jest.fn() },
         },
       ],
     }).compile();

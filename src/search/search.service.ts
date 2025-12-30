@@ -685,28 +685,33 @@ export class SearchService {
   ): Promise<Map<string, number>> {
     const waitTimesMap = new Map<string, number>();
 
-    await Promise.all(
-      attractionIds.map(async (attractionId) => {
-        try {
-          // Get current status (most recent queue data for all queue types)
-          const queueData =
-            await this.queueDataService.findCurrentStatusByAttraction(
-              attractionId,
-            );
-          // Find STANDBY queue (most common wait time)
-          const standbyQueue = queueData.find((q) => q.queueType === "STANDBY");
-          if (
-            standbyQueue &&
-            standbyQueue.waitTime !== null &&
-            standbyQueue.waitTime !== undefined
-          ) {
-            waitTimesMap.set(attractionId, standbyQueue.waitTime);
-          }
-        } catch {
-          // Skip attractions without wait time data
+    if (attractionIds.length === 0) {
+      return waitTimesMap;
+    }
+
+    try {
+      // Get current status for all attractions in one query
+      const queueDataMap =
+        await this.queueDataService.findCurrentStatusByAttractionIds(
+          attractionIds,
+        );
+
+      // Process each attraction
+      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
+        const standbyQueue = queueDataList.find(
+          (q) => q.queueType === "STANDBY",
+        );
+        if (
+          standbyQueue &&
+          standbyQueue.waitTime !== null &&
+          standbyQueue.waitTime !== undefined
+        ) {
+          waitTimesMap.set(attractionId, standbyQueue.waitTime);
         }
-      }),
-    );
+      }
+    } catch {
+      // Skip attractions without wait time data
+    }
 
     return waitTimesMap;
   }

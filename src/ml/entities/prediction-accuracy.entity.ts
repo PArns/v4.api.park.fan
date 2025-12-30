@@ -14,18 +14,19 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  *
  * Tracks prediction vs reality for model monitoring and improvement
  * Used for:
- * - Model performance tracking
- * - Feature engineering feedback
- * - Displaying accuracy metrics to users
+ * - Model performance tracking (compareWithActuals job)
+ * - Pre-aggregation into attraction_accuracy_stats
+ *
+ * Note: API now reads from attraction_accuracy_stats for display,
+ * this table is only used by background jobs.
  */
 @Entity("prediction_accuracy")
-@Index(["attractionId", "targetTime"])
-@Index(["modelVersion", "createdAt"])
-@Index(["targetTime"])
-@Index("idx_pa_target_actual", ["targetTime", "actualWaitTime"], {
-  where: "actual_wait_time IS NOT NULL",
-})
+// Keep only essential indexes for compareWithActuals job
 @Index("idx_pa_attraction_target", ["attractionId", "targetTime"])
+// Removed unused indexes:
+// - @Index(["modelVersion", "createdAt"]) - never queried (0 scans)
+// - @Index(["targetTime"]) - covered by composite index (172 scans)
+// - @Index("idx_pa_target_actual", ...) - barely used (40 scans)
 export class PredictionAccuracy {
   @PrimaryGeneratedColumn("uuid")
   id: string;

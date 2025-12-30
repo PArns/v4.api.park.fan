@@ -45,6 +45,8 @@ import { MLModel } from "../ml/entities/ml-model.entity";
 import { ExternalEntityMapping } from "../database/entities/external-entity-mapping.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.entity";
+import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stats.entity";
+import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.e
       ExternalEntityMapping,
       QueueData,
       QueueDataAggregate,
+      AttractionAccuracyStats,
+      PredictionAccuracy,
     ]),
     // Register Bull queues with Redis connection
     BullModule.forRootAsync({

@@ -23,10 +23,16 @@ import { WeatherModule } from "../external-apis/weather/weather.module";
 import { HolidaysModule } from "../holidays/holidays.module";
 import { QueueTimesModule } from "../external-apis/queue-times/queue-times.module";
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
+import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stats.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Park, WeatherData, ScheduleEntry]),
+    TypeOrmModule.forFeature([
+      Park,
+      WeatherData,
+      ScheduleEntry,
+      AttractionAccuracyStats,
+    ]),
     ThemeParksModule,
     DestinationsModule,
     forwardRef(() => AttractionsModule),

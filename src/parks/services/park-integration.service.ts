@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, In } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
@@ -14,6 +16,7 @@ import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
+import { AttractionAccuracyStats } from "../../ml/entities/attraction-accuracy-stats.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
@@ -42,7 +45,7 @@ export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
   // Multi-tier caching strategy aligned with actual update frequencies
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (Push-based caching: Updated by background job every 5m)
+  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 15 * 60; // 15 minutes (Push-based caching: Updated by background job every 5m)
   private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
   private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
   private readonly TTL_ML_HOURLY = 60 * 60; // 1 hour (hourly predictions update at :15)
@@ -68,6 +71,8 @@ export class ParkIntegrationService {
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @InjectRepository(AttractionAccuracyStats)
+    private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
   ) {}
 
   /**
@@ -138,19 +143,32 @@ export class ParkIntegrationService {
     // Start with base DTO
     const dto = ParkWithAttractionsDto.fromEntity(park);
 
-    // Fetch weather (current + forecast)
-    const weatherData = await this.weatherService.getCurrentAndForecast(
-      park.id,
-    );
+    // Fetch weather, schedule, queue data, and ML predictions in parallel
+    // These all only depend on park.id so they can run simultaneously
+    const MAX_AGE_MINUTES = 6 * 60; // 6 hours for queue data freshness
+
+    const [weatherData, schedule, queueDataMap, mlPredictionsResult] =
+      await Promise.all([
+        this.weatherService.getCurrentAndForecast(park.id),
+        this.parksService.getUpcomingSchedule(park.id, 7),
+        this.queueDataService.findCurrentStatusByPark(park.id, MAX_AGE_MINUTES),
+        Promise.all([
+          this.mlService
+            .getParkPredictions(park.id, "hourly")
+            .catch(() => null),
+          this.mlService
+            .getParkPredictions(park.id, "daily", 16)
+            .catch(() => null),
+        ]),
+      ]);
+    const [hourlyRes, dailyRes] = mlPredictionsResult;
+
     dto.weather = {
       current: weatherData.current
         ? WeatherItemDto.fromEntity(weatherData.current)
         : null,
       forecast: weatherData.forecast.map((w) => WeatherItemDto.fromEntity(w)),
     };
-
-    // Fetch upcoming schedule (today + next 7 days)
-    const schedule = await this.parksService.getUpcomingSchedule(park.id, 7);
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
     // 4. Determine Park Status & Hours
@@ -176,6 +194,7 @@ export class ParkIntegrationService {
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
     if (status === "CLOSED" && park.externalId) {
       try {
+        console.time(`[Perf] FallbackStatus-${park.slug}`);
         const eid = park.externalId;
 
         // --- STRATEGY 1: Queue-Times (qt-) ---
@@ -185,7 +204,9 @@ export class ParkIntegrationService {
           const qtId = parseInt(qtIdStr, 10);
 
           if (!isNaN(qtId)) {
+            console.time(`[Perf] QT-Fetch-${park.slug}`);
             const qtData = await this.queueTimesClient.getParkQueueTimes(qtId);
+            console.timeEnd(`[Perf] QT-Fetch-${park.slug}`);
             // If ANY ride is open, the park is operating
             // We iterate lands and rides
             const allRides = [
@@ -207,8 +228,10 @@ export class ParkIntegrationService {
         else if (eid.startsWith("wz-")) {
           // Extract ID (e.g. "wz-phantasialand" -> "phantasialand")
           const wzId = eid.replace("wz-", "");
+          console.time(`[Perf] WZ-Fetch-${park.slug}`);
           const openingTimes =
             await this.wartezeitenClient.getOpeningTimes(wzId);
+          console.timeEnd(`[Perf] WZ-Fetch-${park.slug}`);
 
           if (
             openingTimes &&
@@ -236,9 +259,11 @@ export class ParkIntegrationService {
         else {
           // Default behavior for pure ThemeParks IDs (UUIDs)
           // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
+          console.time(`[Perf] Wiki-Fetch-${park.slug}`);
           const liveDataList = await this.themeParksClient.getParkLiveData(
             park.externalId,
           );
+          console.timeEnd(`[Perf] Wiki-Fetch-${park.slug}`);
           const liveData =
             liveDataList.find((x) => x.id === park.externalId) ||
             liveDataList[0];
@@ -281,15 +306,11 @@ export class ParkIntegrationService {
         this.logger.warn(
           `Failed to fetch fallback live data for ${park.name}: ${err}`,
         );
+      } finally {
+        console.timeEnd(`[Perf] FallbackStatus-${park.slug}`);
       }
     }
-    // ALWAYS fetch queue data to detect activity for parks without schedules
-    // Filter out stale data (> 6 hours old) to prevent "Ghost Closures" from yesterday
-    const MAX_AGE_MINUTES = 6 * 60; // 6 hours
-    const queueDataMap = await this.queueDataService.findCurrentStatusByPark(
-      park.id,
-      MAX_AGE_MINUTES,
-    );
+    // Queue data already fetched in parallel above - just use it to detect activity
 
     // Collect ride status data for fallback logic (parks without schedules)
     const rideStatusData: import("../../common/utils/status-calculator.util").RideStatusData[] =
@@ -311,51 +332,42 @@ export class ParkIntegrationService {
     const isOpen = isParkOpen(schedule, rideStatusData);
     dto.status = isOpen ? "OPERATING" : "CLOSED";
 
-    // Fetch ML Predictions (Hourly for attractions, Daily for park)
+    // ML Predictions already fetched in parallel above - process results
     // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)
     const hourlyPredictions: Record<string, any[]> = {};
     let dailyPredictions: import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] =
       [];
 
-    try {
-      const [hourlyRes, dailyRes] = await Promise.all([
-        this.mlService.getParkPredictions(park.id, "hourly"),
-        this.mlService.getParkPredictions(park.id, "daily", 16), // Limit to 16 days
-      ]);
+    // Filter hourly predictions:
+    // - If park OPERATING: Show today's hourly predictions
+    // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
+    // Use park's timezone to determine "today" and "tomorrow"
+    const todayInParkTz = park.timezone
+      ? getCurrentDateInTimezone(park.timezone)
+      : new Date().toISOString().split("T")[0];
 
-      // Filter hourly predictions:
-      // - If park OPERATING: Show today's hourly predictions
-      // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
-      // Use park's timezone to determine "today" and "tomorrow"
-      const todayInParkTz = park.timezone
-        ? getCurrentDateInTimezone(park.timezone)
-        : new Date().toISOString().split("T")[0];
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowInParkTz = park.timezone
+      ? getCurrentDateInTimezone(park.timezone)
+      : tomorrowDate.toISOString().split("T")[0];
 
-      const tomorrowDate = new Date();
-      tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-      const tomorrowInParkTz = park.timezone
-        ? getCurrentDateInTimezone(park.timezone)
-        : tomorrowDate.toISOString().split("T")[0];
+    const targetDateStr =
+      dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
 
-      const targetDateStr =
-        dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
-
-      if (hourlyRes && hourlyRes.predictions) {
-        for (const p of hourlyRes.predictions) {
-          // Check if prediction is for target date
-          if (p.predictedTime.startsWith(targetDateStr)) {
-            if (!hourlyPredictions[p.attractionId])
-              hourlyPredictions[p.attractionId] = [];
-            hourlyPredictions[p.attractionId].push(p);
-          }
+    if (hourlyRes && hourlyRes.predictions) {
+      for (const p of hourlyRes.predictions) {
+        // Check if prediction is for target date
+        if (p.predictedTime.startsWith(targetDateStr)) {
+          if (!hourlyPredictions[p.attractionId])
+            hourlyPredictions[p.attractionId] = [];
+          hourlyPredictions[p.attractionId].push(p);
         }
       }
+    }
 
-      if (dailyRes && dailyRes.predictions) {
-        dailyPredictions = this.aggregateDailyPredictions(dailyRes.predictions);
-      }
-    } catch (error) {
-      this.logger.warn(`ML Service unavailable for park ${park.slug}:`, error);
+    if (dailyRes && dailyRes.predictions) {
+      dailyPredictions = this.aggregateDailyPredictions(dailyRes.predictions);
     }
 
     dto.crowdForecast = dailyPredictions;
@@ -372,8 +384,35 @@ export class ParkIntegrationService {
     ) {
       // Batch fetch P90 baselines for all attractions (for relative crowd calculation)
       const attractionIds = dto.attractions.map((a) => a.id);
-      const attractionP90s =
-        await this.analyticsService.getBatchAttractionP90s(attractionIds);
+
+      // Batch fetch P90s, pre-aggregated accuracy stats, and deviation flags in parallel
+      const [attractionP90s, accuracyStats, deviationMap] = await Promise.all([
+        this.analyticsService.getBatchAttractionP90s(attractionIds),
+        // Use pre-aggregated stats table (1 simple query vs N+1)
+        this.accuracyStatsRepository.find({
+          where: { attractionId: In(attractionIds) },
+        }),
+        this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
+      ]);
+
+      // Build accuracy map from pre-aggregated stats
+      const accuracyMap = new Map<
+        string,
+        {
+          badge: string;
+          comparedPredictions: number;
+          totalPredictions: number;
+          message: string | null;
+        }
+      >();
+      for (const stat of accuracyStats) {
+        accuracyMap.set(stat.attractionId, {
+          badge: stat.badge,
+          comparedPredictions: stat.comparedPredictions,
+          totalPredictions: stat.totalPredictions,
+          message: stat.message,
+        });
+      }
 
       for (const attraction of dto.attractions) {
         totalAttractionsCount++;
@@ -430,10 +469,11 @@ export class ParkIntegrationService {
         // Attach ML predictions
         const mlPreds = hourlyPredictions[attraction.id] || [];
 
-        // Enrich predictions with deviation data (Confidence Downgrade)
-        const enrichedPreds = await this.enrichPredictionsWithDeviations(
-          attraction.id,
+        // Enrich predictions with deviation data (using pre-fetched map)
+        const deviationFlag = deviationMap.get(attraction.id) || null;
+        const enrichedPreds = this.enrichPredictionsWithDeviationsSync(
           mlPreds,
+          deviationFlag,
         );
 
         attraction.hourlyForecast = enrichedPreds.map((p) => ({
@@ -506,27 +546,23 @@ export class ParkIntegrationService {
         }
         attraction.trend = trend;
 
-        // Attach Prediction Accuracy (Feedback Loop)
-        try {
-          const accuracy =
-            await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
-              attraction.id,
-            );
-
-          // Map to public DTO, excluding technical metrics
+        // Attach Prediction Accuracy (from pre-aggregated stats table)
+        const accuracy = accuracyMap.get(attraction.id);
+        if (accuracy) {
           attraction.predictionAccuracy = {
-            badge: accuracy.badge,
+            badge: accuracy.badge as
+              | "excellent"
+              | "good"
+              | "fair"
+              | "poor"
+              | "insufficient_data",
             last30Days: {
-              comparedPredictions: accuracy.last30Days.comparedPredictions,
-              totalPredictions: accuracy.last30Days.totalPredictions,
+              comparedPredictions: accuracy.comparedPredictions,
+              totalPredictions: accuracy.totalPredictions,
             },
-            message: accuracy.message,
+            message: accuracy.message ?? undefined,
           };
-        } catch (error) {
-          this.logger.error(
-            `Failed to fetch prediction accuracy for ${attraction.id}:`,
-            error,
-          );
+        } else {
           attraction.predictionAccuracy = null;
         }
       }
@@ -927,7 +963,7 @@ export class ParkIntegrationService {
   ): number {
     if (status === "OPERATING") {
       // Park is open -> use short TTL for fresh live data
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 5 minutes
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 15 minutes
     }
 
     // Park is CLOSED - check if we *should* be open (Unexpected Closure)
@@ -947,7 +983,7 @@ export class ParkIntegrationService {
       this.logger.debug(
         "Park is CLOSED but within operating hours. Using short TTL.",
       );
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 5 minutes
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 15 minutes
     }
 
     // Find next OPERATING schedule entry
@@ -1139,5 +1175,40 @@ export class ParkIntegrationService {
       );
       return predictions;
     }
+  }
+
+  /**
+   * Sync version of enrichPredictionsWithDeviations using pre-fetched deviation flag
+   * OPTIMIZED: No Redis call - uses pre-fetched deviation map
+   */
+  private enrichPredictionsWithDeviationsSync(
+    predictions: any[],
+    deviationFlag: {
+      actualWaitTime: number;
+      deviation: number;
+      percentageDeviation: number;
+      detectedAt: string;
+    } | null,
+  ): any[] {
+    if (!predictions || predictions.length === 0) {
+      return predictions;
+    }
+
+    if (deviationFlag) {
+      return predictions.map((p) => ({
+        ...p,
+        currentWaitTime: deviationFlag.actualWaitTime,
+        confidenceAdjusted: p.confidence * 0.5,
+        deviationDetected: true,
+        deviationInfo: {
+          message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"} than predicted`,
+          deviation: deviationFlag.deviation,
+          percentageDeviation: deviationFlag.percentageDeviation,
+          detectedAt: deviationFlag.detectedAt,
+        },
+      }));
+    }
+
+    return predictions;
   }
 }

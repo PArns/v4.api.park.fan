@@ -15,6 +15,7 @@ import {
   PredictionAccuracy,
 } from "./entities";
 import { MLAccuracyComparison } from "./entities/ml-accuracy-comparison.entity";
+import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -40,6 +41,7 @@ import { BullModule } from "@nestjs/bull";
       MLModel,
       ParkOccupancy,
       PredictionAccuracy,
+      AttractionAccuracyStats,
       MLAccuracyComparison,
       Attraction,
       QueueData,

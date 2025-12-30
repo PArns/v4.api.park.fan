@@ -34,6 +34,7 @@ import { generateSlug } from "../../common/utils/slug.util";
  */
 @Entity("parks")
 @Index(["destinationId", "slug"], { unique: true }) // Slug unique per destination
+@Index(["continentSlug", "countrySlug", "citySlug", "slug"]) // Optimize findByGeographicPath queries
 export class Park {
   @PrimaryGeneratedColumn("uuid")
   id: string;

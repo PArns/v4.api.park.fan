@@ -97,16 +97,16 @@ export class CacheWarmupService {
    * @returns Number of parks warmed
    */
   /**
-   * Warm up cache for currently OPERATING parks
+   * Warm up cache for ALL parks (Operating + Closed)
    *
-   * Used after wait-times sync (every 5 minutes).
-   * Typically affects 10-20 parks.
+   * - OPERATING: Force refresh to get latest wait times
+   * - CLOSED: Only warm if cache missing/expired (respect TTL)
    *
-   * @returns Number of parks warmed
+   * Triggered every 5 minutes by wait-times sync.
    */
   async warmupOperatingParks(): Promise<number> {
     const startTime = Date.now();
-    this.logger.verbose("🔥 Starting cache warmup for OPERATING parks...");
+    this.logger.verbose("🔥 Starting cache warmup for ALL parks...");
 
     try {
       // Get all parks
@@ -117,28 +117,30 @@ export class CacheWarmupService {
         return 0;
       }
 
-      // Get batch park status
+      // Get batch park status for decision making
       const parkIds = parks.map((p) => p.id);
       const statusMap = await this.parksService.getBatchParkStatus(parkIds);
 
-      // Filter to only OPERATING parks
-      const operatingParkIds = Array.from(statusMap.entries())
-        .filter(([, status]) => status === "OPERATING")
-        .map(([parkId]) => parkId);
-
       this.logger.verbose(
-        `Found ${operatingParkIds.length}/${parks.length} OPERATING parks`,
+        `Found ${parks.length} parks to verify in cache (Smart Warmup)`,
       );
 
-      // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
-      const BATCH_SIZE = 3; // Reduced from 5 to avoid 429s (Open-Meteo limit)
+      // Warm up in batches to avoid rate limits
+      const BATCH_SIZE = 3;
       let warmedCount = 0;
 
-      for (let i = 0; i < operatingParkIds.length; i += BATCH_SIZE) {
-        const batch = operatingParkIds.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < parkIds.length; i += BATCH_SIZE) {
+        const batch = parkIds.slice(i, i + BATCH_SIZE);
 
         const results = await Promise.allSettled(
-          batch.map((parkId) => this.warmupParkCache(parkId, true)),
+          batch.map((parkId) => {
+            const status = statusMap.get(parkId);
+            // Force update ONLY if park is operating (to sync wait times)
+            // Otherwise, just ensure it's cached (respect TTL)
+            const shouldForce = status === "OPERATING";
+
+            return this.warmupParkCache(parkId, shouldForce);
+          }),
         );
 
         results.forEach((result) => {
@@ -147,15 +149,15 @@ export class CacheWarmupService {
           }
         });
 
-        // Delay between batches to be nice to APIs
-        if (i + BATCH_SIZE < operatingParkIds.length) {
+        // Delay between batches
+        if (i + BATCH_SIZE < parkIds.length) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Cache warmup complete: ${warmedCount}/${operatingParkIds.length} parks in ${duration}s`,
+        `✅ Cache warmup complete: ${warmedCount}/${parks.length} parks refreshed/verified in ${duration}s`,
       );
 
       return warmedCount;

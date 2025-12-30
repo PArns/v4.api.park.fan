@@ -606,6 +606,114 @@ export class PredictionAccuracyService {
   }
 
   /**
+   * Get prediction accuracy with badge for multiple attractions in a single query
+   * OPTIMIZED: Uses single SQL query with IN clause instead of N individual queries
+   *
+   * @param attractionIds - Array of attraction IDs
+   * @param days - Number of days to look back (default: 30)
+   * @returns Map of attractionId -> accuracy badge info
+   */
+  async getBatchAttractionAccuracy(
+    attractionIds: string[],
+    days: number = 30,
+  ): Promise<
+    Map<
+      string,
+      {
+        badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
+        last30Days: {
+          comparedPredictions: number;
+          totalPredictions: number;
+        };
+        message?: string;
+      }
+    >
+  > {
+    const resultMap = new Map<
+      string,
+      {
+        badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
+        last30Days: {
+          comparedPredictions: number;
+          totalPredictions: number;
+        };
+        message?: string;
+      }
+    >();
+
+    if (attractionIds.length === 0) {
+      return resultMap;
+    }
+
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    try {
+      // Single SQL query with aggregation for all attractions
+      const results = await this.accuracyRepository.query(
+        `
+        SELECT 
+          attraction_id as "attractionId",
+          COUNT(*) as "totalPredictions",
+          COUNT(CASE WHEN actual_wait_time IS NOT NULL THEN 1 END) as "comparedPredictions",
+          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time IS NOT NULL), 0) as "mae"
+        FROM prediction_accuracy
+        WHERE attraction_id = ANY($1)
+          AND target_time >= $2
+        GROUP BY attraction_id
+        `,
+        [attractionIds, startDate],
+      );
+
+      // Process results
+      for (const row of results) {
+        const mae = parseFloat(row.mae) || 0;
+        const comparedPredictions = parseInt(row.comparedPredictions) || 0;
+        const totalPredictions = parseInt(row.totalPredictions) || 0;
+
+        const badgeInfo = this.calculateAccuracyBadge(mae, comparedPredictions);
+
+        resultMap.set(row.attractionId, {
+          badge: badgeInfo.badge,
+          last30Days: {
+            comparedPredictions,
+            totalPredictions,
+          },
+          message: badgeInfo.message,
+        });
+      }
+
+      // Set insufficient_data for attractions with no records
+      for (const id of attractionIds) {
+        if (!resultMap.has(id)) {
+          resultMap.set(id, {
+            badge: "insufficient_data",
+            last30Days: {
+              comparedPredictions: 0,
+              totalPredictions: 0,
+            },
+            message: "Need at least 10 compared predictions (currently 0)",
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to batch fetch accuracy:`, error);
+      // Fallback: set insufficient_data for all
+      for (const id of attractionIds) {
+        resultMap.set(id, {
+          badge: "insufficient_data",
+          last30Days: {
+            comparedPredictions: 0,
+            totalPredictions: 0,
+          },
+          message: "Error fetching accuracy data",
+        });
+      }
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Analyze which features correlate with high prediction errors
    *
    * Helps identify:

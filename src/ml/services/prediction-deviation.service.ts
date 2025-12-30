@@ -162,6 +162,61 @@ export class PredictionDeviationService {
   }
 
   /**
+   * Get deviation flags for multiple attractions in a single Redis call
+   * OPTIMIZED: Uses MGET instead of N individual GET calls
+   *
+   * @param attractionIds - Array of attraction IDs
+   * @returns Map of attractionId -> deviation flag info
+   */
+  async getBatchDeviationFlags(attractionIds: string[]): Promise<
+    Map<
+      string,
+      {
+        actualWaitTime: number;
+        predictedWaitTime: number;
+        deviation: number;
+        percentageDeviation: number;
+        detectedAt: string;
+      }
+    >
+  > {
+    const resultMap = new Map<
+      string,
+      {
+        actualWaitTime: number;
+        predictedWaitTime: number;
+        deviation: number;
+        percentageDeviation: number;
+        detectedAt: string;
+      }
+    >();
+
+    if (attractionIds.length === 0) {
+      return resultMap;
+    }
+
+    try {
+      const keys = attractionIds.map((id) => `prediction:deviation:${id}`);
+      const values = await this.redis.mget(...keys);
+
+      attractionIds.forEach((id, index) => {
+        const value = values[index];
+        if (value) {
+          try {
+            resultMap.set(id, JSON.parse(value));
+          } catch (_parseError) {
+            // Skip malformed entries
+          }
+        }
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to batch fetch deviation flags:`, error);
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Get latest prediction for current hour
    *
    * Finds the most recent prediction that targets the current hour
