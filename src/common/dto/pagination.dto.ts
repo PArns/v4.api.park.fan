@@ -1,6 +1,6 @@
 import { IsOptional, IsInt, Min } from "class-validator";
 import { Type } from "class-transformer";
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiHideProperty } from "@nestjs/swagger";
 
 /**
  * Pagination metadata for paginated responses
@@ -41,6 +41,7 @@ export class PaginationDto {
  * Generic paginated response wrapper
  */
 export class PaginatedResponseDto<T> {
+  @ApiHideProperty()
   data: T[];
 
   @ApiProperty({ type: PaginationDto })
