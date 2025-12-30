@@ -622,9 +622,10 @@ export class AnalyticsService {
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = $1
-          AND qd."queueType" = 'STANDBY'
           AND qd.timestamp >= $2  -- Last 2 hours window
-        ORDER BY qd."attractionId", qd.timestamp DESC
+        ORDER BY qd."attractionId", 
+          CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
+          qd.timestamp DESC
       ),
       today_hourly AS (
         -- Aggregate by hour to find peak

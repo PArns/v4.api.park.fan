@@ -95,6 +95,7 @@ export class ParkReferenceDto {
     statistics: {
       avgWaitTime: number;
       operatingAttractions: number;
+      closedAttractions: number;
       totalAttractions: number;
     };
   };

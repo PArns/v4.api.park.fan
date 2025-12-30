@@ -269,6 +269,8 @@ export class DiscoveryService {
                 statistics: {
                   avgWaitTime: stats.avgWait,
                   operatingAttractions: stats.operatingAttractions,
+                  closedAttractions:
+                    park.attractionCount - stats.operatingAttractions,
                   totalAttractions: park.attractionCount,
                 },
               };
@@ -419,9 +421,10 @@ export class DiscoveryService {
           SELECT "waitTime", "status"
           FROM queue_data qd
           WHERE qd."attractionId" = a.id
-            AND qd."queueType" = 'STANDBY'
             AND qd.timestamp > NOW() - INTERVAL '30 minutes'
-          ORDER BY qd.timestamp DESC
+          ORDER BY 
+            CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
+            qd.timestamp DESC
           LIMIT 1
         ) qd ON true
       ),
