@@ -158,6 +158,12 @@ export class GlobalCountsDto {
 
   @ApiProperty({ description: "Total wait time prediction records" })
   waitTimePredictions: number;
+
+  @ApiProperty({
+    description:
+      "Sum of wait times of all currently operating attractions (minutes)",
+  })
+  totalWaitTime: number;
 }
 
 export class GlobalStatsDto {
@@ -175,11 +181,6 @@ export class GlobalStatsDto {
 
   @ApiProperty({ type: AttractionStatsItemDto, nullable: true })
   shortestWaitRide: AttractionStatsItemDto | null;
-
-  @ApiProperty({
-    description: "Sum of wait times of all currently operating attractions (minutes)",
-  })
-  totalWaitTime: number;
 
   @ApiProperty({ description: "Last updated timestamp" })
   lastUpdated: string;
