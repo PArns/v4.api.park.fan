@@ -1579,7 +1579,7 @@ export class AnalyticsService {
     // Count open parks (those with > 0 active rides)
     const openParks = activeParksResult;
 
-    // Parallel count queries for all entities
+    // Parallel count queries for all entities (Optimized with caching)
     const [
       totalParksCount,
       totalAttractionsCount,
@@ -1592,16 +1592,25 @@ export class AnalyticsService {
       showLiveDataCount,
       waitTimePredictionCount,
     ] = await Promise.all([
-      this.parkRepository.count(),
-      this.attractionRepository.count(),
-      this.showRepository.count(),
-      this.restaurantRepository.count(),
-      this.queueDataRepository.count(),
-      this.weatherDataRepository.count(),
-      this.scheduleEntryRepository.count(),
-      this.restaurantLiveDataRepository.count(),
-      this.showLiveDataRepository.count(),
-      this.waitTimePredictionRepository.count(),
+      this.getCachedCount(this.parkRepository, "count:parks"),
+      this.getCachedCount(this.attractionRepository, "count:attractions"),
+      this.getCachedCount(this.showRepository, "count:shows"),
+      this.getCachedCount(this.restaurantRepository, "count:restaurants"),
+      this.getCachedCount(this.queueDataRepository, "count:queue_data"),
+      this.getCachedCount(this.weatherDataRepository, "count:weather_data"),
+      this.getCachedCount(
+        this.scheduleEntryRepository,
+        "count:schedule_entries",
+      ),
+      this.getCachedCount(
+        this.restaurantLiveDataRepository,
+        "count:restaurant_live_data",
+      ),
+      this.getCachedCount(this.showLiveDataRepository, "count:show_live_data"),
+      this.getCachedCount(
+        this.waitTimePredictionRepository,
+        "count:wait_time_predictions",
+      ),
     ]);
 
     const openParksCount = openParks.length;
@@ -1621,11 +1630,13 @@ export class AnalyticsService {
             countrySlug: openParks[0].countrySlug,
             averageWaitTime: Math.round(openParks[0].avg_wait),
             url: buildParkUrl(openParks[0]),
-            totalAttractions: openParks[0].total_attractions || 0,
-            operatingAttractions: openParks[0].operating_attractions || 0,
+            totalAttractions: parseInt(openParks[0].total_attractions || "0"),
+            operatingAttractions: parseInt(
+              openParks[0].operating_attractions || "0",
+            ),
             closedAttractions:
-              (openParks[0].total_attractions || 0) -
-              (openParks[0].operating_attractions || 0),
+              parseInt(openParks[0].total_attractions || "0") -
+              parseInt(openParks[0].operating_attractions || "0"),
           }
         : null;
 
@@ -1642,13 +1653,19 @@ export class AnalyticsService {
               openParks[openParks.length - 1].avg_wait,
             ),
             url: buildParkUrl(openParks[openParks.length - 1]),
-            totalAttractions:
-              openParks[openParks.length - 1].total_attractions || 0,
-            operatingAttractions:
-              openParks[openParks.length - 1].operating_attractions || 0,
+            totalAttractions: parseInt(
+              openParks[openParks.length - 1].total_attractions || "0",
+            ),
+            operatingAttractions: parseInt(
+              openParks[openParks.length - 1].operating_attractions || "0",
+            ),
             closedAttractions:
-              (openParks[openParks.length - 1].total_attractions || 0) -
-              (openParks[openParks.length - 1].operating_attractions || 0),
+              parseInt(
+                openParks[openParks.length - 1].total_attractions || "0",
+              ) -
+              parseInt(
+                openParks[openParks.length - 1].operating_attractions || "0",
+              ),
           }
         : null;
 
@@ -1682,7 +1699,7 @@ export class AnalyticsService {
         JOIN parks p ON p.id = a."parkId"
         JOIN park_status ps ON ps."parkId" = p.id
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 0
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT *
@@ -1885,6 +1902,21 @@ export class AnalyticsService {
       leastCrowdedPark: leastCrowdedParkDetails as any,
       longestWaitRide: longestWaitRideDetails as any,
       shortestWaitRide: shortestWaitRideDetails as any,
+      activeRides: rideStats.map((stat: any) => ({
+        id: stat.attractionId,
+        name: stat.attractionName,
+        slug: stat.attractionSlug,
+        parkName: stat.parkName,
+        parkSlug: stat.slug,
+        parkCity: stat.city,
+        parkCountry: stat.country,
+        parkCountrySlug: stat.countrySlug,
+        waitTime: stat.waitTime,
+        url: buildAttractionUrl(stat, { slug: stat.attractionSlug }),
+        crowdLevel: null,
+        baseline: null,
+        comparison: null,
+      })),
       lastUpdated: new Date().toISOString(),
     };
 
@@ -2204,5 +2236,28 @@ export class AnalyticsService {
     );
 
     return response;
+  }
+
+  /**
+   * Get cached count for a table to improve performance
+   */
+  private async getCachedCount(
+    repository: Repository<any>,
+    cacheKey: string,
+    ttl: number = 3600,
+  ): Promise<number> {
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return parseInt(cached, 10);
+    }
+
+    try {
+      const count = await repository.count();
+      await this.redis.set(cacheKey, count.toString(), "EX", ttl);
+      return count;
+    } catch (err) {
+      this.logger.warn(`Failed to count for ${cacheKey}`, err);
+      return 0;
+    }
   }
 }

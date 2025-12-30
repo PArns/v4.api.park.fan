@@ -176,6 +176,12 @@ export class GlobalStatsDto {
   @ApiProperty({ type: AttractionStatsItemDto, nullable: true })
   shortestWaitRide: AttractionStatsItemDto | null;
 
+  @ApiProperty({
+    type: [AttractionStatsItemDto],
+    description: "List of all currently operating attractions",
+  })
+  activeRides: AttractionStatsItemDto[];
+
   @ApiProperty({ description: "Last updated timestamp" })
   lastUpdated: string;
 }

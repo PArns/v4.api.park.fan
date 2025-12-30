@@ -15,7 +15,6 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("realtime")
-  @UseInterceptors(new HttpCacheInterceptor(3 * 60)) // 3 minutes (queue data updates every 5min)
   @ApiOperation({ summary: "Get global platform statistics" })
   @ApiResponse({
     status: 200,

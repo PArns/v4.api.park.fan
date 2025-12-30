@@ -160,6 +160,11 @@ export class CacheWarmupService {
         `✅ Cache warmup complete: ${warmedCount}/${parks.length} parks refreshed/verified in ${duration}s`,
       );
 
+      // Warm up global stats (async, don't block return)
+      this.warmupGlobalStats().catch((err) =>
+        this.logger.error("Failed to trigger global stats warmup", err),
+      );
+
       return warmedCount;
     } catch (error: unknown) {
       const errorMessage =
@@ -410,5 +415,32 @@ export class CacheWarmupService {
     );
 
     return successCount;
+  }
+
+  /**
+   * Warm up global realtime stats (API: /v1/analytics/realtime)
+   * Expensive query involving count(*) on heavy tables, so we pre-warm it.
+   */
+  async warmupGlobalStats(): Promise<void> {
+    try {
+      this.logger.verbose("🔥 Warming Global Realtime Stats...");
+      const startTime = Date.now();
+
+      const analyticsService = this.parkIntegrationService["analyticsService"]; // Access via existing service to avoid circular dependency
+      if (
+        analyticsService &&
+        typeof analyticsService.getGlobalRealtimeStats === "function"
+      ) {
+        await analyticsService.getGlobalRealtimeStats();
+        const duration = Date.now() - startTime;
+        this.logger.log(`✅ Global Stats warmed in ${duration}ms`);
+      } else {
+        this.logger.warn(
+          "Could not access AnalyticsService for global stats warmup",
+        );
+      }
+    } catch (error) {
+      this.logger.error("Failed to warm global stats", error);
+    }
   }
 }
