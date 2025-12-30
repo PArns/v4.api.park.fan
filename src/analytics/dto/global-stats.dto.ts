@@ -177,10 +177,9 @@ export class GlobalStatsDto {
   shortestWaitRide: AttractionStatsItemDto | null;
 
   @ApiProperty({
-    type: [AttractionStatsItemDto],
-    description: "List of all currently operating attractions",
+    description: "Sum of wait times of all currently operating attractions (minutes)",
   })
-  activeRides: AttractionStatsItemDto[];
+  totalWaitTime: number;
 
   @ApiProperty({ description: "Last updated timestamp" })
   lastUpdated: string;
