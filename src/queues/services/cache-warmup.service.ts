@@ -8,6 +8,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
+import { DiscoveryService } from "../../discovery/discovery.service";
 
 /**
  * Cache Warmup Service
@@ -33,8 +34,75 @@ export class CacheWarmupService {
     private readonly parksService: ParksService,
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
+    private readonly discoveryService: DiscoveryService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  // ... existing methods
+
+  /**
+   * Generic batch processor for warmup tasks
+   * Handles concurrency limits and progress logging
+   */
+  private async processBatch<T>(
+    items: T[],
+    batchSize: number,
+    label: string,
+    processFn: (item: T) => Promise<boolean>,
+  ): Promise<number> {
+    let successCount = 0;
+
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize);
+
+      const results = await Promise.allSettled(
+        batch.map(async (item) => {
+          const success = await processFn(item);
+          if (success) return true;
+          return false;
+        }),
+      );
+
+      const batchSuccess = results.filter(
+        (r) => r.status === "fulfilled" && r.value === true,
+      ).length;
+      successCount += batchSuccess;
+
+      // Log progress for large sets
+      if (items.length > 20) {
+        const progress = Math.min(i + batchSize, items.length);
+        this.logger.verbose(`[${label}] Progress: ${progress}/${items.length}`);
+      }
+
+      // Delay between batches
+      if (i + batchSize < items.length) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+
+    return successCount;
+  }
+
+  /**
+   * Warm up discovery geo structure and live stats
+   * Triggered during wait-times sync to clear cold start on /discovery/geo
+   */
+  async warmupDiscovery(): Promise<void> {
+    try {
+      this.logger.verbose("🔥 Warming Discovery Geo Structure...");
+      const startTime = Date.now();
+
+      // triggering getGeoStructure warms up:
+      // 1. Structure Cache (24h)
+      // 2. Live Stats Cache (5m) via hydrateStructure -> getLiveStats
+      await this.discoveryService.getGeoStructure();
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Discovery Geo Structure warmed in ${duration}ms`);
+    } catch (error) {
+      this.logger.error("Failed to warm Discovery Geo Structure", error);
+    }
+  }
 
   /**
    * Warm up cache for a single park
@@ -125,35 +193,17 @@ export class CacheWarmupService {
         `Found ${parks.length} parks to verify in cache (Smart Warmup)`,
       );
 
-      // Warm up in batches to avoid rate limits
-      const BATCH_SIZE = 3;
-      let warmedCount = 0;
-
-      for (let i = 0; i < parkIds.length; i += BATCH_SIZE) {
-        const batch = parkIds.slice(i, i + BATCH_SIZE);
-
-        const results = await Promise.allSettled(
-          batch.map((parkId) => {
-            const status = statusMap.get(parkId);
-            // Force update ONLY if park is operating (to sync wait times)
-            // Otherwise, just ensure it's cached (respect TTL)
-            const shouldForce = status === "OPERATING";
-
-            return this.warmupParkCache(parkId, shouldForce);
-          }),
-        );
-
-        results.forEach((result) => {
-          if (result.status === "fulfilled" && result.value) {
-            warmedCount++;
-          }
-        });
-
-        // Delay between batches
-        if (i + BATCH_SIZE < parkIds.length) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-      }
+      // Warm up in batches (Smart Warmup decision logic is inside callback)
+      const warmedCount = await this.processBatch(
+        parkIds,
+        3,
+        "OperatingParks",
+        async (parkId) => {
+          const status = statusMap.get(parkId);
+          const shouldForce = status === "OPERATING";
+          return this.warmupParkCache(parkId, shouldForce);
+        },
+      );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
@@ -164,6 +214,22 @@ export class CacheWarmupService {
       this.warmupGlobalStats().catch((err) =>
         this.logger.error("Failed to trigger global stats warmup", err),
       );
+
+      // Warm up discovery geo (async)
+      this.warmupDiscovery().catch((err) =>
+        this.logger.error("Failed to trigger discovery warmup", err),
+      );
+
+      // Warm up park statistics (async)
+      const operatingParkIds = Array.from(statusMap.entries())
+        .filter(([_, status]) => status === "OPERATING")
+        .map(([id]) => id);
+
+      if (operatingParkIds.length > 0) {
+        this.warmupParkStatistics(operatingParkIds).catch((err) =>
+          this.logger.error("Failed to trigger statistics warmup", err),
+        );
+      }
 
       return warmedCount;
     } catch (error: unknown) {
@@ -207,28 +273,14 @@ export class CacheWarmupService {
 
       this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
 
-      // Warm up in batches to avoid rate limits (OpenMeteo via MLService)
-      const BATCH_SIZE = 3; // Reduced from 5
-      let warmedCount = 0;
+      this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
 
-      for (let i = 0; i < upcomingParks.length; i += BATCH_SIZE) {
-        const batch = upcomingParks.slice(i, i + BATCH_SIZE);
-
-        const results = await Promise.allSettled(
-          batch.map((park) => this.warmupParkCache(park.id)),
-        );
-
-        results.forEach((result) => {
-          if (result.status === "fulfilled" && result.value) {
-            warmedCount++;
-          }
-        });
-
-        // Delay between batches
-        if (i + BATCH_SIZE < upcomingParks.length) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-      }
+      const warmedCount = await this.processBatch(
+        upcomingParks,
+        3,
+        "UpcomingParks",
+        async (park) => this.warmupParkCache(park.id),
+      );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
@@ -328,35 +380,13 @@ export class CacheWarmupService {
 
       this.logger.verbose(`Found ${topAttractions.length} top attractions`);
 
-      // Batch processing to avoid connection timeouts and rate limits
-      // 100 concurrent requests can exhaust the connection pool
-      const BATCH_SIZE = 5; // Reduced from 10
-      let warmedCount = 0;
-
-      for (let i = 0; i < topAttractions.length; i += BATCH_SIZE) {
-        const batch = topAttractions.slice(i, i + BATCH_SIZE);
-
-        await Promise.all(
-          batch.map(async (attraction) => {
-            const success = await this.warmupAttractionCache(
-              attraction.id,
-              true,
-            );
-            if (success) warmedCount++;
-          }),
-        );
-
-        // Log progress every batch
-        const progress = Math.min(i + BATCH_SIZE, topAttractions.length);
-        this.logger.verbose(
-          `Progress: ${progress}/${topAttractions.length} attractions warmed`,
-        );
-
-        // Small delay between batches to be nice to APIs
-        if (i + BATCH_SIZE < topAttractions.length) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-      }
+      // Batch processing using helper
+      const warmedCount = await this.processBatch(
+        topAttractions,
+        5,
+        "TopAttractions",
+        async (attraction) => this.warmupAttractionCache(attraction.id, true),
+      );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
@@ -391,23 +421,32 @@ export class CacheWarmupService {
       `🔥 Warming occupancy cache for ${parkIds.length} parks...`,
     );
 
-    let successCount = 0;
     const analyticsService = this.parkIntegrationService["analyticsService"];
 
-    for (const parkId of parkIds) {
-      try {
-        const occupancy = await analyticsService.calculateParkOccupancy(parkId);
-        const cacheKey = `park:occupancy:${parkId}`;
-        await this.redis.setex(
-          cacheKey,
-          5 * 60, // 5 minutes TTL (same as wait times sync interval)
-          JSON.stringify(occupancy),
-        );
-        successCount++;
-      } catch (error) {
-        this.logger.warn(`Failed to warm occupancy for park ${parkId}`, error);
-      }
-    }
+    const successCount = await this.processBatch(
+      parkIds,
+      5,
+      "ParkOccupancy",
+      async (parkId) => {
+        try {
+          const occupancy =
+            await analyticsService.calculateParkOccupancy(parkId);
+          const cacheKey = `park:occupancy:${parkId}`;
+          await this.redis.setex(
+            cacheKey,
+            5 * 60, // 5 minutes TTL
+            JSON.stringify(occupancy),
+          );
+          return true;
+        } catch (error) {
+          this.logger.warn(
+            `Failed to warm occupancy for park ${parkId}`,
+            error,
+          );
+          return false;
+        }
+      },
+    );
 
     const duration = Date.now() - startTime;
     this.logger.verbose(
@@ -441,6 +480,46 @@ export class CacheWarmupService {
       }
     } catch (error) {
       this.logger.error("Failed to warm global stats", error);
+    }
+  }
+  /**
+   * Warm up park statistics cache for multiple parks
+   */
+  async warmupParkStatistics(parkIds: string[]): Promise<void> {
+    if (parkIds.length === 0) return;
+
+    try {
+      this.logger.verbose(
+        `🔥 Warming statistics cache for ${parkIds.length} parks...`,
+      );
+      const startTime = Date.now();
+
+      const analyticsService = this.parkIntegrationService["analyticsService"];
+
+      const successCount = await this.processBatch(
+        parkIds,
+        5,
+        "ParkStatistics",
+        async (parkId) => {
+          try {
+            await analyticsService.getParkStatistics(parkId);
+            return true;
+          } catch (error) {
+            this.logger.warn(
+              `Failed to warm statistics for park ${parkId}`,
+              error,
+            );
+            return false;
+          }
+        },
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.verbose(
+        `✅ Statistics warmup complete: ${successCount}/${parkIds.length} parks in ${duration}ms`,
+      );
+    } catch (error) {
+      this.logger.error("Failed to warm park statistics", error);
     }
   }
 }

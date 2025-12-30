@@ -598,9 +598,16 @@ export class AnalyticsService {
    */
   async getParkStatistics(parkId: string): Promise<ParkStatisticsDto> {
     const now = new Date();
-    const windowAgo = new Date(Date.now() - 120 * 60 * 1000); // 2 hours window for current stats
+    const windowAgo = new Date(Date.now() - 120 * 60 * 1000); // 2 hours window
     const startOfDay = new Date(now);
     startOfDay.setHours(0, 0, 0, 0);
+
+    // Try cache first
+    const cacheKey = `park:statistics:${parkId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
 
     // Single optimized query combining all statistics
     const result = await this.queueDataRepository.query(
@@ -697,7 +704,7 @@ export class AnalyticsService {
     const occupancy = await this.calculateParkOccupancy(parkId);
     const crowdLevel = this.determineCrowdLevel(occupancy.current);
 
-    return {
+    const statsDto: ParkStatisticsDto = {
       avgWaitTime: Math.round(currentAvgWait),
       avgWaitToday: Math.round(stats?.avg_wait_today || 0),
       peakHour: stats?.peak_hour
@@ -709,6 +716,11 @@ export class AnalyticsService {
       closedAttractions: parseInt(stats?.closed_count) || 0,
       timestamp: now,
     };
+
+    // Cache for 5 minutes
+    await this.redis.setex(cacheKey, 5 * 60, JSON.stringify(statsDto));
+
+    return statsDto;
   }
 
   /**

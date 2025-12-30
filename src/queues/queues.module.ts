@@ -38,6 +38,7 @@ import { DataSourcesModule } from "../external-apis/data-sources/data-sources.mo
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays.module";
+import { DiscoveryModule } from "../discovery/discovery.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -123,6 +124,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     OpenHolidaysModule,
     WartezeitenModule,
     AnalyticsModule,
+    DiscoveryModule,
     RedisModule, // For cache warmup service
   ],
   providers: [

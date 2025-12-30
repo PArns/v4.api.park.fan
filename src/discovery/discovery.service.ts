@@ -409,36 +409,33 @@ export class DiscoveryService {
         WHERE s."scheduleType" = 'OPERATING'
       ),
       latest_attraction_data AS (
-        SELECT DISTINCT ON (qd."attractionId")
-          qd."attractionId",
-          qd."waitTime",
-          qd."status",
-          qd."timestamp"
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE qd.timestamp > NOW() - INTERVAL '30 minutes'
-          AND qd."queueType" = 'STANDBY'
-        ORDER BY qd."attractionId", qd.timestamp DESC
-      ),
-      park_ride_activity AS (
         SELECT 
+          a.id as "attractionId",
           a."parkId",
+          qd."waitTime",
+          qd."status"
+        FROM attractions a
+        JOIN LATERAL (
+          SELECT "waitTime", "status"
+          FROM queue_data qd
+          WHERE qd."attractionId" = a.id
+            AND qd."queueType" = 'STANDBY'
+            AND qd.timestamp > NOW() - INTERVAL '30 minutes'
+          ORDER BY qd.timestamp DESC
+          LIMIT 1
+        ) qd ON true
+      ),
+      park_stats AS (
+        SELECT 
+          lad."parkId",
           COUNT(*) FILTER (
             WHERE lad.status = 'OPERATING' 
               AND lad."waitTime" > 0
-          ) as active_rides
-        FROM attractions a
-        LEFT JOIN latest_attraction_data lad ON lad."attractionId" = a.id
-        GROUP BY a."parkId"
-      ),
-      park_waits AS (
-        SELECT 
-          a."parkId",
+          ) as active_rides,
           AVG(lad."waitTime") as avg_wait,
           COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count
-        FROM attractions a
-        LEFT JOIN latest_attraction_data lad ON lad."attractionId" = a.id
-        GROUP BY a."parkId"
+        FROM latest_attraction_data lad
+        GROUP BY lad."parkId"
       )
       SELECT 
         p.id,
@@ -449,15 +446,14 @@ export class DiscoveryService {
             CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END
           -- If park has NO schedule: Use ride-based fallback
           ELSE 
-            CASE WHEN COALESCE(pra.active_rides, 0) > 0 THEN true ELSE false END
+            CASE WHEN COALESCE(stats.active_rides, 0) > 0 THEN true ELSE false END
         END as is_open,
-        COALESCE(pw.avg_wait, 0) as avg_wait,
-        COALESCE(pw.operating_count, 0) as operating_count
+        COALESCE(stats.avg_wait, 0) as avg_wait,
+        COALESCE(stats.operating_count, 0) as operating_count
       FROM parks p
       LEFT JOIN park_schedules ps ON ps."parkId" = p.id
       LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
-      LEFT JOIN park_ride_activity pra ON pra."parkId" = p.id
-      LEFT JOIN park_waits pw ON pw."parkId" = p.id
+      LEFT JOIN park_stats stats ON stats."parkId" = p.id
     `);
 
     const stats = new Map<
