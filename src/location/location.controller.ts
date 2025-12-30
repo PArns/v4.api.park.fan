@@ -34,7 +34,7 @@ export class LocationController {
     summary: "Find nearby parks or rides",
     description:
       "Returns rides if user is within a park (default 1000m radius), " +
-      "otherwise returns up to 5 nearest parks with live statistics. " +
+      "otherwise returns up to 6 nearest parks with live statistics. " +
       "Rides are sorted by distance from user position.",
   })
   @ApiQuery({
@@ -55,6 +55,13 @@ export class LocationController {
     name: "radius",
     description: "Radius in meters to consider 'in park' (default: 1000)",
     example: 1000,
+    required: false,
+    type: Number,
+  })
+  @ApiQuery({
+    name: "limit",
+    description: "Maximum number of parks to return (default: 6)",
+    example: 6,
     required: false,
     type: Number,
   })
@@ -149,6 +156,7 @@ export class LocationController {
     @Query("lat") lat: string,
     @Query("lng") lng: string,
     @Query("radius") radius?: string,
+    @Query("limit") limit?: string,
   ): Promise<NearbyResponseDto> {
     // Parse and validate coordinates
     const latitude = parseFloat(lat);
@@ -180,6 +188,22 @@ export class LocationController {
       }
     }
 
-    return this.locationService.findNearby(latitude, longitude, radiusInMeters);
+    // Parse and validate limit
+    let limitCount = 6; // Default: 6 parks
+    if (limit) {
+      limitCount = parseInt(limit);
+      if (isNaN(limitCount) || limitCount < 1 || limitCount > 50) {
+        throw new BadRequestException(
+          "Invalid limit (must be between 1 and 50)",
+        );
+      }
+    }
+
+    return this.locationService.findNearby(
+      latitude,
+      longitude,
+      radiusInMeters,
+      limitCount,
+    );
   }
 }

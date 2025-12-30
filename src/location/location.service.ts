@@ -54,6 +54,7 @@ export class LocationService {
     latitude: number,
     longitude: number,
     radiusInMeters: number = 1000,
+    limit: number = 6,
   ): Promise<NearbyResponseDto> {
     const userLocation: GeoCoordinate = { latitude, longitude };
 
@@ -86,8 +87,10 @@ export class LocationService {
       };
     } else {
       // User is outside - return nearby parks
-      this.logger.log("User is outside all parks, finding nearest parks");
-      const parksData = await this.findNearbyParks(userLocation, 5);
+      this.logger.log(
+        `User is outside all parks, finding nearest ${limit} parks`,
+      );
+      const parksData = await this.findNearbyParks(userLocation, limit);
 
       return {
         type: "nearby_parks",
@@ -270,7 +273,7 @@ export class LocationService {
    */
   private async findNearbyParks(
     userLocation: GeoCoordinate,
-    limit: number = 5,
+    limit: number = 6,
   ): Promise<NearbyParksDto> {
     // Get all parks with coordinates
     const parks = await this.parkRepository.find({
