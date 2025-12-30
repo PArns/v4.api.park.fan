@@ -127,7 +127,7 @@ export class PredictionAccuracyService {
       order: {
         targetTime: "ASC",
       },
-      take: 5000, // Process larger batches to prevent backlog
+      take: 10000, // Increased batch size for faster backlog processing
     });
 
     if (pendingPredictions.length === 0) {
@@ -261,7 +261,7 @@ export class PredictionAccuracyService {
 
     // 5. Save Updates in Bulk
     if (updates.length > 0) {
-      await this.accuracyRepository.save(updates, { chunk: 100 });
+      await this.accuracyRepository.save(updates, { chunk: 200 });
     }
 
     const duration = Date.now() - startTime;

@@ -203,7 +203,7 @@ export class QueueSchedulerService implements OnModuleInit {
         {},
         {
           repeat: {
-            cron: "*/15 * * * *", // Every 15 minutes (to keep up with hourly predictions)
+            cron: "*/5 * * * *", // Every 5 minutes (faster processing to prevent backlog)
           },
           jobId: "prediction-accuracy-cron",
         },
