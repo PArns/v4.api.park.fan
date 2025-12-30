@@ -74,7 +74,7 @@ export class ParksController {
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/parks
@@ -1065,7 +1065,6 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes HTTP cache (short for Cloudflare)
   @ApiOperation({
     summary: "Get park by location",
     description: "Returns a specific park by its geographic structure.",
@@ -1184,7 +1183,6 @@ export class ParksController {
    * @throws NotFoundException if neither park nor continent found
    */
   @Get(":slugOrContinent")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes HTTP cache (short for Cloudflare)
   @ApiOperation({
     summary: "Get park or continent",
     description:

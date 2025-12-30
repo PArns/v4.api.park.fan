@@ -83,7 +83,7 @@ export class CacheControlInterceptor implements NestInterceptor {
 
   private getCacheHeaderForPath(path: string, method: string): string | null {
     // No caching for write operations
-    if (method !== "GET") {
+    if (method !== "GET" && method !== "HEAD") {
       return "no-store, no-cache, must-revalidate";
     }
 
