@@ -221,29 +221,44 @@ export class WaitTimesProcessor {
 
               // Persist Operating Hours (from Wartezeiten or Wiki live data)
               // This ensures we have schedule data even if the bulk schedule sync missed it
+              // IMPORTANT: Skip only if Wiki schedule data actually exists for today
               if (
                 liveData.operatingHours &&
                 liveData.operatingHours.length > 0
               ) {
-                try {
-                  const scheduleUpdates = liveData.operatingHours.map(
-                    (window) => ({
-                      date: window.open, // ISO string acts as date
-                      type: window.type,
-                      openingTime: window.open,
-                      closingTime: window.close,
-                      description: "Live update",
-                    }),
-                  );
+                let shouldUpdateSchedule = true;
 
-                  await this.parksService.saveScheduleData(
-                    park.id,
-                    scheduleUpdates,
-                  );
-                } catch (error) {
-                  this.logger.warn(
-                    `Failed to update schedule from live data for ${park.name}: ${error}`,
-                  );
+                // If park has Wiki data, check if today's schedule exists
+                if (park.wikiEntityId) {
+                  const todaySchedule =
+                    await this.parksService.getTodaySchedule(park.id);
+                  if (todaySchedule && todaySchedule.length > 0) {
+                    // Wiki schedule exists - skip live update (Wiki is more reliable)
+                    shouldUpdateSchedule = false;
+                  }
+                }
+
+                if (shouldUpdateSchedule) {
+                  try {
+                    const scheduleUpdates = liveData.operatingHours.map(
+                      (window) => ({
+                        date: window.open, // ISO string acts as date
+                        type: window.type,
+                        openingTime: window.open,
+                        closingTime: window.close,
+                        description: "Live update",
+                      }),
+                    );
+
+                    await this.parksService.saveScheduleData(
+                      park.id,
+                      scheduleUpdates,
+                    );
+                  } catch (error) {
+                    this.logger.warn(
+                      `Failed to update schedule from live data for ${park.name}: ${error}`,
+                    );
+                  }
                 }
               }
 

@@ -33,18 +33,55 @@ export class WartezeitenScheduleProcessor {
 
     try {
       // Get all parks that have Wartezeiten data
-      const parks = await this.parkRepository
+      const allParks = await this.parkRepository
         .createQueryBuilder("park")
         .where("park.wartezeitenEntityId IS NOT NULL")
         .getMany();
 
-      if (parks.length === 0) {
+      if (allParks.length === 0) {
         this.logger.warn("No parks with Wartezeiten data found.");
         return;
       }
 
+      // Filter parks: Skip only if they have Wiki data AND already have schedule data for today
+      // This allows Wartezeiten to fill gaps when Wiki doesn't provide schedules
+      const parks: typeof allParks = [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      for (const park of allParks) {
+        if (park.wikiEntityId) {
+          // Park has Wiki - check if today's schedule exists from Wiki
+          const todaySchedule = await this.parksService.getTodaySchedule(
+            park.id,
+          );
+
+          // If Wiki schedule exists for today, skip Wartezeiten (Wiki is more reliable)
+          if (todaySchedule && todaySchedule.length > 0) {
+            this.logger.verbose(
+              `Skipping ${park.name} - Wiki schedule data exists`,
+            );
+            continue;
+          }
+
+          // No Wiki schedule found - allow Wartezeiten as fallback
+          this.logger.verbose(
+            `Including ${park.name} - No Wiki schedule, using Wartezeiten as fallback`,
+          );
+        }
+
+        parks.push(park);
+      }
+
+      if (parks.length === 0) {
+        this.logger.log(
+          "All Wartezeiten parks already have Wiki schedule data.",
+        );
+        return;
+      }
+
       this.logger.log(
-        `Found ${parks.length} parks with Wartezeiten opening times`,
+        `Found ${parks.length} parks to sync from Wartezeiten (${allParks.length - parks.length} skipped due to existing Wiki data)`,
       );
 
       let successCount = 0;
@@ -60,6 +97,18 @@ export class WartezeitenScheduleProcessor {
             const today = openingTimes[0];
 
             if (today.opened_today) {
+              // Validate that closingTime is after openingTime
+              const openingTime = new Date(today.open_from);
+              const closingTime = new Date(today.closed_from);
+
+              if (closingTime <= openingTime) {
+                this.logger.warn(
+                  `⚠️  Invalid schedule data for ${park.name}: closingTime (${today.closed_from}) is before or equal to openingTime (${today.open_from}). Skipping update.`,
+                );
+                skipCount++;
+                continue;
+              }
+
               // Persist to schedule table
               const scheduleUpdate = {
                 date: today.open_from, // ISO string acts as date
