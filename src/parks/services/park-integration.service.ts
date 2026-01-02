@@ -73,7 +73,7 @@ export class ParkIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(AttractionAccuracyStats)
     private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -743,7 +743,9 @@ export class ParkIntegrationService {
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
             closedAttractions: totalAttractionsCount - totalOperatingCount,
-            timestamp: statistics.timestamp.toISOString(),
+            timestamp: typeof statistics.timestamp === 'string'
+              ? statistics.timestamp
+              : statistics.timestamp.toISOString(),
           },
           percentiles: percentiles || undefined, // Only include if data available
         };
@@ -1034,7 +1036,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1177,9 +1179,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
