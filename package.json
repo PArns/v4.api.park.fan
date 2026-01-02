@@ -51,6 +51,7 @@
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "ioredis": "^5.8.2",
+    "luxon": "^3.7.2",
     "marked": "^17.0.1",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
@@ -59,7 +60,8 @@
     "string-similarity": "^4.0.4",
     "themeparks": "^6.0.1",
     "transliteration": "^2.6.0",
-    "typeorm": "^0.3.28"
+    "typeorm": "^0.3.28",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.14",
