@@ -343,7 +343,9 @@ export class LocationService {
         analytics: occupancy
           ? {
               avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-              crowdLevel: this.mapCrowdLevel(occupancy.current),
+              crowdLevel: this.analyticsService.determineCrowdLevel(
+                occupancy.current,
+              ),
               occupancy: occupancy.current,
             }
           : undefined,
@@ -419,16 +421,5 @@ export class LocationService {
       ),
     );
     return new Map(parkIds.map((id, i) => [id, results[i]]));
-  }
-
-  /**
-   * Map occupancy percentage to crowd level
-   */
-  private mapCrowdLevel(occupancy: number): string {
-    if (occupancy < 30) return "very_low";
-    if (occupancy < 50) return "low";
-    if (occupancy < 75) return "moderate";
-    if (occupancy < 95) return "high";
-    return "very_high";
   }
 }

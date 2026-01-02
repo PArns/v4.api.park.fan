@@ -3,6 +3,7 @@ import { Park } from "../entities/park.entity";
 import { buildParkUrl } from "../../common/utils/url.util";
 import { WeatherItemDto } from "./weather-item.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 
 /**
  * Park Response DTO
@@ -99,7 +100,7 @@ export class ParkResponseDto {
       avgWaitTime: number;
       avgWaitToday: number;
       peakHour: string | null;
-      crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
+      crowdLevel: CrowdLevel;
       totalAttractions: number;
       operatingAttractions: number;
       closedAttractions: number;

@@ -663,8 +663,8 @@ export class AnalyticsService {
       )
       SELECT 
         ROUND(AVG(CASE WHEN lq."waitTime" >= 5 THEN lq."waitTime" END)) as current_avg_wait,
-        COUNT(CASE WHEN lq.status = 'OPERATING' THEN 1 END) as operating_count,
-        COUNT(CASE WHEN lq.status IS NULL OR lq.status != 'OPERATING' THEN 1 END) as closed_count,
+        -- Count explicitly closed attractions (has recent data AND not OPERATING)
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
         (SELECT avg_wait_today FROM today_avg) as avg_wait_today,
         (SELECT hour FROM today_hourly) as peak_hour
@@ -705,6 +705,19 @@ export class AnalyticsService {
     const occupancy = await this.calculateParkOccupancy(parkId);
     const crowdLevel = this.determineCrowdLevel(occupancy.current);
 
+    // Optimistic calculation: totalAttractions - explicitlyClosedCount
+    // This matches Discovery Service logic and prevents showing "0 operating" during data gaps
+    const totalAttractions = parseInt(stats?.total_count) || 0;
+    const explicitlyClosedCount = parseInt(stats?.explicitly_closed_count) || 0;
+
+    // If park has any occupancy or wait times, assume it's open
+    // This handles cases where we have queue data but park status might lag
+    const isParkLikelyOpen = occupancy.current > 0 || currentAvgWait > 0;
+
+    const operatingAttractions = isParkLikelyOpen
+      ? Math.max(0, totalAttractions - explicitlyClosedCount)
+      : 0;
+
     const statsDto: ParkStatisticsDto = {
       avgWaitTime: Math.round(currentAvgWait),
       avgWaitToday: Math.round(stats?.avg_wait_today || 0),
@@ -712,9 +725,9 @@ export class AnalyticsService {
         ? `${String(Math.floor(stats.peak_hour)).padStart(2, "0")}:00`
         : null,
       crowdLevel,
-      totalAttractions: parseInt(stats?.total_count) || 0,
-      operatingAttractions: parseInt(stats?.operating_count) || 0,
-      closedAttractions: parseInt(stats?.closed_count) || 0,
+      totalAttractions,
+      operatingAttractions,
+      closedAttractions: totalAttractions - operatingAttractions,
       timestamp: now,
     };
 
@@ -858,16 +871,33 @@ export class AnalyticsService {
   }
 
   /**
-   * Determine crowd level from occupancy score
+   * Determine crowd level from occupancy percentage
+   *
+   * **Single Source of Truth** for crowd level calculation across all services.
+   * All services should use this method instead of implementing their own logic.
+   *
+   * Thresholds:
+   * - very_low: < 30% (Park is quiet, minimal waits)
+   * - low: 30-50% (Below average crowds)
+   * - moderate: 50-75% (Typical/average crowds)
+   * - high: 75-95% (Busy, above average waits)
+   * - very_high: 95-110% (Very busy, near/at capacity)
+   * - extreme: > 110% (Overcrowded, beyond normal capacity)
+   *
+   * @param occupancy - Park occupancy percentage (0-150+)
+   * @returns Crowd level rating
+   *
+   * @public - Use this method from other services instead of duplicating logic
    */
-  private determineCrowdLevel(
+  public determineCrowdLevel(
     occupancy: number,
-  ): "very_low" | "low" | "moderate" | "high" | "very_high" {
+  ): "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme" {
     if (occupancy < 30) return "very_low";
     if (occupancy < 50) return "low";
     if (occupancy < 75) return "moderate";
     if (occupancy < 95) return "high";
-    return "very_high";
+    if (occupancy < 110) return "very_high";
+    return "extreme";
   }
 
   /**
@@ -884,7 +914,10 @@ export class AnalyticsService {
   }
   /**
    * Convert crowd level rating to comparison text
-   * Maps ratings to 5-level comparison (matching determineComparisonStatus)
+   * Maps 6-level ratings to 5-level comparison status (combines extreme with much_higher)
+   *
+   * @param rating - Crowd level rating (very_low to extreme)
+   * @returns Comparison status text
    */
   public getComparisonText(
     rating: string,
@@ -899,7 +932,9 @@ export class AnalyticsService {
       case "high":
         return "higher"; // 110-140% of baseline
       case "very_high":
-        return "much_higher"; // > 140% of baseline
+        return "much_higher"; // 140-180% of baseline
+      case "extreme":
+        return "much_higher"; // > 180% of baseline (maps to much_higher)
       default:
         return "typical";
     }
@@ -1483,40 +1518,62 @@ export class AnalyticsService {
 
   /**
    * Calculate load rating based on current wait vs 90th percentile baseline
+   *
+   * Uses relative thresholds when baseline is available, absolute thresholds as fallback.
+   *
+   * @param current - Current wait time in minutes
+   * @param baseline - 90th percentile baseline wait time
+   * @returns Object with rating and baseline value
    */
   public getLoadRating(
     current: number,
     baseline: number,
   ): {
-    rating: "very_low" | "low" | "moderate" | "high" | "very_high";
+    rating: "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme";
     baseline: number;
   } {
     // If baseline is 0 (no historical data), use absolute thresholds
     if (baseline === 0) {
-      let rating: "very_low" | "low" | "moderate" | "high" | "very_high";
+      let rating:
+        | "very_low"
+        | "low"
+        | "moderate"
+        | "high"
+        | "very_high"
+        | "extreme";
 
       if (current === 0) rating = "very_low";
       else if (current <= 15) rating = "low";
       else if (current <= 30) rating = "moderate";
       else if (current <= 50) rating = "high";
-      else rating = "very_high";
+      else if (current <= 75) rating = "very_high";
+      else rating = "extreme";
 
       return { rating, baseline };
     }
 
     const ratio = current / baseline;
 
-    let rating: "very_low" | "low" | "moderate" | "high" | "very_high" =
-      "moderate";
+    let rating:
+      | "very_low"
+      | "low"
+      | "moderate"
+      | "high"
+      | "very_high"
+      | "extreme" = "moderate";
 
-    // Unified thresholds matching DTO enums
-    if (ratio <= 0.3) rating = "very_low";
-    else if (ratio <= 0.6) rating = "low";
+    // Relative thresholds based on baseline
+    if (ratio <= 0.3)
+      rating = "very_low"; // <= 30% of baseline
+    else if (ratio <= 0.6)
+      rating = "low"; // 30-60% of baseline
     else if (ratio <= 1.1)
-      rating = "moderate"; // Up to 10% above baseline is moderate
+      rating = "moderate"; // 60-110% of baseline
     else if (ratio <= 1.4)
-      rating = "high"; // Merged "higher" and "high"
-    else rating = "very_high"; // Replaced "extreme"
+      rating = "high"; // 110-140% of baseline
+    else if (ratio <= 1.8)
+      rating = "very_high"; // 140-180% of baseline
+    else rating = "extreme"; // > 180% of baseline
 
     return { rating, baseline };
   }

@@ -13,6 +13,7 @@ import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
@@ -73,7 +74,7 @@ export class ParkIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(AttractionAccuracyStats)
     private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -485,16 +486,8 @@ export class ParkIntegrationService {
           deviationDetected: p.deviationDetected,
         }));
 
-        // Determine Current Crowd Level (Badge)
-        // 1. Try to use current prediction's crowd level if available
-        // 2. Fallback to wait time heuristic
-        let crowdLevel:
-          | "very_low"
-          | "low"
-          | "moderate"
-          | "high"
-          | "very_high"
-          | "closed" = "closed";
+        // Determine crowd level for this attraction
+        let crowdLevel: CrowdLevel | "closed" = "closed";
 
         if (attraction.effectiveStatus === "CLOSED") {
           crowdLevel = "closed";
@@ -743,9 +736,10 @@ export class ParkIntegrationService {
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
             closedAttractions: totalAttractionsCount - totalOperatingCount,
-            timestamp: typeof statistics.timestamp === 'string'
-              ? statistics.timestamp
-              : statistics.timestamp.toISOString(),
+            timestamp:
+              typeof statistics.timestamp === "string"
+                ? statistics.timestamp
+                : statistics.timestamp.toISOString(),
           },
           percentiles: percentiles || undefined, // Only include if data available
         };
@@ -1036,7 +1030,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1179,8 +1173,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

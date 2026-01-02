@@ -136,7 +136,9 @@ export class ParkEnrichmentService {
           avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
           avgWaitToday: stats?.avgWaitToday || 0,
           peakHour: stats?.peakHour || null,
-          crowdLevel: this.mapCrowdLevel(occupancy.current),
+          crowdLevel: this.analyticsService.determineCrowdLevel(
+            occupancy.current,
+          ),
           totalAttractions: stats?.totalAttractions || 0,
           operatingAttractions: stats?.operatingAttractions || 0,
           closedAttractions: stats?.closedAttractions || 0,
@@ -146,20 +148,5 @@ export class ParkEnrichmentService {
     }
 
     return dto;
-  }
-
-  /**
-   * Map occupancy percentage to unified crowd level enum (5 levels)
-   * Unified standard across all park DTOs
-   * @private
-   */
-  private mapCrowdLevel(
-    occupancy: number,
-  ): "very_low" | "low" | "moderate" | "high" | "very_high" {
-    if (occupancy < 20) return "very_low";
-    if (occupancy < 40) return "low";
-    if (occupancy < 70) return "moderate";
-    if (occupancy < 95) return "high";
-    return "very_high";
   }
 }

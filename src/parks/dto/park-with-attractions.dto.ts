@@ -5,6 +5,7 @@ import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl } from "../../common/utils/url.util";
 import { ParkDailyPredictionDto } from "./park-daily-prediction.dto";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 
 export class ParkPredictioAccuracyDto {
   @ApiProperty({
@@ -106,16 +107,18 @@ export class ParkAttractionDto {
 
   @ApiProperty({
     description: "Crowd level badge",
-    enum: ["very_low", "low", "moderate", "high", "very_high", "closed"],
+    enum: [
+      "very_low",
+      "low",
+      "moderate",
+      "high",
+      "very_high",
+      "extreme",
+      "closed",
+    ],
     required: false,
   })
-  crowdLevel?:
-    | "very_low"
-    | "low"
-    | "moderate"
-    | "high"
-    | "very_high"
-    | "closed";
+  crowdLevel?: CrowdLevel | "closed";
 
   @ApiProperty({
     description: "Wait time trend",
@@ -269,9 +272,9 @@ export class ParkStatisticsDto {
 
   @ApiProperty({
     description: "Crowd level",
-    enum: ["very_low", "low", "moderate", "high", "very_high"],
+    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
   })
-  crowdLevel: "very_low" | "low" | "moderate" | "high" | "very_high";
+  crowdLevel: CrowdLevel;
 
   @ApiProperty({ description: "Total attractions count" })
   totalAttractions: number;
