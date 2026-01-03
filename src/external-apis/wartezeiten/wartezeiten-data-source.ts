@@ -107,15 +107,39 @@ export class WartezeitenDataSource implements IDataSource {
     // Result: 30 parks × 1 call = 30 calls/sync (instead of 90) = 6 calls/min
     const waitTimes = await this.client.getWaitTimes(externalId, "en");
 
-    const entities: EntityLiveData[] = waitTimes.map((attraction) => ({
-      externalId: attraction.uuid,
-      source: this.name,
-      entityType: EntityType.ATTRACTION, // Wartezeiten only has attractions
-      name: attraction.name,
-      status: this.mapStatus(attraction.status),
-      waitTime: attraction.waitingtime > 0 ? attraction.waitingtime : undefined,
-      lastUpdated: attraction.datetime,
-    }));
+    const entities: EntityLiveData[] = waitTimes.map((attraction) => {
+      const baseEntity: EntityLiveData = {
+        externalId: attraction.uuid,
+        source: this.name,
+        entityType: EntityType.ATTRACTION, // Wartezeiten only has attractions
+        name: attraction.name,
+        status: this.mapStatus(attraction.status),
+        waitTime:
+          attraction.waitingtime > 0 ? attraction.waitingtime : undefined,
+        lastUpdated: attraction.datetime,
+      };
+
+      // Handle virtual queue status
+      // If status is VIRTUAL_QUEUE, create a RETURN_TIME queue entry
+      if (attraction.status === WartezeitenAttractionStatus.VIRTUAL_QUEUE) {
+        baseEntity.queue = {
+          RETURN_TIME: {
+            state: "AVAILABLE",
+            // Note: Wartezeiten doesn't provide return time windows
+            // We only know it's a virtual queue, not the actual return times
+          },
+        };
+      } else if (attraction.waitingtime > 0) {
+        // Regular standby queue
+        baseEntity.queue = {
+          STANDBY: {
+            waitTime: attraction.waitingtime,
+          },
+        };
+      }
+
+      return baseEntity;
+    });
 
     return {
       source: this.name,
@@ -184,7 +208,7 @@ export class WartezeitenDataSource implements IDataSource {
       hasRestaurants: false,
       hasLands: false,
       hasForecasts: false,
-      hasMultipleQueueTypes: false,
+      hasMultipleQueueTypes: true, // STANDBY + RETURN_TIME (virtual queue)
     };
   }
 

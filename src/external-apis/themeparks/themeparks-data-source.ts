@@ -78,14 +78,10 @@ export class ThemeParksDataSource implements IDataSource {
       status: this.mapStatus(entity.status),
       waitTime: entity.queue?.STANDBY?.waitTime ?? undefined,
       lastUpdated: entity.lastUpdated,
-      queue: entity.queue
-        ? Object.entries(entity.queue).map(([queueType, data]) => ({
-            queueType,
-            state: data.state,
-            returnStart: data.returnStart,
-            returnEnd: data.returnEnd,
-          }))
-        : undefined,
+      // CRITICAL FIX: Keep queue as object (not array) to preserve all queue type data
+      // The processor expects: { STANDBY: {...}, SINGLE_RIDER: {...}, etc }
+      // NOT an array: [{ queueType: 'STANDBY', ... }, ...]
+      queue: entity.queue ?? undefined,
       showtimes: entity.showtimes,
       operatingHours: entity.operatingHours,
       diningAvailability: entity.diningAvailability ? "available" : undefined,

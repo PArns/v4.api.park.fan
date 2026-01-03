@@ -1134,6 +1134,7 @@ export class AnalyticsService {
           qd."attractionId",
           qd.status
         FROM queue_data qd
+        WHERE qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT COUNT(*) as operating_count
@@ -2035,6 +2036,7 @@ export class AnalyticsService {
         JOIN attractions a ON a.id = qd."attractionId"
         JOIN park_status ps ON ps."parkId" = a."parkId"
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
+          AND qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
       ),
       park_stats AS (
@@ -2057,6 +2059,7 @@ export class AnalyticsService {
               FROM queue_data qd
               WHERE qd."attractionId" = a.id
                 AND qd.timestamp > NOW() - INTERVAL '24 hours'
+                AND qd."queueType" = 'STANDBY'
               ORDER BY timestamp DESC
               LIMIT 1
             ) latest_status ON true
@@ -2580,6 +2583,7 @@ export class AnalyticsService {
         JOIN attractions a ON a.id = qd."attractionId"
         JOIN park_status ps ON ps."parkId" = a."parkId"
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
+          AND qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
       ),
       park_stats AS (

@@ -118,12 +118,10 @@ export interface EntityLiveData {
   longitude?: number;
 
   // Queue-specific data
-  queue?: {
-    queueType: string;
-    state?: string;
-    returnStart?: string;
-    returnEnd?: string;
-  }[];
+  // UPDATED: Support object format from ThemeParks.wiki for multiple queue types
+  // Structure: { STANDBY: {...}, SINGLE_RIDER: {...}, RETURN_TIME: {...}, etc }
+  // This enables storing waitTime, returnStart/End, price, boarding group data
+  queue?: any; // QueueData from themeparks.types (avoid circular dependency)
 
   // Show-specific data
   showtimes?: Showtime[];
