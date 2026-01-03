@@ -19,6 +19,7 @@ import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
+import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
@@ -204,6 +205,7 @@ export class MLService {
         .andWhere("q.timestamp > :cutoff", {
           cutoff: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
         })
+        .andWhere("q.queueType = :queueType", { queueType: QueueType.STANDBY })
         .getRawMany();
 
       const activeIdSet = new Set(activeAttractions.map((a) => a.id));
@@ -246,6 +248,9 @@ export class MLService {
             .andWhere("q.timestamp >= :recent", {
               recent: new Date(Date.now() - 3 * 60 * 60 * 1000), // Last 3 hours (tolerant to stale data)
             })
+            .andWhere("q.queueType = :queueType", {
+              queueType: QueueType.STANDBY,
+            })
             .orderBy("q.attractionId")
             .addOrderBy("q.timestamp", "DESC")
             .getMany();
@@ -269,6 +274,9 @@ export class MLService {
             .andWhere("q.timestamp BETWEEN :min AND :max", {
               min: windowMin,
               max: windowMax,
+            })
+            .andWhere("q.queueType = :queueType", {
+              queueType: QueueType.STANDBY,
             })
             .andWhere("q.waitTime IS NOT NULL")
             .getMany();
@@ -631,7 +639,7 @@ export class MLService {
     if (predictionType === "hourly") {
       try {
         const latestData = await this.queueDataRepository.findOne({
-          where: { attractionId },
+          where: { attractionId, queueType: QueueType.STANDBY },
           order: { timestamp: "DESC" },
         });
 
@@ -658,6 +666,9 @@ export class MLService {
           .where("q.attractionId = :attractionId", { attractionId })
           .andWhere("q.timestamp >= :windowMin", { windowMin })
           .andWhere("q.timestamp <= :windowMax", { windowMax })
+          .andWhere("q.queueType = :queueType", {
+            queueType: QueueType.STANDBY,
+          })
           .orderBy("ABS(EXTRACT(EPOCH FROM (q.timestamp - :target)))", "ASC")
           .setParameter("target", thirtyAgo)
           .getOne();
