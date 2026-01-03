@@ -20,8 +20,11 @@
     "^@analytics/(.*)$": "<rootDir>/../src/analytics/$1",
     "^@destinations/(.*)$": "<rootDir>/../src/destinations/$1",
     "^@search/(.*)$": "<rootDir>/../src/search/$1",
-    "^@ml/(.*)$": "<rootDir>/../src/ml/$1"
+    "^@ml/(.*)$": "<rootDir>/../src/ml/$1",
+    "^uuid$": "<rootDir>/mocks/uuid.ts",
+    "^marked$": "<rootDir>/mocks/marked.ts"
   },
+  "transformIgnorePatterns": ["node_modules/(?!(uuid|string-similarity|marked)/)"],
   "collectCoverageFrom": [
     "../src/**/*.(t|j)s",
     "!../src/main.ts",

@@ -79,7 +79,9 @@ describe("SearchController (E2E)", () => {
 
       expect(response.body).toHaveProperty("results");
       expect(response.body.results).toHaveLength(0);
-      expect(response.body).toHaveProperty("total", 0);
+      expect(response.body).toHaveProperty("counts");
+      expect(response.body.counts.park.total).toBe(0);
+      expect(response.body.counts.attraction.total).toBe(0);
     });
 
     it("should find parks by name", async () => {
@@ -141,10 +143,14 @@ describe("SearchController (E2E)", () => {
       await seedMinimalTestData(app);
 
       const response = await request(app.getHttpServer())
-        .get("/v1/search?q=test&limit=5")
+        .get("/v1/search?q=test&limit=2")
         .expect(200);
 
-      expect(response.body.results.length).toBeLessThanOrEqual(5);
+      const parks = response.body.results.filter((r: any) => r.type === "park");
+      const attractions = response.body.results.filter((r: any) => r.type === "attraction");
+
+      expect(parks.length).toBeLessThanOrEqual(2);
+      expect(attractions.length).toBeLessThanOrEqual(2);
     });
 
     it("should perform fuzzy matching", async () => {

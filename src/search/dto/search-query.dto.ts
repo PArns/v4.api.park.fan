@@ -1,5 +1,5 @@
-import { IsString, MinLength, IsOptional, IsArray } from "class-validator";
-import { Transform } from "class-transformer";
+import { IsString, MinLength, IsOptional, IsArray, IsInt, Min, Max } from "class-validator";
+import { Transform, Type } from "class-transformer";
 import { ApiProperty } from "@nestjs/swagger";
 
 export class SearchQueryDto {
@@ -25,4 +25,18 @@ export class SearchQueryDto {
   )
   @IsArray()
   type?: string[];
+
+  @ApiProperty({
+    description: "Maximum number of results per type",
+    required: false,
+    example: 5,
+    minimum: 1,
+    maximum: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  limit?: number = 5;
 }

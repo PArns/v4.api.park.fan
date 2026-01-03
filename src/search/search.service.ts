@@ -1,4 +1,4 @@
-import { Injectable, Inject } from "@nestjs/common";
+import { Injectable, Inject, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Brackets, Between } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -21,7 +21,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 @Injectable()
-export class SearchService {
+export class SearchService implements OnModuleInit {
   private readonly CACHE_TTL = 60; // 1 minute (aligned with frontend revalidation)
 
   constructor(
@@ -40,15 +40,71 @@ export class SearchService {
     private readonly queueDataService: QueueDataService,
     private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
+
+  async onModuleInit() {
+    // Initialize pg_trgm extension and indices for fuzzy search
+    try {
+      await this.parkRepository.query(
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm;",
+      );
+
+      // Create indices concurrently if possible, but safe here without valid concurrently in transaction block usually
+      // Park indices
+      await this.parkRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_park_name_trgm ON parks USING gin (name gin_trgm_ops);",
+      );
+      await this.parkRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_park_city_trgm ON parks USING gin (city gin_trgm_ops);",
+      );
+      await this.parkRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_park_country_trgm ON parks USING gin (country gin_trgm_ops);",
+      );
+
+      // Attraction indices
+      await this.attractionRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_attraction_name_trgm ON attractions USING gin (name gin_trgm_ops);",
+      );
+      await this.attractionRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_attraction_land_name_trgm ON attractions USING gin (land_name gin_trgm_ops);",
+      );
+
+      // Show indices
+      await this.showRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_show_name_trgm ON shows USING gin (name gin_trgm_ops);",
+      );
+
+      // Restaurant indices
+      await this.restaurantRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_restaurant_name_trgm ON restaurants USING gin (name gin_trgm_ops);",
+      );
+
+      console.log("✅ Fuzzy search extensions and indices initialized.");
+    } catch (error) {
+      console.warn("⚠️ Failed to initialize fuzzy search indices:", error);
+    }
+  }
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
     const { q, type } = query;
-    const limit = 5; // Fixed limit per type
+    const limit = query.limit || 5; // Use generic limit or default
+
+    if (!q || q.length < 2) {
+      return {
+        query: q,
+        results: [],
+        counts: {
+          park: { returned: 0, total: 0 },
+          attraction: { returned: 0, total: 0 },
+          show: { returned: 0, total: 0 },
+          restaurant: { returned: 0, total: 0 },
+        },
+      };
+    }
 
     // Build cache key
     const typeKey = type && type.length > 0 ? type.join(",") : "all";
-    const cacheKey = `search:${typeKey}:${q.toLowerCase()}`;
+    const cacheKey = `search:fuzzy:v1:${typeKey}:${q.toLowerCase()}`;
 
     // Try cache first
     const cached = await this.redis.get(cacheKey);
@@ -72,45 +128,46 @@ export class SearchService {
 
     // Search parks
     if (searchTypes.includes("park")) {
-      const totalParks = await this.countParks(q);
       const parks = await this.searchParks(q, limit);
+      // We do a separate count query or just use the length if we didn't hit limit?
+      // For accurate "total" with fuzzy search, it's expensive.
+      // Let's approximate total as length for now or do a count query if needed.
+      // Given fuzzy nature, "total matches" is ambiguous (depends on threshold).
+      // We'll use the returned length as total for now to save perf, or run a count if strictly needed.
       const enrichedParks = await this.enrichParkResults(parks);
       results.push(...enrichedParks);
-      counts.park = { returned: enrichedParks.length, total: totalParks };
+      counts.park = { returned: enrichedParks.length, total: parks.length };
     }
 
     // Search attractions
     if (searchTypes.includes("attraction")) {
-      const totalAttractions = await this.countAttractions(q);
       const attractions = await this.searchAttractions(q, limit);
       const enrichedAttractions =
         await this.enrichAttractionResults(attractions);
       results.push(...enrichedAttractions);
       counts.attraction = {
         returned: enrichedAttractions.length,
-        total: totalAttractions,
+        total: attractions.length,
       };
     }
 
     // Search shows
     if (searchTypes.includes("show")) {
-      const totalShows = await this.countShows(q);
       const shows = await this.searchShows(q, limit);
       const enrichedShows = await this.enrichShowResults(shows);
       results.push(...enrichedShows);
-      counts.show = { returned: enrichedShows.length, total: totalShows };
+      counts.show = { returned: enrichedShows.length, total: shows.length };
     }
 
     // Search restaurants
     if (searchTypes.includes("restaurant")) {
-      const totalRestaurants = await this.countRestaurants(q);
       const restaurants = await this.searchRestaurants(q, limit);
       const enrichedRestaurants =
         await this.enrichRestaurantResults(restaurants);
       results.push(...enrichedRestaurants);
       counts.restaurant = {
         returned: enrichedRestaurants.length,
-        total: totalRestaurants,
+        total: restaurants.length,
       };
     }
 
@@ -132,24 +189,7 @@ export class SearchService {
   }
 
   /**
-   * Count parks matching query
-   */
-  private async countParks(query: string): Promise<number> {
-    return this.parkRepository
-      .createQueryBuilder("park")
-      .where(
-        new Brackets((qb) => {
-          qb.where("park.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .getCount();
-  }
-
-  /**
-   * Search parks by name, city, country, or continent
+   * Search parks with fuzzy matching
    */
   private async searchParks(
     query: string,
@@ -164,78 +204,89 @@ export class SearchService {
       | "longitude"
       | "continentSlug"
       | "countrySlug"
+      | "countryCode"
       | "citySlug"
       | "continent"
       | "country"
-      | "countryCode"
       | "city"
       | "destination"
     >[]
   > {
-    return this.parkRepository
-      .createQueryBuilder("park")
-      .leftJoinAndSelect("park.destination", "destination")
-      .select([
-        "park.id",
-        "park.slug",
-        "park.name",
-        "park.latitude",
-        "park.longitude",
-        "park.continentSlug",
-        "park.countrySlug",
-        "park.citySlug",
-        "park.continent",
-        "park.country",
-        "park.countryCode",
-        "park.city",
-        "destination.id",
-        "destination.name",
-      ])
-      .where(
-        new Brackets((qb) => {
-          qb.where("park.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .orderBy(
-        "CASE WHEN LOWER(park.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
-        "ASC",
-      )
-      .addOrderBy("park.name", "ASC")
-      .setParameter("exactQuery", query)
-      .setParameter("startsWith", `${query}%`)
-      .limit(limit)
-      .getMany();
+    const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+
+    return (
+      this.parkRepository
+        .createQueryBuilder("park")
+        .leftJoinAndSelect("park.destination", "destination")
+        .select([
+          "park.id",
+          "park.slug",
+          "park.name",
+          "park.latitude",
+          "park.longitude",
+          "park.continentSlug",
+          "park.countrySlug",
+          "park.countryCode",
+          "park.citySlug",
+          "park.continent",
+          "park.country",
+          "park.city",
+          "destination.id",
+          "destination.name",
+        ])
+        .where(
+          new Brackets((qb) => {
+            // 1. Exact or Like Match
+            qb.where("park.name ILIKE :query", { query: `%${query}%` })
+              .orWhere("park.city ILIKE :query")
+              .orWhere("park.country ILIKE :query")
+              .orWhere("park.continent ILIKE :query")
+              // 2. Normalized Match (ignores special chars)
+              .orWhere(
+                "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
+                { normalizedQuery: `%${normalizedQuery}%` },
+              )
+              // 3. Fuzzy Match
+              .orWhere("similarity(park.name, :query) > 0.3")
+              .orWhere("similarity(park.city, :query) > 0.3")
+              .orWhere("similarity(park.country, :query) > 0.3");
+          }),
+        )
+        .orderBy(
+          // Prioritize:
+          // 0. Exact Name Match (e.g. "fly" == "fly")
+          // 1. Normalized Exact Match (e.g. "F.L.Y." -> "fly" == "fly")
+          // 2. Exact City Match (e.g. "Orlando")
+          // 3. Prefix Match (e.g. "Flying..." starts with "fly")
+          // 4. Others
+          `CASE
+          WHEN LOWER(park.name) = LOWER(:exactQuery) THEN 0
+          WHEN REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
+          WHEN LOWER(park.city) = LOWER(:exactQuery) THEN 2
+          WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 3
+          ELSE 4
+        END`,
+          "ASC",
+        )
+        // Secondary sort by similarity
+        .addOrderBy("similarity(park.name, :query)", "DESC")
+        .setParameter("exactQuery", query)
+        .setParameter("startsWith", `${query}%`)
+        .setParameter("normalizedQueryExact", normalizedQuery)
+        .setParameter("query", query) // Ensure query parameter is available for similarity
+        .limit(limit)
+        .getMany()
+    );
   }
 
   /**
-   * Count attractions matching query
-   */
-  private async countAttractions(query: string): Promise<number> {
-    return this.attractionRepository
-      .createQueryBuilder("attraction")
-      .leftJoin("attraction.park", "park")
-      .where(
-        new Brackets((qb) => {
-          qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .getCount();
-  }
-
-  /**
-   * Search attractions by name OR by park location
+   * Search attractions with fuzzy matching (including Land)
    */
   private async searchAttractions(
     query: string,
     limit: number,
   ): Promise<
-    (Pick<Attraction, "id" | "slug" | "name"> & {
+    (Pick<Attraction, "id" | "slug" | "name" | "landName"> & {
       park?: Pick<
         Park,
         | "id"
@@ -245,75 +296,88 @@ export class SearchService {
         | "longitude"
         | "continentSlug"
         | "countrySlug"
+        | "countryCode"
         | "citySlug"
         | "continent"
         | "country"
-        | "countryCode"
         | "city"
         | "destination"
       >;
     })[]
   > {
-    return this.attractionRepository
-      .createQueryBuilder("attraction")
-      .leftJoinAndSelect("attraction.park", "park")
-      .leftJoinAndSelect("park.destination", "destination")
-      .select([
-        "attraction.id",
-        "attraction.slug",
-        "attraction.name",
-        "park.id",
-        "park.slug",
-        "park.name",
-        "park.latitude",
-        "park.longitude",
-        "park.continentSlug",
-        "park.countrySlug",
-        "park.citySlug",
-        "park.continent",
-        "park.country",
-        "park.countryCode",
-        "park.city",
-        "destination.id",
-        "destination.name",
-      ])
-      .where(
-        new Brackets((qb) => {
-          qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .orderBy(
-        "CASE WHEN LOWER(attraction.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(attraction.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
-        "ASC",
-      )
-      .addOrderBy("attraction.name", "ASC")
-      .setParameter("exactQuery", query)
-      .setParameter("startsWith", `${query}%`)
-      .limit(limit)
-      .getMany();
+    const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+
+    return (
+      this.attractionRepository
+        .createQueryBuilder("attraction")
+        .leftJoinAndSelect("attraction.park", "park")
+        .leftJoinAndSelect("park.destination", "destination")
+        .select([
+          "attraction.id",
+          "attraction.slug",
+          "attraction.name",
+          "attraction.landName",
+          "park.id",
+          "park.slug",
+          "park.name",
+          "park.latitude",
+          "park.longitude",
+          "park.continentSlug",
+          "park.countrySlug",
+          "park.countryCode",
+          "park.citySlug",
+          "park.continent",
+          "park.country",
+          "park.city",
+          "destination.id",
+          "destination.name",
+        ])
+        .where(
+          new Brackets((qb) => {
+            qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
+              // Land Name Match
+              .orWhere("attraction.landName ILIKE :query")
+              // Normalized Name Match
+              .orWhere(
+                "REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
+                { normalizedQuery: `%${normalizedQuery}%` },
+              )
+              // Normalized Land Match
+              .orWhere(
+                "REGEXP_REPLACE(attraction.landName, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
+              )
+              // Fuzzy Matches
+              .orWhere("similarity(attraction.name, :query) > 0.3")
+              .orWhere("similarity(attraction.landName, :query) > 0.3")
+              // Parent Park Location Fuzzy Matches
+              .orWhere("similarity(park.city, :query) > 0.3")
+              .orWhere("similarity(park.country, :query) > 0.3");
+          }),
+        )
+        .orderBy(
+          `CASE
+            WHEN LOWER(attraction.name) = LOWER(:exactQuery) THEN 0
+            WHEN REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
+            WHEN LOWER(attraction.name) LIKE LOWER(:startsWith) THEN 2
+            ELSE 3
+          END`,
+          "ASC",
+        )
+        .addOrderBy("similarity(attraction.name, :query)", "DESC")
+        // Secondary sort: if searching for land, show land matches
+        .addOrderBy("similarity(attraction.landName, :query)", "DESC")
+        .setParameter("exactQuery", query)
+        .setParameter("startsWith", `${query}%`)
+        .setParameter("normalizedQueryExact", normalizedQuery)
+        .setParameter("query", query)
+        .limit(limit)
+        .getMany()
+    );
   }
 
   /**
-   * Count shows matching query
+   * Search shows with fuzzy matching
    */
-  private async countShows(query: string): Promise<number> {
-    return this.showRepository
-      .createQueryBuilder("show")
-      .leftJoin("show.park", "park")
-      .where(
-        new Brackets((qb) => {
-          qb.where("show.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .getCount();
-  }
-
   private async searchShows(
     query: string,
     limit: number,
@@ -328,15 +392,17 @@ export class SearchService {
         | "longitude"
         | "continentSlug"
         | "countrySlug"
+        | "countryCode"
         | "citySlug"
         | "continent"
         | "country"
-        | "countryCode"
         | "city"
         | "destination"
       >;
     })[]
   > {
+    const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+
     return this.showRepository
       .createQueryBuilder("show")
       .leftJoinAndSelect("show.park", "park")
@@ -352,10 +418,10 @@ export class SearchService {
         "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
+        "park.countryCode",
         "park.citySlug",
         "park.continent",
         "park.country",
-        "park.countryCode",
         "park.city",
         "destination.id",
         "destination.name",
@@ -363,40 +429,36 @@ export class SearchService {
       .where(
         new Brackets((qb) => {
           qb.where("show.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
+            .orWhere(
+              "REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
+              { normalizedQuery: `%${normalizedQuery}%` },
+            )
+            .orWhere("similarity(show.name, :query) > 0.1")
+            .orWhere("similarity(park.city, :query) > 0.2")
+            .orWhere("similarity(park.country, :query) > 0.2");
         }),
       )
       .orderBy(
-        "CASE WHEN LOWER(show.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(show.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        `CASE
+          WHEN LOWER(show.name) = LOWER(:exactQuery) THEN 0
+          WHEN REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
+          WHEN LOWER(show.name) LIKE LOWER(:startsWith) THEN 2
+          ELSE 3
+        END`,
         "ASC",
       )
-      .addOrderBy("show.name", "ASC")
+      .addOrderBy("similarity(show.name, :query)", "DESC")
       .setParameter("exactQuery", query)
       .setParameter("startsWith", `${query}%`)
+      .setParameter("normalizedQueryExact", normalizedQuery)
+      .setParameter("query", query)
       .limit(limit)
       .getMany();
   }
 
   /**
-   * Count restaurants matching query
+   * Search restaurants with fuzzy matching
    */
-  private async countRestaurants(query: string): Promise<number> {
-    return this.restaurantRepository
-      .createQueryBuilder("restaurant")
-      .leftJoin("restaurant.park", "park")
-      .where(
-        new Brackets((qb) => {
-          qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
-        }),
-      )
-      .getCount();
-  }
-
   private async searchRestaurants(
     query: string,
     limit: number,
@@ -411,15 +473,17 @@ export class SearchService {
         | "longitude"
         | "continentSlug"
         | "countrySlug"
+        | "countryCode"
         | "citySlug"
         | "continent"
         | "country"
-        | "countryCode"
         | "city"
         | "destination"
       >;
     })[]
   > {
+    const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+
     return this.restaurantRepository
       .createQueryBuilder("restaurant")
       .leftJoinAndSelect("restaurant.park", "park")
@@ -435,10 +499,10 @@ export class SearchService {
         "park.longitude",
         "park.continentSlug",
         "park.countrySlug",
+        "park.countryCode",
         "park.citySlug",
         "park.continent",
         "park.country",
-        "park.countryCode",
         "park.city",
         "destination.id",
         "destination.name",
@@ -446,18 +510,29 @@ export class SearchService {
       .where(
         new Brackets((qb) => {
           qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
-            .orWhere("park.city ILIKE :query")
-            .orWhere("park.country ILIKE :query")
-            .orWhere("park.continent ILIKE :query");
+            .orWhere(
+              "REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
+              { normalizedQuery: `%${normalizedQuery}%` },
+            )
+            .orWhere("similarity(restaurant.name, :query) > 0.1")
+            .orWhere("similarity(park.city, :query) > 0.2")
+            .orWhere("similarity(park.country, :query) > 0.2");
         }),
       )
       .orderBy(
-        "CASE WHEN LOWER(restaurant.name) = LOWER(:exactQuery) THEN 0 WHEN LOWER(restaurant.name) LIKE LOWER(:startsWith) THEN 1 ELSE 2 END",
+        `CASE
+          WHEN LOWER(restaurant.name) = LOWER(:exactQuery) THEN 0
+          WHEN REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
+          WHEN LOWER(restaurant.name) LIKE LOWER(:startsWith) THEN 2
+          ELSE 3
+        END`,
         "ASC",
       )
-      .addOrderBy("restaurant.name", "ASC")
+      .addOrderBy("similarity(restaurant.name, :query)", "DESC")
       .setParameter("exactQuery", query)
       .setParameter("startsWith", `${query}%`)
+      .setParameter("normalizedQueryExact", normalizedQuery)
+      .setParameter("query", query)
       .limit(limit)
       .getMany();
   }
@@ -577,11 +652,11 @@ export class SearchService {
         waitTime,
         parentPark: attraction.park
           ? {
-              id: attraction.park.id,
-              name: attraction.park.name,
-              slug: attraction.park.slug,
-              url: buildParkUrl(attraction.park),
-            }
+            id: attraction.park.id,
+            name: attraction.park.name,
+            slug: attraction.park.slug,
+            url: buildParkUrl(attraction.park),
+          }
           : null,
       };
     });
@@ -633,11 +708,11 @@ export class SearchService {
         showTimes: isParkOpen ? showTimesMap.get(show.id) || null : null,
         parentPark: show.park
           ? {
-              id: show.park.id,
-              name: show.park.name,
-              slug: show.park.slug,
-              url: buildParkUrl(show.park),
-            }
+            id: show.park.id,
+            name: show.park.name,
+            slug: show.park.slug,
+            url: buildParkUrl(show.park),
+          }
           : null,
       };
     });
@@ -668,11 +743,11 @@ export class SearchService {
       resort: restaurant.park?.destination?.name || null,
       parentPark: restaurant.park
         ? {
-            id: restaurant.park.id,
-            name: restaurant.park.name,
-            slug: restaurant.park.slug,
-            url: buildParkUrl(restaurant.park),
-          }
+          id: restaurant.park.id,
+          name: restaurant.park.name,
+          slug: restaurant.park.slug,
+          url: buildParkUrl(restaurant.park),
+        }
         : null,
     }));
   }
@@ -759,6 +834,17 @@ export class SearchService {
   }
 
   /**
+   * Determine park crowd level from occupancy percentage
+   */
+  private determineParkCrowdLevel(occupancyPercentage: number): CrowdLevel {
+    if (occupancyPercentage <= 20) return "very_low";
+    if (occupancyPercentage <= 40) return "low";
+    if (occupancyPercentage <= 70) return "moderate";
+    if (occupancyPercentage <= 90) return "high";
+    return "very_high";
+  }
+
+  /**
    * Batch fetch today's operating hours for parks
    */
   private async getBatchParkHours(
@@ -799,7 +885,7 @@ export class SearchService {
             });
           }
         } catch {
-          // Skip parks without schedule data
+          // Ignore missing schedule
         }
       }),
     );
@@ -808,40 +894,7 @@ export class SearchService {
   }
 
   /**
-   * Batch fetch today's show times for shows
-   */
-  private async getBatchShowTimes(
-    showIds: string[],
-  ): Promise<Map<string, string[]>> {
-    const showTimesMap = new Map<string, string[]>();
-
-    await Promise.all(
-      showIds.map(async (showId) => {
-        try {
-          // Get current status which includes showtimes
-          const liveData =
-            await this.showsService.findCurrentStatusByShow(showId);
-          if (liveData && liveData.showtimes && liveData.showtimes.length > 0) {
-            // Extract start times from showtime objects
-            const times = liveData.showtimes
-              .map((st: any) => st.startTime)
-              .filter(Boolean)
-              .sort();
-            if (times.length > 0) {
-              showTimesMap.set(showId, times);
-            }
-          }
-        } catch {
-          // Skip shows without showtime data
-        }
-      }),
-    );
-
-    return showTimesMap;
-  }
-
-  /**
-   * Batch fetch load levels for parks from analytics cache
+   * Batch fetch park load levels (occupancy)
    */
   private async getBatchLoadLevels(
     parkIds: string[],
@@ -851,11 +904,16 @@ export class SearchService {
     await Promise.all(
       parkIds.map(async (parkId) => {
         try {
+          // Use today's date for occupancy
           const occupancy =
             await this.analyticsService.calculateParkOccupancy(parkId);
-          loadMap.set(parkId, this.determineCrowdLevel(occupancy.current));
+          if (occupancy) {
+            // Map occupancy percentage to CrowdLevel directly
+            const crowdLevel = this.determineParkCrowdLevel(occupancy.current);
+            loadMap.set(parkId, crowdLevel);
+          }
         } catch {
-          // Skip parks without occupancy data
+          // Ignore errors
         }
       }),
     );
@@ -864,30 +922,52 @@ export class SearchService {
   }
 
   /**
-   * Batch fetch park statuses for a list of entities with optional park reference
+   * Batch fetch show times for operating shows
    */
-  private async getParkStatusMap(
-    entities: { park?: { id: string } }[],
-  ): Promise<Map<string, string>> {
-    const parkIds = [
-      ...new Set(
-        entities.map((e) => e.park?.id).filter((id): id is string => !!id),
-      ),
-    ];
-    if (parkIds.length === 0) {
-      return new Map();
-    }
-    return this.parksService.getBatchParkStatus(parkIds);
+  private async getBatchShowTimes(
+    showIds: string[],
+  ): Promise<Map<string, string[]>> {
+    const showTimesMap = new Map<string, string[]>();
+
+    await Promise.all(
+      showIds.map(async (showId) => {
+        try {
+          const liveData =
+            await this.showsService.findCurrentStatusByShow(showId);
+
+          if (liveData && liveData.showtimes) {
+            const times = liveData.showtimes
+              .map((st) => st.startTime)
+              .filter((t) => !!t) as string[];
+
+            if (times.length > 0) {
+              showTimesMap.set(showId, times);
+            }
+          }
+        } catch {
+          // Ignore errors
+        }
+      }),
+    );
+
+    return showTimesMap;
   }
 
   /**
-   * Convert occupancy percentage to crowd level
+   * Helper to get batch park status for a list of items with park property
    */
-  private determineCrowdLevel(occupancy: number): CrowdLevel {
-    if (occupancy < 20) return "very_low";
-    if (occupancy < 40) return "low";
-    if (occupancy < 70) return "moderate";
-    if (occupancy < 95) return "high";
-    return "very_high";
+  private async getParkStatusMap(items: any[]): Promise<Map<string, string>> {
+    const parkIds = new Set<string>();
+    items.forEach((item) => {
+      if (item.park && item.park.id) {
+        parkIds.add(item.park.id);
+      }
+    });
+
+    if (parkIds.size === 0) {
+      return new Map();
+    }
+
+    return this.parksService.getBatchParkStatus(Array.from(parkIds));
   }
 }
