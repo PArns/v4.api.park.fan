@@ -2,14 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { AppModule } from '../../src/app.module';
-import { setupTestDatabase, teardownTestDatabase } from '../helpers/test-app.helper';
 
 describe('Park Analytics (e2e)', () => {
     let app: INestApplication;
 
     beforeAll(async () => {
-        await setupTestDatabase();
-
         const moduleFixture: TestingModule = await Test.createTestingModule({
             imports: [AppModule],
         }).compile();
@@ -20,7 +17,6 @@ describe('Park Analytics (e2e)', () => {
 
     afterAll(async () => {
         await app.close();
-        await teardownTestDatabase();
     });
 
     describe('GET /v1/parks/:continent/:country/:city/:slug', () => {

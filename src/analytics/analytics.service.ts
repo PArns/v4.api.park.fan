@@ -478,7 +478,7 @@ export class AnalyticsService {
         SELECT DISTINCT ON (qd."attractionId") 
           qd."waitTime"
         FROM queue_data qd
-        JOIN attraction a ON qd."attractionId" = a.id
+        JOIN attractions a ON qd."attractionId" = a.id
         WHERE a."parkId" = $1
           AND qd.timestamp >= $2
           AND qd.status = 'OPERATING'
