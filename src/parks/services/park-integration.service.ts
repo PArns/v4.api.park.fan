@@ -74,7 +74,7 @@ export class ParkIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(AttractionAccuracyStats)
     private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
-  ) {}
+  ) { }
 
   /**
    * Build integrated park response with live data
@@ -195,7 +195,7 @@ export class ParkIntegrationService {
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
     if (status === "CLOSED" && park.externalId) {
       try {
-        console.time(`[Perf] FallbackStatus-${park.slug}`);
+
         const eid = park.externalId;
 
         // --- STRATEGY 1: Queue-Times (qt-) ---
@@ -205,9 +205,9 @@ export class ParkIntegrationService {
           const qtId = parseInt(qtIdStr, 10);
 
           if (!isNaN(qtId)) {
-            console.time(`[Perf] QT-Fetch-${park.slug}`);
+
             const qtData = await this.queueTimesClient.getParkQueueTimes(qtId);
-            console.timeEnd(`[Perf] QT-Fetch-${park.slug}`);
+
             // If ANY ride is open, the park is operating
             // We iterate lands and rides
             const allRides = [
@@ -229,10 +229,10 @@ export class ParkIntegrationService {
         else if (eid.startsWith("wz-")) {
           // Extract ID (e.g. "wz-phantasialand" -> "phantasialand")
           const wzId = eid.replace("wz-", "");
-          console.time(`[Perf] WZ-Fetch-${park.slug}`);
+
           const openingTimes =
             await this.wartezeitenClient.getOpeningTimes(wzId);
-          console.timeEnd(`[Perf] WZ-Fetch-${park.slug}`);
+
 
           if (
             openingTimes &&
@@ -260,11 +260,11 @@ export class ParkIntegrationService {
         else {
           // Default behavior for pure ThemeParks IDs (UUIDs)
           // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
-          console.time(`[Perf] Wiki-Fetch-${park.slug}`);
+
           const liveDataList = await this.themeParksClient.getParkLiveData(
             park.externalId,
           );
-          console.timeEnd(`[Perf] Wiki-Fetch-${park.slug}`);
+
           const liveData =
             liveDataList.find((x) => x.id === park.externalId) ||
             liveDataList[0];
@@ -308,7 +308,7 @@ export class ParkIntegrationService {
           `Failed to fetch fallback live data for ${park.name}: ${err}`,
         );
       } finally {
-        console.timeEnd(`[Perf] FallbackStatus-${park.slug}`);
+
       }
     }
     // Queue data already fetched in parallel above - just use it to detect activity
@@ -1030,7 +1030,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1173,9 +1173,8 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
+              } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,
