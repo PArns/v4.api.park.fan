@@ -371,6 +371,58 @@ describe("AnalyticsService", () => {
     });
   });
 
+  describe("getBatchAttractionStatistics", () => {
+    it("should return statistics for multiple attractions including peak timestamp", async () => {
+      const attractionIds = ["a1", "a2"];
+      const mockRows = [
+        {
+          attractionId: "a1",
+          min_wait: "5",
+          max_wait: "45",
+          avg_wait: "20.5",
+          count: "100",
+          max_timestamp: "2023-01-01T10:00:00.000Z",
+        },
+        {
+          attractionId: "a2",
+          min_wait: "10",
+          max_wait: "60",
+          avg_wait: "35.2",
+          count: "150",
+          max_timestamp: "2023-01-01T14:30:00.000Z",
+        },
+      ];
+
+      mockQueueDataRepository.query.mockResolvedValue(mockRows);
+
+      const result = await service.getBatchAttractionStatistics(attractionIds);
+
+      expect(result.size).toBe(2);
+
+      const stats1 = result.get("a1");
+      expect(stats1).toBeDefined();
+      expect(stats1?.min).toBe(5);
+      expect(stats1?.max).toBe(45);
+      expect(stats1?.avg).toBe(21); // Rounded
+      expect(stats1?.count).toBe(100);
+      expect(stats1?.maxTimestamp).toEqual(
+        new Date("2023-01-01T10:00:00.000Z"),
+      );
+
+      const stats2 = result.get("a2");
+      expect(stats2?.max).toBe(60);
+      expect(stats2?.maxTimestamp).toEqual(
+        new Date("2023-01-01T14:30:00.000Z"),
+      );
+    });
+
+    it("should return empty map if no attractions provided", async () => {
+      const result = await service.getBatchAttractionStatistics([]);
+      expect(result.size).toBe(0);
+      expect(mockQueueDataRepository.query).not.toHaveBeenCalled();
+    });
+  });
+
   describe("detectAttractionTrend", () => {
     it("should return stable when no data available", async () => {
       const queryBuilder = createMockQueryBuilder();

@@ -74,7 +74,7 @@ export class ParkIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(AttractionAccuracyStats)
     private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
-  ) { }
+  ) {}
 
   /**
    * Build integrated park response with live data
@@ -195,7 +195,6 @@ export class ParkIntegrationService {
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
     if (status === "CLOSED" && park.externalId) {
       try {
-
         const eid = park.externalId;
 
         // --- STRATEGY 1: Queue-Times (qt-) ---
@@ -205,7 +204,6 @@ export class ParkIntegrationService {
           const qtId = parseInt(qtIdStr, 10);
 
           if (!isNaN(qtId)) {
-
             const qtData = await this.queueTimesClient.getParkQueueTimes(qtId);
 
             // If ANY ride is open, the park is operating
@@ -232,7 +230,6 @@ export class ParkIntegrationService {
 
           const openingTimes =
             await this.wartezeitenClient.getOpeningTimes(wzId);
-
 
           if (
             openingTimes &&
@@ -308,7 +305,6 @@ export class ParkIntegrationService {
           `Failed to fetch fallback live data for ${park.name}: ${err}`,
         );
       } finally {
-
       }
     }
     // Queue data already fetched in parallel above - just use it to detect activity
@@ -387,13 +383,21 @@ export class ParkIntegrationService {
       const attractionIds = dto.attractions.map((a) => a.id);
 
       // Batch fetch P90s, pre-aggregated accuracy stats, and deviation flags in parallel
-      const [attractionP90s, accuracyStats, deviationMap] = await Promise.all([
+      const [
+        attractionP90s,
+        accuracyStats,
+        deviationMap,
+        attractionStatsMap,
+        attractionHistoryMap,
+      ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90s(attractionIds),
         // Use pre-aggregated stats table (1 simple query vs N+1)
         this.accuracyStatsRepository.find({
           where: { attractionId: In(attractionIds) },
         }),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
+        this.analyticsService.getBatchAttractionStatistics(attractionIds),
+        this.analyticsService.getBatchAttractionWaitTimeHistory(attractionIds),
       ]);
 
       // Build accuracy map from pre-aggregated stats
@@ -556,9 +560,51 @@ export class ParkIntegrationService {
             attraction.baseline = null;
             attraction.comparison = null;
           }
+
+          // Populate detailed statistics (peak today, history, etc.)
+          const stats = attractionStatsMap.get(attraction.id);
+          const history = attractionHistoryMap.get(attraction.id) || [];
+
+          if (stats) {
+            // Calculate current vs typical (if current wait exists)
+            // Note: typicalWaitThisHour calculation is complex to batch, so we might skip it for the list view
+            // or implement a simpler version. For now, we omit typicalWaitThisHour in the list to avoid N+1.
+            // But we can approximate `currentVsTypical` percentage if we had typical.
+            // Using p90 as a proxy for "busy day typical" or just 0 for now.
+
+            attraction.statistics = {
+              avgWaitToday: stats.avg,
+              peakWaitToday: stats.max,
+              peakWaitTimestamp: stats.maxTimestamp
+                ? stats.maxTimestamp.toISOString()
+                : null,
+              minWaitToday: stats.min,
+              dataPoints: stats.count,
+              typicalWaitThisHour: null, // Expensive to calculate per-ride in list
+              percentile95ThisHour: null,
+              currentVsTypical: null,
+              timestamp: new Date().toISOString(),
+              history: history,
+            };
+          } else {
+            // Fallback for operating rides with no data today (e.g. just opened)
+            attraction.statistics = {
+              avgWaitToday: 0,
+              peakWaitToday: 0,
+              peakWaitTimestamp: null,
+              minWaitToday: 0,
+              dataPoints: 0,
+              typicalWaitThisHour: null,
+              percentile95ThisHour: null,
+              currentVsTypical: null,
+              timestamp: new Date().toISOString(),
+              history: [],
+            };
+          }
         } else {
           attraction.baseline = null;
           attraction.comparison = null;
+          attraction.statistics = null;
         }
 
         // Attach Prediction Accuracy (from pre-aggregated stats table)
@@ -731,6 +777,7 @@ export class ParkIntegrationService {
           statistics: {
             avgWaitTime: statistics.avgWaitTime,
             avgWaitToday: statistics.avgWaitToday,
+            peakWaitToday: statistics.peakWaitToday,
             peakHour: statistics.peakHour,
             crowdLevel: statistics.crowdLevel,
             totalAttractions: totalAttractionsCount,
@@ -785,6 +832,7 @@ export class ParkIntegrationService {
           statistics: {
             avgWaitTime: 0, // No current wait
             avgWaitToday: statistics.avgWaitToday || 0, // Historical from when park was open today
+            peakWaitToday: statistics.peakWaitToday || 0,
             peakHour: statistics.peakHour || null, // Historical peak hour
             crowdLevel: "very_low", // Currently very low (closed)
             totalAttractions: totalAttractionsCount,
@@ -817,6 +865,7 @@ export class ParkIntegrationService {
           statistics: {
             avgWaitTime: 0,
             avgWaitToday: 0,
+            peakWaitToday: 0,
             peakHour: null,
             crowdLevel: "very_low",
             totalAttractions: totalAttractionsCount,
@@ -1030,7 +1079,7 @@ export class ParkIntegrationService {
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
-        `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
+          `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
       return cappedTTL;
@@ -1114,6 +1163,20 @@ export class ParkIntegrationService {
       const avgScore = Math.round(totalScore / predsToUse.length);
       const avgConfidence = totalConfidence / predsToUse.length;
 
+      const predsWithWait = predsToUse.filter(
+        (p) =>
+          p.predictedWaitTime !== undefined && p.predictedWaitTime !== null,
+      );
+      const avgWaitTime =
+        predsWithWait.length > 0
+          ? Math.round(
+              predsWithWait.reduce(
+                (sum, p) => sum + (p.predictedWaitTime || 0),
+                0,
+              ) / predsWithWait.length,
+            )
+          : undefined;
+
       const crowdLevel = reverseCrowdMap[avgScore] as any;
 
       let recommendation:
@@ -1137,6 +1200,7 @@ export class ParkIntegrationService {
         confidencePercentage: avgConfidence,
         recommendation,
         source: "ml", // Predictions come from our ML service
+        avgWaitTime,
       });
     }
 
@@ -1173,8 +1237,9 @@ export class ParkIntegrationService {
           confidenceAdjusted: p.confidence * 0.5, // Halve confidence
           deviationDetected: true,
           deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"
-              } than predicted`,
+            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
+              deviationFlag.deviation > 0 ? "higher" : "lower"
+            } than predicted`,
             deviation: deviationFlag.deviation,
             percentageDeviation: deviationFlag.percentageDeviation,
             detectedAt: deviationFlag.detectedAt,

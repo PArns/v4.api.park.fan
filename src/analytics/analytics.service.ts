@@ -643,6 +643,16 @@ export class AnalyticsService {
         ORDER BY hour_avg DESC
         LIMIT 1
       ),
+      today_max AS (
+        -- Find max wait time for the park today
+        SELECT MAX(qd."waitTime") as max_wait_today
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND qd.timestamp BETWEEN $3 AND $4
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+      ),
       today_avg AS (
         -- Overall average for today
         SELECT AVG(qd."waitTime") as avg_wait_today
@@ -667,6 +677,7 @@ export class AnalyticsService {
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
         (SELECT avg_wait_today FROM today_avg) as avg_wait_today,
+        (SELECT max_wait_today FROM today_max) as max_wait_today,
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
@@ -721,6 +732,7 @@ export class AnalyticsService {
     const statsDto: ParkStatisticsDto = {
       avgWaitTime: Math.round(currentAvgWait),
       avgWaitToday: Math.round(stats?.avg_wait_today || 0),
+      peakWaitToday: Math.round(stats?.max_wait_today || 0),
       peakHour: stats?.peak_hour
         ? `${String(Math.floor(stats.peak_hour)).padStart(2, "0")}:00`
         : null,
@@ -735,6 +747,137 @@ export class AnalyticsService {
     await this.redis.setex(cacheKey, 5 * 60, JSON.stringify(statsDto));
 
     return statsDto;
+  }
+
+  /**
+   * Get batch attraction statistics for today
+   * Returns: Avg, Min, Max wait time, and Timestamp of Max Wait
+   */
+  async getBatchAttractionStatistics(attractionIds: string[]): Promise<
+    Map<
+      string,
+      {
+        avg: number;
+        min: number;
+        max: number;
+        maxTimestamp: Date | null;
+        count: number;
+      }
+    >
+  > {
+    if (attractionIds.length === 0) return new Map();
+
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    // Use CTE to get stats and find the timestamp of the max wait
+    const result = await this.queueDataRepository.query(
+      `
+      WITH stats AS (
+        SELECT 
+          qd."attractionId",
+          AVG(qd."waitTime") as avg_wait,
+          MIN(qd."waitTime") as min_wait,
+          MAX(qd."waitTime") as max_wait,
+          COUNT(*) as count
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1)
+          AND qd.timestamp BETWEEN $2 AND $3
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY qd."attractionId"
+      ),
+      max_timestamps AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd.timestamp as max_timestamp
+        FROM queue_data qd
+        INNER JOIN stats s ON s."attractionId" = qd."attractionId"
+        WHERE qd."attractionId" = ANY($1)
+          AND qd.timestamp BETWEEN $2 AND $3
+          AND qd."waitTime" IS NOT NULL
+          -- Floating point comparison check
+          AND ABS(qd."waitTime" - s.max_wait) < 0.01
+          AND qd."queueType" = 'STANDBY'
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      )
+      SELECT 
+        s."attractionId",
+        s.avg_wait,
+        s.min_wait,
+        s.max_wait,
+        s.count,
+        mt.max_timestamp
+      FROM stats s
+      LEFT JOIN max_timestamps mt ON mt."attractionId" = s."attractionId"
+      `,
+      [attractionIds, startOfDay, now],
+    );
+
+    const map = new Map();
+    for (const row of result) {
+      map.set(row.attractionId, {
+        avg: row.avg_wait ? Math.round(parseFloat(row.avg_wait)) : 0,
+        min: row.min_wait ? Math.round(parseFloat(row.min_wait)) : 0,
+        max: row.max_wait ? Math.round(parseFloat(row.max_wait)) : 0,
+        maxTimestamp: row.max_timestamp ? new Date(row.max_timestamp) : null,
+        count: parseInt(row.count),
+      });
+    }
+
+    return map;
+  }
+
+  /**
+   * Get batch wait time history for sparklines (last 12 hours)
+   * Returns simplified list of timestamp/value pairs
+   */
+  async getBatchAttractionWaitTimeHistory(
+    attractionIds: string[],
+  ): Promise<Map<string, { timestamp: string; waitTime: number }[]>> {
+    if (attractionIds.length === 0) return new Map();
+
+    const now = new Date();
+    // Only last 12 hours for sparkline to keep it relevant and performant
+    // User requested "Tagesverlauf" (Daily progress), so from start of day is better?
+    // "Tagesverlauf" implies current day context.
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const result = await this.queueDataRepository
+      .createQueryBuilder("qd")
+      .select("qd.attractionId", "attractionId")
+      .addSelect("qd.timestamp", "timestamp")
+      .addSelect("qd.waitTime", "waitTime")
+      .where("qd.attractionId IN (:...ids)", { ids: attractionIds })
+      .andWhere("qd.timestamp >= :start", { start: startOfDay })
+      .andWhere("qd.status = :status", { status: "OPERATING" })
+      .andWhere("qd.waitTime IS NOT NULL")
+      .andWhere("qd.queueType = :type", { type: "STANDBY" })
+      .orderBy("qd.timestamp", "ASC")
+      .getRawMany();
+
+    const map = new Map<string, { timestamp: string; waitTime: number }[]>();
+
+    for (const row of result) {
+      if (!map.has(row.attractionId)) {
+        map.set(row.attractionId, []);
+      }
+      const list = map.get(row.attractionId)!;
+      const currentWait = Math.round(parseFloat(row.waitTime));
+
+      // Deduplicate: Only record if value changed from the last recorded point
+      if (list.length === 0 || list[list.length - 1].waitTime !== currentWait) {
+        list.push({
+          timestamp: new Date(row.timestamp).toISOString(),
+          waitTime: currentWait,
+        });
+      }
+    }
+
+    return map;
   }
 
   /**
@@ -954,11 +1097,17 @@ export class AnalyticsService {
     const currentDayOfWeek = now.getDay();
 
     // Get today's statistics
-    const todayStats = await this.getAttractionStatsForPeriod(
-      attractionId,
-      startOfDay,
-      now,
-    );
+    // Use batch method (efficient CTE) instead of multiple queries
+    const batchStats = await this.getBatchAttractionStatistics([attractionId]);
+    const batchStat = batchStats.get(attractionId);
+
+    const todayStats = {
+      avg: batchStat?.avg || null,
+      max: batchStat?.max || null,
+      min: batchStat?.min || null,
+      count: batchStat?.count || 0,
+      maxTimestamp: batchStat?.maxTimestamp || null,
+    };
 
     // Get typical wait for this hour/weekday (2-year average)
     const typicalWait = await this.getTypicalWaitForHour(
@@ -980,49 +1129,24 @@ export class AnalyticsService {
         ? Math.round(((todayStats.avg - typicalWait) / typicalWait) * 100)
         : null;
 
+    // Get wait time history for sparkline (last 12 hours / today)
+    // Re-use the batch logic but for single ID
+    const historyMap = await this.getBatchAttractionWaitTimeHistory([
+      attractionId,
+    ]);
+    const history = historyMap.get(attractionId) || [];
+
     return {
       avgWaitToday: todayStats.avg,
       peakWaitToday: todayStats.max,
+      peakWaitTimestamp: todayStats.maxTimestamp,
       minWaitToday: todayStats.min,
       typicalWaitThisHour: typicalWait,
       percentile95ThisHour: p95ThisHour,
       currentVsTypical,
       dataPoints: todayStats.count,
       timestamp: now,
-    };
-  }
-
-  /**
-   * Get attraction statistics for a period
-   */
-  private async getAttractionStatsForPeriod(
-    attractionId: string,
-    start: Date,
-    end: Date,
-  ): Promise<{
-    avg: number | null;
-    max: number | null;
-    min: number | null;
-    count: number;
-  }> {
-    const result = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("AVG(qd.waitTime)", "avg")
-      .addSelect("MAX(qd.waitTime)", "max")
-      .addSelect("MIN(qd.waitTime)", "min")
-      .addSelect("COUNT(*)", "count")
-      .where("qd.attractionId = :attractionId", { attractionId })
-      .andWhere("qd.timestamp BETWEEN :start AND :end", { start, end })
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.queueType = 'STANDBY'")
-      .getRawOne();
-
-    return {
-      avg: result?.avg ? Math.round(parseFloat(result.avg)) : null,
-      max: result?.max ? Math.round(parseFloat(result.max)) : null,
-      min: result?.min ? Math.round(parseFloat(result.min)) : null,
-      count: result?.count ? parseInt(result.count) : 0,
+      history,
     };
   }
 

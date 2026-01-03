@@ -99,11 +99,16 @@ export class AttractionResponseDto {
   statistics?: {
     avgWaitToday: number | null;
     peakWaitToday: number | null;
+    peakWaitTimestamp: string | null;
     minWaitToday: number | null;
     typicalWaitThisHour: number | null;
     percentile95ThisHour: number | null;
     currentVsTypical: number | null;
     dataPoints: number;
+    history: {
+      timestamp: string;
+      waitTime: number;
+    }[];
     timestamp: string;
   } | null;
 

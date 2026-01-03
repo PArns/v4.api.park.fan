@@ -19,7 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("location")
 @Controller("discovery")
 export class LocationController {
-  constructor(private readonly locationService: LocationService) { }
+  constructor(private readonly locationService: LocationService) {}
 
   /**
    * GET /v1/discovery/nearby

@@ -12,7 +12,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("stats")
 @Controller("analytics")
 export class AnalyticsController {
-  constructor(private readonly analyticsService: AnalyticsService) { }
+  constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("realtime")
   @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats need freshness

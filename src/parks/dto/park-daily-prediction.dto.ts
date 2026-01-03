@@ -56,4 +56,11 @@ export class ParkDailyPredictionDto {
 
   @ApiProperty({ description: "Source of the prediction", example: "ml" })
   source: "ml";
+
+  @ApiProperty({
+    description: "Predicted average wait time in minutes",
+    required: false,
+    example: 35,
+  })
+  avgWaitTime?: number;
 }

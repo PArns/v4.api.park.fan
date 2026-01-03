@@ -3,6 +3,7 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 export class ParkStatisticsDto {
   avgWaitTime: number;
   avgWaitToday: number;
+  peakWaitToday: number;
   peakHour: string | null;
   crowdLevel: CrowdLevel;
   totalAttractions: number;
@@ -22,12 +23,14 @@ export class ParkStatisticsDto {
 export class AttractionStatisticsDto {
   avgWaitToday: number | null;
   peakWaitToday: number | null;
+  peakWaitTimestamp: Date | null;
   minWaitToday: number | null;
   typicalWaitThisHour: number | null;
   percentile95ThisHour: number | null;
   currentVsTypical: number | null;
   dataPoints: number;
   timestamp: Date;
+  history: { timestamp: string; waitTime: number }[];
 
   // Phase 4: Optional percentile data
   distributionToday?: {

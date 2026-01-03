@@ -8,7 +8,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("search")
 @Controller("search")
 export class SearchController {
-  constructor(private readonly searchService: SearchService) { }
+  constructor(private readonly searchService: SearchService) {}
 
   @Get()
   @UseInterceptors(new HttpCacheInterceptor(60)) // 1 minute - matches Redis TTL

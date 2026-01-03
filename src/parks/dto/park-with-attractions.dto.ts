@@ -149,6 +149,27 @@ export class ParkAttractionDto {
     | "higher"
     | "much_higher"
     | null;
+
+  @ApiProperty({
+    description: "Attraction statistics",
+    required: false,
+    nullable: true,
+  })
+  statistics?: {
+    avgWaitToday: number | null;
+    peakWaitToday: number | null;
+    peakWaitTimestamp: string | null;
+    minWaitToday: number | null;
+    typicalWaitThisHour: number | null;
+    percentile95ThisHour: number | null;
+    currentVsTypical: number | null;
+    dataPoints: number;
+    history: {
+      timestamp: string;
+      waitTime: number;
+    }[];
+    timestamp: string;
+  } | null;
 }
 
 export class ParkShowDto {
@@ -266,6 +287,9 @@ export class ParkStatisticsDto {
 
   @ApiProperty({ description: "Average wait today" })
   avgWaitToday: number;
+
+  @ApiProperty({ description: "Peak wait today" })
+  peakWaitToday: number;
 
   @ApiProperty({ description: "Peak hour", nullable: true })
   peakHour: string | null;

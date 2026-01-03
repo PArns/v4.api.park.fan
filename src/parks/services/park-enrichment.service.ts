@@ -135,6 +135,7 @@ export class ParkEnrichmentService {
         statistics: {
           avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
           avgWaitToday: stats?.avgWaitToday || 0,
+          peakWaitToday: stats?.peakWaitToday || 0,
           peakHour: stats?.peakHour || null,
           crowdLevel: this.analyticsService.determineCrowdLevel(
             occupancy.current,

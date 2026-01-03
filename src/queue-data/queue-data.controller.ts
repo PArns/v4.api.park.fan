@@ -36,7 +36,7 @@ export class QueueDataController {
     private readonly queueDataService: QueueDataService,
     private readonly attractionsService: AttractionsService,
     private readonly parksService: ParksService,
-  ) { }
+  ) {}
 
   /**
    * GET /v1/attractions/:slug/wait-times

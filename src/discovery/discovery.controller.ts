@@ -36,7 +36,7 @@ export class DiscoveryController {
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
-  ) { }
+  ) {}
 
   /**
    * GET /v1/discovery/geo
@@ -188,8 +188,8 @@ export class DiscoveryController {
     const continentName =
       countries.length > 0
         ? (await this.discoveryService.getContinents()).find(
-          (c) => c.slug === continentSlug,
-        )?.name || continentSlug
+            (c) => c.slug === continentSlug,
+          )?.name || continentSlug
         : continentSlug;
 
     const breadcrumbs: BreadcrumbDto[] = [

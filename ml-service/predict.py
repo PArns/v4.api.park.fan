@@ -588,15 +588,26 @@ def create_prediction_features(
                 last_24h = attraction_data[attraction_data['date'] >= cutoff_24h]
                 avg_24h = last_24h['avg_wait'].mean() if len(last_24h) > 0 else rolling_7d
                 
-                # Last 1h average
-                # Since we don't have hourly data aggregated in 'recent_data' (it's daily-ish but query has hour),
-                # let's check if we can approximate from the query result which DOES have 'hour'.
-                # The query groups by date AND hour.
+                # Last 1h average (Lag 1)
+                # Logic: Get data for (Hour - 1). Handle wrapping for midnight.
+                prev_hour_dt = base_time_pd - timedelta(hours=1)
+                prev_hour = prev_hour_dt.hour
+                prev_hour_date = prev_hour_dt.date()
+
                 last_1h_data = attraction_data[
-                    (attraction_data['date'] == base_time_pd.date()) & 
-                    (attraction_data['hour'] == (base_time.hour - 1))
+                    (attraction_data['date'] == prev_hour_date) & 
+                    (attraction_data['hour'] == prev_hour)
                 ]
-                avg_1h = last_1h_data['avg_wait'].mean() if not last_1h_data.empty else avg_24h
+                
+                # Intermediate Fallback: Same time yesterday (better than daily average)
+                yesterday_prev_hour_date = prev_hour_date - timedelta(days=1)
+                yesterday_fallback = attraction_data[
+                    (attraction_data['date'] == yesterday_prev_hour_date) & 
+                    (attraction_data['hour'] == prev_hour)
+                ]
+                avg_yesterday_fallback = yesterday_fallback['avg_wait'].mean() if not yesterday_fallback.empty else avg_24h
+
+                avg_1h = last_1h_data['avg_wait'].mean() if not last_1h_data.empty else avg_yesterday_fallback
 
                 # Same hour last week (7 days ago, same hour)
                 last_week_date = base_time_pd - timedelta(days=7)

@@ -147,7 +147,9 @@ describe("SearchController (E2E)", () => {
         .expect(200);
 
       const parks = response.body.results.filter((r: any) => r.type === "park");
-      const attractions = response.body.results.filter((r: any) => r.type === "attraction");
+      const attractions = response.body.results.filter(
+        (r: any) => r.type === "attraction",
+      );
 
       expect(parks.length).toBeLessThanOrEqual(2);
       expect(attractions.length).toBeLessThanOrEqual(2);

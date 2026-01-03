@@ -199,11 +199,15 @@ export class AttractionIntegrationService {
       dto.statistics = {
         avgWaitToday: statistics.avgWaitToday,
         peakWaitToday: statistics.peakWaitToday,
+        peakWaitTimestamp: statistics.peakWaitTimestamp
+          ? statistics.peakWaitTimestamp.toISOString()
+          : null,
         minWaitToday: statistics.minWaitToday,
         typicalWaitThisHour: statistics.typicalWaitThisHour,
         percentile95ThisHour: statistics.percentile95ThisHour,
         currentVsTypical: statistics.currentVsTypical,
         dataPoints: statistics.dataPoints,
+        history: statistics.history || [],
         timestamp: statistics.timestamp.toISOString(),
       };
     } catch (error) {

@@ -28,7 +28,8 @@
     "^@analytics/(.*)$": "<rootDir>/analytics/$1",
     "^@destinations/(.*)$": "<rootDir>/destinations/$1",
     "^@search/(.*)$": "<rootDir>/search/$1",
-    "^@ml/(.*)$": "<rootDir>/ml/$1"
+    "^@ml/(.*)$": "<rootDir>/ml/$1",
+    "^uuid$": "<rootDir>/../test/mocks/uuid.ts"
   },
   "coverageThreshold": {
     "global": {

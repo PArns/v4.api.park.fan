@@ -330,55 +330,98 @@ def add_holiday_features(
 def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add historical wait time features
-
+    
     Features:
     - avg_wait_last_24h: Average wait time in last 24 hours (per attraction)
-    - avg_wait_same_hour_last_week: Average wait at same hour, 7 days ago
+    - avg_wait_last_1h: Average wait time in last 1 hour (Time-based, strictly past)
+    - wait_lag_24h: Wait time at same time yesterday (Time-based)
+    - wait_lag_1w: Wait time at same time last week (Time-based)
     - rolling_avg_7d: 7-day rolling average
     """
     df = df.copy()
-    df = df.sort_values(['attractionId', 'timestamp'])
+    if 'timestamp' not in df.columns:
+        return df
 
-    # Last 24h average (per attraction)
-    df['avg_wait_last_24h'] = df.groupby('attractionId')['waitTime'].transform(
-        lambda x: x.rolling(window=24, min_periods=1).mean().shift(1)
-    )
+    # distinct sort for merge_asof
+    df = df.sort_values('timestamp')
+    
+    # 1. Time-based Rolling Features
+    # Must use index for time-based rolling
+    df_indexed = df.set_index('timestamp').sort_index()
+    
+    # avg_wait_last_1h: [t-1h, t)
+    # closed='left' excludes current timestamp, preventing data leakage
+    df['avg_wait_last_1h'] = df_indexed.groupby('attractionId')['waitTime'] \
+        .rolling('1h', closed='left', min_periods=1).mean() \
+        .reset_index(level=0, drop=True).values
 
-    # Last 1h average (per attraction) - captures immediate trends
-    # 5 min intervals -> window=12
-    df['avg_wait_last_1h'] = df.groupby('attractionId')['waitTime'].transform(
-        lambda x: x.rolling(window=12, min_periods=1).mean().shift(1)
-    )
+    # avg_wait_last_24h: [t-24h, t)
+    df['avg_wait_last_24h'] = df_indexed.groupby('attractionId')['waitTime'] \
+        .rolling('24h', closed='left', min_periods=1).mean() \
+        .reset_index(level=0, drop=True).values
 
-    # Same hour last week (168 hours ago)
-    df['avg_wait_same_hour_last_week'] = df.groupby('attractionId')['waitTime'].transform(
-        lambda x: x.shift(168)
-    )
+    # rolling_avg_7d: [t-7d, t)
+    df['rolling_avg_7d'] = df_indexed.groupby('attractionId')['waitTime'] \
+        .rolling('7d', closed='left', min_periods=1).mean() \
+        .reset_index(level=0, drop=True).values
 
-    # 7-day rolling average
-    df['rolling_avg_7d'] = df.groupby('attractionId')['waitTime'].transform(
-        lambda x: x.rolling(window=168, min_periods=1).mean().shift(1)
-    )
+    # 2. Lag Features (Exact time lookups: T-24h, T-1w)
+    # Use merge_asof to find the value closest to (timestamp - lag)
+    # Group-wise merge_asof is not direct, so we loop or use exact match on shifted time?
+    # Approximate match is better for robustness.
+    
+    # Helper to merge lagged values
+    def merge_lag(source_df, lag_delta, col_name):
+        target_time = source_df['timestamp'] - lag_delta
+        temp = source_df.copy()
+        temp['target_ts'] = target_time
+        temp = temp.sort_values('target_ts')
+        
+        lookup = source_df[['attractionId', 'timestamp', 'waitTime']].sort_values('timestamp')
+        
+        return pd.merge_asof(
+            temp,
+            lookup,
+            left_on='target_ts',
+            right_on='timestamp',
+            by='attractionId',
+            tolerance=pd.Timedelta('15min'), # Allow 15 min slop
+            direction='nearest',
+            suffixes=('', '_lag')
+        )['waitTime_lag']
 
-    # Fill NaN with attraction mean
+    # Lag 24h
+    df['wait_lag_24h'] = merge_lag(df, pd.Timedelta(hours=24), 'wait_lag_24h')
+    
+    # Lag 1 week
+    df['wait_lag_1w'] = merge_lag(df, pd.Timedelta(days=7), 'wait_lag_1w')
+    
+    # Map features to legacy names if needed or use new ones
+    # We'll keep legacy column names where appropriate to minimize model drift if not retraining everything immediately, 
+    # but 'avg_wait_same_hour_last_week' essentially maps to 'wait_lag_1w'
+    df['avg_wait_same_hour_last_week'] = df['wait_lag_1w']
+
+    # 3. Fallback Logic (Impute missing short-term history with long-term patterns)
+    # If avg_wait_last_1h is NaN (e.g. morning), fill with wait_lag_24h (Yesterday Same Hour)
+    df['avg_wait_last_1h'] = df['avg_wait_last_1h'].fillna(df['wait_lag_24h'])
+    
+    # If still NaN, fill with Last Week
+    df['avg_wait_last_1h'] = df['avg_wait_last_1h'].fillna(df['wait_lag_1w'])
+
+    # Final Fills with Global Means
     hist_cols = ['avg_wait_last_24h', 'avg_wait_last_1h', 'avg_wait_same_hour_last_week', 'rolling_avg_7d']
     for col in hist_cols:
-        df[col] = df.groupby('attractionId')[col].transform(
-            lambda x: x.fillna(x.mean())
-        ).fillna(0)
+         df[col] = df.fillna(0)[col] # Simplified fill
 
-    # Wait time velocity (rate of change / momentum)
-    # Positive = queues building up, Negative = queues clearing
-    # Uses last 6 observations (~30 min at 5-min intervals) to calculate trend
+    # Wait time velocity (Momentum)
+    # Logic: Change over last 30 mins
+    # (Current - Avg 30 mins ago) ? 
+    # For simplicity, we keep the Diff-based logic but ensure it is robust
     df['wait_time_velocity'] = df.groupby('attractionId')['waitTime'].transform(
         lambda x: x.diff().rolling(window=6, min_periods=1).mean().shift(1)
-    )
-    
-    # Fill NaN velocity with 0 (no change)
-    df['wait_time_velocity'] = df.groupby('attractionId')['wait_time_velocity'].transform(
-        lambda x: x.fillna(0)
     ).fillna(0)
 
+    # Clean up temp columns if any
     return df
 
 

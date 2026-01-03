@@ -99,6 +99,7 @@ export class ParkResponseDto {
     statistics: {
       avgWaitTime: number;
       avgWaitToday: number;
+      peakWaitToday: number;
       peakHour: string | null;
       crowdLevel: CrowdLevel;
       totalAttractions: number;
