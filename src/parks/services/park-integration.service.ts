@@ -389,15 +389,16 @@ export class ParkIntegrationService {
         deviationMap,
         attractionStatsMap,
         attractionHistoryMap,
+        trendsMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90s(attractionIds),
-        // Use pre-aggregated stats table (1 simple query vs N+1)
         this.accuracyStatsRepository.find({
           where: { attractionId: In(attractionIds) },
         }),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(attractionIds),
         this.analyticsService.getBatchAttractionWaitTimeHistory(attractionIds),
+        this.analyticsService.getBatchAttractionTrends(attractionIds),
       ]);
 
       // Build accuracy map from pre-aggregated stats
@@ -522,23 +523,33 @@ export class ParkIntegrationService {
         attraction.crowdLevel = crowdLevel;
 
         // Determine Trend
-        // 1. Try to use trend from first queue (if calculated)
-        // 2. Fallback to ML trend
+        // STRICT SEPARATION: Only use historical/live data.
+        // Hybrid Approach:
+        // 1. "Fast Trend": Compare Current Spot Wait vs Last Hour Average.
+        // 2. "Slow Trend": Compare Last Hour Average vs Previous Hour Average (via AnalyticsService).
         let trend: "up" | "stable" | "down" | null = null;
         if (attraction.effectiveStatus === "OPERATING") {
-          const queueTrend = attraction.queues?.[0]?.trend?.direction;
-          if (queueTrend) {
+          const historicalTrend = trendsMap.get(attraction.id);
+          const currentWait = attraction.queues?.[0]?.waitTime;
+
+          if (
+            currentWait !== undefined &&
+            currentWait !== null &&
+            historicalTrend &&
+            historicalTrend.recentAverage !== null
+          ) {
+            trend = this.analyticsService.computeTrend(
+              currentWait,
+              historicalTrend.recentAverage,
+              historicalTrend.previousAverage,
+            );
+          } else if (historicalTrend) {
             trend =
-              queueTrend === "increasing"
+              historicalTrend.trend === "increasing"
                 ? "up"
-                : queueTrend === "decreasing"
+                : historicalTrend.trend === "decreasing"
                   ? "down"
                   : "stable";
-          } else if (
-            enrichedPreds.length > 0 &&
-            enrichedPreds[0].trend !== undefined
-          ) {
-            trend = enrichedPreds[0].trend;
           }
         }
         attraction.trend = trend;

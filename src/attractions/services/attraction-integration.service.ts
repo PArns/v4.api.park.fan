@@ -100,6 +100,7 @@ export class AttractionIntegrationService {
                 await this.analyticsService.detectAttractionTrend(
                   attraction.id,
                   qd.queueType,
+                  qd.waitTime,
                 );
               queueDto.trend = {
                 direction: trendData.trend,

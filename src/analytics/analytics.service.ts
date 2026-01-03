@@ -130,8 +130,8 @@ export class AnalyticsService {
     const currentHour = now.getHours();
     const currentDayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
 
-    // Get current average wait time
-    const currentAvgWait = await this.getCurrentAverageWaitTime(parkId);
+    // Get current "Spot" average wait time (Latest snapshot)
+    const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
 
     if (currentAvgWait === null) {
       return {
@@ -169,7 +169,7 @@ export class AnalyticsService {
         baseline90thPercentile: 0,
         updatedAt: now.toISOString(),
         breakdown: {
-          currentAvgWait,
+          currentAvgWait: Math.round(currentAvgWait),
           typicalAvgWait: 0,
           activeAttractions: 0,
         },
@@ -179,31 +179,47 @@ export class AnalyticsService {
     // Calculate occupancy as percentage of P90
     const occupancyPercentage = (currentAvgWait / p90Baseline) * 100;
 
-    // Calculate trend (compare to previous reading - approx 1 hour ago)
-    const twoHoursAgo = new Date();
-    twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
+    // Calculate Park Trend (Hybrid Logic)
+    // 1. Fetch [Last 1h Avg] and [Previous 1h Avg]
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const twoHoursAgo = new Date(now.getTime() - 120 * 60 * 1000);
 
-    const previousData = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .innerJoin("qd.attraction", "a")
-      .select("AVG(qd.waitTime)", "avgWait")
-      .where("a.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :start", { start: twoHoursAgo })
-      .andWhere("qd.timestamp < :now", { now: new Date() })
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.queueType = :queueType", { queueType: "STANDBY" })
-      .getRawOne();
+    const trendQuery = `
+      SELECT
+        CASE
+          WHEN qd.timestamp >= $3 THEN 3 -- Now-1h (Spot Window approximate overlap, mostly meant for recent avg)
+          WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2 -- 1h-2h
+        END as bucket,
+        AVG(qd."waitTime") as avg_wait
+      FROM queue_data qd
+      JOIN attractions a ON qd."attractionId" = a.id
+      WHERE a."parkId" = $1
+        AND qd.timestamp >= $2
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" IS NOT NULL
+        AND qd."queueType" = 'STANDBY'
+      GROUP BY bucket
+    `;
 
-    const previousAvgWait = previousData?.avgWait
-      ? parseFloat(previousData.avgWait)
-      : null;
-    let trend: "up" | "down" | "stable" = "stable";
-    if (previousAvgWait !== null) {
-      const change = currentAvgWait - previousAvgWait;
-      if (Math.abs(change) > 5) {
-        // Significant change threshold: 5 minutes
-        trend = change > 0 ? "up" : "down";
+    const trendResult = await this.queueDataRepository.query(trendQuery, [
+      parkId,
+      twoHoursAgo,
+      oneHourAgo,
+    ]);
+
+    const buckets: Record<number, number> = {};
+    for (const row of trendResult) {
+      if (row.bucket && row.avg_wait) {
+        buckets[row.bucket] = parseFloat(row.avg_wait);
       }
+    }
+
+    const avgLastHour = buckets[3] || null;
+    const avgPrevHour = buckets[2] || null;
+
+    let trend: "up" | "down" | "stable" = "stable";
+    if (avgLastHour !== null) {
+      trend = this.computeTrend(currentAvgWait, avgLastHour, avgPrevHour);
     }
 
     // Get typical wait time for this day of week (average over last year)
@@ -255,7 +271,7 @@ export class AnalyticsService {
     const currentDayOfWeek = now.getDay();
 
     // Get current average wait time
-    const currentAvgWait = await this.getCurrentAverageWaitTime(parkId);
+    const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
 
     if (currentAvgWait === null) {
       return 100; // Default to 100% if no current data
@@ -440,45 +456,53 @@ export class AnalyticsService {
   }
 
   /**
-   * Get current average wait time across all operating attractions in a park
+   * Get current "Spot" average wait time across all operating attractions in a park.
+   * Calculates the average of the LATEST wait time for each attraction.
    *
    * @param parkId - Park ID
    * @param minWaitTime - Minimum wait time threshold (default: 5 min to exclude walk-ons)
    * @returns Average wait time or null if no data
-   *
-   * NOTE: Filters out walk-on attractions (< 5 min) by default for more realistic
-   * crowd level calculations. Falls back to including all attractions if < 3 meet threshold.
    */
-  private async getCurrentAverageWaitTime(
+  private async getCurrentSpotAverageWaitTime(
     parkId: string,
     minWaitTime: number = 5,
   ): Promise<number | null> {
-    // Use 120 minutes (2 hours) to accommodate sync intervals and sparse data
-    const windowAgo = new Date(Date.now() - 120 * 60 * 1000);
+    // Look back 60 minutes for "live" data. safely covers sync intervals.
+    const windowAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-    const result = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("AVG(qd.waitTime)", "avgWait")
-      .addSelect("COUNT(*)", "count") // Add count for fallback logic
-      .innerJoin("qd.attraction", "attraction")
-      .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :windowAgo", { windowAgo })
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime >= :minWaitTime", { minWaitTime })
-      .andWhere("qd.queueType = 'STANDBY'") // Only consider standby queues
-      .getRawOne();
+    // Subquery to get the latest timestamp per operating attraction
+    // Then calculate average of those latest wait times
+    const result = await this.queueDataRepository.query(
+      `
+      WITH LatestWaits AS (
+        SELECT DISTINCT ON (qd."attractionId") 
+          qd."waitTime"
+        FROM queue_data qd
+        JOIN attraction a ON qd."attractionId" = a.id
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" >= $3
+          AND qd."queueType" = 'STANDBY'
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      )
+      SELECT 
+        AVG("waitTime") as "avgWait",
+        COUNT(*) as "count"
+      FROM LatestWaits
+    `,
+      [parkId, windowAgo, minWaitTime],
+    );
+
+    const row = result[0];
 
     // Fallback: If < 3 attractions meet threshold and we're using > 0, use all (> 0)
-    // This ensures small parks or quiet times still return meaningful data
-    if (result?.count && parseInt(result.count) < 3 && minWaitTime > 0) {
-      // this.logger.verbose(
-      //   `Park ${parkId}: Only ${result.count} attractions with >= ${minWaitTime} min wait. Falling back to all attractions (> 0).`,
-      // );
-      return this.getCurrentAverageWaitTime(parkId, 0); // Recursive with 0 threshold
+    if (row?.count && parseInt(row.count) < 3 && minWaitTime > 0) {
+      return this.getCurrentSpotAverageWaitTime(parkId, 0); // Recursive with 0 threshold
     }
 
-    return result?.avgWait ? parseFloat(result.avgWait) : null;
+    return row?.avgWait ? parseFloat(row.avgWait) : null;
   }
 
   /**
@@ -729,18 +753,58 @@ export class AnalyticsService {
       ? Math.max(0, totalAttractions - explicitlyClosedCount)
       : 0;
 
+    // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly)
+    const typicalPeakKey = `park:typical-peak:${parkId}`;
+    let typicalPeakHour = await this.redis.get(typicalPeakKey);
+
+    if (!typicalPeakHour) {
+      typicalPeakHour = await this.getTypicalPeakHour(parkId);
+      if (typicalPeakHour) {
+        await this.redis.set(
+          typicalPeakKey,
+          typicalPeakHour,
+          "EX",
+          24 * 60 * 60,
+        ); // 24 hours
+      }
+    }
+
+    const todayPeakRaw = stats?.peak_hour
+      ? `${String(Math.floor(stats.peak_hour)).padStart(2, "0")}:00`
+      : null;
+
+    // determine which peak hour to show
+    let displayPeakHour = todayPeakRaw;
+
+    // If we have a typical peak prediction
+    if (typicalPeakHour) {
+      const currentHour = now.getHours();
+      const typicalHour = parseInt(typicalPeakHour.split(":")[0]);
+
+      // If today's peak hasn't happened yet (or it's early), show prediction
+      // e.g. Now is 10:00, Typical is 14:00 -> Show 14:00
+      // e.g. Now is 16:00, Typical is 14:00 -> Show Today's Peak (or Typical if today was weirdly flat)
+      if (currentHour < typicalHour) {
+        displayPeakHour = typicalPeakHour;
+      } else if (!displayPeakHour) {
+        displayPeakHour = typicalPeakHour;
+      }
+      // If currentHour > typicalHour and we have displayPeakHour (Actual), keep Actual.
+    }
+
+    const history = await this.getParkWaitTimeHistory(parkId);
+
     const statsDto: ParkStatisticsDto = {
       avgWaitTime: Math.round(currentAvgWait),
       avgWaitToday: Math.round(stats?.avg_wait_today || 0),
       peakWaitToday: Math.round(stats?.max_wait_today || 0),
-      peakHour: stats?.peak_hour
-        ? `${String(Math.floor(stats.peak_hour)).padStart(2, "0")}:00`
-        : null,
+      peakHour: displayPeakHour,
       crowdLevel,
       totalAttractions,
       operatingAttractions,
       closedAttractions: totalAttractions - operatingAttractions,
       timestamp: now,
+      history,
     };
 
     // Cache for 5 minutes
@@ -881,6 +945,41 @@ export class AnalyticsService {
   }
 
   /**
+   * Get park-wide wait time history for today
+   */
+  async getParkWaitTimeHistory(
+    parkId: string,
+  ): Promise<{ timestamp: string; waitTime: number }[]> {
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    // Group by 10-minute intervals to get a smooth average trend for the park
+    const result = await this.queueDataRepository.query(
+      `
+      SELECT 
+        to_timestamp(floor(extract(epoch from qd.timestamp) / 600) * 600) AT TIME ZONE 'UTC' as interval_timestamp,
+        ROUND(AVG(qd."waitTime")) as avg_wait
+      FROM queue_data qd
+      INNER JOIN attractions a ON a.id = qd."attractionId"
+      WHERE a."parkId" = $1
+        AND qd.timestamp >= $2
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" IS NOT NULL
+        AND qd."queueType" = 'STANDBY'
+      GROUP BY interval_timestamp
+      ORDER BY interval_timestamp ASC
+      `,
+      [parkId, startOfDay],
+    );
+
+    return result.map((row: any) => ({
+      timestamp: new Date(row.interval_timestamp).toISOString(),
+      waitTime: parseInt(row.avg_wait) || 0,
+    }));
+  }
+
+  /**
    * Get park statistics for multiple parks in batch
    * Optimized version to avoid N+1 queries
    *
@@ -959,6 +1058,38 @@ export class AnalyticsService {
         now,
       })
       .andWhere("qd.status = :status", { status: "OPERATING" })
+      .andWhere('qd."waitTime" IS NOT NULL')
+      .andWhere("qd.\"queueType\" = 'STANDBY'")
+      .groupBy("hour")
+      .orderBy('"avgWait"', "DESC")
+      .limit(1)
+      .getRawOne();
+
+    if (!result?.hour) return null;
+
+    const hour = parseInt(result.hour);
+    return `${hour.toString().padStart(2, "0")}:00`;
+  }
+
+  /**
+   * Predict the Typical Peak Hour for this time of year (Seasonal Sliding Window).
+   *
+   * Uses historical data from the last 60 days to determine the hour with the highest average wait.
+   * This adapts to seasonal changes (e.g. earlier closing in winter) without needing explicit schedules.
+   */
+  private async getTypicalPeakHour(parkId: string): Promise<string | null> {
+    // Sliding window: Last 60 days
+    // This allows the "Peak" to shift from 16:00 (Summer) to 14:00 (Winter) automatically
+    const validSince = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+
+    const result = await this.queueDataRepository
+      .createQueryBuilder("qd")
+      .select("EXTRACT(HOUR FROM qd.timestamp)", "hour")
+      .addSelect('AVG(qd."waitTime")', "avgWait")
+      .innerJoin("qd.attraction", "attraction")
+      .where('attraction."parkId" = :parkId', { parkId })
+      .andWhere("qd.timestamp >= :validSince", { validSince })
+      .andWhere("qd.status = 'OPERATING'")
       .andWhere('qd."waitTime" IS NOT NULL')
       .andWhere("qd.\"queueType\" = 'STANDBY'")
       .groupBy("hour")
@@ -1220,6 +1351,7 @@ export class AnalyticsService {
   async detectAttractionTrend(
     attractionId: string,
     queueType: string = "STANDBY",
+    currentSpotWait?: number | null,
   ): Promise<{
     trend: "increasing" | "stable" | "decreasing";
     changeRate: number; // Minutes per hour
@@ -1253,7 +1385,11 @@ export class AnalyticsService {
     const avgLastHour = await getAvgForPeriod(oneHourAgo, now);
 
     // Not enough data
-    if (avgLastHour === null || avgTwoToOne === null) {
+    // If we have no recent history, and no spot wait, we can't determine trend
+    if (
+      avgLastHour === null ||
+      (avgTwoToOne === null && currentSpotWait === undefined)
+    ) {
       return {
         trend: "stable",
         changeRate: 0,
@@ -1262,43 +1398,189 @@ export class AnalyticsService {
       };
     }
 
-    // Calculate change rate (minutes per hour)
-    const changeRate = avgLastHour - avgTwoToOne;
+    // Calculate change rate (minutes per hour - MOMENTUM)
+    const changeRate =
+      avgTwoToOne !== null && avgLastHour !== null
+        ? avgLastHour - avgTwoToOne
+        : 0;
 
-    // Threshold: 10% change (user specified)
-    const threshold = avgTwoToOne * 0.1;
+    const trendRaw = this.computeTrend(
+      currentSpotWait ?? avgLastHour,
+      avgLastHour,
+      avgTwoToOne,
+      avgThreeToTwo,
+    );
 
-    let trend: "increasing" | "stable" | "decreasing" = "stable";
-
-    // If we have 3-hour data, use weighted average for more accurate trend
-    if (avgThreeToTwo !== null) {
-      const change1 = avgTwoToOne - avgThreeToTwo;
-      const change2 = avgLastHour - avgTwoToOne;
-      const avgChange = (change1 + change2) / 2;
-
-      // Use both absolute threshold (5 min) and relative threshold (10%)
-      if (avgChange > Math.max(5, threshold)) {
-        trend = "increasing";
-      } else if (avgChange < -Math.max(5, threshold)) {
-        trend = "decreasing";
-      }
-    } else {
-      // Use simple comparison for 2-hour data
-      if (changeRate > Math.max(5, threshold)) {
-        trend = "increasing";
-      } else if (changeRate < -Math.max(5, threshold)) {
-        trend = "decreasing";
-      }
-    }
+    const trend: "increasing" | "stable" | "decreasing" =
+      trendRaw === "up"
+        ? "increasing"
+        : trendRaw === "down"
+          ? "decreasing"
+          : "stable";
 
     return {
       trend,
       changeRate: Math.round(changeRate * 10) / 10, // Round to 1 decimal
-      recentAverage: Math.round(avgLastHour),
-      previousAverage: Math.round(avgTwoToOne),
+      recentAverage: avgLastHour ? Math.round(avgLastHour) : null,
+      previousAverage: avgTwoToOne ? Math.round(avgTwoToOne) : null,
     };
   }
 
+  /**
+   * Helper to compute trend using Hybrid Logic:
+   * 1. Fast Trend (Spot vs Recent Average)
+   * 2. Slow Trend (Recent Average vs Previous Average)
+   *
+   * @Returns "up" | "down" | "stable"
+   */
+  public computeTrend(
+    current: number,
+    recentAvg: number,
+    previousAvg: number | null,
+    previousPreviousAvg: number | null = null,
+    thresholdRelative: number = 0.1,
+    thresholdAbsolute: number = 5,
+  ): "up" | "down" | "stable" {
+    // 1. Fast Trend Check (Immediate reaction to spikes)
+    const fastDiff = current - recentAvg;
+    const fastThreshold = Math.max(
+      thresholdAbsolute,
+      recentAvg * thresholdRelative,
+    );
+
+    if (fastDiff > fastThreshold) return "up";
+    if (fastDiff < -fastThreshold) return "down";
+
+    // 2. Slow Trend Check (Hourly Momentum)
+    if (previousAvg !== null) {
+      const threshold = Math.max(
+        thresholdAbsolute,
+        previousAvg * thresholdRelative,
+      );
+
+      if (previousPreviousAvg !== null) {
+        // Weighted average trend
+        const change1 = previousAvg - previousPreviousAvg;
+        const change2 = recentAvg - previousAvg;
+        const avgChange = (change1 + change2) / 2;
+
+        if (avgChange > threshold) return "up";
+        if (avgChange < -threshold) return "down";
+      } else {
+        // Simple comparison
+        const change = recentAvg - previousAvg;
+        if (change > threshold) return "up";
+        if (change < -threshold) return "down";
+      }
+    }
+
+    return "stable";
+  }
+
+  /**
+   * Get batch attraction trends
+   * Efficiently calculates trends for multiple attractions using a single query
+   */
+  async getBatchAttractionTrends(attractionIds: string[]): Promise<
+    Map<
+      string,
+      {
+        trend: "increasing" | "stable" | "decreasing";
+        changeRate: number;
+        recentAverage: number | null;
+        previousAverage: number | null;
+      }
+    >
+  > {
+    if (attractionIds.length === 0) return new Map();
+
+    const now = new Date();
+    const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const oneHourAgo = new Date(now.getTime() - 1 * 60 * 60 * 1000);
+
+    // Fetch aggregated stats for 3 buckets: [3h-2h], [2h-1h], [1h-Now]
+    // Group by attractionId and bucket
+    const result = await this.queueDataRepository.query(
+      `
+      SELECT 
+        "attractionId",
+        CASE 
+          WHEN timestamp BETWEEN $2 AND $3 THEN 1 -- Bucket 1: 3h-2h
+          WHEN timestamp BETWEEN $3 AND $4 THEN 2 -- Bucket 2: 2h-1h
+          WHEN timestamp BETWEEN $4 AND $5 THEN 3 -- Bucket 3: 1h-Now
+        END as bucket,
+        AVG("waitTime") as avg_wait
+      FROM queue_data
+      WHERE "attractionId" = ANY($1)
+        AND timestamp BETWEEN $2 AND $5
+        AND status = 'OPERATING'
+        AND "waitTime" IS NOT NULL
+        AND "queueType" = 'STANDBY'
+      GROUP BY "attractionId", bucket
+    `,
+      [attractionIds, threeHoursAgo, twoHoursAgo, oneHourAgo, now],
+    );
+
+    const trendsMap = new Map();
+
+    // Process results per attraction
+    const attractionData = new Map<string, Record<number, number>>();
+    for (const row of result) {
+      if (!row.bucket) continue;
+      if (!attractionData.has(row.attractionId)) {
+        attractionData.set(row.attractionId, {});
+      }
+      attractionData.get(row.attractionId)![row.bucket] = parseFloat(
+        row.avg_wait,
+      );
+    }
+
+    for (const id of attractionIds) {
+      const data = attractionData.get(id) || {};
+      const avgThreeToTwo = data[1] || null;
+      const avgTwoToOne = data[2] || null;
+      const avgLastHour = data[3] || null;
+
+      if (avgLastHour === null || avgTwoToOne === null) {
+        trendsMap.set(id, {
+          trend: "stable",
+          changeRate: 0,
+          recentAverage: avgLastHour,
+          previousAverage: avgTwoToOne,
+        });
+        continue;
+      }
+
+      const changeRate =
+        avgTwoToOne !== null && avgLastHour !== null
+          ? avgLastHour - avgTwoToOne
+          : 0;
+
+      const trendRaw = this.computeTrend(
+        avgLastHour,
+        avgLastHour,
+        avgTwoToOne,
+        avgThreeToTwo,
+      );
+
+      const trend: "increasing" | "stable" | "decreasing" =
+        trendRaw === "up"
+          ? "increasing"
+          : trendRaw === "down"
+            ? "decreasing"
+            : "stable";
+
+      trendsMap.set(id, {
+        trend,
+        changeRate: Math.round(changeRate * 10) / 10,
+        recentAverage: avgLastHour ? Math.round(avgLastHour) : null,
+        previousAverage: avgTwoToOne ? Math.round(avgTwoToOne) : null,
+      });
+    }
+
+    return trendsMap;
+  }
   /**
    * Get 90th percentile baselines for multiple attractions in a single batched query
    * OPTIMIZED: Uses single SQL query with IN clause instead of N individual queries

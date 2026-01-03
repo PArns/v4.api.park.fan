@@ -18,6 +18,12 @@ export class ParkStatisticsDto {
     p90: number;
     p95: number;
   };
+
+  // History of Park Average Wait Time (for Sparkline/Graph)
+  history?: {
+    timestamp: string;
+    waitTime: number;
+  }[];
 }
 
 export class AttractionStatisticsDto {
