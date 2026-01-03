@@ -5,11 +5,13 @@ import {
   Query,
   NotFoundException,
   BadRequestException,
+  UseInterceptors,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { QueueDataService } from "./queue-data.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ParksService } from "../parks/parks.service";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { WaitTimesResponseDto } from "./dto/wait-times-response.dto";
 import { StatusResponseDto } from "./dto/status-response.dto";
 import {
@@ -34,7 +36,7 @@ export class QueueDataController {
     private readonly queueDataService: QueueDataService,
     private readonly attractionsService: AttractionsService,
     private readonly parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/attractions/:slug/wait-times
@@ -129,6 +131,7 @@ export class QueueDataController {
    * Returns current real-time status for an attraction
    */
   @Get("attractions/:slug/status")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live status
   @ApiOperation({
     summary: "Get attraction live status",
     description:
@@ -259,6 +262,7 @@ export class QueueDataController {
    * Returns current wait times for all attractions in a park
    */
   @Get("parks/:slug/wait-times")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
   async getParkWaitTimes(
     @Param("slug") slug: string,
     @Query("queueType") queueType?: QueueType,

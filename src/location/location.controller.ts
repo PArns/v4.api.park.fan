@@ -19,7 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("location")
 @Controller("discovery")
 export class LocationController {
-  constructor(private readonly locationService: LocationService) {}
+  constructor(private readonly locationService: LocationService) { }
 
   /**
    * GET /v1/discovery/nearby
@@ -29,7 +29,7 @@ export class LocationController {
    * Otherwise, returns up to 5 nearest parks.
    */
   @Get("nearby")
-  @UseInterceptors(new HttpCacheInterceptor(3 * 60)) // 3 minutes cache
+  @UseInterceptors(new HttpCacheInterceptor(60)) // 1 minute - fresher park status
   @ApiOperation({
     summary: "Find nearby parks or rides",
     description:

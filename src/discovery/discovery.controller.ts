@@ -36,7 +36,7 @@ export class DiscoveryController {
     private readonly parksService: ParksService,
     private readonly analyticsService: AnalyticsService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/discovery/geo
@@ -45,7 +45,7 @@ export class DiscoveryController {
    * Cached for 24 hours (HTTP + Redis).
    */
   @Get("geo")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes HTTP cache (live stats)
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "Get complete geo structure",
     description:
@@ -116,7 +116,7 @@ export class DiscoveryController {
    * Returns all continents with nested data.
    */
   @Get("continents")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes for live stats
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "List all continents",
     description:
@@ -138,7 +138,7 @@ export class DiscoveryController {
    * Returns countries in a specific continent.
    */
   @Get("continents/:continentSlug")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "Get countries in continent",
     description:
@@ -188,8 +188,8 @@ export class DiscoveryController {
     const continentName =
       countries.length > 0
         ? (await this.discoveryService.getContinents()).find(
-            (c) => c.slug === continentSlug,
-          )?.name || continentSlug
+          (c) => c.slug === continentSlug,
+        )?.name || continentSlug
         : continentSlug;
 
     const breadcrumbs: BreadcrumbDto[] = [
@@ -206,7 +206,7 @@ export class DiscoveryController {
    * Returns cities in a specific country.
    */
   @Get("continents/:continentSlug/:countrySlug")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "Get cities in country",
     description:
@@ -282,7 +282,7 @@ export class DiscoveryController {
    * Returns list of hydrated park objects for a country
    */
   @Get(":continent/:country")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 mins cache for hydrated data
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "Get hydrated parks in country",
     description: "Returns fully hydrated park objects for a country.",

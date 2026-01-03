@@ -146,14 +146,14 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Discovery/geo endpoints (5 min)
+    // Discovery/geo endpoints (2 min - live park status)
     if (path.includes("/discovery")) {
-      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
+      return "public, max-age=120, s-maxage=120, stale-while-revalidate=120";
     }
 
-    // Search - moderate cache (5 min) - matches Redis TTL
+    // Search - short cache (1 min) - matches Redis TTL
     if (path.includes("/search")) {
-      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
+      return "public, max-age=60, s-maxage=60, stale-while-revalidate=60";
     }
 
     // Holidays - long cache (1 day)
@@ -161,9 +161,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=86400, s-maxage=86400, stale-while-revalidate=172800";
     }
 
-    // Stats/analytics - moderate cache (5 minutes)
+    // Stats/analytics - short cache (2 min for live stats)
     if (path.includes("/stats") || path.includes("/analytics")) {
-      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
+      return "public, max-age=120, s-maxage=120, stale-while-revalidate=120";
     }
 
     // Default - moderate cache for other endpoints

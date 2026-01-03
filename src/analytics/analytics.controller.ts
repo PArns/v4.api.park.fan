@@ -12,9 +12,10 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("stats")
 @Controller("analytics")
 export class AnalyticsController {
-  constructor(private readonly analyticsService: AnalyticsService) {}
+  constructor(private readonly analyticsService: AnalyticsService) { }
 
   @Get("realtime")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats need freshness
   @ApiOperation({ summary: "Get global platform statistics" })
   @ApiResponse({
     status: 200,
@@ -62,7 +63,7 @@ export class AnalyticsController {
   }
 
   @Get("geo-live")
-  @UseInterceptors(new HttpCacheInterceptor(5 * 60)) // 5 minutes
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
   @ApiOperation({
     summary: "Get live geographic statistics",
     description:

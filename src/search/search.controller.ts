@@ -1,15 +1,17 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Controller, Get, Query, UseInterceptors } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from "@nestjs/swagger";
 import { SearchService } from "./search.service";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto } from "./dto/search-result.dto";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 @ApiTags("search")
 @Controller("search")
 export class SearchController {
-  constructor(private readonly searchService: SearchService) {}
+  constructor(private readonly searchService: SearchService) { }
 
   @Get()
+  @UseInterceptors(new HttpCacheInterceptor(60)) // 1 minute - matches Redis TTL
   @ApiOperation({
     summary: "Intelligent search across all entities",
     description:

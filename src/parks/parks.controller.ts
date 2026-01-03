@@ -74,7 +74,7 @@ export class ParksController {
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * GET /v1/parks
@@ -83,6 +83,7 @@ export class ParksController {
    * Now supports pagination with default limit of 10 items.
    */
   @Get()
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
   @ApiOperation({
     summary: "List all parks",
     description:
@@ -843,6 +844,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":slug/wait-times")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
   @ApiOperation({
     summary: "Get current wait times",
     description: "Returns live wait times for all attractions in a park.",
@@ -1065,6 +1067,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
   @ApiOperation({
     summary: "Get park by location",
     description: "Returns a specific park by its geographic structure.",
