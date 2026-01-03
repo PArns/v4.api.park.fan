@@ -39,6 +39,7 @@ export enum QueueType {
   PAID_RETURN_TIME = "PAID_RETURN_TIME",
   BOARDING_GROUP = "BOARDING_GROUP",
   PAID_STANDBY = "PAID_STANDBY",
+  VIRTUAL_QUEUE = "VIRTUAL_QUEUE",
 }
 
 export enum ScheduleType {

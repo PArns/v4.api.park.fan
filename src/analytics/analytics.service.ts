@@ -19,6 +19,7 @@ import {
   AttractionStatisticsDto,
   GlobalStatsDto,
 } from "./dto";
+import { CrowdLevel } from "../common/types/crowd-level.type";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 
 import { Redis } from "ioredis";
@@ -712,42 +713,22 @@ export class AnalyticsService {
 
     const stats = result[0];
 
-    // Fallback logic for small parks (< 3 attractions with >= 5min wait)
-    let currentAvgWait = stats?.current_avg_wait || 0;
-    if (!currentAvgWait || currentAvgWait === 0) {
-      // Retry without 5-minute threshold
-      const fallbackResult = await this.queueDataRepository.query(
-        `
-        SELECT ROUND(AVG(lq."waitTime")) as avg_wait
-        FROM (
-          SELECT DISTINCT ON (qd."attractionId")
-            qd."waitTime"
-          FROM queue_data qd
-          INNER JOIN attractions a ON a.id = qd."attractionId"
-          WHERE a."parkId" = $1
-            AND qd."queueType" = 'STANDBY'
-            AND qd.timestamp >= $2 -- 2 hours window
-            AND qd."waitTime" > 0
-          ORDER BY qd."attractionId", qd.timestamp DESC
-        ) lq
-        `,
-        [parkId, windowAgo],
-      );
-      currentAvgWait = fallbackResult[0]?.avg_wait || 0;
-    }
-
-    // Calculate occupancy for crowd level
+    // Calculate occupancy for crowd level AND current avg wait
+    // This uses the unified Smart Logic (> 10m fallback to > 0)
     const occupancy = await this.calculateParkOccupancy(parkId);
-    const crowdLevel = this.determineCrowdLevel(occupancy.current);
+
+    // Get TODAY's aggregate statistics for history
+    const avgWaitToday = Math.round(stats?.avg_wait_today || 0);
+    const peakWaitToday = Math.round(stats?.max_wait_today || 0);
 
     // Optimistic calculation: totalAttractions - explicitlyClosedCount
     // This matches Discovery Service logic and prevents showing "0 operating" during data gaps
     const totalAttractions = parseInt(stats?.total_count) || 0;
     const explicitlyClosedCount = parseInt(stats?.explicitly_closed_count) || 0;
 
-    // If park has any occupancy or wait times, assume it's open
-    // This handles cases where we have queue data but park status might lag
-    const isParkLikelyOpen = occupancy.current > 0 || currentAvgWait > 0;
+    // Use occupancy data to determine if park is likely open
+    const isParkLikelyOpen =
+      occupancy.current > 0 || (occupancy.breakdown?.currentAvgWait ?? 0) > 0;
 
     const operatingAttractions = isParkLikelyOpen
       ? Math.max(0, totalAttractions - explicitlyClosedCount)
@@ -804,11 +785,13 @@ export class AnalyticsService {
     }
 
     const statsDto: ParkStatisticsDto = {
-      avgWaitTime: Math.round(currentAvgWait),
-      avgWaitToday: Math.round(stats?.avg_wait_today || 0),
-      peakWaitToday: Math.round(stats?.max_wait_today || 0),
+      // Use UNIFIED Smart Logic from calculateParkOccupancy
+      avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+      avgWaitToday,
+      peakWaitToday,
       peakHour: displayPeakHour,
-      crowdLevel,
+      // Use utility method for consistency
+      crowdLevel: this.getParkCrowdLevel(occupancy.current),
       totalAttractions,
       operatingAttractions,
       closedAttractions: totalAttractions - operatingAttractions,
@@ -2753,5 +2736,38 @@ export class AnalyticsService {
       this.logger.warn(`Failed to count for ${cacheKey}`, err);
       return 0;
     }
+  }
+
+  /**
+   * Public utility: Get attraction crowd level from wait time and P90 baseline
+   * Single source of truth for attraction crowd level calculation
+   */
+  public getAttractionCrowdLevel(
+    waitTime: number | undefined,
+    p90: number | undefined,
+  ): CrowdLevel | null {
+    if (!waitTime || waitTime === 0) return null;
+
+    // If we have a P90 baseline, calculate relative occupancy
+    if (p90 && p90 > 0) {
+      const occupancy = (waitTime / p90) * 100;
+      return this.determineCrowdLevel(occupancy);
+    }
+
+    // Fallback to static thresholds if no baseline available
+    if (waitTime < 15) return "very_low";
+    if (waitTime < 30) return "low";
+    if (waitTime < 60) return "moderate";
+    if (waitTime < 90) return "high";
+    if (waitTime < 120) return "very_high";
+    return "extreme";
+  }
+
+  /**
+   * Public utility: Get park crowd level from occupancy percentage
+   * Single source of truth for park crowd level calculation
+   */
+  public getParkCrowdLevel(occupancy: number): CrowdLevel {
+    return this.determineCrowdLevel(occupancy);
   }
 }

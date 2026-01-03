@@ -76,7 +76,8 @@ export class QueueDataService {
     const queueTypes = Object.keys(liveData.queue) as QueueType[];
 
     for (const queueType of queueTypes) {
-      const queueInfo = liveData.queue[queueType];
+      const queueInfo =
+        liveData.queue[queueType as keyof typeof liveData.queue];
 
       if (!queueInfo) continue;
 

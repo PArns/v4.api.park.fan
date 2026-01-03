@@ -593,14 +593,20 @@ export class SearchService implements OnModuleInit {
       }
     });
 
-    // 3. Batch fetch wait times and status ONLY for operating attractions
-    // This replicates the logic in ParksController to avoid stale data
+    // 3. Batch fetch wait times, status, and P90s ONLY for operating attractions
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
+    let p90Map = new Map<string, number>();
 
     if (operatingAttractionIds.length > 0) {
-      waitTimesMap = await this.getBatchWaitTimes(operatingAttractionIds);
-      statusMap = await this.getBatchAttractionStatus(operatingAttractionIds);
+      const [waitTimes, statuses, p90s] = await Promise.all([
+        this.getBatchWaitTimes(operatingAttractionIds),
+        this.getBatchAttractionStatus(operatingAttractionIds),
+        this.analyticsService.getBatchAttractionP90s(operatingAttractionIds),
+      ]);
+      waitTimesMap = waitTimes;
+      statusMap = statuses;
+      p90Map = p90s;
     }
 
     return attractions.map((attraction) => {
@@ -618,8 +624,10 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
+      const p90 = isParkOpen ? p90Map.get(attraction.id) : undefined;
+
       const load = isParkOpen
-        ? this.determineAttractionLoad(waitTime ?? undefined)
+        ? this.determineAttractionLoad(waitTime ?? undefined, p90)
         : null;
 
       return {
@@ -821,27 +829,21 @@ export class SearchService implements OnModuleInit {
 
   /**
    * Determine attraction load level from wait time
+   * REFACTORED: Delegates to AnalyticsService for consistent logic
    */
   private determineAttractionLoad(
     waitTime: number | undefined,
+    p90: number | undefined,
   ): CrowdLevel | null {
-    if (!waitTime) return null;
-    if (waitTime <= 10) return "very_low";
-    if (waitTime <= 20) return "low";
-    if (waitTime <= 45) return "moderate";
-    if (waitTime <= 75) return "high";
-    return "very_high";
+    return this.analyticsService.getAttractionCrowdLevel(waitTime, p90);
   }
 
   /**
    * Determine park crowd level from occupancy percentage
+   * REFACTORED: Delegates to AnalyticsService for consistent logic
    */
   private determineParkCrowdLevel(occupancyPercentage: number): CrowdLevel {
-    if (occupancyPercentage <= 20) return "very_low";
-    if (occupancyPercentage <= 40) return "low";
-    if (occupancyPercentage <= 70) return "moderate";
-    if (occupancyPercentage <= 90) return "high";
-    return "very_high";
+    return this.analyticsService.getParkCrowdLevel(occupancyPercentage);
   }
 
   /**
@@ -901,22 +903,21 @@ export class SearchService implements OnModuleInit {
   ): Promise<Map<string, CrowdLevel>> {
     const loadMap = new Map<string, CrowdLevel>();
 
-    await Promise.all(
-      parkIds.map(async (parkId) => {
-        try {
-          // Use today's date for occupancy
-          const occupancy =
-            await this.analyticsService.calculateParkOccupancy(parkId);
-          if (occupancy) {
-            // Map occupancy percentage to CrowdLevel directly
-            const crowdLevel = this.determineParkCrowdLevel(occupancy.current);
-            loadMap.set(parkId, crowdLevel);
-          }
-        } catch {
-          // Ignore errors
+    try {
+      // Use batch fetch for efficiency and consistent logic
+      const occupancyMap =
+        await this.analyticsService.getBatchParkOccupancy(parkIds);
+
+      for (const [parkId, occupancy] of occupancyMap.entries()) {
+        if (occupancy) {
+          // Map occupancy percentage to CrowdLevel directly
+          const crowdLevel = this.determineParkCrowdLevel(occupancy.current);
+          loadMap.set(parkId, crowdLevel);
         }
-      }),
-    );
+      }
+    } catch {
+      // Ignore errors
+    }
 
     return loadMap;
   }
