@@ -217,7 +217,14 @@ def filter_predictions_by_schedule(
                 # Build set of dates when park is OPERATING
                 operating_dates = set()
                 for schedule_row in schedules:
-                    operating_dates.add(schedule_row[0])
+                    # CRITICAL FIX: PostgreSQL DATE columns may return datetime objects
+                    # depending on the driver. Ensure we're comparing date objects, not datetimes.
+                    date_value = schedule_row[0]
+                    if isinstance(date_value, datetime):
+                        date_value = date_value.date()
+                    operating_dates.add(date_value)
+                
+                print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
                 
                 # Filter predictions
                 for pred in park_preds:
@@ -231,6 +238,10 @@ def filter_predictions_by_schedule(
                             pred_time_utc = pytz.UTC.localize(pred_time_utc)
                         pred_time_local = pred_time_utc.astimezone(park_tz)
                         pred_date = pred_time_local.date()
+                        
+                        # Debug logging for first few predictions
+                        if len(filtered_predictions) < 3:
+                            print(f"   Pred: {pred_time_str} → Local: {pred_time_local} → Date: {pred_date}, In Schedule: {pred_date in operating_dates}")
                         
                         # Only include predictions for days when park is operating
                         if pred_date in operating_dates:
