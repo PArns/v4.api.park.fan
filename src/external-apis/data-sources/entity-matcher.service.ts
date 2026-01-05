@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { compareTwoStrings } from "string-similarity";
+import { compareTwoStrings } from "@elsikora/string-similarity";
 import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import {
   ParkMetadata,
