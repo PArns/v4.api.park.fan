@@ -1158,6 +1158,70 @@ export class ParksService {
     return schedule;
   }
 
+  /**
+   * Get next scheduled opening for a park
+   *
+   * Finds the next day when the park will be operating.
+   * Useful for parks in off-season to show when they will next open.
+   *
+   * @param parkId - Park ID (UUID)
+   * @returns Next operating schedule entry or null if none found
+   */
+  async getNextSchedule(parkId: string): Promise<ScheduleEntry | null> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park) return null;
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+
+    const cacheKey = `schedule:next:${parkId}:${formatInParkTimezone(tomorrow, park.timezone)}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (!parsed) return null;
+      return {
+        ...parsed,
+        date: new Date(parsed.date),
+        openingTime: parsed.openingTime ? new Date(parsed.openingTime) : null,
+        closingTime: parsed.closingTime ? new Date(parsed.closingTime) : null,
+      } as ScheduleEntry;
+    }
+
+    // Look ahead up to 365 days for next operating schedule
+    const lookAheadDate = new Date(tomorrow);
+    lookAheadDate.setDate(lookAheadDate.getDate() + 365);
+
+    const nextSchedule = await this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .where("schedule.parkId = :parkId", { parkId })
+      .andWhere("schedule.date >= :tomorrow", { tomorrow })
+      .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
+      .andWhere("schedule.scheduleType = :type", {
+        type: ScheduleType.OPERATING,
+      })
+      .andWhere("schedule.openingTime IS NOT NULL")
+      .andWhere("schedule.closingTime IS NOT NULL")
+      .orderBy("schedule.date", "ASC")
+      .limit(1)
+      .getOne();
+
+    // Cache result (1 hour TTL)
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(nextSchedule),
+      "EX",
+      this.TTL_SCHEDULE,
+    );
+
+    return nextSchedule;
+  }
+
   async getUpcomingSchedule(
     parkId: string,
     days: number = 7,

@@ -111,6 +111,17 @@ export class NearbyParkInfoDto {
     closingTime: string;
     scheduleType: string;
   };
+
+  @ApiProperty({
+    description: "Next scheduled opening day",
+    required: false,
+    nullable: true,
+  })
+  nextSchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
 }
 
 /**
@@ -196,6 +207,17 @@ export class ParkWithDistanceDto {
     nullable: true,
   })
   todaySchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
+
+  @ApiProperty({
+    description: "Next scheduled opening day",
+    required: false,
+    nullable: true,
+  })
+  nextSchedule?: {
     openingTime: string;
     closingTime: string;
     scheduleType: string;

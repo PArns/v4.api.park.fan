@@ -171,12 +171,14 @@ export class LocationService {
       where: { parkId },
     });
 
-    // Get park status and analytics
-    const [statusMap, parkAnalytics, todaySchedule] = await Promise.all([
-      this.parksService.getBatchParkStatus([parkId]),
-      this.analyticsService.getParkStatistics(parkId).catch(() => null),
-      this.parksService.getTodaySchedule(parkId).catch(() => []),
-    ]);
+    // Get park status, analytics, and schedules
+    const [statusMap, parkAnalytics, todaySchedule, nextSchedule] =
+      await Promise.all([
+        this.parksService.getBatchParkStatus([parkId]),
+        this.analyticsService.getParkStatistics(parkId).catch(() => null),
+        this.parksService.getTodaySchedule(parkId).catch(() => []),
+        this.parksService.getNextSchedule(parkId).catch(() => null),
+      ]);
 
     const parkStatus = statusMap.get(parkId) || "CLOSED";
 
@@ -256,6 +258,13 @@ export class LocationService {
               scheduleType: todaySchedule[0].scheduleType,
             }
           : undefined,
+      nextSchedule: nextSchedule
+        ? {
+            openingTime: nextSchedule.openingTime?.toISOString() || "",
+            closingTime: nextSchedule.closingTime?.toISOString() || "",
+            scheduleType: nextSchedule.scheduleType,
+          }
+        : undefined,
     };
 
     return {
@@ -304,7 +313,7 @@ export class LocationService {
     const parkIds = sortedParks.map((p) => p.id);
 
     // Batch fetch status, analytics, and schedules
-    const [statusMap, occupancyMap, schedulesMap] = await Promise.all([
+    const [statusMap, occupancyMap, schedules] = await Promise.all([
       this.parksService.getBatchParkStatus(parkIds),
       this.analyticsService["getBatchParkOccupancy"](parkIds),
       this.batchFetchSchedules(parkIds),
@@ -328,7 +337,8 @@ export class LocationService {
       const status = statusMap.get(park.id) || "CLOSED";
       const occupancy = occupancyMap.get(park.id);
       const stats = statisticsMap.get(park.id);
-      const schedule = schedulesMap.get(park.id);
+      const todaySchedule = schedules.today.get(park.id);
+      const nextSchedule = schedules.next.get(park.id);
 
       return {
         id: park.id,
@@ -352,13 +362,20 @@ export class LocationService {
         url: buildParkUrl(park) || "",
         timezone: park.timezone,
         todaySchedule:
-          schedule && schedule.length > 0
+          todaySchedule && todaySchedule.length > 0
             ? {
-                openingTime: schedule[0].openingTime?.toISOString() || "",
-                closingTime: schedule[0].closingTime?.toISOString() || "",
-                scheduleType: schedule[0].scheduleType,
+                openingTime: todaySchedule[0].openingTime?.toISOString() || "",
+                closingTime: todaySchedule[0].closingTime?.toISOString() || "",
+                scheduleType: todaySchedule[0].scheduleType,
               }
             : undefined,
+        nextSchedule: nextSchedule
+          ? {
+              openingTime: nextSchedule.openingTime?.toISOString() || "",
+              closingTime: nextSchedule.closingTime?.toISOString() || "",
+              scheduleType: nextSchedule.scheduleType,
+            }
+          : undefined,
       };
     });
 
@@ -412,14 +429,25 @@ export class LocationService {
 
   /**
    * Batch fetch schedules for multiple parks
+   * Returns both today's schedule and next schedule
    * @private
    */
   private async batchFetchSchedules(parkIds: string[]) {
-    const results = await Promise.all(
-      parkIds.map((id) =>
-        this.parksService.getTodaySchedule(id).catch(() => []),
+    const [todayResults, nextResults] = await Promise.all([
+      Promise.all(
+        parkIds.map((id) =>
+          this.parksService.getTodaySchedule(id).catch(() => []),
+        ),
       ),
-    );
-    return new Map(parkIds.map((id, i) => [id, results[i]]));
+      Promise.all(
+        parkIds.map((id) =>
+          this.parksService.getNextSchedule(id).catch(() => null),
+        ),
+      ),
+    ]);
+    return {
+      today: new Map(parkIds.map((id, i) => [id, todayResults[i]])),
+      next: new Map(parkIds.map((id, i) => [id, nextResults[i]])),
+    };
   }
 }
