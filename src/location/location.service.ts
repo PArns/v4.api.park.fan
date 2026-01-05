@@ -171,11 +171,17 @@ export class LocationService {
       where: { parkId },
     });
 
+    const startTime = await this.analyticsService.getEffectiveStartTime(
+      park.id,
+      park.timezone,
+    );
     // Get park status, analytics, and schedules
     const [statusMap, parkAnalytics, todaySchedule, nextSchedule] =
       await Promise.all([
         this.parksService.getBatchParkStatus([parkId]),
-        this.analyticsService.getParkStatistics(parkId).catch(() => null),
+        this.analyticsService
+          .getParkStatistics(parkId, park.timezone, startTime)
+          .catch(() => null),
         this.parksService.getTodaySchedule(parkId).catch(() => []),
         this.parksService.getNextSchedule(parkId).catch(() => null),
       ]);
@@ -319,13 +325,24 @@ export class LocationService {
       this.batchFetchSchedules(parkIds),
     ]);
 
-    // Get statistics for each park
+    // Get statistics for each park (with timezone context)
     const statisticsMap = new Map<string, any>();
     await Promise.all(
       parkIds.map(async (parkId) => {
         try {
-          const stats = await this.analyticsService.getParkStatistics(parkId);
-          statisticsMap.set(parkId, stats);
+          const park = parks.find((p) => p.id === parkId);
+          if (park) {
+            const startTime = await this.analyticsService.getEffectiveStartTime(
+              park.id,
+              park.timezone,
+            );
+            const stats = await this.analyticsService.getParkStatistics(
+              parkId,
+              park.timezone,
+              startTime,
+            );
+            statisticsMap.set(parkId, stats);
+          }
         } catch (_e) {
           // Ignore errors
         }

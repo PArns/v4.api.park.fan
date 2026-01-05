@@ -47,12 +47,22 @@ export class ParkEnrichmentService {
 
     const parkIds = parks.map((p) => p.id);
 
+    // Pre-calculate context (timezone + startTime) for batch park statistics
+    const context = new Map<string, { timezone: string; startTime: Date }>();
+    for (const park of parks) {
+      const startTime = await this.analyticsService.getEffectiveStartTime(
+        park.id,
+        park.timezone,
+      );
+      context.set(park.id, { timezone: park.timezone, startTime });
+    }
+
     // Batch fetch all data in parallel (4 queries total regardless of park count)
     const [statusMap, occupancyMap, statisticsMap, schoolHolidayMap] =
       await Promise.all([
         this.parksService.getBatchParkStatus(parkIds),
         this.analyticsService.getBatchParkOccupancy(parkIds),
-        this.analyticsService.getBatchParkStatistics(parkIds),
+        this.analyticsService.getBatchParkStatistics(parkIds, context),
         this.getBatchSchoolHolidayStatus(parks),
       ]);
 

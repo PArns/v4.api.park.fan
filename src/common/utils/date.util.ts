@@ -1,4 +1,4 @@
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 /**
  * Formats a date as "YYYY-MM-DD" in a specific timezone.
@@ -32,6 +32,34 @@ export function formatInParkTimezone(date: Date, timezone: string): string {
  */
 export function getCurrentDateInTimezone(timezone: string): string {
   return formatInTimeZone(new Date(), timezone, "yyyy-MM-dd");
+}
+
+/**
+ * Gets a Date object representing the start of the current day (midnight)
+ * in a specific timezone, correctly converted to UTC.
+ *
+ * This is critical for database queries that need to filter by "today"
+ * in a park's local timezone. It handles timezone offset correctly to avoid
+ * including data from previous/next day due to UTC conversion.
+ *
+ * @param timezone - IANA timezone (e.g., "America/New_York", "Europe/Paris")
+ * @returns Date object representing midnight in the specified timezone
+ *
+ * @example
+ * // At 2026-01-05 20:50 UTC (15:50 in New York, UTC-5):
+ * const startOfDay = getStartOfDayInTimezone("America/New_York");
+ * // Returns: Date object for 2026-01-05T05:00:00.000Z (2026-01-05 00:00 New York time)
+ * // NOT 2026-01-05T00:00:00.000Z (which would be 2026-01-04 19:00 New York time)
+ */
+export function getStartOfDayInTimezone(timezone: string): Date {
+  // Get current date in park timezone as string (e.g., "2026-01-05")
+  const dateStr = getCurrentDateInTimezone(timezone);
+
+  // Create a date at midnight in the target timezone
+  // fromZonedTime takes a string/date that IS in the timezone and matches it to the UTC instant
+  const zonedMidnight = fromZonedTime(`${dateStr}T00:00:00`, timezone);
+
+  return zonedMidnight;
 }
 
 /**

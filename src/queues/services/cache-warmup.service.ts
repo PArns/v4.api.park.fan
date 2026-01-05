@@ -31,11 +31,12 @@ export class CacheWarmupService {
     private readonly parkRepository: Repository<Park>,
     @InjectRepository(Attraction)
     private readonly attractionRepository: Repository<Attraction>,
+    @Inject(REDIS_CLIENT)
+    private readonly redis: Redis,
     private readonly parksService: ParksService,
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly discoveryService: DiscoveryService,
-    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   // ... existing methods
@@ -502,7 +503,24 @@ export class CacheWarmupService {
         "ParkStatistics",
         async (parkId) => {
           try {
-            await analyticsService.getParkStatistics(parkId);
+            const park = await this.parkRepository.findOne({
+              where: { id: parkId },
+            });
+            if (!park) {
+              this.logger.warn(
+                `Park ${parkId} not found, skipping cache warmup`,
+              );
+              return false;
+            }
+            const startTime = await analyticsService.getEffectiveStartTime(
+              park.id,
+              park.timezone,
+            );
+            await analyticsService.getParkStatistics(
+              parkId,
+              park.timezone,
+              startTime,
+            );
             return true;
           } catch (error) {
             this.logger.warn(

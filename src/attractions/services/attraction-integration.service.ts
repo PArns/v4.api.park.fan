@@ -1,5 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 import { Attraction } from "../entities/attraction.entity";
+import { Park } from "../../parks/entities/park.entity";
 import { AttractionResponseDto } from "../dto/attraction-response.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { QueueDataService } from "../../queue-data/queue-data.service";
@@ -32,6 +35,8 @@ export class AttractionIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parksService: ParksService,
+    @InjectRepository(Park)
+    private readonly parkRepository: Repository<Park>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -191,10 +196,25 @@ export class AttractionIntegrationService {
       dto.hourlyForecast = [];
     }
 
-    // Fetch attraction statistics
+    // Fetch attraction statistics (requires park timezone for accurate daily filtering)
     try {
+      // Fetch park entity to get timezone
+      const park = await this.parkRepository.findOne({
+        where: { id: attraction.parkId },
+      });
+      if (!park) {
+        throw new Error(`Park not found for attraction ${attraction.id}`);
+      }
+
+      const startTime = await this.analyticsService.getEffectiveStartTime(
+        attraction.parkId,
+        park.timezone,
+      );
+
       const statistics = await this.analyticsService.getAttractionStatistics(
         attraction.id,
+        startTime,
+        park.timezone,
       );
 
       dto.statistics = {

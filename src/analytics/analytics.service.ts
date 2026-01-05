@@ -1,13 +1,16 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { WeatherData } from "../parks/entities/weather-data.entity";
-import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
+import {
+  ScheduleEntry,
+  ScheduleType,
+} from "../parks/entities/schedule-entry.entity";
 import { RestaurantLiveData } from "../restaurants/entities/restaurant-live-data.entity";
 import { ShowLiveData } from "../shows/entities/show-live-data.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
@@ -21,6 +24,11 @@ import {
 } from "./dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
+import {
+  getStartOfDayInTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
+import { formatInTimeZone } from "date-fns-tz";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -64,6 +72,28 @@ export class AnalyticsService {
     private queueDataAggregateRepository: Repository<QueueDataAggregate>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * Determine the effective start time for analytics filtering
+   * Uses today's schedule opening time if available, otherwise midnight in park timezone
+   */
+  async getEffectiveStartTime(parkId: string, timezone: string): Promise<Date> {
+    const todayStr = getCurrentDateInTimezone(timezone);
+    const schedule = await this.scheduleEntryRepository.findOne({
+      where: {
+        parkId,
+        date: todayStr as any,
+        scheduleType: ScheduleType.OPERATING,
+      },
+      order: { openingTime: "ASC" },
+    });
+
+    if (schedule?.openingTime) {
+      return schedule.openingTime;
+    }
+
+    return getStartOfDayInTimezone(timezone);
+  }
 
   /**
    * Calculate park occupancy for multiple parks in batch
@@ -621,11 +651,33 @@ export class AnalyticsService {
    *
    * Now uses a single CTE query for ~70% performance improvement.
    */
-  async getParkStatistics(parkId: string): Promise<ParkStatisticsDto> {
+  async getParkStatistics(
+    parkId: string,
+    timezone?: string,
+    startTime?: Date,
+  ): Promise<ParkStatisticsDto> {
     const now = new Date();
     const windowAgo = new Date(Date.now() - 120 * 60 * 1000); // 2 hours window
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+
+    // 1. Resolve Timezone
+    let resolvedTimezone = timezone;
+    if (!resolvedTimezone) {
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["timezone"],
+      });
+      resolvedTimezone = park?.timezone || "UTC";
+    }
+
+    // 2. Resolve Start Time (Effective "Start of Day")
+    let resolvedStartTime = startTime;
+    if (!resolvedStartTime) {
+      resolvedStartTime = await this.getEffectiveStartTime(
+        parkId,
+        resolvedTimezone,
+      );
+    }
+    const startOfDay = resolvedStartTime;
 
     // Try cache first
     const cacheKey = `park:statistics:${parkId}`;
@@ -653,14 +705,14 @@ export class AnalyticsService {
           qd.timestamp DESC
       ),
       today_hourly AS (
-        -- Aggregate by hour to find peak
+        -- Aggregate by hour to find peak (using Park Timezone)
         SELECT 
-          EXTRACT(HOUR FROM qd.timestamp) as hour,
+          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $5) as hour,
           AVG(qd."waitTime") as hour_avg
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = $1
-          AND qd.timestamp >= $3  -- Start of today
+          AND qd.timestamp >= $3  -- Start of today (Effective)
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
@@ -708,7 +760,7 @@ export class AnalyticsService {
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1
       `,
-      [parkId, windowAgo, startOfDay, now],
+      [parkId, windowAgo, startOfDay, now, resolvedTimezone],
     );
 
     const stats = result[0];
@@ -739,7 +791,7 @@ export class AnalyticsService {
     let typicalPeakHour = await this.redis.get(typicalPeakKey);
 
     if (!typicalPeakHour) {
-      typicalPeakHour = await this.getTypicalPeakHour(parkId);
+      typicalPeakHour = await this.getTypicalPeakHour(parkId, resolvedTimezone);
       if (typicalPeakHour) {
         await this.redis.set(
           typicalPeakKey,
@@ -775,7 +827,19 @@ export class AnalyticsService {
 
     let history: { timestamp: string; waitTime: number }[] = [];
     try {
-      history = await this.getParkWaitTimeHistory(parkId);
+      const park = await this.parkRepository.findOne({ where: { id: parkId } });
+      if (park && park.timezone) {
+        const startTime = await this.getEffectiveStartTime(
+          parkId,
+          park.timezone,
+        );
+        history = await this.getParkWaitTimeHistory(parkId, startTime);
+      } else {
+        // Fallback if park not found or no timezone
+        const now = new Date();
+        now.setHours(0, 0, 0, 0); // Fallback start of day
+        history = await this.getParkWaitTimeHistory(parkId, now);
+      }
     } catch (error) {
       this.logger.warn(
         `Failed to fetch park wait time history for ${parkId}:`,
@@ -808,8 +872,14 @@ export class AnalyticsService {
   /**
    * Get batch attraction statistics for today
    * Returns: Avg, Min, Max wait time, and Timestamp of Max Wait
+   *
+   * @param attractionIds - Array of attraction IDs to fetch statistics for
+   * @param startTime - Start time for filtering (e.g. Schedule Opening Time or Start of Day)
    */
-  async getBatchAttractionStatistics(attractionIds: string[]): Promise<
+  async getBatchAttractionStatistics(
+    attractionIds: string[],
+    startTime: Date,
+  ): Promise<
     Map<
       string,
       {
@@ -824,8 +894,7 @@ export class AnalyticsService {
     if (attractionIds.length === 0) return new Map();
 
     const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDay = startTime;
 
     // Use CTE to get stats and find the timestamp of the max wait
     const result = await this.queueDataRepository.query(
@@ -887,20 +956,21 @@ export class AnalyticsService {
   }
 
   /**
-   * Get batch wait time history for sparklines (last 12 hours)
-   * Returns simplified list of timestamp/value pairs
+   * Get batch wait time history for today
+   * Returns simplified list of timestamp/value pairs for sparklines
+   * Only returns changed values for efficient rendering
+   *
+   * @param attractionIds - Array of attraction IDs to fetch history for
+   * @param startTime - Start time for filtering (e.g. Schedule Opening Time or Start of Day)
    */
   async getBatchAttractionWaitTimeHistory(
     attractionIds: string[],
+    startTime: Date,
   ): Promise<Map<string, { timestamp: string; waitTime: number }[]>> {
     if (attractionIds.length === 0) return new Map();
 
-    const now = new Date();
-    // Only last 12 hours for sparkline to keep it relevant and performant
-    // User requested "Tagesverlauf" (Daily progress), so from start of day is better?
-    // "Tagesverlauf" implies current day context.
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    // Use provided start time
+    const startOfDay = startTime;
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
@@ -938,13 +1008,16 @@ export class AnalyticsService {
 
   /**
    * Get park-wide wait time history for today
+   *
+   * @param parkId - Park ID
+   * @param startTime - Start time for filtering (e.g. Schedule Opening Time or Start of Day)
    */
   async getParkWaitTimeHistory(
     parkId: string,
+    startTime: Date,
   ): Promise<{ timestamp: string; waitTime: number }[]> {
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    // Use provided start time
+    const startOfDay = startTime;
 
     // Group by 10-minute intervals to get a smooth average trend for the park
     const result = await this.queueDataRepository.query(
@@ -980,6 +1053,7 @@ export class AnalyticsService {
    */
   async getBatchParkStatistics(
     parkIds: string[],
+    context?: Map<string, { timezone: string; startTime: Date }>,
   ): Promise<Map<string, ParkStatisticsDto>> {
     const resultMap = new Map<string, ParkStatisticsDto>();
 
@@ -987,14 +1061,37 @@ export class AnalyticsService {
       return resultMap;
     }
 
+    // Resolve context if missing
+    let resolvedContext = context;
+    if (!resolvedContext) {
+      resolvedContext = new Map();
+      // Batch fetch timezones
+      const parks = await this.parkRepository.find({
+        where: { id: In(parkIds) },
+        select: ["id", "timezone"],
+      });
+
+      // Calculate effective start times in parallel
+      await Promise.all(
+        parks.map(async (park) => {
+          const timezone = park.timezone || "UTC";
+          const startTime = await this.getEffectiveStartTime(park.id, timezone);
+          resolvedContext!.set(park.id, { timezone, startTime });
+        }),
+      );
+    }
+
     // Execute all statistics queries in parallel
     const results = await Promise.all(
-      parkIds.map((id) =>
-        this.getParkStatistics(id).catch((err) => {
-          this.logger.warn(`Failed to get statistics for park ${id}:`, err);
-          return null;
-        }),
-      ),
+      parkIds.map((id) => {
+        const ctx = resolvedContext!.get(id);
+        return this.getParkStatistics(id, ctx?.timezone, ctx?.startTime).catch(
+          (err) => {
+            this.logger.warn(`Failed to get statistics for park ${id}:`, err);
+            return null;
+          },
+        );
+      }),
     );
 
     // Map results
@@ -1069,14 +1166,17 @@ export class AnalyticsService {
    * Uses historical data from the last 60 days to determine the hour with the highest average wait.
    * This adapts to seasonal changes (e.g. earlier closing in winter) without needing explicit schedules.
    */
-  private async getTypicalPeakHour(parkId: string): Promise<string | null> {
+  private async getTypicalPeakHour(
+    parkId: string,
+    timezone: string,
+  ): Promise<string | null> {
     // Sliding window: Last 60 days
     // This allows the "Peak" to shift from 16:00 (Summer) to 14:00 (Winter) automatically
     const validSince = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
 
     const result = await this.queueDataRepository
       .createQueryBuilder("qd")
-      .select("EXTRACT(HOUR FROM qd.timestamp)", "hour")
+      .select("EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone)", "hour")
       .addSelect('AVG(qd."waitTime")', "avgWait")
       .innerJoin("qd.attraction", "attraction")
       .where('attraction."parkId" = :parkId', { parkId })
@@ -1084,6 +1184,7 @@ export class AnalyticsService {
       .andWhere("qd.status = 'OPERATING'")
       .andWhere('qd."waitTime" IS NOT NULL')
       .andWhere("qd.\"queueType\" = 'STANDBY'")
+      .setParameter("timezone", timezone)
       .groupBy("hour")
       .orderBy('"avgWait"', "DESC")
       .limit(1)
@@ -1209,20 +1310,26 @@ export class AnalyticsService {
 
   /**
    * Get attraction-specific statistics
+   *
+   * @param attractionId - Attraction ID
+   * @param startTime - Start time for filtering (e.g. Schedule Opening Time or Start of Day)
    */
   async getAttractionStatistics(
     attractionId: string,
+    startTime: Date,
+    timezone: string,
   ): Promise<AttractionStatisticsDto> {
     const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    // Calculate current hour/DOW in PARK TIME
+    const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
+    const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
-    const currentHour = now.getHours();
-    const currentDayOfWeek = now.getDay();
-
-    // Get today's statistics
+    // Get today's statistics (using provided start time)
     // Use batch method (efficient CTE) instead of multiple queries
-    const batchStats = await this.getBatchAttractionStatistics([attractionId]);
+    const batchStats = await this.getBatchAttractionStatistics(
+      [attractionId],
+      startTime,
+    );
     const batchStat = batchStats.get(attractionId);
 
     const todayStats = {
@@ -1238,6 +1345,7 @@ export class AnalyticsService {
       attractionId,
       currentHour,
       currentDayOfWeek,
+      timezone,
     );
 
     // Get 95th percentile for this hour/weekday
@@ -1245,6 +1353,7 @@ export class AnalyticsService {
       attractionId,
       currentHour,
       currentDayOfWeek,
+      timezone,
     );
 
     // Calculate current vs typical
@@ -1253,11 +1362,12 @@ export class AnalyticsService {
         ? Math.round(((todayStats.avg - typicalWait) / typicalWait) * 100)
         : null;
 
-    // Get wait time history for sparkline (last 12 hours / today)
+    // Get wait time history for today (using provided start time)
     // Re-use the batch logic but for single ID
-    const historyMap = await this.getBatchAttractionWaitTimeHistory([
-      attractionId,
-    ]);
+    const historyMap = await this.getBatchAttractionWaitTimeHistory(
+      [attractionId],
+      startTime,
+    );
     const history = historyMap.get(attractionId) || [];
 
     return {
@@ -1281,6 +1391,7 @@ export class AnalyticsService {
     attractionId: string,
     hour: number,
     dayOfWeek: number,
+    timezone: string,
   ): Promise<number | null> {
     const twoYearsAgo = new Date();
     twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -1290,11 +1401,18 @@ export class AnalyticsService {
       .select("AVG(qd.waitTime)", "avgWait")
       .where("qd.attractionId = :attractionId", { attractionId })
       .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
-      .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-      .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
+      .andWhere(
+        "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+        { hour },
+      )
+      .andWhere(
+        "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+        { dayOfWeek },
+      )
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
       .andWhere("qd.queueType = 'STANDBY'")
+      .setParameter("timezone", timezone)
       .getRawOne();
 
     return result?.avgWait ? Math.round(parseFloat(result.avgWait)) : null;
@@ -1307,6 +1425,7 @@ export class AnalyticsService {
     attractionId: string,
     hour: number,
     dayOfWeek: number,
+    timezone: string,
   ): Promise<number | null> {
     const twoYearsAgo = new Date();
     twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -1316,11 +1435,18 @@ export class AnalyticsService {
       .select("qd.waitTime", "waitTime")
       .where("qd.attractionId = :attractionId", { attractionId })
       .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
-      .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-      .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
+      .andWhere(
+        "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+        { hour },
+      )
+      .andWhere(
+        "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+        { dayOfWeek },
+      )
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
       .andWhere("qd.queueType = 'STANDBY'")
+      .setParameter("timezone", timezone)
       .getRawMany();
 
     if (waitTimes.length === 0) return null;
@@ -1586,95 +1712,120 @@ export class AnalyticsService {
     attractionIds: string[],
   ): Promise<Map<string, number>> {
     const resultMap = new Map<string, number>();
-    const now = new Date();
-    const hour = now.getHours();
-    const dayOfWeek = now.getDay();
 
     if (attractionIds.length === 0) {
       return resultMap;
     }
 
-    // Check Redis cache first for all attractions
-    const cacheKeys = attractionIds.map(
-      (id) => `analytics:percentile:attraction:${id}:${hour}:${dayOfWeek}`,
-    );
-    const cachedValues = await this.redis.mget(...cacheKeys);
+    // 1. Fetch attractions with park info (for timezone)
+    // We need the timezone to determine what "current hour" means for each attraction
+    const attractions = await this.attractionRepository.find({
+      where: { id: In(attractionIds) },
+      relations: ["park"],
+      select: ["id", "parkId"],
+    });
+
+    // 2. Build cache keys based on local time per attraction
+    const now = new Date();
+    const cacheKeyMap = new Map<string, string>();
+    const attractionMap = new Map<string, Attraction>();
+
+    attractions.forEach((attraction) => {
+      attractionMap.set(attraction.id, attraction); // Keep for later reference if needed
+      const tz = attraction.park?.timezone || "UTC";
+      const hour = parseInt(formatInTimeZone(now, tz, "H"));
+      const dayOfWeek = parseInt(formatInTimeZone(now, tz, "i")) % 7;
+
+      const key = `analytics:percentile:attraction:${attraction.id}:${hour}:${dayOfWeek}`;
+      cacheKeyMap.set(attraction.id, key);
+    });
+
+    // 3. Batched cache check
+    // We iterate original IDs to maintain order or just ensure we check all
+    const keysToCheck = attractionIds
+      .map((id) => cacheKeyMap.get(id))
+      .filter((k) => !!k) as string[];
+
+    // Only check if we have keys (should always happen if attractions exist)
+    let cachedValues: (string | null)[] = [];
+    if (keysToCheck.length > 0) {
+      cachedValues = await this.redis.mget(...keysToCheck);
+    }
 
     const uncachedIds: string[] = [];
-    attractionIds.forEach((id, index) => {
-      if (cachedValues[index] !== null) {
-        resultMap.set(id, parseInt(cachedValues[index] as string, 10));
+
+    // Map existing cache values
+    let cacheIndex = 0;
+    // Iterate original IDs to map back correctly
+    attractionIds.forEach((id) => {
+      const key = cacheKeyMap.get(id);
+      // If attraction not found in DB (weird), skip
+      if (!key) return;
+
+      const value = cachedValues[cacheIndex];
+      cacheIndex++;
+
+      if (value !== null) {
+        resultMap.set(id, parseInt(value, 10));
       } else {
         uncachedIds.push(id);
       }
     });
 
-    // If all values were cached, return early
     if (uncachedIds.length === 0) {
       return resultMap;
     }
 
-    // Single batched query for all uncached attractions
-    // Uses PostgreSQL percentile_cont for efficient P90 calculation
-    const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); // 1 year
+    // 4. Single batched query for all uncached attractions
+    // Uses timezone-aware extraction to match "Current Local Hour" for each attraction
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
 
-    try {
-      const results = await this.queueDataRepository.query(
+    const dbResults = await this.queueDataRepository
+      .createQueryBuilder("qd")
+      .select('qd."attractionId"', "attractionId")
+      .addSelect(
+        'PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")',
+        "p90",
+      )
+      .innerJoin("qd.attraction", "attraction")
+      .innerJoin("attraction.park", "park")
+      .where("qd.attractionId IN (:...ids)", { ids: uncachedIds })
+      .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
+      .andWhere(
         `
-        WITH attraction_wait_times AS (
-          SELECT 
-            qd."attractionId",
-            qd."waitTime"
-          FROM queue_data qd
-          WHERE qd."attractionId" = ANY($1)
-            AND qd.timestamp >= $2
-            AND EXTRACT(HOUR FROM qd.timestamp) = $3
-            AND EXTRACT(DOW FROM qd.timestamp) = $4
-            AND qd.status = 'OPERATING'
-            AND qd."waitTime" IS NOT NULL
-            AND qd."queueType" = 'STANDBY'
-        )
-        SELECT 
-          "attractionId",
-          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY "waitTime") as p90,
-          COUNT(*) as sample_count
-        FROM attraction_wait_times
-        GROUP BY "attractionId"
-        `,
-        [uncachedIds, cutoff, hour, dayOfWeek],
-      );
+        EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE park.timezone) = 
+        EXTRACT(HOUR FROM NOW() AT TIME ZONE park.timezone)
+      `,
+      )
+      .andWhere(
+        `
+        EXTRACT(DOW FROM qd.timestamp AT TIME ZONE park.timezone) = 
+        EXTRACT(DOW FROM NOW() AT TIME ZONE park.timezone)
+      `,
+      )
+      .andWhere("qd.status = 'OPERATING'")
+      .andWhere("qd.waitTime IS NOT NULL")
+      .andWhere("qd.queueType = 'STANDBY'")
+      .groupBy('qd."attractionId"')
+      .getRawMany();
 
-      // Process results and cache them
+    // 5. Store in Map and Cache
+    if (dbResults.length > 0) {
       const pipeline = this.redis.pipeline();
 
-      for (const row of results) {
-        const p90Value = row.p90 ? Math.round(parseFloat(row.p90)) : 0;
-        resultMap.set(row.attractionId, p90Value);
+      dbResults.forEach((res) => {
+        const id = res.attractionId;
+        const p90 = Math.round(parseFloat(res.p90));
+        resultMap.set(id, p90);
 
-        // Cache the value
-        const cacheKey = `analytics:percentile:attraction:${row.attractionId}:${hour}:${dayOfWeek}`;
-        const ttl = p90Value === 0 ? 60 * 60 : this.TTL_PERCENTILES;
-        pipeline.set(cacheKey, p90Value.toString(), "EX", ttl);
-      }
-
-      // Set 0 for attractions with no data found
-      for (const id of uncachedIds) {
-        if (!resultMap.has(id)) {
-          resultMap.set(id, 0);
-          const cacheKey = `analytics:percentile:attraction:${id}:${hour}:${dayOfWeek}`;
-          pipeline.set(cacheKey, "0", "EX", 60 * 60); // Short TTL for 0 values
+        const key = cacheKeyMap.get(id);
+        if (key) {
+          pipeline.set(key, p90, "EX", this.TTL_PERCENTILES);
         }
-      }
+      });
 
       await pipeline.exec();
-    } catch (error) {
-      this.logger.warn(`Failed to batch fetch P90s:`, error);
-      // Fallback: set 0 for all uncached attractions
-      for (const id of uncachedIds) {
-        if (!resultMap.has(id)) {
-          resultMap.set(id, 0);
-        }
-      }
     }
 
     return resultMap;

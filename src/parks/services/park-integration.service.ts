@@ -382,6 +382,12 @@ export class ParkIntegrationService {
       // Batch fetch P90 baselines for all attractions (for relative crowd calculation)
       const attractionIds = dto.attractions.map((a) => a.id);
 
+      // Determine start time for analytics filtering
+      const startTime = await this.analyticsService.getEffectiveStartTime(
+        park.id,
+        park.timezone,
+      );
+
       // Batch fetch P90s, pre-aggregated accuracy stats, and deviation flags in parallel
       const [
         attractionP90s,
@@ -396,8 +402,14 @@ export class ParkIntegrationService {
           where: { attractionId: In(attractionIds) },
         }),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
-        this.analyticsService.getBatchAttractionStatistics(attractionIds),
-        this.analyticsService.getBatchAttractionWaitTimeHistory(attractionIds),
+        this.analyticsService.getBatchAttractionStatistics(
+          attractionIds,
+          startTime,
+        ),
+        this.analyticsService.getBatchAttractionWaitTimeHistory(
+          attractionIds,
+          startTime,
+        ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
       ]);
 
@@ -769,9 +781,17 @@ export class ParkIntegrationService {
     // Only fetch live analytics if park is operating, otherwise return zeroed values
     if (dto.status === "OPERATING") {
       try {
+        const startTime = await this.analyticsService.getEffectiveStartTime(
+          park.id,
+          park.timezone,
+        );
         const [occupancy, statistics, percentiles] = await Promise.all([
           this.analyticsService.calculateParkOccupancy(park.id),
-          this.analyticsService.getParkStatistics(park.id),
+          this.analyticsService.getParkStatistics(
+            park.id,
+            park.timezone,
+            startTime,
+          ),
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
@@ -809,8 +829,16 @@ export class ParkIntegrationService {
     } else {
       // Park is CLOSED - Fetch today's historical analytics and provide "Typical" values for context
       try {
+        const startTime = await this.analyticsService.getEffectiveStartTime(
+          park.id,
+          park.timezone,
+        );
         const [statistics, percentiles] = await Promise.all([
-          this.analyticsService.getParkStatistics(park.id),
+          this.analyticsService.getParkStatistics(
+            park.id,
+            park.timezone,
+            startTime,
+          ),
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
