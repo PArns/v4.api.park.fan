@@ -827,7 +827,11 @@ export class AnalyticsService {
 
     let history: { timestamp: string; waitTime: number }[] = [];
     try {
-      const park = await this.parkRepository.findOne({ where: { id: parkId } });
+      // PERFORMANCE: Only select timezone, not entire park entity
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["id", "timezone"],
+      });
       if (park && park.timezone) {
         const startTime = await this.getEffectiveStartTime(
           parkId,
