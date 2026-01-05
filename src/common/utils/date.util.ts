@@ -89,3 +89,52 @@ export function isSameDayInTimezone(
   const str2 = formatInTimeZone(date2, timezone, "yyyy-MM-dd");
   return str1 === str2;
 }
+
+/**
+ * Gets tomorrow's date as "YYYY-MM-DD" in a specific timezone.
+ *
+ * Use this when you need "tomorrow" in a park's local timezone.
+ * This is critical for showing next-day predictions or schedules.
+ *
+ * @param timezone - IANA timezone (e.g., "Europe/Berlin", "America/New_York")
+ * @returns Tomorrow's date string in the specified timezone (YYYY-MM-DD)
+ *
+ * @example
+ * // At 2024-01-01 23:00 UTC:
+ * getTomorrowDateInTimezone("UTC") // "2024-01-02"
+ * getTomorrowDateInTimezone("America/Los_Angeles") // "2024-01-02" (UTC-8, still 15:00 on 2024-01-01 local)
+ */
+export function getTomorrowDateInTimezone(timezone: string): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return formatInTimeZone(tomorrow, timezone, "yyyy-MM-dd");
+}
+
+/**
+ * Gets the current time as a Date object in a specific timezone.
+ *
+ * This returns a Date object that represents "now" but adjusted to show
+ * the correct hour/minute/day in the specified timezone. Useful for
+ * extracting the current hour/day-of-week in a park's local time.
+ *
+ * @param timezone - IANA timezone (e.g., "America/New_York", "Europe/Paris")
+ * @returns Date object with time adjusted to the specified timezone
+ *
+ * @example
+ * // At 2026-01-05 23:00 UTC (18:00 in New York, UTC-5):
+ * const nyTime = getCurrentTimeInTimezone("America/New_York");
+ * nyTime.getHours() // 18 (not 23)
+ * nyTime.getDay() // 0 (Monday in NY, still Monday in UTC too in this case)
+ */
+export function getCurrentTimeInTimezone(timezone: string): Date {
+  // Get current time formatted in the target timezone
+  const formatted = formatInTimeZone(
+    new Date(),
+    timezone,
+    "yyyy-MM-dd'T'HH:mm:ss",
+  );
+
+  // Parse it back as a Date object
+  // This creates a new Date with the local time components matching the timezone
+  return new Date(formatted);
+}

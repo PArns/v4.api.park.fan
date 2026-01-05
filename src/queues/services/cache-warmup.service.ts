@@ -503,24 +503,30 @@ export class CacheWarmupService {
         "ParkStatistics",
         async (parkId) => {
           try {
+            // PERFORMANCE: Only select timezone, not entire park entity
             const park = await this.parkRepository.findOne({
               where: { id: parkId },
+              select: ["id", "timezone"],
             });
+
             if (!park) {
               this.logger.warn(
                 `Park ${parkId} not found, skipping cache warmup`,
               );
               return false;
             }
+
             const startTime = await analyticsService.getEffectiveStartTime(
-              park.id,
+              parkId,
               park.timezone,
             );
+
             await analyticsService.getParkStatistics(
               parkId,
               park.timezone,
               startTime,
             );
+
             return true;
           } catch (error) {
             this.logger.warn(

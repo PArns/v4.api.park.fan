@@ -453,11 +453,25 @@ def create_prediction_features(
             )
     """)
 
+
     with get_db() as db:
+        # CRITICAL FIX: Use local_timestamp to determine date range
+        # Schedules are stored as DATE type (park's local calendar dates)
+        # We must query using dates in the park's timezone, not UTC
+        # df has 'local_timestamp' column added by convert_to_local_time() earlier
+        if 'local_timestamp' in df.columns:
+            # Extract date range from LOCAL timestamps (already in park TZ)
+            start_date_local = df['local_timestamp'].min().date()
+            end_date_local = df['local_timestamp'].max().date()
+        else:
+            # Fallback to UTC dates (should not happen, but defensive)
+            start_date_local = df_start.date()
+            end_date_local = df_end.date()
+        
         result = db.execute(schedule_query, {
             "park_ids": list(set(park_ids)),
-            "start_date": df_start.date(),
-            "end_date": df_end.date()
+            "start_date": start_date_local,
+            "end_date": end_date_local
         })
         schedules_df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
@@ -481,8 +495,15 @@ def create_prediction_features(
             attraction_id = str(row['attractionId'])
             timestamp = row['timestamp']
 
-            # Convert timestamp to date for comparison
-            date_only = pd.Timestamp(timestamp.date())
+            # CRITICAL FIX: Use LOCAL timestamp for schedule date comparison
+            # Schedules are stored as local calendar dates (DATE type in DB)
+            # We must compare with the date in the park's timezone, not UTC
+            if 'local_timestamp' in row.index and pd.notna(row['local_timestamp']):
+                local_ts = row['local_timestamp']
+                date_only = pd.Timestamp(local_ts.date())
+            else:
+                # Fallback to UTC date (defensive, should not happen)
+                date_only = pd.Timestamp(timestamp.date())
 
             # Filter schedules for this park/date
             # We want: 

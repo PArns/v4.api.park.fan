@@ -22,6 +22,8 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
   getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
+  getCurrentTimeInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
@@ -338,16 +340,20 @@ export class ParkIntegrationService {
     // Filter hourly predictions:
     // - If park OPERATING: Show today's hourly predictions
     // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
-    // Use park's timezone to determine "today" and "tomorrow"
+    // CRITICAL: Use park's timezone to determine "today" and "tomorrow"
     const todayInParkTz = park.timezone
       ? getCurrentDateInTimezone(park.timezone)
       : new Date().toISOString().split("T")[0];
 
-    const tomorrowDate = new Date();
-    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    // CRITICAL FIX: Calculate tomorrow in park's local timezone
+    // Previously incorrectly used getCurrentDateInTimezone which returns TODAY
     const tomorrowInParkTz = park.timezone
-      ? getCurrentDateInTimezone(park.timezone)
-      : tomorrowDate.toISOString().split("T")[0];
+      ? getTomorrowDateInTimezone(park.timezone)
+      : (() => {
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          return tomorrow.toISOString().split("T")[0];
+        })();
 
     const targetDateStr =
       dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
@@ -842,9 +848,16 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // Get typical rating for "right now" even if closed, to show what it would be like
-        const hour = new Date().getHours();
-        const day = new Date().getDay();
+        // CRITICAL FIX: Use park's local time for percentile lookup
+        // Get typical rating for "right now" in park's timezone
+        // Previously incorrectly used UTC time instead of park local time
+        const nowInParkTz = park.timezone
+          ? getCurrentTimeInTimezone(park.timezone)
+          : new Date();
+
+        const hour = nowInParkTz.getHours();
+        const day = nowInParkTz.getDay();
+
         const p90Park = await this.analyticsService.get90thPercentileOneYear(
           park.id,
           hour,
