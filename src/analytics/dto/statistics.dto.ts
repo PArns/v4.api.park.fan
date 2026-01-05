@@ -9,7 +9,8 @@ export class ParkStatisticsDto {
   avgWaitTime: number;
 
   @ApiProperty({
-    description: "Average wait time for today across all operating attractions (minutes)",
+    description:
+      "Average wait time for today across all operating attractions (minutes)",
     example: 32,
   })
   avgWaitToday: number;

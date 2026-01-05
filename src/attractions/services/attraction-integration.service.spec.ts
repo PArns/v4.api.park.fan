@@ -4,6 +4,7 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
+import { ParksService } from "../../parks/parks.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { createTestAttraction } from "../../../test/fixtures/attraction.fixtures";
 
@@ -37,6 +38,10 @@ describe("AttractionIntegrationService", () => {
     getAttractionAccuracyWithBadge: jest.fn(),
   };
 
+  const mockParksService = {
+    getBatchParkStatus: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -56,6 +61,10 @@ describe("AttractionIntegrationService", () => {
         {
           provide: PredictionAccuracyService,
           useValue: mockPredictionAccuracyService,
+        },
+        {
+          provide: ParksService,
+          useValue: mockParksService,
         },
         {
           provide: REDIS_CLIENT,
