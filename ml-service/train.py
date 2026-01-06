@@ -154,13 +154,26 @@ def train_model(version: str = None) -> None:
     else:
         # Time-based split for larger datasets
         validation_cutoff = end_date - timedelta(days=settings.VALIDATION_DAYS)
-        train_mask = df["timestamp"] < validation_cutoff
-        val_mask = df["timestamp"] >= validation_cutoff
+        
+        # Check if validation_cutoff is before data start (fallback to percentage split)
+        data_start = df["timestamp"].min()
+        if validation_cutoff <= data_start:
+            print(f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})")
+            print("   Falling back to percentage-based split (80/20)")
+            split_idx = int(len(df) * 0.8)
+            df = df.sort_values("timestamp")
+            X_train = X.iloc[:split_idx]
+            y_train = y.iloc[:split_idx]
+            X_val = X.iloc[split_idx:]
+            y_val = y.iloc[split_idx:]
+        else:
+            train_mask = df["timestamp"] < validation_cutoff
+            val_mask = df["timestamp"] >= validation_cutoff
 
-        X_train = X[train_mask]
-        y_train = y[train_mask]
-        X_val = X[val_mask]
-        y_val = y[val_mask]
+            X_train = X[train_mask]
+            y_train = y[train_mask]
+            X_val = X[val_mask]
+            y_val = y[val_mask]
 
     print("📈 Train/Validation Split:")
     print(f"   Training samples: {len(X_train):,}")
