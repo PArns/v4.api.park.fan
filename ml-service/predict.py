@@ -464,7 +464,10 @@ def create_prediction_features(
             start_date_local = df['local_timestamp'].min().date()
             end_date_local = df['local_timestamp'].max().date()
         else:
-            # Fallback to UTC dates (should not happen, but defensive)
+            # Fallback to UTC dates (should not happen in production)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("No local_timestamp column - using UTC for schedule dates (may miss boundary dates)")
             start_date_local = df_start.date()
             end_date_local = df_end.date()
         
@@ -474,6 +477,7 @@ def create_prediction_features(
             "end_date": end_date_local
         })
         schedules_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
 
     # Initialize schedule features and status
     df['is_park_open'] = 1  # Assume open if no schedule found
