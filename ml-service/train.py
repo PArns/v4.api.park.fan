@@ -165,6 +165,28 @@ def train_model(version: str = None) -> None:
     print("📈 Train/Validation Split:")
     print(f"   Training samples: {len(X_train):,}")
     print(f"   Validation samples: {len(X_val):,}")
+    
+    # Check for empty datasets
+    if len(X_train) == 0:
+        print("❌ ERROR: Training set is empty after split!")
+        print(f"   Total rows: {len(df):,}")
+        print(f"   Data span: {data_span_days} days")
+        print(f"   Validation cutoff: {validation_cutoff if data_span_days >= 7 else 'N/A (percentage split)'}")
+        return
+    
+    if len(X_val) == 0:
+        print("⚠️  WARNING: Validation set is empty after split!")
+        print("   Using all data for training (no validation)")
+        X_val = X_train
+        y_val = y_train
+    
+    if len(y_train) == 0:
+        print("❌ ERROR: Training labels (y_train) are empty!")
+        print(f"   X_train rows: {len(X_train):,}")
+        print(f"   waitTime column exists: {'waitTime' in df.columns}")
+        print(f"   waitTime non-null count: {df['waitTime'].notna().sum() if 'waitTime' in df.columns else 'N/A'}")
+        return
+    
     print(
         f"   Split ratio: {len(X_train) / (len(X_train) + len(X_val)) * 100:.1f}% / {len(X_val) / (len(X_train) + len(X_val)) * 100:.1f}%"
     )
@@ -178,7 +200,7 @@ def train_model(version: str = None) -> None:
     print(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
     print(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
     print(f"   Depth: {settings.CATBOOST_DEPTH}")
-    print(f"   Early stopping: 50 rounds")
+    print("   Early stopping: 50 rounds")
     print()
 
     model = WaitTimeModel(version)

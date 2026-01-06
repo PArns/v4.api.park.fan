@@ -1233,38 +1233,51 @@ def add_bridge_day_feature(
         if row["holiday_type"] == "public":
             holiday_lookup[(row["country"], row["date"])] = True
 
-    # Vectorized check is hard because parks have different countries
-    # Use iteration for correctness
-
-    # Optimize: Pre-compute bridge dates per country?
-    # Or just iterate rows. Iteration is acceptable for the volume we have.
-
-    def check_bridge(row):
-        # Local date
-        date = row["date_local"]
-        day_of_week = row["day_of_week"]  # 0=Mon, 4=Fri
-
-        # Get country
-        park_info = parks_metadata[parks_metadata["park_id"] == row["parkId"]]
-        if park_info.empty:
-            return 0
-        country = park_info.iloc[0]["country"]
-
-        # Check Friday (4) -> Thursday (date - 1)
-        if day_of_week == 4:
-            prev_day = date - timedelta(days=1)
-            if holiday_lookup.get((country, prev_day)):
-                return 1
-
-        # Check Monday (0) -> Tuesday (date + 1)
-        elif day_of_week == 0:
-            next_day = date + timedelta(days=1)
-            if holiday_lookup.get((country, next_day)):
-                return 1
-
-        return 0
-
-    df["is_bridge_day"] = df.apply(check_bridge, axis=1)
+    # Vectorized approach: Pre-compute bridge dates per country, then merge
+    # Create country mapping for df
+    if "country" not in df.columns:
+        # Merge parks_metadata to get country
+        df_country = df.merge(
+            parks_metadata[["park_id", "country"]],
+            left_on="parkId",
+            right_on="park_id",
+            how="left",
+        )
+        df["country"] = df_country["country"]
+    
+    # Pre-compute bridge dates per country
+    bridge_dates = set()
+    for (country, holiday_date) in holiday_lookup.keys():
+        # Friday after Thursday holiday
+        if holiday_date.weekday() == 3:  # Thursday
+            bridge_friday = holiday_date + timedelta(days=1)
+            bridge_dates.add((country, bridge_friday))
+        # Monday before Tuesday holiday
+        if holiday_date.weekday() == 1:  # Tuesday
+            bridge_monday = holiday_date - timedelta(days=1)
+            bridge_dates.add((country, bridge_monday))
+    
+    # Create bridge lookup DataFrame
+    if bridge_dates:
+        bridge_df = pd.DataFrame(
+            list(bridge_dates), columns=["country", "bridge_date"]
+        )
+        bridge_df["is_bridge"] = 1
+        
+        # Merge with df to find bridge days
+        df_bridge = df.merge(
+            bridge_df,
+            left_on=["country", "date_local"],
+            right_on=["country", "bridge_date"],
+            how="left",
+        )
+        df["is_bridge_day"] = df_bridge["is_bridge"].fillna(0).astype(int)
+    else:
+        df["is_bridge_day"] = 0
+    
+    # Clean up temporary country column if we added it
+    if "country" not in df.columns or "park_id" in df.columns:
+        df = df.drop(columns=["country", "park_id"], errors="ignore")
     return df
 
 
