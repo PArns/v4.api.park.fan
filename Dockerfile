@@ -188,6 +188,7 @@ generateSwaggerSpec()
 EOFSCRIPT
 
 # Build the application
+# Note: postbuild script is configured to not fail the build if Swagger generation fails
 RUN pnpm run build
 
 # Stage 2: Production
