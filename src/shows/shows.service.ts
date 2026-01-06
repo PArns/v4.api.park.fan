@@ -382,7 +382,7 @@ export class ShowsService {
           `Show ${showId} not found in database. Cannot create placeholder without parkId. ` +
             `Skipping live data save. Show will be created by metadata sync.`,
         );
-        return 0;
+        return;
       }
 
       // Save live data (BeforeInsert hook will generate id and timestamp)
