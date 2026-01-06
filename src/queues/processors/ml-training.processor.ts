@@ -55,12 +55,25 @@ export class MLTrainingProcessor {
       this.logger.log("Training started:", response.data);
 
       // Poll for training completion
+      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES (default: 45 minutes)
+      const timeoutMinutes = parseInt(
+        process.env.ML_TRAINING_TIMEOUT_MINUTES || "45",
+        10,
+      );
+      const pollIntervalSeconds = 30; // Check every 30 seconds
+      const maxAttempts = (timeoutMinutes * 60) / pollIntervalSeconds; // Convert to attempts
+
+      this.logger.log(
+        `Training timeout: ${timeoutMinutes} minutes (${maxAttempts} attempts at ${pollIntervalSeconds}s intervals)`,
+      );
+
       let isTraining = true;
       let attempts = 0;
-      const maxAttempts = 60; // 30 minutes max (30s intervals)
 
       while (isTraining && attempts < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 30000)); // Wait 30s
+        await new Promise((resolve) =>
+          setTimeout(resolve, pollIntervalSeconds * 1000),
+        );
         attempts++;
 
         const statusResponse = await axios.get(`${mlServiceUrl}/train/status`);
@@ -79,7 +92,9 @@ export class MLTrainingProcessor {
       }
 
       if (attempts >= maxAttempts) {
-        throw new Error("Training timeout - exceeded 30 minutes");
+        throw new Error(
+          `Training timeout - exceeded ${timeoutMinutes} minutes`,
+        );
       }
 
       // Calculate training duration

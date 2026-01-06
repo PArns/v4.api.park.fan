@@ -33,14 +33,13 @@ import {
  * For Phase 2, we only fetch metadata (parks/attractions), not live data.
  */
 @Entity("queue_data")
-@Index(["attractionId", "timestamp"]) // For efficient time-series queries
+@Index(["attractionId", "timestamp"])
 @Index(["queueType", "timestamp"])
-@Index("queue_data_timestamp_idx", ["timestamp"])
-@Index(["attractionId", "queueType", "timestamp"]) // For DISTINCT ON optimization in findCurrentStatusByPark
+@Index(["attractionId", "queueType", "timestamp"])
 @Index("idx_queue_data_operating", ["attractionId", "timestamp"], {
   where: "\"status\" = 'OPERATING'",
-}) // Partial index for status-based filtering (optimizes analytics queries)
-@Index(["queueType", "status", "timestamp"]) // Optimized for ML training queries (queueType='STANDBY', status='OPERATING', timestamp range)
+})
+@Index(["queueType", "status", "timestamp"])
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;

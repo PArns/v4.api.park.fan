@@ -92,10 +92,15 @@ def train_model(version: str = None) -> None:
     # 2.6 Remove anomalies
     df = remove_anomalies(df)
     print()
+    
     # 3. Feature engineering
+    import time
     print("🔧 Engineering features...")
+    feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
+    feature_time = time.time() - feature_start
     print(f"   Features: {len(get_feature_columns())}")
+    print(f"   Feature engineering time: {feature_time:.2f}s ({feature_time/60:.1f} minutes)")
     print()
 
     # 4. Drop rows with missing target
@@ -167,9 +172,13 @@ def train_model(version: str = None) -> None:
 
     # 7. Train model
     print("🤖 Training CatBoost model...")
+    print(f"   Training samples: {len(X_train):,}")
+    print(f"   Validation samples: {len(X_val):,}")
+    print(f"   Features: {len(feature_columns)}")
     print(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
     print(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
     print(f"   Depth: {settings.CATBOOST_DEPTH}")
+    print(f"   Early stopping: 50 rounds")
     print()
 
     model = WaitTimeModel(version)

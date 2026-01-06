@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     CATBOOST_DEPTH: int = 6
     CATBOOST_L2_LEAF_REG: float = 3.0
     CATBOOST_RANDOM_SEED: int = 42
+    CATBOOST_THREAD_COUNT: int = -1  # -1 = use all available CPU cores, 0 = use CPU count
+    CATBOOST_TASK_TYPE: str = "CPU"  # "CPU" or "GPU" (if GPU available)
 
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2

@@ -22,7 +22,7 @@ def convert_to_local_time(
     Critical for correct hour/day features and date-based lookups (weather/holidays).
     """
     try:
-        import pytz
+        import pytz  # noqa: F401
     except ImportError:
         print("⚠️  pytz not installed, using UTC. Install with: pip install pytz")
         return df
@@ -133,7 +133,7 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
     df["day_of_week_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
     df["day_of_week_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
 
-    # NEW: Day of year (1-365/366) for finer seasonal trends
+    # Day of year (1-365/366) for finer seasonal trends
     df["day_of_year"] = df["local_timestamp"].dt.dayofyear
     df["day_of_year_sin"] = np.sin(2 * np.pi * df["day_of_year"] / 365.25)
     df["day_of_year_cos"] = np.cos(2 * np.pi * df["day_of_year"] / 365.25)
@@ -150,7 +150,7 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
 
     df["season"] = df["month"].apply(get_season)
 
-    # NEW: Peak season indicator (summer months + December holidays)
+    # Peak season indicator (summer months + December holidays)
     # Peak seasons: June-August (summer), December (holidays)
     df["is_peak_season"] = ((df["month"] >= 6) & (df["month"] <= 8)) | (
         df["month"] == 12
@@ -213,7 +213,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     if "precipitation" in df.columns:
         df["is_raining"] = (df["precipitation"] > 0).astype(int)
 
-        # NEW: Precipitation last 3 hours (cumulative effect)
+        # Precipitation last 3 hours (cumulative effect)
         # For training: use rolling window on historical data
         # For inference: will be provided via feature_context
         if "timestamp" in df.columns:
@@ -229,7 +229,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df["precipitation_last_3h"] = 0
 
-    # NEW: Temperature deviation (current vs. monthly average)
+    # Temperature deviation (current vs. monthly average)
     # Helps model understand if weather is unusually hot/cold
     if "temperature_avg" in df.columns and "month" in df.columns:
         # Calculate monthly average temperature per park
@@ -249,6 +249,7 @@ def add_holiday_features(
     parks_metadata: pd.DataFrame,
     start_date: datetime,
     end_date: datetime,
+    cached_holidays_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     Add multi-country and regional holiday features
@@ -279,27 +280,88 @@ def add_holiday_features(
         how="left",
     )
 
-    # Get unique countries to fetch holidays for
-    all_countries = set()
-    for _, row in parks_metadata.iterrows():
-        all_countries.add(row["country"])
+    # Use cached holidays if provided, otherwise fetch
+    if cached_holidays_df is not None:
+        holidays_df = cached_holidays_df.copy()
+        # Filter to date range (cached may include extra days for bridge day calculations)
+        holidays_df = holidays_df[
+            (holidays_df["date"] >= start_date.date())
+            & (holidays_df["date"] <= end_date.date())
+        ]
+    else:
+        # Get unique countries to fetch holidays for
+        all_countries = set()
+        for _, row in parks_metadata.iterrows():
+            all_countries.add(row["country"])
 
-        # Add countries from influencingRegions JSON
-        if isinstance(row["influencingRegions"], list):
-            for region in row["influencingRegions"]:
-                if isinstance(region, dict) and "countryCode" in region:
-                    all_countries.add(region["countryCode"])
+            # Add countries from influencingRegions JSON
+            if isinstance(row["influencingRegions"], list):
+                for region in row["influencingRegions"]:
+                    if isinstance(region, dict) and "countryCode" in region:
+                        all_countries.add(region["countryCode"])
 
-    # Fetch all holidays
-    holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
+        # Fetch all holidays
+        holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
 
     # Convert date column to datetime
     if not holidays_df.empty:
         holidays_df["date"] = pd.to_datetime(holidays_df["date"]).dt.date
 
-    # Create optimized holiday lookup
-    # Key: (country, region, date) -> holiday_type
-    # Also separate lookup for Nationwide holidays: (country, date) -> type
+    # Create holiday lookup DataFrames for vectorized merge
+    # Regional holidays: (country, region, date) -> holiday_type
+    # National holidays: (country, date) -> holiday_type
+    regional_holidays = holidays_df[holidays_df["region"].notna()].copy()
+    national_holidays = holidays_df[holidays_df["is_nationwide"]].copy()
+
+    # Ensure date_local exists in df
+    if "date_local" not in df.columns:
+        if "local_timestamp" in df.columns:
+            df["date_local"] = pd.to_datetime(df["local_timestamp"]).dt.date
+        else:
+            df["date_local"] = pd.to_datetime(df["timestamp"]).dt.date
+
+    # 1. Primary Location Holiday Check (vectorized)
+    if not regional_holidays.empty:
+        # Merge regional holidays
+        regional_holidays["date_only"] = regional_holidays["date"]
+        df_regional = df.merge(
+            regional_holidays[["country", "region", "date_only", "holiday_type"]],
+            left_on=["country", "region_code", "date_local"],
+            right_on=["country", "region", "date_only"],
+            how="left",
+            suffixes=("", "_regional"),
+        )
+        df["primary_holiday_type_regional"] = df_regional["holiday_type"]
+    else:
+        df["primary_holiday_type_regional"] = None
+
+    if not national_holidays.empty:
+        # Merge national holidays
+        national_holidays["date_only"] = national_holidays["date"]
+        df_national = df.merge(
+            national_holidays[["country", "date_only", "holiday_type"]],
+            left_on=["country", "date_local"],
+            right_on=["country", "date_only"],
+            how="left",
+            suffixes=("", "_national"),
+        )
+        df["primary_holiday_type_national"] = df_national["holiday_type"]
+    else:
+        df["primary_holiday_type_national"] = None
+
+    # Combine regional and national (prefer regional, fallback to national)
+    df["primary_holiday_type"] = df["primary_holiday_type_regional"].fillna(
+        df["primary_holiday_type_national"]
+    )
+
+    # Assign primary features (vectorized)
+    df["is_holiday_primary"] = (df["primary_holiday_type"] == "public").astype(int)
+    df["is_school_holiday_primary"] = (df["primary_holiday_type"] == "school").astype(
+        int
+    )
+
+    # 2. Influencing Regions Check (still needs some iteration due to JSON structure)
+    # Create lookup maps for faster access
     holiday_map_regional = {}
     holiday_map_national = {}
 
@@ -311,105 +373,92 @@ def add_holiday_features(
             h_region = row["region"]
             is_nationwide = row["is_nationwide"]
 
-            # Store in National Map if nationwide
             if is_nationwide:
                 holiday_map_national[(h_country, h_date)] = h_type
-
-            # Store in Regional Map if region specific
             if h_region:
                 holiday_map_regional[(h_country, h_region, h_date)] = h_type
 
-    def check_holidays(row):
-        # Use LOCAL date for holiday lookup
-        if pd.isna(row["date_local"]):
-            return row
+    def check_neighbor_holidays(row):
+        """Check holidays for influencing regions"""
+        neighbor_flags = [0, 0, 0]
+        neighbor_school_flags = [0, 0, 0]
 
         date = row["date_local"]
-        primary_country = row["country"]
-        primary_region = row["region_code"]  # e.g. "DE-BW"
-
-        # 1. Primary Location Holiday Check
-        primary_type = None
-
-        # Check specific region match first
-        if primary_region:
-            primary_type = holiday_map_regional.get(
-                (primary_country, primary_region, date)
-            )
-
-        # If no regional match, check national (fallback/additive)
-        if not primary_type:
-            primary_type = holiday_map_national.get((primary_country, date))
-
-        # Assign primary features
-        row["is_holiday_primary"] = int(primary_type == "public")
-        row["is_school_holiday_primary"] = int(primary_type == "school")
-
-        # 2. Influencing Regions Check
-        # Parse influencing regions from JSON or fallback
-        influencing_list = []
+        if pd.isna(date):
+            return neighbor_flags, neighbor_school_flags
 
         raw_regions = row["influencingRegions"]
-        if isinstance(raw_regions, list) and len(raw_regions) > 0:
-            # Use new granular config
-            influencing_list = raw_regions  # list of {countryCode, regionCode}
+        if not isinstance(raw_regions, list) or len(raw_regions) == 0:
+            return neighbor_flags, neighbor_school_flags
 
-        # Check first 3 neighbors
-        neighbor_flags = []
-        neighbor_school_flags = []
-
-        for region_def in influencing_list[:3]:
+        for i, region_def in enumerate(raw_regions[:3]):
             try:
-                # Handle both object (new) and string (bad data) cases safely
                 if not isinstance(region_def, dict):
                     continue
 
                 n_country = region_def.get("countryCode")
-                n_region = region_def.get("regionCode")  # Can be None
+                n_region = region_def.get("regionCode")
 
                 n_type = None
-
-                # Check region specific
+                # Check regional first
                 if n_region:
                     n_type = holiday_map_regional.get((n_country, n_region, date))
 
-                # Check national if no regional hit or if region is None (nationwide influence)
+                # Check national if no regional match
                 if not n_type:
                     n_type = holiday_map_national.get((n_country, date))
 
-                neighbor_flags.append(int(n_type == "public"))
-                neighbor_school_flags.append(int(n_type == "school"))
-
+                neighbor_flags[i] = int(n_type == "public")
+                neighbor_school_flags[i] = int(n_type == "school")
             except Exception:
-                # Safely skip bad entries
-                neighbor_flags.append(0)
-                neighbor_school_flags.append(0)
+                pass
 
-        # Assign neighbor features
-        if len(neighbor_flags) > 0:
-            row["is_holiday_neighbor_1"] = neighbor_flags[0]
-        if len(neighbor_flags) > 1:
-            row["is_holiday_neighbor_2"] = neighbor_flags[1]
-        if len(neighbor_flags) > 2:
-            row["is_holiday_neighbor_3"] = neighbor_flags[2]
+        return neighbor_flags, neighbor_school_flags
 
-        # Totals
-        row["holiday_count_total"] = row["is_holiday_primary"] + sum(neighbor_flags)
+    # Apply neighbor check (only processes influencing regions, not full row)
+    neighbor_results = df.apply(check_neighbor_holidays, axis=1)
+    df["neighbor_flags"] = neighbor_results.apply(lambda x: x[0])
+    df["neighbor_school_flags"] = neighbor_results.apply(lambda x: x[1])
 
-        # "Any School Holiday" Logic (Critical for ML parity)
-        # Matches Node.js isSchoolHolidayInInfluenceZone: true if ANY influenced region has school holiday
-        # OR if local region has school holiday
-        has_local_school = row["is_school_holiday_primary"] == 1
-        has_neighbor_school = sum(neighbor_school_flags) > 0
+    # Assign neighbor features (vectorized)
+    df["is_holiday_neighbor_1"] = df["neighbor_flags"].apply(
+        lambda x: x[0] if len(x) > 0 else 0
+    )
+    df["is_holiday_neighbor_2"] = df["neighbor_flags"].apply(
+        lambda x: x[1] if len(x) > 1 else 0
+    )
+    df["is_holiday_neighbor_3"] = df["neighbor_flags"].apply(
+        lambda x: x[2] if len(x) > 2 else 0
+    )
 
-        row["school_holiday_count_total"] = row["is_school_holiday_primary"] + sum(
-            neighbor_school_flags
-        )
-        row["is_school_holiday_any"] = int(has_local_school or has_neighbor_school)
+    # Totals (vectorized)
+    df["holiday_count_total"] = (
+        df["is_holiday_primary"]
+        + df["is_holiday_neighbor_1"]
+        + df["is_holiday_neighbor_2"]
+        + df["is_holiday_neighbor_3"]
+    )
 
-        return row
+    df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df[
+        "neighbor_school_flags"
+    ].apply(lambda x: sum(x) if isinstance(x, list) else 0)
 
-    df = df.apply(check_holidays, axis=1)
+    df["is_school_holiday_any"] = (
+        (df["is_school_holiday_primary"] == 1)
+        | (df["school_holiday_count_total"] > df["is_school_holiday_primary"])
+    ).astype(int)
+
+    # Clean up temporary columns
+    df = df.drop(
+        columns=[
+            "neighbor_flags",
+            "neighbor_school_flags",
+            "primary_holiday_type_regional",
+            "primary_holiday_type_national",
+            "primary_holiday_type",
+        ],
+        errors="ignore",
+    )
 
     # Drop temporary merge columns
     drop_cols = ["park_id", "country", "region_code", "influencingRegions"]
@@ -501,14 +550,14 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Lag 1 week
     df["wait_lag_1w"] = merge_lag(df, pd.Timedelta(days=7), "wait_lag_1w")
 
-    # Lag 1 month (30 days) - NEW: Extended temporal feature
+    # Lag 1 month (30 days)
     df["wait_lag_1m"] = merge_lag(df, pd.Timedelta(days=30), "wait_lag_1m")
 
     # Map features to legacy names if needed or use new ones
     # We'll keep legacy column names where appropriate to minimize model drift if not retraining everything immediately,
     # but 'avg_wait_same_hour_last_week' essentially maps to 'wait_lag_1w'
     df["avg_wait_same_hour_last_week"] = df["wait_lag_1w"]
-    df["avg_wait_same_hour_last_month"] = df["wait_lag_1m"]  # NEW: Monthly trend
+    df["avg_wait_same_hour_last_month"] = df["wait_lag_1m"]
 
     # 3. Fallback Logic (Impute missing short-term history with long-term patterns)
     # If avg_wait_last_1h is NaN (e.g. morning), fill with wait_lag_24h (Yesterday Same Hour)
@@ -541,48 +590,83 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         .fillna(0)
     )
 
-    # Trend features (NEW: 7-day trend slope)
+    # Trend features (7-day trend slope)
     # Calculate slope of wait times over last 7 days using linear regression
     # Positive = increasing trend, negative = decreasing trend
     df["trend_7d"] = 0.0
-    df["volatility_7d"] = 0.0  # NEW: 7-day volatility (standard deviation)
+    df["volatility_7d"] = 0.0
 
-    for attraction_id in df["attractionId"].unique():
-        mask = df["attractionId"] == attraction_id
-        attraction_data = df[mask].sort_values("timestamp")
+    # Use groupby().apply() for better performance
+    # This is more efficient than iterating over unique attraction IDs
+    def calculate_trend_volatility(group):
+        """Calculate trend and volatility for a single attraction's data"""
+        group = group.sort_values("timestamp")
 
-        if len(attraction_data) >= 2:
-            # Get last 7 days of data
-            if len(attraction_data) > 168:  # More than 7 days of hourly data
-                recent_data = attraction_data.tail(168)  # Last 7 days (24h * 7)
-            else:
-                recent_data = attraction_data
+        if len(group) < 2:
+            return pd.DataFrame(
+                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
+                index=group.index,
+            )
 
-            if len(recent_data) >= 2:
-                # Calculate linear trend (slope)
-                x = np.arange(len(recent_data))
-                y = recent_data["waitTime"].values
-
-                # Simple linear regression: slope = (n*sum(xy) - sum(x)*sum(y)) / (n*sum(x²) - sum(x)²)
-                n = len(x)
-                if n > 1:
-                    slope = (n * np.sum(x * y) - np.sum(x) * np.sum(y)) / (
-                        n * np.sum(x * x) - np.sum(x) ** 2
-                    )
-                    df.loc[mask, "trend_7d"] = slope
-
-                    # Calculate volatility (standard deviation) - NEW
-                    volatility = np.std(y)
-                    df.loc[mask, "volatility_7d"] = volatility
-                else:
-                    df.loc[mask, "trend_7d"] = 0.0
-                    df.loc[mask, "volatility_7d"] = 0.0
-            else:
-                df.loc[mask, "trend_7d"] = 0.0
-                df.loc[mask, "volatility_7d"] = 0.0
+        # Get last 7 days of data (168 hours = 7 days * 24 hours)
+        if len(group) > 168:
+            recent_data = group.tail(168)
         else:
-            df.loc[mask, "trend_7d"] = 0.0
-            df.loc[mask, "volatility_7d"] = 0.0
+            recent_data = group
+
+        if len(recent_data) < 2:
+            return pd.DataFrame(
+                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
+                index=group.index,
+            )
+
+        # Calculate linear trend (slope) using vectorized operations
+        x = np.arange(len(recent_data))
+        y = recent_data["waitTime"].values
+
+        # Remove NaN values
+        mask = ~np.isnan(y)
+        if mask.sum() < 2:
+            return pd.DataFrame(
+                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
+                index=group.index,
+            )
+
+        x_clean = x[mask]
+        y_clean = y[mask]
+
+        # Calculate slope (trend) - simple linear regression
+        n = len(x_clean)
+        if n > 1:
+            slope = (
+                n * np.sum(x_clean * y_clean) - np.sum(x_clean) * np.sum(y_clean)
+            ) / (n * np.sum(x_clean * x_clean) - np.sum(x_clean) ** 2)
+            volatility = np.std(y_clean)
+        else:
+            slope = 0.0
+            volatility = 0.0
+
+        # Return DataFrame with same index as group
+        return pd.DataFrame(
+            {
+                "trend_7d": [slope] * len(group),
+                "volatility_7d": [volatility] * len(group),
+            },
+            index=group.index,
+        )
+
+    # Apply to each attraction group and combine results
+    trend_volatility_results = df.groupby("attractionId", group_keys=False).apply(
+        calculate_trend_volatility
+    )
+
+    # Assign results back to df
+    if (
+        not trend_volatility_results.empty
+        and "trend_7d" in trend_volatility_results.columns
+    ):
+        df["trend_7d"] = trend_volatility_results["trend_7d"]
+        df["volatility_7d"] = trend_volatility_results["volatility_7d"]
 
     # Clean up temp columns if any
     return df
@@ -624,7 +708,7 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
             df["hour"] * df["park_occupancy_pct"] / 100.0
         )  # Normalize
 
-    # NEW: Simple hour * is_weekend interaction (complementary to hour_weekend_interaction)
+    # Simple hour * is_weekend interaction (complementary to hour_weekend_interaction)
     # This is a simpler binary interaction that may be easier for the model to learn
     if "hour" in df.columns and "is_weekend" in df.columns:
         df["hour_is_weekend"] = df["hour"] * df["is_weekend"]
@@ -815,6 +899,7 @@ def add_park_schedule_features(
     df: pd.DataFrame,
     start_date: datetime,
     end_date: datetime,
+    cached_schedules_df: pd.DataFrame = None,
     feature_context: Dict = None,
 ) -> pd.DataFrame:
     """
@@ -828,25 +913,29 @@ def add_park_schedule_features(
     """
     df = df.copy()
 
-    # Determine date range for schedule query using park local timezone
-    # Schedules are stored as DATE type (park's local calendar dates)
-    # We must query using dates in the park's timezone, not UTC
-    # df has 'local_timestamp' column added by convert_to_local_time() earlier
-    if "local_timestamp" in df.columns and not df["local_timestamp"].isna().all():
-        # Extract date range from LOCAL timestamps (already in park TZ)
-        start_date_local = df["local_timestamp"].min().date()
-        end_date_local = df["local_timestamp"].max().date()
+    # Use cached schedules if provided, otherwise fetch
+    if cached_schedules_df is not None:
+        schedules_df = cached_schedules_df.copy()
     else:
-        # Fallback to provided dates (should be in park local timezone already)
-        # If not, this may cause boundary date issues
-        start_date_local = start_date.date()
-        end_date_local = end_date.date()
+        # Determine date range for schedule query using park local timezone
+        # Schedules are stored as DATE type (park's local calendar dates)
+        # We must query using dates in the park's timezone, not UTC
+        # df has 'local_timestamp' column added by convert_to_local_time() earlier
+        if "local_timestamp" in df.columns and not df["local_timestamp"].isna().all():
+            # Extract date range from LOCAL timestamps (already in park TZ)
+            start_date_local = df["local_timestamp"].min().date()
+            end_date_local = df["local_timestamp"].max().date()
+        else:
+            # Fallback to provided dates (should be in park local timezone already)
+            # If not, this may cause boundary date issues
+            start_date_local = start_date.date()
+            end_date_local = end_date.date()
 
-    # Fetch park schedules (using DB helper with local dates)
-    schedules_df = fetch_park_schedules(
-        datetime.combine(start_date_local, time.min),
-        datetime.combine(end_date_local, time.max),
-    )
+        # Fetch park schedules (using DB helper with local dates)
+        schedules_df = fetch_park_schedules(
+            datetime.combine(start_date_local, time.min),
+            datetime.combine(end_date_local, time.max),
+        )
 
     # Initialize features
     df["is_park_open"] = 0
@@ -854,95 +943,146 @@ def add_park_schedule_features(
     df["has_extra_hours"] = 0  # EXTRA_HOURS (typically busier)
     df["time_since_park_open_mins"] = 0.0
 
+    # Pre-process schedules for efficient lookup
     if not schedules_df.empty:
         # Pre-process schedule DF for faster lookup
         schedules_df["date"] = pd.to_datetime(schedules_df["date"])
         schedules_df["opening_time"] = pd.to_datetime(schedules_df["opening_time"])
         schedules_df["closing_time"] = pd.to_datetime(schedules_df["closing_time"])
 
-    # For each row, check schedule
-    for idx, row in df.iterrows():
-        park_id = row["parkId"]
-        # Use LOCAL timestamp and date for schedule comparison
-        # (Schedules in DB are stored as local dates/times and fetch_park_schedules preserves this)
-        # Note: 'local_timestamp' is added by engineer_features -> convert_to_local_time
-        if "local_timestamp" in row:
-            timestamp = row["local_timestamp"]
-            date = row["date_local"]
-        else:
-            # Fallback if local_timestamp missing (shouldn't happen in pipeline)
-            timestamp = row["timestamp"]
-            date = timestamp.date()
+        # Ensure local_timestamp and date_local exist in df
+        if "local_timestamp" not in df.columns:
+            # Fallback: use timestamp if local_timestamp missing
+            df["local_timestamp"] = pd.to_datetime(df["timestamp"])
+        if "date_local" not in df.columns:
+            df["date_local"] = df["local_timestamp"].dt.date
 
-        if not schedules_df.empty:
-            # Find all schedules for this park on this date
-            # Filter for Park-Level schedules (attraction_id is Null/None)
-            # Nan filtering in pandas: isnull()
-            schedules = schedules_df[
-                (schedules_df["park_id"] == park_id)
-                & (schedules_df["date"].dt.date == date)
-            ]
+        # Convert local_timestamp to datetime if needed
+        df["local_timestamp"] = pd.to_datetime(df["local_timestamp"])
 
-            # Use park-level schedules if available, otherwise fallback to any schedule
-            park_schedules = schedules[schedules["attraction_id"].isnull()]
-            if not park_schedules.empty:
-                schedules = park_schedules
+        # Create lookup structure: (park_id, date) -> schedule info
+        # Prefer park-level schedules (attraction_id is null)
+        park_schedules = schedules_df[schedules_df["attraction_id"].isnull()].copy()
+        if park_schedules.empty:
+            park_schedules = schedules_df.copy()
 
-            if not schedules.empty:
-                # Check if park is open (OPERATING schedule type)
-                operating = schedules[schedules["schedule_type"] == "OPERATING"]
-                if not operating.empty:
-                    # Use first operating schedule entry
-                    op_sched = operating.iloc[0]
-                    opening = op_sched["opening_time"]
-                    closing = op_sched["closing_time"]
+        # Create operating schedules lookup
+        operating_schedules = park_schedules[
+            park_schedules["schedule_type"] == "OPERATING"
+        ].copy()
 
-                    # Compare local timestamp with opening/closing
-                    # Ensure comparisons are compatible (both datetime objects)
-                    # Convert DB datetime64 objects to pandas Timestamp for comparison
+        if not operating_schedules.empty:
+            # Group by park_id and date, take first operating schedule per day
+            operating_schedules["date_only"] = operating_schedules["date"].dt.date
+            operating_schedules = (
+                operating_schedules.groupby(["park_id", "date_only"])
+                .first()
+                .reset_index()
+            )
 
-                    # Safety check for NaT
-                    if pd.notna(opening) and pd.notna(closing):
-                        # Convert to pandas Timestamp to handle datetime64 from DB
-                        opening = pd.Timestamp(opening)
-                        closing = pd.Timestamp(closing)
-                        timestamp_ts = pd.Timestamp(timestamp)
+            # Merge with df to get schedule info
+            df["schedule_date"] = df["date_local"]
+            df_merged = df.merge(
+                operating_schedules[
+                    ["park_id", "date_only", "opening_time", "closing_time"]
+                ],
+                left_on=["parkId", "schedule_date"],
+                right_on=["park_id", "date_only"],
+                how="left",
+                suffixes=("", "_schedule"),
+            )
 
-                        if opening <= timestamp_ts <= closing:
-                            df.at[idx, "is_park_open"] = 1
+            # Vectorized time comparisons
+            mask_valid = (
+                df_merged["opening_time"].notna() & df_merged["closing_time"].notna()
+            )
+            mask_open = (
+                mask_valid
+                & (df_merged["local_timestamp"] >= df_merged["opening_time"])
+                & (df_merged["local_timestamp"] <= df_merged["closing_time"])
+            )
 
-                        # Calculate time since open (minutes)
-                        mins_since = (timestamp_ts - opening).total_seconds() / 60.0
-                        df.at[idx, "time_since_park_open_mins"] = max(0, mins_since)
+            df.loc[mask_open.index, "is_park_open"] = 1
 
-                # Check for special events
-                if any(
-                    schedules["schedule_type"].isin(["TICKETED_EVENT", "PRIVATE_EVENT"])
-                ):
-                    df.at[idx, "has_special_event"] = 1
+            # Calculate time since open (vectorized)
+            time_since_open = (
+                df_merged["local_timestamp"] - df_merged["opening_time"]
+            ).dt.total_seconds() / 60.0
+            df.loc[mask_valid.index, "time_since_park_open_mins"] = (
+                time_since_open.clip(lower=0)
+            )
 
-                if any(schedules["schedule_type"] == "EXTRA_HOURS"):
-                    df.at[idx, "has_extra_hours"] = 1
+            # Clean up temporary columns
+            df = df.drop(columns=["schedule_date"], errors="ignore")
 
-        # Correction Logic: Override "Closed" if we have evidence of "Open"
-        if df.at[idx, "is_park_open"] == 0:
-            # 1. Training Override: Target data (waitTime) indicates open
-            if "waitTime" in df.columns:
-                wt = row["waitTime"]
-                if pd.notna(wt) and wt > 0:
-                    df.at[idx, "is_park_open"] = 1
+        # Check for special events (fully vectorized)
+        event_schedules = park_schedules[
+            park_schedules["schedule_type"].isin(["TICKETED_EVENT", "PRIVATE_EVENT"])
+        ]
+        if not event_schedules.empty:
+            event_schedules["date_only"] = event_schedules["date"].dt.date
+            # Create lookup set for fast membership testing
+            event_lookup = set(
+                zip(event_schedules["park_id"], event_schedules["date_only"])
+            )
+            # Vectorized check using merge
+            event_df = pd.DataFrame(
+                list(event_lookup), columns=["park_id", "date_only"]
+            )
+            event_df["has_event"] = 1
+            df_events = df.merge(
+                event_df,
+                left_on=["parkId", "schedule_date"],
+                right_on=["park_id", "date_only"],
+                how="left",
+            )
+            df["has_special_event"] = df_events["has_event"].fillna(0).astype(int)
 
-            # 2. Inference Override: Live Context (currentWaitTimes) indicates open
-            elif feature_context and "currentWaitTimes" in feature_context:
-                # Check if this attraction has wait times
-                if "attractionId" in row:
-                    attr_id = row["attractionId"]
-                    cw = feature_context["currentWaitTimes"]  # dict[attrId, waitTime]
-                    if attr_id in cw:
-                        curr_wt = cw[attr_id]
-                        if curr_wt is not None and curr_wt > 0:
-                            df.at[idx, "is_park_open"] = 1
-                            # Also hints that Park is open, but we process per row
+        # Check for extra hours (fully vectorized)
+        extra_hours_schedules = park_schedules[
+            park_schedules["schedule_type"] == "EXTRA_HOURS"
+        ]
+        if not extra_hours_schedules.empty:
+            extra_hours_schedules["date_only"] = extra_hours_schedules["date"].dt.date
+            # Create lookup set for fast membership testing
+            extra_hours_lookup = set(
+                zip(
+                    extra_hours_schedules["park_id"], extra_hours_schedules["date_only"]
+                )
+            )
+            # Vectorized check using merge
+            extra_hours_df = pd.DataFrame(
+                list(extra_hours_lookup), columns=["park_id", "date_only"]
+            )
+            extra_hours_df["has_extra"] = 1
+            df_extra = df.merge(
+                extra_hours_df,
+                left_on=["parkId", "schedule_date"],
+                right_on=["park_id", "date_only"],
+                how="left",
+            )
+            df["has_extra_hours"] = df_extra["has_extra"].fillna(0).astype(int)
+
+    # Correction Logic: Override "Closed" if we have evidence of "Open" (vectorized)
+    # 1. Training Override: Target data (waitTime) indicates open
+    if "waitTime" in df.columns:
+        mask_wait_time = (
+            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] > 0)
+        )
+        df.loc[mask_wait_time, "is_park_open"] = 1
+
+    # 2. Inference Override: Live Context (currentWaitTimes) indicates open
+    if feature_context and "currentWaitTimes" in feature_context:
+        cw = feature_context["currentWaitTimes"]
+        if "attractionId" in df.columns:
+            mask_context = (
+                (df["is_park_open"] == 0)
+                & df["attractionId"].isin(cw.keys())
+                & df["attractionId"].apply(
+                    lambda x: cw.get(x, 0) > 0 if x in cw else False
+                )
+            )
+            df.loc[mask_context, "is_park_open"] = 1
 
     return df
 
@@ -1030,6 +1170,7 @@ def add_bridge_day_feature(
     start_date: datetime,
     end_date: datetime,
     feature_context: Dict = None,
+    cached_holidays_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     Add bridge day feature
@@ -1056,16 +1197,20 @@ def add_bridge_day_feature(
         return df
 
     # 2. Compare with historical holidays (Training)
-    # Be robust: Fetch holidays 5 days before/after range to cover boundary conditions
-    search_start = start_date - timedelta(days=5)
-    search_end = end_date + timedelta(days=5)
+    # Use cached holidays if provided, otherwise fetch
+    if cached_holidays_df is not None:
+        holidays_df = cached_holidays_df.copy()
+    else:
+        # Be robust: Fetch holidays 5 days before/after range to cover boundary conditions
+        search_start = start_date - timedelta(days=5)
+        search_end = end_date + timedelta(days=5)
 
-    # Get relevant countries
-    all_countries = set()
-    for _, row in parks_metadata.iterrows():
-        all_countries.add(row["country"])
+        # Get relevant countries
+        all_countries = set()
+        for _, row in parks_metadata.iterrows():
+            all_countries.add(row["country"])
 
-    holidays_df = fetch_holidays(list(all_countries), search_start, search_end)
+        holidays_df = fetch_holidays(list(all_countries), search_start, search_end)
 
     if holidays_df.empty:
         return df
@@ -1115,7 +1260,9 @@ def add_bridge_day_feature(
 
 
 def add_park_has_schedule_feature(
-    df: pd.DataFrame, feature_context: Dict = None
+    df: pd.DataFrame,
+    feature_context: Dict = None,
+    cached_schedules_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     Add park_has_schedule feature
@@ -1148,22 +1295,31 @@ def add_park_has_schedule_feature(
             df.loc[mask, "park_has_schedule"] = int(has_schedule)
     else:
         # Training Mode: Check DB for schedule existence
-        # Query to check which parks have OPERATING schedules
-        from db import get_db
-        from sqlalchemy import text
-
+        # Use cached schedules if provided, otherwise query DB
         try:
             park_ids = df["parkId"].unique().tolist()
 
-            with get_db() as db:
-                query = text("""
-                    SELECT DISTINCT "parkId"::text
-                    FROM schedule_entries
-                    WHERE "parkId"::text = ANY(:park_ids)
-                      AND "scheduleType" = 'OPERATING'
-                """)
-                result = db.execute(query, {"park_ids": park_ids})
-                parks_with_schedule = set(row[0] for row in result.fetchall())
+            if cached_schedules_df is not None and not cached_schedules_df.empty:
+                # Use cached schedules to determine which parks have OPERATING schedules
+                parks_with_schedule = set(
+                    cached_schedules_df[
+                        cached_schedules_df["schedule_type"] == "OPERATING"
+                    ]["park_id"].unique()
+                )
+            else:
+                # Query DB if no cached data
+                from db import get_db
+                from sqlalchemy import text
+
+                with get_db() as db:
+                    query = text("""
+                        SELECT DISTINCT "parkId"::text
+                        FROM schedule_entries
+                        WHERE "parkId"::text = ANY(:park_ids)
+                          AND "scheduleType" = 'OPERATING'
+                    """)
+                    result = db.execute(query, {"park_ids": park_ids})
+                    parks_with_schedule = set(row[0] for row in result.fetchall())
 
             # Set feature: 1 if has schedule, 0 if not
             for park_id in park_ids:
@@ -1195,39 +1351,116 @@ def engineer_features(
     Returns:
         DataFrame with all features engineered
     """
+    import time
+
+    total_start = time.time()
+
     # 0. Resample to fix delta-compression gaps
+    resample_start = time.time()
     df = resample_data(df)
+    print(f"   Resampling time: {time.time() - resample_start:.2f}s")
 
     # Fetch park metadata (needed for region-specific weekends & holidays)
+    metadata_start = time.time()
     parks_metadata = fetch_parks_metadata()
+    print(f"   Parks metadata fetch time: {time.time() - metadata_start:.2f}s")
 
-    # Add features (order matters for dependencies)
-    df = add_time_features(df, parks_metadata)  # Region-specific weekends
-    df = add_weather_features(df)
-    df = add_holiday_features(df, parks_metadata, start_date, end_date)
-    df = add_bridge_day_feature(
-        df, parks_metadata, start_date, end_date, feature_context
+    # Cache DB queries to avoid duplicate fetches
+    # fetch_holidays() is called in add_holiday_features() and add_bridge_day_feature()
+    # fetch_park_schedules() is called in add_park_schedule_features() and add_park_has_schedule_feature()
+    cache_start = time.time()
+
+    # Get all countries for holiday fetch (need to do this before fetching)
+    all_countries = set()
+    for _, row in parks_metadata.iterrows():
+        all_countries.add(row["country"])
+        # Add countries from influencingRegions JSON
+        if isinstance(row["influencingRegions"], list):
+            for region in row["influencingRegions"]:
+                if isinstance(region, dict) and "countryCode" in region:
+                    all_countries.add(region["countryCode"])
+
+    # Fetch holidays once (used by add_holiday_features and add_bridge_day_feature)
+    # Extend range by 5 days for bridge day calculations
+    holidays_search_start = start_date - timedelta(days=5)
+    holidays_search_end = end_date + timedelta(days=5)
+    cached_holidays_df = fetch_holidays(
+        list(all_countries), holidays_search_start, holidays_search_end
     )
-    df = add_park_schedule_features(df, start_date, end_date)
+
+    # Fetch schedules once (used by add_park_schedule_features and add_park_has_schedule_feature)
+    # Determine date range from local timestamps if available
+    if "local_timestamp" in df.columns and not df["local_timestamp"].isna().all():
+        start_date_local = df["local_timestamp"].min().date()
+        end_date_local = df["local_timestamp"].max().date()
+    else:
+        start_date_local = start_date.date()
+        end_date_local = end_date.date()
+
+    cached_schedules_df = fetch_park_schedules(
+        datetime.combine(start_date_local, time.min),
+        datetime.combine(end_date_local, time.max),
+    )
+
+    print(f"   DB cache fetch time: {time.time() - cache_start:.2f}s")
+
+    # Add features (order matters for dependencies) with performance logging
+    time_start = time.time()
+    df = add_time_features(df, parks_metadata)  # Region-specific weekends
+    print(f"   Time features: {time.time() - time_start:.2f}s")
+
+    weather_start = time.time()
+    df = add_weather_features(df)
+    print(f"   Weather features: {time.time() - weather_start:.2f}s")
+
+    holiday_start = time.time()
+    df = add_holiday_features(
+        df, parks_metadata, start_date, end_date, cached_holidays_df
+    )
+    print(f"   Holiday features: {time.time() - holiday_start:.2f}s")
+
+    bridge_start = time.time()
+    df = add_bridge_day_feature(
+        df, parks_metadata, start_date, end_date, feature_context, cached_holidays_df
+    )
+    print(f"   Bridge day features: {time.time() - bridge_start:.2f}s")
+
+    schedule_start = time.time()
+    df = add_park_schedule_features(df, start_date, end_date, cached_schedules_df)
+    print(f"   Schedule features: {time.time() - schedule_start:.2f}s")
 
     # Attraction and Park features (using available data only)
+    attraction_start = time.time()
     df = add_attraction_type_feature(df)
     df = add_park_attraction_count_feature(df, parks_metadata)
+    print(f"   Attraction features: {time.time() - attraction_start:.2f}s")
 
+    historical_start = time.time()
     df = add_historical_features(df)
+    print(f"   Historical features: {time.time() - historical_start:.2f}s")
+
+    percentile_start = time.time()
     df = add_percentile_features(df)  # Weather extremes
+    print(f"   Percentile features: {time.time() - percentile_start:.2f}s")
 
     # Phase 2: Add context features (Training uses internal data, Inference uses feature_context)
+    context_start = time.time()
     df = add_park_occupancy_feature(df, feature_context)
     df = add_time_since_park_open(df, feature_context)
     df = add_downtime_features(df, feature_context)
     df = add_virtual_queue_feature(df, feature_context)
-    df = add_park_has_schedule_feature(
-        df, feature_context
-    )  # NEW: Data quality indicator
+    df = add_park_has_schedule_feature(df, feature_context, cached_schedules_df)
+    print(f"   Context features: {time.time() - context_start:.2f}s")
 
     # Interaction features (must be after all base features are added)
+    interaction_start = time.time()
     df = add_interaction_features(df)
+    print(f"   Interaction features: {time.time() - interaction_start:.2f}s")
+
+    total_time = time.time() - total_start
+    print(
+        f"\n   Total feature engineering time: {total_time:.2f}s ({total_time / 60:.1f} minutes)"
+    )
 
     return df
 
@@ -1249,15 +1482,15 @@ def get_feature_columns() -> List[str]:
         "month_sin",
         "month_cos",
         "day_of_year_sin",
-        "day_of_year_cos",  # NEW: Finer seasonal trends
+        "day_of_year_cos",
         "season",
         "is_weekend",
-        "is_peak_season",  # NEW: Peak season indicator (summer + December)
+        "is_peak_season",
         # Weather features (all important for crowd patterns & ride closures)
         "temperature_avg",
-        "temperature_deviation",  # NEW: Current vs. monthly average (unusual weather)
+        "temperature_deviation",
         "precipitation",
-        "precipitation_last_3h",  # NEW: Cumulative rain effect (last 3 hours)
+        "precipitation_last_3h",
         "windSpeedMax",  # Explains high ride closures
         "snowfallSum",  # Explains outdoor ride closures
         "weatherCode",
@@ -1283,11 +1516,11 @@ def get_feature_columns() -> List[str]:
         "avg_wait_last_24h",
         "avg_wait_last_1h",
         "avg_wait_same_hour_last_week",
-        "avg_wait_same_hour_last_month",  # NEW: Monthly trend
+        "avg_wait_same_hour_last_month",
         "rolling_avg_7d",
         "wait_time_velocity",  # Rate of change (momentum)
-        "trend_7d",  # NEW: 7-day trend slope (positive = increasing, negative = decreasing)
-        "volatility_7d",  # NEW: 7-day volatility (standard deviation of wait times)
+        "trend_7d",
+        "volatility_7d",
         # Percentile-based features
         "is_temp_extreme",
         "is_wind_extreme",  # Extreme wind → ride closures
@@ -1297,10 +1530,10 @@ def get_feature_columns() -> List[str]:
         "had_downtime_today",  # Boolean: was DOWN today
         "downtime_minutes_today",  # Total downtime duration
         "has_virtual_queue",  # Boolean: boarding groups active
-        "park_has_schedule",  # NEW: Data quality indicator (1=has schedule, 0=no schedule)
+        "park_has_schedule",
         # Interaction features (NEW - computationally cheap, no extra data needed)
         "hour_weekend_interaction",  # hour * is_weekend (peak times differ on weekends)
-        "hour_is_weekend",  # NEW: Simple hour * is_weekend (complementary interaction)
+        "hour_is_weekend",
         "temp_precip_interaction",  # temperature * precipitation (rain + heat = indoor preference)
         "holiday_occupancy_interaction",  # is_holiday * park_occupancy_pct (holidays + crowds = extreme waits)
         "hour_occupancy_interaction",  # hour * park_occupancy_pct (time + occupancy patterns)

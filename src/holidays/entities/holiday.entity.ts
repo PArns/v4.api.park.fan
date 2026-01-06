@@ -29,8 +29,7 @@ import {
  */
 @Entity("holidays")
 @Index(["country", "date"])
-@Index(["country", "region", "date"]) // Optimized for regional school holiday checks
-@Index(["date"])
+@Index(["country", "region", "date"])
 export class Holiday {
   @PrimaryGeneratedColumn("uuid")
   id: string;

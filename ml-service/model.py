@@ -88,6 +88,20 @@ class WaitTimeModel:
         )
 
         # Initialize model with virtual ensembles for uncertainty estimation
+        import time
+        import os
+        
+        # Determine thread count (use all available cores by default)
+        thread_count = settings.CATBOOST_THREAD_COUNT
+        if thread_count == -1:
+            # Use all available CPU cores
+            thread_count = os.cpu_count() or 4
+        
+        print(f"   Thread count: {thread_count}")
+        print(f"   Task type: {settings.CATBOOST_TASK_TYPE}")
+        
+        training_start = time.time()
+        
         self.model = CatBoostRegressor(
             iterations=settings.CATBOOST_ITERATIONS,
             learning_rate=settings.CATBOOST_LEARNING_RATE,
@@ -97,12 +111,17 @@ class WaitTimeModel:
             eval_metric="RMSE",
             random_seed=settings.CATBOOST_RANDOM_SEED,
             posterior_sampling=True,  # Enable virtual ensembles for uncertainty
+            thread_count=thread_count,  # Use all CPU cores for parallel training
+            task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
             verbose=100,
             early_stopping_rounds=50,
         )
 
         # Train
         self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
+        
+        training_time = time.time() - training_start
+        print(f"\n   Training completed in {training_time:.2f}s ({training_time/60:.1f} minutes)")
 
         # Calculate metrics
         y_pred = self.model.predict(X_val[self.feature_columns])
