@@ -338,7 +338,7 @@ export class ParkIntegrationService {
     // Filter hourly predictions:
     // - If park OPERATING: Show today's hourly predictions
     // - If park CLOSED: Show tomorrow's hourly predictions (trip planning)
-    // CRITICAL: Use park's timezone to determine "today" and "tomorrow"
+    // Use park's timezone to determine "today" and "tomorrow"
     const todayInParkTz = park.timezone
       ? getCurrentDateInTimezone(park.timezone)
       : new Date().toISOString().split("T")[0];
@@ -847,11 +847,11 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // CRITICAL FIX: Use park's local time for percentile lookup
+        // Use park's local time for percentile lookup
         // Get typical rating for "right now" in park's timezone
         // Previously incorrectly used UTC time instead of park local time
         // Fallback: Get typical wait from historical P90 percentiles
-        // IMPORTANT: Use park's local time for hour/day, not UTC
+        // Use park's local time for hour/day, not UTC
         const { toZonedTime } = await import("date-fns-tz");
         const nowInParkTz = park.timezone
           ? toZonedTime(new Date(), park.timezone)

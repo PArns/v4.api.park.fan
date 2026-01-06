@@ -617,8 +617,25 @@ def add_park_schedule_features(
     """
     df = df.copy()
     
-    # Fetch park schedules (using DB helper)
-    schedules_df = fetch_park_schedules(start_date, end_date)
+    # Determine date range for schedule query using park local timezone
+    # Schedules are stored as DATE type (park's local calendar dates)
+    # We must query using dates in the park's timezone, not UTC
+    # df has 'local_timestamp' column added by convert_to_local_time() earlier
+    if 'local_timestamp' in df.columns and not df['local_timestamp'].isna().all():
+        # Extract date range from LOCAL timestamps (already in park TZ)
+        start_date_local = df['local_timestamp'].min().date()
+        end_date_local = df['local_timestamp'].max().date()
+    else:
+        # Fallback to provided dates (should be in park local timezone already)
+        # If not, this may cause boundary date issues
+        start_date_local = start_date.date()
+        end_date_local = end_date.date()
+    
+    # Fetch park schedules (using DB helper with local dates)
+    schedules_df = fetch_park_schedules(
+        datetime.datetime.combine(start_date_local, datetime.time.min),
+        datetime.datetime.combine(end_date_local, datetime.time.max)
+    )
     
     # Initialize features
     df['is_park_open'] = 0

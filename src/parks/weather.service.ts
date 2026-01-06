@@ -10,7 +10,12 @@ import {
   OpenMeteoClient,
 } from "../external-apis/weather/open-meteo.client";
 import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
+} from "../common/utils/date.util";
+import { parseDateInTimezone } from "../common/utils/timezone.util";
 import { fromZonedTime } from "date-fns-tz";
 
 /**
@@ -201,7 +206,7 @@ export class WeatherService {
 
     for (const day of weatherData) {
       try {
-        // CRITICAL: Interpret date string in park timezone, not UTC
+        // Interpret date string in park timezone, not UTC
         // day.date is "2024-01-15" - must be midnight in PARK time, not UTC
         const dateInParkTz = fromZonedTime(
           `${day.date}T00:00:00`,
@@ -397,25 +402,36 @@ export class WeatherService {
       return parsed as { current: WeatherData | null; forecast: WeatherData[] };
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const futureDate = new Date(today);
-    futureDate.setDate(futureDate.getDate() + 16);
-
-    const allWeather = await this.weatherDataRepository
-      .createQueryBuilder("weather")
-      .where("weather.parkId = :parkId", { parkId })
-      .andWhere("weather.date >= :today", { today })
-      .andWhere("weather.date <= :futureDate", { futureDate })
-      .orderBy("weather.date", "ASC")
-      .getMany();
-
     if (!park) {
       return { current: null, forecast: [] };
     }
 
-    const todayStr = formatInParkTimezone(today, park.timezone);
+    // Calculate date range using park's local timezone for query
+    // Weather data has `date` column (DATE type in PostgreSQL)
+    // We must use park's local timezone to determine "today" and future dates
+    // This ensures we fetch the correct calendar days, especially for parks
+    // in timezones ahead/behind UTC (e.g., JST, EST)
+    const todayStr = getCurrentDateInTimezone(park.timezone);
+    const todayDate = parseDateInTimezone(todayStr, park.timezone);
+    
+    // Calculate future date (16 days ahead) in park timezone
+    const futureDateStr = getTomorrowDateInTimezone(park.timezone);
+    // Parse and add 15 more days
+    const futureDateParsed = parseDateInTimezone(futureDateStr, park.timezone);
+    const futureDate = new Date(futureDateParsed);
+    futureDate.setDate(futureDate.getDate() + 15);
+
+    // Use timezone-aware query similar to getWeatherData()
+    const allWeather = await this.weatherDataRepository
+      .createQueryBuilder("weather")
+      .where("weather.parkId = :parkId", { parkId })
+      .andWhere("DATE(weather.date AT TIME ZONE :tz) BETWEEN :start AND :end", {
+        tz: park.timezone,
+        start: todayStr,
+        end: formatInParkTimezone(futureDate, park.timezone),
+      })
+      .orderBy("weather.date", "ASC")
+      .getMany();
 
     // Separate current (today) from forecast (future)
     // Ensure date is converted to Date object if it's a string
@@ -425,9 +441,10 @@ export class WeatherService {
         return formatInParkTimezone(weatherDate, park.timezone) === todayStr;
       }) || null;
 
+    // Filter forecast (future dates) - dates are already in correct timezone from query
     const forecast = allWeather.filter((w) => {
       const weatherDate = new Date(w.date);
-      return weatherDate > today;
+      return formatInParkTimezone(weatherDate, park.timezone) > todayStr;
     });
 
     const result = { current, forecast };

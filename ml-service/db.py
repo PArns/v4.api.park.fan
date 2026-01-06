@@ -310,6 +310,15 @@ def fetch_parks_metadata() -> pd.DataFrame:
 def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
     """
     Fetch park opening hours/schedules including special events
+    
+    IMPORTANT: This function expects start_date and end_date to represent dates
+    in the park's local timezone (not UTC). The dates are converted using .date()
+    which extracts the calendar date. If UTC datetime objects are passed, the
+    date extraction will be in UTC, which may not match the park's local calendar date.
+    
+    For timezone-aware usage, ensure dates are already converted to park local time
+    before calling this function, or use the DataFrame-based extraction in
+    add_park_schedule_features() which uses local_timestamp.
 
     Returns DataFrame with columns:
     - park_id
@@ -340,6 +349,10 @@ def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datet
     """)
 
     with get_db() as db:
+        # Extract date() from datetime objects for SQL query
+        # Note: If start_date/end_date are timezone-aware, .date() extracts the date
+        # in that timezone. For correct behavior, ensure dates are in park local timezone.
+        # The caller (add_park_schedule_features) should handle timezone conversion.
         result = db.execute(query, {
             "start_date": start_date.date(),
             "end_date": end_date.date()

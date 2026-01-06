@@ -165,7 +165,7 @@ def create_prediction_features(
     df['parkId'] = df['parkId'].astype(str)
     df['attractionId'] = df['attractionId'].astype(str)
 
-    # CRITICAL: Convert UTC timestamps to local park time using helper function
+    # Convert UTC timestamps to local park time using helper function
     # This matches the training pipeline in features.py::engineer_features()
     # Without this, hour/day_of_week/month features would be wrong (UTC instead of local)
     from features import convert_to_local_time
@@ -455,7 +455,7 @@ def create_prediction_features(
 
 
     with get_db() as db:
-        # CRITICAL FIX: Use local_timestamp to determine date range
+        # Determine date range for schedule query using park local timezone
         # Schedules are stored as DATE type (park's local calendar dates)
         # We must query using dates in the park's timezone, not UTC
         # df has 'local_timestamp' column added by convert_to_local_time() earlier
@@ -499,7 +499,7 @@ def create_prediction_features(
             attraction_id = str(row['attractionId'])
             timestamp = row['timestamp']
 
-            # CRITICAL FIX: Use LOCAL timestamp for schedule date comparison
+            # Use local timestamp for schedule date comparison
             # Schedules are stored as local calendar dates (DATE type in DB)
             # We must compare with the date in the park's timezone, not UTC
             if 'local_timestamp' in row.index and pd.notna(row['local_timestamp']):
@@ -590,6 +590,13 @@ def create_prediction_features(
         if recent_data['date'].dt.tz is not None:
             recent_data['date'] = recent_data['date'].dt.tz_localize(None)
 
+        # NOTE: Historical features use UTC for hour/day lookups
+        # The data in recent_data is aggregated by UTC hour (from fetch_recent_wait_times)
+        # For accurate "same hour yesterday" lookups in park local time, we would need
+        # to aggregate the data by local hour, which is a future improvement.
+        # For now, we use UTC which works correctly but may be off by a few hours
+        # for parks in timezones far from UTC.
+        
         # Convert base_time to pandas Timestamp for consistent comparisons
         # Ensure it is timezone-naive UTC to match the SQL date output
         base_time_pd = pd.Timestamp(base_time)
@@ -614,7 +621,9 @@ def create_prediction_features(
                 avg_24h = last_24h['avg_wait'].mean() if len(last_24h) > 0 else rolling_7d
                 
                 # Last 1h average (Lag 1)
-                # Logic: Get data for (Hour - 1). Handle wrapping for midnight.
+                # NOTE: recent_data is aggregated by UTC hour (from fetch_recent_wait_times)
+                # So we must use UTC for hour lookup, even though we'd prefer local time
+                # For future improvement, consider aggregating by local hour in fetch_recent_wait_times
                 prev_hour_dt = base_time_pd - timedelta(hours=1)
                 prev_hour = prev_hour_dt.hour
                 prev_hour_date = prev_hour_dt.date()
@@ -635,7 +644,8 @@ def create_prediction_features(
                 avg_1h = last_1h_data['avg_wait'].mean() if not last_1h_data.empty else avg_yesterday_fallback
 
                 # Same hour last week (7 days ago, same hour)
-                last_week_date = base_time_pd - timedelta(days=7)
+                # NOTE: Using UTC hour since data is aggregated by UTC hour
+                last_week_date = (base_time_pd - timedelta(days=7)).date()
                 current_hour = base_time.hour
 
                 same_hour_last_week = attraction_data[
