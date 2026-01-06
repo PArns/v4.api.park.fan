@@ -171,6 +171,7 @@ def create_prediction_features(
     from features import convert_to_local_time
     
     # Fetch park metadata for timezone conversion (fetches all parks)
+    # OPTIMIZATION: Cache this to avoid multiple DB queries
     parks_metadata = fetch_parks_metadata()
     
     df = convert_to_local_time(df, parks_metadata)
@@ -191,7 +192,8 @@ def create_prediction_features(
     df['season'] = df['timestamp'].dt.month.apply(lambda m: (m % 12) // 3)
 
     # Region-specific weekends
-    parks_metadata = fetch_parks_metadata()
+    # OPTIMIZATION: Reuse parks_metadata from above instead of fetching again
+    # parks_metadata already fetched at line 174
     middle_east_countries = ['SA', 'AE', 'BH', 'KW', 'OM', 'QA', 'IL']
     df['is_weekend'] = 0
 
@@ -468,8 +470,9 @@ def create_prediction_features(
             import logging
             logger = logging.getLogger(__name__)
             logger.warning("No local_timestamp column - using UTC for schedule dates (may miss boundary dates)")
-            start_date_local = df_start.date()
-            end_date_local = df_end.date()
+            # FIX: Use df['timestamp'] instead of undefined df_start/df_end
+            start_date_local = df['timestamp'].min().date()
+            end_date_local = df['timestamp'].max().date()
         
         result = db.execute(schedule_query, {
             "park_ids": list(set(park_ids)),
@@ -719,8 +722,7 @@ def create_prediction_features(
         # For inference, if we lack context, we might skip expensive fallback or fetch metadata.
         # Let's pass what we have.
         # Note: add_bridge_day_feature signature: (df, parks_metadata, start_date, end_date, feature_context)
-        # We need to fetch metadata if not available (already imported at module level)
-        parks_metadata = fetch_parks_metadata()
+        # OPTIMIZATION: Reuse parks_metadata from line 174 instead of fetching again
         start = df['timestamp'].min()
         end = df['timestamp'].max()
         df = add_bridge_day_feature(df, parks_metadata, start, end, feature_context)
