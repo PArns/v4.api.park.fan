@@ -7,6 +7,7 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
   inject: [ConfigService],
   useFactory: () => {
     const dbConfig = getDatabaseConfig();
+    const isBuildTime = process.env.NODE_ENV === "build";
 
     return {
       type: "postgres" as const,
@@ -21,8 +22,12 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       timezone: "UTC", // Always use UTC
       extra: {
         max: 20, // Connection pool size
-        connectionTimeoutMillis: 2000,
+        // During build, use very short timeout to fail fast
+        connectionTimeoutMillis: isBuildTime ? 100 : 2000,
       },
+      // During build, don't retry connections
+      retryAttempts: isBuildTime ? 0 : 3,
+      retryDelay: isBuildTime ? 0 : 3000,
     };
   },
 };

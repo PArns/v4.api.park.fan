@@ -17,39 +17,58 @@ const { AppModule } = require("../dist/src/app.module");
 async function generateSwaggerSpec(): Promise<void> {
   console.log("🚀 Generating Swagger/OpenAPI spec...");
 
-  // Set environment to use minimal connection timeout during build
-  // This allows the app to bootstrap even if database is unavailable
-  const originalDbHost = process.env.DB_HOST;
-  const originalDbPort = process.env.DB_PORT;
+  // Set environment to skip database connection during build
+  // Swagger generation only needs metadata, not actual DB connection
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "build"; // Special mode for build-time spec generation
   
-  // Use a non-existent host to prevent actual connection attempts
-  // TypeORM will fail to connect but we can catch it
-  process.env.DB_HOST = process.env.DB_HOST || "localhost";
-  process.env.DB_PORT = process.env.DB_PORT || "5432";
-  
-  // Set very short timeout to fail fast if connection is attempted
-  process.env.DB_CONNECTION_TIMEOUT = "1000";
+  // Set very short connection timeout to fail fast if connection is attempted
+  // Use invalid host to prevent actual connection
+  process.env.DB_HOST = "127.0.0.1";
+  process.env.DB_PORT = "1"; // Invalid port
+  process.env.DB_CONNECTION_TIMEOUT = "100";
 
   let app;
   try {
     // Create a minimal app instance for spec generation
-    // Note: TypeORM may attempt to connect, but Swagger generation only needs metadata
+    // TypeORM will try to connect but will fail quickly with invalid host/port
+    // We catch the error and continue - Swagger doesn't need DB connection
     app = await NestFactory.create(AppModule, {
       logger: false, // Suppress logs during build
     });
   } catch (error) {
-    // If app creation fails due to database, we can't generate the spec
-    // This is acceptable - the app will generate it at runtime
-    console.warn("⚠️  Failed to bootstrap app for spec generation:", error instanceof Error ? error.message : String(error));
-    console.warn("⚠️  Swagger spec will be generated at runtime instead");
-    // Restore original environment before exiting
-    if (originalDbHost) process.env.DB_HOST = originalDbHost;
-    if (originalDbPort) process.env.DB_PORT = originalDbPort;
-    process.exit(0); // Exit successfully - runtime generation will handle it
+    // TypeORM connection failure is expected during build
+    // Swagger generation only needs decorator metadata, not DB connection
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // If it's a connection error, we can still try to generate the spec
+    // by catching the error at the module level
+    if (errorMessage.includes("connect") || errorMessage.includes("ECONNREFUSED") || errorMessage.includes("timeout")) {
+      console.warn("⚠️  Database connection failed during build (expected)");
+      console.warn("⚠️  Attempting to generate Swagger spec without DB connection...");
+      
+      // Try to create app with abortOnError: false to skip connection errors
+      try {
+        app = await NestFactory.create(AppModule, {
+          logger: false,
+          abortOnError: false, // Don't abort on module initialization errors
+        });
+      } catch (retryError) {
+        console.warn("⚠️  Could not bootstrap app for spec generation");
+        console.warn("⚠️  Swagger spec will be generated at runtime instead");
+        if (originalNodeEnv) process.env.NODE_ENV = originalNodeEnv;
+        process.exit(0);
+      }
+    } else {
+      // Other errors - can't proceed
+      console.warn("⚠️  Failed to bootstrap app for spec generation:", errorMessage);
+      console.warn("⚠️  Swagger spec will be generated at runtime instead");
+      if (originalNodeEnv) process.env.NODE_ENV = originalNodeEnv;
+      process.exit(0);
+    }
   } finally {
     // Restore original environment
-    if (originalDbHost) process.env.DB_HOST = originalDbHost;
-    if (originalDbPort) process.env.DB_PORT = originalDbPort;
+    if (originalNodeEnv) process.env.NODE_ENV = originalNodeEnv;
   }
 
   // Apply global prefix to match production setup
