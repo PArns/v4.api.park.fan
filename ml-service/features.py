@@ -1481,7 +1481,7 @@ def engineer_features(
 
     total_time = time_module.time() - total_start
 
-    # Performance summary - show slowest features (absolute times, not cumulative)
+    # Performance summary - show slowest features (absolute times)
     resample_time = time_module.time() - resample_start
     metadata_time = time_module.time() - metadata_start
     cache_time = time_module.time() - cache_start
@@ -1496,20 +1496,21 @@ def engineer_features(
     context_time = time_module.time() - context_start
     interaction_time = time_module.time() - interaction_start
     
+    # Use absolute times directly (already calculated correctly above)
     feature_times = {
         "Resampling": resample_time,
-        "Parks metadata": metadata_time - resample_time,
-        "DB cache fetch": cache_time - metadata_time,
-        "Time features": time_features_time - cache_time,
-        "Weather features": weather_time - time_features_time,
-        "Holiday features": holiday_time - weather_time,
-        "Bridge day features": bridge_time - holiday_time,
-        "Schedule features": schedule_time - bridge_time,
-        "Attraction features": attraction_time - schedule_time,
-        "Historical features": historical_time - attraction_time,
-        "Percentile features": percentile_time - historical_time,
-        "Context features": context_time - percentile_time,
-        "Interaction features": interaction_time - context_time,
+        "Parks metadata": metadata_time,
+        "DB cache fetch": cache_time,
+        "Time features": time_features_time,
+        "Weather features": weather_time,
+        "Holiday features": holiday_time,
+        "Bridge day features": bridge_time,
+        "Schedule features": schedule_time,
+        "Attraction features": attraction_time,
+        "Historical features": historical_time,
+        "Percentile features": percentile_time,
+        "Context features": context_time,
+        "Interaction features": interaction_time,
     }
 
     # Sort by time (slowest first)
