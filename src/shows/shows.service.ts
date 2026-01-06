@@ -346,7 +346,7 @@ export class ShowsService {
   async saveLiveData(
     showId: string,
     status: string,
-    showtimes: any[],
+    showtimes: ShowtimeData[],
     lastUpdated: Date,
     operatingHours?: { openingTime: string; closingTime: string },
   ): Promise<void> {

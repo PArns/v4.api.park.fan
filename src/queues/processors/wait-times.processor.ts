@@ -393,34 +393,39 @@ export class WaitTimesProcessor {
                     }),
                   ]);
 
-                // Mark each attraction as OPERATING
-                for (const attraction of parkAttractions) {
-                  try {
-                    const fallbackData: EntityLiveResponse = {
-                      id: attraction.externalId,
-                      name: attraction.name,
-                      entityType: EntityType.ATTRACTION,
-                      status: LiveStatus.OPERATING,
-                      lastUpdated: new Date().toISOString(),
-                    };
+                // Mark all attractions as OPERATING (parallel processing)
+                // This replaces N+1 sequential queries with parallel batch processing
+                const attractionPromises = parkAttractions.map(
+                  async (attraction) => {
+                    try {
+                      const fallbackData: EntityLiveResponse = {
+                        id: attraction.externalId,
+                        name: attraction.name,
+                        entityType: EntityType.ATTRACTION,
+                        status: LiveStatus.OPERATING,
+                        lastUpdated: new Date().toISOString(),
+                      };
 
-                    const saved = await this.queueDataService.saveLiveData(
-                      attraction.id,
-                      fallbackData,
-                    );
-                    totalAttractions++;
-                    savedAttractions += saved;
-                  } catch (error) {
-                    const errorMessage =
-                      error instanceof Error ? error.message : String(error);
-                    this.logger.error(
-                      `❌ Failed to mark attraction ${attraction.name} as operating: ${errorMessage}`,
-                    );
-                  }
-                }
+                      const saved = await this.queueDataService.saveLiveData(
+                        attraction.id,
+                        fallbackData,
+                      );
+                      return { saved, total: 1 };
+                    } catch (error) {
+                      const errorMessage =
+                        error instanceof Error
+                          ? error.message
+                          : String(error);
+                      this.logger.error(
+                        `❌ Failed to mark attraction ${attraction.name} as operating: ${errorMessage}`,
+                      );
+                      return { saved: 0, total: 1 };
+                    }
+                  },
+                );
 
-                // Mark each show as OPERATING
-                for (const show of parkShows) {
+                // Mark all shows as OPERATING (parallel processing)
+                const showPromises = parkShows.map(async (show) => {
                   try {
                     const fallbackData: EntityLiveResponse = {
                       id: show.externalId,
@@ -434,43 +439,77 @@ export class WaitTimesProcessor {
                       show.id,
                       fallbackData,
                     );
-                    totalShows++;
-                    savedShows += saved;
+                    return { saved, total: 1 };
                   } catch (error) {
                     const errorMessage =
                       error instanceof Error ? error.message : String(error);
                     this.logger.error(
                       `❌ Failed to mark show ${show.name} as operating: ${errorMessage}`,
                     );
+                    return { saved: 0, total: 1 };
                   }
-                }
+                });
 
-                // Mark each restaurant as OPERATING
-                for (const restaurant of parkRestaurants) {
-                  try {
-                    const fallbackData: EntityLiveResponse = {
-                      id: restaurant.externalId,
-                      name: restaurant.name,
-                      entityType: EntityType.RESTAURANT,
-                      status: LiveStatus.OPERATING,
-                      lastUpdated: new Date().toISOString(),
-                    };
+                // Mark all restaurants as OPERATING (parallel processing)
+                const restaurantPromises = parkRestaurants.map(
+                  async (restaurant) => {
+                    try {
+                      const fallbackData: EntityLiveResponse = {
+                        id: restaurant.externalId,
+                        name: restaurant.name,
+                        entityType: EntityType.RESTAURANT,
+                        status: LiveStatus.OPERATING,
+                        lastUpdated: new Date().toISOString(),
+                      };
 
-                    const saved =
-                      await this.restaurantsService.saveDiningAvailability(
-                        restaurant.id,
-                        fallbackData,
+                      const saved =
+                        await this.restaurantsService.saveDiningAvailability(
+                          restaurant.id,
+                          fallbackData,
+                        );
+                      return { saved, total: 1 };
+                    } catch (error) {
+                      const errorMessage =
+                        error instanceof Error
+                          ? error.message
+                          : String(error);
+                      this.logger.error(
+                        `❌ Failed to mark restaurant ${restaurant.name} as operating: ${errorMessage}`,
                       );
-                    totalRestaurants++;
-                    savedRestaurants += saved;
-                  } catch (error) {
-                    const errorMessage =
-                      error instanceof Error ? error.message : String(error);
-                    this.logger.error(
-                      `❌ Failed to mark restaurant ${restaurant.name} as operating: ${errorMessage}`,
-                    );
-                  }
-                }
+                      return { saved: 0, total: 1 };
+                    }
+                  },
+                );
+
+                // Execute all in parallel
+                const [attractionResults, showResults, restaurantResults] =
+                  await Promise.all([
+                    Promise.all(attractionPromises),
+                    Promise.all(showPromises),
+                    Promise.all(restaurantPromises),
+                  ]);
+
+                // Aggregate results
+                savedAttractions += attractionResults.reduce(
+                  (sum, r) => sum + r.saved,
+                  0,
+                );
+                totalAttractions += attractionResults.reduce(
+                  (sum, r) => sum + r.total,
+                  0,
+                );
+
+                savedShows += showResults.reduce((sum, r) => sum + r.saved, 0);
+                totalShows += showResults.reduce((sum, r) => sum + r.total, 0);
+
+                savedRestaurants += restaurantResults.reduce(
+                  (sum, r) => sum + r.saved,
+                  0,
+                );
+                totalRestaurants += restaurantResults.reduce(
+                  (sum, r) => sum + r.total,
+                  0,
+                );
               }
             } catch (error) {
               const errorMessage =

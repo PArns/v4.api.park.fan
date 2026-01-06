@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit } from "@nestjs/common";
+import { Injectable, Inject, OnModuleInit, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Brackets, Between } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -22,6 +22,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 @Injectable()
 export class SearchService implements OnModuleInit {
+  private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 60; // 1 minute (aligned with frontend revalidation)
 
   constructor(
@@ -79,9 +80,9 @@ export class SearchService implements OnModuleInit {
         "CREATE INDEX IF NOT EXISTS idx_restaurant_name_trgm ON restaurants USING gin (name gin_trgm_ops);",
       );
 
-      console.log("✅ Fuzzy search extensions and indices initialized.");
+      this.logger.log("✅ Fuzzy search extensions and indices initialized.");
     } catch (error) {
-      console.warn("⚠️ Failed to initialize fuzzy search indices:", error);
+      this.logger.warn("⚠️ Failed to initialize fuzzy search indices:", error);
     }
   }
 

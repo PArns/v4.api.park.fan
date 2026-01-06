@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
+import { Park } from "../parks/entities/park.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { QueueTimesClient } from "../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.client";
@@ -174,11 +175,40 @@ export class AttractionsService {
       filters.waitTimeMax !== undefined ||
       (filters.sort && filters.sort.startsWith("waitTime"))
     ) {
-      // Join with latest queue data
+      // Join with latest queue data using DISTINCT ON subquery
+      // This replaces the O(n²) correlated subquery with a single efficient query
+      // Uses the composite index on (attractionId, queueType, timestamp) for optimal performance
+      // Prioritizes STANDBY queue type, falls back to others if STANDBY not available
       queryBuilder.leftJoin(
-        "queue_data",
+        (subQuery) => {
+          return subQuery
+            .select("qd.attractionId")
+            .addSelect("qd.queueType")
+            .addSelect("qd.timestamp")
+            .addSelect("qd.status")
+            .addSelect("qd.waitTime")
+            .addSelect("qd.state")
+            .addSelect("qd.returnStart")
+            .addSelect("qd.returnEnd")
+            .addSelect("qd.price")
+            .addSelect("qd.allocationStatus")
+            .addSelect("qd.currentGroupStart")
+            .addSelect("qd.currentGroupEnd")
+            .addSelect("qd.estimatedWait")
+            .addSelect("qd.lastUpdated")
+            .addSelect("qd.dataSource")
+            .addSelect("qd.id")
+            .from("queue_data", "qd")
+            .distinctOn(["qd.attractionId"])
+            .orderBy("qd.attractionId", "ASC")
+            .addOrderBy(
+              "CASE WHEN qd.queueType = 'STANDBY' THEN 0 ELSE 1 END",
+              "ASC",
+            ) // Prioritize STANDBY
+            .addOrderBy("qd.timestamp", "DESC"); // Latest first within each group
+        },
         "qd",
-        'qd."attractionId" = attraction.id AND qd.timestamp = (SELECT MAX(qd2.timestamp) FROM queue_data qd2 WHERE qd2."attractionId" = attraction.id)',
+        "qd.attractionId = attraction.id",
       );
 
       // Filter by status
@@ -329,19 +359,31 @@ export class AttractionsService {
   /**
    * Sync attractions from Queue-Times
    */
-  private async syncFromQueueTimes(park: any, qtId: number) {
+  private async syncFromQueueTimes(park: Park, qtId: number) {
     try {
       const data = await this.queueTimesClient.getParkQueueTimes(qtId);
       const allRides = [...data.rides, ...data.lands.flatMap((l) => l.rides)];
 
+      // Pre-fetch all existing slugs for this park to avoid N+1 queries
+      // This replaces N queries (one per ride) with a single batch query
+      const existingAttractions = await this.attractionRepository.find({
+        where: { parkId: park.id },
+        select: ["slug"],
+      });
+      const existingSlugs = existingAttractions.map((a) => a.slug);
+
       for (const ride of allRides) {
         const externalId = `qt-ride-${ride.id}`;
-        await this.upsertAttraction(park, {
-          externalId,
-          name: ride.name,
-          attractionType: "ROW", // Generic type
-          // QT doesn't provide lat/lon in this endpoint usually
-        });
+        await this.upsertAttraction(
+          park,
+          {
+            externalId,
+            name: ride.name,
+            attractionType: "ROW", // Generic type
+            // QT doesn't provide lat/lon in this endpoint usually
+          },
+          existingSlugs,
+        );
       }
     } catch (error) {
       this.logger.error(
@@ -353,17 +395,29 @@ export class AttractionsService {
   /**
    * Sync attractions from Wartezeiten.app
    */
-  private async syncFromWartezeiten(park: any, wzId: string) {
+  private async syncFromWartezeiten(park: Park, wzId: string) {
     try {
       const waitTimes = await this.wartezeitenClient.getWaitTimes(wzId);
 
+      // Pre-fetch all existing slugs for this park to avoid N+1 queries
+      // This replaces N queries (one per item) with a single batch query
+      const existingAttractions = await this.attractionRepository.find({
+        where: { parkId: park.id },
+        select: ["slug"],
+      });
+      const existingSlugs = existingAttractions.map((a) => a.slug);
+
       for (const item of waitTimes) {
         const externalId = item.uuid; // WZ UUIDs are unique
-        await this.upsertAttraction(park, {
-          externalId,
-          name: item.name,
-          attractionType: "ROW", // Generic type
-        });
+        await this.upsertAttraction(
+          park,
+          {
+            externalId,
+            name: item.name,
+            attractionType: "ROW", // Generic type
+          },
+          existingSlugs,
+        );
       }
     } catch (error) {
       this.logger.error(
@@ -374,9 +428,14 @@ export class AttractionsService {
 
   /**
    * Unified Upsert Logic
+   *
+   * @param park - Park entity
+   * @param data - Attraction data to upsert
+   * @param existingSlugs - Optional pre-fetched slugs array to avoid N+1 queries
+   *                       If not provided, will fetch slugs (for backward compatibility)
    */
   private async upsertAttraction(
-    park: any,
+    park: Park,
     data: {
       externalId: string;
       name: string;
@@ -384,6 +443,7 @@ export class AttractionsService {
       latitude?: number;
       longitude?: number;
     },
+    existingSlugs?: string[],
   ) {
     // Check if attraction exists
     const existing = await this.attractionRepository.findOne({
@@ -402,14 +462,17 @@ export class AttractionsService {
       // Create
       const baseSlug = generateSlug(data.name);
 
-      // Get existing slugs context
-      // Note: This query inside a loop is slightly inefficient but safe for uniqueness
-      const existingAttractions = await this.attractionRepository.find({
-        where: { parkId: park.id },
-        select: ["slug"],
-      });
-      const existingSlugs = existingAttractions.map((a) => a.slug);
-      const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+      // Use pre-fetched slugs if provided, otherwise fetch (backward compatibility)
+      let slugs = existingSlugs;
+      if (!slugs) {
+        const existingAttractions = await this.attractionRepository.find({
+          where: { parkId: park.id },
+          select: ["slug"],
+        });
+        slugs = existingAttractions.map((a) => a.slug);
+      }
+
+      const uniqueSlug = generateUniqueSlug(baseSlug, slugs);
 
       await this.attractionRepository.save({
         parkId: park.id,

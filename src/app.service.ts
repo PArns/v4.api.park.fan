@@ -1,10 +1,11 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { marked } from "marked";
 import { readFileSync } from "fs";
 import { join } from "path";
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
   private cachedHtml: string | null = null;
 
   /**
@@ -29,7 +30,7 @@ export class AppService {
 
       return this.cachedHtml;
     } catch (error) {
-      console.error("Error reading README.md:", error);
+      this.logger.error("Error reading README.md:", error);
       return this.getFallbackHtml();
     }
   }

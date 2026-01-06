@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
 import { Connection, Repository, MoreThanOrEqual } from "typeorm";
@@ -52,6 +52,8 @@ interface HealthStatus {
 @ApiTags("health")
 @Controller("health")
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
   constructor(
     @InjectConnection() private connection: Connection,
     @InjectRepository(Park)
@@ -191,7 +193,7 @@ export class HealthController {
       });
       return count;
     } catch (error) {
-      console.error("Error fetching wait times count:", error);
+      this.logger.error("Error fetching wait times count:", error);
       return 0;
     }
   }
@@ -256,7 +258,7 @@ export class HealthController {
       if (error instanceof Error && error.message?.includes("does not exist")) {
         return 0;
       }
-      console.error("Error fetching predictions count:", error);
+      this.logger.error("Error fetching predictions count:", error);
       return 0;
     }
   }
