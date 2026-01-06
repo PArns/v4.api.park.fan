@@ -1015,13 +1015,10 @@ def add_park_schedule_features(
                 time_since_open.clip(lower=0)
             )
 
-            # Clean up temporary columns
-            df = df.drop(columns=["schedule_date"], errors="ignore")
-
         # Check for special events (fully vectorized)
         event_schedules = park_schedules[
             park_schedules["schedule_type"].isin(["TICKETED_EVENT", "PRIVATE_EVENT"])
-        ]
+        ].copy()
         if not event_schedules.empty:
             event_schedules["date_only"] = event_schedules["date"].dt.date
             # Create lookup set for fast membership testing
@@ -1033,6 +1030,9 @@ def add_park_schedule_features(
                 list(event_lookup), columns=["park_id", "date_only"]
             )
             event_df["has_event"] = 1
+            # Ensure schedule_date exists for merge
+            if "schedule_date" not in df.columns:
+                df["schedule_date"] = df["date_local"]
             df_events = df.merge(
                 event_df,
                 left_on=["parkId", "schedule_date"],
@@ -1044,7 +1044,7 @@ def add_park_schedule_features(
         # Check for extra hours (fully vectorized)
         extra_hours_schedules = park_schedules[
             park_schedules["schedule_type"] == "EXTRA_HOURS"
-        ]
+        ].copy()
         if not extra_hours_schedules.empty:
             extra_hours_schedules["date_only"] = extra_hours_schedules["date"].dt.date
             # Create lookup set for fast membership testing
@@ -1058,6 +1058,9 @@ def add_park_schedule_features(
                 list(extra_hours_lookup), columns=["park_id", "date_only"]
             )
             extra_hours_df["has_extra"] = 1
+            # Ensure schedule_date exists for merge
+            if "schedule_date" not in df.columns:
+                df["schedule_date"] = df["date_local"]
             df_extra = df.merge(
                 extra_hours_df,
                 left_on=["parkId", "schedule_date"],
@@ -1065,6 +1068,9 @@ def add_park_schedule_features(
                 how="left",
             )
             df["has_extra_hours"] = df_extra["has_extra"].fillna(0).astype(int)
+    
+    # Clean up temporary columns (after all merges are done)
+    df = df.drop(columns=["schedule_date"], errors="ignore")
 
     # Correction Logic: Override "Closed" if we have evidence of "Open" (vectorized)
     # 1. Training Override: Target data (waitTime) indicates open
