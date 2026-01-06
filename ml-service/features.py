@@ -283,11 +283,6 @@ def add_holiday_features(
     # Use cached holidays if provided, otherwise fetch
     if cached_holidays_df is not None:
         holidays_df = cached_holidays_df.copy()
-        # Filter to date range (cached may include extra days for bridge day calculations)
-        holidays_df = holidays_df[
-            (holidays_df["date"] >= start_date.date())
-            & (holidays_df["date"] <= end_date.date())
-        ]
     else:
         # Get unique countries to fetch holidays for
         all_countries = set()
@@ -303,9 +298,17 @@ def add_holiday_features(
         # Fetch all holidays
         holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
 
-    # Convert date column to datetime
+    # Convert date column to date type (handle both datetime and date types)
     if not holidays_df.empty:
+        # Convert to datetime first (handles both date and datetime), then extract date
         holidays_df["date"] = pd.to_datetime(holidays_df["date"]).dt.date
+        
+        # Filter to date range (cached may include extra days for bridge day calculations)
+        if cached_holidays_df is not None:
+            holidays_df = holidays_df[
+                (holidays_df["date"] >= start_date.date())
+                & (holidays_df["date"] <= end_date.date())
+            ]
 
     # Create holiday lookup DataFrames for vectorized merge
     # Regional holidays: (country, region, date) -> holiday_type
