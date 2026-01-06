@@ -147,11 +147,10 @@ def filter_predictions_by_schedule(
                     opening_local = opening_pd.tz_convert(park_tz)
                     closing_local = closing_pd.tz_convert(park_tz)
 
-                    print(
-                        f"   - {date_str}: {opening_local.strftime('%H:%M')} to {closing_local.strftime('%H:%M')} {park_tz}"
-                    )
+                    # Schedule details logging removed to reduce spam
                 else:
-                    print(f"   - {date_str}: No schedule")
+                    # No schedule logging removed
+                    pass
 
         if schedules:
             # PRIMARY LOGIC: Filter by schedule
@@ -161,7 +160,6 @@ def filter_predictions_by_schedule(
                 # Filter out predictions AFTER park closing time for today
                 # Get current date in park's timezone
                 now_park_tz = datetime.now(park_tz)
-                today_park = now_park_tz.date()
 
                 schedule_map = {}
                 for schedule_row in schedules:
