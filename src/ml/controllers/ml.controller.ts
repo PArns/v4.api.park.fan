@@ -10,20 +10,18 @@ import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
 import { MLDashboardService } from "../services/ml-dashboard.service";
 import { MLModelService } from "../services/ml-model.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
-import { MLDriftMonitoringService } from "../services/ml-drift-monitoring.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
-import { MLDriftDto } from "../dto/ml-drift.dto";
 
 /**
  * MLController
  *
- * Unified REST controller for all ML-related endpoints:
+ * Core ML endpoints:
  * - Dashboard (System Health, Models)
  * - Accuracy Analytics (System, Park, Attraction levels)
  * - Feature Analysis
- * - Drift Monitoring
+ * - Model Management
  *
- * Replaces MLDashboardController and PredictionAccuracyController.
+ * Note: Monitoring endpoints (drift, alerts, anomalies) are in MLMonitoringController
  */
 @ApiTags("ML")
 @Controller("ml")
@@ -32,7 +30,6 @@ export class MLController {
     private dashboardService: MLDashboardService,
     private modelService: MLModelService,
     private accuracyService: PredictionAccuracyService,
-    private driftService: MLDriftMonitoringService,
   ) {}
 
   /**
@@ -52,51 +49,6 @@ export class MLController {
   })
   async getDashboard(): Promise<MLDashboardDto> {
     return this.dashboardService.getDashboard();
-  }
-
-  /**
-   * Get Active Model Details
-   */
-  @Get("models/active")
-  @ApiOperation({
-    summary: "Get detailed information about active model",
-  })
-  async getActiveModel() {
-    const model = await this.modelService.getActiveModel();
-    if (!model) {
-      return { importance: [] };
-    }
-
-    // TODO: Calculate feature importance from model metadata
-    // Could be stored during training or calculated on demand
-    return { importance: [] };
-  }
-
-  /**
-   * Model Drift Monitoring
-   * Track model performance degradation over time
-   */
-  @Get("monitoring/drift")
-  @ApiOperation({
-    summary: "Get model drift metrics",
-    description:
-      "Returns drift analysis comparing live performance vs training performance",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Number of days to analyze (default: 30)",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Drift metrics retrieved successfully",
-    type: MLDriftDto,
-  })
-  async getDriftMetrics(
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
-  ): Promise<MLDriftDto> {
-    return this.driftService.getDriftMetrics(days);
   }
 
   /**

@@ -22,6 +22,7 @@ import { ParkEnrichmentProcessor } from "./processors/park-enrichment.processor"
 import { EntityMappingsProcessor } from "./processors/entity-mappings.processor";
 import { QueuePercentileProcessor } from "./processors/queue-percentile.processor";
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
+import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
 import { AttractionsModule } from "../attractions/attractions.module";
@@ -105,6 +106,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
       { name: "park-enrichment" },
       { name: "analytics" },
       { name: "wartezeiten-schedule" },
+      { name: "ml-monitoring" },
     ),
 
     // Feature modules for processors
@@ -147,6 +149,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     ParkEnrichmentProcessor,
     QueuePercentileProcessor,
     WartezeitenScheduleProcessor,
+    MLMonitoringProcessor,
   ],
   exports: [BullModule], // Export for use in other modules
 })

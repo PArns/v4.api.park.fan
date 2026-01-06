@@ -42,6 +42,8 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("wartezeiten-schedule")
     private wartezeitenScheduleQueue: Queue,
+    @InjectQueue("ml-monitoring")
+    private mlMonitoringQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -284,6 +286,81 @@ export class QueueSchedulerService implements OnModuleInit {
           jobId: "wartezeiten-schedule-cron",
         },
       );
+    }
+
+    // ML Monitoring Jobs
+    {
+      // Feature drift detection (daily at 2am)
+      const hasFeatureDriftCron = await this.hasRepeatableJob(
+        this.mlMonitoringQueue,
+        "feature-drift-cron",
+      );
+      if (!hasFeatureDriftCron) {
+        await this.mlMonitoringQueue.add(
+          "detect-feature-drift",
+          {},
+          {
+            repeat: {
+              cron: "0 2 * * *", // Daily at 2am
+            },
+            jobId: "feature-drift-cron",
+          },
+        );
+      }
+
+      // Alert check (hourly)
+      const hasAlertCheckCron = await this.hasRepeatableJob(
+        this.mlMonitoringQueue,
+        "alert-check-cron",
+      );
+      if (!hasAlertCheckCron) {
+        await this.mlMonitoringQueue.add(
+          "check-alerts",
+          {},
+          {
+            repeat: {
+              cron: "0 * * * *", // Every hour
+            },
+            jobId: "alert-check-cron",
+          },
+        );
+      }
+
+      // Anomaly detection (daily at 3am)
+      const hasAnomalyDetectionCron = await this.hasRepeatableJob(
+        this.mlMonitoringQueue,
+        "anomaly-detection-cron",
+      );
+      if (!hasAnomalyDetectionCron) {
+        await this.mlMonitoringQueue.add(
+          "detect-anomalies",
+          {},
+          {
+            repeat: {
+              cron: "0 3 * * *", // Daily at 3am
+            },
+            jobId: "anomaly-detection-cron",
+          },
+        );
+      }
+
+      // Cleanup (daily at 4am)
+      const hasCleanupCron = await this.hasRepeatableJob(
+        this.mlMonitoringQueue,
+        "cleanup-cron",
+      );
+      if (!hasCleanupCron) {
+        await this.mlMonitoringQueue.add(
+          "cleanup",
+          {},
+          {
+            repeat: {
+              cron: "0 4 * * *", // Daily at 4am
+            },
+            jobId: "cleanup-cron",
+          },
+        );
+      }
     }
 
     this.logger.log("🎉 All scheduled jobs registered!");

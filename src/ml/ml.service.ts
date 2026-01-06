@@ -21,6 +21,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { MLRequestLoggingService } from "./services/ml-request-logging.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
@@ -61,6 +62,7 @@ export class MLService {
     @Inject(forwardRef(() => ParksService))
     private parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private requestLoggingService: MLRequestLoggingService,
   ) {
     // ML service URL from environment or default
     this.ML_SERVICE_URL =
@@ -119,18 +121,71 @@ export class MLService {
   async getPredictions(
     request: PredictionRequestDto,
   ): Promise<BulkPredictionResponseDto> {
+    const startTime = Date.now();
+    let modelVersion = "unknown";
+
     try {
       const response = await this.mlClient.post<BulkPredictionResponseDto>(
         "/predict",
         request,
       );
+      const duration = Date.now() - startTime;
+      modelVersion = response.data.modelVersion || "unknown";
+
+      // Log request (async, don't block)
+      this.logRequest(
+        request,
+        duration,
+        response.data.count,
+        modelVersion,
+      ).catch((err) => {
+        this.logger.warn(`Failed to log prediction request: ${err}`);
+      });
+
       return response.data;
     } catch (error) {
+      const duration = Date.now() - startTime;
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.error("Prediction request failed:", errorMessage);
+
+      // Log failed request
+      this.logRequest(request, duration, 0, modelVersion).catch((err) => {
+        this.logger.warn(`Failed to log failed prediction request: ${err}`);
+      });
+
       throw new HttpException("Failed to get predictions from ML service", 503);
     }
+  }
+
+  /**
+   * Log prediction request for analytics
+   */
+  private async logRequest(
+    request: PredictionRequestDto,
+    durationMs: number,
+    predictionCount: number,
+    modelVersion: string,
+  ): Promise<void> {
+    // Get request logging service (inject if not available)
+    // For now, we'll inject it in constructor
+    const parkId =
+      request.parkIds && request.parkIds.length > 0 ? request.parkIds[0] : null;
+
+    await this.requestLoggingService.logRequest({
+      parkId,
+      attractionCount: request.attractionIds?.length || 0,
+      parkCount: request.parkIds?.length || 0,
+      predictionType: request.predictionType || "hourly",
+      modelVersion,
+      durationMs,
+      predictionCount,
+      requestMetadata: {
+        hasWeatherForecast: !!request.weatherForecast,
+        hasCurrentWaitTimes: !!request.currentWaitTimes,
+        hasFeatureContext: !!request.featureContext,
+      },
+    });
   }
 
   /**

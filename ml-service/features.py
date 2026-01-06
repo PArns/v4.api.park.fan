@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
 from percentile_features import add_percentile_features
+from attraction_features import add_attraction_type_feature, add_park_attraction_count_feature
 
 
 
@@ -54,6 +55,53 @@ def convert_to_local_time(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.
     return df
 
 
+def add_weekend_feature(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add weekend feature based on region-specific weekend days.
+    
+    Centralized function to avoid code duplication between training and inference.
+    
+    Weekend definitions:
+    - Middle East (SA, AE, BH, KW, OM, QA, IL): Friday (4) + Saturday (5)
+    - Western countries: Saturday (5) + Sunday (6)
+    
+    Args:
+        df: DataFrame with 'parkId' and 'day_of_week' columns
+        parks_metadata: DataFrame with park metadata including 'park_id' and 'country'
+    
+    Returns:
+        DataFrame with 'is_weekend' column added
+    """
+    df = df.copy()
+    
+    # Middle East countries use Friday+Saturday as weekend
+    middle_east_countries = ['SA', 'AE', 'BH', 'KW', 'OM', 'QA', 'IL']
+    
+    # Initialize is_weekend column
+    df['is_weekend'] = 0
+    
+    # For each park, determine weekend based on country
+    for park_id in df['parkId'].unique():
+        park_info = parks_metadata[parks_metadata['park_id'] == park_id]
+        park_mask = df['parkId'] == park_id
+        
+        if not park_info.empty:
+            country = park_info.iloc[0]['country']
+            
+            if country in middle_east_countries:
+                # Middle East: Friday (4) + Saturday (5)
+                # dayofweek: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
+                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([4, 5]).astype(int)
+            else:
+                # Western: Saturday (5) + Sunday (6)
+                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([5, 6]).astype(int)
+        else:
+            # Default: Western weekend (Saturday + Sunday)
+            df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([5, 6]).astype(int)
+    
+    return df
+
+
 def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.DataFrame:
     """
     Add time-based features using LOCAL time.
@@ -75,6 +123,11 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
     df['day_of_week_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
     df['day_of_week_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
     
+    # NEW: Day of year (1-365/366) for finer seasonal trends
+    df['day_of_year'] = df['local_timestamp'].dt.dayofyear
+    df['day_of_year_sin'] = np.sin(2 * np.pi * df['day_of_year'] / 365.25)
+    df['day_of_year_cos'] = np.cos(2 * np.pi * df['day_of_year'] / 365.25)
+    
     # Season (derived from month)
     def get_season(month):
         if month in [12, 1, 2]: return 0  # Winter
@@ -83,37 +136,19 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
         return 3                         # Fall
         
     df['season'] = df['month'].apply(get_season)
+    
+    # NEW: Peak season indicator (summer months + December holidays)
+    # Peak seasons: June-August (summer), December (holidays)
+    df['is_peak_season'] = ((df['month'] >= 6) & (df['month'] <= 8)) | (df['month'] == 12)
+    df['is_peak_season'] = df['is_peak_season'].astype(int)
 
     # 3. Use LOCAL date for further lookups (holidays, weather)
     # This prevents using yesterday's weather for today's morning (due to UTC lag)
     df['date_local'] = df['local_timestamp'].dt.date
 
     # Region-specific weekend detection
-    # Middle East & Israel: Friday (5) + Saturday (6)
-    # Western countries: Saturday (6) + Sunday (0)
-    middle_east_countries = ['SA', 'AE', 'BH', 'KW', 'OM', 'QA', 'IL']
-
-    # Initialize is_weekend
-    df['is_weekend'] = 0
-
-    # For each park, determine weekend based on country
-    for park_id in df['parkId'].unique():
-        park_info = parks_metadata[parks_metadata['park_id'] == park_id]
-
-        if not park_info.empty:
-            country = park_info.iloc[0]['country']
-            park_mask = df['parkId'] == park_id
-
-            if country in middle_east_countries:
-                # Middle East: Friday (5) + Saturday (6)
-                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([5, 6]).astype(int)
-            else:
-                # Western: Saturday (6) + Sunday (0)
-                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([0, 6]).astype(int)
-        else:
-            # Default: Western weekend
-            park_mask = df['parkId'] == park_id
-            df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([0, 6]).astype(int)
+    # Use centralized function to avoid code duplication
+    df = add_weekend_feature(df, parks_metadata)
 
     return df
 
@@ -154,6 +189,28 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     # Binary rain indicator (explicit signal, valuable for ML)
     if 'precipitation' in df.columns:
         df['is_raining'] = (df['precipitation'] > 0).astype(int)
+        
+        # NEW: Precipitation last 3 hours (cumulative effect)
+        # For training: use rolling window on historical data
+        # For inference: will be provided via feature_context
+        if 'timestamp' in df.columns:
+            df_sorted = df.sort_values('timestamp').set_index('timestamp')
+            df['precipitation_last_3h'] = df_sorted.groupby('parkId')['precipitation'] \
+                .rolling('3h', closed='left', min_periods=1).sum() \
+                .reset_index(level=0, drop=True).values
+            df['precipitation_last_3h'] = df['precipitation_last_3h'].fillna(0)
+        else:
+            df['precipitation_last_3h'] = 0
+
+    # NEW: Temperature deviation (current vs. monthly average)
+    # Helps model understand if weather is unusually hot/cold
+    if 'temperature_avg' in df.columns and 'month' in df.columns:
+        # Calculate monthly average temperature per park
+        monthly_avg = df.groupby(['parkId', 'month'])['temperature_avg'].transform('mean')
+        df['temperature_deviation'] = df['temperature_avg'] - monthly_avg
+        df['temperature_deviation'] = df['temperature_deviation'].fillna(0)
+    else:
+        df['temperature_deviation'] = 0
 
     return df
 
@@ -396,10 +453,14 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Lag 1 week
     df['wait_lag_1w'] = merge_lag(df, pd.Timedelta(days=7), 'wait_lag_1w')
     
+    # Lag 1 month (30 days) - NEW: Extended temporal feature
+    df['wait_lag_1m'] = merge_lag(df, pd.Timedelta(days=30), 'wait_lag_1m')
+    
     # Map features to legacy names if needed or use new ones
     # We'll keep legacy column names where appropriate to minimize model drift if not retraining everything immediately, 
     # but 'avg_wait_same_hour_last_week' essentially maps to 'wait_lag_1w'
     df['avg_wait_same_hour_last_week'] = df['wait_lag_1w']
+    df['avg_wait_same_hour_last_month'] = df['wait_lag_1m']  # NEW: Monthly trend
 
     # 3. Fallback Logic (Impute missing short-term history with long-term patterns)
     # If avg_wait_last_1h is NaN (e.g. morning), fill with wait_lag_24h (Yesterday Same Hour)
@@ -409,9 +470,11 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     df['avg_wait_last_1h'] = df['avg_wait_last_1h'].fillna(df['wait_lag_1w'])
 
     # Final Fills with Global Means
-    hist_cols = ['avg_wait_last_24h', 'avg_wait_last_1h', 'avg_wait_same_hour_last_week', 'rolling_avg_7d']
+    hist_cols = ['avg_wait_last_24h', 'avg_wait_last_1h', 'avg_wait_same_hour_last_week', 
+                 'avg_wait_same_hour_last_month', 'rolling_avg_7d', 'trend_7d', 'volatility_7d']
     for col in hist_cols:
-         df[col] = df.fillna(0)[col] # Simplified fill
+         if col in df.columns:
+             df[col] = df[col].fillna(0)
 
     # Wait time velocity (Momentum)
     # Logic: Change over last 30 mins
@@ -420,8 +483,89 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     df['wait_time_velocity'] = df.groupby('attractionId')['waitTime'].transform(
         lambda x: x.diff().rolling(window=6, min_periods=1).mean().shift(1)
     ).fillna(0)
+    
+    # Trend features (NEW: 7-day trend slope)
+    # Calculate slope of wait times over last 7 days using linear regression
+    # Positive = increasing trend, negative = decreasing trend
+    df['trend_7d'] = 0.0
+    df['volatility_7d'] = 0.0  # NEW: 7-day volatility (standard deviation)
+    
+    for attraction_id in df['attractionId'].unique():
+        mask = df['attractionId'] == attraction_id
+        attraction_data = df[mask].sort_values('timestamp')
+        
+        if len(attraction_data) >= 2:
+            # Get last 7 days of data
+            if len(attraction_data) > 168:  # More than 7 days of hourly data
+                recent_data = attraction_data.tail(168)  # Last 7 days (24h * 7)
+            else:
+                recent_data = attraction_data
+            
+            if len(recent_data) >= 2:
+                # Calculate linear trend (slope)
+                x = np.arange(len(recent_data))
+                y = recent_data['waitTime'].values
+                
+                # Simple linear regression: slope = (n*sum(xy) - sum(x)*sum(y)) / (n*sum(x²) - sum(x)²)
+                n = len(x)
+                if n > 1:
+                    slope = (n * np.sum(x * y) - np.sum(x) * np.sum(y)) / (n * np.sum(x * x) - np.sum(x) ** 2)
+                    df.loc[mask, 'trend_7d'] = slope
+                    
+                    # Calculate volatility (standard deviation) - NEW
+                    volatility = np.std(y)
+                    df.loc[mask, 'volatility_7d'] = volatility
+                else:
+                    df.loc[mask, 'trend_7d'] = 0.0
+                    df.loc[mask, 'volatility_7d'] = 0.0
+            else:
+                df.loc[mask, 'trend_7d'] = 0.0
+                df.loc[mask, 'volatility_7d'] = 0.0
+        else:
+            df.loc[mask, 'trend_7d'] = 0.0
+            df.loc[mask, 'volatility_7d'] = 0.0
 
     # Clean up temp columns if any
+    return df
+
+
+def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add interaction features (combinations of existing features)
+    
+    Only adds interactions that are computationally cheap and use existing features.
+    No additional database queries required.
+    
+    Args:
+        df: DataFrame with time and other features
+    
+    Returns:
+        DataFrame with interaction features added
+    """
+    df = df.copy()
+    
+    # hour * is_weekend: Peak times on weekends are different
+    # Weekend mornings (9-11) and afternoons (14-16) are typically busier
+    if 'hour' in df.columns and 'is_weekend' in df.columns:
+        df['hour_weekend_interaction'] = df['hour'] * df['is_weekend']
+    
+    # temperature * precipitation: Rain + heat = indoor attractions more popular
+    if 'temperature_avg' in df.columns and 'precipitation' in df.columns:
+        df['temp_precip_interaction'] = df['temperature_avg'] * df['precipitation']
+    
+    # is_holiday * park_occupancy_pct: Holidays + high occupancy = extreme wait times
+    if 'is_holiday_primary' in df.columns and 'park_occupancy_pct' in df.columns:
+        df['holiday_occupancy_interaction'] = df['is_holiday_primary'] * df['park_occupancy_pct']
+    
+    # hour * park_occupancy_pct: Time of day + occupancy = different patterns
+    if 'hour' in df.columns and 'park_occupancy_pct' in df.columns:
+        df['hour_occupancy_interaction'] = df['hour'] * df['park_occupancy_pct'] / 100.0  # Normalize
+    
+    # NEW: Simple hour * is_weekend interaction (complementary to hour_weekend_interaction)
+    # This is a simpler binary interaction that may be easier for the model to learn
+    if 'hour' in df.columns and 'is_weekend' in df.columns:
+        df['hour_is_weekend'] = df['hour'] * df['is_weekend']
+    
     return df
 
 
@@ -998,6 +1142,11 @@ def engineer_features(
     df = add_holiday_features(df, parks_metadata, start_date, end_date)
     df = add_bridge_day_feature(df, parks_metadata, start_date, end_date, feature_context)
     df = add_park_schedule_features(df, start_date, end_date)
+    
+    # Attraction and Park features (using available data only)
+    df = add_attraction_type_feature(df)
+    df = add_park_attraction_count_feature(df, parks_metadata)
+    
     df = add_historical_features(df)
     df = add_percentile_features(df)  # Weather extremes
     
@@ -1007,12 +1156,15 @@ def engineer_features(
     df = add_downtime_features(df, feature_context)
     df = add_virtual_queue_feature(df, feature_context)
     df = add_park_has_schedule_feature(df, feature_context)  # NEW: Data quality indicator
+    
+    # Interaction features (must be after all base features are added)
+    df = add_interaction_features(df)
 
     return df
 
 
 def get_feature_columns() -> List[str]:
-    """Return list of feature column names (in order) - Complete 42 feature set"""
+    """Return list of feature column names (in order) - Complete feature set with new additions"""
     return [
         # IDs (categorical)
         'parkId',
@@ -1025,12 +1177,16 @@ def get_feature_columns() -> List[str]:
         'hour_sin', 'hour_cos',
         'day_of_week_sin', 'day_of_week_cos',
         'month_sin', 'month_cos',
+        'day_of_year_sin', 'day_of_year_cos',  # NEW: Finer seasonal trends
         'season',
         'is_weekend',
+        'is_peak_season',  # NEW: Peak season indicator (summer + December)
 
         # Weather features (all important for crowd patterns & ride closures)
         'temperature_avg',
+        'temperature_deviation',  # NEW: Current vs. monthly average (unusual weather)
         'precipitation',
+        'precipitation_last_3h',  # NEW: Cumulative rain effect (last 3 hours)
         'windSpeedMax',          # Explains high ride closures
         'snowfallSum',            # Explains outdoor ride closures
         'weatherCode',
@@ -1052,12 +1208,19 @@ def get_feature_columns() -> List[str]:
         'has_special_event',
         'has_extra_hours',
 
+        # Attraction features (NEW - using available data)
+        'attraction_type',       # From attractions.attractionType (nullable, defaults to 'UNKNOWN')
+        'park_attraction_count', # Number of attractions in park (indicator of park size)
+
         # Historical features
         'avg_wait_last_24h',
         'avg_wait_last_1h',
         'avg_wait_same_hour_last_week',
+        'avg_wait_same_hour_last_month',  # NEW: Monthly trend
         'rolling_avg_7d',
         'wait_time_velocity',  # Rate of change (momentum)
+        'trend_7d',            # NEW: 7-day trend slope (positive = increasing, negative = decreasing)
+        'volatility_7d',        # NEW: 7-day volatility (standard deviation of wait times)
 
         # Percentile-based features
         'is_temp_extreme',
@@ -1070,9 +1233,16 @@ def get_feature_columns() -> List[str]:
         'downtime_minutes_today',        # Total downtime duration
         'has_virtual_queue',             # Boolean: boarding groups active
         'park_has_schedule',             # NEW: Data quality indicator (1=has schedule, 0=no schedule)
+        
+        # Interaction features (NEW - computationally cheap, no extra data needed)
+        'hour_weekend_interaction',      # hour * is_weekend (peak times differ on weekends)
+        'hour_is_weekend',              # NEW: Simple hour * is_weekend (complementary interaction)
+        'temp_precip_interaction',       # temperature * precipitation (rain + heat = indoor preference)
+        'holiday_occupancy_interaction', # is_holiday * park_occupancy_pct (holidays + crowds = extreme waits)
+        'hour_occupancy_interaction',    # hour * park_occupancy_pct (time + occupancy patterns)
     ]
 
 
 def get_categorical_features() -> List[str]:
     """Return list of categorical feature names"""
-    return ['parkId', 'attractionId', 'weatherCode']
+    return ['parkId', 'attractionId', 'weatherCode', 'attraction_type']

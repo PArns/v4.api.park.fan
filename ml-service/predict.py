@@ -188,31 +188,25 @@ def create_prediction_features(
     df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
     df['day_of_week_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
     df['day_of_week_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+    
+    # NEW: Day of year (1-365/366) for finer seasonal trends
+    df['day_of_year'] = df['local_timestamp'].dt.dayofyear
+    df['day_of_year_sin'] = np.sin(2 * np.pi * df['day_of_year'] / 365.25)
+    df['day_of_year_cos'] = np.cos(2 * np.pi * df['day_of_year'] / 365.25)
 
-    df['season'] = df['timestamp'].dt.month.apply(lambda m: (m % 12) // 3)
+    # Season calculation - MUST use local_timestamp to match training pipeline
+    # Using UTC timestamp would cause season to be wrong for parks in different timezones
+    # Example: 23:00 UTC Feb 28 = 08:00 JST Mar 1 → Season jumps from Winter to Spring
+    df['season'] = df['local_timestamp'].dt.month.apply(lambda m: (m % 12) // 3)
+    
+    # NEW: Peak season indicator (summer months + December holidays)
+    df['is_peak_season'] = ((df['month'] >= 6) & (df['month'] <= 8)) | (df['month'] == 12)
+    df['is_peak_season'] = df['is_peak_season'].astype(int)
 
     # Region-specific weekends
-    # OPTIMIZATION: Reuse parks_metadata from above instead of fetching again
-    # parks_metadata already fetched at line 174
-    middle_east_countries = ['SA', 'AE', 'BH', 'KW', 'OM', 'QA', 'IL']
-    df['is_weekend'] = 0
-
-    for park_id in df['parkId'].unique():
-        park_info = parks_metadata[parks_metadata['park_id'] == park_id]
-        if not park_info.empty:
-            country = park_info.iloc[0]['country']
-            park_mask = df['parkId'] == park_id
-
-            if country in middle_east_countries:
-                # Middle East: Friday (4) + Saturday (5) in dayofweek (0=Mon)
-                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([4, 5]).astype(int)
-            else:
-                # Western: Saturday (5) + Sunday (6)
-                df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([5, 6]).astype(int)
-        else:
-            # Default: Western weekend
-            park_mask = df['parkId'] == park_id
-            df.loc[park_mask, 'is_weekend'] = df.loc[park_mask, 'day_of_week'].isin([5, 6]).astype(int)
+    # OPTIMIZATION: Use centralized function from features.py to avoid code duplication
+    from features import add_weekend_feature
+    df = add_weekend_feature(df, parks_metadata)
 
     # Weather features 
     # Logic: Use provided hourly forecast if available, otherwise fallback to historical daily averages
@@ -248,17 +242,32 @@ def create_prediction_features(
             df['snowfallSum'] = df['snowfall'].fillna(0.0)
             df['weatherCode'] = df['weatherCode'].fillna(0).astype(int)
             
+            # NEW: Weather interaction features
+            # Precipitation last 3h (for forecast, we approximate with current precipitation * 3)
+            df['precipitation_last_3h'] = df['precipitation'] * 3.0  # Approximation for forecast
+            # Temperature deviation will be calculated later after we have monthly averages
+            
             # Cleanup join columns
             df = df.drop(columns=['join_time', 'time', 'temperature', 'windSpeed', 'snowfall', 'rain'], errors='ignore')
             use_forecast = True
         except Exception as e:
-            print(f"⚠️ Failed to use weather forecast in features: {e}. Falling back to DB.")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to use weather forecast in features: {e}. Falling back to DB.")
             use_forecast = False
 
     if not use_forecast:
         # Weather features (use seasonal averages from DB for better accuracy)
-        # Get the month we're predicting for
-        prediction_month = timestamps[0].month if timestamps else datetime.now(timezone.utc).month
+        # Get the month we're predicting for (use local time for accurate month)
+        # Use the first timestamp's local month if available, otherwise UTC month
+        if timestamps:
+            # Try to use local timestamp if available (more accurate for timezone-aware predictions)
+            if 'local_timestamp' in df.columns and len(df) > 0:
+                prediction_month = df['local_timestamp'].iloc[0].month
+            else:
+                prediction_month = timestamps[0].month
+        else:
+            prediction_month = datetime.now(timezone.utc).month
         
         weather_query = text("""
             SELECT
@@ -271,17 +280,23 @@ def create_prediction_features(
             FROM weather_data
             WHERE "parkId"::text = ANY(:park_ids)
                 AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
-                AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 
+                AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 years of historical data
             GROUP BY "parkId"
         """)
     
-        with get_db() as db:
-            result = db.execute(weather_query, {
-                "park_ids": list(set(park_ids)),
-                "month": prediction_month
-            })
-            weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-            weather_df = convert_df_types(weather_df)
+        try:
+            with get_db() as db:
+                result = db.execute(weather_query, {
+                    "park_ids": list(set(park_ids)),
+                    "month": prediction_month
+                })
+                weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                weather_df = convert_df_types(weather_df)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to fetch historical weather data: {e}. Using defaults.")
+            weather_df = pd.DataFrame()
     
         # Merge weather data
         if not weather_df.empty:
@@ -291,6 +306,13 @@ def create_prediction_features(
             df['windSpeedMax'] = df['wind_avg'].fillna(0.0)
             df['snowfallSum'] = df['snow_avg'].fillna(0.0)
             df['weatherCode'] = df['weather_code_mode'].fillna(0).astype(int)
+            
+            # NEW: Temperature deviation (current vs. monthly average)
+            df['temperature_deviation'] = df['temperature_avg'] - df['temp_avg'].fillna(20.0)
+            
+            # NEW: Precipitation last 3h (for historical data, approximate with daily average)
+            df['precipitation_last_3h'] = df['precipitation'] * 0.125  # Daily / 24h * 3h approximation
+            
             df = df.drop(columns=['temp_avg', 'precip_avg', 'wind_avg', 'snow_avg', 'weather_code_mode'], errors='ignore')
         else:
             df['temperature_avg'] = 20.0
@@ -298,6 +320,22 @@ def create_prediction_features(
             df['windSpeedMax'] = 0.0
             df['snowfallSum'] = 0.0
             df['weatherCode'] = 0
+            df['temperature_deviation'] = 0.0
+            df['precipitation_last_3h'] = 0.0
+
+    # Calculate temperature deviation if not already set (for forecast data)
+    if 'temperature_deviation' not in df.columns or df['temperature_deviation'].isna().any():
+        # Get monthly average for each park
+        if 'month' in df.columns:
+            monthly_avg = df.groupby(['parkId', 'month'])['temperature_avg'].transform('mean')
+            df['temperature_deviation'] = df['temperature_avg'] - monthly_avg
+            df['temperature_deviation'] = df['temperature_deviation'].fillna(0)
+        else:
+            df['temperature_deviation'] = 0.0
+
+    # Ensure precipitation_last_3h is set
+    if 'precipitation_last_3h' not in df.columns:
+        df['precipitation_last_3h'] = df['precipitation'] * 0.125  # Approximation
 
     df['is_raining'] = (df['precipitation'] > 0).astype(int)
 
@@ -585,7 +623,9 @@ def create_prediction_features(
     df['avg_wait_last_24h'] = 30.0
     df['avg_wait_last_1h'] = 30.0
     df['avg_wait_same_hour_last_week'] = 35.0
+    df['avg_wait_same_hour_last_month'] = 35.0  # NEW: Monthly trend
     df['rolling_avg_7d'] = 32.0
+    df['trend_7d'] = 0.0  # NEW: 7-day trend (0 = no trend)
 
     if not recent_data.empty:
         recent_data['date'] = pd.to_datetime(recent_data['date'])
@@ -593,80 +633,152 @@ def create_prediction_features(
         if recent_data['date'].dt.tz is not None:
             recent_data['date'] = recent_data['date'].dt.tz_localize(None)
 
-        # NOTE: Historical features use UTC for hour/day lookups
+        # OPTIMIZATION: Use local time for historical feature lookups
         # The data in recent_data is aggregated by UTC hour (from fetch_recent_wait_times)
-        # For accurate "same hour yesterday" lookups in park local time, we would need
-        # to aggregate the data by local hour, which is a future improvement.
-        # For now, we use UTC which works correctly but may be off by a few hours
-        # for parks in timezones far from UTC.
+        # We convert base_time to local time for each park to improve accuracy
+        # Note: For perfect accuracy, fetch_recent_wait_times() should aggregate by local hour,
+        # but this approximation works well for most use cases.
         
-        # Convert base_time to pandas Timestamp for consistent comparisons
-        # Ensure it is timezone-naive UTC to match the SQL date output
+        # Convert base_time to pandas Timestamp (timezone-aware UTC)
         base_time_pd = pd.Timestamp(base_time)
-        if base_time_pd.tzinfo is not None:
-            base_time_pd = base_time_pd.tz_convert('UTC').tz_localize(None)
+        if base_time_pd.tzinfo is None:
+            base_time_pd = base_time_pd.tz_localize('UTC')
+        else:
+            base_time_pd = base_time_pd.tz_convert('UTC')
+        
+        # Get park timezone for each attraction
+        attraction_to_park = dict(zip(attraction_ids, park_ids))
+        park_timezones = {}
+        for park_id in set(park_ids):
+            park_info = parks_metadata[parks_metadata['park_id'] == park_id]
+            if not park_info.empty:
+                park_timezones[park_id] = park_info.iloc[0]['timezone']
 
         for attraction_id in attraction_ids:
             attraction_data = recent_data[recent_data['attractionId'] == attraction_id]
+            park_id = attraction_to_park.get(attraction_id)
+            park_tz = park_timezones.get(park_id) if park_id else None
 
             if not attraction_data.empty:
                 # Overall average (all data)
                 overall_avg = attraction_data['avg_wait'].mean()
 
-                # Last 7 days average (rolling_avg_7d)
-                cutoff_7d = base_time_pd - timedelta(days=7)
-                last_7_days = attraction_data[attraction_data['date'] >= cutoff_7d]
+                # Convert base_time to local time for this park
+                if park_tz:
+                    try:
+                        import pytz
+                        tz = pytz.timezone(park_tz)
+                        base_time_local = base_time_pd.tz_convert(tz)
+                    except Exception:
+                        # Fallback to UTC if timezone conversion fails
+                        base_time_local = base_time_pd
+                else:
+                    base_time_local = base_time_pd
+
+                # Last 7 days average (rolling_avg_7d) - use local date
+                cutoff_7d_local = (base_time_local - timedelta(days=7)).date()
+                last_7_days = attraction_data[pd.to_datetime(attraction_data['date']).dt.date >= cutoff_7d_local]
                 rolling_7d = last_7_days['avg_wait'].mean() if len(last_7_days) > 0 else overall_avg
 
-                # Last 24h average (approximation: today + yesterday average)
-                cutoff_24h = base_time_pd - timedelta(days=1)
-                last_24h = attraction_data[attraction_data['date'] >= cutoff_24h]
+                # Last 24h average (approximation: today + yesterday average) - use local date
+                cutoff_24h_local = (base_time_local - timedelta(days=1)).date()
+                last_24h = attraction_data[pd.to_datetime(attraction_data['date']).dt.date >= cutoff_24h_local]
                 avg_24h = last_24h['avg_wait'].mean() if len(last_24h) > 0 else rolling_7d
                 
-                # Last 1h average (Lag 1)
-                # NOTE: recent_data is aggregated by UTC hour (from fetch_recent_wait_times)
-                # So we must use UTC for hour lookup, even though we'd prefer local time
-                # For future improvement, consider aggregating by local hour in fetch_recent_wait_times
-                prev_hour_dt = base_time_pd - timedelta(hours=1)
-                prev_hour = prev_hour_dt.hour
-                prev_hour_date = prev_hour_dt.date()
+                # Last 1h average (Lag 1) - use local hour
+                # Note: Data is still UTC-aggregated, but we use local hour for lookup
+                # This is an approximation - for perfect accuracy, data should be aggregated by local hour
+                prev_hour_dt_local = base_time_local - timedelta(hours=1)
+                prev_hour_local = prev_hour_dt_local.hour
+                prev_hour_date_local = prev_hour_dt_local.date()
 
+                # Try local hour first
                 last_1h_data = attraction_data[
-                    (attraction_data['date'] == prev_hour_date) & 
-                    (attraction_data['hour'] == prev_hour)
+                    (pd.to_datetime(attraction_data['date']).dt.date == prev_hour_date_local) & 
+                    (attraction_data['hour'] == prev_hour_local)
                 ]
                 
+                # Fallback: Try UTC hour if local hour doesn't match (timezone offset)
+                if last_1h_data.empty:
+                    prev_hour_utc = (base_time_pd - timedelta(hours=1)).hour
+                    prev_hour_date_utc = (base_time_pd - timedelta(hours=1)).date()
+                    last_1h_data = attraction_data[
+                        (pd.to_datetime(attraction_data['date']).dt.date == prev_hour_date_utc) & 
+                        (attraction_data['hour'] == prev_hour_utc)
+                    ]
+                
                 # Intermediate Fallback: Same time yesterday (better than daily average)
-                yesterday_prev_hour_date = prev_hour_date - timedelta(days=1)
+                yesterday_prev_hour_date = prev_hour_date_local - timedelta(days=1)
                 yesterday_fallback = attraction_data[
-                    (attraction_data['date'] == yesterday_prev_hour_date) & 
-                    (attraction_data['hour'] == prev_hour)
+                    (pd.to_datetime(attraction_data['date']).dt.date == yesterday_prev_hour_date) & 
+                    (attraction_data['hour'] == prev_hour_local)
                 ]
                 avg_yesterday_fallback = yesterday_fallback['avg_wait'].mean() if not yesterday_fallback.empty else avg_24h
 
                 avg_1h = last_1h_data['avg_wait'].mean() if not last_1h_data.empty else avg_yesterday_fallback
 
-                # Same hour last week (7 days ago, same hour)
-                # NOTE: Using UTC hour since data is aggregated by UTC hour
-                last_week_date = (base_time_pd - timedelta(days=7)).date()
-                current_hour = base_time.hour
+                # Same hour last week (7 days ago, same hour in local time)
+                last_week_date_local = (base_time_local - timedelta(days=7)).date()
+                current_hour_local = base_time_local.hour
 
                 same_hour_last_week = attraction_data[
-                    (attraction_data['date'] == last_week_date.normalize()) &
-                    (attraction_data['hour'] == current_hour)
+                    (pd.to_datetime(attraction_data['date']).dt.date == last_week_date_local) &
+                    (attraction_data['hour'] == current_hour_local)
                 ]
                 avg_same_hour = same_hour_last_week['avg_wait'].mean() if len(same_hour_last_week) > 0 else rolling_7d
-
+                
+                # Same hour last month (30 days ago, same hour in local time) - NEW
+                last_month_date_local = (base_time_local - timedelta(days=30)).date()
+                same_hour_last_month = attraction_data[
+                    (pd.to_datetime(attraction_data['date']).dt.date == last_month_date_local) &
+                    (attraction_data['hour'] == current_hour_local)
+                ]
+                avg_same_hour_month = same_hour_last_month['avg_wait'].mean() if len(same_hour_last_month) > 0 else rolling_7d
+                
+                # Calculate 7-day trend (slope) - NEW
+                # Simple approximation: compare last 7 days average to previous 7 days average
+                cutoff_14d_local = (base_time_local - timedelta(days=14)).date()
+                last_14_days = attraction_data[pd.to_datetime(attraction_data['date']).dt.date >= cutoff_14d_local]
+                
+                trend_7d = 0.0
+                if len(last_14_days) >= 2:
+                    # Split into two 7-day periods
+                    mid_point = cutoff_7d_local
+                    recent_7d = last_14_days[pd.to_datetime(last_14_days['date']).dt.date >= cutoff_7d_local]
+                    previous_7d = last_14_days[pd.to_datetime(last_14_days['date']).dt.date < cutoff_7d_local]
+                    
+                    if len(recent_7d) > 0 and len(previous_7d) > 0:
+                        recent_avg = recent_7d['avg_wait'].mean()
+                        previous_avg = previous_7d['avg_wait'].mean()
+                        # Trend = difference per day (approximation)
+                        trend_7d = (recent_avg - previous_avg) / 7.0
+                
+                # Calculate volatility (standard deviation) - NEW
+                volatility_7d = 0.0
+                if len(last_7_days) > 1:
+                    volatility_7d = last_7_days['avg_wait'].std()
+                    if pd.isna(volatility_7d):
+                        volatility_7d = 0.0
+                
                 # Apply to all rows for this attraction
                 mask = df['attractionId'] == attraction_id
                 df.loc[mask, 'avg_wait_last_24h'] = avg_24h
                 df.loc[mask, 'avg_wait_last_1h'] = avg_1h
                 df.loc[mask, 'avg_wait_same_hour_last_week'] = avg_same_hour
+                df.loc[mask, 'avg_wait_same_hour_last_month'] = avg_same_hour_month
                 df.loc[mask, 'rolling_avg_7d'] = rolling_7d
+                df.loc[mask, 'trend_7d'] = trend_7d
+                df.loc[mask, 'volatility_7d'] = volatility_7d
 
     # Calculate wait time velocity (momentum) BEFORE overriding lags
     # Initialize with default (no change)
     df['wait_time_velocity'] = 0.0
+    
+    # Initialize trend and volatility if not already set
+    if 'trend_7d' not in df.columns:
+        df['trend_7d'] = 0.0
+    if 'volatility_7d' not in df.columns:
+        df['volatility_7d'] = 0.0
     
     # Override lags with current wait times if available (Autoregression)
     if current_wait_times:
@@ -699,6 +811,11 @@ def create_prediction_features(
     # Add percentile features (Weather extremes)
     df = add_percentile_features(df)
     
+    # Add attraction and park features (using available data only)
+    from attraction_features import add_attraction_type_feature, add_park_attraction_count_feature
+    df = add_attraction_type_feature(df)
+    df = add_park_attraction_count_feature(df, parks_metadata)
+    
     # Phase 2: Add real-time context features
     if feature_context:
         from features import (
@@ -707,7 +824,8 @@ def create_prediction_features(
             add_downtime_features,
             add_virtual_queue_feature,
             add_bridge_day_feature,
-            add_park_has_schedule_feature
+            add_park_has_schedule_feature,
+            add_interaction_features
         )
         
         df = add_park_occupancy_feature(df, feature_context)
@@ -726,6 +844,9 @@ def create_prediction_features(
         start = df['timestamp'].min()
         end = df['timestamp'].max()
         df = add_bridge_day_feature(df, parks_metadata, start, end, feature_context)
+        
+        # Interaction features (must be after all base features are added)
+        df = add_interaction_features(df)
     else:
         # Defaults if no feature_context provided
         df['park_occupancy_pct'] = 100.0
@@ -735,6 +856,10 @@ def create_prediction_features(
         df['has_virtual_queue'] = 0
         df['is_bridge_day'] = 0
         df['park_has_schedule'] = 1  # NEW: Default to 1 (assume schedule exists for better quality)
+        
+        # Interaction features with defaults
+        from features import add_interaction_features
+        df = add_interaction_features(df)
 
     return df
 

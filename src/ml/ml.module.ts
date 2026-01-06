@@ -6,8 +6,13 @@ import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
 import { PredictionDeviationService } from "./services/prediction-deviation.service";
 import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service";
+import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
+import { MLAlertService } from "./services/ml-alert.service";
+import { MLRequestLoggingService } from "./services/ml-request-logging.service";
+import { MLAnomalyDetectionService } from "./services/ml-anomaly-detection.service";
 import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
+import { MLMonitoringController } from "./controllers/ml-monitoring.controller";
 import {
   WaitTimePrediction,
   MLModel,
@@ -16,6 +21,11 @@ import {
 } from "./entities";
 import { MLAccuracyComparison } from "./entities/ml-accuracy-comparison.entity";
 import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.entity";
+import { MLFeatureStats } from "./entities/ml-feature-stats.entity";
+import { MLFeatureDrift } from "./entities/ml-feature-drift.entity";
+import { MLAlert } from "./entities/ml-alert.entity";
+import { MLPredictionRequestLog } from "./entities/ml-prediction-request-log.entity";
+import { MLPredictionAnomaly } from "./entities/ml-prediction-anomaly.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -43,6 +53,11 @@ import { BullModule } from "@nestjs/bull";
       PredictionAccuracy,
       AttractionAccuracyStats,
       MLAccuracyComparison,
+      MLFeatureStats,
+      MLFeatureDrift,
+      MLAlert,
+      MLPredictionRequestLog,
+      MLPredictionAnomaly,
       Attraction,
       QueueData,
       Park, // For JOIN queries in getTopBottomPerformers
@@ -57,14 +72,22 @@ import { BullModule } from "@nestjs/bull";
     MLDashboardService,
     PredictionDeviationService,
     MLDriftMonitoringService,
+    MLFeatureDriftService,
+    MLAlertService,
+    MLRequestLoggingService,
+    MLAnomalyDetectionService,
   ],
-  controllers: [MLController, MLHealthController],
+  controllers: [MLController, MLHealthController, MLMonitoringController],
   exports: [
     MLService,
     PredictionAccuracyService,
     MLModelService,
     MLDashboardService,
     PredictionDeviationService,
+    MLFeatureDriftService,
+    MLAlertService,
+    MLRequestLoggingService,
+    MLAnomalyDetectionService,
   ],
 })
 export class MLModule {}

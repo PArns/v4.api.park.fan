@@ -96,6 +96,7 @@ def fetch_training_data(start_date: datetime.datetime, end_date: datetime.dateti
                 qd.id,
                 qd."attractionId",
                 a."parkId",
+                a."attractionType",
                 qd.timestamp,
                 qd."waitTime",
                 EXTRACT(HOUR FROM qd.timestamp) as hour,
@@ -279,31 +280,63 @@ def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_
         return convert_df_types(df)
 
 
-def fetch_parks_metadata() -> pd.DataFrame:
+# Cache for parks metadata (5 minute TTL)
+_parks_metadata_cache = None
+_parks_metadata_cache_time = None
+_parks_metadata_cache_ttl = 300  # 5 minutes in seconds
+
+
+def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
     """
     Fetch park metadata (country code, influencing regions, etc.)
+    
+    OPTIMIZATION: Caches result for 5 minutes to avoid repeated DB queries
+    during prediction batches.
+
+    Args:
+        use_cache: If True, use cached result if available and fresh
 
     Returns DataFrame with park details
     """
+    global _parks_metadata_cache, _parks_metadata_cache_time
+    
+    # Check cache if enabled
+    if use_cache and _parks_metadata_cache is not None and _parks_metadata_cache_time is not None:
+        import time
+        age = time.time() - _parks_metadata_cache_time
+        if age < _parks_metadata_cache_ttl:
+            return _parks_metadata_cache.copy()
+    
     query = text("""
         SELECT
-            id as park_id,
-            name,
-            "countryCode" as country,
-            "regionCode" as region_code,
-            timezone,
-            "influencingRegions", 
-
-            "influenceRadiusKm",
-            latitude,
-            longitude
-        FROM parks
+            p.id as park_id,
+            p.name,
+            p."countryCode" as country,
+            p."regionCode" as region_code,
+            p.timezone,
+            p."influencingRegions", 
+            p."influenceRadiusKm",
+            p.latitude,
+            p.longitude,
+            COUNT(DISTINCT a.id) as attraction_count
+        FROM parks p
+        LEFT JOIN attractions a ON a."parkId" = p.id
+        GROUP BY p.id, p.name, p."countryCode", p."regionCode", p.timezone, 
+                 p."influencingRegions", p."influenceRadiusKm", p.latitude, p.longitude
     """)
 
     with get_db() as db:
         result = db.execute(query)
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
-        return convert_df_types(df)
+        df = convert_df_types(df)
+        
+        # Update cache
+        if use_cache:
+            import time
+            _parks_metadata_cache = df.copy()
+            _parks_metadata_cache_time = time.time()
+        
+        return df
 
 
 
