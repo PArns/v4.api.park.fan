@@ -141,9 +141,17 @@ def train_model(version: str = None) -> None:
     # - Too high weights (factor > 1.0) can cause overfitting on errors
     # - Only a small subset of data will have weights (only those with predictions)
     # - Should be used conservatively (factor 0.3-0.5 recommended)
+    # - Requires sufficient data (>30 days) to avoid overfitting
     sample_weights = None
     
-    if settings.ENABLE_SAMPLE_WEIGHTS:
+    # Check if we have enough data for sample weights
+    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
+    can_use_weights = (
+        settings.ENABLE_SAMPLE_WEIGHTS 
+        and data_span_days >= settings.MIN_DATA_DAYS_FOR_WEIGHTS
+    )
+    
+    if can_use_weights:
         print("📊 Calculating sample weights from prediction accuracy...")
         from db import fetch_prediction_errors_for_training
         import numpy as np
@@ -201,13 +209,16 @@ def train_model(version: str = None) -> None:
                 print("   No prediction errors available (using uniform weights)")
         else:
             print("   No prediction accuracy data available (using uniform weights)")
+    elif settings.ENABLE_SAMPLE_WEIGHTS and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS:
+        print(f"   Sample weights disabled: Only {data_span_days} days of data (< {settings.MIN_DATA_DAYS_FOR_WEIGHTS} days required)")
+        print("      Enable weights when you have more historical data to avoid overfitting")
     else:
         print("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
     # 6. Train/test split
     # For small datasets (< 100 rows or < 7 days), use percentage split
     # For larger datasets, use time-based split (last N days as validation)
-    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
+    # Note: data_span_days already calculated above for sample weights check
 
     train_mask = None  # Initialize for sample weights split
     
