@@ -1351,24 +1351,24 @@ def engineer_features(
     Returns:
         DataFrame with all features engineered
     """
-    import time
+    import time as time_module
 
-    total_start = time.time()
+    total_start = time_module.time()
 
     # 0. Resample to fix delta-compression gaps
-    resample_start = time.time()
+    resample_start = time_module.time()
     df = resample_data(df)
-    print(f"   Resampling time: {time.time() - resample_start:.2f}s")
+    print(f"   Resampling time: {time_module.time() - resample_start:.2f}s")
 
     # Fetch park metadata (needed for region-specific weekends & holidays)
-    metadata_start = time.time()
+    metadata_start = time_module.time()
     parks_metadata = fetch_parks_metadata()
-    print(f"   Parks metadata fetch time: {time.time() - metadata_start:.2f}s")
+    print(f"   Parks metadata fetch time: {time_module.time() - metadata_start:.2f}s")
 
     # Cache DB queries to avoid duplicate fetches
     # fetch_holidays() is called in add_holiday_features() and add_bridge_day_feature()
     # fetch_park_schedules() is called in add_park_schedule_features() and add_park_has_schedule_feature()
-    cache_start = time.time()
+    cache_start = time_module.time()
 
     # Get all countries for holiday fetch (need to do this before fetching)
     all_countries = set()
@@ -1402,62 +1402,62 @@ def engineer_features(
         datetime.combine(end_date_local, time.max),
     )
 
-    print(f"   DB cache fetch time: {time.time() - cache_start:.2f}s")
+    print(f"   DB cache fetch time: {time_module.time() - cache_start:.2f}s")
 
     # Add features (order matters for dependencies) with performance logging
-    time_start = time.time()
+    time_start = time_module.time()
     df = add_time_features(df, parks_metadata)  # Region-specific weekends
-    print(f"   Time features: {time.time() - time_start:.2f}s")
+    print(f"   Time features: {time_module.time() - time_start:.2f}s")
 
-    weather_start = time.time()
+    weather_start = time_module.time()
     df = add_weather_features(df)
-    print(f"   Weather features: {time.time() - weather_start:.2f}s")
+    print(f"   Weather features: {time_module.time() - weather_start:.2f}s")
 
-    holiday_start = time.time()
+    holiday_start = time_module.time()
     df = add_holiday_features(
         df, parks_metadata, start_date, end_date, cached_holidays_df
     )
-    print(f"   Holiday features: {time.time() - holiday_start:.2f}s")
+    print(f"   Holiday features: {time_module.time() - holiday_start:.2f}s")
 
-    bridge_start = time.time()
+    bridge_start = time_module.time()
     df = add_bridge_day_feature(
         df, parks_metadata, start_date, end_date, feature_context, cached_holidays_df
     )
-    print(f"   Bridge day features: {time.time() - bridge_start:.2f}s")
+    print(f"   Bridge day features: {time_module.time() - bridge_start:.2f}s")
 
-    schedule_start = time.time()
+    schedule_start = time_module.time()
     df = add_park_schedule_features(df, start_date, end_date, cached_schedules_df)
-    print(f"   Schedule features: {time.time() - schedule_start:.2f}s")
+    print(f"   Schedule features: {time_module.time() - schedule_start:.2f}s")
 
     # Attraction and Park features (using available data only)
-    attraction_start = time.time()
+    attraction_start = time_module.time()
     df = add_attraction_type_feature(df)
     df = add_park_attraction_count_feature(df, parks_metadata)
-    print(f"   Attraction features: {time.time() - attraction_start:.2f}s")
+    print(f"   Attraction features: {time_module.time() - attraction_start:.2f}s")
 
-    historical_start = time.time()
+    historical_start = time_module.time()
     df = add_historical_features(df)
-    print(f"   Historical features: {time.time() - historical_start:.2f}s")
+    print(f"   Historical features: {time_module.time() - historical_start:.2f}s")
 
-    percentile_start = time.time()
+    percentile_start = time_module.time()
     df = add_percentile_features(df)  # Weather extremes
-    print(f"   Percentile features: {time.time() - percentile_start:.2f}s")
+    print(f"   Percentile features: {time_module.time() - percentile_start:.2f}s")
 
     # Phase 2: Add context features (Training uses internal data, Inference uses feature_context)
-    context_start = time.time()
+    context_start = time_module.time()
     df = add_park_occupancy_feature(df, feature_context)
     df = add_time_since_park_open(df, feature_context)
     df = add_downtime_features(df, feature_context)
     df = add_virtual_queue_feature(df, feature_context)
     df = add_park_has_schedule_feature(df, feature_context, cached_schedules_df)
-    print(f"   Context features: {time.time() - context_start:.2f}s")
+    print(f"   Context features: {time_module.time() - context_start:.2f}s")
 
     # Interaction features (must be after all base features are added)
-    interaction_start = time.time()
+    interaction_start = time_module.time()
     df = add_interaction_features(df)
-    print(f"   Interaction features: {time.time() - interaction_start:.2f}s")
+    print(f"   Interaction features: {time_module.time() - interaction_start:.2f}s")
 
-    total_time = time.time() - total_start
+    total_time = time_module.time() - total_start
     print(
         f"\n   Total feature engineering time: {total_time:.2f}s ({total_time / 60:.1f} minutes)"
     )
