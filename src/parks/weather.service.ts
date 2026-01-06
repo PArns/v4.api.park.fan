@@ -11,6 +11,7 @@ import {
 } from "../external-apis/weather/open-meteo.client";
 import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { fromZonedTime } from "date-fns-tz";
 
 /**
  * Weather Service
@@ -185,13 +186,33 @@ export class WeatherService {
   ): Promise<number> {
     let savedCount = 0;
 
+    // Get park timezone for correct date interpretation
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park || !park.timezone) {
+      this.logger.error(
+        `Cannot save weather data: Park ${parkId} not found or has no timezone`,
+      );
+      return 0;
+    }
+
     for (const day of weatherData) {
       try {
+        // CRITICAL: Interpret date string in park timezone, not UTC
+        // day.date is "2024-01-15" - must be midnight in PARK time, not UTC
+        const dateInParkTz = fromZonedTime(
+          `${day.date}T00:00:00`,
+          park.timezone,
+        );
+
         // Check if record exists
         const existing = await this.weatherDataRepository.findOne({
           where: {
             parkId,
-            date: new Date(day.date),
+            date: dateInParkTz,
           },
         });
 
@@ -214,7 +235,7 @@ export class WeatherService {
           // Create new record
           await this.weatherDataRepository.save({
             parkId,
-            date: new Date(day.date),
+            date: dateInParkTz,
             dataType,
             temperatureMax: day.temperatureMax,
             temperatureMin: day.temperatureMin,
@@ -247,11 +268,40 @@ export class WeatherService {
     startDate: Date,
     endDate: Date,
   ): Promise<WeatherData[]> {
+    // Get park timezone for correct date comparison
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+
+    if (!park || !park.timezone) {
+      this.logger.warn(
+        `Cannot query weather data correctly: Park ${parkId} has no timezone`,
+      );
+      // Fallback to simple query (may be incorrect for non-UTC timezones)
+      return this.weatherDataRepository
+        .createQueryBuilder("weather")
+        .where("weather.parkId = :parkId", { parkId })
+        .andWhere("weather.date >= :startDate", { startDate })
+        .andWhere("weather.date <= :endDate", { endDate })
+        .orderBy("weather.date", "ASC")
+        .getMany();
+    }
+
+    // Convert dates to YYYY-MM-DD strings in park timezone for comparison
+    const startStr = formatInParkTimezone(startDate, park.timezone);
+    const endStr = formatInParkTimezone(endDate, park.timezone);
+
+    // Use PostgreSQL's AT TIME ZONE to compare dates correctly
+    // This ensures we match the calendar day in the park's timezone
     return this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
-      .andWhere("weather.date >= :startDate", { startDate })
-      .andWhere("weather.date <= :endDate", { endDate })
+      .andWhere("DATE(weather.date AT TIME ZONE :tz) BETWEEN :start AND :end", {
+        tz: park.timezone,
+        start: startStr,
+        end: endStr,
+      })
       .orderBy("weather.date", "ASC")
       .getMany();
   }

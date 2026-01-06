@@ -4,7 +4,6 @@ import {
   Param,
   Query,
   NotFoundException,
-  BadRequestException,
   Inject,
   UseInterceptors,
 } from "@nestjs/common";
@@ -292,45 +291,17 @@ export class ParksController {
       );
     }
 
-    // Parse and validate date parameters
-    let fromDate: Date;
-    let toDate: Date;
+    // Parse date range with timezone awareness
+    const { parseDateRange, validateDateRange } =
+      await import("../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange(from, to, {
+      timezone: park.timezone,
+      defaultFromDaysAgo: 0,
+      defaultToDaysAhead: 30,
+    });
 
-    if (from) {
-      fromDate = new Date(from);
-      if (isNaN(fromDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "from" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      fromDate = new Date();
-    }
-    fromDate.setHours(0, 0, 0, 0);
-
-    if (to) {
-      toDate = new Date(to);
-      if (isNaN(toDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "to" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: 30 days ahead
-      toDate = new Date(fromDate);
-      toDate.setDate(toDate.getDate() + 30);
-    }
-    toDate.setHours(23, 59, 59, 999);
-
-    // Validate range
-    const daysDiff = Math.ceil(
-      (toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24),
-    );
-    if (daysDiff > 90) {
-      throw new BadRequestException(
-        "Date range too large. Maximum allowed: 90 days.",
-      );
-    }
+    // Validate range (max 90 days)
+    validateDateRange(fromDate, toDate, 90);
 
     return this.calendarService.buildCalendarResponse(
       park,
@@ -369,9 +340,13 @@ export class ParksController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Get forecast data (next 16 days)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get forecast data (next 16 days) using park's timezone
+    const { getCurrentDateInTimezone } =
+      await import("../common/utils/date.util");
+    const { fromZonedTime } = await import("date-fns-tz");
+
+    const todayStr = getCurrentDateInTimezone(park.timezone);
+    const today = fromZonedTime(`${todayStr}T00:00:00`, park.timezone);
     const futureDate = new Date(today);
     futureDate.setDate(futureDate.getDate() + 16);
 
@@ -430,36 +405,14 @@ export class ParksController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Parse date parameters
-    let fromDate: Date;
-    let toDate: Date;
-
-    if (from) {
-      fromDate = new Date(from);
-      if (isNaN(fromDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "from" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: 30 days ago
-      fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - 30);
-    }
-    fromDate.setHours(0, 0, 0, 0);
-
-    if (to) {
-      toDate = new Date(to);
-      if (isNaN(toDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "to" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: today
-      toDate = new Date();
-    }
-    toDate.setHours(23, 59, 59, 999);
+    // Parse date range with timezone awareness
+    const { parseDateRange } =
+      await import("../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange(from, to, {
+      timezone: park.timezone,
+      defaultFromDaysAgo: 30,
+      defaultToDaysAhead: 0, // Default 'to' is today
+    });
 
     const weatherData = await this.weatherService.getWeatherData(
       park.id,
@@ -518,36 +471,14 @@ export class ParksController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Parse date parameters
-    let fromDate: Date;
-    let toDate: Date;
-
-    if (from) {
-      fromDate = new Date(from);
-      if (isNaN(fromDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "from" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: today
-      fromDate = new Date();
-    }
-    fromDate.setHours(0, 0, 0, 0);
-
-    if (to) {
-      toDate = new Date(to);
-      if (isNaN(toDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "to" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: 30 days ahead
-      toDate = new Date(fromDate);
-      toDate.setDate(toDate.getDate() + 30);
-    }
-    toDate.setHours(23, 59, 59, 999);
+    // Parse date range with timezone awareness
+    const { parseDateRange } =
+      await import("../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange(from, to, {
+      timezone: park.timezone,
+      defaultFromDaysAgo: 0, // Default from: today
+      defaultToDaysAhead: 30, // Default to: 30 days ahead
+    });
 
     const schedules = await this.parksService.getSchedule(
       park.id,
@@ -617,21 +548,7 @@ export class ParksController {
       throw new NotFoundException(`Park not found: ${slug}`);
     }
 
-    const predictions = await this.mlService.getParkPredictionsYearly(park.id);
-    const dailyPredictions =
-      await this.parkIntegrationService.aggregateDailyPredictions(
-        predictions.predictions,
-      );
-
-    return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-      },
-      predictions: dailyPredictions,
-      generatedAt: new Date().toISOString(),
-    };
+    return this.buildYearlyPredictionsResponse(park);
   }
 
   /**
@@ -697,6 +614,14 @@ export class ParksController {
       );
     }
 
+    return this.buildYearlyPredictionsResponse(park);
+  }
+
+  /**
+   * Helper: Build yearly predictions response
+   * Extracts duplicated logic from both yearly predictions endpoints
+   */
+  private async buildYearlyPredictionsResponse(park: Park) {
     const predictions = await this.mlService.getParkPredictionsYearly(park.id);
     const dailyPredictions =
       await this.parkIntegrationService.aggregateDailyPredictions(
@@ -861,81 +786,10 @@ export class ParksController {
       throw new NotFoundException(`Park with slug "${slug}" not found`);
     }
 
-    // Check timezone-aware park status
-    const statusMap = await this.parksService.getBatchParkStatus([park.id]);
-    const parkStatus = statusMap.get(park.id) || "CLOSED";
-
-    // If park is CLOSED, return empty wait times (no stale data)
-    if (parkStatus === "CLOSED") {
-      return {
-        park: {
-          id: park.id,
-          name: park.name,
-          slug: park.slug,
-          timezone: park.timezone,
-          status: "CLOSED",
-        },
-        attractions: [],
-      };
-    }
-
-    // Park is OPERATING - fetch live wait times
-    const waitTimes = await this.queueDataService.findWaitTimesByPark(
-      park.id,
+    return this.parkIntegrationService.getParkWaitTimesResponse(
+      park,
       queueType,
     );
-
-    // Group by attraction
-    const attractionsMap = new Map<string, any>();
-
-    for (const queueData of waitTimes) {
-      const attractionId = queueData.attraction.id;
-
-      if (!attractionsMap.has(attractionId)) {
-        attractionsMap.set(attractionId, {
-          attraction: {
-            id: queueData.attraction.id,
-            name: queueData.attraction.name,
-            slug: queueData.attraction.slug,
-          },
-          queues: [],
-        });
-      }
-
-      const queueDto = {
-        queueType: queueData.queueType,
-        status: queueData.status,
-        waitTime: queueData.waitTime ?? null,
-        state: queueData.state ?? null,
-        returnStart: queueData.returnStart
-          ? queueData.returnStart.toISOString()
-          : null,
-        returnEnd: queueData.returnEnd
-          ? queueData.returnEnd.toISOString()
-          : null,
-        price: queueData.price ?? null,
-        allocationStatus: queueData.allocationStatus ?? null,
-        currentGroupStart: queueData.currentGroupStart ?? null,
-        currentGroupEnd: queueData.currentGroupEnd ?? null,
-        estimatedWait: queueData.estimatedWait ?? null,
-        lastUpdated: (
-          queueData.lastUpdated || queueData.timestamp
-        ).toISOString(),
-      };
-
-      attractionsMap.get(attractionId)!.queues.push(queueDto);
-    }
-
-    return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-        status: parkStatus,
-      },
-      attractions: Array.from(attractionsMap.values()),
-    };
   }
 
   /**
@@ -978,81 +832,10 @@ export class ParksController {
       );
     }
 
-    // Check timezone-aware park status
-    const statusMap = await this.parksService.getBatchParkStatus([park.id]);
-    const parkStatus = statusMap.get(park.id) || "CLOSED";
-
-    // If park is CLOSED, return empty wait times (no stale data)
-    if (parkStatus === "CLOSED") {
-      return {
-        park: {
-          id: park.id,
-          name: park.name,
-          slug: park.slug,
-          timezone: park.timezone,
-          status: "CLOSED",
-        },
-        attractions: [],
-      };
-    }
-
-    // Park is OPERATING - fetch live wait times
-    const waitTimes = await this.queueDataService.findWaitTimesByPark(
-      park.id,
+    return this.parkIntegrationService.getParkWaitTimesResponse(
+      park,
       queueType,
     );
-
-    // Group by attraction
-    const attractionsMap = new Map<string, any>();
-
-    for (const queueData of waitTimes) {
-      const attractionId = queueData.attraction.id;
-
-      if (!attractionsMap.has(attractionId)) {
-        attractionsMap.set(attractionId, {
-          attraction: {
-            id: queueData.attraction.id,
-            name: queueData.attraction.name,
-            slug: queueData.attraction.slug,
-          },
-          queues: [],
-        });
-      }
-
-      const queueDto = {
-        queueType: queueData.queueType,
-        status: queueData.status,
-        waitTime: queueData.waitTime ?? null,
-        state: queueData.state ?? null,
-        returnStart: queueData.returnStart
-          ? queueData.returnStart.toISOString()
-          : null,
-        returnEnd: queueData.returnEnd
-          ? queueData.returnEnd.toISOString()
-          : null,
-        price: queueData.price ?? null,
-        allocationStatus: queueData.allocationStatus ?? null,
-        currentGroupStart: queueData.currentGroupStart ?? null,
-        currentGroupEnd: queueData.currentGroupEnd ?? null,
-        estimatedWait: queueData.estimatedWait ?? null,
-        lastUpdated: (
-          queueData.lastUpdated || queueData.timestamp
-        ).toISOString(),
-      };
-
-      attractionsMap.get(attractionId)!.queues.push(queueDto);
-    }
-
-    return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-        status: parkStatus,
-      },
-      attractions: Array.from(attractionsMap.values()),
-    };
   }
 
   /**

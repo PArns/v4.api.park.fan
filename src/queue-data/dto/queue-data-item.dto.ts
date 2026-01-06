@@ -111,4 +111,30 @@ export class QueueDataItemDto {
     recentAverage: number | null; // Last hour average wait time
     previousAverage: number | null; // 2-3 hours ago average wait time
   };
+
+  /**
+   * Create QueueDataItemDto from QueueData entity
+   * Centralizes DTO transformation logic to eliminate code duplication
+   *
+   * @param queueData - QueueData entity from database
+   * @returns Transformed DTO
+   */
+  static fromEntity(queueData: any): QueueDataItemDto {
+    return {
+      queueType: queueData.queueType,
+      status: queueData.status,
+      waitTime: queueData.waitTime ?? null,
+      state: queueData.state ?? null,
+      returnStart: queueData.returnStart
+        ? queueData.returnStart.toISOString()
+        : null,
+      returnEnd: queueData.returnEnd ? queueData.returnEnd.toISOString() : null,
+      price: queueData.price ?? null,
+      allocationStatus: queueData.allocationStatus ?? null,
+      currentGroupStart: queueData.currentGroupStart ?? null,
+      currentGroupEnd: queueData.currentGroupEnd ?? null,
+      estimatedWait: queueData.estimatedWait ?? null,
+      lastUpdated: (queueData.lastUpdated || queueData.timestamp).toISOString(),
+    };
+  }
 }

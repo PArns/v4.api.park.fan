@@ -2,6 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { WeatherService } from "./weather.service";
 import { WeatherData } from "./entities/weather-data.entity";
+import { Park } from "./entities/park.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("WeatherService", () => {
@@ -24,9 +25,22 @@ describe("WeatherService", () => {
       orderBy: jest.fn().mockReturnThis(),
       update: jest.fn().mockReturnThis(),
       set: jest.fn().mockReturnThis(),
+      setParameters: jest.fn().mockReturnThis(),
       execute: jest.fn().mockResolvedValue({ affected: 0 }),
       getMany: jest.fn().mockResolvedValue([]),
     })),
+  };
+
+  const mockParkRepository = {
+    findOne: jest.fn().mockResolvedValue({
+      id: "park-123",
+      timezone: "America/Los_Angeles",
+    }),
+  };
+
+  const mockOpenMeteoClient = {
+    getHistoricalWeather: jest.fn(),
+    getWeatherForecast: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -36,6 +50,14 @@ describe("WeatherService", () => {
         {
           provide: getRepositoryToken(WeatherData),
           useValue: mockWeatherDataRepository,
+        },
+        {
+          provide: getRepositoryToken(Park),
+          useValue: mockParkRepository,
+        },
+        {
+          provide: "OpenMeteoClient",
+          useValue: mockOpenMeteoClient,
         },
         {
           provide: REDIS_CLIENT,

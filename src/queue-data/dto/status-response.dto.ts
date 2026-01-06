@@ -1,8 +1,6 @@
-import {
-  LiveStatus,
-  QueueType,
-} from "../../external-apis/themeparks/themeparks.types";
+import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 import { ApiProperty } from "@nestjs/swagger";
+import { QueueDataItemDto } from "./queue-data-item.dto";
 
 export class QueuePriceDto {
   @ApiProperty({ description: "Price amount" })
@@ -11,90 +9,6 @@ export class QueuePriceDto {
   currency: string;
   @ApiProperty({ description: "Formatted price string", required: false })
   formatted?: string;
-}
-
-/**
- * DTO for a single queue item within StatusResponseDto
- */
-export class QueueDataItemDto {
-  @ApiProperty({
-    enum: QueueType,
-    description: "Type of queue (e.g., STANDBY, SINGLE_RIDER)",
-  })
-  queueType: QueueType;
-
-  @ApiProperty({
-    enum: LiveStatus,
-    description: "Status of this specific queue",
-  })
-  status: LiveStatus;
-
-  @ApiProperty({
-    description: "Current wait time in minutes, if applicable",
-    type: Number,
-    required: false,
-  })
-  waitTime?: number;
-
-  @ApiProperty({
-    description: "Current state of the queue (e.g., 'OPEN', 'CLOSED')",
-    type: String,
-    required: false,
-  })
-  state?: string;
-
-  @ApiProperty({
-    description: "Start time for return entry (ISO 8601), if applicable",
-    type: String,
-    format: "date-time",
-    required: false,
-  })
-  returnStart?: string;
-
-  @ApiProperty({
-    description: "End time for return entry (ISO 8601), if applicable",
-    type: String,
-    format: "date-time",
-    required: false,
-  })
-  returnEnd?: string;
-
-  @ApiProperty({
-    description: "Price details for paid queues (e.g., Lightning Lane)",
-    type: QueuePriceDto,
-    required: false,
-  })
-  price?: QueuePriceDto;
-
-  @ApiProperty({
-    description:
-      "Allocation status for virtual queues (e.g., 'AVAILABLE', 'FULL')",
-    type: String,
-    required: false,
-  })
-  allocationStatus?: string;
-
-  @ApiProperty({
-    description: "Current boarding group start number, if applicable",
-    type: Number,
-    required: false,
-  })
-  currentGroupStart?: number;
-
-  @ApiProperty({
-    description: "Current boarding group end number, if applicable",
-    type: Number,
-    required: false,
-  })
-  currentGroupEnd?: number;
-
-  @ApiProperty({
-    description:
-      "Estimated wait time in minutes for virtual queues, if applicable",
-    type: Number,
-    required: false,
-  })
-  estimatedWait?: number;
 }
 
 /**

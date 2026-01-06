@@ -21,7 +21,6 @@ import {
 import { QueueDataItemDto } from "./dto/queue-data-item.dto";
 import { PaginationDto } from "../common/dto/pagination.dto";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
-import { QueueData } from "./entities/queue-data.entity";
 import { ForecastData } from "./entities/forecast-data.entity";
 
 /**
@@ -114,7 +113,7 @@ export class QueueDataController {
         slug: attraction.park.slug,
         timezone: attraction.park.timezone,
       },
-      waitTimes: waitTimes.map(this.mapQueueDataToDto),
+      waitTimes: waitTimes.map((qd) => QueueDataItemDto.fromEntity(qd)),
       pagination: new PaginationDto(
         page ? parseInt(String(page)) : 1,
         limit ? parseInt(String(limit)) : 10,
@@ -177,19 +176,7 @@ export class QueueDataController {
         timezone: attraction.park.timezone,
       },
       status: overallStatus,
-      queues: currentQueues.map((q) => ({
-        queueType: q.queueType,
-        status: q.status,
-        waitTime: q.waitTime ?? undefined,
-        state: q.state ?? undefined,
-        returnStart: q.returnStart ? q.returnStart.toISOString() : undefined,
-        returnEnd: q.returnEnd ? q.returnEnd.toISOString() : undefined,
-        price: q.price ?? undefined,
-        allocationStatus: q.allocationStatus ?? undefined,
-        currentGroupStart: q.currentGroupStart ?? undefined,
-        currentGroupEnd: q.currentGroupEnd ?? undefined,
-        estimatedWait: q.estimatedWait ?? undefined,
-      })),
+      queues: currentQueues.map((qd) => QueueDataItemDto.fromEntity(qd)),
       lastUpdated: lastUpdated.toISOString(),
     };
 
@@ -197,11 +184,12 @@ export class QueueDataController {
   }
 
   /**
-   * GET /v1/attractions/:slug/forecasts
+   * GET /v1/attractions/:slug/forecast
    *
-   * Returns wait time predictions for an attraction
+   * Get wait time forecasts for a specific attraction
    */
-  @Get("attractions/:slug/forecasts")
+  @Get("attractions/:slug/forecast")
+  @UseInterceptors(new HttpCacheInterceptor(120))
   @ApiOperation({
     summary: "Get attraction forecasts",
     description:
@@ -213,28 +201,27 @@ export class QueueDataController {
     type: ForecastResponseDto,
   })
   @ApiResponse({ status: 404, description: "Attraction not found" })
-  async getForecasts(
+  async getAttractionForecast(
     @Param("slug") slug: string,
-    @Query("hours") hours?: number,
+    @Query("hours") hoursParam?: string,
   ): Promise<ForecastResponseDto> {
-    // Find attraction
     const attraction = await this.attractionsService.findBySlug(slug);
+
     if (!attraction) {
       throw new NotFoundException(`Attraction with slug "${slug}" not found`);
     }
 
-    // Parse hours parameter
-    const hoursAhead = hours ? parseInt(String(hours)) : 24;
-    if (isNaN(hoursAhead) || hoursAhead < 1 || hoursAhead > 168) {
-      throw new BadRequestException(
-        'Invalid "hours" parameter. Must be between 1 and 168.',
-      );
+    // Parse hours param for forecast horizon (default: 24)
+    const hours = hoursParam ? parseInt(hoursParam) : 24;
+
+    if (hours < 1 || hours > 168) {
+      throw new BadRequestException("Hours must be between 1 and 168 (1 week)");
     }
 
-    // Query forecasts
+    // Get forecasts
     const forecasts = await this.queueDataService.findForecastsByAttraction(
       attraction.id,
-      hoursAhead,
+      hours,
     );
 
     // Build response
@@ -250,7 +237,7 @@ export class QueueDataController {
         slug: attraction.park.slug,
         timezone: attraction.park.timezone,
       },
-      forecasts: forecasts.map(this.mapForecastToDto),
+      forecasts: forecasts.map((f) => this.mapForecastToDto(f)),
     };
 
     return response;
@@ -259,7 +246,8 @@ export class QueueDataController {
   /**
    * GET /v1/parks/:slug/wait-times
    *
-   * Returns current wait times for all attractions in a park
+   * Get current wait times for all attractions in a park (grouped by attraction)
+   * NOTE: This endpoint has park status checking - querying closed parks returns empty wait times
    */
   @Get("parks/:slug/wait-times")
   @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
@@ -298,7 +286,7 @@ export class QueueDataController {
 
       attractionsMap
         .get(attractionId)!
-        .queues.push(this.mapQueueDataToDto(queueData));
+        .queues.push(QueueDataItemDto.fromEntity(queueData));
     }
 
     return {
@@ -313,29 +301,7 @@ export class QueueDataController {
   }
 
   /**
-   * Map QueueData entity to DTO
-   */
-  private mapQueueDataToDto(queueData: QueueData): QueueDataItemDto {
-    return {
-      queueType: queueData.queueType,
-      status: queueData.status,
-      waitTime: queueData.waitTime ?? null,
-      state: queueData.state ?? null,
-      returnStart: queueData.returnStart
-        ? queueData.returnStart.toISOString()
-        : null,
-      returnEnd: queueData.returnEnd ? queueData.returnEnd.toISOString() : null,
-      price: queueData.price ?? null,
-      allocationStatus: queueData.allocationStatus ?? null,
-      currentGroupStart: queueData.currentGroupStart ?? null,
-      currentGroupEnd: queueData.currentGroupEnd ?? null,
-      estimatedWait: queueData.estimatedWait ?? null,
-      lastUpdated: (queueData.lastUpdated || queueData.timestamp).toISOString(),
-    };
-  }
-
-  /**
-   * Map ForecastData entity to DTO
+   * Map Forecast Data entity to DTO
    */
   private mapForecastToDto(forecast: ForecastData): ForecastItemDto {
     return {

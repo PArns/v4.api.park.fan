@@ -22,8 +22,6 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
   getCurrentDateInTimezone,
-  getTomorrowDateInTimezone,
-  getCurrentTimeInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
@@ -345,15 +343,16 @@ export class ParkIntegrationService {
       ? getCurrentDateInTimezone(park.timezone)
       : new Date().toISOString().split("T")[0];
 
-    // CRITICAL FIX: Calculate tomorrow in park's local timezone
-    // Previously incorrectly used getCurrentDateInTimezone which returns TODAY
+    // Get tomorrow's date in park's timezone (for hourly predictions when park is closed)
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrowInParkTz = park.timezone
-      ? getTomorrowDateInTimezone(park.timezone)
-      : (() => {
+      ? (() => {
           const tomorrow = new Date();
           tomorrow.setDate(tomorrow.getDate() + 1);
-          return tomorrow.toISOString().split("T")[0];
-        })();
+          return formatInParkTimezone(tomorrow, park.timezone).split("T")[0];
+        })()
+      : tomorrowDate.toISOString().split("T")[0];
 
     const targetDateStr =
       dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
@@ -851,13 +850,16 @@ export class ParkIntegrationService {
         // CRITICAL FIX: Use park's local time for percentile lookup
         // Get typical rating for "right now" in park's timezone
         // Previously incorrectly used UTC time instead of park local time
+        // Fallback: Get typical wait from historical P90 percentiles
+        // IMPORTANT: Use park's local time for hour/day, not UTC
+        const { toZonedTime } = await import("date-fns-tz");
         const nowInParkTz = park.timezone
-          ? getCurrentTimeInTimezone(park.timezone)
+          ? toZonedTime(new Date(), park.timezone)
           : new Date();
-
         const hour = nowInParkTz.getHours();
         const day = nowInParkTz.getDay();
 
+        // Get P90 park-level baseline
         const p90Park = await this.analyticsService.get90thPercentileOneYear(
           park.id,
           hour,
@@ -1344,5 +1346,104 @@ export class ParkIntegrationService {
     }
 
     return predictions;
+  }
+
+  /**
+   * Get park wait times with timezone-aware park status check
+   *
+   * Unified method that replaces duplicated logic in controllers.
+   * Ensures consistent behavior across all wait-times endpoints.
+   *
+   * CRITICAL Features:
+   * - Timezone-aware park status check (uses getBatchParkStatus)
+   * - Returns empty attractions array for CLOSED parks (no stale data)
+   * - Uses QueueDataItemDto.fromEntity() for consistent DTO transformation
+   * - Groups queue data by attraction
+   *
+   * @param park - Park entity (must have id, name, slug, timezone)
+   * @param queueType - Optional queue type filter
+   * @returns Park waittimes response with status and attractions
+   */
+  async getParkWaitTimesResponse(
+    park: Park,
+    queueType?: import("../../external-apis/themeparks/themeparks.types").QueueType,
+  ): Promise<{
+    park: {
+      id: string;
+      name: string;
+      slug: string;
+      timezone: string;
+      status: import("../../common/types/status.type").ParkStatus;
+    };
+    attractions: Array<{
+      attraction: { id: string; name: string; slug: string };
+      queues: import("../../queue-data/dto/queue-data-item.dto").QueueDataItemDto[];
+    }>;
+  }> {
+    // Check timezone-aware park status
+    const statusMap = await this.parksService.getBatchParkStatus([park.id]);
+    const parkStatus = statusMap.get(park.id) || "CLOSED";
+
+    // If park is CLOSED, return empty wait times (no stale data)
+    if (parkStatus === "CLOSED") {
+      return {
+        park: {
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          timezone: park.timezone,
+          status: "CLOSED",
+        },
+        attractions: [],
+      };
+    }
+
+    // Park is OPERATING - fetch live wait times
+    const waitTimes = await this.queueDataService.findWaitTimesByPark(
+      park.id,
+      queueType,
+    );
+
+    // Group by attraction
+    const attractionsMap = new Map<
+      string,
+      {
+        attraction: { id: string; name: string; slug: string };
+        queues: import("../../queue-data/dto/queue-data-item.dto").QueueDataItemDto[];
+      }
+    >();
+
+    for (const queueData of waitTimes) {
+      const attractionId = queueData.attraction.id;
+
+      if (!attractionsMap.has(attractionId)) {
+        attractionsMap.set(attractionId, {
+          attraction: {
+            id: queueData.attraction.id,
+            name: queueData.attraction.name,
+            slug: queueData.attraction.slug,
+          },
+          queues: [],
+        });
+      }
+
+      // Use centralized DTO transformation
+      const { QueueDataItemDto } =
+        await import("../../queue-data/dto/queue-data-item.dto");
+      const queueDto = QueueDataItemDto.fromEntity(queueData);
+
+      attractionsMap.get(attractionId)!.queues.push(queueDto);
+    }
+
+    return {
+      park: {
+        id: park.id,
+        name: park.name,
+        slug: park.slug,
+        timezone: park.timezone,
+        status: parkStatus,
+      },
+      attractions: Array.from(attractionsMap.values()),
+    };
   }
 }

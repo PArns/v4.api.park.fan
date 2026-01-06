@@ -71,36 +71,16 @@ export class HolidaysController {
     // Parse limit
     const resultLimit = limit ? Math.min(parseInt(String(limit)), 1000) : 100;
 
-    // Parse date parameters
-    let fromDate: Date;
-    let toDate: Date;
-
-    if (from) {
-      fromDate = new Date(from);
-      if (isNaN(fromDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "from" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: today
-      fromDate = new Date();
-    }
-    fromDate.setHours(0, 0, 0, 0);
-
-    if (to) {
-      toDate = new Date(to);
-      if (isNaN(toDate.getTime())) {
-        throw new BadRequestException(
-          'Invalid "to" date format. Use YYYY-MM-DD.',
-        );
-      }
-    } else {
-      // Default: 1 year ahead
-      toDate = new Date(fromDate);
-      toDate.setFullYear(toDate.getFullYear() + 1);
-    }
-    toDate.setHours(23, 59, 59, 999);
+    // Parse date range with timezone awareness
+    // Note: Holidays are country-specific, not park-specific
+    // We use UTC as default timezone since holidays are calendar-based
+    const { parseDateRange } =
+      await import("../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange(from, to, {
+      timezone: "UTC", // Holidays are calendar dates, not park-specific
+      defaultFromDaysAgo: 0,
+      defaultToDaysAhead: 365, // 1 year
+    });
 
     // Get holidays from service
     let holidays = country
