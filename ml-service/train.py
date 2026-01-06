@@ -137,52 +137,72 @@ def train_model(version: str = None) -> None:
     y = df["waitTime"]
     
     # 5.5. Calculate sample weights based on prediction errors (feedback loop)
-    print("📊 Calculating sample weights from prediction accuracy...")
-    from db import fetch_prediction_errors_for_training
-    import numpy as np
-    
-    error_df = fetch_prediction_errors_for_training(start_date, end_date)
+    # WARNING: Sample weights can improve performance on difficult cases, but:
+    # - Too high weights (factor > 1.0) can cause overfitting on errors
+    # - Only a small subset of data will have weights (only those with predictions)
+    # - Should be used conservatively (factor 0.3-0.5 recommended)
     sample_weights = None
     
-    if not error_df.empty:
-        # Merge errors with training data
-        # Match on attractionId and timestamp (within 5 minutes tolerance)
-        df_with_errors = df.merge(
-            error_df[["attractionId", "timestamp", "absolute_error", "percentage_error"]],
-            on=["attractionId"],
-            how="left",
-            suffixes=("", "_error")
-        )
+    if settings.ENABLE_SAMPLE_WEIGHTS:
+        print("📊 Calculating sample weights from prediction accuracy...")
+        from db import fetch_prediction_errors_for_training
+        import numpy as np
         
-        # Match timestamps (within 5 minutes)
-        if "timestamp_error" in df_with_errors.columns:
-            time_diff = (df_with_errors["timestamp"] - df_with_errors["timestamp_error"]).abs()
-            time_match = time_diff <= pd.Timedelta(minutes=5)
+        error_df = fetch_prediction_errors_for_training(start_date, end_date)
+        
+        if not error_df.empty:
+            # Merge errors with training data
+            # Match on attractionId and timestamp (within 5 minutes tolerance)
+            df_with_errors = df.merge(
+                error_df[["attractionId", "timestamp", "absolute_error", "percentage_error"]],
+                on=["attractionId"],
+                how="left",
+                suffixes=("", "_error")
+            )
             
-            # Calculate weights: higher weight for higher errors
-            # Weight formula: 1.0 + (error / max_error) * weight_factor
-            # This gives weights between 1.0 and 2.0 (double weight for max error)
-            max_error = error_df["absolute_error"].max() if len(error_df) > 0 else 1.0
-            weight_factor = 1.0  # Can be tuned (0.5 = 50% boost, 1.0 = 100% boost)
-            
-            sample_weights = np.ones(len(df))
-            matched_mask = time_match & df_with_errors["absolute_error"].notna()
-            
-            if matched_mask.sum() > 0:
-                matched_errors = df_with_errors.loc[matched_mask, "absolute_error"]
-                weights = 1.0 + (matched_errors / max_error) * weight_factor
-                sample_weights[matched_mask] = weights
+            # Match timestamps (within 5 minutes)
+            if "timestamp_error" in df_with_errors.columns:
+                time_diff = (df_with_errors["timestamp"] - df_with_errors["timestamp_error"]).abs()
+                time_match = time_diff <= pd.Timedelta(minutes=5)
                 
-                matched_count = matched_mask.sum()
-                avg_weight = weights.mean()
-                print(f"   Matched {matched_count:,} samples with prediction errors")
-                print(f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {weights.max():.2f})")
+                # Calculate weights: higher weight for higher errors
+                # Weight formula: 1.0 + (error / max_error) * weight_factor
+                # Conservative default: 0.5 = 50% boost (weights: 1.0 - 1.5)
+                # Aggressive: 1.0 = 100% boost (weights: 1.0 - 2.0)
+                max_error = error_df["absolute_error"].max() if len(error_df) > 0 else 1.0
+                weight_factor = settings.SAMPLE_WEIGHT_FACTOR
+                
+                sample_weights = np.ones(len(df))
+                matched_mask = time_match & df_with_errors["absolute_error"].notna()
+                
+                if matched_mask.sum() > 0:
+                    matched_errors = df_with_errors.loc[matched_mask, "absolute_error"]
+                    weights = 1.0 + (matched_errors / max_error) * weight_factor
+                    sample_weights[matched_mask] = weights
+                    
+                    matched_count = matched_mask.sum()
+                    matched_percentage = (matched_count / len(df)) * 100
+                    avg_weight = weights.mean()
+                    max_weight = weights.max()
+                    
+                    print(f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors")
+                    print(f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})")
+                    print(f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)")
+                    
+                    # Warning if too many samples are weighted (might indicate systematic issues)
+                    if matched_percentage > 50:
+                        print(f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting")
+                        print(f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})")
+                    elif matched_percentage < 5:
+                        print(f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected")
+                else:
+                    print("   No matching prediction errors found (using uniform weights)")
             else:
-                print("   No matching prediction errors found (using uniform weights)")
+                print("   No prediction errors available (using uniform weights)")
         else:
-            print("   No prediction errors available (using uniform weights)")
+            print("   No prediction accuracy data available (using uniform weights)")
     else:
-        print("   No prediction accuracy data available (using uniform weights)")
+        print("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
     # 6. Train/test split
     # For small datasets (< 100 rows or < 7 days), use percentage split
