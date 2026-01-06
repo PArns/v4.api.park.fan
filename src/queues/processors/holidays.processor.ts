@@ -9,6 +9,7 @@ import {
   PEAK_SEASONS_BY_COUNTRY,
   getPeakSeasonHolidays,
 } from "../../common/peak-seasons";
+import { HolidayInput } from "../../common/types/holiday-input.type";
 
 /**
  * Holidays Processor
@@ -129,7 +130,7 @@ export class HolidaysProcessor {
       // 3. Peak Seasons (Hardcoded for countries without API coverage)
       this.logger.log("📅 Syncing hardcoded peak seasons...");
       let totalPeakHolidaysSaved = 0;
-      const peakHolidaysToUpsert: any[] = [];
+      const peakHolidaysToUpsert: HolidayInput[] = [];
 
       for (const isoCode of countries) {
         if (!PEAK_SEASONS_BY_COUNTRY[isoCode]) continue;

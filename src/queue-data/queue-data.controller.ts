@@ -7,7 +7,7 @@ import {
   BadRequestException,
   UseInterceptors,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse, ApiParam } from "@nestjs/swagger";
 import { QueueDataService } from "./queue-data.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { ParksService } from "../parks/parks.service";
@@ -18,6 +18,10 @@ import {
   ForecastResponseDto,
   ForecastItemDto,
 } from "./dto/forecast-response.dto";
+import {
+  ParkWaitTimesResponseDto,
+  AttractionWaitTimesDto,
+} from "./dto/park-wait-times-response.dto";
 import { QueueDataItemDto } from "./dto/queue-data-item.dto";
 import { PaginationDto } from "../common/dto/pagination.dto";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
@@ -47,6 +51,11 @@ export class QueueDataController {
     summary: "Get attraction wait times",
     description:
       "Returns historical and current wait time data for a specific attraction.",
+  })
+  @ApiParam({
+    name: "slug",
+    description: "Attraction slug",
+    example: "space-mountain",
   })
   @ApiResponse({
     status: 200,
@@ -136,6 +145,11 @@ export class QueueDataController {
     description:
       "Returns current real-time status only (no historical data) for an attraction.",
   })
+  @ApiParam({
+    name: "slug",
+    description: "Attraction slug",
+    example: "space-mountain",
+  })
   @ApiResponse({
     status: 200,
     description: "Status retrieved successfully",
@@ -195,6 +209,11 @@ export class QueueDataController {
     description:
       "Returns future wait time predictions for a specific attraction.",
   })
+  @ApiParam({
+    name: "slug",
+    description: "Attraction slug",
+    example: "space-mountain",
+  })
   @ApiResponse({
     status: 200,
     description: "Forecasts retrieved successfully",
@@ -251,10 +270,27 @@ export class QueueDataController {
    */
   @Get("parks/:slug/wait-times")
   @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
+  @ApiOperation({
+    summary: "Get park wait times",
+    description:
+      "Returns current wait times for all attractions in a park, grouped by attraction. " +
+      "Closed parks return empty wait times. Cached for 2 minutes.",
+  })
+  @ApiParam({
+    name: "slug",
+    description: "Park slug",
+    example: "magic-kingdom",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Wait times retrieved successfully",
+    type: ParkWaitTimesResponseDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
   async getParkWaitTimes(
     @Param("slug") slug: string,
     @Query("queueType") queueType?: QueueType,
-  ): Promise<{ park: any; attractions: any[] }> {
+  ): Promise<ParkWaitTimesResponseDto> {
     // Find park
     const park = await this.parksService.findBySlug(slug);
     if (!park) {
@@ -268,7 +304,7 @@ export class QueueDataController {
     );
 
     // Group by attraction
-    const attractionsMap = new Map<string, any>();
+    const attractionsMap = new Map<string, AttractionWaitTimesDto>();
 
     for (const queueData of waitTimes) {
       const attractionId = queueData.attraction.id;

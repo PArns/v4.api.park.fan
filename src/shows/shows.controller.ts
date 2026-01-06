@@ -15,6 +15,7 @@ import {
 import { ShowsService } from "./shows.service";
 import { ShowResponseDto, ShowWithLiveDataDto } from "./dto/show-response.dto";
 import { ShowQueryDto } from "./dto/show-query.dto";
+import { ShowtimesResponseDto } from "./dto/showtimes-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 /**
@@ -152,9 +153,15 @@ export class ShowsController {
     summary: "Get showtimes",
     description: "Returns upcoming showtimes for a specific show.",
   })
-  @ApiResponse({ status: 200, description: "Showtimes data" })
+  @ApiResponse({
+    status: 200,
+    description: "Showtimes data",
+    type: ShowtimesResponseDto,
+  })
   @ApiResponse({ status: 404, description: "Show not found" })
-  async getShowtimes(@Param("slug") slug: string): Promise<any> {
+  async getShowtimes(
+    @Param("slug") slug: string,
+  ): Promise<ShowtimesResponseDto> {
     const show = await this.showsService.findBySlug(slug);
 
     if (!show) {
@@ -169,7 +176,7 @@ export class ShowsController {
         name: show.name,
         slug: show.slug,
       },
-      showtimes: liveData?.showtimes || [],
+      showtimes: liveData?.showtimes?.map((st) => st.startTime) || [],
       lastUpdated: liveData
         ? (liveData.lastUpdated || liveData.timestamp).toISOString()
         : null,

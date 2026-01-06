@@ -19,6 +19,7 @@ import { ShowsService } from "../shows/shows.service";
 import { CrowdLevel } from "../common/types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { SearchCounts } from "./types/search-counts.type";
 
 @Injectable()
 export class SearchService implements OnModuleInit {
@@ -99,7 +100,7 @@ export class SearchService implements OnModuleInit {
           attraction: { returned: 0, total: 0 },
           show: { returned: 0, total: 0 },
           restaurant: { returned: 0, total: 0 },
-        },
+        } as SearchCounts,
       };
     }
 
@@ -120,7 +121,7 @@ export class SearchService implements OnModuleInit {
         : ["park", "attraction", "show", "restaurant"];
 
     const results: SearchResultItemDto[] = [];
-    const counts = {
+    const counts: SearchCounts = {
       park: { returned: 0, total: 0 },
       attraction: { returned: 0, total: 0 },
       show: { returned: 0, total: 0 },
@@ -135,7 +136,9 @@ export class SearchService implements OnModuleInit {
       // Let's approximate total as length for now or do a count query if needed.
       // Given fuzzy nature, "total matches" is ambiguous (depends on threshold).
       // We'll use the returned length as total for now to save perf, or run a count if strictly needed.
-      const enrichedParks = await this.enrichParkResults(parks);
+      const enrichedParks = await this.enrichParkResults(
+        parks as unknown as Park[],
+      );
       results.push(...enrichedParks);
       counts.park = { returned: enrichedParks.length, total: parks.length };
     }
@@ -542,7 +545,7 @@ export class SearchService implements OnModuleInit {
    * Enrich park results with status and load from cached analytics data
    */
   private async enrichParkResults(
-    parks: any[],
+    parks: Park[],
   ): Promise<SearchResultItemDto[]> {
     const parkIds = parks.map((p) => p.id);
 
@@ -561,8 +564,8 @@ export class SearchService implements OnModuleInit {
       name: park.name,
       slug: park.slug,
       url: buildParkUrl(park),
-      latitude: park.latitude ? parseFloat(park.latitude) : null,
-      longitude: park.longitude ? parseFloat(park.longitude) : null,
+      latitude: park.latitude ? Number(park.latitude) : null,
+      longitude: park.longitude ? Number(park.longitude) : null,
       continent: park.continent || null,
       country: park.country || null,
       countryCode: park.countryCode || null,
@@ -578,7 +581,26 @@ export class SearchService implements OnModuleInit {
    * Enrich attraction results with parent park info, wait times, status, and load
    */
   private async enrichAttractionResults(
-    attractions: any[],
+    attractions: Array<
+      Pick<Attraction, "id" | "name" | "slug" | "landName"> & {
+        park?: Pick<
+          Park,
+          | "id"
+          | "name"
+          | "slug"
+          | "latitude"
+          | "longitude"
+          | "continent"
+          | "country"
+          | "countryCode"
+          | "city"
+          | "continentSlug"
+          | "countrySlug"
+          | "citySlug"
+          | "destination"
+        >;
+      }
+    >,
   ): Promise<SearchResultItemDto[]> {
     // 1. Batch fetch park statuses first (to filter out closed parks)
     const parkStatusMap = await this.getParkStatusMap(attractions);
@@ -640,10 +662,10 @@ export class SearchService implements OnModuleInit {
           ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
           : null,
         latitude: attraction.park?.latitude
-          ? parseFloat(attraction.park.latitude)
+          ? Number(attraction.park.latitude)
           : null,
         longitude: attraction.park?.longitude
-          ? parseFloat(attraction.park.longitude)
+          ? Number(attraction.park.longitude)
           : null,
         continent: attraction.park?.continent || null,
         country: attraction.park?.country || null,
@@ -675,7 +697,26 @@ export class SearchService implements OnModuleInit {
    * Enrich show results with parent park info and show times
    */
   private async enrichShowResults(
-    shows: any[],
+    shows: Array<
+      Pick<Show, "id" | "name" | "slug"> & {
+        park?: Pick<
+          Park,
+          | "id"
+          | "name"
+          | "slug"
+          | "latitude"
+          | "longitude"
+          | "continent"
+          | "country"
+          | "countryCode"
+          | "city"
+          | "continentSlug"
+          | "countrySlug"
+          | "citySlug"
+          | "destination"
+        >;
+      }
+    >,
   ): Promise<SearchResultItemDto[]> {
     // 1. Batch fetch park statuses first (to filter out closed parks)
     const parkStatusMap = await this.getParkStatusMap(shows);
@@ -705,10 +746,8 @@ export class SearchService implements OnModuleInit {
         name: show.name,
         slug: show.slug,
         url: null,
-        latitude: show.park?.latitude ? parseFloat(show.park.latitude) : null,
-        longitude: show.park?.longitude
-          ? parseFloat(show.park.longitude)
-          : null,
+        latitude: show.park?.latitude ? Number(show.park.latitude) : null,
+        longitude: show.park?.longitude ? Number(show.park.longitude) : null,
         continent: show.park?.continent || null,
         country: show.park?.country || null,
         countryCode: show.park?.countryCode || null,
@@ -731,7 +770,26 @@ export class SearchService implements OnModuleInit {
    * Enrich restaurant results with parent park info
    */
   private async enrichRestaurantResults(
-    restaurants: any[],
+    restaurants: Array<
+      Pick<Restaurant, "id" | "name" | "slug"> & {
+        park?: Pick<
+          Park,
+          | "id"
+          | "name"
+          | "slug"
+          | "latitude"
+          | "longitude"
+          | "continent"
+          | "country"
+          | "countryCode"
+          | "city"
+          | "continentSlug"
+          | "countrySlug"
+          | "citySlug"
+          | "destination"
+        >;
+      }
+    >,
   ): Promise<SearchResultItemDto[]> {
     return restaurants.map((restaurant) => ({
       type: "restaurant" as const,
@@ -740,10 +798,10 @@ export class SearchService implements OnModuleInit {
       slug: restaurant.slug,
       url: null,
       latitude: restaurant.park?.latitude
-        ? parseFloat(restaurant.park.latitude)
+        ? Number(restaurant.park.latitude)
         : null,
       longitude: restaurant.park?.longitude
-        ? parseFloat(restaurant.park.longitude)
+        ? Number(restaurant.park.longitude)
         : null,
       continent: restaurant.park?.continent || null,
       country: restaurant.park?.country || null,
@@ -958,7 +1016,9 @@ export class SearchService implements OnModuleInit {
   /**
    * Helper to get batch park status for a list of items with park property
    */
-  private async getParkStatusMap(items: any[]): Promise<Map<string, string>> {
+  private async getParkStatusMap(
+    items: Array<{ park?: { id: string } | null }>,
+  ): Promise<Map<string, string>> {
     const parkIds = new Set<string>();
     items.forEach((item) => {
       if (item.park && item.park.id) {

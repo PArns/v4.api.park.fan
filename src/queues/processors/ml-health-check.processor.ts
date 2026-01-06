@@ -37,11 +37,13 @@ export class MLHealthCheckProcessor {
         this.logger.warn(
           `🔄 Triggering model retraining - Reason: ${healthCheck.reason}`,
         );
-        this.logger.warn(
-          `   Metrics: MAE=${healthCheck.metrics.mae.toFixed(1)} min, ` +
-            `Coverage=${healthCheck.metrics.coveragePercent.toFixed(1)}%, ` +
-            `MAPE=${healthCheck.metrics.mape.toFixed(1)}%`,
-        );
+        if (healthCheck.metrics) {
+          this.logger.warn(
+            `   Metrics: MAE=${healthCheck.metrics.mae.toFixed(1)} min, ` +
+              `Coverage=${healthCheck.metrics.coveragePercent.toFixed(1)}%, ` +
+              `MAPE=${healthCheck.metrics.mape.toFixed(1)}%`,
+          );
+        }
 
         // Trigger training job
         await this.mlTrainingQueue.add("train-model", {
@@ -53,8 +55,8 @@ export class MLHealthCheckProcessor {
         this.logger.log("✅ Retraining job queued");
       } else {
         this.logger.log(
-          `✅ Model health good: MAE=${healthCheck.metrics.mae.toFixed(1)} min, ` +
-            `Coverage=${healthCheck.metrics.coveragePercent.toFixed(1)}%`,
+          `✅ Model health good: MAE=${healthCheck.metrics?.mae.toFixed(1) ?? "N/A"} min, ` +
+            `Coverage=${healthCheck.metrics?.coveragePercent.toFixed(1) ?? "N/A"}%`,
         );
       }
     } catch (error) {

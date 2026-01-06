@@ -42,7 +42,7 @@ export class DiscoveryController {
    * GET /v1/discovery/geo
    *
    * Returns complete hierarchical geographic structure.
-   * Cached for 24 hours (HTTP + Redis).
+   * Cached for 2 minutes (HTTP + Redis) to include live statistics.
    */
   @Get("geo")
   @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
@@ -50,7 +50,7 @@ export class DiscoveryController {
     summary: "Get complete geo structure",
     description:
       "Returns hierarchical structure of continents → countries → cities → parks → attractions. " +
-      "Includes live statistics (crowd levels, wait times). Cached for 5 minutes.",
+      "Includes live statistics (crowd levels, wait times). Cached for 2 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -121,7 +121,7 @@ export class DiscoveryController {
     summary: "List all continents",
     description:
       "Returns all continents with countries, cities, parks, and attractions. " +
-      "Includes live statistics. Cached for 5 minutes.",
+      "Includes live statistics. Cached for 2 minutes.",
   })
   @ApiResponse({
     status: 200,

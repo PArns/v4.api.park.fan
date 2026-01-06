@@ -40,6 +40,8 @@ import { ScheduleItemDto } from "./dto/schedule-item.dto";
 import { IntegratedCalendarResponse } from "./dto/integrated-calendar.dto";
 import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
+import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
+import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { Park } from "./entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -148,7 +150,12 @@ export class ParksController {
     summary: "List parks with missing geocode",
     description: "Debug endpoint for identifying data issues.",
   })
-  async findParksWithMissingGeocode(): Promise<any[]> {
+  @ApiResponse({
+    status: 200,
+    description: "List of parks with incomplete geocoding data",
+    type: [MissingGeocodeResponseDto],
+  })
+  async findParksWithMissingGeocode(): Promise<MissingGeocodeResponseDto[]> {
     const parks = await this.parksService.findAll();
 
     const incomplete = parks.filter(
@@ -774,12 +781,16 @@ export class ParksController {
     summary: "Get current wait times",
     description: "Returns live wait times for all attractions in a park.",
   })
-  @ApiResponse({ status: 200, description: "Wait times data" })
+  @ApiResponse({
+    status: 200,
+    description: "Wait times data",
+    type: ParkWaitTimesResponseDto,
+  })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkWaitTimes(
     @Param("slug") slug: string,
     @Query("queueType") queueType?: QueueType,
-  ): Promise<{ park: any; attractions: any[] }> {
+  ): Promise<ParkWaitTimesResponseDto> {
     const park = await this.parksService.findBySlug(slug);
 
     if (!park) {
@@ -810,7 +821,11 @@ export class ParksController {
     summary: "Get wait times (geo)",
     description: "Returns wait times via geographic path.",
   })
-  @ApiResponse({ status: 200, description: "Wait times data" })
+  @ApiResponse({
+    status: 200,
+    description: "Wait times data",
+    type: ParkWaitTimesResponseDto,
+  })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkWaitTimesByGeographicPath(
     @Param("continent") continent: string,
@@ -818,7 +833,7 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
     @Query("queueType") queueType?: QueueType,
-  ): Promise<{ park: any; attractions: any[] }> {
+  ): Promise<ParkWaitTimesResponseDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
       country,

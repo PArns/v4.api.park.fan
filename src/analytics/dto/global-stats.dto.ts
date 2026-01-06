@@ -22,8 +22,9 @@ export class ParkStatsItemDto {
   @ApiProperty({
     description: "Internal normalized URL path (geocoded)",
     example: "/united-states/orlando/magic-kingdom",
+    nullable: true,
   })
-  url: string;
+  url: string | null;
 
   @ApiProperty({
     description: "Crowd level (e.g., 'high', 'low')",
@@ -83,8 +84,9 @@ export class AttractionStatsItemDto {
   @ApiProperty({
     description: "Internal normalized URL path",
     example: "/united-states/orlando/magic-kingdom/attractions/space-mountain",
+    nullable: true,
   })
-  url: string;
+  url: string | null;
 
   @ApiProperty({
     description: "Crowd level (e.g., 'high', 'low')",

@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { QueueDataInfo } from "../../common/types/feature-context.type";
 
 export class WeatherForecastItemDto {
   @ApiProperty({ description: "Forecast time (ISO 8601)" })
@@ -69,7 +70,7 @@ export class PredictionRequestDto {
     parkOccupancy?: Record<string, number>; // parkId -> occupancy %
     parkOpeningTimes?: Record<string, string>; // parkId -> opening time ISO string
     downtimeCache?: Record<string, number>; // attractionId -> downtime minutes
-    queueData?: Record<string, any>; // attractionId -> queue info
+    queueData?: Record<string, QueueDataInfo>; // attractionId -> queue info
     isBridgeDay?: Record<string, boolean>; // parkId -> is bridge day?
   };
 }

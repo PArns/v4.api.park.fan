@@ -67,8 +67,11 @@ export class ModelConfigurationDto {
   @ApiProperty({ example: 22, description: "Number of features" })
   featureCount: number;
 
-  @ApiProperty({ description: "Model hyperparameters" })
-  hyperparameters: Record<string, any>;
+  @ApiProperty({
+    description: "Model hyperparameters",
+    example: { iterations: 1000, learning_rate: 0.1, depth: 6 },
+  })
+  hyperparameters: Record<string, string | number | boolean>;
 }
 
 export class CurrentModelDto {

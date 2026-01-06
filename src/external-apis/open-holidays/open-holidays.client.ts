@@ -48,7 +48,12 @@ export class OpenHolidaysClient {
       this.logger.debug(
         `Fetching school holidays for ${countryIsoCode} (${validFrom} to ${validTo}, lang: ${languageIsoCode})`,
       );
-      const params: any = {
+      const params: {
+        countryIsoCode: string;
+        validFrom: string;
+        validTo: string;
+        languageIsoCode?: string;
+      } = {
         countryIsoCode,
         validFrom,
         validTo,

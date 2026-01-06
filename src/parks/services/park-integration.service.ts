@@ -5,7 +5,8 @@ import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
 import { WeatherItemDto } from "../dto/weather-item.dto";
-import { ScheduleItemDto } from "../dto/schedule-item.dto";
+import { ScheduleItemDto, InfluencingHoliday } from "../dto/schedule-item.dto";
+import { ParkWaitTimesResponse } from "../types/park-wait-times.type";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
 import { AttractionsService } from "../../attractions/attractions.service";
@@ -25,10 +26,14 @@ import {
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { HolidaysService } from "../../holidays/holidays.service";
+import { Holiday } from "../../holidays/entities/holiday.entity";
+import { ShowLiveData } from "../../shows/entities/show-live-data.entity";
+import { RestaurantLiveData } from "../../restaurants/entities/restaurant-live-data.entity";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
+import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 
 /**
  * Park Integration Service
@@ -331,7 +336,7 @@ export class ParkIntegrationService {
 
     // ML Predictions already fetched in parallel above - process results
     // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)
-    const hourlyPredictions: Record<string, any[]> = {};
+    const hourlyPredictions: Record<string, PredictionDto[]> = {};
     let dailyPredictions: import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] =
       [];
 
@@ -661,7 +666,7 @@ export class ParkIntegrationService {
 
     // Fetch current status for shows
     if (park.shows && park.shows.length > 0) {
-      let showLiveDataMap = new Map<string, any>();
+      let showLiveDataMap = new Map<string, ShowLiveData>();
       // Always fetch to check for overrides?
       // For shows/restaurants, less critical, but let's be consistent:
       // If Park is now OPERATING (potentially via override), we fetch live data.
@@ -735,7 +740,7 @@ export class ParkIntegrationService {
 
     // Fetch current status for restaurants
     if (park.restaurants && park.restaurants.length > 0) {
-      let restaurantLiveDataMap = new Map<string, any>();
+      let restaurantLiveDataMap = new Map<string, RestaurantLiveData>();
 
       if (dto.status === "OPERATING") {
         restaurantLiveDataMap =
@@ -957,8 +962,8 @@ export class ParkIntegrationService {
         const holidays = allHolidays.flat();
 
         // Map for fast lookup: "YYYY-MM-DD" -> Holiday
-        const holidayMap = new Map<string, any>();
-        const influencingMap = new Map<string, any[]>();
+        const holidayMap = new Map<string, Holiday>();
+        const influencingMap = new Map<string, InfluencingHoliday[]>();
 
         for (const h of holidays) {
           // Check if this holiday is relevant for the park's specific regions or is nationwide
@@ -1012,7 +1017,7 @@ export class ParkIntegrationService {
         }
 
         // Apply to schedule items
-        for (const item of (dto as any).schedule) {
+        for (const item of dto.schedule || []) {
           const dateStr = item.date;
           const localHoliday = holidayMap.get(dateStr);
           const localInfluencing = influencingMap.get(dateStr) || [];
@@ -1020,10 +1025,9 @@ export class ParkIntegrationService {
           if (localHoliday) {
             item.isHoliday = true;
             item.holidayName = localHoliday.name;
-
-            if (localHoliday.metadata?.isBridgeDay) {
-              item.isBridgeDay = true;
-            }
+            // isBridgeDay is calculated separately based on day of week and adjacent holidays
+            // See fillScheduleGaps in ParksService for the logic
+            item.isBridgeDay = false; // Will be set by schedule enrichment if applicable
           } else {
             // Ensure flag is false if no LOCAL holiday found
             item.isHoliday = false;
@@ -1155,9 +1159,9 @@ export class ParkIntegrationService {
    * Public so it can be used by yearly predictions route
    */
   public aggregateDailyPredictions(
-    predictions: any[],
+    predictions: PredictionDto[],
   ): import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] {
-    const datesMap = new Map<string, any[]>();
+    const datesMap = new Map<string, PredictionDto[]>();
 
     // Group by date
     for (const p of predictions) {
@@ -1272,8 +1276,8 @@ export class ParkIntegrationService {
    */
   private async enrichPredictionsWithDeviations(
     attractionId: string,
-    predictions: any[],
-  ): Promise<any[]> {
+    predictions: PredictionDto[],
+  ): Promise<PredictionDto[]> {
     if (!predictions || predictions.length === 0) {
       return predictions;
     }
@@ -1318,14 +1322,14 @@ export class ParkIntegrationService {
    * OPTIMIZED: No Redis call - uses pre-fetched deviation map
    */
   private enrichPredictionsWithDeviationsSync(
-    predictions: any[],
+    predictions: PredictionDto[],
     deviationFlag: {
       actualWaitTime: number;
       deviation: number;
       percentageDeviation: number;
       detectedAt: string;
     } | null,
-  ): any[] {
+  ): PredictionDto[] {
     if (!predictions || predictions.length === 0) {
       return predictions;
     }
@@ -1367,19 +1371,7 @@ export class ParkIntegrationService {
   async getParkWaitTimesResponse(
     park: Park,
     queueType?: import("../../external-apis/themeparks/themeparks.types").QueueType,
-  ): Promise<{
-    park: {
-      id: string;
-      name: string;
-      slug: string;
-      timezone: string;
-      status: import("../../common/types/status.type").ParkStatus;
-    };
-    attractions: Array<{
-      attraction: { id: string; name: string; slug: string };
-      queues: import("../../queue-data/dto/queue-data-item.dto").QueueDataItemDto[];
-    }>;
-  }> {
+  ): Promise<ParkWaitTimesResponse> {
     // Check timezone-aware park status
     const statusMap = await this.parksService.getBatchParkStatus([park.id]);
     const parkStatus = statusMap.get(park.id) || "CLOSED";

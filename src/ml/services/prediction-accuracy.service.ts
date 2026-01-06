@@ -871,7 +871,24 @@ export class PredictionAccuracyService {
       ),
     ]);
 
-    const featureAnalysis: any = {};
+    const featureAnalysis: {
+      hour?: {
+        highError: Record<number, number>;
+        lowError: Record<number, number>;
+        mostProblematicHours: Array<{ hour: number; errorRate: number }>;
+      };
+      dayOfWeek?: {
+        highError: Record<number, number>;
+        lowError: Record<number, number>;
+        mostProblematicDays: Array<{ day: number; errorRate: number }>;
+      };
+      weatherCode?: {
+        highError: Record<number, number>;
+        lowError: Record<number, number>;
+        mostProblematicWeather: Array<{ code: number; errorRate: number }>;
+      };
+      [key: string]: unknown;
+    } = {};
     const insights: string[] = [];
 
     // Process Hour Analysis
@@ -1658,7 +1675,15 @@ export class PredictionAccuracyService {
   async checkRetrainingNeeded(days: number = 7): Promise<{
     needed: boolean;
     reason?: string;
-    metrics: any;
+    metrics: {
+      mae: number;
+      rmse: number;
+      mape: number;
+      r2Score: number;
+      totalPredictions: number;
+      matchedPredictions: number;
+      coveragePercent: number;
+    } | null;
   }> {
     try {
       const stats = await this.getSystemAccuracyStats(days);

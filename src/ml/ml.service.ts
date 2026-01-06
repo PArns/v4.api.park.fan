@@ -26,6 +26,10 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { forwardRef } from "@nestjs/common";
+import {
+  FeatureContext,
+  QueueDataInfo,
+} from "../common/types/feature-context.type";
 
 @Injectable()
 export class MLService {
@@ -169,10 +173,12 @@ export class MLService {
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() + maxDays);
 
-        cachedData.predictions = cachedData.predictions.filter((p: any) => {
-          const predTime = new Date(p.predictedTime);
-          return predTime <= cutoffDate;
-        });
+        cachedData.predictions = cachedData.predictions.filter(
+          (p: PredictionDto) => {
+            const predTime = new Date(p.predictedTime);
+            return predTime <= cutoffDate;
+          },
+        );
         cachedData.count = cachedData.predictions.length;
       }
 
@@ -376,7 +382,7 @@ export class MLService {
   private async buildFeatureContext(
     parkId: string,
     attractionIds: string[],
-  ): Promise<any> {
+  ): Promise<FeatureContext> {
     try {
       // 1. Get park occupancy percentage
       let parkOccupancy: Record<string, number> = {};
@@ -438,7 +444,7 @@ export class MLService {
       }
 
       // 4. Get queue data for virtual queue detection
-      let queueData: Record<string, any> = {};
+      let queueData: Record<string, QueueDataInfo> = {};
       try {
         const latestQueueData = await this.queueDataRepository
           .createQueryBuilder("q")

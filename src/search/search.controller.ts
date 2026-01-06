@@ -17,7 +17,7 @@ export class SearchController {
     description:
       "Search parks, attractions, shows, and restaurants by name, city, country, or continent. " +
       "Returns enriched results with coordinates, wait times, park hours, show times, and more. " +
-      "Cached for 5 minutes for optimal performance.",
+      "Cached for 1 minute for optimal performance.",
   })
   @ApiQuery({
     name: "q",

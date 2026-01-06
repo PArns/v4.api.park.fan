@@ -388,6 +388,7 @@ export class AnalyticsService {
     p50: number;
     p75: number;
     p90: number;
+    p95?: number;
     iqr: number;
     sampleCount: number;
   } | null> {
@@ -825,7 +826,8 @@ export class AnalyticsService {
       // If currentHour > typicalHour and we have displayPeakHour (Actual), keep Actual.
     }
 
-    let history: { timestamp: string; waitTime: number }[] = [];
+    let history: import("./types/analytics-response.type").WaitTimeHistoryItem[] =
+      [];
     try {
       // PERFORMANCE: Only select timezone, not entire park entity
       const park = await this.parkRepository.findOne({
@@ -1019,7 +1021,7 @@ export class AnalyticsService {
   async getParkWaitTimeHistory(
     parkId: string,
     startTime: Date,
-  ): Promise<{ timestamp: string; waitTime: number }[]> {
+  ): Promise<import("./types/analytics-response.type").WaitTimeHistoryItem[]> {
     // Use provided start time
     const startOfDay = startTime;
 
@@ -1042,10 +1044,12 @@ export class AnalyticsService {
       [parkId, startOfDay],
     );
 
-    return result.map((row: any) => ({
-      timestamp: new Date(row.interval_timestamp).toISOString(),
-      waitTime: parseInt(row.avg_wait) || 0,
-    }));
+    return result.map(
+      (row: { interval_timestamp: Date; avg_wait: string }) => ({
+        timestamp: new Date(row.interval_timestamp).toISOString(),
+        waitTime: parseInt(row.avg_wait) || 0,
+      }),
+    );
   }
 
   /**
@@ -1208,7 +1212,7 @@ export class AnalyticsService {
    */
   private async getAttractionCounts(
     parkId: string,
-  ): Promise<{ total: number; operating: number; closed: number }> {
+  ): Promise<import("./types/analytics-response.type").AttractionCounts> {
     const total = await this.attractionRepository.count({
       where: { parkId },
     });
@@ -1475,12 +1479,7 @@ export class AnalyticsService {
     attractionId: string,
     queueType: string = "STANDBY",
     currentSpotWait?: number | null,
-  ): Promise<{
-    trend: "increasing" | "stable" | "decreasing";
-    changeRate: number; // Minutes per hour
-    recentAverage: number | null; // Last hour average
-    previousAverage: number | null; // 2-3 hours ago average
-  }> {
+  ): Promise<import("./types/analytics-response.type").WaitTimeTrend> {
     const now = new Date();
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
     const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
@@ -1863,7 +1862,7 @@ export class AnalyticsService {
       { days: null, name: "any available" }, // All available data
     ];
 
-    let waitTimes: any[] = [];
+    let waitTimes: Array<{ waitTime: number }> = [];
     let usedWindow = "";
 
     // Try each time window until we get enough data
@@ -2051,9 +2050,7 @@ export class AnalyticsService {
 
     let value = 0;
     if (waitTimes.length > 0) {
-      const sorted = waitTimes
-        .map((w) => parseFloat(w.waitTime))
-        .sort((a, b) => a - b);
+      const sorted = waitTimes.map((w) => w.waitTime).sort((a, b) => a - b);
       const idx = Math.ceil(sorted.length * 0.9) - 1;
       value = Math.round(sorted[idx]);
 
@@ -2252,7 +2249,10 @@ export class AnalyticsService {
     const closedParksCount = Math.max(0, totalParksCount - openParksCount);
 
     // 2. Find Most/Least Crowded Park (by Avg Wait)
-    openParks.sort((a: any, b: any) => b.avg_wait - a.avg_wait);
+    openParks.sort(
+      (a: { avg_wait: number }, b: { avg_wait: number }) =>
+        b.avg_wait - a.avg_wait,
+    );
 
     const mostCrowdedPark =
       openParks.length > 0
@@ -2349,7 +2349,10 @@ export class AnalyticsService {
     `);
 
     // Sort in JS
-    rideStats.sort((a: any, b: any) => b.waitTime - a.waitTime);
+    rideStats.sort(
+      (a: { waitTime: number }, b: { waitTime: number }) =>
+        b.waitTime - a.waitTime,
+    );
 
     const longestWaitRide =
       rideStats.length > 0
@@ -2539,14 +2542,15 @@ export class AnalyticsService {
         showLiveDataRecords: showLiveDataCount,
         waitTimePredictions: waitTimePredictionCount,
         totalWaitTime: rideStats.reduce(
-          (sum: number, stat: any) => sum + (stat.waitTime || 0),
+          (sum: number, stat: { waitTime?: number }) =>
+            sum + (stat.waitTime || 0),
           0,
         ),
       },
-      mostCrowdedPark: mostCrowdedParkDetails as any,
-      leastCrowdedPark: leastCrowdedParkDetails as any,
-      longestWaitRide: longestWaitRideDetails as any,
-      shortestWaitRide: shortestWaitRideDetails as any,
+      mostCrowdedPark: mostCrowdedParkDetails,
+      leastCrowdedPark: leastCrowdedParkDetails,
+      longestWaitRide: longestWaitRideDetails,
+      shortestWaitRide: shortestWaitRideDetails,
 
       lastUpdated: new Date().toISOString(),
     };

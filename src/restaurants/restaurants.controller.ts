@@ -18,6 +18,7 @@ import {
   RestaurantWithLiveDataDto,
 } from "./dto/restaurant-response.dto";
 import { RestaurantQueryDto } from "./dto/restaurant-query.dto";
+import { AvailabilityResponseDto } from "./dto/availability-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
 /**
@@ -35,7 +36,7 @@ export class RestaurantsController {
   constructor(private readonly restaurantsService: RestaurantsService) {}
 
   /**
-   * GET /v1/ restaurants
+   * GET /v1/restaurants
    *
    * Returns all restaurants globally with optional filtering and sorting.
    * Now supports pagination with default limit of 10 items.
@@ -166,9 +167,15 @@ export class RestaurantsController {
     summary: "Get availability",
     description: "Returns dining availability for a specific restaurant.",
   })
-  @ApiResponse({ status: 200, description: "Availability data" })
+  @ApiResponse({
+    status: 200,
+    description: "Availability data",
+    type: AvailabilityResponseDto,
+  })
   @ApiResponse({ status: 404, description: "Restaurant not found" })
-  async getAvailability(@Param("slug") slug: string): Promise<any> {
+  async getAvailability(
+    @Param("slug") slug: string,
+  ): Promise<AvailabilityResponseDto> {
     const restaurant = await this.restaurantsService.findBySlug(slug);
 
     if (!restaurant) {

@@ -69,7 +69,7 @@ export class AnalyticsController {
     description:
       "Returns real-time statistics (open park count and average wait time) " +
       "for all continents, countries, and cities. Useful for showing live data " +
-      "on geographic navigation pages. Cached for 5 minutes.",
+      "on geographic navigation pages. Cached for 2 minutes.",
   })
   @ApiResponse({
     status: 200,

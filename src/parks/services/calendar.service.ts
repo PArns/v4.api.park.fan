@@ -20,6 +20,10 @@ import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkStatus } from "../../common/types/status.type";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { InfluencingHoliday } from "../dto/schedule-item.dto";
+import { WeatherData } from "../entities/weather-data.entity";
+import { Holiday } from "../../holidays/entities/holiday.entity";
+import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -180,9 +184,9 @@ export class CalendarService {
     park: Park,
     date: Date,
     schedules: ScheduleEntry[],
-    weatherData: any[],
-    mlPredictions: any[],
-    holidays: any[],
+    weatherData: WeatherData[],
+    mlPredictions: PredictionDto[],
+    holidays: Holiday[],
     refurbishments: string[],
     includeHourly: string,
   ): Promise<CalendarDay> {
@@ -200,7 +204,7 @@ export class CalendarService {
 
     // Find ML prediction for this day
     const mlPrediction = mlPredictions.find(
-      (p) => p.date?.split("T")[0] === dateStr,
+      (p) => p.predictedTime?.split("T")[0] === dateStr,
     );
 
     // Find weather for this day
@@ -214,7 +218,7 @@ export class CalendarService {
 
     // Build events array (deduplicated) and separate local/influencing holidays
     const events: CalendarEvent[] = [];
-    const influencingHolidays: any[] = [];
+    const influencingHolidays: InfluencingHoliday[] = [];
     const seenEvents = new Set<string>();
 
     const dayHolidays = holidays.filter(
@@ -241,7 +245,7 @@ export class CalendarService {
           seenEvents.add(key);
           events.push({
             name: h.name,
-            type: type as any,
+            type: type as "holiday" | "school-holiday",
             isNationwide: h.isNationwide,
           });
         }
@@ -253,16 +257,14 @@ export class CalendarService {
         if (h.holidayType === "school") {
           localSchoolVacationFound = true;
         }
-        if (h.metadata?.isBridgeDay) {
-          localBridgeDayFound = true;
-        }
+        // Bridge day is calculated separately, not stored in holiday metadata
       } else {
         // Influencing but not local
         influencingHolidays.push({
           name: h.name,
           source: {
             countryCode: h.country,
-            regionCode: h.region ? h.region.split("-").pop() : null,
+            regionCode: h.region ? (h.region.split("-").pop() ?? null) : null,
           },
           holidayType: h.holidayType,
         });
@@ -298,9 +300,7 @@ export class CalendarService {
 
     // Map crowd level
     const crowdLevel: CrowdLevel | "closed" =
-      status === "CLOSED"
-        ? "closed"
-        : this.mapCrowdLevel(mlPrediction?.crowdScore || 50);
+      status === "CLOSED" ? "closed" : mlPrediction?.crowdLevel || "moderate";
 
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
@@ -312,8 +312,8 @@ export class CalendarService {
           tempMin: weather.temperatureMin || 0,
           tempMax: weather.temperatureMax || 0,
           rainChance: Math.round(
-            (weather.precipitationSum || 0) > 0
-              ? Math.min((weather.precipitationSum / 10) * 100, 100)
+            (weather.precipitationSum ?? 0) > 0
+              ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
               : 0,
           ),
         }
@@ -327,8 +327,7 @@ export class CalendarService {
       isTomorrow: dateStr === tomorrow,
       hours: hours || undefined,
       crowdLevel,
-      crowdScore:
-        status === "CLOSED" ? undefined : mlPrediction?.crowdScore || undefined,
+      crowdScore: undefined, // Deprecated: use crowdLevel instead
       weather: weatherSummary || undefined,
       events,
       isHoliday,
@@ -346,7 +345,7 @@ export class CalendarService {
     // Add ML-generated recommendation
     if (status === "OPERATING") {
       const advisoryKeys = this.generateAdvisoryKeys(
-        mlPrediction?.crowdScore || mlPrediction?.crowdLevel,
+        mlPrediction?.crowdLevel,
         isHoliday,
         isBridgeDay,
         weatherSummary,
@@ -361,7 +360,7 @@ export class CalendarService {
       day.hourly = await this.buildHourlyPredictions(
         park,
         date,
-        mlPrediction,
+        mlPrediction ?? null,
         status,
       );
     }
@@ -403,7 +402,7 @@ export class CalendarService {
   private async buildHourlyPredictions(
     park: Park,
     date: Date,
-    mlPrediction: any,
+    mlPrediction: PredictionDto | null,
     dayStatus: ParkStatus,
   ): Promise<HourlyPrediction[]> {
     if (dayStatus === "CLOSED") {

@@ -104,7 +104,10 @@ export class MLModelService {
       configuration: {
         featuresUsed: model.featuresUsed || [],
         featureCount: (model.featuresUsed || []).length,
-        hyperparameters: model.hyperparameters || {},
+        hyperparameters: (model.hyperparameters || {}) as Record<
+          string,
+          string | number | boolean
+        >,
       },
     };
 

@@ -18,9 +18,6 @@ import { AttractionResponseDto } from "./dto/attraction-response.dto";
 import { AttractionQueryDto } from "./dto/attraction-query.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 
-// Removed EntityLiveResponse as it's not used in the provided code snippet
-// Removed Entity as it's not used and replaced Controller which is used
-
 /**
  * Attractions Controller
  *

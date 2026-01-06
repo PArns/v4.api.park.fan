@@ -6,6 +6,7 @@ import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { HolidayInput } from "../common/types/holiday-input.type";
 
 /**
  * Holidays Service
@@ -38,7 +39,16 @@ export class HolidaysService {
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
-    const holidaysToUpsert: any[] = [];
+    const holidaysToUpsert: Array<{
+      externalId: string;
+      date: Date;
+      name: string;
+      localName?: string;
+      country: string;
+      region?: string;
+      holidayType: "public" | "observance" | "school" | "bank";
+      isNationwide: boolean;
+    }> = [];
     for (const holiday of holidays) {
       const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
       const holidayType = this.mapHolidayType(holiday.types);
@@ -60,7 +70,19 @@ export class HolidaysService {
     }
 
     // Deduplicate by externalId before batch upsert to avoid "ON CONFLICT" errors
-    const uniqueHolidays = new Map<string, any>();
+    const uniqueHolidays = new Map<
+      string,
+      {
+        externalId: string;
+        date: Date;
+        name: string;
+        localName?: string;
+        country: string;
+        region?: string;
+        holidayType: "public" | "observance" | "school" | "bank";
+        isNationwide: boolean;
+      }
+    >();
     for (const h of holidaysToUpsert) {
       uniqueHolidays.set(h.externalId, h);
     }
@@ -93,16 +115,7 @@ export class HolidaysService {
   /**
    * Generic upsert for any holiday (used by peak seasons sync)
    */
-  async upsertHoliday(holiday: {
-    externalId: string;
-    date: Date;
-    name: string;
-    localName?: string;
-    country: string;
-    region?: string;
-    holidayType: "public" | "observance" | "school" | "bank";
-    isNationwide: boolean;
-  }): Promise<void> {
+  async upsertHoliday(holiday: HolidayInput): Promise<void> {
     await this.holidayRepository.upsert(
       {
         externalId: holiday.externalId,
@@ -129,7 +142,7 @@ export class HolidaysService {
     countryCode: string,
   ): Promise<number> {
     let savedCount = 0;
-    const holidaysToUpsert: any[] = [];
+    const holidaysToUpsert: HolidayInput[] = [];
 
     for (const entry of entries) {
       const start = new Date(entry.startDate);
@@ -193,7 +206,19 @@ export class HolidaysService {
     }
 
     // Deduplicate by externalId before batch upsert
-    const uniqueHolidays = new Map<string, any>();
+    const uniqueHolidays = new Map<
+      string,
+      {
+        externalId: string;
+        date: Date;
+        name: string;
+        localName?: string;
+        country: string;
+        region?: string;
+        holidayType: "public" | "observance" | "school" | "bank";
+        isNationwide: boolean;
+      }
+    >();
     for (const h of holidaysToUpsert) {
       uniqueHolidays.set(h.externalId, h);
     }
@@ -449,11 +474,11 @@ export class HolidaysService {
   /**
    * Save a batch of raw holiday objects (used for peak seasons and internal syncs)
    */
-  async saveRawHolidays(holidays: any[]): Promise<number> {
+  async saveRawHolidays(holidays: HolidayInput[]): Promise<number> {
     if (holidays.length === 0) return 0;
 
     // Deduplicate by externalId
-    const uniqueHolidays = new Map<string, any>();
+    const uniqueHolidays = new Map<string, HolidayInput>();
     for (const h of holidays) {
       uniqueHolidays.set(h.externalId, h);
     }

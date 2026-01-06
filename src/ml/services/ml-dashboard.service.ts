@@ -63,7 +63,10 @@ export class MLDashboardService {
         configuration: {
           featuresUsed: currentModelData.featuresUsed || [],
           featureCount: (currentModelData.featuresUsed || []).length,
-          hyperparameters: currentModelData.hyperparameters || {},
+          hyperparameters: (currentModelData.hyperparameters || {}) as Record<
+            string,
+            string | number | boolean
+          >,
         },
         trainingData: {
           startDate: currentModelData.trainDataStartDate
