@@ -60,8 +60,9 @@ import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stat
     ParksService,
     WeatherService,
     ParkIntegrationService,
+    TypeOrmModule, // CRITICAL: Export TypeOrmModule so other modules can inject ParkRepository
     ParkEnrichmentService,
     CalendarService,
   ],
 })
-export class ParksModule {}
+export class ParksModule { }
