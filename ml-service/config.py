@@ -35,11 +35,11 @@ class Settings(BaseSettings):
     VALIDATION_DAYS: int = 30
     
     # Sample Weight Configuration (Feedback Loop)
-    # WARNING: Only enable with sufficient data (>30 days recommended)
-    # With limited data (<30 days), sample weights can cause overfitting
-    ENABLE_SAMPLE_WEIGHTS: bool = False  # Disabled by default - enable when you have >30 days of data
+    # Feature is enabled by default, but only activates when sufficient data is available
+    # With limited data (<30 days), sample weights are automatically disabled to avoid overfitting
+    ENABLE_SAMPLE_WEIGHTS: bool = True  # Feature enabled, but requires MIN_DATA_DAYS_FOR_WEIGHTS
     SAMPLE_WEIGHT_FACTOR: float = 0.3  # Conservative default (0.3 = 30% boost, weights: 1.0 - 1.3)
-    MIN_DATA_DAYS_FOR_WEIGHTS: int = 30  # Minimum days of data before enabling weights
+    MIN_DATA_DAYS_FOR_WEIGHTS: int = 30  # Minimum days of data before weights are actually used
 
     # Prediction Configuration
     HOURLY_PREDICTIONS: int = 24  # Next 24 hours (internal use)
