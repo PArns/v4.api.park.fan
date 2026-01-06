@@ -50,6 +50,7 @@ class WaitTimeModel:
         y_train: pd.Series,
         X_val: pd.DataFrame,
         y_val: pd.Series,
+        sample_weights: Optional[np.ndarray] = None,
     ) -> Dict[str, float]:
         """
         Train CatBoost model
@@ -76,11 +77,12 @@ class WaitTimeModel:
             X_train["attractionId"] = X_train["attractionId"].astype(str)
             X_val["attractionId"] = X_val["attractionId"].astype(str)
 
-        # Create CatBoost pools
+        # Create CatBoost pools with optional sample weights
         train_pool = Pool(
             X_train[self.feature_columns],
             y_train,
             cat_features=self.categorical_features,
+            weight=sample_weights if sample_weights is not None else None,
         )
 
         val_pool = Pool(

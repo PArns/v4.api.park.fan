@@ -440,3 +440,41 @@ def fetch_active_model_version() -> str:
         print(f"⚠️  Failed to fetch active model from database: {e}")
         print("   Using default v1.0.0")
         return "v1.0.0"
+
+
+def fetch_prediction_errors_for_training(
+    start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
+    """
+    Fetch prediction accuracy errors to calculate sample weights for training
+    
+    Returns DataFrame with columns:
+    - attractionId
+    - timestamp (targetTime from prediction_accuracy)
+    - absolute_error
+    - percentage_error
+    
+    Used to weight training samples: higher weights for samples with high prediction errors
+    """
+    query = text("""
+        SELECT
+            pa."attraction_id" as "attractionId",
+            pa."target_time" as timestamp,
+            pa."absolute_error",
+            pa."percentage_error"
+        FROM prediction_accuracy pa
+        WHERE pa."comparison_status" = 'COMPLETED'
+            AND pa."target_time" BETWEEN :start_date AND :end_date
+            AND pa."absolute_error" IS NOT NULL
+            AND pa."absolute_error" >= 0
+    """)
+    
+    try:
+        with get_db() as db:
+            result = db.execute(query, {"start_date": start_date, "end_date": end_date})
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            return convert_df_types(df)
+    except Exception as e:
+        print(f"⚠️  Failed to fetch prediction errors: {e}")
+        print("   Training without sample weights (using uniform weights)")
+        return pd.DataFrame()
