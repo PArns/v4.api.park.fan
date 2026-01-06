@@ -3,7 +3,7 @@ Feature engineering for ML model
 """
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
 from percentile_features import add_percentile_features
@@ -777,8 +777,8 @@ def add_park_schedule_features(
     
     # Fetch park schedules (using DB helper with local dates)
     schedules_df = fetch_park_schedules(
-        datetime.datetime.combine(start_date_local, datetime.time.min),
-        datetime.datetime.combine(end_date_local, datetime.time.max)
+        datetime.combine(start_date_local, time.min),
+        datetime.combine(end_date_local, time.max)
     )
     
     # Initialize features

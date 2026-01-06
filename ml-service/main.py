@@ -240,9 +240,12 @@ async def train_model_endpoint(request: TrainRequest):
                 logger.error(f"Failed to auto-load new model: {e}")
                 
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
             logger.error(f"❌ Training failed: {e}")
+            logger.error(f"Full traceback:\n{error_traceback}")
             training_status["status"] = "failed"
-            training_status["error"] = str(e)
+            training_status["error"] = f"{str(e)}\n\nTraceback:\n{error_traceback}"
             training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
             training_status["is_training"] = False
     
