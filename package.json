@@ -1,6 +1,6 @@
 {
   "name": "park-fan-api",
-  "version": "4.0.0",
+  "version": "4.2.0",
   "description": "Real-time theme park data aggregation API providing wait times, occupancy insights, and ML-ready analytics",
   "author": "Patrick Arns",
   "private": true,
@@ -8,6 +8,7 @@
   "scripts": {
     "prebuild": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "build": "nest build",
+    "postbuild": "ts-node -r tsconfig-paths/register scripts/generate-swagger-spec.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "NODE_NO_WARNINGS=1 nest start",
     "dev": "NODE_NO_WARNINGS=1 nest start --watch",

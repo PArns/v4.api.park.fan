@@ -9,6 +9,8 @@ import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
 import * as packageJson from "../package.json";
+import * as fs from "fs";
+import * as path from "path";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -56,80 +58,99 @@ async function bootstrap(): Promise<void> {
   });
 
   // Swagger/OpenAPI Documentation
-  const config = new DocumentBuilder()
-    .setTitle("park.fan API v4")
-    .setDescription(
-      "Real-time theme park intelligence powered by machine learning. " +
-        "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-        "for optimal theme park experiences worldwide.",
-    )
-    .setVersion(packageJson.version)
-    .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")
-    .setLicense("UNLICENSED", "")
-    .setExternalDoc("Frontend Application", "https://park.fan")
-    // Core API tags
-    .addTag(
-      "health",
-      "System health checks, database connectivity, and application monitoring",
-    )
-    .addTag(
-      "parks",
-      "Park metadata, operating hours, weather, and geographic details",
-    )
-    .addTag(
-      "attractions",
-      "Attraction info, live status, wait times, and queue data",
-    )
-    .addTag("shows", "Live entertainment schedules and showtimes")
-    .addTag("restaurants", "Dining options, menus, and operating hours")
-    // Data & Analytics tags
-    .addTag(
-      "queue-data",
-      "Historical wait times, queue performance, and ride availability",
-    )
-    .addTag(
-      "stats",
-      "Park-wide analytics, crowd levels, and historical performance",
-    )
-    .addTag(
-      "predictions",
-      "ML-powered crowd predictions and wait time forecasts",
-    )
-    // Utility tags
-    .addTag(
-      "search",
-      "Intelligent search across parks, attractions, shows, and restaurants",
-    )
-    .addTag(
-      "discovery",
-      "Geographic hierarchy for route generation (continents → countries → cities)",
-    )
-    .addTag("destinations", "Resort-level aggregation grouping multiple parks")
-    .addTag(
-      "holidays",
-      "Public holiday data affecting crowds and operating hours",
-    )
-    // ML Service tags
-    .addTag("ML", "Machine learning predictions and model information")
-    .addTag("ML Dashboard", "ML service health, metrics, and model diagnostics")
-    // Admin tag with security notice
-    .addTag(
-      "admin",
-      "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION via Cloudflare",
-    )
-    // Security schemes (Cloudflare API Key via query parameter)
-    .addApiKey(
-      {
-        type: "apiKey",
-        name: "pass",
-        in: "query",
-        description: "Admin API key (Cloudflare protected - production only)",
-      },
-      "admin-auth",
-    )
-    .build();
+  // Try to load pre-generated spec from build time, otherwise generate at runtime
+  const specPath = path.join(__dirname, "..", "swagger-spec.json");
+  let document: any;
 
-  const document = SwaggerModule.createDocument(app, config);
+  if (fs.existsSync(specPath)) {
+    // Use pre-generated spec (faster startup)
+    console.log("📚 Loading pre-generated Swagger spec...");
+    const specContent = fs.readFileSync(specPath, "utf-8");
+    document = JSON.parse(specContent);
+  } else {
+    // Fallback: generate spec at runtime (slower, but works in dev)
+    console.log("📚 Generating Swagger spec at runtime...");
+    const config = new DocumentBuilder()
+      .setTitle("park.fan API v4")
+      .setDescription(
+        "Real-time theme park intelligence powered by machine learning. " +
+          "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
+          "for optimal theme park experiences worldwide.",
+      )
+      .setVersion(packageJson.version)
+      .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")
+      .setLicense("UNLICENSED", "")
+      .setExternalDoc("Frontend Application", "https://park.fan")
+      // Core API tags
+      .addTag(
+        "health",
+        "System health checks, database connectivity, and application monitoring",
+      )
+      .addTag(
+        "parks",
+        "Park metadata, operating hours, weather, and geographic details",
+      )
+      .addTag(
+        "attractions",
+        "Attraction info, live status, wait times, and queue data",
+      )
+      .addTag("shows", "Live entertainment schedules and showtimes")
+      .addTag("restaurants", "Dining options, menus, and operating hours")
+      // Data & Analytics tags
+      .addTag(
+        "queue-data",
+        "Historical wait times, queue performance, and ride availability",
+      )
+      .addTag(
+        "stats",
+        "Park-wide analytics, crowd levels, and historical performance",
+      )
+      .addTag(
+        "predictions",
+        "ML-powered crowd predictions and wait time forecasts",
+      )
+      // Utility tags
+      .addTag(
+        "search",
+        "Intelligent search across parks, attractions, shows, and restaurants",
+      )
+      .addTag(
+        "discovery",
+        "Geographic hierarchy for route generation (continents → countries → cities)",
+      )
+      .addTag(
+        "destinations",
+        "Resort-level aggregation grouping multiple parks",
+      )
+      .addTag(
+        "holidays",
+        "Public holiday data affecting crowds and operating hours",
+      )
+      // ML Service tags
+      .addTag("ML", "Machine learning predictions and model information")
+      .addTag(
+        "ML Dashboard",
+        "ML service health, metrics, and model diagnostics",
+      )
+      // Admin tag with security notice
+      .addTag(
+        "admin",
+        "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION via Cloudflare",
+      )
+      // Security schemes (Cloudflare API Key via query parameter)
+      .addApiKey(
+        {
+          type: "apiKey",
+          name: "pass",
+          in: "query",
+          description: "Admin API key (Cloudflare protected - production only)",
+        },
+        "admin-auth",
+      )
+      .build();
+
+    document = SwaggerModule.createDocument(app, config);
+  }
 
   // Swagger UI options (cache headers handled by CacheControlInterceptor)
   SwaggerModule.setup("api", app, document, {
