@@ -40,6 +40,7 @@ import {
 @Index("idx_queue_data_operating", ["attractionId", "timestamp"], {
   where: "\"status\" = 'OPERATING'",
 }) // Partial index for status-based filtering (optimizes analytics queries)
+@Index(["queueType", "status", "timestamp"]) // Optimized for ML training queries (queueType='STANDBY', status='OPERATING', timestamp range)
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;

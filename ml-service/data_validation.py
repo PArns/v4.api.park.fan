@@ -50,28 +50,49 @@ def validate_training_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, An
     # Step 3: Statistical outlier detection per attraction (IQR method)
     # This catches values that are outliers relative to each attraction's normal range
     # e.g., if an attraction normally has 30-60 min waits, a sudden 400 min is suspicious
+    # OPTIMIZED: Use vectorized groupby operations instead of loops
+    import time
+
+    outlier_start = time.time()
+
     statistical_outliers = pd.Series(False, index=df.index)
 
     if len(df) > 0:
-        for attraction_id in df["attractionId"].unique():
-            attraction_data = df[df["attractionId"] == attraction_id]["waitTime"]
+        # Vectorized approach: Calculate IQR bounds per attraction using groupby
+        # This is much faster than looping (O(n) vs O(n*m))
+        attraction_groups = df.groupby("attractionId")["waitTime"]
 
-            if len(attraction_data) >= 10:  # Need enough data for IQR
-                Q1 = attraction_data.quantile(0.25)
-                Q3 = attraction_data.quantile(0.75)
-                IQR = Q3 - Q1
+        # Get group sizes to filter attractions with at least 10 samples
+        group_sizes = attraction_groups.size()
+        valid_attraction_ids = group_sizes[group_sizes >= 10].index
 
-                # Only flag as outlier if it's significantly outside normal range
-                # Use 3x IQR (more conservative than standard 1.5x) to avoid removing legitimate peaks
-                upper_bound = Q3 + 3 * IQR
+        if len(valid_attraction_ids) > 0:
+            # Calculate Q1, Q3, IQR for each attraction (only for valid ones)
+            Q1 = attraction_groups.quantile(0.25)
+            Q3 = attraction_groups.quantile(0.75)
+            IQR = Q3 - Q1
 
-                # Only flag if value is both:
-                # 1. Outside IQR bounds (statistical outlier)
-                # 2. Above a reasonable threshold (e.g., 200 min) to avoid flagging low values
-                attraction_mask = (df["attractionId"] == attraction_id) & (
-                    (df["waitTime"] > upper_bound) & (df["waitTime"] > 200)
-                )
-                statistical_outliers |= attraction_mask
+            # Calculate upper bound (Q3 + 3*IQR) for each attraction
+            upper_bounds = Q3 + 3 * IQR
+
+            # Map upper bounds back to dataframe rows
+            df["_upper_bound"] = df["attractionId"].map(upper_bounds)
+
+            # Flag outliers: waitTime > upper_bound AND waitTime > 200
+            # Only check attractions with enough data
+            mask_valid = df["attractionId"].isin(valid_attraction_ids)
+            statistical_outliers = (
+                mask_valid
+                & (df["waitTime"] > df["_upper_bound"])
+                & (df["waitTime"] > 200)
+            )
+
+            # Clean up temporary column
+            df.drop(columns=["_upper_bound"], inplace=True, errors="ignore")
+
+    outlier_time = time.time() - outlier_start
+    if outlier_time > 1.0:  # Only log if it takes more than 1 second
+        print(f"   Outlier detection time: {outlier_time:.2f}s")
 
     # Combine all outlier masks
     outlier_mask = negative_mask | extreme_high_mask | statistical_outliers

@@ -115,11 +115,11 @@ def fetch_training_data(
                 END as season
             FROM queue_data qd
             INNER JOIN attractions a ON a.id = qd."attractionId"
-            WHERE qd.timestamp BETWEEN :start_date AND :end_date
+            WHERE qd."queueType" = 'STANDBY'  -- Use index-friendly order: queueType first
                 AND qd.status = 'OPERATING'
+                AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 0
-                AND qd."queueType" = 'STANDBY'
         ),
         weather_daily AS (
             SELECT
@@ -149,9 +149,15 @@ def fetch_training_data(
         ORDER BY qwp.timestamp
     """)
 
+    import time
+
+    start_time = time.time()
+
     with get_db() as db:
         result = db.execute(query, {"start_date": start_date, "end_date": end_date})
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        query_time = time.time() - start_time
+        print(f"   Query execution time: {query_time:.2f}s")
         return convert_df_types(df)
 
 

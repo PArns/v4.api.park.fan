@@ -874,7 +874,6 @@ def add_park_schedule_features(
             timestamp = row["timestamp"]
             date = timestamp.date()
 
-
         if not schedules_df.empty:
             # Find all schedules for this park on this date
             # Filter for Park-Level schedules (attraction_id is Null/None)
@@ -1000,6 +999,8 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
         # Resample to 30-minute intervals (sweet spot for hourly predictions)
         # Mean: Average wait time within 30 mins
         # Forward fill: Handle gaps up to 2 hours (4 * 30min = 2h)
+        # NOTE: This can increase row count if there are many gaps in the original data
+        # (e.g., if data is sparse, forward-fill creates interpolated rows)
         resampled = group.resample("30min").agg(agg_dict).ffill(limit=4)
 
         # Restore identifiers
