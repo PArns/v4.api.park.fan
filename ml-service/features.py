@@ -1461,9 +1461,34 @@ def engineer_features(
     print(f"   Interaction features: {time_module.time() - interaction_start:.2f}s")
 
     total_time = time_module.time() - total_start
+
+    # Performance summary - show slowest features
+    feature_times = {
+        "Resampling": time_module.time() - resample_start,
+        "Parks metadata": time_module.time() - metadata_start,
+        "DB cache fetch": time_module.time() - cache_start,
+        "Time features": time_module.time() - time_start,
+        "Weather features": time_module.time() - weather_start,
+        "Holiday features": time_module.time() - holiday_start,
+        "Bridge day features": time_module.time() - bridge_start,
+        "Schedule features": time_module.time() - schedule_start,
+        "Attraction features": time_module.time() - attraction_start,
+        "Historical features": time_module.time() - historical_start,
+        "Percentile features": time_module.time() - percentile_start,
+        "Context features": time_module.time() - context_start,
+        "Interaction features": time_module.time() - interaction_start,
+    }
+
+    # Sort by time (slowest first)
+    sorted_features = sorted(feature_times.items(), key=lambda x: x[1], reverse=True)
+
     print(
         f"\n   Total feature engineering time: {total_time:.2f}s ({total_time / 60:.1f} minutes)"
     )
+    print("   Slowest features:")
+    for name, duration in sorted_features[:5]:  # Show top 5 slowest
+        percentage = (duration / total_time) * 100 if total_time > 0 else 0
+        print(f"     - {name}: {duration:.2f}s ({percentage:.1f}%)")
 
     return df
 
