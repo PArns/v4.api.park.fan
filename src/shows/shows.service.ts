@@ -269,22 +269,13 @@ export class ShowsService {
       });
 
       if (!showExists) {
+        // Cannot create placeholder without parkId (NOT NULL constraint)
+        // Skip placeholder creation - show will be created properly when metadata sync runs
         this.logger.warn(
-          `Show ${showId} not found in database, creating placeholder entry for live data`,
+          `Show ${showId} not found in database. Cannot create placeholder without parkId. ` +
+            `Skipping live data save. Show will be created by metadata sync.`,
         );
-
-        // Create minimal show entry to satisfy foreign key constraint
-        // This will be enriched later by the shows metadata sync
-        const placeholderShow = this.showRepository.create({
-          id: showId,
-          name: `Show ${showId.substring(0, 8)}`, // Temporary name
-          slug: `show-${showId.substring(0, 8)}`,
-          externalId: `placeholder-${showId}`, // Temporary externalId
-          // parkId will be set by metadata sync later
-        });
-        await this.showRepository.save(placeholderShow);
-
-        this.logger.log(`✅ Created placeholder show entry for ${showId}`);
+        return 0;
       }
 
       // Map API data to entity
@@ -385,21 +376,13 @@ export class ShowsService {
       });
 
       if (!showExists) {
+        // Cannot create placeholder without parkId (NOT NULL constraint)
+        // Skip placeholder creation - show will be created properly when metadata sync runs
         this.logger.warn(
-          `Show ${showId} not found in database, creating placeholder entry for live data`,
+          `Show ${showId} not found in database. Cannot create placeholder without parkId. ` +
+            `Skipping live data save. Show will be created by metadata sync.`,
         );
-
-        // Create minimal show entry to satisfy foreign key constraint
-        // This will be enriched later by the shows metadata sync
-        const placeholderShow = this.showRepository.create({
-          id: showId,
-          name: `Show ${showId.substring(0, 8)}`, // Temporary name
-          slug: `show-${showId.substring(0, 8)}`,
-          // parkId will be set by metadata sync later
-        });
-        await this.showRepository.save(placeholderShow);
-
-        this.logger.log(`✅ Created placeholder show entry for ${showId}`);
+        return 0;
       }
 
       // Save live data (BeforeInsert hook will generate id and timestamp)
