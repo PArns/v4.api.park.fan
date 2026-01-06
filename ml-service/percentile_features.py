@@ -38,7 +38,7 @@ def add_percentile_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Weather extreme features (threshold: P90 over last 14 days)
     if "temperature_avg" in df.columns and "parkId" in df.columns:
-        print("   Adding temperature extreme features...")
+        # Adding temperature extreme features (logging removed)
         for park_id in df["parkId"].unique():
             park_mask = df["parkId"] == park_id
             park_df = df[park_mask].copy()
@@ -66,7 +66,7 @@ def add_percentile_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Wind extreme features (important for ride closures!)
     if "windSpeedMax" in df.columns and "parkId" in df.columns:
-        print("   Adding wind extreme features...")
+        # Adding wind extreme features (logging removed)
         for park_id in df["parkId"].unique():
             park_mask = df["parkId"] == park_id
             park_df = df[park_mask].copy()
@@ -85,5 +85,5 @@ def add_percentile_features(df: pd.DataFrame) -> pd.DataFrame:
 
             df.loc[park_mask, "is_wind_extreme"] = park_df["is_wind_extreme"].fillna(0)
 
-    print("   ✓ Percentile features added")
+    # Percentile features added (logging removed)
     return df

@@ -125,7 +125,7 @@ def filter_predictions_by_schedule(
                 park_info.iloc[0]["name"] if "name" in park_info.columns else park_id
             )
             print(
-                f"📅 Park {park_name} ({park_id}): Found {len(schedules)} schedule entries"
+                # Park schedule entries found (logging removed to reduce spam)
             )
             for s in schedules:
                 date_str = s[0]
@@ -260,7 +260,7 @@ def filter_predictions_by_schedule(
                         continue
         else:
             # FALLBACK LOGIC: No schedule data, keep all predictions
-            print(f"⚠️  No schedule data for park {park_id}, keeping all predictions")
+            # Logging removed to reduce spam (only log if it's a real issue)
             filtered_predictions.extend(park_preds)
 
     # Log filtering statistics
@@ -268,12 +268,15 @@ def filter_predictions_by_schedule(
     filtered_count = len(filtered_predictions)
     removed_count = original_count - filtered_count
 
+    # Filtering stats logging removed to reduce log spam
+    # Only log if significant filtering occurred (>50% removed)
     if removed_count > 0:
         removal_percentage = (
             (removed_count / original_count * 100) if original_count > 0 else 0
         )
-        print(
-            f"📊 Filtering stats: Kept {filtered_count}/{original_count} predictions ({removal_percentage:.1f}% filtered out)"
-        )
+        if removal_percentage > 50:
+            print(
+                f"📊 Filtering: {removal_percentage:.1f}% predictions filtered out ({filtered_count}/{original_count} kept)"
+            )
 
     return filtered_predictions
