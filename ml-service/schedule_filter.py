@@ -120,15 +120,8 @@ def filter_predictions_by_schedule(
             )
             schedules = result.fetchall()
 
-            # Debug: Log schedules found
-            park_name = (
-                park_info.iloc[0]["name"] if "name" in park_info.columns else park_id
-            )
-            print(
-                # Park schedule entries found (logging removed to reduce spam)
-            )
+            # Debug: Log schedules found (logging removed to reduce spam)
             for s in schedules:
-                date_str = s[0]
                 opening_utc = s[2]
                 closing_utc = s[3]
 
@@ -158,8 +151,7 @@ def filter_predictions_by_schedule(
             if prediction_type == "hourly":
                 # HOURLY: Only show predictions for TODAY (in park's timezone)
                 # Filter out predictions AFTER park closing time for today
-                # Get current date in park's timezone
-                now_park_tz = datetime.now(park_tz)
+                # Get current date in park's timezone (logging removed)
 
                 schedule_map = {}
                 for schedule_row in schedules:
