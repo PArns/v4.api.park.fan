@@ -351,17 +351,23 @@ class WaitTimeModel:
         missing_cols = set(model_features) - set(X.columns)
         if missing_cols:
             defaults = self._get_default_feature_values()
-            print(
-                f"⚠️  Filling {len(missing_cols)} missing features with defaults for backward compatibility:"
-            )
+            # Reduced logging - only log critical missing features
+            critical_missing = [col for col in missing_cols if col in ["parkId", "attractionId"]]
+            if critical_missing:
+                print(
+                    f"⚠️  CRITICAL: Missing required features: {critical_missing}. Predictions may be inaccurate."
+                )
+            else:
+                # Only log summary for non-critical missing features
+                print(
+                    f"⚠️  Filling {len(missing_cols)} missing features with defaults (backward compatibility)"
+                )
+            
             for col in sorted(missing_cols):
                 # Special handling for categorical features
                 if col in ["parkId", "attractionId"]:
                     # These should never be missing in practice, but provide default for safety
                     default_val = defaults.get(col, "UNKNOWN")
-                    print(
-                        f"   ⚠️  CRITICAL: {col} is missing! Using default '{default_val}' (predictions may be inaccurate)"
-                    )
                 elif col in self.categorical_features:
                     # Categorical features: use string default
                     default_val = defaults.get(col, "UNKNOWN")
@@ -369,11 +375,6 @@ class WaitTimeModel:
                     # Numeric features: use numeric default
                     default_val = defaults.get(col, 0.0)
                 X[col] = default_val
-                if col not in [
-                    "parkId",
-                    "attractionId",
-                ]:  # Don't print for IDs (already printed above)
-                    print(f"   - {col} = {default_val}")
 
         # Check for extra columns (warn but don't fail)
         extra_cols = set(X.columns) - set(model_features)

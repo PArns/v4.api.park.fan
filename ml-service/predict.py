@@ -1046,20 +1046,7 @@ def predict_wait_times(
     timestamps = generate_future_timestamps(base_time, prediction_type)
 
     # Create features with all DB-loaded data
-    # Logging input stats
-    print(f"🔮 Prediction Request: Type={prediction_type}, Parks={len(park_ids)}")
-    if current_wait_times:
-        print(f"   - Current Wait Times: {len(current_wait_times)} items")
-    else:
-        print("   - Current Wait Times: None")
-
-    if recent_wait_times:
-        print(f"   - Recent Wait Times: {len(recent_wait_times)} items")
-    else:
-        print("   - Recent Wait Times: None")
-
-    if feature_context:
-        print("   - Feature Context: True")
+    # Reduced logging - only log summary, not details
 
     # Features
     features_df = create_prediction_features(
@@ -1081,7 +1068,9 @@ def predict_wait_times(
         use_uncertainty = True
     except Exception as e:
         # Fallback to regular predictions if uncertainty estimation fails
-        print(f"⚠️  Uncertainty estimation failed, using regular predictions: {e}")
+        # Reduced logging - only log if it's a real issue
+        if "missing" not in str(e).lower():
+            print(f"⚠️  Uncertainty estimation failed: {e}")
         predictions = model.predict(features_df)
         uncertainties = np.zeros(len(predictions))
         use_uncertainty = False

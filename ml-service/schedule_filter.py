@@ -249,11 +249,7 @@ def filter_predictions_by_schedule(
                         pred_time_local = pred_time_utc.astimezone(park_tz)
                         pred_date = pred_time_local.date()
 
-                        # Debug logging for first few predictions
-                        if len(filtered_predictions) < 3:
-                            print(
-                                f"   Pred: {pred_time_str} → Local: {pred_time_local} → Date: {pred_date}, In Schedule: {pred_date in operating_dates}"
-                            )
+                        # Debug logging removed to reduce log spam
 
                         # Only include predictions for days when park is operating
                         if pred_date in operating_dates:
