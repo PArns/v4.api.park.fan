@@ -29,4 +29,4 @@ import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.modu
   providers: [AttractionsService, AttractionIntegrationService],
   exports: [AttractionsService, AttractionIntegrationService],
 })
-export class AttractionsModule { }
+export class AttractionsModule {}

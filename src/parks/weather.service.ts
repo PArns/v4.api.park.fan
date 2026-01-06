@@ -412,8 +412,7 @@ export class WeatherService {
     // This ensures we fetch the correct calendar days, especially for parks
     // in timezones ahead/behind UTC (e.g., JST, EST)
     const todayStr = getCurrentDateInTimezone(park.timezone);
-    const todayDate = parseDateInTimezone(todayStr, park.timezone);
-    
+
     // Calculate future date (16 days ahead) in park timezone
     const futureDateStr = getTomorrowDateInTimezone(park.timezone);
     // Parse and add 15 more days

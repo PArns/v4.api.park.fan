@@ -413,9 +413,7 @@ export class WaitTimesProcessor {
                       return { saved, total: 1 };
                     } catch (error) {
                       const errorMessage =
-                        error instanceof Error
-                          ? error.message
-                          : String(error);
+                        error instanceof Error ? error.message : String(error);
                       this.logger.error(
                         `❌ Failed to mark attraction ${attraction.name} as operating: ${errorMessage}`,
                       );
@@ -470,9 +468,7 @@ export class WaitTimesProcessor {
                       return { saved, total: 1 };
                     } catch (error) {
                       const errorMessage =
-                        error instanceof Error
-                          ? error.message
-                          : String(error);
+                        error instanceof Error ? error.message : String(error);
                       this.logger.error(
                         `❌ Failed to mark restaurant ${restaurant.name} as operating: ${errorMessage}`,
                       );

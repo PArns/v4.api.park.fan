@@ -65,4 +65,4 @@ import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stat
     CalendarService,
   ],
 })
-export class ParksModule { }
+export class ParksModule {}
