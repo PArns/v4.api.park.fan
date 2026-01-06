@@ -189,6 +189,8 @@ def train_model(version: str = None) -> None:
     # For larger datasets, use time-based split (last N days as validation)
     data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
 
+    train_mask = None  # Initialize for sample weights split
+    
     if len(df) < 100 or data_span_days < 7:
         # Percentage-based split for small datasets
         print("📊 Using percentage-based split (80/20) due to limited data")
