@@ -43,7 +43,22 @@ export class AnalyticsService {
   private readonly TTL_PERCENTILES = 24 * 60 * 60; // 24 hours - historical percentiles (very stable)
   private readonly TTL_GLOBAL_STATS = 5 * 60; // 5 minutes - global statistics
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
-  private readonly CACHE_TTL_SECONDS = 60 * 60; // 1 hour - legacy, kept for compatibility
+
+  // Unified filter constants for consistent data quality across all analytics
+  /**
+   * Minimum wait time threshold (in minutes) for filtering out walk-on attractions
+   * Used to exclude attractions with minimal/no wait times from average calculations
+   * This prevents walk-ons from diluting the average wait time for the park
+   *
+   * Strategy: Start with 5min threshold, fallback to 0 if insufficient data
+   */
+  private readonly MIN_WAIT_TIME_THRESHOLD = 5;
+
+  /**
+   * Minimum sample size required before applying MIN_WAIT_TIME_THRESHOLD
+   * If fewer samples meet the threshold, fallback to 0 (include all data)
+   */
+  private readonly MIN_SAMPLE_SIZE_FOR_THRESHOLD = 3;
 
   constructor(
     @InjectRepository(QueueData)
@@ -152,14 +167,49 @@ export class AnalyticsService {
 
   /**
    * Calculate park occupancy based on 90th percentile of historical wait times
-   * 100% = 90th percentile of typical wait times for this hour/weekday over last 1 year
    *
-   * NOTE: Changed from P95 to P90 as universal baseline (Phase 4)
+   * **Occupancy Calculation:**
+   * - 100% = 90th percentile of typical wait times for this hour/weekday over last 1 year
+   * - Formula: (currentAvgWait / p90Baseline) * 100
+   * - Can exceed 100% on extremely busy days (e.g., 150% = 50% busier than typical P90)
+   *
+   * **Timezone-Aware:**
+   * - Uses park's timezone (not UTC) for hour/day-of-week calculation
+   * - Ensures accurate baseline matching for parks in different timezones
+   * - Critical for international parks (e.g., Tokyo Disney vs. Orlando)
+   *
+   * **Trend Calculation (Hybrid Logic):**
+   * - Compares current spot wait vs. last hour average (fast trend)
+   * - Compares last hour vs. previous hour average (slow trend)
+   * - Uses computeTrend() for final determination
+   *
+   * **Edge Cases:**
+   * - No current data: Returns 0% occupancy with "typical" status
+   * - No historical baseline: Returns 50% occupancy (default) with warning
+   * - Park closed: Should not be called (caller should check status first)
+   *
+   *
+   * @param parkId - Park ID
+   * @returns OccupancyDto with current percentage, trend, comparison, and breakdown
+   *
+   * @example
+   * // For a park currently at 45min average wait with 30min P90 baseline
+   * // Result: { current: 150, trend: "up", comparisonStatus: "higher", ... }
+   * // Meaning: 150% of typical (50% busier than normal)
    */
   async calculateParkOccupancy(parkId: string): Promise<OccupancyDto> {
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentDayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
+
+    // Get park timezone for accurate hour/day-of-week calculation
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+
+    // Calculate current hour and day of week in PARK TIMEZONE (not UTC)
+    const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
+    const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
     // Get current "Spot" average wait time (Latest snapshot)
     const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
@@ -186,6 +236,7 @@ export class AnalyticsService {
       currentHour,
       currentDayOfWeek,
       "park",
+      timezone,
     );
 
     if (p90Baseline === 0) {
@@ -193,7 +244,7 @@ export class AnalyticsService {
         `No historical data for park ${parkId} at hour ${currentHour}, day ${currentDayOfWeek}`,
       );
       return {
-        current: 50, // Default to 50% if no historical data
+        current: 50,
         trend: "stable",
         comparedToTypical: 0,
         comparisonStatus: "typical",
@@ -298,14 +349,23 @@ export class AnalyticsService {
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentDayOfWeek = now.getDay();
+
+    // Get park timezone for accurate hour/day-of-week calculation
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+
+    // Calculate current hour and day of week in PARK TIMEZONE (not UTC)
+    const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
+    const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
     // Get current average wait time
     const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
 
     if (currentAvgWait === null) {
-      return 100; // Default to 100% if no current data
+      return 100;
     }
 
     // Calculate 90th percentile for this hour/weekday
@@ -314,16 +374,16 @@ export class AnalyticsService {
       currentHour,
       currentDayOfWeek,
       "park",
+      timezone,
     );
 
     if (p90Baseline === 0) {
-      return 100; // Default to 100% if no historical baseline
+      return 100;
     }
 
     // Calculate occupancy as percentage of P90
     const occupancyPercentage = (currentAvgWait / p90Baseline) * 100;
 
-    // Cap at 200% to prevent extreme outliers
     return Math.round(Math.min(occupancyPercentage, 200));
   }
 
@@ -364,7 +424,7 @@ export class AnalyticsService {
         .getRawOne();
 
       if (!result || result.p50 === null) {
-        return null; // No data available for today
+        return null;
       }
 
       return {
@@ -529,8 +589,12 @@ export class AnalyticsService {
 
     const row = result[0];
 
-    // Fallback: If < 3 attractions meet threshold and we're using > 0, use all (> 0)
-    if (row?.count && parseInt(row.count) < 3 && minWaitTime > 0) {
+    // Unified fallback strategy: If insufficient samples meet threshold, include all data
+    if (
+      row?.count &&
+      parseInt(row.count) < this.MIN_SAMPLE_SIZE_FOR_THRESHOLD &&
+      minWaitTime > 0
+    ) {
       return this.getCurrentSpotAverageWaitTime(parkId, 0); // Recursive with 0 threshold
     }
 
@@ -750,7 +814,7 @@ export class AnalyticsService {
         WHERE "parkId" = $1
       )
       SELECT 
-        ROUND(AVG(CASE WHEN lq."waitTime" >= 5 THEN lq."waitTime" END)) as current_avg_wait,
+        ROUND(AVG(CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)) as current_avg_wait,
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
@@ -761,7 +825,14 @@ export class AnalyticsService {
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1
       `,
-      [parkId, windowAgo, startOfDay, now, resolvedTimezone],
+      [
+        parkId,
+        windowAgo,
+        startOfDay,
+        now,
+        resolvedTimezone,
+        this.MIN_WAIT_TIME_THRESHOLD,
+      ],
     );
 
     const stats = result[0];
@@ -1553,7 +1624,13 @@ export class AnalyticsService {
    * 1. Fast Trend (Spot vs Recent Average)
    * 2. Slow Trend (Recent Average vs Previous Average)
    *
-   * @Returns "up" | "down" | "stable"
+   * @param current - Current wait time (spot measurement)
+   * @param recentAvg - Average wait time over last hour
+   * @param previousAvg - Average wait time over previous hour (can be null)
+   * @param previousPreviousAvg - Average wait time over hour before previous (optional, for weighted trend)
+   * @param thresholdRelative - Relative threshold as fraction (default: 0.1 = 10%)
+   * @param thresholdAbsolute - Absolute threshold in minutes (default: 5)
+   * @returns "up" | "down" | "stable"
    */
   public computeTrend(
     current: number,
@@ -1563,6 +1640,36 @@ export class AnalyticsService {
     thresholdRelative: number = 0.1,
     thresholdAbsolute: number = 5,
   ): "up" | "down" | "stable" {
+    // Input validation
+    if (typeof current !== "number" || isNaN(current) || current < 0) {
+      this.logger.warn(
+        `Invalid current value in computeTrend: ${current}, defaulting to stable`,
+      );
+      return "stable";
+    }
+
+    if (typeof recentAvg !== "number" || isNaN(recentAvg) || recentAvg < 0) {
+      this.logger.warn(
+        `Invalid recentAvg value in computeTrend: ${recentAvg}, defaulting to stable`,
+      );
+      return "stable";
+    }
+
+    // Validate thresholds
+    if (thresholdRelative < 0 || thresholdRelative > 1) {
+      this.logger.warn(
+        `Invalid thresholdRelative: ${thresholdRelative}, using default 0.1`,
+      );
+      thresholdRelative = 0.1;
+    }
+
+    if (thresholdAbsolute < 0) {
+      this.logger.warn(
+        `Invalid thresholdAbsolute: ${thresholdAbsolute}, using default 5`,
+      );
+      thresholdAbsolute = 5;
+    }
+
     // 1. Fast Trend Check (Immediate reaction to spikes)
     const fastDiff = current - recentAvg;
     const fastThreshold = Math.max(
@@ -1578,23 +1685,54 @@ export class AnalyticsService {
     // This allows detecting "0 -> 300" jumps as "UP" instead of "Stable"
     const prev = previousAvg ?? 0;
 
+    // Validate previousAvg if provided
+    let validatedPrev = prev;
+    if (
+      previousAvg !== null &&
+      (typeof previousAvg !== "number" || isNaN(previousAvg) || previousAvg < 0)
+    ) {
+      this.logger.warn(
+        `Invalid previousAvg value in computeTrend: ${previousAvg}, treating as 0`,
+      );
+      validatedPrev = 0;
+    }
+
     // Only apply threshold check if we have enough data (at least recentAvg exists)
     // If both are 0, it's stable.
-    if (recentAvg === 0 && prev === 0) return "stable";
+    if (recentAvg === 0 && validatedPrev === 0) return "stable";
 
-    const threshold = Math.max(thresholdAbsolute, prev * thresholdRelative);
+    const threshold = Math.max(
+      thresholdAbsolute,
+      validatedPrev * thresholdRelative,
+    );
 
     if (previousPreviousAvg !== null) {
+      // Validate previousPreviousAvg
+      if (
+        typeof previousPreviousAvg !== "number" ||
+        isNaN(previousPreviousAvg) ||
+        previousPreviousAvg < 0
+      ) {
+        this.logger.warn(
+          `Invalid previousPreviousAvg value in computeTrend: ${previousPreviousAvg}, using simple comparison`,
+        );
+        // Fall through to simple comparison
+        const change = recentAvg - validatedPrev;
+        if (change > threshold) return "up";
+        if (change < -threshold) return "down";
+        return "stable";
+      }
+
       // Weighted average trend
-      const change1 = prev - previousPreviousAvg;
-      const change2 = recentAvg - prev;
+      const change1 = validatedPrev - previousPreviousAvg;
+      const change2 = recentAvg - validatedPrev;
       const avgChange = (change1 + change2) / 2;
 
       if (avgChange > threshold) return "up";
       if (avgChange < -threshold) return "down";
     } else {
       // Simple comparison
-      const change = recentAvg - prev;
+      const change = recentAvg - validatedPrev;
       if (change > threshold) return "up";
       if (change < -threshold) return "down";
     }
@@ -1838,12 +1976,49 @@ export class AnalyticsService {
    * Calculate 90th percentile wait time for specific hour/weekday over last 1 year
    * Uses Redis caching to avoid expensive DB queries
    * Implements cascading fallback strategy for sparse data
+   *
+   * **Fallback Strategy (Cascading):**
+   * 1. **Strict Match**: Exact hour + day of week (requires 3+ samples for attractions, 5+ for parks)
+   * 2. **Same Hour**: Same hour, any day of week (requires 10+ samples for attractions, 20+ for parks)
+   * 3. **Same Day**: Same day of week, any hour (any data available)
+   * 4. **Any Data**: Any data from time window (last resort)
+   *
+   * **Time Windows (Adaptive):**
+   * Tries progressively shorter windows: 1 year → 30 days → 7 days → 3 days → any available
+   * This ensures new parks/attractions with limited data still get meaningful baselines
+   *
+   * **Timezone Handling:**
+   * All EXTRACT queries use timezone-aware extraction to ensure accurate hour/day matching
+   * in the entity's local timezone (not UTC). This is critical for parks in different timezones.
+   *
+   * **Edge Cases:**
+   * - New parks/attractions: Uses shorter time windows and lower sample thresholds
+   * - Missing timezone: Falls back to UTC
+   * - No historical data: Returns 0 (cached for 1 hour to avoid repeated queries)
+   *
+   * @param entityId - Park or attraction ID
+   * @param hour - Hour in the entity's timezone (0-23)
+   * @param dayOfWeek - Day of week in the entity's timezone (0=Sunday, 6=Saturday)
+   * @param type - "park" or "attraction"
+   * @param timezone - Timezone string (e.g., "Europe/Berlin") for accurate hour/day extraction. If not provided, fetched from entity.
+   * @returns 90th percentile wait time in minutes, or 0 if no data available
+   *
+   * @example
+   * // For a park in Europe/Berlin at 14:00 on Monday
+   * const p90 = await get90thPercentileOneYear(
+   *   "park-123",
+   *   14,  // 2 PM in Berlin time
+   *   1,   // Monday
+   *   "park",
+   *   "Europe/Berlin"
+   * );
    */
   async get90thPercentileOneYear(
     entityId: string,
     hour: number,
     dayOfWeek: number,
     type: "park" | "attraction",
+    timezone?: string,
   ): Promise<number> {
     const cacheKey = `analytics:percentile:${type}:${entityId}:${hour}:${dayOfWeek}`;
 
@@ -1851,6 +2026,26 @@ export class AnalyticsService {
     const cached = await this.redis.get(cacheKey);
     if (cached) {
       return parseInt(cached, 10);
+    }
+
+    // Resolve timezone: if not provided, fetch from entity
+    let resolvedTimezone = timezone;
+    if (!resolvedTimezone) {
+      if (type === "park") {
+        const park = await this.parkRepository.findOne({
+          where: { id: entityId },
+          select: ["timezone"],
+        });
+        resolvedTimezone = park?.timezone || "UTC";
+      } else {
+        // For attractions, get timezone from park
+        const attraction = await this.attractionRepository.findOne({
+          where: { id: entityId },
+          relations: ["park"],
+          select: ["id"],
+        });
+        resolvedTimezone = attraction?.park?.timezone || "UTC";
+      }
     }
 
     // Adaptive time windows for new parks with limited data
@@ -1873,18 +2068,24 @@ export class AnalyticsService {
 
       if (type === "attraction") {
         // Strategy 1: Exact hour + day of week - The "Gold Standard"
+        // Use timezone-aware extraction for accurate hour/day matching
         const strict = await this.queueDataRepository
           .createQueryBuilder("qd")
           .select("qd.waitTime", "waitTime")
           .where("qd.attractionId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-            dayOfWeek,
-          })
+          .andWhere(
+            "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+            { hour },
+          )
+          .andWhere(
+            "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+            { dayOfWeek },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         // Reduced threshold: 3 samples instead of 5 for limited data
@@ -1900,10 +2101,14 @@ export class AnalyticsService {
           .select("qd.waitTime", "waitTime")
           .where("qd.attractionId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
+          .andWhere(
+            "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+            { hour },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         // Reduced threshold: 10 samples instead of 20
@@ -1919,12 +2124,14 @@ export class AnalyticsService {
           .select("qd.waitTime", "waitTime")
           .where("qd.attractionId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-            dayOfWeek,
-          })
+          .andWhere(
+            "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+            { dayOfWeek },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         // Prefer any data over nothing
@@ -1960,19 +2167,25 @@ export class AnalyticsService {
         }
       } else {
         // Park Logic (Same progressive fallback)
+        // Use timezone-aware extraction for accurate hour/day matching
         const strict = await this.queueDataRepository
           .createQueryBuilder("qd")
           .select("qd.waitTime", "waitTime")
           .innerJoin("qd.attraction", "attraction")
           .where("attraction.parkId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-            dayOfWeek,
-          })
+          .andWhere(
+            "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+            { hour },
+          )
+          .andWhere(
+            "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+            { dayOfWeek },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         // Reduced threshold: 5 samples instead of 10
@@ -1988,10 +2201,14 @@ export class AnalyticsService {
           .innerJoin("qd.attraction", "attraction")
           .where("attraction.parkId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
+          .andWhere(
+            "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
+            { hour },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         // Reduced threshold: 20 samples instead of 50
@@ -2007,12 +2224,14 @@ export class AnalyticsService {
           .innerJoin("qd.attraction", "attraction")
           .where("attraction.parkId = :entityId", { entityId })
           .andWhere("qd.timestamp >= :cutoff", { cutoff })
-          .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", {
-            dayOfWeek,
-          })
+          .andWhere(
+            "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
+            { dayOfWeek },
+          )
           .andWhere("qd.status = :status", { status: "OPERATING" })
           .andWhere("qd.waitTime IS NOT NULL")
           .andWhere("qd.queueType = 'STANDBY'")
+          .setParameter("timezone", resolvedTimezone)
           .getRawMany();
 
         if (strict.length > 0) {

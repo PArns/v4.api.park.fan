@@ -35,12 +35,35 @@ export class ParkStatisticsDto {
     enumName: "CrowdLevel",
   })
   crowdLevel: CrowdLevel;
+
+  @ApiProperty({
+    description: "Total number of attractions in the park",
+    example: 45,
+  })
   totalAttractions: number;
+
+  @ApiProperty({
+    description: "Number of attractions currently operating",
+    example: 42,
+  })
   operatingAttractions: number;
+
+  @ApiProperty({
+    description: "Number of attractions currently closed",
+    example: 3,
+  })
   closedAttractions: number;
+
+  @ApiProperty({
+    description: "Timestamp when statistics were calculated",
+    example: "2024-01-15T14:30:00Z",
+  })
   timestamp: Date | string;
 
-  // Phase 4: Optional percentile data
+  @ApiProperty({
+    description: "Optional percentile distribution for today",
+    required: false,
+  })
   percentilesToday?: {
     p50: number;
     p75: number;
@@ -48,7 +71,19 @@ export class ParkStatisticsDto {
     p95: number;
   };
 
-  // History of Park Average Wait Time (for Sparkline/Graph)
+  @ApiProperty({
+    description:
+      "Historical wait time data points for sparkline/graph visualization",
+    required: false,
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        timestamp: { type: "string", format: "date-time" },
+        waitTime: { type: "number" },
+      },
+    },
+  })
   history?: {
     timestamp: string;
     waitTime: number;
@@ -56,18 +91,85 @@ export class ParkStatisticsDto {
 }
 
 export class AttractionStatisticsDto {
+  @ApiProperty({
+    description: "Average wait time today (minutes)",
+    example: 25,
+    nullable: true,
+  })
   avgWaitToday: number | null;
+
+  @ApiProperty({
+    description: "Peak/maximum wait time today (minutes)",
+    example: 60,
+    nullable: true,
+  })
   peakWaitToday: number | null;
+
+  @ApiProperty({
+    description: "Timestamp when peak wait time occurred",
+    example: "2024-01-15T14:30:00Z",
+    nullable: true,
+  })
   peakWaitTimestamp: Date | null;
+
+  @ApiProperty({
+    description: "Minimum wait time today (minutes)",
+    example: 5,
+    nullable: true,
+  })
   minWaitToday: number | null;
+
+  @ApiProperty({
+    description:
+      "Typical wait time for current hour based on historical data (minutes)",
+    example: 20,
+    nullable: true,
+  })
   typicalWaitThisHour: number | null;
+
+  @ApiProperty({
+    description: "95th percentile wait time for current hour (minutes)",
+    example: 45,
+    nullable: true,
+  })
   percentile95ThisHour: number | null;
+
+  @ApiProperty({
+    description: "Percentage difference from typical wait time",
+    example: 25,
+    nullable: true,
+  })
   currentVsTypical: number | null;
+
+  @ApiProperty({
+    description: "Number of data points collected today",
+    example: 120,
+  })
   dataPoints: number;
+
+  @ApiProperty({
+    description: "Timestamp when statistics were calculated",
+    example: "2024-01-15T14:30:00Z",
+  })
   timestamp: Date;
+
+  @ApiProperty({
+    description: "Historical wait time data points for visualization",
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        timestamp: { type: "string", format: "date-time" },
+        waitTime: { type: "number" },
+      },
+    },
+  })
   history: { timestamp: string; waitTime: number }[];
 
-  // Phase 4: Optional percentile data
+  @ApiProperty({
+    description: "Optional percentile distribution for today",
+    required: false,
+  })
   distributionToday?: {
     p25: number;
     p50: number;
@@ -76,6 +178,10 @@ export class AttractionStatisticsDto {
     iqr: number;
   };
 
+  @ApiProperty({
+    description: "Optional recent pattern statistics",
+    required: false,
+  })
   recentPatterns?: {
     p50Last7d: number;
     p90Last7d: number;

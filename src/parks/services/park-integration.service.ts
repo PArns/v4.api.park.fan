@@ -870,6 +870,7 @@ export class ParkIntegrationService {
           hour,
           day,
           "park",
+          park.timezone,
         );
         // Note: We don't have a "current" wait, so we can't calculate a rating.
         // But we can populate baseline90thPercentile to show "Typical Wait: X min"
