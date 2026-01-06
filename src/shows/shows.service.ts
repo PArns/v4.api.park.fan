@@ -26,7 +26,7 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) { }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -335,6 +335,56 @@ export class ShowsService {
       await this.showLiveDataRepository.save(entry);
 
       return 1;
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Failed to save show live data: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  async saveLiveData(
+    showId: string,
+    status: string,
+    showtimes: any[],
+    lastUpdated: Date,
+    operatingHours?: { openingTime: string; closingTime: string },
+  ): Promise<void> {
+    try {
+      // Check if show exists, create if missing (orphan data from external API)
+      // This handles race condition where live data arrives before metadata sync
+      const showExists = await this.showRepository.findOne({
+        where: { id: showId },
+        select: ["id"], // Minimal select for performance
+      });
+
+      if (!showExists) {
+        this.logger.warn(
+          `Show ${showId} not found in database, creating placeholder entry for live data`,
+        );
+
+        // Create minimal show entry to satisfy foreign key constraint
+        // This will be enriched later by the shows metadata sync
+        const placeholderShow = this.showRepository.create({
+          id: showId,
+          name: `Show ${showId.substring(0, 8)}`, // Temporary name
+          slug: `show-${showId.substring(0, 8)}`,
+          // parkId will be set by metadata sync later
+        });
+        await this.showRepository.save(placeholderShow);
+
+        this.logger.log(`✅ Created placeholder show entry for ${showId}`);
+      }
+
+      // Save live data (BeforeInsert hook will generate id and timestamp)
+      // TypeScript workaround: cast to any because TypeORM doesn't recognize showId FK field
+      await this.showLiveDataRepository.save({
+        showId,
+        status,
+        showtimes,
+        lastUpdated,
+        operatingHours,
+      } as any);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
