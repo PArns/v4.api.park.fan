@@ -1,10 +1,11 @@
 """
 Database connection and queries for ML training
 """
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
-from typing import Generator, List, Dict, Any
+from typing import Generator, List, Dict
 import datetime
 import pandas as pd
 import decimal
@@ -29,9 +30,9 @@ def convert_df_types(df: pd.DataFrame) -> pd.DataFrame:
             sample = df[col].dropna()
             if sample.empty:
                 continue
-                
+
             first_val = sample.iloc[0]
-            
+
             try:
                 # 1. Decimal -> Float
                 if isinstance(first_val, decimal.Decimal):
@@ -44,12 +45,14 @@ def convert_df_types(df: pd.DataFrame) -> pd.DataFrame:
                     try:
                         df[col] = pd.to_datetime(df[col], utc=True)
                     except Exception as conv_error:
-                        print(f"⚠️  Warning: Failed to convert datetime column {col}: {conv_error}")
+                        print(
+                            f"⚠️  Warning: Failed to convert datetime column {col}: {conv_error}"
+                        )
                         # Keep original values if conversion fails
                         pass
             except Exception as e:
                 print(f"⚠️  Warning: Failed to convert column {col}: {e}")
-                
+
     return df
 
 
@@ -75,7 +78,9 @@ def get_db() -> Generator:
         db.close()
 
 
-def fetch_training_data(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
+def fetch_training_data(
+    start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
     """
     Fetch historical queue data, weather, holidays for training
 
@@ -145,10 +150,7 @@ def fetch_training_data(start_date: datetime.datetime, end_date: datetime.dateti
     """)
 
     with get_db() as db:
-        result = db.execute(query, {
-            "start_date": start_date,
-            "end_date": end_date
-        })
+        result = db.execute(query, {"start_date": start_date, "end_date": end_date})
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         return convert_df_types(df)
 
@@ -156,22 +158,22 @@ def fetch_training_data(start_date: datetime.datetime, end_date: datetime.dateti
 def fetch_queue_aggregates(
     attraction_ids: List[str],
     target_hour: datetime.datetime,
-    lookback_hours: List[int] = None
+    lookback_hours: List[int] = None,
 ) -> pd.DataFrame:
     """
     Fetch pre-computed percentiles from queue_data_aggregates
-    
+
     Used for temporal percentile lookups in ML features:
     - wait_p50_same_hour_yesterday (lookback: 24h)
     - wait_p90_same_hour_last_week (lookback: 168h)
     - wait_p75_same_hour_4w_ago (lookback: 672h)
-    
+
     Args:
         attraction_ids: List of attraction IDs to fetch
         target_hour: The hour to look back from (usually current prediction time)
         lookback_hours: List of hours to look back (e.g., [24, 168, 672])
                        If None, fetches all aggregates for last 7 days
-    
+
     Returns:
         DataFrame with columns:
         - attraction_id
@@ -183,7 +185,7 @@ def fetch_queue_aggregates(
     if lookback_hours is None:
         # Default: last 7 days for general ML features
         lookback_hours = list(range(0, 24 * 7, 24))  # Every 24h for 7 days
-    
+
     # Calculate exact timestamps to fetch
     target_timestamps = []
     for hours in lookback_hours:
@@ -191,7 +193,7 @@ def fetch_queue_aggregates(
         # Truncate to hour
         ts = ts.replace(minute=0, second=0, microsecond=0)
         target_timestamps.append(ts)
-    
+
     query = text("""
         SELECT
             "attractionId" as attraction_id,
@@ -212,18 +214,18 @@ def fetch_queue_aggregates(
           AND hour = ANY(:target_hours)
         ORDER BY "attractionId", hour DESC
     """)
-    
+
     with engine.connect() as conn:
         result = conn.execute(
             query,
             {
                 "attraction_ids": attraction_ids,
                 "target_hours": target_timestamps,
-                "target_hour": target_hour
-            }
+                "target_hour": target_hour,
+            },
         )
         data = pd.DataFrame(result.fetchall(), columns=result.keys())
-    
+
     return convert_df_types(data)
 
 
@@ -246,8 +248,9 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
         return {row.park_id: row.countries for row in result}
 
 
-
-def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
+def fetch_holidays(
+    country_codes: List[str], start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
     """
     Fetch holidays for specified countries
 
@@ -271,11 +274,14 @@ def fetch_holidays(country_codes: List[str], start_date: datetime.datetime, end_
     """)
 
     with get_db() as db:
-        result = db.execute(query, {
-            "countries": country_codes,
-            "start_date": start_date,
-            "end_date": end_date
-        })
+        result = db.execute(
+            query,
+            {
+                "countries": country_codes,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         return convert_df_types(df)
 
@@ -289,7 +295,7 @@ _parks_metadata_cache_ttl = 300  # 5 minutes in seconds
 def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
     """
     Fetch park metadata (country code, influencing regions, etc.)
-    
+
     OPTIMIZATION: Caches result for 5 minutes to avoid repeated DB queries
     during prediction batches.
 
@@ -299,14 +305,19 @@ def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
     Returns DataFrame with park details
     """
     global _parks_metadata_cache, _parks_metadata_cache_time
-    
+
     # Check cache if enabled
-    if use_cache and _parks_metadata_cache is not None and _parks_metadata_cache_time is not None:
+    if (
+        use_cache
+        and _parks_metadata_cache is not None
+        and _parks_metadata_cache_time is not None
+    ):
         import time
+
         age = time.time() - _parks_metadata_cache_time
         if age < _parks_metadata_cache_ttl:
             return _parks_metadata_cache.copy()
-    
+
     query = text("""
         SELECT
             p.id as park_id,
@@ -329,26 +340,28 @@ def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
         result = db.execute(query)
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         df = convert_df_types(df)
-        
+
         # Update cache
         if use_cache:
             import time
+
             _parks_metadata_cache = df.copy()
             _parks_metadata_cache_time = time.time()
-        
+
         return df
 
 
-
-def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
+def fetch_park_schedules(
+    start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
     """
     Fetch park opening hours/schedules including special events
-    
+
     IMPORTANT: This function expects start_date and end_date to represent dates
     in the park's local timezone (not UTC). The dates are converted using .date()
     which extracts the calendar date. If UTC datetime objects are passed, the
     date extraction will be in UTC, which may not match the park's local calendar date.
-    
+
     For timezone-aware usage, ensure dates are already converted to park local time
     before calling this function, or use the DataFrame-based extraction in
     add_park_schedule_features() which uses local_timestamp.
@@ -386,10 +399,9 @@ def fetch_park_schedules(start_date: datetime.datetime, end_date: datetime.datet
         # Note: If start_date/end_date are timezone-aware, .date() extracts the date
         # in that timezone. For correct behavior, ensure dates are in park local timezone.
         # The caller (add_park_schedule_features) should handle timezone conversion.
-        result = db.execute(query, {
-            "start_date": start_date.date(),
-            "end_date": end_date.date()
-        })
+        result = db.execute(
+            query, {"start_date": start_date.date(), "end_date": end_date.date()}
+        )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         return convert_df_types(df)
 

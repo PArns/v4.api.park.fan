@@ -1,6 +1,7 @@
 """
 Configuration for ML Service
 """
+
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -32,8 +33,8 @@ class Settings(BaseSettings):
     VALIDATION_DAYS: int = 30
 
     # Prediction Configuration
-    HOURLY_PREDICTIONS: int = 24   # Next 24 hours (internal use)
-    DAILY_PREDICTIONS: int = 365   # Next 365 days (1 year)
+    HOURLY_PREDICTIONS: int = 24  # Next 24 hours (internal use)
+    DAILY_PREDICTIONS: int = 365  # Next 365 days (1 year)
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200

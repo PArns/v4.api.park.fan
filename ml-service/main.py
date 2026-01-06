@@ -1,6 +1,7 @@
 """
 FastAPI ML Service for Wait Time Predictions
 """
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -23,7 +24,7 @@ settings = get_settings()
 app = FastAPI(
     title="Park.fan ML Service",
     description="Wait time prediction service using CatBoost",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Global model instance
@@ -52,6 +53,7 @@ async def startup_event():
 # Request/Response models
 class WeatherForecastItem(BaseModel):
     """Hourly weather forecast item"""
+
     time: str
     temperature: Optional[float]
     precipitation: Optional[float]
@@ -63,18 +65,20 @@ class WeatherForecastItem(BaseModel):
 
 class PredictionRequest(BaseModel):
     """Request for wait time predictions"""
+
     attractionIds: List[str]
     parkIds: List[str]
-    predictionType: str = 'hourly'  # 'hourly' or 'daily'
+    predictionType: str = "hourly"  # 'hourly' or 'daily'
     baseTime: Optional[str] = None  # ISO format, defaults to now
     weatherForecast: Optional[List[WeatherForecastItem]] = None
     currentWaitTimes: Optional[Dict[str, int]] = None
     recentWaitTimes: Optional[Dict[str, int]] = None  # ~30 mins ago for velocity
-    featureContext: Optional[Dict[str, Any]] = None   # Phase 2 features
+    featureContext: Optional[Dict[str, Any]] = None  # Phase 2 features
 
 
 class PredictionResponse(BaseModel):
     """Single prediction response"""
+
     attractionId: str
     parkId: str  # Added for schedule filtering
     predictedTime: str
@@ -89,6 +93,7 @@ class PredictionResponse(BaseModel):
 
 class BulkPredictionResponse(BaseModel):
     """Response containing multiple predictions"""
+
     predictions: List[PredictionResponse]
     count: int
     modelVersion: str
@@ -96,6 +101,7 @@ class BulkPredictionResponse(BaseModel):
 
 class ModelInfoResponse(BaseModel):
     """Model information"""
+
     version: str
     trainedAt: Optional[str]
     metrics: Optional[dict]
@@ -112,7 +118,7 @@ async def root():
         "service": "park.fan ML Service",
         "status": "running",
         "model_loaded": model is not None,
-        "model_version": model.version if model else None
+        "model_version": model.version if model else None,
     }
 
 
@@ -123,7 +129,7 @@ async def health():
         "status": "healthy",
         "model_loaded": model is not None,
         "model_version": model.version if model else None,
-        "ready_for_predictions": model is not None
+        "ready_for_predictions": model is not None,
     }
 
 
@@ -135,11 +141,11 @@ async def get_model_info():
 
     return ModelInfoResponse(
         version=model.version,
-        trainedAt=model.metadata.get('trained_at'),
-        metrics=model.metadata.get('metrics'),
-        features=model.metadata.get('features_used'),
-        train_samples=model.metadata.get('train_samples'),  # Add samples
-        val_samples=model.metadata.get('val_samples'),  # Add samples
+        trainedAt=model.metadata.get("trained_at"),
+        metrics=model.metadata.get("metrics"),
+        features=model.metadata.get("features_used"),
+        train_samples=model.metadata.get("train_samples"),  # Add samples
+        val_samples=model.metadata.get("val_samples"),  # Add samples
     )
 
 
@@ -149,19 +155,21 @@ async def reload_model():
     global model
     try:
         model_version = fetch_active_model_version()
-        logger.info(f"Reloading active model version {model_version} (from database)...")
-        
+        logger.info(
+            f"Reloading active model version {model_version} (from database)..."
+        )
+
         new_model = WaitTimeModel(model_version)
         new_model.load()
-        
+
         # Atomically swap
         model = new_model
         logger.info("✅ Model reloaded successfully")
-        
+
         return {
-            "status": "success", 
+            "status": "success",
             "message": f"Model reloaded. Version: {model.version}",
-            "version": model.version
+            "version": model.version,
         }
     except Exception as e:
         logger.error(f"❌ Error reloading model: {e}")
@@ -175,12 +183,13 @@ training_status = {
     "started_at": None,
     "finished_at": None,
     "status": "idle",
-    "error": None
+    "error": None,
 }
 
 
 class TrainRequest(BaseModel):
     """Training request"""
+
     version: Optional[str] = None
 
 
@@ -188,28 +197,25 @@ class TrainRequest(BaseModel):
 async def train_model_endpoint(request: TrainRequest):
     """
     Trigger model training in background
-    
+
     This endpoint starts training asynchronously and returns immediately.
     Use /train/status to check progress.
     """
     global training_status
-    
+
     if training_status["is_training"]:
-        raise HTTPException(
-            status_code=409, 
-            detail="Training already in progress"
-        )
-    
+        raise HTTPException(status_code=409, detail="Training already in progress")
+
     # Generate version if not provided
     version = request.version
     if not version:
         now = datetime.now(timezone.utc)
         version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
-    
+
     # Start training in background thread
     import threading
     from train import train_model
-    
+
     def training_worker():
         global training_status
         try:
@@ -219,16 +225,16 @@ async def train_model_endpoint(request: TrainRequest):
             training_status["status"] = "training"
             training_status["error"] = None
             training_status["finished_at"] = None
-            
+
             logger.info(f"🤖 Starting training in background for version {version}")
             train_model(version=version)
-            
+
             training_status["status"] = "completed"
             training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
             training_status["is_training"] = False
-            
+
             logger.info(f"✅ Training completed for version {version}")
-            
+
             # Auto-reload the new model
             try:
                 global model
@@ -238,9 +244,10 @@ async def train_model_endpoint(request: TrainRequest):
                 logger.info("✅ New model loaded automatically")
             except Exception as e:
                 logger.error(f"Failed to auto-load new model: {e}")
-                
+
         except Exception as e:
             import traceback
+
             error_traceback = traceback.format_exc()
             logger.error(f"❌ Training failed: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
@@ -248,16 +255,16 @@ async def train_model_endpoint(request: TrainRequest):
             training_status["error"] = f"{str(e)}\n\nTraceback:\n{error_traceback}"
             training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
             training_status["is_training"] = False
-    
+
     # Start background thread
     thread = threading.Thread(target=training_worker, daemon=True)
     thread.start()
-    
+
     return {
         "status": "training_started",
         "version": version,
         "message": f"Training started in background for version {version}",
-        "check_status_at": "/train/status"
+        "check_status_at": "/train/status",
     }
 
 
@@ -270,7 +277,7 @@ async def get_training_status():
         "started_at": training_status["started_at"],
         "finished_at": training_status["finished_at"],
         "status": training_status["status"],
-        "error": training_status["error"]
+        "error": training_status["error"],
     }
 
 
@@ -290,21 +297,19 @@ async def predict(request: PredictionRequest):
 
     if len(request.attractionIds) != len(request.parkIds):
         raise HTTPException(
-            status_code=400,
-            detail="attractionIds and parkIds must have same length"
+            status_code=400, detail="attractionIds and parkIds must have same length"
         )
 
-    if request.predictionType not in ['hourly', 'daily']:
+    if request.predictionType not in ["hourly", "daily"]:
         raise HTTPException(
-            status_code=400,
-            detail="predictionType must be 'hourly' or 'daily'"
+            status_code=400, detail="predictionType must be 'hourly' or 'daily'"
         )
 
     # Parse base time
     base_time = None
     if request.baseTime:
         try:
-            base_time = datetime.fromisoformat(request.baseTime.replace('Z', '+00:00'))
+            base_time = datetime.fromisoformat(request.baseTime.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid baseTime format")
 
@@ -319,36 +324,32 @@ async def predict(request: PredictionRequest):
             request.weatherForecast,
             request.currentWaitTimes,
             request.recentWaitTimes,
-            request.featureContext
+            request.featureContext,
         )
-        
+
         # Apply schedule filtering for both hourly and daily predictions
         # Hourly: Only hours within operating times
         # Daily: Only days when park is open (no off-season)
         predictions = filter_predictions_by_schedule(
-            predictions,
-            request.parkIds,
-            request.predictionType
+            predictions, request.parkIds, request.predictionType
         )
 
         return BulkPredictionResponse(
             predictions=[PredictionResponse(**p) for p in predictions],
             count=len(predictions),
-            modelVersion=model.version
+            modelVersion=model.version,
         )
 
     except Exception as e:
         import traceback
+
         logger.error(f"Prediction error: {e}")
         logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/predict/park/{park_id}", response_model=BulkPredictionResponse)
-async def predict_park(
-    park_id: str,
-    prediction_type: str = 'hourly'
-):
+async def predict_park(park_id: str, prediction_type: str = "hourly"):
     """
     Predict wait times for all attractions in a park
 
@@ -362,10 +363,9 @@ async def predict_park(
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    if prediction_type not in ['hourly', 'daily']:
+    if prediction_type not in ["hourly", "daily"]:
         raise HTTPException(
-            status_code=400,
-            detail="prediction_type must be 'hourly' or 'daily'"
+            status_code=400, detail="prediction_type must be 'hourly' or 'daily'"
         )
 
     try:
@@ -374,11 +374,12 @@ async def predict_park(
         return BulkPredictionResponse(
             predictions=[PredictionResponse(**p) for p in predictions],
             count=len(predictions),
-            modelVersion=model.version
+            modelVersion=model.version,
         )
 
     except Exception as e:
         import traceback
+
         logger.error(f"Park prediction error: {e}")
         logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -386,4 +387,5 @@ async def predict_park(
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

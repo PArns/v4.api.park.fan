@@ -1,10 +1,10 @@
 """
 Model training script
 """
+
 import argparse
 from datetime import datetime, timedelta, timezone
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 from config import get_settings
 from db import fetch_training_data
@@ -18,33 +18,36 @@ settings = get_settings()
 def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     """
     Filter out likely downtime anomalies (sudden drops to near-zero)
-    
+
     User Request: "filter downtime with unusual drops... even if not closed"
     """
-    if df.empty: return df
+    if df.empty:
+        return df
 
     print("   🧹 Filtering anomalies...")
     initial_count = len(df)
 
     # Ensure timestamp sort
-    df = df.sort_values(['attractionId', 'timestamp'])
+    df = df.sort_values(["attractionId", "timestamp"])
 
     # Calculate rolling median (centered) to determine "context"
     # We use a centered window to see what's happening around the data point
-    df['rolling_median'] = df.groupby('attractionId')['waitTime'].transform(
+    df["rolling_median"] = df.groupby("attractionId")["waitTime"].transform(
         lambda x: x.rolling(window=7, min_periods=1, center=True).median()
     )
 
-    # Condition: Wait time is very low (< 10 min) 
+    # Condition: Wait time is very low (< 10 min)
     # BUT the surrounding context (median) is high (> 25 min)
     # This suggests a sudden, unrepresentative drop (downtime/reset) vs natural low crowds
-    anomaly_mask = (df['waitTime'] < 10) & (df['rolling_median'] > 25)
+    anomaly_mask = (df["waitTime"] < 10) & (df["rolling_median"] > 25)
 
     df_clean = df[~anomaly_mask].copy()
-    df_clean = df_clean.drop(columns=['rolling_median'])
+    df_clean = df_clean.drop(columns=["rolling_median"])
 
     removed = initial_count - len(df_clean)
-    print(f"   Removed {removed} rows ({(removed/initial_count)*100:.2f}%) identified as anomalies")
+    print(
+        f"   Removed {removed} rows ({(removed / initial_count) * 100:.2f}%) identified as anomalies"
+    )
 
     return df_clean
 
@@ -59,16 +62,16 @@ def train_model(version: str = None) -> None:
     if version is None:
         version = settings.MODEL_VERSION
 
-    print(f"\n{'='*60}")
-    print(f"🚀 Training Wait Time Prediction Model")
+    print(f"\n{'=' * 60}")
+    print("🚀 Training Wait Time Prediction Model")
     print(f"   Version: {version}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # 1. Define training period (last 2 years + 1 day buffer for today's data)
     end_date = datetime.now(timezone.utc) + timedelta(days=1)
     start_date = end_date - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
 
-    print(f"📅 Training Period:")
+    print("📅 Training Period:")
     print(f"   Start: {start_date.strftime('%Y-%m-%d')}")
     print(f"   End: {end_date.strftime('%Y-%m-%d')}")
     print()
@@ -82,10 +85,10 @@ def train_model(version: str = None) -> None:
     if len(df) == 0:
         print("❌ No training data found!")
         return
-    
+
     # 2.5 Validate data quality
     df, validation_report = validate_training_data(df)
-    
+
     # 2.6 Remove anomalies
     df = remove_anomalies(df)
     print()
@@ -96,7 +99,7 @@ def train_model(version: str = None) -> None:
     print()
 
     # 4. Drop rows with missing target
-    df = df.dropna(subset=['waitTime'])
+    df = df.dropna(subset=["waitTime"])
     print(f"   Rows after cleaning: {len(df):,}")
     print()
 
@@ -106,32 +109,38 @@ def train_model(version: str = None) -> None:
         return
 
     if len(df) < 10:
-        print("⚠️  WARNING: Very limited data (< 10 rows). Model will have poor accuracy.")
+        print(
+            "⚠️  WARNING: Very limited data (< 10 rows). Model will have poor accuracy."
+        )
         print("   Training anyway - model will improve as more data accumulates.")
         print()
     elif len(df) < 100:
         print("⚠️  WARNING: Limited data (< 100 rows). Model accuracy will be limited.")
-        print("   Model will improve significantly as more data is collected over time.")
+        print(
+            "   Model will improve significantly as more data is collected over time."
+        )
         print()
     elif len(df) < 1000:
-        print("ℹ️  Notice: Moderate data available. Model will improve with more historical data.")
+        print(
+            "ℹ️  Notice: Moderate data available. Model will improve with more historical data."
+        )
         print()
 
     # 5. Prepare features and target
     feature_columns = get_feature_columns()
     X = df[feature_columns]
-    y = df['waitTime']
+    y = df["waitTime"]
 
     # 6. Train/test split
     # For small datasets (< 100 rows or < 7 days), use percentage split
     # For larger datasets, use time-based split (last N days as validation)
-    data_span_days = (df['timestamp'].max() - df['timestamp'].min()).days
+    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
 
     if len(df) < 100 or data_span_days < 7:
         # Percentage-based split for small datasets
         print("📊 Using percentage-based split (80/20) due to limited data")
         split_idx = int(len(df) * 0.8)
-        df = df.sort_values('timestamp')  # Ensure time ordering
+        df = df.sort_values("timestamp")  # Ensure time ordering
 
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
@@ -140,18 +149,20 @@ def train_model(version: str = None) -> None:
     else:
         # Time-based split for larger datasets
         validation_cutoff = end_date - timedelta(days=settings.VALIDATION_DAYS)
-        train_mask = df['timestamp'] < validation_cutoff
-        val_mask = df['timestamp'] >= validation_cutoff
+        train_mask = df["timestamp"] < validation_cutoff
+        val_mask = df["timestamp"] >= validation_cutoff
 
         X_train = X[train_mask]
         y_train = y[train_mask]
         X_val = X[val_mask]
         y_val = y[val_mask]
 
-    print(f"📈 Train/Validation Split:")
+    print("📈 Train/Validation Split:")
     print(f"   Training samples: {len(X_train):,}")
     print(f"   Validation samples: {len(X_val):,}")
-    print(f"   Split ratio: {len(X_train)/(len(X_train)+len(X_val))*100:.1f}% / {len(X_val)/(len(X_train)+len(X_val))*100:.1f}%")
+    print(
+        f"   Split ratio: {len(X_train) / (len(X_train) + len(X_val)) * 100:.1f}% / {len(X_val) / (len(X_train) + len(X_val)) * 100:.1f}%"
+    )
     print()
 
     # 7. Train model
@@ -164,10 +175,10 @@ def train_model(version: str = None) -> None:
     model = WaitTimeModel(version)
     metrics = model.train(X_train, y_train, X_val, y_val)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("✅ Training Complete!")
-    print(f"{'='*60}")
-    print(f"\n📊 Validation Metrics:")
+    print(f"{'=' * 60}")
+    print("\n📊 Validation Metrics:")
     print(f"   MAE:  {metrics['mae']:.2f} minutes")
     print(f"   RMSE: {metrics['rmse']:.2f} minutes")
     print(f"   MAPE: {metrics['mape']:.2f}%")
@@ -186,18 +197,15 @@ def train_model(version: str = None) -> None:
     model.save()
     print()
 
-    print("="*60)
+    print("=" * 60)
     print(f"✅ Model {version} ready for deployment!")
-    print("="*60)
+    print("=" * 60)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train wait time prediction model")
     parser.add_argument(
-        '--version',
-        type=str,
-        default=None,
-        help='Model version (e.g., v1.0.0)'
+        "--version", type=str, default=None, help="Model version (e.g., v1.0.0)"
     )
 
     args = parser.parse_args()
@@ -206,5 +214,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ FATAL ERROR during training: {e}")
         import traceback
+
         traceback.print_exc()
         exit(1)
