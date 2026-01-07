@@ -43,6 +43,9 @@ export class OpenMeteoClient {
 
   /**
    * Execute request with retry logic for 429s and 5xx errors
+   *
+   * IMPORTANT: This method checks for blocks before making requests to prevent
+   * calls during a block, which would extend the lock duration.
    */
   private async requestWithRetry<T>(
     url: string,
@@ -50,19 +53,25 @@ export class OpenMeteoClient {
     retries = 3,
     delay = 1000,
   ): Promise<T> {
-    try {
-      // Check Global Redis Block
-      // Only check on first attempt or if we suspect a block
-      const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
-      if (blockedUntil) {
-        const ttl = await this.redis.ttl(this.BLOCKED_KEY);
-        // Wait if reasonable (under 65s)
-        if (ttl > 0 && ttl < 65) {
-          // this.logger.debug(`Waiting out distributed rate limit (${ttl}s)...`);
-          await new Promise((resolve) => setTimeout(resolve, ttl * 1000));
-        }
-      }
+    // Check Global Redis Block before making request
+    // Only log on first attempt (retries === 3) to avoid duplicate logs
+    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+    if (blockedUntil) {
+      const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+      const nextRetrySeconds = ttl > 0 ? ttl : 0;
+      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
 
+      // Only log on first attempt to avoid duplicate logs
+      if (retries === 3) {
+        this.logger.warn(
+          `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
+        );
+      }
+      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
+      throw new Error(`Open-Meteo API: Global Rate Limit (blocked)`);
+    }
+
+    try {
       const response = await this.client.get<T>(url, config);
 
       return response.data;

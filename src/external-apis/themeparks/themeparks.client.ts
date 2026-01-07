@@ -30,28 +30,28 @@ export class ThemeParksClient {
 
   /**
    * Helper to fetch with retry on 429
+   *
+   * IMPORTANT: This method checks for blocks before making requests to prevent
+   * calls during a block, which would extend the lock duration.
    */
   private async fetchWithRetry(url: string, attempt = 0): Promise<Response> {
     // 1. Check Distributed Rate Limit
-    if (attempt === 0) {
-      // Check only on first attempt to avoid redundant checks during retry loop
-      const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
-      if (blockedUntil) {
-        const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+    // Only check on first attempt to avoid redundant checks during retry loop
+    // But also check during retries if a block becomes active
+    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+    if (blockedUntil) {
+      const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+      const nextRetrySeconds = ttl > 0 ? ttl : 0;
+      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
+
+      // Only log on first attempt to avoid duplicate logs
+      if (attempt === 0) {
         this.logger.warn(
-          `⏳ Global Rate Limit active. Waiting for ThemeParks API (${ttl}s)...`,
+          `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
         );
-        // Wait it out if it's short, otherwise throw?
-        // Since this is a retry-capable function, we can just wait if it's reasonable
-        if (ttl > 0 && ttl < 60) {
-          await new Promise((resolve) => setTimeout(resolve, ttl * 1000));
-        } else {
-          // If long block, maybe just throw to avoid holding connection
-          throw new Error(
-            `ThemeParks API: Global Rate Limit (blocked for ${ttl}s)`,
-          );
-        }
       }
+      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
+      throw new Error(`ThemeParks API: Global Rate Limit (blocked)`);
     }
 
     const response = await fetch(url);

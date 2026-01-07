@@ -26,6 +26,9 @@ export class GoogleGeocodingClient {
   private readonly baseUrl =
     "https://maps.googleapis.com/maps/api/geocode/json";
 
+  // Redis key for distributed rate limiting
+  private readonly BLOCKED_KEY = "ratelimit:google-geocoding:blocked";
+
   // Very long TTL for geocoding - coordinates NEVER change
   // 90 days - minimizes expensive Google API calls
   private readonly TTL_GEOCODING = 90 * 24 * 60 * 60; // 90 days
@@ -127,6 +130,24 @@ export class GoogleGeocodingClient {
     longitude: number,
     attempt = 0,
   ): Promise<GeographicData | null> {
+    // Check Global Redis Block before making request
+    // Only log on first attempt to avoid duplicate logs
+    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+    if (blockedUntil) {
+      const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+      const nextRetrySeconds = ttl > 0 ? ttl : 0;
+      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
+
+      // Only log on first attempt to avoid duplicate logs
+      if (attempt === 0) {
+        this.logger.warn(
+          `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
+        );
+      }
+      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
+      throw new Error(`Google Geocoding API: Global Rate Limit (blocked)`);
+    }
+
     try {
       const response = await this.httpClient.get<GoogleGeocodingResponse>(
         this.baseUrl,
@@ -141,9 +162,12 @@ export class GoogleGeocodingClient {
 
       // Handle Google API specific status codes
       if (response.data.status === "OVER_QUERY_LIMIT") {
+        // Set global block in Redis (60s default)
+        await this.redis.set(this.BLOCKED_KEY, "true", "EX", 60);
+
         if (attempt >= 5) {
           this.logger.error(
-            `Google Geocoding API rate limit exceeded after 5 attempts.`,
+            `Google Geocoding API rate limit exceeded after 5 attempts. Setting global block for 60s.`,
           );
           return null;
         }
@@ -187,8 +211,13 @@ export class GoogleGeocodingClient {
       if (axios.isAxiosError(error)) {
         // Handle HTTP 429
         if (error.response?.status === 429) {
+          // Set global block in Redis (60s default)
+          await this.redis.set(this.BLOCKED_KEY, "true", "EX", 60);
+
           if (attempt >= 5) {
-            this.logger.error(`HTTP 429 Rate limit exceeded after 5 attempts.`);
+            this.logger.error(
+              `HTTP 429 Rate limit exceeded after 5 attempts. Setting global block for 60s.`,
+            );
             return null;
           }
           const delay = 1000 * Math.pow(2, attempt);

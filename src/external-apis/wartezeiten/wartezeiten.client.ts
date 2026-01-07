@@ -57,14 +57,23 @@ export class WartezeitenClient {
 
   /**
    * Enforce rate limiting (90 req/min local + global Redis check)
+   *
+   * IMPORTANT: This method MUST be called before any API request to prevent
+   * calls during a block, which would extend the lock duration.
    */
   private async enforceRateLimit(): Promise<void> {
     // 1. Check Global Redis Block
     const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
     if (blockedUntil) {
+      // Get TTL to determine when block expires
+      const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+      const nextRetrySeconds = ttl > 0 ? ttl : 0;
+      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
+
       this.logger.warn(
-        `⏳ Global Rate Limit active. Waiting for Wartezeiten API recovery...`,
+        `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
       );
+      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
       throw new Error(`Wartezeiten API: Global Rate Limit (blocked)`);
     }
 
@@ -139,6 +148,10 @@ export class WartezeitenClient {
   /**
    * Execute request with retry logic for 5xx and network errors
    * NOTE: Does NOT retry 429s because of the severe 15-minute block penalty.
+   *
+   * IMPORTANT: This method assumes enforceRateLimit() was called before.
+   * However, we check again here to prevent calls during retries if a block
+   * becomes active (e.g., from another process).
    */
   private async requestWithRetry<T>(
     url: string,
@@ -146,6 +159,24 @@ export class WartezeitenClient {
     retries = 3,
     delay = 1000,
   ): Promise<T> {
+    // Double-check block status before making request (prevents calls during retries)
+    // Only log if this is a retry (retries < 3), otherwise enforceRateLimit() already logged
+    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+    if (blockedUntil) {
+      // Only log if we're in a retry loop (not the initial call)
+      if (retries < 3) {
+        const ttl = await this.redis.ttl(this.BLOCKED_KEY);
+        const nextRetrySeconds = ttl > 0 ? ttl : 0;
+        const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
+
+        this.logger.warn(
+          `⏳ Block detected during retry. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
+        );
+      }
+      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
+      throw new Error(`Wartezeiten API: Global Rate Limit (blocked)`);
+    }
+
     try {
       const response = await this.client.get<T>(url, config);
       return response.data;
