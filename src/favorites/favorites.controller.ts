@@ -10,11 +10,11 @@ import { FavoritesService } from "./favorites.service";
 import { FavoritesQueryDto } from "./dto/favorites-request.dto";
 import { FavoritesResponseDto } from "./dto/favorites-response.dto";
 import {
-  ParkWithDistanceDto,
   AttractionWithDistanceDto,
   ShowWithDistanceDto,
   RestaurantWithDistanceDto,
 } from "./dto/favorites-response.dto";
+import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 /**

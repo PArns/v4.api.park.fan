@@ -15,11 +15,11 @@ import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import {
   FavoritesResponseDto,
-  ParkWithDistanceDto,
   AttractionWithDistanceDto,
   ShowWithDistanceDto,
   RestaurantWithDistanceDto,
 } from "./dto/favorites-response.dto";
+import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import {
   calculateHaversineDistance,
   GeoCoordinate,

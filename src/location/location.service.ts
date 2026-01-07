@@ -18,9 +18,9 @@ import {
   NearbyRidesDto,
   NearbyParksDto,
   RideWithDistanceDto,
-  ParkWithDistanceDto,
   NearbyParkInfoDto,
 } from "./dto/nearby-response.dto";
+import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 
 /**
  * Location Service
@@ -362,8 +362,8 @@ export class LocationService {
         name: park.name,
         slug: park.slug,
         distance: Math.round(park.distance),
-        city: park.city || "Unknown",
-        country: park.country || "Unknown",
+        city: park.city || null,
+        country: park.country || null,
         status,
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,
@@ -376,7 +376,7 @@ export class LocationService {
               occupancy: occupancy.current,
             }
           : undefined,
-        url: buildParkUrl(park) || "",
+        url: buildParkUrl(park) || null,
         timezone: park.timezone,
         todaySchedule:
           todaySchedule && todaySchedule.length > 0
