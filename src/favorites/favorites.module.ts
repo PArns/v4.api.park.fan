@@ -12,6 +12,7 @@ import { ShowsModule } from "../shows/shows.module";
 import { RestaurantsModule } from "../restaurants/restaurants.module";
 import { QueueDataModule } from "../queue-data/queue-data.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
+import { RedisModule } from "../common/redis/redis.module";
 
 /**
  * Favorites Module
@@ -27,6 +28,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
     forwardRef(() => RestaurantsModule),
     forwardRef(() => QueueDataModule),
     forwardRef(() => AnalyticsModule),
+    RedisModule,
   ],
   controllers: [FavoritesController],
   providers: [FavoritesService],

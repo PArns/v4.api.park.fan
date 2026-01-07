@@ -1,6 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
@@ -35,6 +37,8 @@ import { buildParkUrl } from "../common/utils/url.util";
 @Injectable()
 export class FavoritesService {
   private readonly logger = new Logger(FavoritesService.name);
+  private readonly CACHE_TTL = 2 * 60; // 2 minutes - matches HTTP cache
+  private readonly CACHE_STALE_THRESHOLD = 60; // Refresh if TTL < 1 minute
 
   constructor(
     @InjectRepository(Park)
@@ -52,10 +56,16 @@ export class FavoritesService {
     private readonly restaurantsService: RestaurantsService,
     private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /**
    * Get favorites with full information
+   *
+   * Uses Redis caching for performance:
+   * - Cache key based on sorted IDs + location hash
+   * - TTL: 2 minutes (matches HTTP cache)
+   * - Stale-while-revalidate: refreshes in background if TTL < 1 minute
    *
    * @param parkIds - Array of park IDs
    * @param attractionIds - Array of attraction IDs
@@ -69,6 +79,151 @@ export class FavoritesService {
     attractionIds: string[] = [],
     showIds: string[] = [],
     restaurantIds: string[] = [],
+    userLocation?: GeoCoordinate,
+  ): Promise<FavoritesResponseDto> {
+    // Generate cache key from sorted IDs + location
+    const cacheKey = this.buildCacheKey(
+      parkIds,
+      attractionIds,
+      showIds,
+      restaurantIds,
+      userLocation,
+    );
+
+    // Try cache first
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) {
+        const cachedResponse = JSON.parse(cached) as FavoritesResponseDto;
+
+        // Stale-while-revalidate: refresh in background if cache expires soon
+        const ttl = await this.redis.ttl(cacheKey);
+        if (ttl < this.CACHE_STALE_THRESHOLD && ttl > 0) {
+          this.refreshCacheInBackground(
+            parkIds,
+            attractionIds,
+            showIds,
+            restaurantIds,
+            userLocation,
+            cacheKey,
+          ).catch((err) =>
+            this.logger.warn(
+              `Background cache refresh failed for favorites:`,
+              err,
+            ),
+          );
+        }
+
+        return cachedResponse;
+      }
+    } catch (error) {
+      this.logger.warn(`Cache read failed, falling back to DB:`, error);
+    }
+
+    // Cache miss - fetch and enrich data
+    const response = await this.fetchAndEnrichFavorites(
+      parkIds,
+      attractionIds,
+      showIds,
+      restaurantIds,
+      userLocation,
+    );
+
+    // Cache response
+    try {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(response),
+        "EX",
+        this.CACHE_TTL,
+      );
+    } catch (error) {
+      this.logger.warn(`Cache write failed:`, error);
+    }
+
+    return response;
+  }
+
+  /**
+   * Build cache key from entity IDs and user location
+   * Uses sorted IDs for consistent keys regardless of input order
+   */
+  private buildCacheKey(
+    parkIds: string[],
+    attractionIds: string[],
+    showIds: string[],
+    restaurantIds: string[],
+    userLocation?: GeoCoordinate,
+  ): string {
+    // Sort IDs for consistent cache keys
+    const sortedParkIds = [...parkIds].sort().join(",");
+    const sortedAttractionIds = [...attractionIds].sort().join(",");
+    const sortedShowIds = [...showIds].sort().join(",");
+    const sortedRestaurantIds = [...restaurantIds].sort().join(",");
+
+    // Create location hash if provided (rounded to ~100m precision)
+    let locationHash = "";
+    if (userLocation) {
+      const roundedLat = Math.round(userLocation.latitude * 1000) / 1000;
+      const roundedLng = Math.round(userLocation.longitude * 1000) / 1000;
+      locationHash = `:${roundedLat}:${roundedLng}`;
+    }
+
+    // Build key: favorites:{parkIds}:{attractionIds}:{showIds}:{restaurantIds}:{locationHash}
+    const keyParts = [
+      "favorites",
+      sortedParkIds || "none",
+      sortedAttractionIds || "none",
+      sortedShowIds || "none",
+      sortedRestaurantIds || "none",
+    ];
+
+    if (locationHash) {
+      keyParts.push(locationHash.substring(1)); // Remove leading colon
+    }
+
+    return keyParts.join(":");
+  }
+
+  /**
+   * Refresh cache in background (stale-while-revalidate pattern)
+   */
+  private async refreshCacheInBackground(
+    parkIds: string[],
+    attractionIds: string[],
+    showIds: string[],
+    restaurantIds: string[],
+    userLocation: GeoCoordinate | undefined,
+    cacheKey: string,
+  ): Promise<void> {
+    const response = await this.fetchAndEnrichFavorites(
+      parkIds,
+      attractionIds,
+      showIds,
+      restaurantIds,
+      userLocation,
+    );
+
+    try {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(response),
+        "EX",
+        this.CACHE_TTL,
+      );
+    } catch (error) {
+      this.logger.warn(`Background cache refresh failed:`, error);
+    }
+  }
+
+  /**
+   * Fetch and enrich favorites data (core logic without caching)
+   */
+  private async fetchAndEnrichFavorites(
+    parkIds: string[],
+    attractionIds: string[],
+    showIds: string[],
+    restaurantIds: string[],
     userLocation?: GeoCoordinate,
   ): Promise<FavoritesResponseDto> {
     // Fetch all entities in parallel
