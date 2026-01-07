@@ -162,6 +162,7 @@ export class ShowWithDistanceDto {
     id: string;
     name: string;
     slug: string;
+    timezone: string;
   } | null;
 }
 
@@ -221,6 +222,7 @@ export class RestaurantWithDistanceDto {
     id: string;
     name: string;
     slug: string;
+    timezone: string;
   } | null;
 }
 

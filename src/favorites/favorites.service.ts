@@ -365,6 +365,7 @@ export class FavoritesService {
               id: show.park.id,
               name: show.park.name,
               slug: show.park.slug,
+              timezone: show.park.timezone,
             }
           : null,
       };
@@ -422,6 +423,7 @@ export class FavoritesService {
               id: restaurant.park.id,
               name: restaurant.park.name,
               slug: restaurant.park.slug,
+              timezone: restaurant.park.timezone,
             }
           : null,
       };
