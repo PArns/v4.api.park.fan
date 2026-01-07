@@ -544,8 +544,14 @@ export class QueueDataService {
   /**
    * Get valid data cutoff based on park opening hours
    *
-   * If park is open today, returns today's opening time.
-   * Otherwise, falls back to maxAgeMinutes (default: 6 hours) from now.
+   * Uses park timezone to determine "today" and checks if park is scheduled to operate today.
+   * If park has an OPERATING schedule for today (even if not yet open), uses today's opening time.
+   * This ensures we keep all data from when the park opens, even if > 6 hours.
+   *
+   * Falls back to maxAgeMinutes (default: 6 hours) if:
+   * - No schedule available
+   * - Park is not scheduled to operate today
+   * - Schedule lookup fails
    *
    * @param parkId - Park ID
    * @param maxAgeMinutes - Fallback maximum age in minutes (optional, default: 6 hours)
@@ -556,18 +562,27 @@ export class QueueDataService {
     maxAgeMinutes?: number,
   ): Promise<Date | undefined> {
     try {
-      // Get today's schedule
+      // Get today's schedule (uses park timezone internally)
       const todaySchedule = await this.parksService.getTodaySchedule(parkId);
 
       // Find today's OPERATING schedule
+      // openingTime and closingTime are stored as UTC timestamps
       const operatingSchedule = todaySchedule.find(
         (s) => s.scheduleType === "OPERATING" && s.openingTime,
       );
 
       if (operatingSchedule?.openingTime) {
-        // Park is open today - use opening time as cutoff
-        // This ensures we keep all data from when the park opened, even if > 6 hours
-        return new Date(operatingSchedule.openingTime);
+        // Park is scheduled to operate today - use opening time as cutoff
+        // This ensures we keep all data from when the park opens (or will open),
+        // even if the park hasn't opened yet or has been open for > 6 hours
+        // openingTime is already a UTC timestamp, so we can use it directly
+        const openingTime = new Date(operatingSchedule.openingTime);
+        const now = new Date();
+
+        // If opening time is in the future (park hasn't opened yet today),
+        // still use it as cutoff to ensure we have data once it opens
+        // If opening time is in the past, use it to keep all data from today
+        return openingTime;
       }
 
       // No schedule or park closed today - use fallback
