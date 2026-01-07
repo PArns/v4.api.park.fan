@@ -17,8 +17,9 @@ import { AnalyticsModule } from "./analytics/analytics.module";
 import { MLModule } from "./ml/ml.module";
 import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
-import { DiscoveryModule } from "./discovery/discovery.module";
 import { LocationModule } from "./location/location.module";
+import { DiscoveryModule } from "./discovery/discovery.module";
+import { FavoritesModule } from "./favorites/favorites.module";
 import { AdminModule } from "./admin/admin.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
@@ -65,6 +66,9 @@ import { AppService } from "./app.service";
     // Geographic Discovery
     LocationModule,
     DiscoveryModule,
+
+    // Favorites
+    FavoritesModule,
 
     // Admin utilities
     AdminModule,
