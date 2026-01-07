@@ -1,11 +1,13 @@
 import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bull";
 import { RedisModule } from "../common/redis/redis.module";
+import { ParksModule } from "../parks/parks.module";
 import { AdminController } from "./admin.controller";
 
 @Module({
   imports: [
     RedisModule,
+    ParksModule,
     BullModule.registerQueue({ name: "holidays" }),
     BullModule.registerQueue({ name: "park-metadata" }),
     BullModule.registerQueue({ name: "ml-training" }),

@@ -1,14 +1,25 @@
-import { Controller, Post, HttpCode, HttpStatus, Inject } from "@nestjs/common";
+import {
+  Controller,
+  Post,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Body,
+} from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiSecurity,
+  ApiBody,
 } from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { ParkValidatorService } from "../parks/services/park-validator.service";
+import { ParkRepairService } from "../parks/services/park-repair.service";
+import { ParkMergeService } from "../parks/services/park-merge.service";
 
 /**
  * Admin Controller
@@ -30,6 +41,9 @@ export class AdminController {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly parkValidatorService: ParkValidatorService,
+    private readonly parkRepairService: ParkRepairService,
+    private readonly parkMergeService: ParkMergeService,
   ) {}
 
   /**
@@ -57,6 +71,35 @@ export class AdminController {
     );
     return {
       message: "Holiday sync job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Manually trigger park metadata sync
+   *
+   * Forces a complete resync of all parks from all sources (Wiki, Queue-Times, Wartezeiten).
+   * Useful for testing duplicate detection and matching improvements.
+   */
+  @Post("sync-parks")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger park metadata sync",
+    description:
+      "Manually triggers a complete resync of all parks from all sources (Wiki, Queue-Times, Wartezeiten)",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Park metadata sync job queued successfully",
+  })
+  async triggerParkSync(): Promise<{ message: string; jobId: string }> {
+    const job = await this.parkMetadataQueue.add(
+      "sync-all-parks",
+      {},
+      { priority: 10 },
+    );
+    return {
+      message: "Park metadata sync job queued",
       jobId: job.id.toString(),
     };
   }
@@ -227,6 +270,525 @@ export class AdminController {
       message: "Complete cache reset and rebuild started",
       flushed: "ALL (FLUSHALL executed)",
       jobsTriggered,
+    };
+  }
+
+  /**
+   * Validate and repair park data
+   *
+   * Validates all parks against external APIs (Queue-Times, Wartezeiten.app)
+   * and optionally repairs found issues automatically.
+   */
+  @Post("validate-and-repair-parks")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Validate and repair parks",
+    description:
+      "Validates all parks against Queue-Times and Wartezeiten.app APIs. " +
+      "Detects mismatched IDs, missing IDs, and duplicates. " +
+      "Optionally repairs issues automatically if autoFix=true.",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        autoFix: {
+          type: "boolean",
+          description: "Automatically repair found issues",
+          default: false,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Validation complete. Returns report with found issues and repair results.",
+  })
+  async validateAndRepairParks(
+    @Body() body: { autoFix?: boolean } = {},
+  ): Promise<{
+    validation: {
+      mismatchedQtIds: number;
+      mismatchedWzIds: number;
+      missingQtIds: number;
+      missingWzIds: number;
+      duplicates: number;
+      summary: {
+        totalParks: number;
+        parksWithQtId: number;
+        parksWithWzId: number;
+        issuesFound: number;
+      };
+    };
+    repair?: {
+      fixedQtMismatches: number;
+      fixedWzMismatches: number;
+      addedQtIds: number;
+      addedWzIds: number;
+      mergedDuplicates: number;
+      errors: number;
+    };
+    report: {
+      mismatchedQtIds: Array<{
+        parkId: string;
+        parkName: string;
+        currentQtId: string;
+        reason: string;
+      }>;
+      mismatchedWzIds: Array<{
+        parkId: string;
+        parkName: string;
+        currentWzId: string;
+        reason: string;
+      }>;
+      missingQtIds: Array<{
+        parkId: string;
+        parkName: string;
+        suggestedQtId: string;
+      }>;
+      missingWzIds: Array<{
+        parkId: string;
+        parkName: string;
+        suggestedWzId: string;
+      }>;
+      duplicates: Array<{
+        park1: { id: string; name: string };
+        park2: { id: string; name: string };
+        score: number;
+        reason: string;
+      }>;
+    };
+  }> {
+    const autoFix = body.autoFix === true;
+
+    // Run validation
+    const validationReport = await this.parkValidatorService.validateAll();
+
+    let repairResult = null;
+
+    if (autoFix) {
+      // Auto-fix mismatched QT IDs (but we need to determine correct IDs first)
+      // For now, we'll only fix missing IDs and note mismatches for manual review
+      const qtFixes: Array<{ parkId: string; correctQtId: string }> = [];
+      const wzFixes: Array<{ parkId: string; correctWzId: string }> = [];
+      const qtAdditions: Array<{ parkId: string; qtId: string }> = [];
+      const wzAdditions: Array<{ parkId: string; wzId: string }> = [];
+
+      // Add missing IDs
+      for (const missing of validationReport.missingQtIds) {
+        qtAdditions.push({
+          parkId: missing.parkId,
+          qtId: missing.suggestedQtId,
+        });
+      }
+
+      for (const missing of validationReport.missingWzIds) {
+        wzAdditions.push({
+          parkId: missing.parkId,
+          wzId: missing.suggestedWzId,
+        });
+      }
+
+      // Note: Mismatched IDs require manual review to determine correct IDs
+      // We don't auto-fix them as it could cause data loss
+
+      // Perform repairs
+      const [qtResult, wzResult, qtAddResult, wzAddResult] = await Promise.all([
+        qtFixes.length > 0
+          ? this.parkRepairService.fixMismatchedQueueTimesIds(qtFixes)
+          : Promise.resolve({
+              fixedQtMismatches: 0,
+              fixedWzMismatches: 0,
+              addedQtIds: 0,
+              addedWzIds: 0,
+              mergedDuplicates: 0,
+              errors: [],
+            }),
+        wzFixes.length > 0
+          ? this.parkRepairService.fixMismatchedWartezeitenIds(wzFixes)
+          : Promise.resolve({
+              fixedQtMismatches: 0,
+              fixedWzMismatches: 0,
+              addedQtIds: 0,
+              addedWzIds: 0,
+              mergedDuplicates: 0,
+              errors: [],
+            }),
+        qtAdditions.length > 0
+          ? this.parkRepairService.addMissingQueueTimesIds(qtAdditions)
+          : Promise.resolve({
+              fixedQtMismatches: 0,
+              fixedWzMismatches: 0,
+              addedQtIds: 0,
+              addedWzIds: 0,
+              mergedDuplicates: 0,
+              errors: [],
+            }),
+        wzAdditions.length > 0
+          ? this.parkRepairService.addMissingWartezeitenIds(wzAdditions)
+          : Promise.resolve({
+              fixedQtMismatches: 0,
+              fixedWzMismatches: 0,
+              addedQtIds: 0,
+              addedWzIds: 0,
+              mergedDuplicates: 0,
+              errors: [],
+            }),
+      ]);
+
+      repairResult = {
+        fixedQtMismatches:
+          qtResult.fixedQtMismatches + wzResult.fixedQtMismatches,
+        fixedWzMismatches:
+          qtResult.fixedWzMismatches + wzResult.fixedWzMismatches,
+        addedQtIds: qtAddResult.addedQtIds,
+        addedWzIds: wzAddResult.addedWzIds,
+        mergedDuplicates: 0, // Merges require manual confirmation
+        errors: [
+          ...qtResult.errors,
+          ...wzResult.errors,
+          ...qtAddResult.errors,
+          ...wzAddResult.errors,
+        ],
+      };
+    }
+
+    return {
+      validation: {
+        mismatchedQtIds: validationReport.mismatchedQtIds.length,
+        mismatchedWzIds: validationReport.mismatchedWzIds.length,
+        missingQtIds: validationReport.missingQtIds.length,
+        missingWzIds: validationReport.missingWzIds.length,
+        duplicates: validationReport.duplicates.length,
+        summary: validationReport.summary,
+      },
+      repair: repairResult
+        ? {
+            ...repairResult,
+            errors: repairResult.errors.length,
+          }
+        : undefined,
+      report: {
+        mismatchedQtIds: validationReport.mismatchedQtIds.map((m) => ({
+          parkId: m.parkId,
+          parkName: m.parkName,
+          currentQtId: m.currentQtId,
+          reason: m.reason,
+        })),
+        mismatchedWzIds: validationReport.mismatchedWzIds.map((m) => ({
+          parkId: m.parkId,
+          parkName: m.parkName,
+          currentWzId: m.currentWzId,
+          reason: m.reason,
+        })),
+        missingQtIds: validationReport.missingQtIds.map((m) => ({
+          parkId: m.parkId,
+          parkName: m.parkName,
+          suggestedQtId: m.suggestedQtId,
+        })),
+        missingWzIds: validationReport.missingWzIds.map((m) => ({
+          parkId: m.parkId,
+          parkName: m.parkName,
+          suggestedWzId: m.suggestedWzId,
+        })),
+        duplicates: validationReport.duplicates.map((d) => ({
+          park1: d.park1,
+          park2: d.park2,
+          score: d.score,
+          reason: d.reason,
+        })),
+      },
+    };
+  }
+
+  /**
+   * Merge duplicate parks
+   *
+   * Identifies and merges duplicate parks, or merges specific parks if IDs are provided.
+   */
+  @Post("merge-duplicate-parks")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Merge duplicate parks",
+    description:
+      "Identifies duplicate parks automatically or merges specific parks if park1Id and park2Id are provided. " +
+      "Winner is determined by priority (Wiki-ID, more Entity-IDs, more Child-Entities, older park).",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        park1Id: {
+          type: "string",
+          description: "First park ID (optional, for manual merge)",
+        },
+        park2Id: {
+          type: "string",
+          description: "Second park ID (optional, for manual merge)",
+        },
+        autoDetect: {
+          type: "boolean",
+          description: "Automatically detect and merge all duplicates",
+          default: false,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Merge operation completed",
+  })
+  async mergeDuplicateParks(
+    @Body()
+    body: {
+      park1Id?: string;
+      park2Id?: string;
+      autoDetect?: boolean;
+    } = {},
+  ): Promise<{
+    message: string;
+    merged: number;
+    results: Array<{
+      winnerId: string;
+      winnerName: string;
+      loserId: string;
+      loserName: string;
+      migratedAttractions: number;
+      migratedShows: number;
+      migratedRestaurants: number;
+      migratedScheduleEntries: number;
+      migratedMappings: number;
+    }>;
+    errors: Array<{ parkId: string; error: string }>;
+  }> {
+    const results: Array<{
+      winnerId: string;
+      winnerName: string;
+      loserId: string;
+      loserName: string;
+      migratedAttractions: number;
+      migratedShows: number;
+      migratedRestaurants: number;
+      migratedScheduleEntries: number;
+      migratedMappings: number;
+    }> = [];
+    const errors: Array<{ parkId: string; error: string }> = [];
+
+    if (body.autoDetect) {
+      // Auto-detect duplicates
+      const duplicates = await this.parkValidatorService.findDuplicates();
+
+      if (duplicates.length === 0) {
+        return {
+          message: "No duplicates found",
+          merged: 0,
+          results: [],
+          errors: [],
+        };
+      }
+
+      // Use repair service to handle merges
+      const mergePairs: Array<{ winnerId: string; loserId: string }> = [];
+      const parkRepo = this.parkValidatorService.getParkRepository();
+
+      for (const duplicate of duplicates) {
+        // Determine winner based on priority
+        const park1 = await parkRepo.findOne({
+          where: { id: duplicate.park1.id },
+        });
+        const park2 = await parkRepo.findOne({
+          where: { id: duplicate.park2.id },
+        });
+
+        if (!park1 || !park2) {
+          errors.push({
+            parkId: duplicate.park1.id || duplicate.park2.id,
+            error: "Park not found",
+          });
+          continue;
+        }
+
+        // Simple priority: Wiki-ID > more Entity-IDs > older
+        let winnerId = duplicate.park1.id;
+        let loserId = duplicate.park2.id;
+
+        if (park2.wikiEntityId && !park1.wikiEntityId) {
+          winnerId = duplicate.park2.id;
+          loserId = duplicate.park1.id;
+        } else if (
+          (park1.wikiEntityId && park2.wikiEntityId) ||
+          (!park1.wikiEntityId && !park2.wikiEntityId)
+        ) {
+          // Count Entity-IDs
+          const count1 =
+            (park1.wikiEntityId ? 1 : 0) +
+            (park1.queueTimesEntityId ? 1 : 0) +
+            (park1.wartezeitenEntityId ? 1 : 0);
+          const count2 =
+            (park2.wikiEntityId ? 1 : 0) +
+            (park2.queueTimesEntityId ? 1 : 0) +
+            (park2.wartezeitenEntityId ? 1 : 0);
+
+          if (count2 > count1) {
+            winnerId = duplicate.park2.id;
+            loserId = duplicate.park1.id;
+          } else if (count1 === count2 && park2.createdAt < park1.createdAt) {
+            // Older park wins if counts are equal
+            winnerId = duplicate.park2.id;
+            loserId = duplicate.park1.id;
+          }
+        }
+
+        mergePairs.push({ winnerId, loserId });
+      }
+
+      // Use repair service to perform merges
+      const repairResult =
+        await this.parkRepairService.repairDuplicates(mergePairs);
+
+      // Convert repair result to response format
+      // Note: repairDuplicates doesn't return detailed migration counts per merge
+      // We'll use the duplicate info for names
+      for (let i = 0; i < mergePairs.length; i++) {
+        const pair = mergePairs[i];
+        const duplicateInfo = duplicates.find(
+          (d) =>
+            (d.park1.id === pair.winnerId && d.park2.id === pair.loserId) ||
+            (d.park2.id === pair.winnerId && d.park1.id === pair.loserId),
+        );
+
+        const winnerName =
+          duplicateInfo?.park1.id === pair.winnerId
+            ? duplicateInfo.park1.name
+            : duplicateInfo?.park2.name || "Unknown";
+        const loserName =
+          duplicateInfo?.park1.id === pair.loserId
+            ? duplicateInfo.park1.name
+            : duplicateInfo?.park2.name || "Unknown";
+
+        // Check if this merge was successful (no error for this pair)
+        const hasError = repairResult.errors.some(
+          (e) => e.parkId === pair.loserId,
+        );
+
+        if (!hasError) {
+          // Note: We don't have detailed migration counts from repairDuplicates
+          // The merge service logs them, but repairDuplicates doesn't return them
+          // For now, we'll use placeholder values
+          results.push({
+            winnerId: pair.winnerId,
+            winnerName,
+            loserId: pair.loserId,
+            loserName,
+            migratedAttractions: 0, // Would need to enhance repairDuplicates to return this
+            migratedShows: 0,
+            migratedRestaurants: 0,
+            migratedScheduleEntries: 0,
+            migratedMappings: 0,
+          });
+        }
+      }
+
+      // Add errors from repair result
+      errors.push(...repairResult.errors);
+    } else if (body.park1Id && body.park2Id) {
+      // Manual merge - determine winner
+      const parkRepo = this.parkValidatorService.getParkRepository();
+      const park1 = await parkRepo.findOne({
+        where: { id: body.park1Id },
+      });
+      const park2 = await parkRepo.findOne({
+        where: { id: body.park2Id },
+      });
+
+      if (!park1 || !park2) {
+        return {
+          message: "One or both parks not found",
+          merged: 0,
+          results: [],
+          errors: [
+            {
+              parkId: body.park1Id || body.park2Id,
+              error: "Park not found",
+            },
+          ],
+        };
+      }
+
+      // Determine winner
+      let winnerId = body.park1Id;
+      let loserId = body.park2Id;
+
+      if (park2.wikiEntityId && !park1.wikiEntityId) {
+        winnerId = body.park2Id;
+        loserId = body.park1Id;
+      } else if (
+        (park1.wikiEntityId && park2.wikiEntityId) ||
+        (!park1.wikiEntityId && !park2.wikiEntityId)
+      ) {
+        const count1 =
+          (park1.wikiEntityId ? 1 : 0) +
+          (park1.queueTimesEntityId ? 1 : 0) +
+          (park1.wartezeitenEntityId ? 1 : 0);
+        const count2 =
+          (park2.wikiEntityId ? 1 : 0) +
+          (park2.queueTimesEntityId ? 1 : 0) +
+          (park2.wartezeitenEntityId ? 1 : 0);
+
+        if (count2 > count1) {
+          winnerId = body.park2Id;
+          loserId = body.park1Id;
+        } else if (count1 === count2 && park2.createdAt < park1.createdAt) {
+          winnerId = body.park2Id;
+          loserId = body.park1Id;
+        }
+      }
+
+      try {
+        const mergeResult = await this.parkMergeService.mergeParks(
+          winnerId,
+          loserId,
+        );
+
+        if (mergeResult.success) {
+          results.push({
+            winnerId: mergeResult.winnerId,
+            winnerName: mergeResult.winnerName,
+            loserId: mergeResult.loserId,
+            loserName: mergeResult.loserName,
+            migratedAttractions: mergeResult.migratedAttractions,
+            migratedShows: mergeResult.migratedShows,
+            migratedRestaurants: mergeResult.migratedRestaurants,
+            migratedScheduleEntries: mergeResult.migratedScheduleEntries,
+            migratedMappings: mergeResult.migratedMappings,
+          });
+        } else {
+          errors.push({
+            parkId: loserId,
+            error: mergeResult.errors.join(", "),
+          });
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        errors.push({ parkId: loserId, error: errorMessage });
+      }
+    } else {
+      return {
+        message:
+          "Either autoDetect=true or both park1Id and park2Id must be provided",
+        merged: 0,
+        results: [],
+        errors: [],
+      };
+    }
+
+    return {
+      message: `Merged ${results.length} duplicate park(s)`,
+      merged: results.length,
+      results,
+      errors,
     };
   }
 }

@@ -105,7 +105,7 @@ export class MultiSourceOrchestrator {
     // 4. Match Remaining QT vs Remaining WZ (Parks NOT in Wiki)
     // We use the "unmatched" lists from previous steps
     const qtNoWiki = qtMatchResult.qtOnly;
-    const wzNoWiki = wzMatchResult.qtOnly;
+    const wzNoWiki = wzMatchResult.qtOnly; // Note: matchParks returns qtOnly for second arg
 
     // Use matchParks but interpret the result carefully:
     // "wiki" arg -> QT parks

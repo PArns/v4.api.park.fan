@@ -47,6 +47,12 @@ export class QueueSchedulerService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // Skip scheduler if SKIP_QUEUE_BOOTSTRAP is set (for scripts)
+    if (process.env.SKIP_QUEUE_BOOTSTRAP === "true") {
+      this.logger.debug("Queue scheduler skipped (SKIP_QUEUE_BOOTSTRAP=true)");
+      return;
+    }
+
     // Wait a bit to let bootstrap complete first
     setTimeout(() => {
       this.registerScheduledJobs().catch((err) => {

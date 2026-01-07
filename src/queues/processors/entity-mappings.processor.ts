@@ -98,8 +98,19 @@ export class EntityMappingsProcessor {
     let totalMappings = 0;
     const parkStats: Record<string, number> = {};
 
-    // Need at least Wiki (primary) + one other (secondary) to do ANY matching
-    if (!wikiMapping || (!qtMapping && !wzMapping)) {
+    // Need at least one source to do matching
+    // Previously required Wiki, but now support Wartezeiten-only parks
+    if (!wikiMapping && !qtMapping && !wzMapping) {
+      this.skippedParksCount++;
+      return 0;
+    }
+
+    // Special case: Wartezeiten-only parks (no Wiki, no QT)
+    // These parks have entities created with Wartezeiten UUIDs, so we can't match them
+    // They're already correctly set up during initial sync
+    if (!wikiMapping && !qtMapping && wzMapping) {
+      // Wartezeiten-only park - entities already have correct externalIds
+      // No matching needed, but we could create mappings for consistency
       this.skippedParksCount++;
       return 0;
     }
@@ -235,27 +246,46 @@ export class EntityMappingsProcessor {
 
     // For each matched pair, find internal ID and create both mappings
     for (const match of matchResult.matched) {
-      // Find internal entity by source1 (wiki) externalId
-      // NOTE: We assume seeding created the entity with the wiki ID as its externalId
-      // or we have a mapping already.
-      // Actually, seeding sets Attraction.externalId = Wiki ID.
       const repository = this.getRepository(entityType);
 
-      const entity = await repository.findOne({
+      // Find internal entity by source1 externalId (usually Wiki, but could be Wartezeiten for WZ-only parks)
+      // NOTE: For Wiki-based parks, seeding sets Attraction.externalId = Wiki ID
+      // For Wartezeiten-only parks, externalId = Wartezeiten UUID
+      let entity = await repository.findOne({
         where: {
           parkId,
           externalId: match.entity1.externalId,
         },
         relations: [], // Ensure we don't fetch unnecessary relations
       });
-      // Note: We need landName in the entity to check if it's missing.
-      // Ensure entity returned by repository has landName.
-      // TypeORM findOne returns all columns by default, so 'landName' should be present.
 
+      // Fallback: If not found by source1 externalId, try finding via existing mapping
+      // This handles cases where:
+      // 1. Entity was created with a different source's ID
+      // 2. Entity already has a mapping from a previous sync
       if (!entity) {
-        // Try finding via mapping if direct externalId match fails
-        // This handles cases where seeding might have used a diff ID (unlikely)
-        continue;
+        const existingMapping = await this.mappingRepository.findOne({
+          where: {
+            externalSource: source1Name,
+            externalEntityId: match.entity1.externalId,
+            internalEntityType: entityType,
+          },
+        });
+
+        if (existingMapping) {
+          entity = await repository.findOne({
+            where: { id: existingMapping.internalEntityId },
+            relations: [],
+          });
+        }
+
+        // If still not found, skip this match
+        if (!entity) {
+          this.logger.debug(
+            `Entity not found for ${source1Name}:${match.entity1.externalId} in park ${parkId}`,
+          );
+          continue;
+        }
       }
 
       // Create mapping for source1 (Update confidence/cache)
@@ -281,17 +311,47 @@ export class EntityMappingsProcessor {
       );
       stats[source2Name] = (stats[source2Name] || 0) + 1;
 
-      // ENRICHMENT: If this is an attraction and source2 (QT/WZ) has land data, update our internal entity
-      if (
-        entityType === "attraction" &&
-        match.entity2.landName &&
-        !entity.landName // Only update if missing (don't overwrite Wiki if present)
-      ) {
-        await this.attractionsService.updateLandInfo(
-          entity.id,
-          match.entity2.landName,
-          match.entity2.landId || null,
-        );
+      // ENRICHMENT: Update additional fields based on entity type
+      if (entityType === "attraction") {
+        const updates: Partial<any> = {};
+
+        // Update queueTimesEntityId if source2 is Queue-Times
+        // Extract numeric ID from "qt-ride-8" -> "8"
+        if (source2Name === "queue-times") {
+          const qtNumericId = this.extractQueueTimesNumericId(
+            match.entity2.externalId,
+          );
+          if (qtNumericId && !entity.queueTimesEntityId) {
+            updates.queueTimesEntityId = qtNumericId;
+          }
+        }
+
+        // Update land information if available and missing
+        if (match.entity2.landName && !entity.landName) {
+          // Only update if missing (don't overwrite Wiki if present)
+          await this.attractionsService.updateLandInfo(
+            entity.id,
+            match.entity2.landName,
+            match.entity2.landId || null,
+          );
+        }
+
+        // Apply queueTimesEntityId update if needed
+        if (Object.keys(updates).length > 0) {
+          await this.attractionsService
+            .getRepository()
+            .update(entity.id, updates);
+        }
+      } else if (entityType === "show" || entityType === "restaurant") {
+        // Update land information for Shows and Restaurants if available and missing
+        // Note: Queue-Times doesn't typically have Shows/Restaurants, but Wartezeiten might
+        if (match.entity2.landName && !entity.landName) {
+          const repository = this.getRepository(entityType);
+          await repository.update(entity.id, {
+            landName: match.entity2.landName,
+            landExternalId: match.entity2.landId || null,
+          });
+        }
       }
     }
   }
@@ -308,6 +368,32 @@ export class EntityMappingsProcessor {
       case "restaurant":
         return this.restaurantsService.getRepository();
     }
+  }
+
+  /**
+   * Extract numeric Queue-Times ID from external ID
+   * Examples:
+   * - "qt-ride-8" -> "8"
+   * - "qt-park-56" -> "56"
+   * - "8" -> "8" (already numeric)
+   */
+  private extractQueueTimesNumericId(externalId: string): string | null {
+    if (!externalId) return null;
+
+    // Handle prefixed IDs like "qt-ride-8" or "qt-park-56"
+    if (externalId.startsWith("qt-ride-")) {
+      return externalId.replace("qt-ride-", "");
+    }
+    if (externalId.startsWith("qt-park-")) {
+      return externalId.replace("qt-park-", "");
+    }
+
+    // If already numeric, return as-is
+    if (/^\d+$/.test(externalId)) {
+      return externalId;
+    }
+
+    return null;
   }
 
   /**

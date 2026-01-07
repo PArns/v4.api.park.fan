@@ -110,9 +110,13 @@ export function normalizeForMatching(text: string): string {
   // Transliterate first to handle accents (e.g. Astérix -> Asterix)
   const transliterated = transliterate(text);
 
-  return transliterated
-    .toLowerCase()
-    .replace(/[®™&'\-]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    transliterated
+      .toLowerCase()
+      // Remove country code suffixes like " (FR)", " (US)", etc. before other normalization
+      .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")
+      .replace(/[®™&'\-]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }

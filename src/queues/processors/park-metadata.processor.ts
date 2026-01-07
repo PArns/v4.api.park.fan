@@ -13,6 +13,7 @@ import { Park } from "../../parks/entities/park.entity";
 import { ParkMetadata } from "../../external-apis/data-sources/interfaces/data-source.interface";
 import { generateSlug } from "../../common/utils/slug.util";
 import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources/config/wartezeiten-only-parks";
+import { ParkValidatorService } from "../../parks/services/park-validator.service";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -32,6 +33,7 @@ export class ParkMetadataProcessor {
     private themeParksClient: ThemeParksClient,
     private geocodingClient: GoogleGeocodingClient,
     private orchestrator: MultiSourceOrchestrator,
+    private parkValidatorService: ParkValidatorService,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
@@ -213,9 +215,51 @@ export class ParkMetadataProcessor {
 
       // Step 12: Trigger weather sync
       await this.weatherQueue.add("fetch-weather", {}, { priority: 2 });
+
+      // Step 13: Validate parks (warnings only, no auto-fix)
+      await this.validateParksAfterSync();
     } catch (error) {
       this.logger.error("❌ Park metadata sync failed", error);
       throw error;
+    }
+  }
+
+  /**
+   * Validates parks after sync (warnings only, no auto-fix)
+   */
+  private async validateParksAfterSync(): Promise<void> {
+    try {
+      this.logger.log("🔍 Validating parks after sync...");
+      const validationReport = await this.parkValidatorService.validateAll();
+
+      if (validationReport.summary.issuesFound > 0) {
+        this.logger.warn(
+          `⚠️ Found ${validationReport.summary.issuesFound} issues after sync:`,
+        );
+        this.logger.warn(
+          `   - ${validationReport.mismatchedQtIds.length} mismatched QT-IDs`,
+        );
+        this.logger.warn(
+          `   - ${validationReport.mismatchedWzIds.length} mismatched WZ-IDs`,
+        );
+        this.logger.warn(
+          `   - ${validationReport.missingQtIds.length} missing QT-IDs`,
+        );
+        this.logger.warn(
+          `   - ${validationReport.missingWzIds.length} missing WZ-IDs`,
+        );
+        this.logger.warn(
+          `   - ${validationReport.duplicates.length} duplicates`,
+        );
+        this.logger.warn(
+          `💡 Use POST /v1/admin/validate-and-repair-parks to see details and repair`,
+        );
+      } else {
+        this.logger.log("✅ No validation issues found");
+      }
+    } catch (error) {
+      // Don't fail the sync if validation fails
+      this.logger.warn(`⚠️ Park validation failed (non-critical): ${error}`);
     }
   }
 
@@ -264,11 +308,49 @@ export class ParkMetadataProcessor {
       else if (wz) parkExternalId = `wz-${wz.externalId}`;
     }
 
+    // CRITICAL: Check for existing park by multiple criteria to prevent duplicates
+    // 1. Check by externalId (primary)
     let park = await this.parkRepository.findOne({
       where: { externalId: parkExternalId },
     });
 
+    // 2. If not found, check by entity IDs (prevents duplicates when park was created with different externalId)
+    // Example: Park created as QT-only with externalId="qt-123", later matched with Wiki
+    // We need to find it by queueTimesEntityId to avoid creating a duplicate
+    if (!park) {
+      // Build query to find park by any matching entity ID
+      const queryBuilder = this.parkRepository.createQueryBuilder("park");
+      const conditions: string[] = [];
+      const params: Record<string, any> = {};
+
+      if (wiki?.externalId) {
+        conditions.push("park.wikiEntityId = :wikiId");
+        params.wikiId = wiki.externalId;
+      }
+      if (qt?.externalId) {
+        conditions.push("park.queueTimesEntityId = :qtId");
+        params.qtId = qt.externalId;
+      }
+      if (wz?.externalId) {
+        conditions.push("park.wartezeitenEntityId = :wzId");
+        params.wzId = wz.externalId;
+      }
+
+      if (conditions.length > 0) {
+        queryBuilder.where(conditions.join(" OR "), params);
+        park = await queryBuilder.getOne();
+
+        if (park) {
+          this.logger.warn(
+            `⚠️ Found existing park "${park.name}" by entity ID (not externalId). ` +
+              `This indicates a potential duplicate scenario. Updating instead of creating duplicate.`,
+          );
+        }
+      }
+    }
+
     // Helper to get best name
+    // CRITICAL: Wiki ALWAYS has priority, even if other names are longer
     // Priority: Wiki (Source of Truth) > Longest Name (Fallback)
     let bestName = wiki?.name;
 
@@ -297,43 +379,143 @@ export class ParkMetadataProcessor {
     if (!bestName) return; // Safety check
 
     if (!park) {
-      // Create park
-      park = await this.parkRepository.save({
-        externalId: parkExternalId,
-        name: bestName,
-        slug: generateSlug(bestName),
-        destinationId: destination?.id || undefined,
-        timezone: anchor.timezone || "UTC", // Default to UTC if missing to avoid DB constraint error
-        latitude: anchor.latitude,
-        longitude: anchor.longitude,
-        continent: anchor.continent,
-        continentSlug: anchor.continent
-          ? generateSlug(anchor.continent)
-          : undefined,
-        country: anchor.country,
-        countrySlug: anchor.country ? generateSlug(anchor.country) : undefined,
-        primaryDataSource: effectivePrimary,
-        dataSources: dataSourceList,
-        wikiEntityId: wiki?.externalId || null,
-        queueTimesEntityId: qt?.externalId || null,
-        wartezeitenEntityId: wz?.externalId || null,
-      });
-      this.logger.verbose(`✓ Created matched park: ${park.name} (${park.id})`);
-    } else {
-      // Update existing park
+      // Double-check: Verify no duplicate exists with same entity IDs
+      // This prevents race conditions where park might have been created between checks
+      const duplicateCheck = await this.parkRepository
+        .createQueryBuilder("park")
+        .where(
+          "(park.wikiEntityId = :wikiId OR park.queueTimesEntityId = :qtId OR park.wartezeitenEntityId = :wzId)",
+          {
+            wikiId: wiki?.externalId || null,
+            qtId: qt?.externalId || null,
+            wzId: wz?.externalId || null,
+          },
+        )
+        .getOne();
+
+      if (duplicateCheck) {
+        this.logger.warn(
+          `⚠️ Duplicate park detected during creation: "${bestName}". ` +
+            `Found existing park "${duplicateCheck.name}" with matching entity IDs. ` +
+            `Updating existing park instead of creating duplicate.`,
+        );
+        park = duplicateCheck;
+      } else {
+        // Create park
+        try {
+          park = await this.parkRepository.save({
+            externalId: parkExternalId,
+            name: bestName,
+            slug: generateSlug(bestName),
+            destinationId: destination?.id || undefined,
+            timezone: anchor.timezone || "UTC", // Default to UTC if missing to avoid DB constraint error
+            latitude: anchor.latitude,
+            longitude: anchor.longitude,
+            continent: anchor.continent,
+            continentSlug: anchor.continent
+              ? generateSlug(anchor.continent)
+              : undefined,
+            country: anchor.country,
+            countrySlug: anchor.country
+              ? generateSlug(anchor.country)
+              : undefined,
+            primaryDataSource: effectivePrimary,
+            dataSources: dataSourceList,
+            wikiEntityId: wiki?.externalId || null,
+            queueTimesEntityId: qt?.externalId || null,
+            wartezeitenEntityId: wz?.externalId || null,
+          });
+          this.logger.verbose(
+            `✓ Created matched park: ${park.name} (${park.id})`,
+          );
+        } catch (error: any) {
+          // Handle race condition: Another process might have created the park
+          if (
+            error.code === "23505" ||
+            error.message?.includes("duplicate key")
+          ) {
+            this.logger.warn(
+              `Race condition detected: Park "${bestName}" was created by another process. ` +
+                `Refetching and updating...`,
+            );
+            // Refetch by entity IDs
+            park = await this.parkRepository
+              .createQueryBuilder("park")
+              .where(
+                "(park.wikiEntityId = :wikiId OR park.queueTimesEntityId = :qtId OR park.wartezeitenEntityId = :wzId)",
+                {
+                  wikiId: wiki?.externalId || null,
+                  qtId: qt?.externalId || null,
+                  wzId: wz?.externalId || null,
+                },
+              )
+              .getOne();
+
+            if (!park) {
+              // Still not found - try by externalId as last resort
+              park = await this.parkRepository.findOne({
+                where: { externalId: parkExternalId },
+              });
+            }
+
+            if (!park) {
+              this.logger.error(
+                `Failed to find park after race condition for "${bestName}". Skipping.`,
+              );
+              return;
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
+
+    // Ensure park exists at this point
+    if (!park) {
+      this.logger.error(
+        `Failed to create or find park "${bestName}". This should not happen.`,
+      );
+      return;
+    }
+
+    // Update existing park - consolidate all entity IDs
+    const needsUpdate =
+      JSON.stringify(park.dataSources?.sort()) !==
+        JSON.stringify(dataSourceList.sort()) ||
+      park.primaryDataSource !== effectivePrimary ||
+      (wiki && park.wikiEntityId !== wiki.externalId) ||
+      (qt && park.queueTimesEntityId !== qt.externalId) ||
+      (wz && park.wartezeitenEntityId !== wz.externalId) ||
+      park.name !== bestName;
+
+    if (needsUpdate) {
       park.dataSources = dataSourceList;
       park.primaryDataSource = effectivePrimary;
       if (wiki) park.wikiEntityId = wiki.externalId;
       if (qt) park.queueTimesEntityId = qt.externalId;
       if (wz) park.wartezeitenEntityId = wz.externalId;
 
-      // Update name if changed (Prioritize Wiki truth, even if shorter)
+      // Update name if changed
+      // CRITICAL: Always use Wiki name if available, even if current name is longer
+      // This ensures Wiki remains the source of truth for park names
       if (park.name !== bestName) {
         this.logger.verbose(
-          `Updating park name: "${park.name}" -> "${bestName}"`,
+          `Updating park name: "${park.name}" -> "${bestName}" ` +
+            `(Wiki priority: ${wiki ? "YES" : "NO"})`,
         );
         park.name = bestName;
         park.slug = generateSlug(bestName);
+      }
+
+      // Update externalId if it doesn't match the anchor (e.g., park was created with different ID)
+      if (park.externalId !== parkExternalId) {
+        this.logger.warn(
+          `⚠️ Park "${park.name}" has mismatched externalId: ` +
+            `"${park.externalId}" vs expected "${parkExternalId}". ` +
+            `Updating to match anchor source.`,
+        );
+        park.externalId = parkExternalId;
       }
 
       await this.parkRepository.save(park);
@@ -387,10 +569,41 @@ export class ParkMetadataProcessor {
       "themeparks-wiki",
     );
 
+    // Also check by wikiEntityId to prevent duplicates
+    // (e.g., if park was created as matched but later became Wiki-only)
+    if (!park && wiki.externalId) {
+      park = await this.parkRepository.findOne({
+        where: { wikiEntityId: wiki.externalId },
+      });
+
+      if (park) {
+        this.logger.warn(
+          `⚠️ Found existing park "${park.name}" by wikiEntityId. ` +
+            `Updating externalId to match Wiki format.`,
+        );
+        // Update externalId to Wiki format for consistency
+        park.externalId = wiki.externalId;
+      }
+    }
+
     if (park) {
+      const needsUpdate = !park.wikiEntityId || park.name !== wiki.name;
+
       if (!park.wikiEntityId) {
         park.wikiEntityId = wiki.externalId;
         park.queueTimesEntityId = null;
+      }
+
+      // CRITICAL: Always update name to Wiki name (Wiki has priority)
+      if (park.name !== wiki.name) {
+        this.logger.verbose(
+          `Updating park name to Wiki: "${park.name}" -> "${wiki.name}"`,
+        );
+        park.name = wiki.name;
+        park.slug = generateSlug(wiki.name);
+      }
+
+      if (needsUpdate) {
         await this.parkRepository.save(park);
         this.logger.debug(
           `✓ Backfilled columns for wiki-only park: ${park.name}`,
@@ -474,15 +687,43 @@ export class ParkMetadataProcessor {
   private async processQueueTimesOnlyPark(qt: ParkMetadata): Promise<void> {
     const qtExternalId = `qt-${qt.externalId}`; // Prefix to avoid collision
 
-    // Check if park already exists
+    // Check if park already exists by externalId
     let park = await this.parkRepository.findOne({
       where: { externalId: qtExternalId },
     });
 
+    // Also check by queueTimesEntityId to prevent duplicates
+    // (e.g., if park was created as matched but later became QT-only)
+    if (!park && qt.externalId) {
+      park = await this.parkRepository.findOne({
+        where: { queueTimesEntityId: qt.externalId },
+      });
+
+      if (park) {
+        this.logger.warn(
+          `⚠️ Found existing park "${park.name}" by queueTimesEntityId. ` +
+            `Updating externalId to match QT-only format.`,
+        );
+        // Update externalId to QT format for consistency
+        park.externalId = qtExternalId;
+      }
+    }
+
     if (park) {
+      // If park has Wiki ID, preserve Wiki name (Wiki has priority)
+      // Only update if Wiki ID is missing (QT-only park)
       if (!park.queueTimesEntityId) {
         park.queueTimesEntityId = qt.externalId;
-        park.wikiEntityId = null;
+        // Only set wikiEntityId to null if it's truly a QT-only park
+        // If park has wikiEntityId, keep it and don't overwrite with null
+        if (!park.wikiEntityId) {
+          park.wikiEntityId = null;
+        }
+        // If park has Wiki ID, don't update name (Wiki name has priority)
+        if (!park.wikiEntityId && park.name !== qt.name) {
+          park.name = qt.name;
+          park.slug = generateSlug(qt.name);
+        }
         try {
           await this.parkRepository.save(park);
         } catch (error: any) {
@@ -531,14 +772,44 @@ export class ParkMetadataProcessor {
   private async processWartezeitenOnlyPark(wz: ParkMetadata): Promise<void> {
     const wzExternalId = `wz-${wz.externalId}`; // Prefix to avoid collision
 
-    // Check if park already exists
+    // Check if park already exists by externalId
     let park = await this.parkRepository.findOne({
       where: { externalId: wzExternalId },
     });
 
+    // Also check by wartezeitenEntityId to prevent duplicates
+    // (e.g., if park was created as matched but later became WZ-only)
+    if (!park && wz.externalId) {
+      park = await this.parkRepository.findOne({
+        where: { wartezeitenEntityId: wz.externalId },
+      });
+
+      if (park) {
+        this.logger.warn(
+          `⚠️ Found existing park "${park.name}" by wartezeitenEntityId. ` +
+            `Updating externalId to match WZ-only format.`,
+        );
+        // Update externalId to WZ format for consistency
+        park.externalId = wzExternalId;
+      }
+    }
+
     if (park) {
+      // If park has Wiki ID, preserve Wiki name (Wiki has priority)
+      // Only update name if park doesn't have Wiki ID
+      const cleanedWzName = wz.name.replace(/\s*\([A-Z]{2}\)$/, "").trim();
+      const shouldUpdateName =
+        !park.wikiEntityId && park.name !== cleanedWzName;
+
       if (!park.wartezeitenEntityId) {
         park.wartezeitenEntityId = wz.externalId;
+
+        // Only update name if park doesn't have Wiki ID (Wiki name has priority)
+        if (shouldUpdateName) {
+          park.name = cleanedWzName;
+          park.slug = generateSlug(cleanedWzName);
+        }
+
         try {
           await this.parkRepository.save(park);
         } catch (error: any) {
@@ -675,20 +946,31 @@ export class ParkMetadataProcessor {
       }
 
       try {
-        // Get Wiki external ID from mapping
-        const mapping = await this.mappingRepository.findOne({
-          where: {
-            internalEntityId: park.id,
-            internalEntityType: "park",
-            externalSource: "themeparks-wiki",
-          },
-        });
+        // Try to get Wiki external ID from park entity first (faster)
+        let wikiExternalId = park.wikiEntityId;
 
-        if (!mapping) continue;
+        // Fallback to mapping if wikiEntityId is not set
+        if (!wikiExternalId) {
+          const mapping = await this.mappingRepository.findOne({
+            where: {
+              internalEntityId: park.id,
+              internalEntityType: "park",
+              externalSource: "themeparks-wiki",
+            },
+          });
 
-        const scheduleResponse = await this.themeParksClient.getSchedule(
-          mapping.externalEntityId,
-        );
+          if (!mapping) {
+            this.logger.warn(
+              `No Wiki ID found for park ${park.name}, skipping schedule sync`,
+            );
+            continue;
+          }
+
+          wikiExternalId = mapping.externalEntityId;
+        }
+
+        const scheduleResponse =
+          await this.themeParksClient.getSchedule(wikiExternalId);
         const savedEntries = await this.parksService.saveScheduleData(
           park.id,
           scheduleResponse.schedule,

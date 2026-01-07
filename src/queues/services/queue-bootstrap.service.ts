@@ -49,6 +49,12 @@ export class QueueBootstrapService implements OnModuleInit {
    * Triggers initial data fetch jobs (non-blocking).
    */
   async onModuleInit(): Promise<void> {
+    // Skip bootstrap if SKIP_QUEUE_BOOTSTRAP is set (for scripts)
+    if (process.env.SKIP_QUEUE_BOOTSTRAP === "true") {
+      this.logger.debug("Queue bootstrap skipped (SKIP_QUEUE_BOOTSTRAP=true)");
+      return;
+    }
+
     // Non-blocking: fire and forget
     this.bootstrapQueues().catch((err) => {
       this.logger.error("Queue bootstrap failed", err);

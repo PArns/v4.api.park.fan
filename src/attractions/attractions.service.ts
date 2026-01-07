@@ -380,6 +380,7 @@ export class AttractionsService {
             externalId,
             name: ride.name,
             attractionType: "ROW", // Generic type
+            queueTimesEntityId: ride.id.toString(), // Store numeric ID
             // QT doesn't provide lat/lon in this endpoint usually
           },
           existingSlugs,
@@ -442,6 +443,7 @@ export class AttractionsService {
       attractionType?: string;
       latitude?: number;
       longitude?: number;
+      queueTimesEntityId?: string;
     },
     existingSlugs?: string[],
   ) {
@@ -452,12 +454,19 @@ export class AttractionsService {
 
     if (existing) {
       // Update
-      await this.attractionRepository.update(existing.id, {
+      const updateData: Partial<Attraction> = {
         name: data.name,
         // Only update lat/lon if provided (QT/WZ usually don't have it)
         ...(data.latitude && { latitude: data.latitude }),
         ...(data.longitude && { longitude: data.longitude }),
-      });
+      };
+
+      // Update queueTimesEntityId if provided and missing
+      if (data.queueTimesEntityId && !existing.queueTimesEntityId) {
+        updateData.queueTimesEntityId = data.queueTimesEntityId;
+      }
+
+      await this.attractionRepository.update(existing.id, updateData);
     } else {
       // Create
       const baseSlug = generateSlug(data.name);
@@ -482,6 +491,7 @@ export class AttractionsService {
         attractionType: data.attractionType || "UNKNOWN",
         latitude: data.latitude,
         longitude: data.longitude,
+        queueTimesEntityId: data.queueTimesEntityId || null,
       });
     }
   }

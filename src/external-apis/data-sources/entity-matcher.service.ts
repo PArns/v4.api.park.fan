@@ -290,7 +290,13 @@ export class EntityMatcherService {
    * Strict normalization for manual match keys (remove all non-alphanumeric)
    */
   private normalizeByKey(text: string): string {
-    return text.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return (
+      text
+        .toLowerCase()
+        // Remove country code suffixes like " (FR)", " (US)", etc. before other normalization
+        .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")
+        .replace(/[^a-z0-9]/g, "")
+    );
   }
 
   /**
@@ -331,8 +337,16 @@ export class EntityMatcherService {
         }
 
         const score = this.calculateEntitySimilarity(entity1, entity2);
-        if (score > bestScore && score > 0.8) {
-          // 80% threshold
+        // Dynamic threshold: Lower for entities without geo data (e.g. Wartezeiten)
+        // This ensures we can match entities even when one source lacks location data
+        const hasGeo =
+          entity1.latitude &&
+          entity1.longitude &&
+          entity2.latitude &&
+          entity2.longitude;
+        const threshold = hasGeo ? 0.8 : 0.75; // Lower threshold when geo is missing
+
+        if (score > bestScore && score >= threshold) {
           bestScore = score;
           bestMatch = entity2;
         }
@@ -364,14 +378,14 @@ export class EntityMatcherService {
     e1: EntityMetadata,
     e2: EntityMetadata,
   ): number {
-    // Name similarity (80% weight)
+    // Name similarity (primary factor)
     const n1 = normalizeForMatching(e1.name);
     const n2 = normalizeForMatching(e2.name);
 
-    // Name similarity (80% weight)
+    // Name similarity calculation
     let rawNameSim = compareTwoStrings(n1, n2);
 
-    // Boost if substring
+    // Boost if substring (e.g. "Space Mountain" in "Space Mountain - Tomorrowland")
     if (
       (n1.length > 5 && n2.includes(n1)) ||
       (n2.length > 5 && n1.includes(n2))
@@ -379,28 +393,33 @@ export class EntityMatcherService {
       rawNameSim = Math.max(rawNameSim, 0.9);
     }
 
-    const nameSim = rawNameSim * 0.8;
+    // Check if both have location data
+    const hasGeo1 = e1.latitude && e1.longitude;
+    const hasGeo2 = e2.latitude && e2.longitude;
 
-    // Location similarity (20% weight) - if both have location
-    let geoSim = 0;
+    if (hasGeo1 && hasGeo2) {
+      // Both have geo: Use weighted combination (80% name, 20% geo)
+      const nameSim = rawNameSim * 0.8;
 
-    if (e1.latitude && e1.longitude && e2.latitude && e2.longitude) {
       const distance = this.haversineDistance(
-        { latitude: e1.latitude, longitude: e1.longitude },
-        { latitude: e2.latitude, longitude: e2.longitude },
+        { latitude: e1.latitude!, longitude: e1.longitude! },
+        { latitude: e2.latitude!, longitude: e2.longitude! },
       );
       // Close = within 100m = 1.0 score
       // Far = > 1km = 0.0 score
       // Linear decay
       const maxDist = 1.0; // km
-      geoSim = Math.max(0, 1 - distance / maxDist) * 0.2;
-    } else {
-      // If missing geo, normalize name score to 100%
-      // e.g. 0.8 score becomes 1.0 equivalent
-      return nameSim / 0.8;
-    }
+      const geoSim = Math.max(0, 1 - distance / maxDist) * 0.2;
 
-    return nameSim + geoSim;
+      return nameSim + geoSim;
+    } else {
+      // One or both missing geo: Use name-only matching with adjusted threshold
+      // Since we lose 20% geo weight, we scale name similarity to compensate
+      // This ensures that perfect name matches (1.0) still score 1.0
+      // But we're more lenient: 0.8 name sim becomes 1.0 (vs 0.64 with geo)
+      // This is important for Wartezeiten which has no geo data
+      return rawNameSim;
+    }
   }
 
   /**

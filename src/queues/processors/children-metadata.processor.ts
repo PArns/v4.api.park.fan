@@ -402,6 +402,9 @@ export class ChildrenMetadataProcessor {
    * Sync a single attraction from Queue-Times (Simplified)
    */
   private async syncQtAttraction(entity: any, parkId: string): Promise<void> {
+    // Extract numeric Queue-Times ID (e.g., "8" from "qt-ride-8")
+    const qtNumericId = this.extractQueueTimesNumericId(entity.externalId);
+
     // Check if attraction exists (by externalId)
     // Note: QT externalId is different from Wiki
     const existing = await this.attractionsService.getRepository().findOne({
@@ -409,11 +412,19 @@ export class ChildrenMetadataProcessor {
     });
 
     if (existing) {
-      // Update name if needed
+      // Update name and queueTimesEntityId if needed
+      const updateData: any = {};
       if (existing.name !== entity.name) {
-        await this.attractionsService.getRepository().update(existing.id, {
-          name: entity.name,
-        });
+        updateData.name = entity.name;
+      }
+      if (qtNumericId && !existing.queueTimesEntityId) {
+        updateData.queueTimesEntityId = qtNumericId;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await this.attractionsService
+          .getRepository()
+          .update(existing.id, updateData);
       }
     } else {
       // Generate slug
@@ -436,6 +447,7 @@ export class ChildrenMetadataProcessor {
         parkId: parkId,
         latitude: entity.latitude || undefined,
         longitude: entity.longitude || undefined,
+        queueTimesEntityId: qtNumericId || null,
       } as any);
 
       // Create mapping
@@ -446,6 +458,32 @@ export class ChildrenMetadataProcessor {
         newAttraction.externalId,
       );
     }
+  }
+
+  /**
+   * Extract numeric Queue-Times ID from external ID
+   * Examples:
+   * - "qt-ride-8" -> "8"
+   * - "qt-park-56" -> "56"
+   * - "8" -> "8" (already numeric)
+   */
+  private extractQueueTimesNumericId(externalId: string): string | null {
+    if (!externalId) return null;
+
+    // Handle prefixed IDs like "qt-ride-8" or "qt-park-56"
+    if (externalId.startsWith("qt-ride-")) {
+      return externalId.replace("qt-ride-", "");
+    }
+    if (externalId.startsWith("qt-park-")) {
+      return externalId.replace("qt-park-", "");
+    }
+
+    // If already numeric, return as-is
+    if (/^\d+$/.test(externalId)) {
+      return externalId;
+    }
+
+    return null;
   }
 
   /**

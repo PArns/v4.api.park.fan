@@ -873,12 +873,33 @@ export class WaitTimesProcessor {
         const internalId = qtIdMap.get(qtAttractionId.toString());
 
         if (internalId) {
+          // Extract numeric Queue-Times ID (e.g., "8" from "qt-ride-8")
+          const qtNumericId = this.extractQueueTimesNumericId(
+            qtAttractionId.toString(),
+          );
+
           // Update attraction with land info
           const changed = await this.attractionsService.updateLandInfo(
             internalId,
             land.name,
             land.id?.toString() || null,
           );
+
+          // Also update queueTimesEntityId if missing and we have the numeric ID
+          if (qtNumericId) {
+            const attraction = await this.attractionsService
+              .getRepository()
+              .findOne({
+                where: { id: internalId },
+                select: ["id", "queueTimesEntityId"],
+              });
+
+            if (attraction && !attraction.queueTimesEntityId) {
+              await this.attractionsService.getRepository().update(internalId, {
+                queueTimesEntityId: qtNumericId,
+              });
+            }
+          }
 
           if (changed) {
             updatedCount++;
@@ -894,6 +915,32 @@ export class WaitTimesProcessor {
     }
 
     return updatedCount;
+  }
+
+  /**
+   * Extract numeric Queue-Times ID from external ID
+   * Examples:
+   * - "qt-ride-8" -> "8"
+   * - "qt-park-56" -> "56"
+   * - "8" -> "8" (already numeric)
+   */
+  private extractQueueTimesNumericId(externalId: string): string | null {
+    if (!externalId) return null;
+
+    // Handle prefixed IDs like "qt-ride-8" or "qt-park-56"
+    if (externalId.startsWith("qt-ride-")) {
+      return externalId.replace("qt-ride-", "");
+    }
+    if (externalId.startsWith("qt-park-")) {
+      return externalId.replace("qt-park-", "");
+    }
+
+    // If already numeric, return as-is
+    if (/^\d+$/.test(externalId)) {
+      return externalId;
+    }
+
+    return null;
   }
 
   /**
