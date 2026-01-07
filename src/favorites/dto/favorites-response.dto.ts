@@ -101,16 +101,6 @@ export class AttractionWithDistanceDto extends AttractionResponseDto {
     nullable: true,
   })
   distance?: number | null;
-
-  @ApiProperty({
-    description:
-      "Overall trend direction extracted from primary queue (up/down/stable)",
-    example: "up",
-    enum: ["up", "down", "stable"],
-    required: false,
-    nullable: true,
-  })
-  trend?: "up" | "down" | "stable" | null;
 }
 
 /**

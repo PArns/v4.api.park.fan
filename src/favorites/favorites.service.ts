@@ -296,22 +296,8 @@ export class FavoritesService {
         return dto;
       }
 
-      // Extract trend from primary queue (STANDBY or first available)
-      const primaryQueue =
-        integrated.queues?.find((q) => q.queueType === "STANDBY") ||
-        integrated.queues?.[0];
-      let trend: "up" | "down" | "stable" | null = null;
-      if (primaryQueue?.trend?.direction) {
-        // Map "increasing" -> "up", "decreasing" -> "down", "stable" -> "stable"
-        trend =
-          primaryQueue.trend.direction === "increasing"
-            ? "up"
-            : primaryQueue.trend.direction === "decreasing"
-              ? "down"
-              : "stable";
-      }
-
-      // Create DTO from integrated response with distance and trend
+      // Create DTO from integrated response with distance
+      // Trend is already included in integrated response from AttractionIntegrationService
       const dto: AttractionWithDistanceDto = {
         ...integrated,
         distance:
@@ -327,7 +313,6 @@ export class FavoritesService {
                 ),
               )
             : null,
-        trend,
       };
 
       return dto;

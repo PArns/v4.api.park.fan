@@ -128,6 +128,21 @@ export class AttractionIntegrationService {
 
       // Set overall status (use first queue's status as representative)
       dto.status = queueData[0].status;
+
+      // Extract trend from primary queue (STANDBY or first available)
+      const primaryQueue =
+        dto.queues?.find((q) => q.queueType === "STANDBY") || dto.queues?.[0];
+      if (primaryQueue?.trend?.direction) {
+        // Map "increasing" -> "up", "decreasing" -> "down", "stable" -> "stable"
+        dto.trend =
+          primaryQueue.trend.direction === "increasing"
+            ? "up"
+            : primaryQueue.trend.direction === "decreasing"
+              ? "down"
+              : "stable";
+      } else {
+        dto.trend = null;
+      }
     }
 
     // Check park status and calculate effectiveStatus

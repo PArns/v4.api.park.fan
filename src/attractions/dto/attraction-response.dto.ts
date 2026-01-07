@@ -112,6 +112,14 @@ export class AttractionResponseDto {
     timestamp: string;
   } | null;
 
+  @ApiProperty({
+    description: "Wait time trend direction (up/down/stable)",
+    enum: ["up", "down", "stable"],
+    required: false,
+    nullable: true,
+  })
+  trend?: "up" | "down" | "stable" | null;
+
   // Prediction Accuracy (Feedback Loop)
   @ApiProperty({
     description: "Prediction accuracy metrics",
