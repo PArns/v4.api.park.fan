@@ -168,14 +168,36 @@ export class ParkValidatorService {
         apiPark.latitude &&
         apiPark.longitude
       ) {
+        const apiLat = parseFloat(apiPark.latitude);
+        const apiLng = parseFloat(apiPark.longitude);
+
+        // Calculate initial distance
         distanceKm = calculateHaversineDistance(
           { latitude: park.latitude, longitude: park.longitude },
-          {
-            latitude: parseFloat(apiPark.latitude),
-            longitude: parseFloat(apiPark.longitude),
-          },
+          { latitude: apiLat, longitude: apiLng },
           "km",
         );
+
+        // Smart Sign Correction: Check if flipping longitude fixes the match
+        // This handles cases where one source has East positive vs West negative error
+        // (e.g., -81.5 vs 81.5 for Orlando, FL)
+        if (distanceKm > 1000) {
+          const flippedDistance = calculateHaversineDistance(
+            { latitude: park.latitude, longitude: park.longitude },
+            { latitude: apiLat, longitude: -apiLng }, // Try flipping sign
+            "km",
+          );
+
+          // If flipped distance is much better (<100km), use it and note the sign error
+          if (flippedDistance < 100) {
+            this.logger.debug(
+              `Found sign error for ${park.name}: ${distanceKm.toFixed(2)}km -> ${flippedDistance.toFixed(2)}km (flipped longitude)`,
+            );
+            distanceKm = flippedDistance;
+            // Note: We don't auto-fix the coordinate here, just use corrected distance for validation
+            // The actual coordinate fix should be done manually or via repair service
+          }
+        }
       }
 
       // Determine if it's a mismatch
@@ -376,14 +398,32 @@ export class ParkValidatorService {
           apiPark.latitude &&
           apiPark.longitude
         ) {
+          const apiLat = parseFloat(apiPark.latitude);
+          const apiLng = parseFloat(apiPark.longitude);
+
+          // Calculate initial distance
           distance = calculateHaversineDistance(
             { latitude: park.latitude, longitude: park.longitude },
-            {
-              latitude: parseFloat(apiPark.latitude),
-              longitude: parseFloat(apiPark.longitude),
-            },
+            { latitude: apiLat, longitude: apiLng },
             "km",
           );
+
+          // Smart Sign Correction: Check if flipping longitude fixes the match
+          if (distance > 1000) {
+            const flippedDistance = calculateHaversineDistance(
+              { latitude: park.latitude, longitude: park.longitude },
+              { latitude: apiLat, longitude: -apiLng }, // Try flipping sign
+              "km",
+            );
+
+            // If flipped distance is much better (<100km), use it
+            if (flippedDistance < 100) {
+              this.logger.debug(
+                `Found sign error for ${park.name}: ${distance.toFixed(2)}km -> ${flippedDistance.toFixed(2)}km (flipped longitude)`,
+              );
+              distance = flippedDistance;
+            }
+          }
 
           // If within 1km, this is a strong candidate
           if (distance <= 1.0) {
