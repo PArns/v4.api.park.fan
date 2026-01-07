@@ -15,7 +15,7 @@ import {
   ShowWithDistanceDto,
   RestaurantWithDistanceDto,
 } from "./dto/favorites-response.dto";
-import { HttpCacheInterceptor } from "../common/interceptors/http-cache.interceptor";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 /**
  * Favorites Controller
