@@ -3,10 +3,12 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
 import { QueueData } from "./entities/queue-data.entity";
 import { ForecastData } from "./entities/forecast-data.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
 import {
   EntityLiveResponse,
   QueueType,
 } from "../external-apis/themeparks/themeparks.types";
+import { ParksService } from "../parks/parks.service";
 
 /**
  * Queue Data Service
@@ -28,6 +30,9 @@ export class QueueDataService {
     private queueDataRepository: Repository<QueueData>,
     @InjectRepository(ForecastData)
     private forecastDataRepository: Repository<ForecastData>,
+    @InjectRepository(Attraction)
+    private attractionRepository: Repository<Attraction>,
+    private parksService: ParksService,
   ) {}
 
   /**
@@ -394,13 +399,32 @@ export class QueueDataService {
   /**
    * Find current status for an attraction (most recent queue data)
    *
+   * Uses park opening hours to determine valid data cutoff instead of fixed time window.
+   * If park is open today, filters data from today's opening time.
+   * Falls back to maxAgeMinutes if no schedule available.
+   *
    * @param attractionId - Attraction ID
+   * @param maxAgeMinutes - Fallback maximum age in minutes (optional, default: 6 hours)
    * @returns Most recent queue data for all queue types
    */
   async findCurrentStatusByAttraction(
     attractionId: string,
     maxAgeMinutes?: number,
   ): Promise<QueueData[]> {
+    // Get attraction to find park
+    const attraction = await this.attractionRepository.findOne({
+      where: { id: attractionId },
+      select: ["parkId"],
+    });
+
+    let cutoff: Date | undefined;
+    if (attraction?.parkId) {
+      cutoff = await this.getValidDataCutoff(attraction.parkId, maxAgeMinutes);
+    } else if (maxAgeMinutes) {
+      // Fallback if no park found
+      cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+    }
+
     // Use DISTINCT ON optimization to get latest record per queueType efficiently
     // This replaces N queries (one per queue type) with a single query
     const query = this.queueDataRepository
@@ -410,8 +434,7 @@ export class QueueDataService {
       .orderBy("qd.queueType", "ASC")
       .addOrderBy("qd.timestamp", "DESC");
 
-    if (maxAgeMinutes) {
-      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+    if (cutoff) {
       query.andWhere("qd.timestamp >= :cutoff", { cutoff });
     }
 
@@ -421,8 +444,12 @@ export class QueueDataService {
   /**
    * Find current status for multiple attractions (batch query)
    *
+   * Note: This method doesn't use park-specific opening hours due to performance.
+   * It uses maxAgeMinutes as a simple fallback. For park-specific filtering,
+   * use findCurrentStatusByPark instead.
+   *
    * @param attractionIds - Array of Attraction IDs
-   * @param maxAgeMinutes - Maximum age of queue data in minutes (optional)
+   * @param maxAgeMinutes - Maximum age of queue data in minutes (optional, default: 6 hours)
    * @returns Map of attractionId -> QueueData[]
    */
   async findCurrentStatusByAttractionIds(
@@ -442,10 +469,11 @@ export class QueueDataService {
       .addOrderBy("qd.queueType", "ASC")
       .addOrderBy("qd.timestamp", "DESC");
 
-    if (maxAgeMinutes) {
-      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
-      query.andWhere("qd.timestamp >= :cutoff", { cutoff });
-    }
+    // For batch queries, use simple time-based filter
+    // (park-specific filtering would require N schedule lookups)
+    const fallbackMinutes = maxAgeMinutes ?? 6 * 60; // Default: 6 hours
+    const cutoff = new Date(Date.now() - fallbackMinutes * 60 * 1000);
+    query.andWhere("qd.timestamp >= :cutoff", { cutoff });
 
     const queueData = await query.getMany();
 
@@ -466,16 +494,24 @@ export class QueueDataService {
    * This is a performance-optimized version that fetches queue data for all attractions
    * in a single query instead of N queries (one per attraction).
    *
+   * Uses park opening hours to determine valid data cutoff instead of fixed time window.
+   * If park is open today, filters data from today's opening time.
+   * Falls back to maxAgeMinutes if no schedule available.
+   *
    * Uses PostgreSQL DISTINCT ON to get latest record per (attractionId, queueType) efficiently.
    * Requires composite index on (attractionId, queueType, timestamp) for optimal performance.
    *
    * @param parkId - Park ID
+   * @param maxAgeMinutes - Fallback maximum age in minutes (optional, default: 6 hours)
    * @returns Map of attractionId -> QueueData[] (current status for all queue types)
    */
   async findCurrentStatusByPark(
     parkId: string,
     maxAgeMinutes?: number,
   ): Promise<Map<string, QueueData[]>> {
+    // Get valid data cutoff based on park opening hours
+    const cutoff = await this.getValidDataCutoff(parkId, maxAgeMinutes);
+
     // Use DISTINCT ON to get latest timestamp for each (attractionId, queueType) combination
     // This replaces the O(n²) correlated subquery with a single index scan
     const query = this.queueDataRepository
@@ -487,8 +523,7 @@ export class QueueDataService {
       .addOrderBy("qd.queueType", "ASC")
       .addOrderBy("qd.timestamp", "DESC"); // Latest first within each group
 
-    if (maxAgeMinutes) {
-      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+    if (cutoff) {
       query.andWhere("qd.timestamp >= :cutoff", { cutoff });
     }
 
@@ -504,6 +539,49 @@ export class QueueDataService {
     }
 
     return result;
+  }
+
+  /**
+   * Get valid data cutoff based on park opening hours
+   *
+   * If park is open today, returns today's opening time.
+   * Otherwise, falls back to maxAgeMinutes (default: 6 hours) from now.
+   *
+   * @param parkId - Park ID
+   * @param maxAgeMinutes - Fallback maximum age in minutes (optional, default: 6 hours)
+   * @returns Cutoff date or undefined if no filter should be applied
+   */
+  private async getValidDataCutoff(
+    parkId: string,
+    maxAgeMinutes?: number,
+  ): Promise<Date | undefined> {
+    try {
+      // Get today's schedule
+      const todaySchedule = await this.parksService.getTodaySchedule(parkId);
+
+      // Find today's OPERATING schedule
+      const operatingSchedule = todaySchedule.find(
+        (s) => s.scheduleType === "OPERATING" && s.openingTime,
+      );
+
+      if (operatingSchedule?.openingTime) {
+        // Park is open today - use opening time as cutoff
+        // This ensures we keep all data from when the park opened, even if > 6 hours
+        return new Date(operatingSchedule.openingTime);
+      }
+
+      // No schedule or park closed today - use fallback
+      const fallbackMinutes = maxAgeMinutes ?? 6 * 60; // Default: 6 hours
+      return new Date(Date.now() - fallbackMinutes * 60 * 1000);
+    } catch (error) {
+      // If schedule lookup fails, use fallback
+      this.logger.warn(
+        `Failed to get schedule for park ${parkId}, using fallback:`,
+        error,
+      );
+      const fallbackMinutes = maxAgeMinutes ?? 6 * 60;
+      return new Date(Date.now() - fallbackMinutes * 60 * 1000);
+    }
   }
 
   /**

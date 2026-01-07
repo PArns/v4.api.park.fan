@@ -70,12 +70,11 @@ export class AttractionIntegrationService {
     // Start with base DTO
     const dto = AttractionResponseDto.fromEntity(attraction);
 
-    // Fetch current queue data (all queue types, max 6 hours old)
-    // Use same maxAge as park-integration for consistency
-    const MAX_AGE_MINUTES = 6 * 60; // 6 hours
+    // Fetch current queue data (all queue types)
+    // Uses park opening hours to determine valid data cutoff
+    // Falls back to 6 hours if no schedule available
     const queueData = await this.queueDataService.findCurrentStatusByAttraction(
       attraction.id,
-      MAX_AGE_MINUTES,
     );
 
     if (queueData.length > 0) {

@@ -151,13 +151,13 @@ export class ParkIntegrationService {
 
     // Fetch weather, schedule, queue data, and ML predictions in parallel
     // These all only depend on park.id so they can run simultaneously
-    const MAX_AGE_MINUTES = 6 * 60; // 6 hours for queue data freshness
+    // Queue data uses park opening hours to determine valid cutoff (not fixed 6 hours)
 
     const [weatherData, schedule, queueDataMap, mlPredictionsResult] =
       await Promise.all([
         this.weatherService.getCurrentAndForecast(park.id),
         this.parksService.getUpcomingSchedule(park.id, 7),
-        this.queueDataService.findCurrentStatusByPark(park.id, MAX_AGE_MINUTES),
+        this.queueDataService.findCurrentStatusByPark(park.id),
         Promise.all([
           this.mlService
             .getParkPredictions(park.id, "hourly")

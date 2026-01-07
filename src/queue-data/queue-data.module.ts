@@ -6,6 +6,7 @@ import { QueueDataService } from "./queue-data.service";
 import { QueueDataController } from "./queue-data.controller";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { ParksModule } from "../parks/parks.module";
+import { Attraction } from "../attractions/entities/attraction.entity";
 
 /**
  * Queue Data Module
@@ -25,7 +26,7 @@ import { ParksModule } from "../parks/parks.module";
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([QueueData, ForecastData]),
+    TypeOrmModule.forFeature([QueueData, ForecastData, Attraction]),
     forwardRef(() => AttractionsModule),
     forwardRef(() => ParksModule),
   ],
