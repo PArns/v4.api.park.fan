@@ -2,6 +2,7 @@ import { ApiProperty } from "@nestjs/swagger";
 import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 
 /**
  * Attraction Response DTO
@@ -141,15 +142,7 @@ export class AttractionResponseDto {
     required: false,
     nullable: true,
   })
-  crowdLevel?:
-    | "very_low"
-    | "low"
-    | "moderate"
-    | "high"
-    | "very_high"
-    | "extreme"
-    | "closed"
-    | null;
+  crowdLevel?: CrowdLevel | "closed" | null;
 
   // Prediction Accuracy (Feedback Loop)
   @ApiProperty({

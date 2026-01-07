@@ -12,6 +12,7 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { ParksService } from "../../parks/parks.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 
 /**
  * Attraction Integration Service
@@ -230,15 +231,7 @@ export class AttractionIntegrationService {
     // Calculate crowd level
     // Strategy: Use real-time wait time with P90 baseline if available,
     // otherwise fallback to ML prediction crowdLevel
-    let crowdLevel:
-      | "very_low"
-      | "low"
-      | "moderate"
-      | "high"
-      | "very_high"
-      | "extreme"
-      | "closed"
-      | null = null;
+    let crowdLevel: CrowdLevel | "closed" | null = null;
     if (dto.effectiveStatus === "CLOSED") {
       crowdLevel = "closed";
     } else {
