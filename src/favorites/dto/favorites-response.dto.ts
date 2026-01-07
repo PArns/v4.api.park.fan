@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { AttractionResponseDto } from "../../attractions/dto/attraction-response.dto";
 
 /**
  * Simplified park with distance (similar to nearby endpoint)
@@ -90,18 +91,9 @@ export class ParkWithDistanceDto {
 }
 
 /**
- * Simplified attraction (ride) with distance (similar to nearby endpoint)
+ * Attraction with distance (extends full AttractionResponseDto)
  */
-export class AttractionWithDistanceDto {
-  @ApiProperty({ description: "Attraction ID" })
-  id: string;
-
-  @ApiProperty({ description: "Attraction name", example: "Blue Fire" })
-  name: string;
-
-  @ApiProperty({ description: "Attraction slug", example: "blue-fire" })
-  slug: string;
-
+export class AttractionWithDistanceDto extends AttractionResponseDto {
   @ApiProperty({
     description: "Distance from user location in meters (if lat/lng provided)",
     example: 250,
@@ -111,47 +103,14 @@ export class AttractionWithDistanceDto {
   distance?: number | null;
 
   @ApiProperty({
-    description: "Current wait time in minutes",
-    example: 35,
-    nullable: true,
-  })
-  waitTime: number | null;
-
-  @ApiProperty({
-    description: "Attraction status",
-    example: "OPERATING",
-    enum: ["OPERATING", "CLOSED", "DOWN", "REFURBISHMENT"],
-  })
-  status: string;
-
-  @ApiProperty({
-    description: "Analytics data for the ride",
+    description:
+      "Overall trend direction extracted from primary queue (up/down/stable)",
+    example: "up",
+    enum: ["up", "down", "stable"],
     required: false,
     nullable: true,
   })
-  analytics?: {
-    p50?: number;
-    p90?: number;
-    avgWaitToday?: number;
-  };
-
-  @ApiProperty({
-    description: "Frontend URL to attraction",
-    example: "/europe/germany/rust/europa-park/blue-fire",
-    nullable: true,
-  })
-  url: string | null;
-
-  @ApiProperty({
-    description: "Parent park details",
-    required: false,
-    nullable: true,
-  })
-  park?: {
-    id: string;
-    name: string;
-    slug: string;
-  } | null;
+  trend?: "up" | "down" | "stable" | null;
 }
 
 /**

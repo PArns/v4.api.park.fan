@@ -7,6 +7,8 @@ import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { ParksService } from "../parks/parks.service";
 import { AttractionsService } from "../attractions/attractions.service";
+import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
+import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
 import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -22,7 +24,7 @@ import {
   calculateHaversineDistance,
   GeoCoordinate,
 } from "../common/utils/distance.util";
-import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
+import { buildParkUrl } from "../common/utils/url.util";
 
 /**
  * Favorites Service
@@ -45,6 +47,7 @@ export class FavoritesService {
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly parksService: ParksService,
     private readonly attractionsService: AttractionsService,
+    private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly showsService: ShowsService,
     private readonly restaurantsService: RestaurantsService,
     private readonly queueDataService: QueueDataService,
@@ -246,7 +249,8 @@ export class FavoritesService {
   }
 
   /**
-   * Enrich attractions with live data and calculate distances (similar to nearby endpoint)
+   * Enrich attractions with live data and calculate distances
+   * Uses AttractionIntegrationService for complete data (queues, statistics, trends)
    */
   private async enrichAttractions(
     attractions: Attraction[],
@@ -256,36 +260,60 @@ export class FavoritesService {
       return [];
     }
 
-    const attractionIds = attractions.map((a) => a.id);
-
-    // Get latest queue data for all attractions (batch query)
-    const latestQueueData = await this.getLatestQueueData(attractions);
-
-    // Batch fetch percentiles for all attractions in parallel
-    const percentilesMap = new Map<string, any>();
-    await Promise.all(
-      attractionIds.map(async (attractionId) => {
-        try {
-          const percentiles =
-            await this.analyticsService.getAttractionPercentilesToday(
-              attractionId,
-            );
-          percentilesMap.set(attractionId, percentiles);
-        } catch (_e) {
-          // Ignore errors
-        }
-      }),
+    // Build integrated responses for all attractions in parallel
+    const integratedResponses = await Promise.all(
+      attractions.map((attraction) =>
+        this.attractionIntegrationService
+          .buildIntegratedResponse(attraction)
+          .catch(() => null),
+      ),
     );
 
-    // Build attraction DTOs (similar to nearby endpoint)
-    const enrichedAttractions = attractions.map((attraction) => {
-      const queueData = latestQueueData.get(attraction.id);
-      const analytics = percentilesMap.get(attraction.id);
+    // Build DTOs with distance and trend
+    return attractions.map((attraction, index) => {
+      const integrated = integratedResponses[index];
 
+      // If integration failed, create minimal DTO
+      if (!integrated) {
+        const baseDto = AttractionResponseDto.fromEntity(attraction);
+        const dto: AttractionWithDistanceDto = {
+          ...baseDto,
+          distance:
+            userLocation && attraction.latitude && attraction.longitude
+              ? Math.round(
+                  calculateHaversineDistance(
+                    userLocation,
+                    {
+                      latitude: Number(attraction.latitude),
+                      longitude: Number(attraction.longitude),
+                    },
+                    "m",
+                  ),
+                )
+              : null,
+          trend: null,
+        };
+        return dto;
+      }
+
+      // Extract trend from primary queue (STANDBY or first available)
+      const primaryQueue =
+        integrated.queues?.find((q) => q.queueType === "STANDBY") ||
+        integrated.queues?.[0];
+      let trend: "up" | "down" | "stable" | null = null;
+      if (primaryQueue?.trend?.direction) {
+        // Map "increasing" -> "up", "decreasing" -> "down", "stable" -> "stable"
+        trend =
+          primaryQueue.trend.direction === "increasing"
+            ? "up"
+            : primaryQueue.trend.direction === "decreasing"
+              ? "down"
+              : "stable";
+      }
+
+      // Create DTO from integrated response with distance and trend
       const dto: AttractionWithDistanceDto = {
-        id: attraction.id,
-        name: attraction.name,
-        slug: attraction.slug,
+        ...integrated,
         distance:
           userLocation && attraction.latitude && attraction.longitude
             ? Math.round(
@@ -299,76 +327,11 @@ export class FavoritesService {
                 ),
               )
             : null,
-        waitTime: queueData?.waitTime || null,
-        status: queueData?.status || "CLOSED",
-        analytics: analytics
-          ? {
-              p50: analytics.p50,
-              p90: analytics.p90,
-              avgWaitToday: analytics.avgWaitToday,
-            }
-          : undefined,
-        url: attraction.park
-          ? buildAttractionUrl(attraction.park, attraction) || null
-          : null,
-        park: attraction.park
-          ? {
-              id: attraction.park.id,
-              name: attraction.park.name,
-              slug: attraction.park.slug,
-            }
-          : null,
+        trend,
       };
 
       return dto;
     });
-
-    return enrichedAttractions;
-  }
-
-  /**
-   * Get latest queue data for multiple attractions (batch query)
-   * Similar to location service implementation
-   */
-  private async getLatestQueueData(
-    attractions: Attraction[],
-  ): Promise<Map<string, any>> {
-    if (attractions.length === 0) {
-      return new Map();
-    }
-
-    // Group attractions by park for batch queries
-    const parkMap = new Map<string, Attraction[]>();
-    attractions.forEach((attraction) => {
-      if (attraction.parkId) {
-        if (!parkMap.has(attraction.parkId)) {
-          parkMap.set(attraction.parkId, []);
-        }
-        parkMap.get(attraction.parkId)!.push(attraction);
-      }
-    });
-
-    const result = new Map<string, any>();
-
-    // Fetch queue data for each park
-    await Promise.all(
-      Array.from(parkMap.entries()).map(async ([parkId, parkAttractions]) => {
-        const allQueues =
-          await this.queueDataService.findPrioritizedStatusByPark(
-            parkId,
-            30, // 30 minutes max age
-          );
-
-        parkAttractions.forEach((attraction) => {
-          const queueData = allQueues.get(attraction.id);
-          if (queueData) {
-            result.set(attraction.id, queueData);
-          }
-        });
-      }),
-    );
-
-    return result;
   }
 
   /**
