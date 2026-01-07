@@ -545,15 +545,18 @@ export class ParkValidatorService {
         const nameSimilarity = calculateNameSimilarity(park1.name, park2.name);
 
         // Determine if duplicate
-        if (
+        // IMPORTANT: Require either same city OR geo proximity for high name similarity
+        // This prevents false positives like "Disneyland Park" (Anaheim) vs "Disneyland Park" (Paris)
+        const isDuplicate =
           (sameCity && nameSimilarity >= 0.85) ||
           (geoProximity && nameSimilarity >= 0.85) ||
-          nameSimilarity >= 0.95
-        ) {
+          (nameSimilarity >= 0.98 && (sameCity || geoProximity)); // Very high similarity still needs location match
+
+        if (isDuplicate) {
           const reasons: string[] = [];
           if (sameCity) reasons.push("same city");
           if (geoProximity) reasons.push("geo proximity < 1km");
-          if (nameSimilarity >= 0.95) reasons.push("very high name similarity");
+          if (nameSimilarity >= 0.98) reasons.push("very high name similarity");
 
           duplicates.push({
             park1: { id: park1.id, name: park1.name, city: park1.city },
