@@ -399,35 +399,35 @@ export class QueueDataService {
    */
   async findCurrentStatusByAttraction(
     attractionId: string,
+    maxAgeMinutes?: number,
   ): Promise<QueueData[]> {
-    // Get the most recent queue data for each queue type
-    // This gives us the current real-time status
-    const queueTypes = Object.values(QueueType);
-    const results: QueueData[] = [];
+    // Use DISTINCT ON optimization to get latest record per queueType efficiently
+    // This replaces N queries (one per queue type) with a single query
+    const query = this.queueDataRepository
+      .createQueryBuilder("qd")
+      .where("qd.attractionId = :attractionId", { attractionId })
+      .distinctOn(["qd.queueType"])
+      .orderBy("qd.queueType", "ASC")
+      .addOrderBy("qd.timestamp", "DESC");
 
-    for (const queueType of queueTypes) {
-      const latest = await this.queueDataRepository.findOne({
-        where: { attractionId, queueType },
-        relations: ["attraction", "attraction.park"],
-        order: { timestamp: "DESC" },
-      });
-
-      if (latest) {
-        results.push(latest);
-      }
+    if (maxAgeMinutes) {
+      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+      query.andWhere("qd.timestamp >= :cutoff", { cutoff });
     }
 
-    return results;
+    return query.getMany();
   }
 
   /**
    * Find current status for multiple attractions (batch query)
    *
    * @param attractionIds - Array of Attraction IDs
+   * @param maxAgeMinutes - Maximum age of queue data in minutes (optional)
    * @returns Map of attractionId -> QueueData[]
    */
   async findCurrentStatusByAttractionIds(
     attractionIds: string[],
+    maxAgeMinutes?: number,
   ): Promise<Map<string, QueueData[]>> {
     if (attractionIds.length === 0) {
       return new Map();
@@ -441,6 +441,11 @@ export class QueueDataService {
       .orderBy("qd.attractionId", "ASC")
       .addOrderBy("qd.queueType", "ASC")
       .addOrderBy("qd.timestamp", "DESC");
+
+    if (maxAgeMinutes) {
+      const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+      query.andWhere("qd.timestamp >= :cutoff", { cutoff });
+    }
 
     const queueData = await query.getMany();
 
