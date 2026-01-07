@@ -92,8 +92,6 @@ export class QueueDataService {
       };
 
       // Map fields based on queue type
-      // Always save queue data if queueInfo exists (even if specific fields are missing)
-      // This ensures all queue types from live data are stored
       switch (queueType) {
         case QueueType.STANDBY:
         case QueueType.SINGLE_RIDER:
@@ -101,20 +99,18 @@ export class QueueDataService {
           if ("waitTime" in queueInfo) {
             queueData.waitTime = queueInfo.waitTime;
           }
-          // Even without waitTime, save the queue type with status
-          // This ensures SINGLE_RIDER, PAID_STANDBY etc. are stored even if waitTime is missing
           break;
 
         case QueueType.RETURN_TIME:
         case QueueType.PAID_RETURN_TIME:
           if ("state" in queueInfo) {
             queueData.state = queueInfo.state;
-          }
-          if ("returnStart" in queueInfo && queueInfo.returnStart) {
-            queueData.returnStart = new Date(queueInfo.returnStart);
-          }
-          if ("returnEnd" in queueInfo && queueInfo.returnEnd) {
-            queueData.returnEnd = new Date(queueInfo.returnEnd);
+            queueData.returnStart = queueInfo.returnStart
+              ? new Date(queueInfo.returnStart)
+              : undefined;
+            queueData.returnEnd = queueInfo.returnEnd
+              ? new Date(queueInfo.returnEnd)
+              : undefined;
           }
           if (
             queueType === QueueType.PAID_RETURN_TIME &&
@@ -122,23 +118,15 @@ export class QueueDataService {
           ) {
             queueData.price = queueInfo.price;
           }
-          // Even without state, save the queue type with status
           break;
 
         case QueueType.BOARDING_GROUP:
           if ("allocationStatus" in queueInfo) {
             queueData.allocationStatus = queueInfo.allocationStatus;
-          }
-          if ("currentGroupStart" in queueInfo) {
             queueData.currentGroupStart = queueInfo.currentGroupStart;
-          }
-          if ("currentGroupEnd" in queueInfo) {
             queueData.currentGroupEnd = queueInfo.currentGroupEnd;
-          }
-          if ("estimatedWait" in queueInfo) {
             queueData.estimatedWait = queueInfo.estimatedWait;
           }
-          // Even without allocationStatus, save the queue type with status
           break;
       }
 
