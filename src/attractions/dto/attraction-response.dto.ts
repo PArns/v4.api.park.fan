@@ -127,6 +127,30 @@ export class AttractionResponseDto {
   })
   trend?: "up" | "down" | "stable" | null;
 
+  @ApiProperty({
+    description: "Current crowd level badge",
+    enum: [
+      "very_low",
+      "low",
+      "moderate",
+      "high",
+      "very_high",
+      "extreme",
+      "closed",
+    ],
+    required: false,
+    nullable: true,
+  })
+  crowdLevel?:
+    | "very_low"
+    | "low"
+    | "moderate"
+    | "high"
+    | "very_high"
+    | "extreme"
+    | "closed"
+    | null;
+
   // Prediction Accuracy (Feedback Loop)
   @ApiProperty({
     description: "Prediction accuracy metrics",

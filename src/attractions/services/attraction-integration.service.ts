@@ -187,6 +187,14 @@ export class AttractionIntegrationService {
 
     // Fetch ML predictions (our model - daily, up to 1 year)
     // Only if ML service is available
+    let enrichedPredictions: Array<{
+      predictedTime: string;
+      predictedWaitTime: number;
+      confidence: number;
+      crowdLevel?: string;
+      baseline?: number;
+      trend: string;
+    }> = [];
     try {
       const isHealthy = await this.mlService.isHealthy();
       if (isHealthy) {
@@ -196,13 +204,19 @@ export class AttractionIntegrationService {
             "hourly",
           );
 
-        dto.hourlyForecast = predictions.map((p) => ({
+        enrichedPredictions = predictions.map((p) => ({
           predictedTime: p.predictedTime,
           predictedWaitTime: p.predictedWaitTime,
           confidence: p.confidence,
           crowdLevel: p.crowdLevel,
           baseline: p.baseline,
           trend: p.trend || "stable",
+        }));
+        dto.hourlyForecast = enrichedPredictions.map((p) => ({
+          predictedTime: p.predictedTime,
+          predictedWaitTime: p.predictedWaitTime,
+          confidence: p.confidence,
+          trend: p.trend,
         }));
       }
     } catch (error) {
@@ -212,6 +226,63 @@ export class AttractionIntegrationService {
       this.logger.warn("ML predictions unavailable:", errorMessage);
       dto.hourlyForecast = [];
     }
+
+    // Calculate crowd level
+    // Strategy: Use real-time wait time with P90 baseline if available,
+    // otherwise fallback to ML prediction crowdLevel
+    let crowdLevel:
+      | "very_low"
+      | "low"
+      | "moderate"
+      | "high"
+      | "very_high"
+      | "extreme"
+      | "closed"
+      | null = null;
+    if (dto.effectiveStatus === "CLOSED") {
+      crowdLevel = "closed";
+    } else {
+      // Find current hour prediction for fallback
+      const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
+      const currentPred = enrichedPredictions.find((p) =>
+        p.predictedTime.startsWith(nowStr),
+      );
+
+      // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
+      const wait = dto.queues?.[0]?.waitTime;
+      if (wait !== undefined && wait !== null) {
+        // Get P90 baseline for relative crowd level (context-aware)
+        try {
+          const percentiles =
+            await this.analyticsService.getAttractionPercentilesToday(
+              attraction.id,
+            );
+          const p90 = percentiles?.p90 || 0;
+          const { rating } = this.analyticsService.getLoadRating(wait, p90);
+          crowdLevel = rating;
+        } catch (error) {
+          // If percentile lookup fails, fallback to ML prediction
+          this.logger.warn(
+            `Failed to get percentiles for crowd level, using fallback:`,
+            error,
+          );
+          if (currentPred?.crowdLevel) {
+            crowdLevel = currentPred.crowdLevel as any;
+          } else {
+            crowdLevel = "very_low";
+          }
+        }
+      } else {
+        // 2. Fallback to ML Prediction if no live data
+        if (currentPred?.crowdLevel) {
+          crowdLevel = currentPred.crowdLevel as any;
+        } else {
+          // 3. Last resort default
+          crowdLevel = "very_low";
+        }
+      }
+    }
+    dto.crowdLevel = crowdLevel;
 
     // Fetch attraction statistics (requires park timezone for accurate daily filtering)
     try {
