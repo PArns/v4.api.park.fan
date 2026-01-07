@@ -92,6 +92,13 @@ export class AttractionResponseDto {
   } | null;
 
   @ApiProperty({
+    description: "Frontend URL to attraction",
+    nullable: true,
+    required: false,
+  })
+  url?: string | null;
+
+  @ApiProperty({
     description: "Attraction statistics",
     required: false,
     nullable: true,

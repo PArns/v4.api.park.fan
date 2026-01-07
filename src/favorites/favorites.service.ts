@@ -26,7 +26,12 @@ import {
   calculateHaversineDistance,
   GeoCoordinate,
 } from "../common/utils/distance.util";
-import { buildParkUrl } from "../common/utils/url.util";
+import {
+  buildParkUrl,
+  buildAttractionUrl,
+  buildShowUrl,
+  buildRestaurantUrl,
+} from "../common/utils/url.util";
 
 /**
  * Favorites Service
@@ -448,6 +453,10 @@ export class FavoritesService {
               : null,
           trend: null,
         };
+        // Add URL if park is available
+        if (attraction.park) {
+          dto.url = buildAttractionUrl(attraction.park, attraction) || null;
+        }
         return dto;
       }
 
@@ -468,6 +477,12 @@ export class FavoritesService {
                 ),
               )
             : null,
+        // Set URL if not already set and park is available
+        url:
+          integrated.url ||
+          (attraction.park
+            ? buildAttractionUrl(attraction.park, attraction) || null
+            : null),
       };
 
       return dto;
@@ -514,7 +529,7 @@ export class FavoritesService {
             : null,
         status: liveData?.status || "CLOSED",
         showtimes: liveData?.showtimes || null,
-        url: show.park ? buildParkUrl(show.park) || null : null,
+        url: show.park ? buildShowUrl(show.park, show) || null : null,
         park: show.park
           ? {
               id: show.park.id,
@@ -572,7 +587,9 @@ export class FavoritesService {
         status: liveData?.status || "CLOSED",
         waitTime: liveData?.waitTime || null,
         cuisineType: restaurant.cuisineType || null,
-        url: restaurant.park ? buildParkUrl(restaurant.park) || null : null,
+        url: restaurant.park
+          ? buildRestaurantUrl(restaurant.park, restaurant) || null
+          : null,
         park: restaurant.park
           ? {
               id: restaurant.park.id,
