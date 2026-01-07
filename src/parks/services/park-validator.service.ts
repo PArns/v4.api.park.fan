@@ -179,8 +179,11 @@ export class ParkValidatorService {
       }
 
       // Determine if it's a mismatch
+      // If similarity is 100%, consider it correct even if normalized names differ slightly
+      // (e.g., due to special characters like ® that might be handled differently)
       const isNameMismatch =
-        similarity < 0.8 || normalizedDbName !== normalizedApiName;
+        similarity < 1.0 &&
+        (similarity < 0.8 || normalizedDbName !== normalizedApiName);
       const isGeoMismatch =
         distanceKm !== null && distanceKm !== undefined && distanceKm > 1.0;
 
@@ -295,7 +298,12 @@ export class ParkValidatorService {
       const normalizedDbName = normalizeForMatching(park.name);
       const normalizedApiName = normalizeForMatching(apiPark.name);
 
-      if (similarity < 0.8 || normalizedDbName !== normalizedApiName) {
+      // If similarity is 100%, consider it correct even if normalized names differ slightly
+      const isNameMismatch =
+        similarity < 1.0 &&
+        (similarity < 0.8 || normalizedDbName !== normalizedApiName);
+
+      if (isNameMismatch) {
         mismatches.push({
           parkId: park.id,
           parkName: park.name,
