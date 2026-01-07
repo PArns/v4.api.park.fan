@@ -277,6 +277,45 @@ export class AttractionIntegrationService {
     }
     dto.crowdLevel = crowdLevel;
 
+    // Calculate baseline and comparison (same logic as park-integration)
+    if (dto.effectiveStatus === "OPERATING") {
+      const wait = dto.queues?.[0]?.waitTime;
+      if (wait !== undefined && wait !== null) {
+        try {
+          const percentiles =
+            await this.analyticsService.getAttractionPercentilesToday(
+              attraction.id,
+            );
+          const p90 = percentiles?.p90 || 0;
+
+          if (p90 > 0) {
+            const loadRating = this.analyticsService.getLoadRating(wait, p90);
+            dto.baseline = loadRating.baseline;
+            dto.comparison = this.analyticsService.getComparisonText(
+              loadRating.rating,
+            );
+          } else {
+            dto.baseline = null;
+            dto.comparison = null;
+          }
+        } catch (error) {
+          // If percentile lookup fails, set to null
+          this.logger.warn(
+            `Failed to get percentiles for baseline/comparison:`,
+            error,
+          );
+          dto.baseline = null;
+          dto.comparison = null;
+        }
+      } else {
+        dto.baseline = null;
+        dto.comparison = null;
+      }
+    } else {
+      dto.baseline = null;
+      dto.comparison = null;
+    }
+
     // Fetch attraction statistics (requires park timezone for accurate daily filtering)
     try {
       // Fetch park entity to get timezone
