@@ -9,6 +9,7 @@ import { MLModel } from "../ml/entities/ml-model.entity";
 import { Redis } from "ioredis";
 import { Inject } from "@nestjs/common";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import * as packageJson from "../../package.json";
 
 interface HealthStatus {
   status: "ok" | "degraded" | "error";
@@ -145,7 +146,7 @@ export class HealthController {
       status: dbStatus === "connected" && redisStatus ? "ok" : "degraded",
       timestamp: new Date().toISOString(),
       uptime: Math.floor(process.uptime()),
-      version: "4.0.0",
+      version: packageJson.version,
       services: {
         database: {
           status: dbStatus,
