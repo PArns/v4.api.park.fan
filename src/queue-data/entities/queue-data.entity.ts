@@ -33,18 +33,26 @@ import {
  * For Phase 2, we only fetch metadata (parks/attractions), not live data.
  */
 @Entity("queue_data")
+// Base index for attractionId + timestamp queries (used by findCurrentStatusByAttraction without status filter)
 @Index(["attractionId", "timestamp"])
-@Index(["queueType", "timestamp"])
+// Composite index for DISTINCT ON queries: attractionId + queueType + timestamp
+// Used by: findCurrentStatusByPark, findCurrentStatusByAttraction, findAllWithFilters
 @Index(["attractionId", "queueType", "timestamp"])
+// Partial index for OPERATING status queries (smaller than full index, faster for status = 'OPERATING')
+// Used by: analytics queries filtering by status = 'OPERATING'
 @Index("idx_queue_data_operating", ["attractionId", "timestamp"], {
   where: "\"status\" = 'OPERATING'",
 })
+// Index for queueType + status + timestamp queries (used by ML service training data)
+// Used by: ml-service/db.py fetch_training_data (WHERE queueType = 'STANDBY' AND status = 'OPERATING')
 @Index(["queueType", "status", "timestamp"])
 // Optimized index for history queries: attractionId + queueType + status + timestamp
 // This covers the WHERE clause: attractionId = X AND queueType = 'STANDBY' AND status = 'OPERATING' AND timestamp >= Y AND timestamp < Z
+// Used by: calculateAttractionHistory (history feature)
 @Index(["attractionId", "queueType", "status", "timestamp"])
 // Partial index for DOWN status queries (down count calculation)
 // This is more efficient than scanning all rows and filtering by status = 'DOWN'
+// Used by: calculateAttractionHistory (down count query)
 @Index("idx_queue_data_down", ["attractionId", "timestamp"], {
   where: "\"status\" = 'DOWN'",
 })
