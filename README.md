@@ -113,37 +113,62 @@ GET /v1/health/db           # Database connectivity
 
 ### 🎡 Parks
 
-Core endpoints for park information, weather, schedules, and wait times.
+Core endpoints for park information, weather, schedules, and wait times. All routes use the full geographic path structure for consistency and SEO-friendly URLs.
 
+**Geographic Routes:**
 ```http
-GET /v1/parks                                      # List all parks
-GET /v1/parks/:slug                                # Get park by slug
-GET /v1/parks/:continent/:country/:city/:parkSlug  # Get park by location
-GET /v1/parks/:slug/wait-times                     # Live wait times
-GET /v1/parks/:slug/weather                        # Current weather
-GET /v1/parks/:slug/weather/forecast               # 16-day forecast
-GET /v1/parks/:slug/schedule                       # Operating hours
-GET /v1/parks/:slug/schedule/:date                 # Schedule for specific date
+GET /v1/parks                                                      # List all parks (paginated)
+GET /v1/parks/:continent                                          # Parks by continent
+GET /v1/parks/:continent/:country                                 # Parks by country
+GET /v1/parks/:continent/:country/:city                           # Parks by city
+GET /v1/parks/:continent/:country/:city/:parkSlug                 # Get park by location
+GET /v1/parks/:continent/:country/:city/:parkSlug/calendar        # Integrated calendar
+GET /v1/parks/:continent/:country/:city/:parkSlug/weather         # Current weather & history
+GET /v1/parks/:continent/:country/:city/:parkSlug/weather/forecast # 16-day forecast
+GET /v1/parks/:continent/:country/:city/:parkSlug/schedule        # Operating hours
+GET /v1/parks/:continent/:country/:city/:parkSlug/wait-times       # Live wait times
+GET /v1/parks/:continent/:country/:city/:parkSlug/predictions/yearly # Yearly crowd predictions
+GET /v1/parks/:continent/:country/:city/:parkSlug/attractions     # List park attractions
+GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction
+GET /v1/parks/:continent/:country/:city/:parkSlug/rides/:rideSlug # Get ride (alias for attraction)
 ```
 
 **Query Parameters:**
-- `continent`, `country`, `city` — Filter by location
+- `continent`, `country`, `city` — Filter by location (in list endpoint)
 - `sort` — Sort order (name, popularity, etc.)
-- `include` — Include related data (attractions, schedule, weather)
+- `page`, `limit` — Pagination (default: page=1, limit=10)
+- `from`, `to` — Date range for weather/schedule (YYYY-MM-DD format)
+
+**Example Geographic Route:**
+```http
+GET /v1/parks/north-america/united-states/orlando/magic-kingdom
+```
 
 **Example Response:**
 ```json
 {
-  "id": 1,
+  "id": "123e4567-e89b-12d3-a456-426614174000",
   "name": "Magic Kingdom",
   "slug": "magic-kingdom",
+  "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom",
   "continent": "North America",
   "country": "United States",
   "city": "Orlando",
   "timezone": "America/New_York",
   "currentStatus": "OPERATING",
-  "currentCrowdLevel": "MODERATE",
-  "coordinates": { "lat": 28.3772, "lng": -81.5707 }
+  "currentLoad": {
+    "crowdLevel": "moderate",
+    "occupancy": 0.65
+  },
+  "coordinates": { "lat": 28.3772, "lng": -81.5707 },
+  "attractions": [
+    {
+      "id": "...",
+      "name": "Space Mountain",
+      "slug": "space-mountain",
+      "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom/attractions/space-mountain"
+    }
+  ]
 }
 ```
 
@@ -151,12 +176,17 @@ GET /v1/parks/:slug/schedule/:date                 # Schedule for specific date
 
 ### 🎢 Attractions
 
-Detailed attraction data with ML predictions and historical analytics.
+Detailed attraction data with ML predictions and historical analytics. Access attractions through their park's geographic route.
 
+**Routes:**
 ```http
-GET /v1/attractions         # List all attractions
-GET /v1/attractions/:slug   # Get attraction details
+GET /v1/parks/:continent/:country/:city/:parkSlug/attractions              # List park attractions
+GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction details
+GET /v1/parks/:continent/:country/:city/:parkSlug/rides/:rideSlug          # Get ride (alias for attraction)
 ```
+
+**Query Parameters:**
+- `page`, `limit` — Pagination for attraction list (default: page=1, limit=10)
 
 **Response includes:**
 - Live wait times and status (OPERATING, CLOSED, DOWN, REFURBISHMENT)
@@ -164,14 +194,20 @@ GET /v1/attractions/:slug   # Get attraction details
 - Daily predictions with confidence scores
 - Historical statistics (average, percentiles)
 - Downtime tracking and reliability metrics
+- Full geographic URL for easy navigation
 
 **Example Response:**
 ```json
 {
-  "id": 123,
+  "id": "123e4567-e89b-12d3-a456-426614174000",
   "name": "Space Mountain",
   "slug": "space-mountain",
-  "parkSlug": "magic-kingdom",
+  "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom/attractions/space-mountain",
+  "park": {
+    "id": "...",
+    "name": "Magic Kingdom",
+    "slug": "magic-kingdom"
+  },
   "category": "RIDE",
   "currentWaitTime": 45,
   "status": "OPERATING",
@@ -233,12 +269,7 @@ GET /v1/discovery/continents/:continent      # Countries in continent
 
 ### 🏰 Destinations
 
-Resort-level aggregation grouping multiple parks.
-
-```http
-GET /v1/destinations        # List all destinations
-GET /v1/destinations/:slug  # Get destination details
-```
+Resort-level aggregation grouping multiple parks. Destinations are used internally for data organization but are not exposed as top-level API endpoints. Parks are accessed directly via their geographic routes.
 
 **Examples:**
 - Walt Disney World (Magic Kingdom, EPCOT, Hollywood Studios, Animal Kingdom)
@@ -248,38 +279,25 @@ GET /v1/destinations/:slug  # Get destination details
 
 ### 🎭 Shows & Dining
 
-Entertainment and dining options across all parks.
-
-```http
-GET /v1/shows               # List all shows
-GET /v1/shows/:slug         # Get show details
-GET /v1/restaurants         # List all restaurants
-GET /v1/restaurants/:slug   # Get restaurant details
-```
-
-**Response includes:**
-- Showtimes and schedules
-- Operating hours
-- Wait times (for restaurants)
-- Location and park information
+Entertainment and dining options are available through the park endpoints. Shows and restaurants are not exposed as top-level API endpoints but are included in park responses and can be accessed via the search endpoint.
 
 ---
 
 ### 🔍 Intelligent Search
 
-Global search with enriched results across parks, attractions, shows, and restaurants.
+Global search with enriched results across parks and attractions.
 
 ```http
-GET /v1/search?q=disney               # Search all types
-GET /v1/search?q=thunder&type=attraction   # Filter by type
-GET /v1/search?q=paris                # Search by city
+GET /v1/search?q=disney                    # Search all types
+GET /v1/search?q=thunder&type=attraction  # Filter by type
+GET /v1/search?q=paris                   # Search by city
 ```
 
 **Search Features:**
-- **Multi-entity search**: Parks, attractions, shows, restaurants
+- **Multi-entity search**: Parks and attractions
 - **Geographic search**: By city, country, or continent
 - **Per-type counts**: Shows returned vs total results
-- **Enriched results**: Coordinates, wait times, park hours, show times
+- **Enriched results**: Coordinates, wait times, park hours, full geographic URLs
 - **Smart filtering**: Type-based filtering with max 5 results per type
 - **Fast response**: Redis-cached for 5min, <3ms cached response
 
@@ -315,12 +333,7 @@ GET /v1/search?q=paris                # Search by city
 
 ### 🎉 Holidays
 
-Public holiday data affecting park crowds and operating hours.
-
-```http
-GET /v1/holidays/:isoCountryCode              # Holidays by country
-GET /v1/holidays/:isoCountryCode/:year        # Holidays for specific year
-```
+Public holiday data affecting park crowds and operating hours. Holidays are used internally for ML predictions and analytics but are not exposed as top-level API endpoints.
 
 ---
 
