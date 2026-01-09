@@ -40,6 +40,14 @@ import {
   where: "\"status\" = 'OPERATING'",
 })
 @Index(["queueType", "status", "timestamp"])
+// Optimized index for history queries: attractionId + queueType + status + timestamp
+// This covers the WHERE clause: attractionId = X AND queueType = 'STANDBY' AND status = 'OPERATING' AND timestamp >= Y AND timestamp < Z
+@Index(["attractionId", "queueType", "status", "timestamp"])
+// Partial index for DOWN status queries (down count calculation)
+// This is more efficient than scanning all rows and filtering by status = 'DOWN'
+@Index("idx_queue_data_down", ["attractionId", "timestamp"], {
+  where: "\"status\" = 'DOWN'",
+})
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;
