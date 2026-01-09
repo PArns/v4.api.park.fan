@@ -7,6 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
+from holiday_utils import calculate_holiday_info, calculate_holiday_info_from_string
 from percentile_features import add_percentile_features
 from attraction_features import (
     add_attraction_type_feature,
@@ -310,6 +311,56 @@ def add_holiday_features(
                 & (holidays_df["date"] <= end_date.date())
             ]
 
+    # Extend holidays with weekend extensions (Saturday/Sunday after Friday holidays)
+    # Use holiday_utils to add weekend extensions to the holiday map
+    if not holidays_df.empty:
+        extended_holidays = []
+        for country in holidays_df["country"].unique():
+            country_holidays = holidays_df[holidays_df["country"] == country]
+            # Build holiday map for this country
+            country_holiday_map = {}
+            for _, row in country_holidays.iterrows():
+                date_str = row["date"].strftime("%Y-%m-%d")
+                country_holiday_map[date_str] = row["holiday_type"]
+            
+            # Check all dates in range for weekend extensions
+            check_start = start_date.date()
+            check_end = end_date.date()
+            current_date = check_start
+            while current_date <= check_end:
+                date_str = current_date.strftime("%Y-%m-%d")
+                date_obj = datetime.combine(current_date, time.min)
+                is_holiday, holiday_name, is_bridge = calculate_holiday_info(
+                    date_obj, country_holiday_map
+                )
+                # If it's a weekend extension (is_holiday but not in original map), add it
+                if is_holiday and date_str not in country_holiday_map:
+                    # This is a weekend extension - add it
+                    # Find the Friday's holiday type
+                    day_of_week = current_date.weekday()
+                    if day_of_week == 5 or day_of_week == 6:  # Weekend
+                        days_back = 1 if day_of_week == 5 else 2
+                        friday_date = current_date - timedelta(days=days_back)
+                        friday_str = friday_date.strftime("%Y-%m-%d")
+                        friday_holiday_type = country_holiday_map.get(friday_str)
+                        if friday_holiday_type:
+                            # Add weekend extension with same type as Friday holiday
+                            extended_holidays.append({
+                                "date": current_date,
+                                "country": country,
+                                "holiday_type": friday_holiday_type,
+                                "region": None,
+                                "is_nationwide": True,  # Weekend extensions are treated as nationwide
+                                "name": holiday_name or "Holiday",
+                            })
+                current_date += timedelta(days=1)
+        
+        # Add extended holidays to holidays_df
+        if extended_holidays:
+            extended_df = pd.DataFrame(extended_holidays)
+            holidays_df = pd.concat([holidays_df, extended_df], ignore_index=True)
+            holidays_df = holidays_df.drop_duplicates(subset=["country", "date", "holiday_type"])
+
     # Create holiday lookup DataFrames for vectorized merge
     # Regional holidays: (country, region, date) -> holiday_type
     # National holidays: (country, date) -> holiday_type
@@ -358,6 +409,7 @@ def add_holiday_features(
     )
 
     # Assign primary features (vectorized)
+    # Weekend extensions are already included in holidays_df from above
     df["is_holiday_primary"] = (df["primary_holiday_type"] == "public").astype(int)
     df["is_school_holiday_primary"] = (df["primary_holiday_type"] == "school").astype(
         int
@@ -1233,7 +1285,7 @@ def add_bridge_day_feature(
         if row["holiday_type"] == "public":
             holiday_lookup[(row["country"], row["date"])] = True
 
-    # Vectorized approach: Pre-compute bridge dates per country, then merge
+    # Vectorized approach: Pre-compute bridge dates per country using holiday_utils
     # Create country mapping for df
     if "country" not in df.columns:
         # Merge parks_metadata to get country
@@ -1245,17 +1297,29 @@ def add_bridge_day_feature(
         )
         df["country"] = df_country["country"]
     
-    # Pre-compute bridge dates per country
+    # Pre-compute bridge dates per country using holiday_utils
+    # Build holiday map per country for utility function
     bridge_dates = set()
-    for (country, holiday_date) in holiday_lookup.keys():
-        # Friday after Thursday holiday
-        if holiday_date.weekday() == 3:  # Thursday
-            bridge_friday = holiday_date + timedelta(days=1)
-            bridge_dates.add((country, bridge_friday))
-        # Monday before Tuesday holiday
-        if holiday_date.weekday() == 1:  # Tuesday
-            bridge_monday = holiday_date - timedelta(days=1)
-            bridge_dates.add((country, bridge_monday))
+    for country in set(c for c, _ in holiday_lookup.keys()):
+        # Build holiday map for this country (date string -> holiday name)
+        country_holiday_map = {}
+        for (c, holiday_date), _ in holiday_lookup.items():
+            if c == country:
+                country_holiday_map[holiday_date.strftime("%Y-%m-%d")] = "Holiday"
+        
+        # Check all dates in the extended range for bridge days
+        # Use extended range to catch bridge days at boundaries
+        check_start = start_date - timedelta(days=5)
+        check_end = end_date + timedelta(days=5)
+        current_date = check_start.date()
+        while current_date <= check_end.date():
+            date_obj = datetime.combine(current_date, time.min)
+            is_holiday, holiday_name, is_bridge_day = calculate_holiday_info(
+                date_obj, country_holiday_map
+            )
+            if is_bridge_day:
+                bridge_dates.add((country, current_date))
+            current_date += timedelta(days=1)
     
     # Create bridge lookup DataFrame
     if bridge_dates:
