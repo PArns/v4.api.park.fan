@@ -745,13 +745,45 @@ export class ParksService {
     for (const entry of scheduleData) {
       const dateObj = new Date(entry.date);
       const dateStr = formatInParkTimezone(dateObj, park!.timezone);
-      const holidayName = holidayMap.get(dateStr) || null;
-      const isHoliday = !!holidayName;
+      let holidayName = holidayMap.get(dateStr) || null;
+      let isHoliday = !!holidayName;
+
+      // Check if weekend between holidays (Saturday/Sunday between two holidays)
+      // Ferien gehen auch übers Wochenende
+      const dayOfWeek = dateObj.getDay();
+      if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
+        // Weekend (0 = Sunday, 6 = Saturday)
+        const prevDate = new Date(dateObj);
+        prevDate.setDate(dateObj.getDate() - 1);
+        const prevDateStr = formatInParkTimezone(prevDate, park!.timezone);
+        const nextDate = new Date(dateObj);
+        nextDate.setDate(dateObj.getDate() + 1);
+        const nextDateStr = formatInParkTimezone(nextDate, park!.timezone);
+
+        // Check if both previous and next day are holidays
+        const prevIsHoliday = holidayMap.has(prevDateStr);
+        const nextIsHoliday = holidayMap.has(nextDateStr);
+
+        if (prevIsHoliday && nextIsHoliday) {
+          // Weekend between two holidays - mark as holiday
+          isHoliday = true;
+          // Use the holiday name from the previous day (or next if prev doesn't have name)
+          holidayName =
+            holidayMap.get(prevDateStr) || holidayMap.get(nextDateStr) || null;
+        } else if (prevIsHoliday) {
+          // Weekend after holiday - mark as holiday
+          isHoliday = true;
+          holidayName = holidayMap.get(prevDateStr) || null;
+        } else if (nextIsHoliday) {
+          // Weekend before holiday - mark as holiday
+          isHoliday = true;
+          holidayName = holidayMap.get(nextDateStr) || null;
+        }
+      }
 
       // Check Bridge Day Logic
       // Friday (5) after Thursday Holiday OR Monday (1) before Tuesday Holiday
       let isBridgeDay = false;
-      const dayOfWeek = dateObj.getDay();
 
       if (dayOfWeek === 5) {
         // Friday
@@ -898,8 +930,40 @@ export class ParksService {
         holidayName = holidayMap.get(dateStr)!;
       }
 
-      // Check Bridge Day
+      // Check if weekend between holidays (Saturday/Sunday between two holidays)
+      // Ferien gehen auch übers Wochenende
       const dayOfWeek = currentDate.getDay();
+      if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
+        // Weekend (0 = Sunday, 6 = Saturday)
+        const prev = new Date(currentDate);
+        prev.setDate(currentDate.getDate() - 1);
+        const prevStr = formatInParkTimezone(prev, park.timezone);
+        const next = new Date(currentDate);
+        next.setDate(currentDate.getDate() + 1);
+        const nextStr = formatInParkTimezone(next, park.timezone);
+
+        // Check if both previous and next day are holidays
+        const prevIsHoliday = holidayDatesSet.has(prevStr);
+        const nextIsHoliday = holidayDatesSet.has(nextStr);
+
+        if (prevIsHoliday && nextIsHoliday) {
+          // Weekend between two holidays - mark as holiday
+          isHoliday = true;
+          // Use the holiday name from the previous day (or next if prev doesn't have name)
+          holidayName =
+            holidayMap.get(prevStr) || holidayMap.get(nextStr) || null;
+        } else if (prevIsHoliday) {
+          // Weekend after holiday - mark as holiday
+          isHoliday = true;
+          holidayName = holidayMap.get(prevStr) || null;
+        } else if (nextIsHoliday) {
+          // Weekend before holiday - mark as holiday
+          isHoliday = true;
+          holidayName = holidayMap.get(nextStr) || null;
+        }
+      }
+
+      // Check Bridge Day
       if (dayOfWeek === 5) {
         // Friday -> Check Thursday
         const prev = new Date(currentDate);

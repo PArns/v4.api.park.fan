@@ -1038,11 +1038,52 @@ export class ParkIntegrationService {
           }
         }
 
+        // Create set of holiday dates for weekend-between-holidays detection
+        const holidayDatesSet = new Set<string>(holidayMap.keys());
+
         // Apply to schedule items
         for (const item of dto.schedule || []) {
           const dateStr = item.date;
-          const localHoliday = holidayMap.get(dateStr);
+          let localHoliday = holidayMap.get(dateStr);
           const localInfluencing = influencingMap.get(dateStr) || [];
+
+          // Check if weekend between holidays (Saturday/Sunday between two holidays)
+          // Ferien gehen auch übers Wochenende
+          if (!localHoliday) {
+            // Parse date string (YYYY-MM-DD) - dateStr is already in YYYY-MM-DD format
+            const [year, month, day] = dateStr.split("-").map(Number);
+            const dateObj = new Date(year, month - 1, day);
+            const dayOfWeek = dateObj.getDay();
+
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+              // Weekend (0 = Sunday, 6 = Saturday)
+              // Calculate previous and next day in same format (YYYY-MM-DD)
+              const prevDate = new Date(dateObj);
+              prevDate.setDate(dateObj.getDate() - 1);
+              const prevStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}-${String(prevDate.getDate()).padStart(2, "0")}`;
+              const nextDate = new Date(dateObj);
+              nextDate.setDate(dateObj.getDate() + 1);
+              const nextStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}-${String(nextDate.getDate()).padStart(2, "0")}`;
+
+              // Check if both previous and next day are holidays
+              const prevIsHoliday = holidayDatesSet.has(prevStr);
+              const nextIsHoliday = holidayDatesSet.has(nextStr);
+
+              if (prevIsHoliday && nextIsHoliday) {
+                // Weekend between two holidays - mark as holiday
+                localHoliday =
+                  holidayMap.get(prevStr) ||
+                  holidayMap.get(nextStr) ||
+                  undefined;
+              } else if (prevIsHoliday) {
+                // Weekend after holiday - mark as holiday
+                localHoliday = holidayMap.get(prevStr) || undefined;
+              } else if (nextIsHoliday) {
+                // Weekend before holiday - mark as holiday
+                localHoliday = holidayMap.get(nextStr) || undefined;
+              }
+            }
+          }
 
           if (localHoliday) {
             item.isHoliday = true;
