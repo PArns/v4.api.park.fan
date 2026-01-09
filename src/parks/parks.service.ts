@@ -748,36 +748,23 @@ export class ParksService {
       let holidayName = holidayMap.get(dateStr) || null;
       let isHoliday = !!holidayName;
 
-      // Check if weekend between holidays (Saturday/Sunday between two holidays)
-      // Ferien gehen auch übers Wochenende
+      // Check if weekend after Friday holiday
+      // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
       const dayOfWeek = dateObj.getDay();
       if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
         // Weekend (0 = Sunday, 6 = Saturday)
-        const prevDate = new Date(dateObj);
-        prevDate.setDate(dateObj.getDate() - 1);
-        const prevDateStr = formatInParkTimezone(prevDate, park!.timezone);
-        const nextDate = new Date(dateObj);
-        nextDate.setDate(dateObj.getDate() + 1);
-        const nextDateStr = formatInParkTimezone(nextDate, park!.timezone);
+        // Check if Friday (5) is a holiday
+        const fridayDate = new Date(dateObj);
+        // For Saturday: go back 1 day to get Friday
+        // For Sunday: go back 2 days to get Friday
+        const daysBack = dayOfWeek === 6 ? 1 : 2;
+        fridayDate.setDate(dateObj.getDate() - daysBack);
+        const fridayDateStr = formatInParkTimezone(fridayDate, park!.timezone);
 
-        // Check if both previous and next day are holidays
-        const prevIsHoliday = holidayMap.has(prevDateStr);
-        const nextIsHoliday = holidayMap.has(nextDateStr);
-
-        if (prevIsHoliday && nextIsHoliday) {
-          // Weekend between two holidays - mark as holiday
+        // Only mark weekend as holiday if Friday is a holiday
+        if (holidayMap.has(fridayDateStr)) {
           isHoliday = true;
-          // Use the holiday name from the previous day (or next if prev doesn't have name)
-          holidayName =
-            holidayMap.get(prevDateStr) || holidayMap.get(nextDateStr) || null;
-        } else if (prevIsHoliday) {
-          // Weekend after holiday - mark as holiday
-          isHoliday = true;
-          holidayName = holidayMap.get(prevDateStr) || null;
-        } else if (nextIsHoliday) {
-          // Weekend before holiday - mark as holiday
-          isHoliday = true;
-          holidayName = holidayMap.get(nextDateStr) || null;
+          holidayName = holidayMap.get(fridayDateStr) || null;
         }
       }
 
@@ -930,36 +917,23 @@ export class ParksService {
         holidayName = holidayMap.get(dateStr)!;
       }
 
-      // Check if weekend between holidays (Saturday/Sunday between two holidays)
-      // Ferien gehen auch übers Wochenende
+      // Check if weekend after Friday holiday
+      // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
       const dayOfWeek = currentDate.getDay();
       if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
         // Weekend (0 = Sunday, 6 = Saturday)
-        const prev = new Date(currentDate);
-        prev.setDate(currentDate.getDate() - 1);
-        const prevStr = formatInParkTimezone(prev, park.timezone);
-        const next = new Date(currentDate);
-        next.setDate(currentDate.getDate() + 1);
-        const nextStr = formatInParkTimezone(next, park.timezone);
+        // Check if Friday (5) is a holiday
+        const fridayDate = new Date(currentDate);
+        // For Saturday: go back 1 day to get Friday
+        // For Sunday: go back 2 days to get Friday
+        const daysBack = dayOfWeek === 6 ? 1 : 2;
+        fridayDate.setDate(currentDate.getDate() - daysBack);
+        const fridayStr = formatInParkTimezone(fridayDate, park.timezone);
 
-        // Check if both previous and next day are holidays
-        const prevIsHoliday = holidayDatesSet.has(prevStr);
-        const nextIsHoliday = holidayDatesSet.has(nextStr);
-
-        if (prevIsHoliday && nextIsHoliday) {
-          // Weekend between two holidays - mark as holiday
+        // Only mark weekend as holiday if Friday is a holiday
+        if (holidayDatesSet.has(fridayStr)) {
           isHoliday = true;
-          // Use the holiday name from the previous day (or next if prev doesn't have name)
-          holidayName =
-            holidayMap.get(prevStr) || holidayMap.get(nextStr) || null;
-        } else if (prevIsHoliday) {
-          // Weekend after holiday - mark as holiday
-          isHoliday = true;
-          holidayName = holidayMap.get(prevStr) || null;
-        } else if (nextIsHoliday) {
-          // Weekend before holiday - mark as holiday
-          isHoliday = true;
-          holidayName = holidayMap.get(nextStr) || null;
+          holidayName = holidayMap.get(fridayStr) || null;
         }
       }
 
