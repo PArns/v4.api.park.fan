@@ -279,14 +279,38 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         // Get P90 baseline for relative crowd level (context-aware)
+        // Use 365-day sliding window (same as park crowd level calculation)
         try {
-          const percentiles =
-            await this.analyticsService.getAttractionPercentilesToday(
+          const p90 =
+            await this.analyticsService.get90thPercentileSlidingWindow(
               attraction.id,
+              "attraction",
             );
-          const p90 = percentiles?.p90 || 0;
-          const { rating } = this.analyticsService.getLoadRating(wait, p90);
-          crowdLevel = rating;
+
+          if (p90 > 0) {
+            const { rating } = this.analyticsService.getLoadRating(wait, p90);
+            crowdLevel = rating;
+          } else {
+            // Fallback to today's data if sliding window has no data
+            const percentiles =
+              await this.analyticsService.getAttractionPercentilesToday(
+                attraction.id,
+              );
+            const p90Today = percentiles?.p90 || 0;
+            if (p90Today > 0) {
+              const { rating } = this.analyticsService.getLoadRating(
+                wait,
+                p90Today,
+              );
+              crowdLevel = rating;
+            } else {
+              // Last resort: use absolute thresholds
+              crowdLevel = this.analyticsService.getAttractionCrowdLevel(
+                wait,
+                undefined,
+              ) as CrowdLevel;
+            }
+          }
         } catch (error) {
           // If percentile lookup fails, fallback to ML prediction
           this.logger.warn(

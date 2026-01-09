@@ -29,7 +29,8 @@ import {
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { subDays } from "date-fns";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -273,16 +274,12 @@ export class AnalyticsService {
   async calculateParkOccupancy(parkId: string): Promise<OccupancyDto> {
     const now = new Date();
 
-    // Get park timezone for accurate hour/day-of-week calculation
+    // Get park timezone for accurate date calculations
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["timezone"],
     });
     const timezone = park?.timezone || "UTC";
-
-    // Calculate current hour and day of week in PARK TIMEZONE (not UTC)
-    const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
-    const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
     // Get current "Spot" average wait time (Latest snapshot)
     const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
@@ -303,18 +300,16 @@ export class AnalyticsService {
       };
     }
 
-    // Calculate 90th percentile for this hour/weekday over last 1 year
-    const p90Baseline = await this.get90thPercentileOneYear(
+    // Calculate 90th percentile from 365-day sliding window (no hour/weekday filtering)
+    const p90Baseline = await this.get90thPercentileSlidingWindow(
       parkId,
-      currentHour,
-      currentDayOfWeek,
       "park",
       timezone,
     );
 
     if (p90Baseline === 0) {
       this.logger.warn(
-        `No historical data for park ${parkId} at hour ${currentHour}, day ${currentDayOfWeek}`,
+        `No historical data for park ${parkId} (365-day sliding window)`,
       );
       return {
         current: 50,
@@ -2315,6 +2310,127 @@ export class AnalyticsService {
     } else {
       this.logger.warn(
         `No historical data found for ${type} ${entityId} (h=${hour}, dow=${dayOfWeek}) - returning 0`,
+      );
+    }
+
+    // Cache result in Redis - shorter TTL for 0 values (1 hour vs 24 hours)
+    const ttl = value === 0 ? 60 * 60 : this.TTL_PERCENTILES;
+    await this.redis.set(cacheKey, value.toString(), "EX", ttl);
+
+    return value;
+  }
+
+  /**
+   * Calculate 90th percentile from sliding window of last 365 days
+   *
+   * Uses a simple 365-day sliding window without filtering by hour/weekday.
+   * This provides a consistent baseline for both parks and attractions.
+   *
+   * **Key Features:**
+   * - 365-day sliding window (last 365 days from now in park timezone)
+   * - No hour/weekday filtering (uses all operating data)
+   * - Only includes OPERATING status data (excludes closed days)
+   * - Works without schedule data (many parks don't have schedules)
+   * - Correctly handles park timezone for date calculations
+   *
+   * **Timezone Handling:**
+   * - Cutoff date (now - 365 days) is calculated in park timezone
+   * - Converted to UTC for database query
+   * - Ensures accurate 365-day window regardless of server timezone
+   *
+   * @param entityId - Park or attraction ID
+   * @param type - "park" or "attraction"
+   * @param timezone - Optional timezone (if not provided, fetched from entity)
+   * @returns 90th percentile wait time in minutes, or 0 if no data available
+   */
+  async get90thPercentileSlidingWindow(
+    entityId: string,
+    type: "park" | "attraction",
+    timezone?: string,
+  ): Promise<number> {
+    const cacheKey = `analytics:percentile:sliding:${type}:${entityId}`;
+
+    // Try cache first
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return parseInt(cached, 10);
+    }
+
+    // Resolve timezone: if not provided, fetch from entity
+    let resolvedTimezone = timezone;
+    if (!resolvedTimezone) {
+      if (type === "park") {
+        const park = await this.parkRepository.findOne({
+          where: { id: entityId },
+          select: ["timezone"],
+        });
+        resolvedTimezone = park?.timezone || "UTC";
+      } else {
+        // For attractions, get timezone from park
+        const attraction = await this.attractionRepository.findOne({
+          where: { id: entityId },
+          relations: ["park"],
+          select: ["id"],
+        });
+        resolvedTimezone = attraction?.park?.timezone || "UTC";
+      }
+    }
+
+    // Calculate cutoff date: now - 365 days in park timezone
+    // Use fromZonedTime to ensure correct UTC conversion
+    const now = new Date();
+
+    // Get current date in park timezone
+    const todayStr = formatInTimeZone(now, resolvedTimezone, "yyyy-MM-dd");
+    const today = fromZonedTime(`${todayStr}T00:00:00`, resolvedTimezone);
+    const cutoff = subDays(today, 365);
+
+    let waitTimes: Array<{ waitTime: number }> = [];
+
+    if (type === "attraction") {
+      // Query all queue_data for this attraction from last 365 days
+      const result = await this.queueDataRepository
+        .createQueryBuilder("qd")
+        .select("qd.waitTime", "waitTime")
+        .where("qd.attractionId = :entityId", { entityId })
+        .andWhere("qd.timestamp >= :cutoff", { cutoff })
+        .andWhere("qd.status = :status", { status: "OPERATING" })
+        .andWhere("qd.waitTime IS NOT NULL")
+        .andWhere("qd.waitTime > 0")
+        .andWhere("qd.queueType = 'STANDBY'")
+        .getRawMany();
+
+      waitTimes = result;
+    } else {
+      // Park: query all queue_data for all attractions in this park
+      const result = await this.queueDataRepository
+        .createQueryBuilder("qd")
+        .select("qd.waitTime", "waitTime")
+        .innerJoin("qd.attraction", "attraction")
+        .where("attraction.parkId = :entityId", { entityId })
+        .andWhere("qd.timestamp >= :cutoff", { cutoff })
+        .andWhere("qd.status = :status", { status: "OPERATING" })
+        .andWhere("qd.waitTime IS NOT NULL")
+        .andWhere("qd.waitTime > 0")
+        .andWhere("qd.queueType = 'STANDBY'")
+        .getRawMany();
+
+      waitTimes = result;
+    }
+
+    let value = 0;
+    if (waitTimes.length > 0) {
+      // Calculate 90th percentile
+      const sorted = waitTimes.map((w) => w.waitTime).sort((a, b) => a - b);
+      const idx = Math.ceil(sorted.length * 0.9) - 1;
+      value = Math.round(sorted[idx]);
+
+      this.logger.debug(
+        `P90 sliding window for ${type} ${entityId}: ${value}min from ${waitTimes.length} samples (365 days)`,
+      );
+    } else {
+      this.logger.warn(
+        `No historical data found for ${type} ${entityId} (365-day sliding window) - returning 0`,
       );
     }
 
