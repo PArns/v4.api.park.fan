@@ -130,7 +130,6 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/wait-times       # Live wait t
 GET /v1/parks/:continent/:country/:city/:parkSlug/predictions/yearly # Yearly crowd predictions
 GET /v1/parks/:continent/:country/:city/:parkSlug/attractions     # List park attractions
 GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction
-GET /v1/parks/:continent/:country/:city/:parkSlug/rides/:rideSlug # Get ride (alias for attraction)
 ```
 
 **Query Parameters:**
@@ -182,7 +181,6 @@ Detailed attraction data with ML predictions and historical analytics. Access at
 ```http
 GET /v1/parks/:continent/:country/:city/:parkSlug/attractions              # List park attractions
 GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction details
-GET /v1/parks/:continent/:country/:city/:parkSlug/rides/:rideSlug          # Get ride (alias for attraction)
 ```
 
 **Query Parameters:**
