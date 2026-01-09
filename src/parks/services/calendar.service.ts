@@ -20,6 +20,7 @@ import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkStatus } from "../../common/types/status.type";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { InfluencingHoliday } from "../dto/schedule-item.dto";
 import { WeatherData } from "../entities/weather-data.entity";
 import { Holiday } from "../../holidays/entities/holiday.entity";
@@ -428,7 +429,7 @@ export class CalendarService {
           crowdLevel: (p.crowdLevel === "closed"
             ? "very_low"
             : p.crowdLevel) as CrowdLevel,
-          predictedWaitTime: Math.round(p.predictedWaitTime || 30),
+          predictedWaitTime: roundToNearest5Minutes(p.predictedWaitTime || 30),
           probability: p.confidence,
         };
       });

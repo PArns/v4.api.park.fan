@@ -28,6 +28,7 @@ import {
   getStartOfDayInTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { formatInTimeZone } from "date-fns-tz";
 
 import { Redis } from "ioredis";
@@ -323,7 +324,7 @@ export class AnalyticsService {
         baseline90thPercentile: 0,
         updatedAt: now.toISOString(),
         breakdown: {
-          currentAvgWait: Math.round(currentAvgWait),
+          currentAvgWait: roundToNearest5Minutes(currentAvgWait),
           typicalAvgWait: 0,
           activeAttractions: 0,
         },
@@ -401,8 +402,8 @@ export class AnalyticsService {
       baseline90thPercentile: Math.round(p90Baseline),
       updatedAt: now.toISOString(),
       breakdown: {
-        currentAvgWait: Math.round(currentAvgWait),
-        typicalAvgWait: Math.round(typicalAvgWait || 0),
+        currentAvgWait: roundToNearest5Minutes(currentAvgWait),
+        typicalAvgWait: roundToNearest5Minutes(typicalAvgWait || 0),
         activeAttractions: await this.getActiveAttractionsCount(parkId),
       },
     };
@@ -865,8 +866,8 @@ export class AnalyticsService {
     const occupancy = await this.calculateParkOccupancy(parkId);
 
     // Get TODAY's aggregate statistics for history
-    const avgWaitToday = Math.round(stats?.avg_wait_today || 0);
-    const peakWaitToday = Math.round(stats?.max_wait_today || 0);
+    const avgWaitToday = roundToNearest5Minutes(stats?.avg_wait_today || 0);
+    const peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
 
     // Optimistic calculation: totalAttractions - explicitlyClosedCount
     // This matches Discovery Service logic and prevents showing "0 operating" during data gaps
@@ -1044,9 +1045,15 @@ export class AnalyticsService {
     const map = new Map();
     for (const row of result) {
       map.set(row.attractionId, {
-        avg: row.avg_wait ? Math.round(parseFloat(row.avg_wait)) : 0,
-        min: row.min_wait ? Math.round(parseFloat(row.min_wait)) : 0,
-        max: row.max_wait ? Math.round(parseFloat(row.max_wait)) : 0,
+        avg: row.avg_wait
+          ? roundToNearest5Minutes(parseFloat(row.avg_wait))
+          : 0,
+        min: row.min_wait
+          ? roundToNearest5Minutes(parseFloat(row.min_wait))
+          : 0,
+        max: row.max_wait
+          ? roundToNearest5Minutes(parseFloat(row.max_wait))
+          : 0,
         maxTimestamp: row.max_timestamp ? new Date(row.max_timestamp) : null,
         count: parseInt(row.count),
       });
@@ -1092,7 +1099,7 @@ export class AnalyticsService {
         map.set(row.attractionId, []);
       }
       const list = map.get(row.attractionId)!;
-      const currentWait = Math.round(parseFloat(row.waitTime));
+      const currentWait = roundToNearest5Minutes(parseFloat(row.waitTime));
 
       // Deduplicate: Only record if value changed from the last recorded point
       if (list.length === 0 || list[list.length - 1].waitTime !== currentWait) {
@@ -1141,7 +1148,7 @@ export class AnalyticsService {
     return result.map(
       (row: { interval_timestamp: Date; avg_wait: string }) => ({
         timestamp: new Date(row.interval_timestamp).toISOString(),
-        waitTime: parseInt(row.avg_wait) || 0,
+        waitTime: roundToNearest5Minutes(parseFloat(row.avg_wait) || 0),
       }),
     );
   }
@@ -1345,15 +1352,17 @@ export class AnalyticsService {
    * **Single Source of Truth** for crowd level calculation across all services.
    * All services should use this method instead of implementing their own logic.
    *
-   * Thresholds:
-   * - very_low: < 30% (Park is quiet, minimal waits)
-   * - low: 30-50% (Below average crowds)
-   * - moderate: 50-75% (Typical/average crowds)
-   * - high: 75-95% (Busy, above average waits)
-   * - very_high: 95-110% (Very busy, near/at capacity)
-   * - extreme: > 110% (Overcrowded, beyond normal capacity)
+   * **Unified Thresholds for Parks and Attractions:**
+   * Both use P90 (90th percentile) as baseline: occupancy = (current / p90) * 100
+   * - 100% = P90 = typical "busy day" baseline
+   * - very_low: ≤ 20% (≤ 0.2x P90) - Much quieter than typical
+   * - low: 21-40% (0.21-0.4x P90) - Below typical
+   * - moderate: 41-70% (0.41-0.7x P90) - Around typical
+   * - high: 71-90% (0.71-0.9x P90) - Approaching typical busy day
+   * - very_high: 91-120% (0.91-1.2x P90) - At or above typical busy day
+   * - extreme: > 120% (> 1.2x P90) - Significantly above typical busy day
    *
-   * @param occupancy - Park occupancy percentage (0-150+)
+   * @param occupancy - Occupancy percentage relative to P90 baseline (0-150+)
    * @returns Crowd level rating
    *
    * @public - Use this method from other services instead of duplicating logic
@@ -1361,11 +1370,12 @@ export class AnalyticsService {
   public determineCrowdLevel(
     occupancy: number,
   ): "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme" {
-    if (occupancy < 30) return "very_low";
-    if (occupancy < 50) return "low";
-    if (occupancy < 75) return "moderate";
-    if (occupancy < 95) return "high";
-    if (occupancy < 110) return "very_high";
+    // Unified thresholds for both parks and attractions
+    if (occupancy <= 20) return "very_low";
+    if (occupancy <= 40) return "low";
+    if (occupancy <= 70) return "moderate";
+    if (occupancy <= 90) return "high";
+    if (occupancy <= 120) return "very_high";
     return "extreme";
   }
 
@@ -1516,7 +1526,9 @@ export class AnalyticsService {
       .setParameter("timezone", timezone)
       .getRawOne();
 
-    return result?.avgWait ? Math.round(parseFloat(result.avgWait)) : null;
+    return result?.avgWait
+      ? roundToNearest5Minutes(parseFloat(result.avgWait))
+      : null;
   }
 
   /**
@@ -1557,7 +1569,7 @@ export class AnalyticsService {
       .sort((a, b) => a - b);
 
     const percentileIndex = Math.ceil(sortedWaitTimes.length * 0.95) - 1;
-    return Math.round(sortedWaitTimes[percentileIndex]);
+    return roundToNearest5Minutes(sortedWaitTimes[percentileIndex]);
   }
 
   /**
@@ -1636,8 +1648,8 @@ export class AnalyticsService {
     return {
       trend,
       changeRate: Math.round(changeRate * 10) / 10, // Round to 1 decimal
-      recentAverage: avgLastHour ? Math.round(avgLastHour) : null,
-      previousAverage: avgTwoToOne ? Math.round(avgTwoToOne) : null,
+      recentAverage: avgLastHour ? roundToNearest5Minutes(avgLastHour) : null,
+      previousAverage: avgTwoToOne ? roundToNearest5Minutes(avgTwoToOne) : null,
     };
   }
 
@@ -1859,8 +1871,10 @@ export class AnalyticsService {
       trendsMap.set(id, {
         trend,
         changeRate: Math.round(changeRate * 10) / 10,
-        recentAverage: avgLastHour ? Math.round(avgLastHour) : null,
-        previousAverage: avgTwoToOne ? Math.round(avgTwoToOne) : null,
+        recentAverage: avgLastHour ? roundToNearest5Minutes(avgLastHour) : null,
+        previousAverage: avgTwoToOne
+          ? roundToNearest5Minutes(avgTwoToOne)
+          : null,
       });
     }
 
@@ -2320,6 +2334,14 @@ export class AnalyticsService {
    * @param baseline - 90th percentile baseline wait time
    * @returns Object with rating and baseline value
    */
+  /**
+   * Get load rating from current wait time and baseline
+   * Uses unified thresholds consistent with determineCrowdLevel
+   *
+   * @param current - Current wait time
+   * @param baseline - Baseline (typically P90)
+   * @returns Rating and baseline
+   */
   public getLoadRating(
     current: number,
     baseline: number,
@@ -2347,28 +2369,11 @@ export class AnalyticsService {
       return { rating, baseline };
     }
 
-    const ratio = current / baseline;
+    // Calculate occupancy percentage: (current / baseline) * 100
+    const occupancy = (current / baseline) * 100;
 
-    let rating:
-      | "very_low"
-      | "low"
-      | "moderate"
-      | "high"
-      | "very_high"
-      | "extreme" = "moderate";
-
-    // Relative thresholds based on baseline
-    if (ratio <= 0.3)
-      rating = "very_low"; // <= 30% of baseline
-    else if (ratio <= 0.6)
-      rating = "low"; // 30-60% of baseline
-    else if (ratio <= 1.1)
-      rating = "moderate"; // 60-110% of baseline
-    else if (ratio <= 1.4)
-      rating = "high"; // 110-140% of baseline
-    else if (ratio <= 1.8)
-      rating = "very_high"; // 140-180% of baseline
-    else rating = "extreme"; // > 180% of baseline
+    // Use unified thresholds (same as determineCrowdLevel)
+    const rating = this.determineCrowdLevel(occupancy);
 
     return { rating, baseline };
   }
@@ -2504,7 +2509,7 @@ export class AnalyticsService {
             city: openParks[0].city,
             country: openParks[0].country,
             countrySlug: openParks[0].countrySlug,
-            averageWaitTime: Math.round(openParks[0].avg_wait),
+            averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
             url: buildParkUrl(openParks[0]),
             totalAttractions: parseInt(openParks[0].total_attractions || "0"),
             operatingAttractions: Math.max(
@@ -2947,7 +2952,9 @@ export class AnalyticsService {
             openParkCount: cityData.openParkCount,
             averageWaitTime:
               cityData.parkCount > 0
-                ? Math.round(cityData.totalWaitTime / cityData.parkCount)
+                ? roundToNearest5Minutes(
+                    cityData.totalWaitTime / cityData.parkCount,
+                  )
                 : null,
           });
         }
@@ -2957,7 +2964,9 @@ export class AnalyticsService {
           openParkCount: countryData.openParkCount,
           averageWaitTime:
             countryData.parkCount > 0
-              ? Math.round(countryData.totalWaitTime / countryData.parkCount)
+              ? roundToNearest5Minutes(
+                  countryData.totalWaitTime / countryData.parkCount,
+                )
               : null,
           cities,
         });
@@ -2968,7 +2977,9 @@ export class AnalyticsService {
         openParkCount: continentData.openParkCount,
         averageWaitTime:
           continentData.parkCount > 0
-            ? Math.round(continentData.totalWaitTime / continentData.parkCount)
+            ? roundToNearest5Minutes(
+                continentData.totalWaitTime / continentData.parkCount,
+              )
             : null,
         countries,
       });

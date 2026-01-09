@@ -4,6 +4,7 @@ import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { Park } from "../parks/entities/park.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import {
   GeoStructureDto,
   ContinentDto,
@@ -299,7 +300,7 @@ export class DiscoveryService {
           city.openParkCount = cityOpenCount;
           city.averageWaitTime =
             cityWaitCount > 0
-              ? Math.round(cityTotalWait / cityWaitCount)
+              ? roundToNearest5Minutes(cityTotalWait / cityWaitCount)
               : undefined;
 
           countryOpenCount += cityOpenCount;
@@ -310,7 +311,7 @@ export class DiscoveryService {
         country.openParkCount = countryOpenCount;
         country.averageWaitTime =
           countryWaitCount > 0
-            ? Math.round(countryTotalWait / countryWaitCount)
+            ? roundToNearest5Minutes(countryTotalWait / countryWaitCount)
             : undefined;
 
         continentOpenCount += countryOpenCount;
@@ -321,7 +322,7 @@ export class DiscoveryService {
       continent.openParkCount = continentOpenCount;
       continent.averageWaitTime =
         continentWaitCount > 0
-          ? Math.round(continentTotalWait / continentWaitCount)
+          ? roundToNearest5Minutes(continentTotalWait / continentWaitCount)
           : undefined;
     }
 
@@ -484,7 +485,7 @@ export class DiscoveryService {
     for (const row of result) {
       stats.set(row.id, {
         isOpen: row.is_open,
-        avgWait: Math.round(parseFloat(row.avg_wait || 0)),
+        avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait || 0)),
         operatingAttractions: parseInt(row.operating_conf_count || "0", 10), // Keep raw count for fallback
         explicitlyClosedCount: parseInt(row.explicitly_closed_count || "0", 10),
         crowdLevel: row.current_crowd_level

@@ -4,6 +4,7 @@ import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
+import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 
 /**
  * Attraction Response DTO
@@ -190,6 +191,14 @@ export class AttractionResponseDto {
     type: [HistoryDayDto],
   })
   history?: HistoryDayDto[];
+
+  @ApiProperty({
+    description:
+      "Park schedule (opening hours and holidays) for the last 30 days, aligned with history data",
+    required: false,
+    type: [ScheduleItemDto],
+  })
+  schedule?: ScheduleItemDto[];
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

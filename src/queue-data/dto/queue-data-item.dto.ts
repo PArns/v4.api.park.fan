@@ -3,6 +3,7 @@ import {
   QueueType,
   LiveStatus,
 } from "../../external-apis/themeparks/themeparks.types";
+import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 
 /**
  * Represents a single queue data entry
@@ -123,7 +124,10 @@ export class QueueDataItemDto {
     return {
       queueType: queueData.queueType,
       status: queueData.status,
-      waitTime: queueData.waitTime ?? null,
+      waitTime:
+        queueData.waitTime !== null && queueData.waitTime !== undefined
+          ? roundToNearest5Minutes(queueData.waitTime)
+          : null,
       state: queueData.state ?? null,
       returnStart: queueData.returnStart
         ? queueData.returnStart.toISOString()
@@ -133,7 +137,11 @@ export class QueueDataItemDto {
       allocationStatus: queueData.allocationStatus ?? null,
       currentGroupStart: queueData.currentGroupStart ?? null,
       currentGroupEnd: queueData.currentGroupEnd ?? null,
-      estimatedWait: queueData.estimatedWait ?? null,
+      estimatedWait:
+        queueData.estimatedWait !== null &&
+        queueData.estimatedWait !== undefined
+          ? roundToNearest5Minutes(queueData.estimatedWait)
+          : null,
       lastUpdated: (queueData.lastUpdated || queueData.timestamp).toISOString(),
     };
   }

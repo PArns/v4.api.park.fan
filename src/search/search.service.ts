@@ -17,6 +17,7 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { ShowsService } from "../shows/shows.service";
 import { CrowdLevel } from "../common/types";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
@@ -680,7 +681,10 @@ export class SearchService implements OnModuleInit {
             | "REFURBISHMENT"
             | null) || "CLOSED",
         load,
-        waitTime,
+        waitTime:
+          waitTime !== null && waitTime !== undefined
+            ? roundToNearest5Minutes(waitTime)
+            : null,
         parentPark: attraction.park
           ? {
               id: attraction.park.id,

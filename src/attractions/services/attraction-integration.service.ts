@@ -24,9 +24,12 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
+  getStartOfDayInTimezone,
 } from "../../common/utils/date.util";
+import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
+import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 
 /**
  * Attraction Integration Service
@@ -416,6 +419,40 @@ export class AttractionIntegrationService {
           );
           dto.history = [];
         }
+
+        // Fetch park schedule for the same date range (aligned with history)
+        // Schedule: from today back to (today - 30 days) = 31 days total
+        try {
+          // Calculate date range in park timezone: today back to (today - days)
+          // Example: days=30 means today + 30 past days = 31 days total
+          // Use getStartOfDayInTimezone to ensure "today" is correctly calculated in park timezone
+          const today = getStartOfDayInTimezone(parkForUrl.timezone);
+          const startDate = subDays(today, days); // today - 30 days for days=30
+          // End date: today (inclusive) - already calculated in park timezone
+
+          // Get schedule entries for the park (only park-level, not attraction-specific)
+          const scheduleEntries = await this.scheduleEntryRepository
+            .createQueryBuilder("schedule")
+            .where("schedule.parkId = :parkId", { parkId: attraction.parkId })
+            .andWhere("schedule.attractionId IS NULL") // Only park schedules
+            .andWhere("schedule.date >= :startDate", { startDate })
+            .andWhere("schedule.date <= :endDate", { endDate: today })
+            .orderBy("schedule.date", "ASC")
+            .addOrderBy("schedule.scheduleType", "ASC")
+            .getMany();
+
+          // Convert to DTOs
+          dto.schedule = scheduleEntries.map((entry) =>
+            ScheduleItemDto.fromEntity(entry),
+          );
+        } catch (error) {
+          // Log but don't fail - schedule is optional
+          this.logger.warn(
+            `Failed to fetch schedule for attraction ${attraction.id}:`,
+            error,
+          );
+          dto.schedule = [];
+        }
       }
     } catch (error) {
       this.logger.error("Failed to fetch attraction statistics:", error);
@@ -529,10 +566,18 @@ export class AttractionIntegrationService {
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
+        // Apply 5-minute rounding to cached data (in case cache was created before rounding fix)
+        const rounded = parsed.map((day: HistoryDayDto) => ({
+          ...day,
+          hourlyP90: day.hourlyP90.map((h) => ({
+            ...h,
+            value: roundToNearest5Minutes(h.value),
+          })),
+        }));
         this.logger.log(
-          `Using cached history for ${attractionId}: ${parsed.length} days`,
+          `Using cached history for ${attractionId}: ${rounded.length} days`,
         );
-        return parsed;
+        return rounded;
       } catch (error) {
         this.logger.warn(
           `Failed to parse cached history for ${attractionId}:`,
@@ -582,6 +627,7 @@ export class AttractionIntegrationService {
       // Note: Only 1 sample needed since we only store changes (not all values)
       // The WHERE clause uses UTC timestamps (stored in DB) compared to UTC Date objects
       // The GROUP BY extracts dates in park timezone for correct day boundaries
+      // Round P90 and avg_wait to nearest 5 minutes in SQL for consistency
       const queueDataResults = await this.dataSource.query(
         `
         SELECT 
@@ -642,7 +688,12 @@ export class AttractionIntegrationService {
       // PostgreSQL DATE() returns a string in YYYY-MM-DD format, but ensure consistency
       const queueDataByDate = new Map<
         string,
-        Array<{ hour: number; p90: number; avgWait: number }>
+        Array<{
+          hour: number;
+          p90: number;
+          avgWait: number;
+          sampleCount: number;
+        }>
       >();
       for (const row of queueDataResults) {
         // Ensure date is in YYYY-MM-DD format (PostgreSQL DATE returns this format)
@@ -655,8 +706,9 @@ export class AttractionIntegrationService {
         }
         queueDataByDate.get(dateStr)!.push({
           hour: parseInt(row.hour, 10),
-          p90: parseFloat(row.p90),
-          avgWait: parseFloat(row.avg_wait),
+          p90: roundToNearest5Minutes(parseFloat(row.p90)), // Ensure rounding (already done in SQL, but double-check)
+          avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)), // Ensure rounding
+          sampleCount: parseInt(row.sample_count, 10) || 0,
         });
       }
 
@@ -701,17 +753,33 @@ export class AttractionIntegrationService {
           const downCount = downCountMap.get(dateStr) || 0;
 
           // Calculate daily utilization (average wait vs P90 baseline)
+          // Use weighted average (same as statistics.avgWaitToday) - each data point counts equally
           let utilization: CrowdLevel | "closed" = "closed";
           if (dayQueueData.length > 0) {
-            // Calculate average wait for the day
+            // Calculate weighted average wait for the day
+            // Weight by sample count to match statistics.avgWaitToday calculation
+            const totalSamples = dayQueueData.reduce(
+              (sum, h) => sum + h.sampleCount,
+              0,
+            );
             const totalAvgWait =
-              dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
-              dayQueueData.length;
+              totalSamples > 0
+                ? dayQueueData.reduce(
+                    (sum, h) => sum + h.avgWait * h.sampleCount,
+                    0,
+                  ) / totalSamples
+                : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
+                  dayQueueData.length; // Fallback if sample counts missing
 
-            // Get P90 baseline (average of hourly P90s)
+            // Get P90 baseline (average of hourly P90s, weighted by sample count)
             const avgP90 =
-              dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
-              dayQueueData.length;
+              totalSamples > 0
+                ? dayQueueData.reduce(
+                    (sum, h) => sum + h.p90 * h.sampleCount,
+                    0,
+                  ) / totalSamples
+                : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
+                  dayQueueData.length; // Fallback if sample counts missing
 
             // Use analytics service to get crowd level
             if (avgP90 > 0) {
@@ -728,7 +796,7 @@ export class AttractionIntegrationService {
           const hourlyP90: Array<{ hour: string; value: number }> = [];
           const hourDataMap = new Map<
             number,
-            { p90: number; avgWait: number }
+            { p90: number; avgWait: number; sampleCount: number }
           >();
 
           // Create map of existing hour data
@@ -736,6 +804,7 @@ export class AttractionIntegrationService {
             hourDataMap.set(hourData.hour, {
               p90: hourData.p90,
               avgWait: hourData.avgWait,
+              sampleCount: hourData.sampleCount,
             });
           }
 
@@ -815,7 +884,7 @@ export class AttractionIntegrationService {
             const hourStr = `${hour.toString().padStart(2, "0")}:00`;
             hourlyP90.push({
               hour: hourStr,
-              value: Math.round(hourData.p90),
+              value: roundToNearest5Minutes(hourData.p90),
             });
           }
 
@@ -856,7 +925,10 @@ export class AttractionIntegrationService {
               const openingHourStr = `${openingHour.toString().padStart(2, "0")}:00`;
               hourlyP90.push({
                 hour: openingHourStr,
-                value: nearestValue !== null ? Math.round(nearestValue) : 0,
+                value:
+                  nearestValue !== null
+                    ? roundToNearest5Minutes(nearestValue)
+                    : 0,
               });
             }
           }
@@ -898,7 +970,10 @@ export class AttractionIntegrationService {
               const closingHourStr = `${closingHour.toString().padStart(2, "0")}:00`;
               hourlyP90.push({
                 hour: closingHourStr,
-                value: nearestValue !== null ? Math.round(nearestValue) : 0,
+                value:
+                  nearestValue !== null
+                    ? roundToNearest5Minutes(nearestValue)
+                    : 0,
               });
             }
           }
@@ -909,7 +984,10 @@ export class AttractionIntegrationService {
           history.push({
             date: dateStr,
             utilization: utilization || "closed",
-            hourlyP90,
+            hourlyP90: hourlyP90.map((h) => ({
+              ...h,
+              value: roundToNearest5Minutes(h.value), // Ensure all values are rounded
+            })),
             downCount,
           });
         }

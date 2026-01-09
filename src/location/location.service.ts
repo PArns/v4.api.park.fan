@@ -13,6 +13,7 @@ import {
   GeoCoordinate,
 } from "../common/utils/distance.util";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import {
   NearbyResponseDto,
   NearbyRidesDto,
@@ -219,7 +220,10 @@ export class LocationService {
           name: attraction.name,
           slug: attraction.slug,
           distance: Math.round(attraction.distance),
-          waitTime: queueData?.waitTime || null,
+          waitTime:
+            queueData?.waitTime !== null && queueData?.waitTime !== undefined
+              ? roundToNearest5Minutes(queueData.waitTime)
+              : null,
           status: queueData?.status || "CLOSED",
           analytics: analytics
             ? {
