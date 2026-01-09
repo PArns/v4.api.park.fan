@@ -811,7 +811,8 @@ export class ParksController {
     summary: "Get yearly crowd predictions (geo)",
     description:
       "Returns daily crowd predictions for the entire year (365 days) via geographic path. " +
-      "Useful for long-term trip planning and identifying best times to visit.",
+      "Useful for long-term trip planning and identifying best times to visit. " +
+      "Cached for 24 hours.",
   })
   @ApiExtraModels(ParkDailyPredictionDto)
   @ApiResponse({
@@ -902,10 +903,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
   @ApiOperation({
     summary: "List park attractions (geo)",
     description:
-      "Returns a paginated list of all attractions for a specific park via geographic path.",
+      "Returns a paginated list of all attractions for a specific park via geographic path. " +
+      "Cached for 2 minutes.",
   })
   @ApiParam({
     name: "continent",
@@ -1127,7 +1130,9 @@ export class ParksController {
   @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
   @ApiOperation({
     summary: "Get park by location",
-    description: "Returns a specific park by its geographic structure.",
+    description:
+      "Returns a specific park by its geographic structure. " +
+      "Cached for 2 minutes.",
   })
   @ApiResponse({
     status: 200,
