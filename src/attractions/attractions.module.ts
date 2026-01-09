@@ -11,10 +11,12 @@ import { MLModule } from "../ml/ml.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { QueueTimesModule } from "../external-apis/queue-times/queue-times.module";
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
+import { QueueData } from "../queue-data/entities/queue-data.entity";
+import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Attraction]),
+    TypeOrmModule.forFeature([Attraction, QueueData, ScheduleEntry]),
     ThemeParksModule,
     forwardRef(() => ParksModule),
     forwardRef(() => QueueDataModule),

@@ -3,6 +3,7 @@ import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { HistoryDayDto } from "./history-day.dto";
 
 /**
  * Attraction Response DTO
@@ -180,6 +181,15 @@ export class AttractionResponseDto {
     };
     message?: string;
   } | null;
+
+  // Historical Data
+  @ApiProperty({
+    description:
+      "Historical daily data (utilization, hourly P90, down counts) for the requested period",
+    required: false,
+    type: [HistoryDayDto],
+  })
+  history?: HistoryDayDto[];
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

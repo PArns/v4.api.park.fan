@@ -1037,7 +1037,8 @@ export class ParksController {
     summary: "Get attraction details (geo)",
     description:
       "Returns details for a specific attraction in a park via full geographic path. " +
-      "This is the primary route with full integration support. Cached for 2 minutes.",
+      "This is the primary route with full integration support. Includes historical data (utilization, hourly P90, down counts). " +
+      "Cached for 2 minutes.",
   })
   @ApiParam({
     name: "continent",
@@ -1064,6 +1065,14 @@ export class ParksController {
     description: "Attraction slug (e.g., 'taron', 'space-mountain')",
     example: "taron",
   })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    type: Number,
+    description:
+      "Number of days of history to include (including today). Default: 30. Min: 1, Max: 365.",
+    example: 30,
+  })
   @ApiResponse({
     status: 200,
     description: "Attraction details with full integration",
@@ -1076,6 +1085,7 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
     @Param("attractionSlug") attractionSlug: string,
+    @Query("days") days?: number,
   ): Promise<AttractionResponseDto> {
     const attraction = await this.attractionsService.findByGeographicPath(
       continent,
@@ -1091,9 +1101,14 @@ export class ParksController {
       );
     }
 
-    // Return with full integration (live data, forecasts, ML predictions, etc.)
+    // Validate days parameter
+    const historyDays =
+      days !== undefined ? Math.max(1, Math.min(365, days)) : 30;
+
+    // Return with full integration (live data, forecasts, ML predictions, history, etc.)
     return this.attractionIntegrationService.buildIntegratedResponse(
       attraction,
+      historyDays,
     );
   }
 

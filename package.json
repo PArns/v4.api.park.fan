@@ -1,6 +1,6 @@
 {
   "name": "park-fan-api",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "Real-time theme park data aggregation API providing wait times, occupancy insights, and ML-ready analytics",
   "author": "Patrick Arns",
   "private": true,

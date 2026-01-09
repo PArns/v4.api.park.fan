@@ -1,4 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
+import { getRepositoryToken } from "@nestjs/typeorm";
+import { DataSource } from "typeorm";
 import { AttractionIntegrationService } from "./attraction-integration.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
@@ -6,6 +8,9 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { Park } from "../../parks/entities/park.entity";
+import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
 import { createTestAttraction } from "../../../test/fixtures/attraction.fixtures";
 
 describe("AttractionIntegrationService", () => {
@@ -27,6 +32,8 @@ describe("AttractionIntegrationService", () => {
   const mockAnalyticsService = {
     detectAttractionTrend: jest.fn(),
     getAttractionStatistics: jest.fn(),
+    getEffectiveStartTime: jest.fn(),
+    getAttractionCrowdLevel: jest.fn(),
   };
 
   const mockMLService = {
@@ -40,6 +47,23 @@ describe("AttractionIntegrationService", () => {
 
   const mockParksService = {
     getBatchParkStatus: jest.fn(),
+    getSchedule: jest.fn(),
+  };
+
+  const mockParkRepository = {
+    findOne: jest.fn(),
+  };
+
+  const mockQueueDataRepository = {
+    find: jest.fn(),
+  };
+
+  const mockScheduleEntryRepository = {
+    find: jest.fn(),
+  };
+
+  const mockDataSource = {
+    query: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -65,6 +89,22 @@ describe("AttractionIntegrationService", () => {
         {
           provide: ParksService,
           useValue: mockParksService,
+        },
+        {
+          provide: getRepositoryToken(Park),
+          useValue: mockParkRepository,
+        },
+        {
+          provide: getRepositoryToken(QueueData),
+          useValue: mockQueueDataRepository,
+        },
+        {
+          provide: getRepositoryToken(ScheduleEntry),
+          useValue: mockScheduleEntryRepository,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
         },
         {
           provide: REDIS_CLIENT,
@@ -96,6 +136,7 @@ describe("AttractionIntegrationService", () => {
         id: testAttraction.id,
         name: testAttraction.name,
         slug: testAttraction.slug,
+        url: "/test-url",
       };
 
       mockRedis.get.mockResolvedValue(JSON.stringify(cachedResponse));
@@ -165,6 +206,19 @@ describe("AttractionIntegrationService", () => {
         previousAverage: 27,
       });
 
+      // Mock park repository
+      mockParkRepository.findOne.mockResolvedValue({
+        id: "park-1",
+        slug: "test-park",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "test-city",
+        continent: "Europe",
+        country: "Germany",
+        city: "Test City",
+        timezone: "Europe/Berlin",
+      });
+
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
         avgWaitToday: 30,
         peakWaitToday: 50,
@@ -175,6 +229,14 @@ describe("AttractionIntegrationService", () => {
         dataPoints: 120,
         timestamp: new Date(),
       });
+
+      // Mock schedule and history queries
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockAnalyticsService.getEffectiveStartTime.mockResolvedValue(
+        new Date("2025-12-15T00:00:00Z"),
+      );
+      mockAnalyticsService.getAttractionCrowdLevel.mockReturnValue("moderate");
 
       // Mock prediction accuracy
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
@@ -196,7 +258,7 @@ describe("AttractionIntegrationService", () => {
       expect(result).toHaveProperty("name", testAttraction.name);
       expect(result).toHaveProperty("queues");
       expect(result).toHaveProperty("forecasts");
-      expect(result).toHaveProperty("predictions");
+      expect(result).toHaveProperty("hourlyForecast");
       expect(result).toHaveProperty("statistics");
       expect(result).toHaveProperty("predictionAccuracy");
 
@@ -237,6 +299,18 @@ describe("AttractionIntegrationService", () => {
       // ML service is down
       mockMLService.isHealthy.mockResolvedValue(false);
 
+      mockParkRepository.findOne.mockResolvedValue({
+        id: "park-1",
+        slug: "test-park",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "test-city",
+        continent: "Europe",
+        country: "Germany",
+        city: "Test City",
+        timezone: "Europe/Berlin",
+      });
+
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
         avgWaitToday: 25,
         peakWaitToday: 40,
@@ -247,6 +321,9 @@ describe("AttractionIntegrationService", () => {
         dataPoints: 85,
         timestamp: new Date(),
       });
+
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
 
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
         {
@@ -262,8 +339,8 @@ describe("AttractionIntegrationService", () => {
 
       const result = await service.buildIntegratedResponse(testAttraction);
 
-      // Predictions should be undefined when ML service is down (not initialized)
-      expect(result.hourlyForecast).toBeUndefined();
+      // Predictions should be empty array when ML service is down
+      expect(result.hourlyForecast).toEqual([]);
 
       // Other data should still be present
       expect(result.statistics).toBeDefined();
@@ -299,6 +376,18 @@ describe("AttractionIntegrationService", () => {
         new Error("Trend calculation failed"),
       );
 
+      mockParkRepository.findOne.mockResolvedValue({
+        id: "park-1",
+        slug: "test-park",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "test-city",
+        continent: "Europe",
+        country: "Germany",
+        city: "Test City",
+        timezone: "Europe/Berlin",
+      });
+
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
         avgWaitToday: 28,
         peakWaitToday: 45,
@@ -309,6 +398,9 @@ describe("AttractionIntegrationService", () => {
         dataPoints: 95,
         timestamp: new Date(),
       });
+
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
 
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
         {
@@ -363,6 +455,18 @@ describe("AttractionIntegrationService", () => {
       mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
       mockMLService.isHealthy.mockResolvedValue(false);
 
+      mockParkRepository.findOne.mockResolvedValue({
+        id: "park-1",
+        slug: "test-park",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "test-city",
+        continent: "Europe",
+        country: "Germany",
+        city: "Test City",
+        timezone: "Europe/Berlin",
+      });
+
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
         avgWaitToday: 22,
         peakWaitToday: 38,
@@ -373,6 +477,9 @@ describe("AttractionIntegrationService", () => {
         dataPoints: 75,
         timestamp: new Date(),
       });
+
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
 
       // Prediction accuracy fetch fails
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockRejectedValue(

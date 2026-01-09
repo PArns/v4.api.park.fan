@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, DataSource } from "typeorm";
 import { Attraction } from "../entities/attraction.entity";
 import { Park } from "../../parks/entities/park.entity";
 import { AttractionResponseDto } from "../dto/attraction-response.dto";
@@ -14,6 +14,19 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { buildAttractionUrl } from "../../common/utils/url.util";
+import { HistoryDayDto } from "../dto/history-day.dto";
+import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import {
+  ScheduleEntry,
+  ScheduleType,
+} from "../../parks/entities/schedule-entry.entity";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
+} from "../../common/utils/date.util";
+import { subDays } from "date-fns";
+import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 
 /**
  * Attraction Integration Service
@@ -39,7 +52,12 @@ export class AttractionIntegrationService {
     private readonly parksService: ParksService,
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
+    @InjectRepository(QueueData)
+    private readonly queueDataRepository: Repository<QueueData>,
+    @InjectRepository(ScheduleEntry)
+    private readonly scheduleEntryRepository: Repository<ScheduleEntry>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -52,14 +70,17 @@ export class AttractionIntegrationService {
    * - ML predictions (daily, up to 1 year)
    * - Statistics (analytics)
    * - Prediction accuracy metrics
+   * - Historical data (utilization, hourly P90, down counts)
    *
    * Cached for 5 minutes for better performance on frequent requests
    *
    * @param attraction - Attraction entity
+   * @param days - Number of days of history to include (default: 30)
    * @returns Complete attraction DTO with all integrated live data
    */
   async buildIntegratedResponse(
     attraction: Attraction,
+    days: number = 30,
   ): Promise<AttractionResponseDto> {
     // Try cache first
     const cacheKey = `attraction:integrated:${attraction.id}`;
@@ -377,6 +398,25 @@ export class AttractionIntegrationService {
         history: statistics.history || [],
         timestamp: statistics.timestamp.toISOString(),
       };
+
+      // Calculate historical data (utilization, hourly P90, down counts)
+      if (parkForUrl && parkForUrl.timezone) {
+        try {
+          dto.history = await this.calculateAttractionHistory(
+            attraction.id,
+            attraction.parkId,
+            parkForUrl.timezone,
+            days,
+          );
+        } catch (error) {
+          // Log but don't fail - history is optional
+          this.logger.warn(
+            `Failed to calculate history for attraction ${attraction.id}:`,
+            error,
+          );
+          dto.history = [];
+        }
+      }
     } catch (error) {
       this.logger.error("Failed to fetch attraction statistics:", error);
       dto.statistics = null;
@@ -457,5 +497,442 @@ export class AttractionIntegrationService {
     );
 
     return dto;
+  }
+
+  /**
+   * Calculate attraction history for a configurable time period
+   *
+   * Returns daily historical data including:
+   * - Daily utilization (crowd level)
+   * - Hourly P90 wait times
+   * - Down count per day
+   *
+   * Only includes days when park was open (has OPERATING schedule or fallback detection).
+   * Uses timezone-aware date calculations and park opening hours.
+   *
+   * @param attractionId - Attraction ID
+   * @param parkId - Park ID
+   * @param timezone - Park timezone (IANA format)
+   * @param days - Number of days to include (including today)
+   * @returns Array of history entries (only for days when park was open)
+   */
+  async calculateAttractionHistory(
+    attractionId: string,
+    parkId: string,
+    timezone: string,
+    days: number,
+  ): Promise<HistoryDayDto[]> {
+    // Check cache first
+    const cacheKey = `attraction:history:${attractionId}:${days}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        this.logger.log(
+          `Using cached history for ${attractionId}: ${parsed.length} days`,
+        );
+        return parsed;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to parse cached history for ${attractionId}:`,
+          error,
+        );
+      }
+    }
+
+    try {
+      // Calculate date range: today back to (today - days + 1) in park timezone
+      // Example: days=30 means today + 29 past days = 30 days total
+      const todayStr = getCurrentDateInTimezone(timezone);
+      const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+      const startDate = subDays(today, days - 1);
+
+      // Calculate end date: start of tomorrow in park timezone, converted to UTC
+      // This ensures we include all of today's data (up to but not including tomorrow)
+      const tomorrowStr = getTomorrowDateInTimezone(timezone);
+      const endDate = fromZonedTime(`${tomorrowStr}T00:00:00`, timezone);
+
+      // Debug logging
+      this.logger.log(
+        `History query for attraction ${attractionId}: ` +
+          `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
+          `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
+          `days=${days}, timezone=${timezone}`,
+      );
+
+      // Batch fetch schedules for all days in range
+      const schedules = await this.parksService.getSchedule(
+        parkId,
+        startDate,
+        endDate,
+      );
+
+      // Create schedule map: date string -> schedule entry
+      const scheduleMap = new Map<string, ScheduleEntry>();
+      for (const schedule of schedules) {
+        if (schedule.scheduleType === ScheduleType.OPERATING) {
+          const dateStr = formatInParkTimezone(schedule.date, timezone);
+          scheduleMap.set(dateStr, schedule);
+        }
+      }
+
+      // Single batch query for all queue data in date range
+      // Use raw SQL for efficient aggregation with timezone-aware date extraction
+      // Note: Only 1 sample needed since we only store changes (not all values)
+      // The WHERE clause uses UTC timestamps (stored in DB) compared to UTC Date objects
+      // The GROUP BY extracts dates in park timezone for correct day boundaries
+      const queueDataResults = await this.dataSource.query(
+        `
+        SELECT 
+          DATE(qd.timestamp AT TIME ZONE $3) as date,
+          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3) as hour,
+          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
+          AVG(qd."waitTime") as avg_wait,
+          COUNT(*) as sample_count
+        FROM queue_data qd
+        WHERE qd."attractionId" = $1
+          AND qd.timestamp >= $2
+          AND qd.timestamp < $4
+          AND qd.status = 'OPERATING'
+          AND qd."queueType" = 'STANDBY'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" > 0
+        GROUP BY DATE(qd.timestamp AT TIME ZONE $3), 
+                 EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)
+        HAVING COUNT(*) >= 1
+        ORDER BY date, hour
+      `,
+        [
+          attractionId,
+          startDate.toISOString(),
+          timezone,
+          endDate.toISOString(),
+        ],
+      );
+
+      // Query down count separately (more efficient)
+      const downCountResults = await this.dataSource.query(
+        `
+        SELECT 
+          DATE(qd.timestamp AT TIME ZONE $3) as date,
+          COUNT(DISTINCT 
+            CASE 
+              WHEN qd.status = 'DOWN' THEN 
+                DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $3)
+              ELSE NULL
+            END
+          ) as down_count
+        FROM queue_data qd
+        WHERE qd."attractionId" = $1
+          AND qd.timestamp >= $2
+          AND qd.timestamp < $4
+          AND qd.status = 'DOWN'
+        GROUP BY DATE(qd.timestamp AT TIME ZONE $3)
+      `,
+        [
+          attractionId,
+          startDate.toISOString(),
+          timezone,
+          endDate.toISOString(),
+        ],
+      );
+
+      // Group queue data by date
+      // PostgreSQL DATE() returns a string in YYYY-MM-DD format, but ensure consistency
+      const queueDataByDate = new Map<
+        string,
+        Array<{ hour: number; p90: number; avgWait: number }>
+      >();
+      for (const row of queueDataResults) {
+        // Ensure date is in YYYY-MM-DD format (PostgreSQL DATE returns this format)
+        const dateStr =
+          typeof row.date === "string"
+            ? row.date
+            : new Date(row.date).toISOString().split("T")[0];
+        if (!queueDataByDate.has(dateStr)) {
+          queueDataByDate.set(dateStr, []);
+        }
+        queueDataByDate.get(dateStr)!.push({
+          hour: parseInt(row.hour, 10),
+          p90: parseFloat(row.p90),
+          avgWait: parseFloat(row.avg_wait),
+        });
+      }
+
+      // Debug: Log query results
+      const distinctDates = Array.from(queueDataByDate.keys()).sort();
+      console.log(
+        `[DEBUG] History query for ${attractionId}: ` +
+          `SQL returned ${queueDataResults.length} hour groups, ` +
+          `${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+      );
+      this.logger.log(
+        `History query returned ${queueDataResults.length} hour groups, ` +
+          `covering ${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+      );
+
+      // Create down count map
+      const downCountMap = new Map<string, number>();
+      for (const row of downCountResults) {
+        // Ensure date is in YYYY-MM-DD format
+        const dateStr =
+          typeof row.date === "string"
+            ? row.date
+            : new Date(row.date).toISOString().split("T")[0];
+        downCountMap.set(dateStr, parseInt(row.down_count, 10) || 0);
+      }
+
+      // Build history entries for each day
+      const history: HistoryDayDto[] = [];
+      const currentDate = new Date(startDate);
+
+      while (currentDate < endDate) {
+        const dateStr = formatInParkTimezone(currentDate, timezone);
+
+        // Check if we have queue data for this day
+        // Only include days with actual data (either from schedule + data, or fallback with data)
+        const schedule = scheduleMap.get(dateStr);
+        const dayQueueData = queueDataByDate.get(dateStr) || [];
+
+        // Only include days when we have queue data
+        // This ensures we only show days when the park was actually operating and we have data
+        if (dayQueueData.length > 0) {
+          const downCount = downCountMap.get(dateStr) || 0;
+
+          // Calculate daily utilization (average wait vs P90 baseline)
+          let utilization: CrowdLevel | "closed" = "closed";
+          if (dayQueueData.length > 0) {
+            // Calculate average wait for the day
+            const totalAvgWait =
+              dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
+              dayQueueData.length;
+
+            // Get P90 baseline (average of hourly P90s)
+            const avgP90 =
+              dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
+              dayQueueData.length;
+
+            // Use analytics service to get crowd level
+            if (avgP90 > 0) {
+              utilization = this.analyticsService.getAttractionCrowdLevel(
+                totalAvgWait,
+                avgP90,
+              ) as CrowdLevel;
+            } else {
+              utilization = "closed";
+            }
+          }
+
+          // Build hourly P90 array (only for hours within operating hours)
+          const hourlyP90: Array<{ hour: string; value: number }> = [];
+          const hourDataMap = new Map<
+            number,
+            { p90: number; avgWait: number }
+          >();
+
+          // Create map of existing hour data
+          for (const hourData of dayQueueData) {
+            hourDataMap.set(hourData.hour, {
+              p90: hourData.p90,
+              avgWait: hourData.avgWait,
+            });
+          }
+
+          // Extract opening and closing hours from schedule if available
+          // Round times to nearest 5 minutes (0, 5, 10, 15, 20, etc.)
+          let openingHour: number | null = null;
+          let closingHour: number | null = null;
+
+          if (schedule && schedule.openingTime && schedule.closingTime) {
+            // Get time in park timezone and round to nearest 5 minutes
+            // schedule.openingTime and schedule.closingTime are stored as UTC timestamps
+            // We need to convert them to park timezone first
+            const openingTimeStr = formatInTimeZone(
+              schedule.openingTime,
+              timezone,
+              "HH:mm",
+            );
+            const [openingHourRaw, openingMinuteRaw] = openingTimeStr
+              .split(":")
+              .map(Number);
+            // Round minutes to nearest 5 (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)
+            const openingMinuteRounded = Math.round(openingMinuteRaw / 5) * 5;
+            // If rounded to 60, increment hour and set minute to 0
+            if (openingMinuteRounded === 60) {
+              openingHour = (openingHourRaw + 1) % 24;
+            } else {
+              openingHour = openingHourRaw;
+            }
+
+            // Debug logging
+            this.logger.debug(
+              `Schedule for ${dateStr}: openingTime UTC=${schedule.openingTime.toISOString()}, ` +
+                `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
+            );
+
+            // Extract closing hour in park timezone
+            // Validate that closingTime is on the same day as the schedule date
+            const scheduleDateStr = formatInParkTimezone(
+              schedule.date,
+              timezone,
+            );
+            const closingDateStr = formatInParkTimezone(
+              schedule.closingTime,
+              timezone,
+            );
+
+            // Only use closingTime if it's on the same day (handle data quality issues)
+            if (scheduleDateStr === closingDateStr) {
+              const closingTimeStr = formatInTimeZone(
+                schedule.closingTime,
+                timezone,
+                "HH:mm",
+              );
+              const [closingHourRaw, closingMinuteRaw] = closingTimeStr
+                .split(":")
+                .map(Number);
+              // Round minutes to nearest 5
+              const closingMinuteRounded = Math.round(closingMinuteRaw / 5) * 5;
+              // If rounded to 60, increment hour and set minute to 0
+              if (closingMinuteRounded === 60) {
+                closingHour = (closingHourRaw + 1) % 24;
+              } else {
+                closingHour = closingHourRaw;
+              }
+            } else {
+              // Log warning but don't fail - use opening hour + reasonable default
+              this.logger.warn(
+                `Invalid closingTime for ${dateStr}: closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr})`,
+              );
+              // Don't set closingHour - we'll just use opening hour
+            }
+          }
+
+          // Add all existing hour data
+          for (const hourData of dayQueueData) {
+            const hour = hourData.hour;
+            const hourStr = `${hour.toString().padStart(2, "0")}:00`;
+            hourlyP90.push({
+              hour: hourStr,
+              value: Math.round(hourData.p90),
+            });
+          }
+
+          // Ensure we have opening hour if schedule available
+          // openingHour is already in park timezone (from formatInTimeZone)
+          if (openingHour !== null) {
+            // Check if we already have this hour in the array
+            const openingHourStr = `${openingHour.toString().padStart(2, "0")}:00`;
+            const hasOpeningHour = hourlyP90.some(
+              (h) => h.hour === openingHourStr,
+            );
+
+            if (!hasOpeningHour) {
+              // Find nearest available hour data (prefer later hours)
+              let nearestHour: number | null = null;
+              let nearestValue: number | null = null;
+
+              // Look for nearest hour with data
+              for (const [hour, data] of hourDataMap.entries()) {
+                if (hour >= openingHour) {
+                  if (nearestHour === null || hour < nearestHour) {
+                    nearestHour = hour;
+                    nearestValue = data.p90;
+                  }
+                }
+              }
+
+              // If no later hour found, use earliest available
+              if (nearestHour === null && hourDataMap.size > 0) {
+                const sortedHours = Array.from(hourDataMap.keys()).sort(
+                  (a, b) => a - b,
+                );
+                nearestHour = sortedHours[0];
+                nearestValue = hourDataMap.get(nearestHour)!.p90;
+              }
+
+              // Add opening hour entry (format as HH:00 since we only track hours)
+              const openingHourStr = `${openingHour.toString().padStart(2, "0")}:00`;
+              hourlyP90.push({
+                hour: openingHourStr,
+                value: nearestValue !== null ? Math.round(nearestValue) : 0,
+              });
+            }
+          }
+
+          // Ensure we have closing hour if schedule available
+          // closingHour is already in park timezone (from formatInTimeZone)
+          if (closingHour !== null) {
+            // Check if we already have this hour in the array
+            const closingHourStr = `${closingHour.toString().padStart(2, "0")}:00`;
+            const hasClosingHour = hourlyP90.some(
+              (h) => h.hour === closingHourStr,
+            );
+
+            if (!hasClosingHour) {
+              // Find nearest available hour data (prefer earlier hours)
+              let nearestHour: number | null = null;
+              let nearestValue: number | null = null;
+
+              // Look for nearest hour with data
+              for (const [hour, data] of hourDataMap.entries()) {
+                if (hour <= closingHour) {
+                  if (nearestHour === null || hour > nearestHour) {
+                    nearestHour = hour;
+                    nearestValue = data.p90;
+                  }
+                }
+              }
+
+              // If no earlier hour found, use latest available
+              if (nearestHour === null && hourDataMap.size > 0) {
+                const sortedHours = Array.from(hourDataMap.keys()).sort(
+                  (a, b) => b - a,
+                );
+                nearestHour = sortedHours[0];
+                nearestValue = hourDataMap.get(nearestHour)!.p90;
+              }
+
+              // Add closing hour entry (format as HH:00 since we only track hours)
+              const closingHourStr = `${closingHour.toString().padStart(2, "0")}:00`;
+              hourlyP90.push({
+                hour: closingHourStr,
+                value: nearestValue !== null ? Math.round(nearestValue) : 0,
+              });
+            }
+          }
+
+          // Sort by hour
+          hourlyP90.sort((a, b) => a.hour.localeCompare(b.hour));
+
+          history.push({
+            date: dateStr,
+            utilization: utilization || "closed",
+            hourlyP90,
+            downCount,
+          });
+        }
+
+        // Move to next day
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      // Determine TTL: shorter if today is included, longer for pure history
+      const todayInRange = history.some((h) => h.date === todayStr);
+      const ttl = todayInRange ? 5 * 60 : 24 * 60 * 60; // 5 min if today included, 24h for history only
+
+      // Cache the result
+      await this.redis.set(cacheKey, JSON.stringify(history), "EX", ttl);
+
+      return history;
+    } catch (error) {
+      this.logger.error(
+        `Failed to calculate history for attraction ${attractionId}:`,
+        error,
+      );
+      // Return empty array on error (don't fail entire response)
+      return [];
+    }
   }
 }
