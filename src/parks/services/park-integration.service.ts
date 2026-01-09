@@ -25,6 +25,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
+import { calculateHolidayInfoFromString } from "../../common/utils/holiday.utils";
 import { buildAttractionUrl } from "../../common/utils/url.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { Holiday } from "../../holidays/entities/holiday.entity";
@@ -1038,36 +1039,50 @@ export class ParkIntegrationService {
           }
         }
 
-        // Create set of holiday dates for weekend-between-holidays detection
-        const holidayDatesSet = new Set<string>(holidayMap.keys());
-
         // Apply to schedule items
         for (const item of dto.schedule || []) {
           const dateStr = item.date;
           let localHoliday = holidayMap.get(dateStr);
           const localInfluencing = influencingMap.get(dateStr) || [];
 
-          // Check if weekend after Friday holiday
-          // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
+          // Check if weekend after Friday holiday using utility function
           if (!localHoliday) {
-            // Parse date string (YYYY-MM-DD) - dateStr is already in YYYY-MM-DD format
-            const [year, month, day] = dateStr.split("-").map(Number);
-            const dateObj = new Date(year, month - 1, day);
-            const dayOfWeek = dateObj.getDay();
-
-            if (dayOfWeek === 0 || dayOfWeek === 6) {
-              // Weekend (0 = Sunday, 6 = Saturday)
-              // Check if Friday (5) is a holiday
-              const fridayDate = new Date(dateObj);
-              // For Saturday: go back 1 day to get Friday
-              // For Sunday: go back 2 days to get Friday
-              const daysBack = dayOfWeek === 6 ? 1 : 2;
-              fridayDate.setDate(dateObj.getDate() - daysBack);
-              const fridayStr = `${fridayDate.getFullYear()}-${String(fridayDate.getMonth() + 1).padStart(2, "0")}-${String(fridayDate.getDate()).padStart(2, "0")}`;
-
-              // Only mark weekend as holiday if Friday is a holiday
-              if (holidayDatesSet.has(fridayStr)) {
-                localHoliday = holidayMap.get(fridayStr) || undefined;
+            const holidayInfo = calculateHolidayInfoFromString(
+              dateStr,
+              holidayMap,
+              park.timezone,
+            );
+            if (holidayInfo.isHoliday) {
+              // Get holiday from map (could be direct holiday or weekend extension)
+              localHoliday = holidayMap.get(dateStr) || undefined;
+              // If weekend extension, get the Friday holiday
+              if (!localHoliday && holidayInfo.holidayName) {
+                // Find the holiday by name in the map
+                for (const [date, holiday] of holidayMap.entries()) {
+                  const holidayName =
+                    holiday instanceof Object ? holiday.name : holiday;
+                  if (holidayName === holidayInfo.holidayName) {
+                    // Check if this is the Friday before the weekend
+                    const [year, month, day] = dateStr.split("-").map(Number);
+                    const dateObj = new Date(year, month - 1, day);
+                    const dayOfWeek = dateObj.getDay();
+                    if (dayOfWeek === 0 || dayOfWeek === 6) {
+                      const [fridayYear, fridayMonth, fridayDay] = date
+                        .split("-")
+                        .map(Number);
+                      const fridayDateObj = new Date(
+                        fridayYear,
+                        fridayMonth - 1,
+                        fridayDay,
+                      );
+                      const fridayDayOfWeek = fridayDateObj.getDay();
+                      if (fridayDayOfWeek === 5) {
+                        localHoliday = holiday;
+                        break;
+                      }
+                    }
+                  }
+                }
               }
             }
           }

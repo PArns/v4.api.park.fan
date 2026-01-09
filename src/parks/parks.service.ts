@@ -10,6 +10,7 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { calculateHolidayInfo } from "../common/utils/holiday.utils";
 import {
   calculateParkPriority,
   findDuplicatePark,
@@ -744,47 +745,11 @@ export class ParksService {
 
     for (const entry of scheduleData) {
       const dateObj = new Date(entry.date);
-      const dateStr = formatInParkTimezone(dateObj, park!.timezone);
-      let holidayName = holidayMap.get(dateStr) || null;
-      let isHoliday = !!holidayName;
-
-      // Check if weekend after Friday holiday
-      // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
-      const dayOfWeek = dateObj.getDay();
-      if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
-        // Weekend (0 = Sunday, 6 = Saturday)
-        // Check if Friday (5) is a holiday
-        const fridayDate = new Date(dateObj);
-        // For Saturday: go back 1 day to get Friday
-        // For Sunday: go back 2 days to get Friday
-        const daysBack = dayOfWeek === 6 ? 1 : 2;
-        fridayDate.setDate(dateObj.getDate() - daysBack);
-        const fridayDateStr = formatInParkTimezone(fridayDate, park!.timezone);
-
-        // Only mark weekend as holiday if Friday is a holiday
-        if (holidayMap.has(fridayDateStr)) {
-          isHoliday = true;
-          holidayName = holidayMap.get(fridayDateStr) || null;
-        }
-      }
-
-      // Check Bridge Day Logic
-      // Friday (5) after Thursday Holiday OR Monday (1) before Tuesday Holiday
-      let isBridgeDay = false;
-
-      if (dayOfWeek === 5) {
-        // Friday
-        const prevDate = new Date(dateObj);
-        prevDate.setDate(dateObj.getDate() - 1);
-        const prevDateStr = formatInParkTimezone(prevDate, park!.timezone);
-        if (holidayMap.has(prevDateStr)) isBridgeDay = true;
-      } else if (dayOfWeek === 1) {
-        // Monday
-        const nextDate = new Date(dateObj);
-        nextDate.setDate(dateObj.getDate() + 1);
-        const nextDateStr = formatInParkTimezone(nextDate, park!.timezone);
-        if (holidayMap.has(nextDateStr)) isBridgeDay = true;
-      }
+      const holidayInfo = calculateHolidayInfo(
+        dateObj,
+        holidayMap,
+        park!.timezone,
+      );
 
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
@@ -794,9 +759,9 @@ export class ParksService {
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
         description: entry.description || null,
         purchases: entry.purchases || null,
-        isHoliday: isHoliday,
-        holidayName: holidayName,
-        isBridgeDay: isHoliday ? false : isBridgeDay,
+        isHoliday: holidayInfo.isHoliday,
+        holidayName: holidayInfo.holidayName,
+        isBridgeDay: holidayInfo.isBridgeDay,
       };
 
       // Check if entry exists for this park, date, and type
@@ -907,56 +872,11 @@ export class ParksService {
     while (currentDate <= endDate) {
       const dateStr = formatInParkTimezone(currentDate, park.timezone);
 
-      let holidayName: string | null = null;
-      let isHoliday = false;
-      let isBridgeDay = false;
-
-      // Check Holiday
-      if (holidayMap.has(dateStr)) {
-        isHoliday = true;
-        holidayName = holidayMap.get(dateStr)!;
-      }
-
-      // Check if weekend after Friday holiday
-      // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
-      const dayOfWeek = currentDate.getDay();
-      if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
-        // Weekend (0 = Sunday, 6 = Saturday)
-        // Check if Friday (5) is a holiday
-        const fridayDate = new Date(currentDate);
-        // For Saturday: go back 1 day to get Friday
-        // For Sunday: go back 2 days to get Friday
-        const daysBack = dayOfWeek === 6 ? 1 : 2;
-        fridayDate.setDate(currentDate.getDate() - daysBack);
-        const fridayStr = formatInParkTimezone(fridayDate, park.timezone);
-
-        // Only mark weekend as holiday if Friday is a holiday
-        if (holidayDatesSet.has(fridayStr)) {
-          isHoliday = true;
-          holidayName = holidayMap.get(fridayStr) || null;
-        }
-      }
-
-      // Check Bridge Day
-      if (dayOfWeek === 5) {
-        // Friday -> Check Thursday
-        const prev = new Date(currentDate);
-        prev.setDate(currentDate.getDate() - 1);
-        const prevStr = formatInParkTimezone(prev, park.timezone);
-        if (holidayDatesSet.has(prevStr)) {
-          isBridgeDay = true;
-        }
-      } else if (dayOfWeek === 1) {
-        // Monday -> Check Tuesday
-        const next = new Date(currentDate);
-        next.setDate(currentDate.getDate() + 1);
-        const nextStr = formatInParkTimezone(next, park.timezone);
-        if (holidayDatesSet.has(nextStr)) {
-          isBridgeDay = true;
-        }
-      }
-
-      const finalIsBridgeDay = isHoliday ? false : isBridgeDay;
+      const holidayInfo = calculateHolidayInfo(
+        currentDate,
+        holidayMap,
+        park.timezone,
+      );
 
       // If no entry exists for this date, create it
       if (!existingDates.has(dateStr)) {
@@ -964,9 +884,9 @@ export class ParksService {
           parkId,
           date: new Date(currentDate),
           scheduleType: ScheduleType.UNKNOWN,
-          isHoliday,
-          holidayName,
-          isBridgeDay: finalIsBridgeDay,
+          isHoliday: holidayInfo.isHoliday,
+          holidayName: holidayInfo.holidayName,
+          isBridgeDay: holidayInfo.isBridgeDay,
           openingTime: null,
           closingTime: null,
         });
@@ -983,14 +903,14 @@ export class ParksService {
 
         if (
           existing &&
-          (existing.isHoliday !== isHoliday ||
-            existing.holidayName !== holidayName ||
-            existing.isBridgeDay !== finalIsBridgeDay)
+          (existing.isHoliday !== holidayInfo.isHoliday ||
+            existing.holidayName !== holidayInfo.holidayName ||
+            existing.isBridgeDay !== holidayInfo.isBridgeDay)
         ) {
           await this.scheduleRepository.update(existing.id, {
-            isHoliday,
-            holidayName,
-            isBridgeDay: finalIsBridgeDay,
+            isHoliday: holidayInfo.isHoliday,
+            holidayName: holidayInfo.holidayName,
+            isBridgeDay: holidayInfo.isBridgeDay,
           });
           filledCount++; // Count updates too
         }
