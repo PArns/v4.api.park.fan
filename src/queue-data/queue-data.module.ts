@@ -3,7 +3,6 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { QueueData } from "./entities/queue-data.entity";
 import { ForecastData } from "./entities/forecast-data.entity";
 import { QueueDataService } from "./queue-data.service";
-import { QueueDataController } from "./queue-data.controller";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { ParksModule } from "../parks/parks.module";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -30,7 +29,7 @@ import { Attraction } from "../attractions/entities/attraction.entity";
     forwardRef(() => AttractionsModule),
     forwardRef(() => ParksModule),
   ],
-  controllers: [QueueDataController],
+  controllers: [],
   providers: [QueueDataService],
   exports: [QueueDataService],
 })

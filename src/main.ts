@@ -46,11 +46,47 @@ async function bootstrap(): Promise<void> {
     new ExcludeNullInterceptor(), // Remove null values (disable with ?debug=true)
   );
 
-  // Enable CORS for development
-  app.enableCors({
-    origin: process.env.NODE_ENV === "production" ? false : "*",
-    credentials: true,
-  });
+  // CORS Configuration
+  // SECURITY: In production, CORS should be disabled or use a whitelist
+  // Cloudflare handles CORS in production, so we disable it at application level
+  const isProduction = process.env.NODE_ENV === "production";
+  const allowedOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
+    : [];
+
+  if (isProduction) {
+    // Production: Use whitelist if provided, otherwise disable CORS (Cloudflare handles it)
+    if (allowedOrigins.length > 0) {
+      app.enableCors({
+        origin: (origin, callback) => {
+          if (origin && allowedOrigins.includes(origin)) {
+            callback(null, true);
+          } else {
+            callback(new Error("Not allowed by CORS"));
+          }
+        },
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
+      });
+    } else {
+      // No CORS origins configured - disable CORS (Cloudflare will handle it)
+      // This is safer than allowing all origins
+      app.enableCors({
+        origin: false,
+        credentials: false,
+      });
+    }
+  } else {
+    // Development: Allow all origins for local testing
+    // SECURITY WARNING: Never deploy with this configuration to production
+    app.enableCors({
+      origin: "*",
+      credentials: false, // SECURITY: Don't allow credentials with wildcard origin
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
+    });
+  }
 
   // API versioning prefix (exclude root controller)
   app.setGlobalPrefix("v1", {
@@ -78,8 +114,6 @@ async function bootstrap(): Promise<void> {
           "for optimal theme park experiences worldwide.",
       )
       .setVersion(packageJson.version)
-      .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")
-      .setLicense("UNLICENSED", "")
       .setExternalDoc("Frontend Application", "https://park.fan")
       // Core API tags
       .addTag(
@@ -90,44 +124,28 @@ async function bootstrap(): Promise<void> {
         "parks",
         "Park metadata, operating hours, weather, and geographic details",
       )
-      .addTag(
-        "attractions",
-        "Attraction info, live status, wait times, and queue data",
-      )
-      .addTag("shows", "Live entertainment schedules and showtimes")
-      .addTag("restaurants", "Dining options, menus, and operating hours")
       // Data & Analytics tags
-      .addTag(
-        "queue-data",
-        "Historical wait times, queue performance, and ride availability",
-      )
       .addTag(
         "stats",
         "Park-wide analytics, crowd levels, and historical performance",
       )
-      .addTag(
-        "predictions",
-        "ML-powered crowd predictions and wait time forecasts",
-      )
       // Utility tags
+      .addTag("root", "API root and documentation")
       .addTag(
-        "search",
-        "Intelligent search across parks, attractions, shows, and restaurants",
+        "favorites",
+        "User favorites management for parks, attractions, and more",
       )
+      .addTag("search", "Intelligent search across parks and attractions")
       .addTag(
         "discovery",
         "Geographic hierarchy for route generation (continents → countries → cities)",
       )
-      .addTag(
-        "destinations",
-        "Resort-level aggregation grouping multiple parks",
-      )
-      .addTag(
-        "holidays",
-        "Public holiday data affecting crowds and operating hours",
-      )
       // ML Service tags
       .addTag("ML", "Machine learning predictions and model information")
+      .addTag(
+        "ML Monitoring",
+        "ML monitoring, drift detection, alerts, and anomaly detection",
+      )
       .addTag(
         "ML Dashboard",
         "ML service health, metrics, and model diagnostics",

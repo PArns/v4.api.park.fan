@@ -130,6 +130,22 @@ export class GoogleGeocodingClient {
     longitude: number,
     attempt = 0,
   ): Promise<GeographicData | null> {
+    // SECURITY: Validate coordinates to prevent injection
+    if (
+      typeof latitude !== "number" ||
+      typeof longitude !== "number" ||
+      isNaN(latitude) ||
+      isNaN(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      throw new Error(
+        `Invalid coordinates: lat=${latitude}, lng=${longitude}. Must be valid numbers within valid ranges.`,
+      );
+    }
+
     // Check Global Redis Block before making request
     // Only log on first attempt to avoid duplicate logs
     const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
@@ -149,6 +165,7 @@ export class GoogleGeocodingClient {
     }
 
     try {
+      // SECURITY: Use axios params option to safely encode query parameters
       const response = await this.httpClient.get<GoogleGeocodingResponse>(
         this.baseUrl,
         {

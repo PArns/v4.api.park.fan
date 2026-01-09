@@ -103,8 +103,9 @@ export class TimescaleInitService implements OnModuleInit {
       }
 
       // Get row count before truncation
+      // SECURITY: Use parameterized query with identifier quoting
       const countResult = await this.dataSource.query(
-        `SELECT COUNT(*) as count FROM ${tableName};`,
+        `SELECT COUNT(*) as count FROM ${this.quoteIdentifier(tableName)};`,
       );
       const rowCount = parseInt(countResult[0]?.count || "0");
 
@@ -112,7 +113,10 @@ export class TimescaleInitService implements OnModuleInit {
         this.logger.warn(
           `  ⚠️  ${tableName} has ${rowCount} rows. Truncating before conversion...`,
         );
-        await this.dataSource.query(`TRUNCATE TABLE ${tableName} CASCADE;`);
+        // SECURITY: Table name is validated against whitelist, but use identifier quoting
+        await this.dataSource.query(
+          `TRUNCATE TABLE ${this.quoteIdentifier(tableName)} CASCADE;`,
+        );
         this.logger.debug(`  ✓ Truncated ${tableName}`);
       }
 
@@ -121,8 +125,9 @@ export class TimescaleInitService implements OnModuleInit {
 
       // Drop primary key constraint
       if (pkName) {
+        // SECURITY: Both tableName and pkName are validated, but use identifier quoting
         await this.dataSource.query(
-          `ALTER TABLE ${tableName} DROP CONSTRAINT "${pkName}";`,
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(pkName)};`,
         );
         this.logger.debug(`  ✓ Dropped primary key constraint: ${pkName}`);
       }
@@ -135,20 +140,25 @@ export class TimescaleInitService implements OnModuleInit {
       // - restaurant_live_data: (id, timeColumn)
       let compositePK: string;
       if (tableName === "weather_data") {
-        compositePK = `"parkId", "${timeColumn}"`;
+        // SECURITY: Use identifier quoting for column names
+        compositePK = `${this.quoteIdentifier("parkId")}, ${this.quoteIdentifier(timeColumn)}`;
       } else {
         // All other tables use (id, timestamp)
-        compositePK = `"id", "${timeColumn}"`;
+        // SECURITY: Use identifier quoting for column names
+        compositePK = `${this.quoteIdentifier("id")}, ${this.quoteIdentifier(timeColumn)}`;
       }
 
+      // SECURITY: Table name and columns are validated, but use identifier quoting
       await this.dataSource.query(
-        `ALTER TABLE ${tableName} ADD PRIMARY KEY (${compositePK});`,
+        `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD PRIMARY KEY (${compositePK});`,
       );
       this.logger.debug(`  ✓ Added composite primary key (${compositePK})`);
 
       // Convert to hypertable
+      // SECURITY: All parameters are validated against whitelist, but use identifier quoting
       await this.dataSource.query(
-        `SELECT create_hypertable('${tableName}', '${timeColumn}', chunk_time_interval => INTERVAL '${chunkInterval}', if_not_exists => TRUE);`,
+        `SELECT create_hypertable($1, $2, chunk_time_interval => INTERVAL $3, if_not_exists => TRUE);`,
+        [tableName, timeColumn, `'${chunkInterval}'`],
       );
 
       this.logger.debug(
@@ -184,6 +194,7 @@ export class TimescaleInitService implements OnModuleInit {
   private async getPrimaryKeyConstraintName(
     tableName: string,
   ): Promise<string> {
+    // SECURITY: Use parameterized query
     const result = await this.dataSource.query(
       `SELECT conname
        FROM pg_constraint
@@ -192,6 +203,18 @@ export class TimescaleInitService implements OnModuleInit {
       [tableName],
     );
     return result[0]?.conname || `PK_${tableName}`;
+  }
+
+  /**
+   * Quote SQL identifier to prevent injection
+   * Only allows alphanumeric and underscore characters
+   */
+  private quoteIdentifier(identifier: string): string {
+    // SECURITY: Validate identifier contains only safe characters
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
+      throw new Error(`Invalid SQL identifier: ${identifier}`);
+    }
+    return `"${identifier}"`;
   }
 
   /**
@@ -287,8 +310,9 @@ export class TimescaleInitService implements OnModuleInit {
 
       if (!isEnabled) {
         // Enable compression
+        // SECURITY: Table name is validated, but use identifier quoting
         await this.dataSource.query(
-          `ALTER TABLE ${tableName} SET (timescaledb.compress);`,
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} SET (timescaledb.compress);`,
         );
         this.logger.debug(`  ✓ Enabled compression on ${tableName}`);
       }
@@ -302,8 +326,10 @@ export class TimescaleInitService implements OnModuleInit {
       );
 
       if (policyCheck.length === 0) {
+        // SECURITY: Use parameterized query for table name
         await this.dataSource.query(
-          `SELECT add_compression_policy('${tableName}', INTERVAL '${compressAfterDays} days');`,
+          `SELECT add_compression_policy($1, INTERVAL $2);`,
+          [tableName, `${compressAfterDays} days`],
         );
         this.logger.debug(
           `  ✓ ${tableName}: Compress after ${compressAfterDays} days (${description})`,

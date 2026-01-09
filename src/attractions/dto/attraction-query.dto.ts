@@ -13,6 +13,18 @@ export class AttractionQueryDto extends PaginationQueryDto {
 
   @IsOptional()
   @IsString()
+  continentSlug?: string;
+
+  @IsOptional()
+  @IsString()
+  countrySlug?: string;
+
+  @IsOptional()
+  @IsString()
+  citySlug?: string;
+
+  @IsOptional()
+  @IsString()
   @IsIn(["OPERATING", "DOWN", "CLOSED", "REFURBISHMENT"])
   status?: LiveStatus;
 

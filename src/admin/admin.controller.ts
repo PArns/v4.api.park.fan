@@ -5,6 +5,9 @@ import {
   HttpStatus,
   Inject,
   Body,
+  Query,
+  HttpException,
+  Logger,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -34,6 +37,8 @@ import { ParkMergeService } from "../parks/services/park-merge.service";
 @ApiSecurity("admin-auth")
 @Controller("admin")
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   constructor(
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
@@ -221,6 +226,9 @@ export class AdminController {
    * ⚠️ WARNING: Performs FLUSHALL on Redis, clearing ALL cache data.
    * Queue jobs are NOT affected (separate storage mechanism).
    *
+   * SECURITY: This operation is protected by Cloudflare in production and requires
+   * explicit confirmation via `confirm=true` query parameter to prevent accidental execution.
+   *
    * Use when:
    * - Discovery structure is corrupted or out of sync
    * - Major database schema changes occurred
@@ -237,18 +245,42 @@ export class AdminController {
   @ApiOperation({
     summary: "Complete cache reset and rebuild",
     description:
-      "⚠️ Performs FLUSHALL on Redis and triggers complete data rebuild pipeline. Use with caution.",
+      "⚠️ SECURITY: Performs FLUSHALL on Redis and triggers complete data rebuild pipeline. " +
+      "Requires explicit confirmation via ?confirm=true query parameter. Use with extreme caution.",
   })
   @ApiResponse({
     status: 200,
     description: "Cache completely flushed and rebuild jobs triggered",
   })
-  async resetCache(): Promise<{
+  @ApiResponse({
+    status: 400,
+    description:
+      "Confirmation required. Add ?confirm=true to confirm FLUSHALL operation.",
+  })
+  async resetCache(@Query("confirm") confirm?: string): Promise<{
     message: string;
     flushed: string;
     jobsTriggered: string[];
   }> {
+    // SECURITY: Require explicit confirmation to prevent accidental FLUSHALL
+    if (confirm !== "true") {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message:
+            "FLUSHALL operation requires explicit confirmation. Add ?confirm=true to confirm.",
+          warning:
+            "This operation will delete ALL Redis cache data. This cannot be undone.",
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     // Perform complete Redis flush
+    // SECURITY: This is a dangerous operation, but protected by Cloudflare in production
+    this.logger.warn(
+      "⚠️  Executing FLUSHALL on Redis - all cache data will be deleted",
+    );
     await this.redis.flushall();
 
     // Trigger complete rebuild pipeline

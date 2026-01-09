@@ -2,7 +2,6 @@ import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Holiday } from "./entities/holiday.entity";
 import { HolidaysService } from "./holidays.service";
-import { HolidaysController } from "./holidays.controller";
 import { NagerDateModule } from "../external-apis/nager-date/nager-date.module";
 import { ParksModule } from "../parks/parks.module";
 import { RedisModule } from "../common/redis/redis.module";
@@ -20,7 +19,7 @@ import { RedisModule } from "../common/redis/redis.module";
     forwardRef(() => ParksModule), // forwardRef to avoid circular dependency
     RedisModule,
   ],
-  controllers: [HolidaysController],
+  controllers: [],
   providers: [HolidaysService],
   exports: [HolidaysService],
 })

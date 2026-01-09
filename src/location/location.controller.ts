@@ -16,7 +16,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
  * Provides location-based discovery endpoints.
  * Allows users to find nearby parks and attractions based on their geographic coordinates.
  */
-@ApiTags("location")
+@ApiTags("discovery")
 @Controller("discovery")
 export class LocationController {
   constructor(private readonly locationService: LocationService) {}

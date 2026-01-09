@@ -4,6 +4,7 @@ import { Job } from "bull";
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs/promises";
+import * as path from "path";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
@@ -265,24 +266,62 @@ export class MLTrainingProcessor {
       let deletedDbEntries = 0;
 
       for (const model of modelsToDelete) {
+        // SECURITY: Validate version to prevent path traversal
+        const sanitizedVersion = this.sanitizeVersion(model.version);
+        if (!sanitizedVersion) {
+          this.logger.warn(
+            `   ⚠ Invalid model version format, skipping: ${model.version}`,
+          );
+          continue;
+        }
+
         // Delete model file (.cbm)
         try {
-          const modelPath = `/app/models/catboost_${model.version}.cbm`;
+          // SECURITY: Use path.join to prevent path traversal, validate against MODEL_DIR
+          const modelPath = path.join(
+            process.env.MODEL_DIR || "/app/models",
+            `catboost_${sanitizedVersion}.cbm`,
+          );
+          // SECURITY: Ensure path is within MODEL_DIR to prevent directory traversal
+          if (
+            !this.isPathSafe(modelPath, process.env.MODEL_DIR || "/app/models")
+          ) {
+            this.logger.warn(
+              `   ⚠ Unsafe model path detected, skipping: ${modelPath}`,
+            );
+            continue;
+          }
           await fs.unlink(modelPath);
-          this.logger.debug(`   ✓ Deleted model file: ${model.version}`);
+          this.logger.debug(`   ✓ Deleted model file: ${sanitizedVersion}`);
           deletedFiles++;
         } catch (fileError) {
           // File might not exist, that's ok
           this.logger.debug(
-            `   ⚠ Could not delete model file ${model.version}: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
+            `   ⚠ Could not delete model file ${sanitizedVersion}: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
           );
         }
 
         // Delete metadata file (.pkl)
         try {
-          const metadataPath = `/app/models/metadata_${model.version}.pkl`;
+          // SECURITY: Use path.join and validate path
+          const metadataPath = path.join(
+            process.env.MODEL_DIR || "/app/models",
+            `metadata_${sanitizedVersion}.pkl`,
+          );
+          // SECURITY: Ensure path is within MODEL_DIR
+          if (
+            !this.isPathSafe(
+              metadataPath,
+              process.env.MODEL_DIR || "/app/models",
+            )
+          ) {
+            this.logger.warn(
+              `   ⚠ Unsafe metadata path detected, skipping: ${metadataPath}`,
+            );
+            continue;
+          }
           await fs.unlink(metadataPath);
-          this.logger.debug(`   ✓ Deleted metadata file: ${model.version}`);
+          this.logger.debug(`   ✓ Deleted metadata file: ${sanitizedVersion}`);
         } catch (_metaError) {
           // Metadata might not exist, that's ok
         }
@@ -301,6 +340,41 @@ export class MLTrainingProcessor {
         error instanceof Error ? error.message : String(error);
       this.logger.error(`❌ Model cleanup failed: ${errorMessage}`);
       // Don't throw - cleanup failure shouldn't fail the training job
+    }
+  }
+
+  /**
+   * SECURITY: Sanitize version string to prevent path traversal
+   * Only allows alphanumeric, dash, underscore, and dot characters
+   */
+  private sanitizeVersion(version: string): string | null {
+    // Allow only safe characters: alphanumeric, dash, underscore, dot
+    if (!/^[a-zA-Z0-9._-]+$/.test(version)) {
+      return null;
+    }
+    // Prevent path traversal patterns
+    if (
+      version.includes("..") ||
+      version.includes("/") ||
+      version.includes("\\")
+    ) {
+      return null;
+    }
+    return version;
+  }
+
+  /**
+   * SECURITY: Check if file path is safe (within allowed directory)
+   * Prevents directory traversal attacks
+   */
+  private isPathSafe(filePath: string, allowedDir: string): boolean {
+    try {
+      const resolvedPath = path.resolve(filePath);
+      const resolvedDir = path.resolve(allowedDir);
+      // Check if resolved path starts with allowed directory
+      return resolvedPath.startsWith(resolvedDir);
+    } catch {
+      return false;
     }
   }
 }

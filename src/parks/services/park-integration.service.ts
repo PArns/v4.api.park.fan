@@ -25,6 +25,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
+import { buildAttractionUrl } from "../../common/utils/url.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { Holiday } from "../../holidays/entities/holiday.entity";
 import { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -124,9 +125,19 @@ export class ParkIntegrationService {
           hasRestaurantsInDb &&
           (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
 
-        if (missingShowsInCache || missingRestaurantsInCache) {
+        // Check if attractions have URLs (new feature - invalidate cache if missing)
+        const hasAttractionsWithoutUrls =
+          cachedDto.attractions &&
+          cachedDto.attractions.length > 0 &&
+          cachedDto.attractions.some((att) => !att.url);
+
+        if (
+          missingShowsInCache ||
+          missingRestaurantsInCache ||
+          hasAttractionsWithoutUrls
+        ) {
           this.logger.warn(
-            `Detected incomplete cache for ${park.slug} (DB has shows/restaurants, cache empty). Force rebuilding.`,
+            `Detected incomplete cache for ${park.slug} (missing shows/restaurants or attraction URLs). Force rebuilding.`,
           );
           // Fall through to rebuild logic below
         } else {
@@ -658,6 +669,16 @@ export class ParkIntegrationService {
           };
         } else {
           attraction.predictionAccuracy = null;
+        }
+
+        // Set URL using geo route (if park has geo data)
+        // The park entity should have geo data since it was loaded via findByGeographicPath
+        if (park.continentSlug && park.countrySlug && park.citySlug) {
+          attraction.url = buildAttractionUrl(park, attraction);
+        } else {
+          // Fallback: try to build URL from park data in DTO if available
+          // This handles cases where park entity might not have geo data loaded
+          attraction.url = null;
         }
       }
     }

@@ -1,12 +1,7 @@
-import { Controller, Get, Param, UseInterceptors } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from "@nestjs/swagger";
+import { Controller, Get, UseInterceptors } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AnalyticsService } from "./analytics.service";
-import {
-  GlobalStatsDto,
-  ParkPercentilesDto,
-  AttractionPercentilesDto,
-  GeoLiveStatsDto,
-} from "./dto";
+import { GlobalStatsDto, GeoLiveStatsDto } from "./dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 @ApiTags("stats")
@@ -32,72 +27,6 @@ export class AnalyticsController {
   })
   async getGlobalStats(): Promise<GlobalStatsDto> {
     return this.analyticsService.getGlobalRealtimeStats();
-  }
-
-  @Get("parks/:parkId/percentiles")
-  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60))
-  @ApiOperation({
-    summary: "Get complete percentile distribution for a park",
-    description:
-      "Returns percentile distribution (P50, P75, P90, P95) for today plus rolling windows (7d, 30d). Percentiles update daily, cached for 12 hours.",
-  })
-  @ApiParam({
-    name: "parkId",
-    description: "UUID of the park",
-    example: "123e4567-e89b-12d3-a456-426614174000",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Returns today's percentiles + rolling windows (7d, 30d)",
-    type: ParkPercentilesDto,
-  })
-  @ApiResponse({
-    status: 404,
-    description: "Park not found",
-  })
-  @ApiResponse({
-    status: 500,
-    description: "Internal server error",
-  })
-  async getParkPercentiles(
-    @Param("parkId") parkId: string,
-  ): Promise<ParkPercentilesDto> {
-    return this.analyticsService.getParkPercentiles(
-      parkId,
-    ) as Promise<ParkPercentilesDto>;
-  }
-
-  @Get("attractions/:attractionId/percentiles")
-  @UseInterceptors(new HttpCacheInterceptor(12 * 60 * 60))
-  @ApiOperation({
-    summary: "Get complete percentile distribution for an attraction",
-    description:
-      "Returns percentile distribution (P25, P50, P75, P90) for today plus hourly breakdown and rolling windows (7d, 30d). Percentiles update daily, cached for 12 hours.",
-  })
-  @ApiParam({
-    name: "attractionId",
-    description: "UUID of the attraction",
-    example: "123e4567-e89b-12d3-a456-426614174000",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Returns today's percentiles + hourly array + rolling windows",
-    type: AttractionPercentilesDto,
-  })
-  @ApiResponse({
-    status: 404,
-    description: "Attraction not found",
-  })
-  @ApiResponse({
-    status: 500,
-    description: "Internal server error",
-  })
-  async getAttractionPercentiles(
-    @Param("attractionId") attractionId: string,
-  ): Promise<AttractionPercentilesDto> {
-    return this.analyticsService.getAttractionPercentiles(
-      attractionId,
-    ) as Promise<AttractionPercentilesDto>;
   }
 
   @Get("geo-live")

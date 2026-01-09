@@ -40,8 +40,43 @@ export class HttpExceptionFilter implements ExceptionFilter {
         error = responseObj.error as string;
       }
     } else if (exception instanceof Error) {
-      message = exception.message;
-      error = exception.name;
+      // SECURITY: Sanitize error messages in production to prevent information disclosure
+      if (this.isProduction) {
+        // Check if error message contains sensitive information
+        const sensitivePatterns = [
+          /password/i,
+          /secret/i,
+          /api[_-]?key/i,
+          /token/i,
+          /credential/i,
+          /connection.*string/i,
+          /database.*url/i,
+          /sql.*error/i,
+          /query.*failed/i,
+        ];
+
+        const hasSensitiveInfo = sensitivePatterns.some((pattern) =>
+          pattern.test(exception.message),
+        );
+
+        if (hasSensitiveInfo) {
+          // Replace sensitive error with generic message
+          message = "An internal error occurred";
+          error = "InternalServerError";
+          this.logger.error(
+            `Sanitized error message containing sensitive information: ${request.method} ${request.url}`,
+            exception.stack,
+          );
+        } else {
+          // Use original message if no sensitive info detected
+          message = exception.message;
+          error = exception.name;
+        }
+      } else {
+        // Development: show full error details
+        message = exception.message;
+        error = exception.name;
+      }
     }
 
     // Log full error details (including stack) for debugging

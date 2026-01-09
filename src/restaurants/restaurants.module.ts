@@ -2,7 +2,6 @@ import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Restaurant } from "./entities/restaurant.entity";
 import { RestaurantLiveData } from "./entities/restaurant-live-data.entity";
-import { RestaurantsController } from "./restaurants.controller";
 import { RestaurantsService } from "./restaurants.service";
 import { ThemeParksModule } from "../external-apis/themeparks/themeparks.module";
 import { ParksModule } from "../parks/parks.module";
@@ -21,7 +20,7 @@ import { ParksModule } from "../parks/parks.module";
     ThemeParksModule,
     forwardRef(() => ParksModule),
   ],
-  controllers: [RestaurantsController],
+  controllers: [],
   providers: [RestaurantsService],
   exports: [RestaurantsService],
 })

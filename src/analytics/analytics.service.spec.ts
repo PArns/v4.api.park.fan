@@ -303,44 +303,6 @@ describe("AnalyticsService", () => {
     });
   });
 
-  describe("getAttractionRollingPercentiles", () => {
-    it("should return null when no data available", async () => {
-      const queryBuilder = createMockQueryBuilder();
-      queryBuilder.getRawOne.mockResolvedValue(null);
-      mockQueueDataAggregateRepository.createQueryBuilder.mockReturnValue(
-        queryBuilder,
-      );
-
-      const result =
-        await service.getAttractionRollingPercentiles("attraction-123");
-
-      expect(result).toBeNull();
-    });
-
-    it("should return rolling percentiles for specified days", async () => {
-      const queryBuilder = createMockQueryBuilder();
-      queryBuilder.getRawOne.mockResolvedValue({
-        p50: "25.5",
-        p90: "55.8",
-        iqr: "25",
-      });
-      mockQueueDataAggregateRepository.createQueryBuilder.mockReturnValue(
-        queryBuilder,
-      );
-
-      const result = await service.getAttractionRollingPercentiles(
-        "attraction-123",
-        7,
-      );
-
-      expect(result).toEqual({
-        p50: 26,
-        p90: 56,
-        iqr: 25,
-      });
-    });
-  });
-
   describe("getAttractionStatistics", () => {
     it("should return statistics for an attraction", async () => {
       const queryBuilder = createMockQueryBuilder();

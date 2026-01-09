@@ -51,7 +51,16 @@ export class QueueTimesClient {
    * @param parkId - Queue-Times park ID (numeric)
    */
   async getParkQueueTimes(parkId: number): Promise<QueueTimesParkQueueData> {
-    const url = `${this.baseUrl}/parks/${parkId}/queue_times.json`;
+    // SECURITY: Validate parkId to prevent injection
+    if (!Number.isInteger(parkId) || parkId <= 0) {
+      throw new Error(`Invalid parkId: ${parkId}. Must be a positive integer.`);
+    }
+
+    // SECURITY: Use URL constructor to safely build URL and prevent injection
+    const url = new URL(
+      `/parks/${parkId}/queue_times.json`,
+      this.baseUrl,
+    ).toString();
 
     try {
       const response = await fetch(url);

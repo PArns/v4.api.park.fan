@@ -13,6 +13,7 @@ import { ParksService } from "../../parks/parks.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { buildAttractionUrl } from "../../common/utils/url.util";
 
 /**
  * Attraction Integration Service
@@ -65,7 +66,16 @@ export class AttractionIntegrationService {
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
-      return JSON.parse(cached);
+      const cachedDto = JSON.parse(cached);
+      // Check if cached response has URL (new feature - invalidate cache if missing)
+      if (!cachedDto.url) {
+        // Cache is missing URL, rebuild
+        this.logger.debug(
+          `Cache for attraction ${attraction.id} missing URL, rebuilding.`,
+        );
+      } else {
+        return cachedDto;
+      }
     }
 
     // Start with base DTO
@@ -317,14 +327,30 @@ export class AttractionIntegrationService {
     }
 
     // Fetch attraction statistics (requires park timezone for accurate daily filtering)
+    // Also fetch park for URL generation
+    let parkForUrl: Park | null = null;
     try {
-      // Fetch park entity to get timezone
+      // Fetch park entity to get timezone and geo data
       const park = await this.parkRepository.findOne({
         where: { id: attraction.parkId },
+        select: [
+          "id",
+          "slug",
+          "continentSlug",
+          "countrySlug",
+          "citySlug",
+          "continent",
+          "country",
+          "city",
+          "timezone",
+        ],
       });
       if (!park) {
         throw new Error(`Park not found for attraction ${attraction.id}`);
       }
+
+      // Store park for URL generation later
+      parkForUrl = park;
 
       const startTime = await this.analyticsService.getEffectiveStartTime(
         attraction.parkId,
@@ -377,6 +403,49 @@ export class AttractionIntegrationService {
       // Log error but don't fail - accuracy is optional
       this.logger.warn("Failed to fetch prediction accuracy:", error);
       dto.predictionAccuracy = null;
+    }
+
+    // Set URL using geo route (if park has geo data)
+    // Try to use park from attraction relation first, or reuse park fetched for statistics
+    if (!parkForUrl) {
+      parkForUrl = attraction.park || null;
+    }
+
+    // If park relation not loaded or missing geo data, fetch it
+    if (
+      !parkForUrl ||
+      !parkForUrl.continentSlug ||
+      !parkForUrl.countrySlug ||
+      !parkForUrl.citySlug
+    ) {
+      if (attraction.parkId) {
+        // Fetch park with all fields (including geo slugs)
+        parkForUrl = await this.parkRepository.findOne({
+          where: { id: attraction.parkId },
+          select: [
+            "id",
+            "slug",
+            "continentSlug",
+            "countrySlug",
+            "citySlug",
+            "continent",
+            "country",
+            "city",
+            "timezone",
+          ],
+        });
+      }
+    }
+
+    if (
+      parkForUrl &&
+      parkForUrl.continentSlug &&
+      parkForUrl.countrySlug &&
+      parkForUrl.citySlug
+    ) {
+      dto.url = buildAttractionUrl(parkForUrl, attraction);
+    } else {
+      dto.url = null;
     }
 
     // Cache the complete response (5 minutes for real-time freshness)

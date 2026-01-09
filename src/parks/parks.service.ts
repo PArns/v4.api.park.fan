@@ -600,6 +600,9 @@ export class ParksService {
     continent?: string;
     country?: string;
     city?: string;
+    continentSlug?: string;
+    countrySlug?: string;
+    citySlug?: string;
     sort?: string;
     page?: number;
     limit?: number;
@@ -608,20 +611,32 @@ export class ParksService {
       .createQueryBuilder("park")
       .leftJoinAndSelect("park.destination", "destination");
 
-    // Apply filters
-    if (filters.continent) {
+    // Apply filters - prefer slugs over names (from geo routes)
+    if (filters.continentSlug) {
+      queryBuilder.andWhere("park.continentSlug = :continentSlug", {
+        continentSlug: filters.continentSlug,
+      });
+    } else if (filters.continent) {
       queryBuilder.andWhere("LOWER(park.continent) = LOWER(:continent)", {
         continent: filters.continent,
       });
     }
 
-    if (filters.country) {
+    if (filters.countrySlug) {
+      queryBuilder.andWhere("park.countrySlug = :countrySlug", {
+        countrySlug: filters.countrySlug,
+      });
+    } else if (filters.country) {
       queryBuilder.andWhere("LOWER(park.country) = LOWER(:country)", {
         country: filters.country,
       });
     }
 
-    if (filters.city) {
+    if (filters.citySlug) {
+      queryBuilder.andWhere("park.citySlug = :citySlug", {
+        citySlug: filters.citySlug,
+      });
+    } else if (filters.city) {
       queryBuilder.andWhere("LOWER(park.city) = LOWER(:city)", {
         city: filters.city,
       });

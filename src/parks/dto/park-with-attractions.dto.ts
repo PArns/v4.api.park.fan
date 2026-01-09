@@ -3,7 +3,7 @@ import { Park } from "../entities/park.entity";
 import { WeatherItemDto } from "./weather-item.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
-import { buildParkUrl } from "../../common/utils/url.util";
+import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
 import { ParkDailyPredictionDto } from "./park-daily-prediction.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 
@@ -170,6 +170,13 @@ export class ParkAttractionDto {
     }[];
     timestamp: string;
   } | null;
+
+  @ApiProperty({
+    description: "Frontend URL to attraction (geo route)",
+    nullable: true,
+    required: false,
+  })
+  url?: string | null;
 }
 
 export class ParkShowDto {
@@ -475,6 +482,7 @@ export class ParkWithAttractionsDto {
             longitude:
               attraction.longitude !== undefined ? attraction.longitude : null,
             land: attraction.landName || null,
+            url: buildAttractionUrl(park, attraction) || null,
             // queue data, forecasts etc will be attached by service
           }))
         : [],

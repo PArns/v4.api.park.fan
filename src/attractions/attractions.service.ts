@@ -148,6 +148,9 @@ export class AttractionsService {
    */
   async findAllWithFilters(filters: {
     park?: string;
+    continentSlug?: string;
+    countrySlug?: string;
+    citySlug?: string;
     status?: string;
     queueType?: string;
     waitTimeMin?: number;
@@ -164,6 +167,25 @@ export class AttractionsService {
     if (filters.park) {
       queryBuilder.andWhere("park.slug = :parkSlug", {
         parkSlug: filters.park,
+      });
+    }
+
+    // Filter by geographic parameters (from geo routes)
+    if (filters.continentSlug) {
+      queryBuilder.andWhere("park.continentSlug = :continentSlug", {
+        continentSlug: filters.continentSlug,
+      });
+    }
+
+    if (filters.countrySlug) {
+      queryBuilder.andWhere("park.countrySlug = :countrySlug", {
+        countrySlug: filters.countrySlug,
+      });
+    }
+
+    if (filters.citySlug) {
+      queryBuilder.andWhere("park.citySlug = :citySlug", {
+        citySlug: filters.citySlug,
       });
     }
 
@@ -319,6 +341,37 @@ export class AttractionsService {
       },
       relations: ["park", "park.destination"],
     });
+  }
+
+  /**
+   * Finds attraction by geographic path (continent/country/city/park/attraction)
+   *
+   * Used for full geo routes: /parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug
+   *
+   * @param continentSlug - Continent slug
+   * @param countrySlug - Country slug
+   * @param citySlug - City slug
+   * @param parkSlug - Park slug
+   * @param attractionSlug - Attraction slug
+   * @returns Attraction if found, null otherwise
+   */
+  async findByGeographicPath(
+    continentSlug: string,
+    countrySlug: string,
+    citySlug: string,
+    parkSlug: string,
+    attractionSlug: string,
+  ): Promise<Attraction | null> {
+    return this.attractionRepository
+      .createQueryBuilder("attraction")
+      .leftJoinAndSelect("attraction.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .where("attraction.slug = :attractionSlug", { attractionSlug })
+      .andWhere("park.continentSlug = :continentSlug", { continentSlug })
+      .andWhere("park.countrySlug = :countrySlug", { countrySlug })
+      .andWhere("park.citySlug = :citySlug", { citySlug })
+      .andWhere("park.slug = :parkSlug", { parkSlug })
+      .getOne();
   }
 
   /**

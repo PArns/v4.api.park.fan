@@ -16,6 +16,18 @@ export class ParkQueryDto extends PaginationQueryDto {
 
   @IsOptional()
   @IsString()
+  continentSlug?: string;
+
+  @IsOptional()
+  @IsString()
+  countrySlug?: string;
+
+  @IsOptional()
+  @IsString()
+  citySlug?: string;
+
+  @IsOptional()
+  @IsString()
   @IsIn(["name:asc", "name:desc", "openStatus:asc", "openStatus:desc"])
   sort?: string;
 }

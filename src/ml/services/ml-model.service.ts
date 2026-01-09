@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { MLModel } from "../entities/ml-model.entity";
 import * as fs from "fs/promises";
+import { resolve } from "path";
 import {
   CurrentModelDto,
   ModelComparisonDto,
@@ -54,12 +55,20 @@ export class MLModelService {
     let fileSizeMB: number | null = null;
 
     try {
-      const stats = await fs.stat(model.filePath);
-      fileSizeBytes = stats.size;
-      fileSizeMB = parseFloat((fileSizeBytes / 1024 / 1024).toFixed(2));
-      this.logger.debug(
-        `Model file size: ${fileSizeMB} MB (${model.filePath})`,
-      );
+      // SECURITY: Validate file path is within MODEL_DIR to prevent path traversal
+      if (!this.isPathSafe(model.filePath, this.MODEL_DIR)) {
+        this.logger.warn(
+          `Unsafe model file path detected: ${model.filePath} (not within ${this.MODEL_DIR})`,
+        );
+        // Continue with null values instead of throwing
+      } else {
+        const stats = await fs.stat(model.filePath);
+        fileSizeBytes = stats.size;
+        fileSizeMB = parseFloat((fileSizeBytes / 1024 / 1024).toFixed(2));
+        this.logger.debug(
+          `Model file size: ${fileSizeMB} MB (${model.filePath})`,
+        );
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -242,5 +251,20 @@ export class MLModelService {
       where: { isActive: true },
       order: { trainedAt: "DESC" },
     });
+  }
+
+  /**
+   * SECURITY: Check if file path is safe (within allowed directory)
+   * Prevents directory traversal attacks
+   */
+  private isPathSafe(filePath: string, allowedDir: string): boolean {
+    try {
+      const resolvedPath = resolve(filePath);
+      const resolvedDir = resolve(allowedDir);
+      // Check if resolved path starts with allowed directory
+      return resolvedPath.startsWith(resolvedDir);
+    } catch {
+      return false;
+    }
   }
 }
