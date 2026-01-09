@@ -45,9 +45,13 @@ export class HttpCacheInterceptor implements NestInterceptor {
         }
 
         // Set cache headers
+        // Include s-maxage for Cloudflare CDN caching
+        // For live data endpoints (2 min), use shorter stale-while-revalidate
+        const staleWhileRevalidate =
+          this.maxAge <= 120 ? this.maxAge : this.maxAge * 2;
         const cacheControl = this.sMaxAge
-          ? `public, max-age=${this.maxAge}, s-maxage=${this.sMaxAge}`
-          : `public, max-age=${this.maxAge}`;
+          ? `public, max-age=${this.maxAge}, s-maxage=${this.sMaxAge}, stale-while-revalidate=${staleWhileRevalidate}`
+          : `public, max-age=${this.maxAge}, s-maxage=${this.maxAge}, stale-while-revalidate=${staleWhileRevalidate}`;
 
         response.setHeader("Cache-Control", cacheControl);
         response.setHeader("ETag", etag);

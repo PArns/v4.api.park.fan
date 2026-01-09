@@ -325,24 +325,25 @@ export class FavoritesService {
 
     const parkIds = parks.map((p) => p.id);
 
-    // Pre-calculate context (timezone + startTime) for batch park statistics
-    const context = new Map<string, { timezone: string; startTime: Date }>();
-    await Promise.all(
-      parks.map(async (park) => {
-        const startTime = await this.analyticsService.getEffectiveStartTime(
-          park.id,
-          park.timezone,
-        );
-        context.set(park.id, { timezone: park.timezone, startTime });
-      }),
+    // Pre-calculate context (timezone + startTime) for batch park statistics using batch method
+    const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
+      parks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
     );
+    const context = new Map<string, { timezone: string; startTime: Date }>();
+    for (const park of parks) {
+      const startTime = startTimeMap.get(park.id)!;
+      context.set(park.id, {
+        timezone: park.timezone || "UTC",
+        startTime,
+      });
+    }
 
     // Batch fetch status, analytics, schedules, and statistics
     const [statusMap, occupancyMap, schedules, statisticsMap] =
       await Promise.all([
         this.parksService.getBatchParkStatus(parkIds),
         this.analyticsService["getBatchParkOccupancy"](parkIds),
-        this.batchFetchSchedules(parkIds),
+        this.parksService.getBatchSchedules(parkIds),
         this.analyticsService.getBatchParkStatistics(parkIds, context),
       ]);
 
@@ -500,15 +501,14 @@ export class FavoritesService {
       return [];
     }
 
-    // Fetch live data for all shows in parallel
-    const liveDataPromises = shows.map((show) =>
-      this.showsService.findCurrentStatusByShow(show.id).catch(() => null),
-    );
-    const liveDataArray = await Promise.all(liveDataPromises);
+    // Batch fetch live data for all shows
+    const showIds = shows.map((s) => s.id);
+    const liveDataMap =
+      await this.showsService.findBatchCurrentStatusByShows(showIds);
 
     // Build enriched DTOs (simplified like nearby)
-    return shows.map((show, index) => {
-      const liveData = liveDataArray[index];
+    return shows.map((show) => {
+      const liveData = liveDataMap.get(show.id) || null;
 
       const dto: ShowWithDistanceDto = {
         id: show.id,
@@ -555,17 +555,16 @@ export class FavoritesService {
       return [];
     }
 
-    // Fetch live data for all restaurants in parallel
-    const liveDataPromises = restaurants.map((restaurant) =>
-      this.restaurantsService
-        .findCurrentStatusByRestaurant(restaurant.id)
-        .catch(() => null),
-    );
-    const liveDataArray = await Promise.all(liveDataPromises);
+    // Batch fetch live data for all restaurants
+    const restaurantIds = restaurants.map((r) => r.id);
+    const liveDataMap =
+      await this.restaurantsService.findBatchCurrentStatusByRestaurants(
+        restaurantIds,
+      );
 
     // Build enriched DTOs (simplified like nearby)
-    return restaurants.map((restaurant, index) => {
-      const liveData = liveDataArray[index];
+    return restaurants.map((restaurant) => {
+      const liveData = liveDataMap.get(restaurant.id) || null;
 
       const dto: RestaurantWithDistanceDto = {
         id: restaurant.id,
@@ -602,28 +601,5 @@ export class FavoritesService {
 
       return dto;
     });
-  }
-
-  /**
-   * Batch fetch schedules for multiple parks
-   * Returns both today's schedule and next schedule
-   */
-  private async batchFetchSchedules(parkIds: string[]) {
-    const [todayResults, nextResults] = await Promise.all([
-      Promise.all(
-        parkIds.map((id) =>
-          this.parksService.getTodaySchedule(id).catch(() => []),
-        ),
-      ),
-      Promise.all(
-        parkIds.map((id) =>
-          this.parksService.getNextSchedule(id).catch(() => null),
-        ),
-      ),
-    ]);
-    return {
-      today: new Map(parkIds.map((id, i) => [id, todayResults[i]])),
-      next: new Map(parkIds.map((id, i) => [id, nextResults[i]])),
-    };
   }
 }

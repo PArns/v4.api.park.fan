@@ -428,6 +428,46 @@ export class RestaurantsService {
   }
 
   /**
+   * Find current status for multiple restaurants in batch
+   * Uses DISTINCT ON to efficiently fetch latest live data for all restaurants
+   *
+   * @param restaurantIds - Array of restaurant IDs
+   * @returns Map of restaurantId -> RestaurantLiveData (or null if no data)
+   */
+  async findBatchCurrentStatusByRestaurants(
+    restaurantIds: string[],
+  ): Promise<Map<string, RestaurantLiveData | null>> {
+    const resultMap = new Map<string, RestaurantLiveData | null>();
+
+    if (restaurantIds.length === 0) {
+      return resultMap;
+    }
+
+    // Initialize map with null values for all restaurants
+    for (const restaurantId of restaurantIds) {
+      resultMap.set(restaurantId, null);
+    }
+
+    // Use DISTINCT ON to get latest record per restaurantId
+    const restaurantData = await this.restaurantLiveDataRepository
+      .createQueryBuilder("rld")
+      .innerJoinAndSelect("rld.restaurant", "restaurant")
+      .leftJoinAndSelect("restaurant.park", "park")
+      .where("rld.restaurantId IN (:...restaurantIds)", { restaurantIds })
+      .distinctOn(["rld.restaurantId"])
+      .orderBy("rld.restaurantId", "ASC")
+      .addOrderBy("rld.timestamp", "DESC")
+      .getMany();
+
+    // Map results
+    for (const data of restaurantData) {
+      resultMap.set(data.restaurantId, data);
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Find live data for a restaurant with date range filtering
    */
   async findLiveDataByRestaurant(

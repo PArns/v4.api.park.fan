@@ -111,6 +111,78 @@ export class AnalyticsService {
   }
 
   /**
+   * Get effective start times for multiple parks in batch
+   * Optimized to avoid N+1 queries by fetching all schedules in a single query
+   *
+   * @param parks - Array of parks with id and timezone
+   * @returns Map of parkId -> effective start time
+   */
+  async getBatchEffectiveStartTime(
+    parks: Array<{ id: string; timezone: string }>,
+  ): Promise<Map<string, Date>> {
+    const resultMap = new Map<string, Date>();
+
+    if (parks.length === 0) {
+      return resultMap;
+    }
+
+    // Group parks by timezone to batch fetch schedules efficiently
+    const timezoneGroups = new Map<string, string[]>();
+    for (const park of parks) {
+      const timezone = park.timezone || "UTC";
+      if (!timezoneGroups.has(timezone)) {
+        timezoneGroups.set(timezone, []);
+      }
+      timezoneGroups.get(timezone)!.push(park.id);
+    }
+
+    // Fetch schedules for all parks in parallel, grouped by timezone
+    const schedulePromises = Array.from(timezoneGroups.entries()).map(
+      async ([timezone, parkIds]) => {
+        const todayStr = getCurrentDateInTimezone(timezone);
+        const schedules = await this.scheduleEntryRepository.find({
+          where: {
+            parkId: In(parkIds),
+            date: todayStr as any,
+            scheduleType: ScheduleType.OPERATING,
+          },
+          order: {
+            parkId: "ASC",
+            openingTime: "ASC",
+          },
+        });
+
+        // Group by parkId and take first (earliest) opening time per park
+        const scheduleMap = new Map<string, ScheduleEntry>();
+        for (const schedule of schedules) {
+          if (!scheduleMap.has(schedule.parkId)) {
+            scheduleMap.set(schedule.parkId, schedule);
+          }
+        }
+
+        return { timezone, parkIds, scheduleMap };
+      },
+    );
+
+    const scheduleResults = await Promise.all(schedulePromises);
+
+    // Build result map with fallback to start of day
+    for (const park of parks) {
+      const timezone = park.timezone || "UTC";
+      const result = scheduleResults.find((r) => r.timezone === timezone);
+      const schedule = result?.scheduleMap.get(park.id);
+
+      if (schedule?.openingTime) {
+        resultMap.set(park.id, schedule.openingTime);
+      } else {
+        resultMap.set(park.id, getStartOfDayInTimezone(timezone));
+      }
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Calculate park occupancy for multiple parks in batch
    * OPTIMIZED: Cache-first strategy using Redis
    * Pre-computed values are written during wait-times sync
@@ -1101,14 +1173,13 @@ export class AnalyticsService {
         select: ["id", "timezone"],
       });
 
-      // Calculate effective start times in parallel
-      await Promise.all(
-        parks.map(async (park) => {
-          const timezone = park.timezone || "UTC";
-          const startTime = await this.getEffectiveStartTime(park.id, timezone);
-          resolvedContext!.set(park.id, { timezone, startTime });
-        }),
-      );
+      // Calculate effective start times in batch
+      const startTimeMap = await this.getBatchEffectiveStartTime(parks);
+      for (const park of parks) {
+        const timezone = park.timezone || "UTC";
+        const startTime = startTimeMap.get(park.id)!;
+        resolvedContext.set(park.id, { timezone, startTime });
+      }
     }
 
     // Execute all statistics queries in parallel

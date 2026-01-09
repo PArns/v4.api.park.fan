@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -1235,6 +1235,228 @@ export class ParksService {
     );
 
     return nextSchedule;
+  }
+
+  /**
+   * Batch fetch schedules for multiple parks
+   * Returns both today's schedule and next schedule for all parks
+   * Optimized to avoid N+1 queries by batching database queries
+   *
+   * @param parkIds - Array of park IDs
+   * @returns Object with today and next schedule maps
+   */
+  async getBatchSchedules(parkIds: string[]): Promise<{
+    today: Map<string, ScheduleEntry[]>;
+    next: Map<string, ScheduleEntry | null>;
+  }> {
+    const todayMap = new Map<string, ScheduleEntry[]>();
+    const nextMap = new Map<string, ScheduleEntry | null>();
+
+    if (parkIds.length === 0) {
+      return { today: todayMap, next: nextMap };
+    }
+
+    // Fetch parks with timezones
+    const parks = await this.parkRepository.find({
+      where: { id: In(parkIds) },
+      select: ["id", "timezone"],
+    });
+
+    const timezoneMap = new Map<string, string>();
+    for (const park of parks) {
+      timezoneMap.set(park.id, park.timezone || "UTC");
+    }
+
+    // Try to get from cache first
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const cacheKeysToday = parks.map(
+      (p) =>
+        `schedule:today:${p.id}:${formatInParkTimezone(today, p.timezone || "UTC")}`,
+    );
+    const cacheKeysNext = parks.map(
+      (p) =>
+        `schedule:next:${p.id}:${formatInParkTimezone(tomorrow, p.timezone || "UTC")}`,
+    );
+
+    const cachedToday = await this.redis.mget(...cacheKeysToday);
+    const cachedNext = await this.redis.mget(...cacheKeysNext);
+
+    // Process cached results and identify which parks need DB queries
+    const parksNeedingTodayQuery: string[] = [];
+    const parksNeedingNextQuery: string[] = [];
+
+    for (let i = 0; i < parks.length; i++) {
+      const park = parks[i];
+      const parkId = park.id;
+
+      // Process today's schedule
+      const cachedTodayValue = cachedToday[i];
+      if (cachedTodayValue) {
+        try {
+          const parsed = JSON.parse(cachedTodayValue) as any[];
+          todayMap.set(
+            parkId,
+            parsed.map((entry) => ({
+              ...entry,
+              date: new Date(entry.date),
+              openingTime: entry.openingTime
+                ? new Date(entry.openingTime)
+                : null,
+              closingTime: entry.closingTime
+                ? new Date(entry.closingTime)
+                : null,
+            })) as ScheduleEntry[],
+          );
+        } catch {
+          parksNeedingTodayQuery.push(parkId);
+        }
+      } else {
+        parksNeedingTodayQuery.push(parkId);
+      }
+
+      // Process next schedule
+      const cachedNextValue = cachedNext[i];
+      if (cachedNextValue) {
+        try {
+          const parsed = JSON.parse(cachedNextValue);
+          if (parsed) {
+            nextMap.set(parkId, {
+              ...parsed,
+              date: new Date(parsed.date),
+              openingTime: parsed.openingTime
+                ? new Date(parsed.openingTime)
+                : null,
+              closingTime: parsed.closingTime
+                ? new Date(parsed.closingTime)
+                : null,
+            } as ScheduleEntry);
+          } else {
+            nextMap.set(parkId, null);
+          }
+        } catch {
+          parksNeedingNextQuery.push(parkId);
+        }
+      } else {
+        parksNeedingNextQuery.push(parkId);
+      }
+    }
+
+    // Batch fetch today's schedules for parks not in cache
+    if (parksNeedingTodayQuery.length > 0) {
+      const parksForToday = parks.filter((p) =>
+        parksNeedingTodayQuery.includes(p.id),
+      );
+
+      // Group by timezone for efficient querying
+      const timezoneGroups = new Map<string, string[]>();
+      for (const park of parksForToday) {
+        const tz = park.timezone || "UTC";
+        if (!timezoneGroups.has(tz)) {
+          timezoneGroups.set(tz, []);
+        }
+        timezoneGroups.get(tz)!.push(park.id);
+      }
+
+      const todayPromises = Array.from(timezoneGroups.entries()).map(
+        async ([timezone, ids]) => {
+          const todayStr = formatInParkTimezone(today, timezone);
+          const endOfToday = new Date(today);
+          endOfToday.setHours(23, 59, 59, 999);
+
+          // Batch query schedules for all parks in this timezone group
+          const schedules = await this.scheduleRepository
+            .createQueryBuilder("schedule")
+            .where("schedule.parkId IN (:...parkIds)", { parkIds: ids })
+            .andWhere("schedule.date >= :startDate", { startDate: today })
+            .andWhere("schedule.date <= :endDate", { endDate: endOfToday })
+            .orderBy("schedule.parkId", "ASC")
+            .addOrderBy("schedule.date", "ASC")
+            .addOrderBy("schedule.scheduleType", "ASC")
+            .getMany();
+
+          // Group by parkId
+          const scheduleMap = new Map<string, ScheduleEntry[]>();
+          for (const schedule of schedules) {
+            if (!scheduleMap.has(schedule.parkId)) {
+              scheduleMap.set(schedule.parkId, []);
+            }
+            scheduleMap.get(schedule.parkId)!.push(schedule);
+          }
+
+          // Cache results
+          for (const park of parksForToday.filter((p) => ids.includes(p.id))) {
+            const parkSchedules = scheduleMap.get(park.id) || [];
+            const cacheKey = `schedule:today:${park.id}:${todayStr}`;
+            await this.redis.set(
+              cacheKey,
+              JSON.stringify(parkSchedules),
+              "EX",
+              this.TTL_SCHEDULE,
+            );
+            todayMap.set(park.id, parkSchedules);
+          }
+
+          return scheduleMap;
+        },
+      );
+
+      await Promise.all(todayPromises);
+    }
+
+    // Batch fetch next schedules for parks not in cache
+    if (parksNeedingNextQuery.length > 0) {
+      const parksForNext = parks.filter((p) =>
+        parksNeedingNextQuery.includes(p.id),
+      );
+
+      const lookAheadDate = new Date(tomorrow);
+      lookAheadDate.setDate(lookAheadDate.getDate() + 365);
+
+      // Fetch all next schedules in one query
+      const nextSchedules = await this.scheduleRepository
+        .createQueryBuilder("schedule")
+        .where("schedule.parkId IN (:...parkIds)", {
+          parkIds: parksNeedingNextQuery,
+        })
+        .andWhere("schedule.date >= :tomorrow", { tomorrow })
+        .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
+        .andWhere("schedule.scheduleType = :type", {
+          type: ScheduleType.OPERATING,
+        })
+        .andWhere("schedule.openingTime IS NOT NULL")
+        .andWhere("schedule.closingTime IS NOT NULL")
+        .orderBy("schedule.parkId", "ASC")
+        .addOrderBy("schedule.date", "ASC")
+        .getMany();
+
+      // Group by parkId and take first (earliest) for each park
+      const nextScheduleMap = new Map<string, ScheduleEntry>();
+      for (const schedule of nextSchedules) {
+        if (!nextScheduleMap.has(schedule.parkId)) {
+          nextScheduleMap.set(schedule.parkId, schedule);
+        }
+      }
+
+      // Cache and set results
+      for (const park of parksForNext) {
+        const schedule = nextScheduleMap.get(park.id) || null;
+        const timezone = park.timezone || "UTC";
+        const cacheKey = `schedule:next:${park.id}:${formatInParkTimezone(tomorrow, timezone)}`;
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(schedule),
+          "EX",
+          this.TTL_SCHEDULE,
+        );
+        nextMap.set(park.id, schedule);
+      }
+    }
+
+    return { today: todayMap, next: nextMap };
   }
 
   async getUpcomingSchedule(

@@ -13,6 +13,7 @@ import {
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 @Injectable()
 export class ShowsService {
@@ -564,6 +565,95 @@ export class ShowsService {
       relations: ["show", "show.park"],
       order: { timestamp: "DESC" },
     });
+  }
+
+  /**
+   * Find current status for multiple shows in batch
+   * Uses DISTINCT ON to efficiently fetch latest live data for all shows
+   *
+   * @param showIds - Array of show IDs
+   * @returns Map of showId -> ShowLiveData (or null if no data)
+   */
+  async findBatchCurrentStatusByShows(
+    showIds: string[],
+  ): Promise<Map<string, ShowLiveData | null>> {
+    const resultMap = new Map<string, ShowLiveData | null>();
+
+    if (showIds.length === 0) {
+      return resultMap;
+    }
+
+    // Initialize map with null values for all shows
+    for (const showId of showIds) {
+      resultMap.set(showId, null);
+    }
+
+    // Use DISTINCT ON to get latest record per showId
+    const showData = await this.showLiveDataRepository
+      .createQueryBuilder("sld")
+      .innerJoinAndSelect("sld.show", "linked_show")
+      .leftJoinAndSelect("linked_show.park", "linked_park")
+      .where("sld.showId IN (:...showIds)", { showIds })
+      .distinctOn(["sld.showId"])
+      .orderBy("sld.showId", "ASC")
+      .addOrderBy("sld.timestamp", "DESC")
+      .getMany();
+
+    const now = new Date();
+
+    // Process and project stale showtimes to today if needed
+    for (const data of showData) {
+      // Fix: Project Stale Showtimes to Today on Read
+      if (
+        data.status === "OPERATING" &&
+        data.showtimes &&
+        data.showtimes.length > 0 &&
+        data.show &&
+        data.show.park &&
+        data.show.park.timezone
+      ) {
+        const timezone = data.show.park.timezone;
+        const todayDateString = formatInParkTimezone(now, timezone);
+
+        data.showtimes = data.showtimes.map((st) => {
+          if (!st.startTime) return st;
+
+          // Project to today's date if show is operating
+          const originalDate = new Date(st.startTime);
+          const originalTimeStr = formatInTimeZone(
+            originalDate,
+            timezone,
+            "HH:mm:ss",
+          );
+          const projectedTime = `${todayDateString}T${originalTimeStr}`;
+          const projectedDate = fromZonedTime(projectedTime, timezone);
+
+          return {
+            ...st,
+            startTime: projectedDate.toISOString(),
+            endTime: st.endTime
+              ? (() => {
+                  const endDate = new Date(st.endTime);
+                  const endTimeStr = formatInTimeZone(
+                    endDate,
+                    timezone,
+                    "HH:mm:ss",
+                  );
+                  const projectedEndTime = `${todayDateString}T${endTimeStr}`;
+                  return fromZonedTime(
+                    projectedEndTime,
+                    timezone,
+                  ).toISOString();
+                })()
+              : undefined,
+          };
+        });
+      }
+
+      resultMap.set(data.showId, data);
+    }
+
+    return resultMap;
   }
 
   /**
