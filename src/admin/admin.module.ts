@@ -10,6 +10,7 @@ import { AdminController } from "./admin.controller";
     ParksModule,
     BullModule.registerQueue({ name: "holidays" }),
     BullModule.registerQueue({ name: "park-metadata" }),
+    BullModule.registerQueue({ name: "park-enrichment" }),
     BullModule.registerQueue({ name: "ml-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
     BullModule.registerQueue({ name: "children-metadata" }),

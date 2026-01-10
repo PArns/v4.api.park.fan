@@ -56,13 +56,6 @@ export class ScheduleItemDto {
   closingTime: string | null; // ISO 8601 timestamp
 
   @ApiProperty({
-    description: "Description or notes",
-    required: false,
-    nullable: true,
-  })
-  description: string | null;
-
-  @ApiProperty({
     description: "Ticket/Upgrade purchase options",
     required: false,
     nullable: true,
@@ -89,6 +82,28 @@ export class ScheduleItemDto {
   holidayName: string | null;
 
   @ApiProperty({
+    description:
+      "Type of holiday: 'public' (public holiday), 'school' (school holiday), 'bank' (bank holiday), 'observance' (observance), or null",
+    enum: ["public", "school", "bank", "observance"],
+    required: false,
+    nullable: true,
+  })
+  holidayType: "public" | "school" | "bank" | "observance" | null;
+
+  @ApiProperty({
+    description:
+      "Indicates if this date is a public holiday (public or bank holiday)",
+    required: false,
+  })
+  isPublicHoliday: boolean;
+
+  @ApiProperty({
+    description: "Indicates if this date is a school holiday",
+    required: false,
+  })
+  isSchoolHoliday: boolean;
+
+  @ApiProperty({
     description: "Indicates if this date is a bridge day",
     required: false,
   })
@@ -106,10 +121,13 @@ export class ScheduleItemDto {
     scheduleType: ScheduleType;
     openingTime: Date | string | null;
     closingTime: Date | string | null;
-    description: string | null;
+
     purchases: any | null;
     isHoliday?: boolean;
     holidayName?: string | null;
+    holidayType?: "public" | "school" | "bank" | "observance" | null;
+    isPublicHoliday?: boolean;
+    isSchoolHoliday?: boolean;
     isBridgeDay?: boolean;
   }): ScheduleItemDto {
     const dto = new ScheduleItemDto();
@@ -129,10 +147,18 @@ export class ScheduleItemDto {
         ? schedule.closingTime
         : schedule.closingTime.toISOString()
       : null;
-    dto.description = schedule.description;
+
     dto.purchases = schedule.purchases;
     dto.isHoliday = schedule.isHoliday || false;
     dto.holidayName = schedule.holidayName || null;
+    dto.holidayType = schedule.holidayType || null;
+    // isPublicHoliday and isSchoolHoliday are calculated at runtime, not stored in DB
+    // They are set in park-integration.service.ts after fromEntity is called
+    dto.isPublicHoliday =
+      schedule.isPublicHoliday ??
+      (schedule.holidayType === "public" || schedule.holidayType === "bank");
+    dto.isSchoolHoliday =
+      schedule.isSchoolHoliday ?? schedule.holidayType === "school";
     dto.isBridgeDay = schedule.isBridgeDay || false;
     dto.influencingHolidays = (schedule as any).influencingHolidays || [];
     return dto;

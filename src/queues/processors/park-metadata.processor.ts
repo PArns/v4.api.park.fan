@@ -1017,6 +1017,7 @@ export class ParkMetadataProcessor {
         const shouldGeocode =
           !park.city ||
           !park.country ||
+          !park.countryCode || // Also geocode if countryCode is missing
           !park.geocodingAttemptedAt ||
           missingRegionData; // Retry if we are missing regional data
 

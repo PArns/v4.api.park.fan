@@ -5,7 +5,7 @@ import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
 import { WeatherItemDto } from "../dto/weather-item.dto";
-import { ScheduleItemDto, InfluencingHoliday } from "../dto/schedule-item.dto";
+import { ScheduleItemDto } from "../dto/schedule-item.dto";
 import { ParkWaitTimesResponse } from "../types/park-wait-times.type";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
@@ -25,10 +25,9 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
-import { calculateHolidayInfoFromString } from "../../common/utils/holiday.utils";
 import { buildAttractionUrl } from "../../common/utils/url.util";
 import { HolidaysService } from "../../holidays/holidays.service";
-import { Holiday } from "../../holidays/entities/holiday.entity";
+import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 import { RestaurantLiveData } from "../../restaurants/entities/restaurant-live-data.entity";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
@@ -75,6 +74,7 @@ export class ParkIntegrationService {
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly predictionDeviationService: PredictionDeviationService,
     private readonly holidaysService: HolidaysService,
+    private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly themeParksClient: ThemeParksClient,
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
@@ -962,151 +962,10 @@ export class ParkIntegrationService {
 
     // Enrich schedule with holiday data (covers weekends that might be missing in scraped data)
     if (dto.schedule && dto.schedule.length > 0) {
-      try {
-        // Find date range
-        const dates = dto.schedule.map((s) => s.date).sort();
-        const minDate = new Date(dates[0]);
-        const maxDate = new Date(dates[dates.length - 1]);
-
-        // Fetch all holidays for this range (Home Country + Influencing Regions)
-        const relevantRegions = [
-          { countryCode: park.countryCode, regionCode: park.regionCode },
-          ...(park.influencingRegions || []),
-        ];
-
-        const countryCodes = [
-          ...new Set(relevantRegions.map((r) => r.countryCode)),
-        ];
-        const allHolidays = await Promise.all(
-          countryCodes.map((cc) =>
-            this.holidaysService.getHolidays(cc, minDate, maxDate),
-          ),
-        );
-        const holidays = allHolidays.flat();
-
-        // Map for fast lookup: "YYYY-MM-DD" -> Holiday
-        const holidayMap = new Map<string, Holiday>();
-        const influencingMap = new Map<string, InfluencingHoliday[]>();
-
-        for (const h of holidays) {
-          // Check if this holiday is relevant for the park's specific regions or is nationwide
-          const isRelevant = relevantRegions.some((reg) => {
-            if (reg.countryCode !== h.country) return false;
-
-            // Nationwide always matches
-            if (h.isNationwide || !h.region) return true;
-
-            // Region matches if it's explicitly the park's region (NW, BW)
-            return (
-              h.region === reg.regionCode ||
-              (reg.regionCode && h.region.endsWith(`-${reg.regionCode}`))
-            );
-          });
-
-          if (isRelevant) {
-            const dateStr =
-              h.date instanceof Date
-                ? h.date.toISOString().split("T")[0]
-                : (h.date as unknown as string);
-
-            const isHomeCountry = h.country === park.countryCode;
-
-            if (isHomeCountry) {
-              // Local holiday: determines isHoliday and holidayName
-              const existing = holidayMap.get(dateStr);
-              const isBetterType =
-                h.holidayType === "public" || h.holidayType === "bank";
-
-              if (
-                !existing ||
-                (isBetterType && existing.holidayType === "school")
-              ) {
-                holidayMap.set(dateStr, h);
-              }
-            } else {
-              // Influencing holiday: added to a list for context
-              const currentInfluencing = influencingMap.get(dateStr) || [];
-              currentInfluencing.push({
-                name: h.name,
-                source: {
-                  countryCode: h.country,
-                  regionCode: h.region ? h.region.split("-").pop() : null,
-                },
-                holidayType: h.holidayType,
-              });
-              influencingMap.set(dateStr, currentInfluencing);
-            }
-          }
-        }
-
-        // Apply to schedule items
-        for (const item of dto.schedule || []) {
-          const dateStr = item.date;
-          let localHoliday = holidayMap.get(dateStr);
-          const localInfluencing = influencingMap.get(dateStr) || [];
-
-          // Check if weekend after Friday holiday using utility function
-          if (!localHoliday) {
-            const holidayInfo = calculateHolidayInfoFromString(
-              dateStr,
-              holidayMap,
-              park.timezone,
-            );
-            if (holidayInfo.isHoliday) {
-              // Get holiday from map (could be direct holiday or weekend extension)
-              localHoliday = holidayMap.get(dateStr) || undefined;
-              // If weekend extension, get the Friday holiday
-              if (!localHoliday && holidayInfo.holidayName) {
-                // Find the holiday by name in the map
-                for (const [date, holiday] of holidayMap.entries()) {
-                  const holidayName =
-                    holiday instanceof Object ? holiday.name : holiday;
-                  if (holidayName === holidayInfo.holidayName) {
-                    // Check if this is the Friday before the weekend
-                    const [year, month, day] = dateStr.split("-").map(Number);
-                    const dateObj = new Date(year, month - 1, day);
-                    const dayOfWeek = dateObj.getDay();
-                    if (dayOfWeek === 0 || dayOfWeek === 6) {
-                      const [fridayYear, fridayMonth, fridayDay] = date
-                        .split("-")
-                        .map(Number);
-                      const fridayDateObj = new Date(
-                        fridayYear,
-                        fridayMonth - 1,
-                        fridayDay,
-                      );
-                      const fridayDayOfWeek = fridayDateObj.getDay();
-                      if (fridayDayOfWeek === 5) {
-                        localHoliday = holiday;
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          if (localHoliday) {
-            item.isHoliday = true;
-            item.holidayName = localHoliday.name;
-            // isBridgeDay is calculated separately based on day of week and adjacent holidays
-            // See fillScheduleGaps in ParksService for the logic
-            item.isBridgeDay = false; // Will be set by schedule enrichment if applicable
-          } else {
-            // Ensure flag is false if no LOCAL holiday found
-            item.isHoliday = false;
-            item.holidayName = null;
-          }
-
-          // Always attach influencing holidays if any exist
-          item.influencingHolidays = localInfluencing;
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Failed to enrich schedule with holidays for ${park.slug}: ${error}`,
-        );
-      }
+      await this.parkEnrichmentService.enrichScheduleWithHolidays(
+        dto.schedule,
+        park,
+      );
     }
 
     // Cache the complete response with dynamic TTL

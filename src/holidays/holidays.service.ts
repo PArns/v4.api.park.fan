@@ -51,7 +51,18 @@ export class HolidaysService {
     }> = [];
     for (const holiday of holidays) {
       const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
-      const holidayType = this.mapHolidayType(holiday.types);
+      let holidayType = this.mapHolidayType(holiday.types);
+
+      // Fallback: If API marks known public holidays as "observance", correct them
+      // This handles cases where Nager.Date API incorrectly classifies official holidays
+      if (holidayType === "observance") {
+        holidayType = this.correctHolidayType(
+          holiday.name,
+          holiday.localName,
+          countryCode,
+        );
+      }
+
       const holidayDate = new Date(holiday.date + "T00:00:00.000Z");
 
       holidaysToUpsert.push({
@@ -102,13 +113,95 @@ export class HolidaysService {
 
   /**
    * Map Nager.Date holiday types to our enum
+   *
+   * Priority:
+   * 1. Public - Official public holidays (government/banks closed)
+   * 2. Bank - Bank holidays
+   * 3. School - School holidays
+   * 4. Authorities - Government offices closed (treat as public)
+   * 5. Observance - Observed but not official
+   *
+   * Note: If a holiday has multiple types (e.g., ["Public", "Bank"]),
+   * we prioritize "Public" > "Bank" > "School" > "Authorities"
    */
   private mapHolidayType(
     types: string[],
   ): "public" | "observance" | "school" | "bank" {
+    // Priority order: Public > Bank > School > Authorities > Observance
     if (types.includes("Public")) return "public";
     if (types.includes("Bank")) return "bank";
     if (types.includes("School")) return "school";
+    // Authorities (government offices closed) should be treated as public holidays
+    if (types.includes("Authorities")) return "public";
+    return "observance";
+  }
+
+  /**
+   * Correct holiday type for known public holidays that are incorrectly marked as "observance"
+   *
+   * This handles cases where the Nager.Date API marks official public holidays as "Observance"
+   * instead of "Public". We maintain a list of known public holidays per country.
+   */
+  private correctHolidayType(
+    name: string,
+    localName: string | null,
+    countryCode: string,
+  ): "public" | "observance" | "school" | "bank" {
+    const holidayName = (localName || name).toLowerCase();
+
+    // Known public holidays that are often incorrectly marked as "observance"
+    const publicHolidayPatterns: Record<string, string[]> = {
+      DE: [
+        // German public holidays
+        "erster weihnachtstag",
+        "zweiter weihnachtstag",
+        "neujahr",
+        "ostermontag",
+        "pfingstmontag",
+        "tag der deutschen einheit",
+        "himmelfahrt",
+        "fronleichnam",
+        "allerheiligen",
+        "heilige drei könige",
+        "maifeiertag",
+        "reformationstag",
+        "buß- und bettag",
+      ],
+      AT: [
+        // Austrian public holidays
+        "neujahr",
+        "heilige drei könige",
+        "ostermontag",
+        "staatsfeiertag",
+        "pfingstmontag",
+        "fronleichnam",
+        "mariä himmelfahrt",
+        "nationalfeiertag",
+        "allerheiligen",
+        "mariä empfängnis",
+        "erster weihnachtstag",
+        "zweiter weihnachtstag",
+      ],
+      CH: [
+        // Swiss public holidays (varies by canton, but these are common)
+        "neujahr",
+        "ostermontag",
+        "pfingstmontag",
+        "erster weihnachtstag",
+        "zweiter weihnachtstag",
+      ],
+    };
+
+    const patterns = publicHolidayPatterns[countryCode];
+    if (patterns) {
+      for (const pattern of patterns) {
+        if (holidayName.includes(pattern)) {
+          return "public";
+        }
+      }
+    }
+
+    // Default: keep as "observance" if no match found
     return "observance";
   }
 
@@ -244,6 +337,8 @@ export class HolidaysService {
     startDate: Date,
     endDate: Date,
   ): Promise<Holiday[]> {
+    // Use getMany() without explicit select to ensure all fields are loaded
+    // TypeORM will automatically load all entity fields including enums
     return this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })

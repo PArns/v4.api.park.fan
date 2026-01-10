@@ -5,6 +5,14 @@ import { ParksService } from "../parks.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { OccupancyDto, ParkStatisticsDto } from "../../analytics/dto";
 import { HolidaysService } from "../../holidays/holidays.service";
+import { ScheduleItemDto, InfluencingHoliday } from "../dto/schedule-item.dto";
+import {
+  calculateHolidayInfoFromString,
+  HolidayEntry,
+} from "../../common/utils/holiday.utils";
+import { formatInParkTimezone } from "../../common/utils/date.util";
+import { normalizeRegionCode } from "../../common/utils/region.util";
+import { fromZonedTime } from "date-fns-tz";
 
 /**
  * Park Enrichment Service
@@ -159,5 +167,247 @@ export class ParkEnrichmentService {
     }
 
     return dto;
+  }
+
+  /**
+   * Enrich schedule items with holiday information
+   *
+   * Shared function used by both park and attraction endpoints.
+   * Fetches holidays for the given date range and enriches schedule items
+   * with holiday information (isHoliday, holidayName, holidayType, isBridgeDay, etc.)
+   *
+   * @param scheduleItems - Schedule items to enrich
+   * @param park - Park entity (for country, region, timezone, influencingRegions)
+   * @returns Enriched schedule items (mutates the input array)
+   */
+  async enrichScheduleWithHolidays(
+    scheduleItems: ScheduleItemDto[],
+    park: Park,
+  ): Promise<void> {
+    if (!scheduleItems || scheduleItems.length === 0) {
+      return;
+    }
+
+    // Skip if park doesn't have countryCode (required for holiday lookup)
+    if (!park.countryCode) {
+      this.logger.debug(
+        `Skipping holiday enrichment for ${park.slug}: missing countryCode`,
+      );
+      return;
+    }
+
+    try {
+      // Find date range from schedule items
+      const dates = scheduleItems.map((s) => s.date).sort();
+      // Parse date strings in park timezone to create proper Date objects
+      const minDate = fromZonedTime(`${dates[0]}T00:00:00`, park.timezone);
+      const maxDate = fromZonedTime(
+        `${dates[dates.length - 1]}T23:59:59`,
+        park.timezone,
+      );
+      // Extend range by 1 day on each side for bridge day detection
+      minDate.setDate(minDate.getDate() - 1);
+      maxDate.setDate(maxDate.getDate() + 1);
+
+      // Fetch all holidays for this range (Home Country + Influencing Regions)
+      const relevantRegions = [
+        { countryCode: park.countryCode, regionCode: park.regionCode },
+        ...(park.influencingRegions || []),
+      ];
+
+      const countryCodes = [
+        ...new Set(relevantRegions.map((r) => r.countryCode)),
+      ];
+      const allHolidays = await Promise.all(
+        countryCodes.map((cc) =>
+          this.holidaysService.getHolidays(cc, minDate, maxDate),
+        ),
+      );
+      const holidays = allHolidays.flat();
+
+      // Map for fast lookup: "YYYY-MM-DD" -> HolidayEntry (for bridge day logic)
+      // We need separate tracking for school holidays since a day can have both
+      // a public holiday and a school holiday
+      const holidayMap = new Map<string, HolidayEntry>();
+      const schoolHolidayMap = new Map<string, HolidayEntry>();
+      const influencingMap = new Map<string, InfluencingHoliday[]>();
+
+      for (const h of holidays) {
+        // Normalize holiday date to park timezone for consistent matching
+        const dateStr = formatInParkTimezone(h.date, park.timezone);
+
+        // Check if this holiday matches the park's primary region
+        const matchesPrimaryRegion = (() => {
+          // Only check primary region (park's own region)
+          const primaryRegion = {
+            countryCode: park.countryCode,
+            regionCode: park.regionCode,
+          };
+
+          if (primaryRegion.countryCode !== h.country) return false;
+
+          // For school holidays: Must match region explicitly
+          // Use fallback to handle cases where holidayType might be missing
+          const holidayType = h.holidayType || "public";
+          if (holidayType === "school") {
+            if (!h.region) {
+              // No region = truly nationwide school holiday (rare)
+              return true;
+            }
+            // Check if region matches (normalize both sides)
+            const holidayRegionCode = normalizeRegionCode(h.region);
+            const parkRegionCode = normalizeRegionCode(
+              primaryRegion.regionCode,
+            );
+            return holidayRegionCode === parkRegionCode;
+          }
+
+          // For public holidays: Nationwide always matches
+          if (h.isNationwide || !h.region) return true;
+
+          // Region matches if it's explicitly the park's region (normalize both sides)
+          const holidayRegionCode = normalizeRegionCode(h.region);
+          const parkRegionCode = normalizeRegionCode(primaryRegion.regionCode);
+          return holidayRegionCode === parkRegionCode;
+        })();
+
+        // Check if this holiday matches any influencing region
+        const matchesInfluencingRegion = relevantRegions.some((reg) => {
+          if (reg.countryCode !== h.country) return false;
+          // Skip primary region (already checked above)
+          if (
+            reg.countryCode === park.countryCode &&
+            reg.regionCode === park.regionCode
+          ) {
+            return false;
+          }
+
+          // For school holidays: Must match region explicitly
+          // Use fallback to handle cases where holidayType might be missing
+          const holidayType = h.holidayType || "public";
+          if (holidayType === "school") {
+            if (!h.region) {
+              // No region = truly nationwide school holiday (rare)
+              return true;
+            }
+            // Check if region matches (normalize both sides)
+            const holidayRegionCode = normalizeRegionCode(h.region);
+            const parkRegionCode = normalizeRegionCode(reg.regionCode);
+            return holidayRegionCode === parkRegionCode;
+          }
+
+          // For public holidays: Nationwide always matches
+          if (h.isNationwide || !h.region) return true;
+
+          // Region matches if it's explicitly the influencing region (normalize both sides)
+          const holidayRegionCode = normalizeRegionCode(h.region);
+          const parkRegionCode = normalizeRegionCode(reg.regionCode);
+          return holidayRegionCode === parkRegionCode;
+        });
+
+        if (matchesPrimaryRegion) {
+          // Local holiday: determines isHoliday and holidayName
+          // Ensure holidayType is set - if missing from DB, infer from name or default to "public"
+          let holidayType = h.holidayType;
+          if (!holidayType) {
+            // Fallback: Try to infer type from name
+            const name = (h.localName || h.name || "").toLowerCase();
+            if (
+              name.includes("holiday") ||
+              name.includes("ferien") ||
+              name.includes("vacation")
+            ) {
+              holidayType = "school";
+            } else {
+              holidayType = "public"; // Default to public for official holidays
+            }
+          }
+
+          if (holidayType === "school") {
+            // School holidays: Store in separate map (a day can have both public and school holidays)
+            schoolHolidayMap.set(dateStr, {
+              name: h.localName || h.name,
+              type: holidayType,
+            });
+          } else {
+            // Public holidays: Store in main holiday map
+            const existing = holidayMap.get(dateStr);
+            const isBetterType =
+              holidayType === "public" || holidayType === "bank";
+
+            if (!existing || (isBetterType && existing.type === "observance")) {
+              holidayMap.set(dateStr, {
+                name: h.localName || h.name,
+                type: holidayType as
+                  | "public"
+                  | "school"
+                  | "observance"
+                  | "bank",
+              });
+            }
+          }
+        } else if (matchesInfluencingRegion) {
+          // Influencing holiday: added to a list for context (even if same country)
+          const currentInfluencing = influencingMap.get(dateStr) || [];
+          currentInfluencing.push({
+            name: h.name,
+            source: {
+              countryCode: h.country,
+              regionCode: normalizeRegionCode(h.region),
+            },
+            holidayType: h.holidayType,
+          });
+          influencingMap.set(dateStr, currentInfluencing);
+        }
+      }
+
+      // Apply to schedule items
+      for (const item of scheduleItems) {
+        const dateStr = item.date;
+        const localInfluencing = influencingMap.get(dateStr) || [];
+
+        // Use utility function to calculate holiday info (including weekend extensions and bridge days)
+        const holidayInfo = calculateHolidayInfoFromString(
+          dateStr,
+          holidayMap,
+          park.timezone,
+        );
+
+        // Check for school holidays separately (a day can have both public and school holidays)
+        const schoolHoliday = schoolHolidayMap.get(dateStr);
+        const isSchoolHoliday = !!schoolHoliday;
+
+        // Determine holiday type from both maps
+        // Check maps directly to ensure we get the type even if calculateHolidayInfoFromString doesn't return it
+        const publicHoliday = holidayMap.get(dateStr);
+        const publicHolidayType =
+          publicHoliday && typeof publicHoliday !== "string"
+            ? publicHoliday.type
+            : null;
+        const schoolHolidayType = schoolHoliday?.type ?? null;
+        const finalHolidayType =
+          publicHolidayType || schoolHolidayType || holidayInfo.holidayType;
+
+        // Set all holiday information from utility function
+        item.isHoliday = holidayInfo.isHoliday || isSchoolHoliday;
+        // Prefer public holiday name, but use school holiday name if no public holiday
+        item.holidayName =
+          holidayInfo.holidayName || (schoolHoliday?.name ?? null);
+        // If both exist, prefer public holiday type, otherwise use school holiday type
+        item.holidayType = finalHolidayType;
+        // Set flags based on type (explicitly check type, not just rely on utility function)
+        item.isPublicHoliday =
+          finalHolidayType === "public" || finalHolidayType === "bank";
+        item.isSchoolHoliday = isSchoolHoliday || finalHolidayType === "school";
+        item.isBridgeDay = holidayInfo.isBridgeDay;
+
+        // Always attach influencing holidays if any exist
+        item.influencingHolidays = localInfluencing;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to enrich schedule with holidays for ${park.slug}: ${error}`,
+      );
+    }
   }
 }

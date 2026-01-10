@@ -42,6 +42,7 @@ export class AdminController {
   constructor(
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
+    @InjectQueue("park-enrichment") private parkEnrichmentQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
@@ -136,6 +137,35 @@ export class AdminController {
     );
     return {
       message: "Schedule gap filling job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Manually trigger park enrichment
+   *
+   * Enriches all parks with ISO country codes and influencing regions.
+   * Useful for fixing missing countryCode fields.
+   */
+  @Post("enrich-parks")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger park enrichment",
+    description:
+      "Manually triggers park enrichment to set countryCode from country names and update influencing regions",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Park enrichment job queued successfully",
+  })
+  async triggerParkEnrichment(): Promise<{ message: string; jobId: string }> {
+    const job = await this.parkEnrichmentQueue.add(
+      "enrich-all",
+      {},
+      { priority: 10 },
+    );
+    return {
+      message: "Park enrichment job queued",
       jobId: job.id.toString(),
     };
   }

@@ -10,7 +10,10 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import { formatInParkTimezone } from "../common/utils/date.util";
-import { calculateHolidayInfo } from "../common/utils/holiday.utils";
+import {
+  calculateHolidayInfo,
+  HolidayEntry,
+} from "../common/utils/holiday.utils";
 import {
   calculateParkPriority,
   findDuplicatePark,
@@ -702,7 +705,7 @@ export class ParksService {
     });
 
     // 2. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
-    const holidayMap = new Map<string, string>(); // Date -> Name
+    const holidayMap = new Map<string, string | HolidayEntry>(); // Date -> Name or HolidayEntry
     if (park?.countryCode) {
       try {
         const dates = scheduleData.map((e) => new Date(e.date).getTime());
@@ -728,9 +731,26 @@ export class ParksService {
           if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
             // Use park's timezone to determine the holiday date string
             const dateStr = formatInParkTimezone(h.date, park.timezone);
-            // If multiple holidays on same day, just picking first or specific one?
-            if (!holidayMap.has(dateStr)) {
-              holidayMap.set(dateStr, h.localName || h.name || "");
+            // If multiple holidays on same day, prefer public holidays over school holidays
+            const existing = holidayMap.get(dateStr);
+            const isPublicHoliday =
+              h.holidayType === "public" || h.holidayType === "bank";
+            if (!existing) {
+              // Store as HolidayEntry to preserve type information for bridge day logic
+              holidayMap.set(dateStr, {
+                name: h.localName || h.name || "",
+                type: h.holidayType,
+              });
+            } else if (isPublicHoliday) {
+              // Prefer public holidays over school holidays if multiple exist
+              const existingType =
+                typeof existing === "string" ? "public" : existing.type;
+              if (existingType === "school") {
+                holidayMap.set(dateStr, {
+                  name: h.localName || h.name || "",
+                  type: h.holidayType,
+                });
+              }
             }
           }
         }
@@ -785,6 +805,7 @@ export class ParksService {
             scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description ||
           existing.isHoliday !== scheduleEntry.isHoliday ||
+          existing.holidayName !== scheduleEntry.holidayName ||
           existing.isBridgeDay !== scheduleEntry.isBridgeDay;
 
         if (hasChanges) {
@@ -846,22 +867,36 @@ export class ParksService {
       maxDate,
     );
 
-    // Map Holidays by Date
-    const holidayMap = new Map<string, string>();
+    // Map Holidays by Date (with type information for bridge day logic)
+    const holidayMap = new Map<string, string | HolidayEntry>();
     const fullRegion = park.regionCode
       ? `${park.countryCode}-${park.regionCode}`
       : "";
 
-    // Also store dates to check bridge logic efficiently
-    const holidayDatesSet = new Set<string>();
-
     for (const h of holidays) {
       if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
         const d = formatInParkTimezone(h.date, park.timezone);
-        if (!holidayMap.has(d)) {
-          holidayMap.set(d, h.localName || h.name || "");
+        // If multiple holidays on same day, prefer public holidays over school holidays
+        const existing = holidayMap.get(d);
+        const isPublicHoliday =
+          h.holidayType === "public" || h.holidayType === "bank";
+        if (!existing) {
+          // Store as HolidayEntry to preserve type information for bridge day logic
+          holidayMap.set(d, {
+            name: h.localName || h.name || "",
+            type: h.holidayType,
+          });
+        } else if (isPublicHoliday) {
+          // Prefer public holidays over school holidays if multiple exist
+          const existingType =
+            typeof existing === "string" ? "public" : existing.type;
+          if (existingType === "school") {
+            holidayMap.set(d, {
+              name: h.localName || h.name || "",
+              type: h.holidayType,
+            });
+          }
         }
-        holidayDatesSet.add(d);
       }
     }
 
@@ -969,7 +1004,7 @@ export class ParksService {
       // but haven't been processed by our geocoder yet (geocodingAttemptedAt IS NULL).
       // This is crucial for applying Metro Mappings (e.g. fixing Bay Lake -> Orlando).
       .andWhere(
-        "(park.geocodingAttemptedAt IS NULL OR (park.metadataRetryCount < 3 AND (park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL)))",
+        "(park.geocodingAttemptedAt IS NULL OR (park.metadataRetryCount < 3 AND (park.countryCode IS NULL OR park.regionCode IS NULL OR park.city IS NULL OR park.country IS NULL)))",
       )
       .getMany();
 

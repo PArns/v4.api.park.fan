@@ -30,6 +30,7 @@ import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
+import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
 
 /**
  * Attraction Integration Service
@@ -53,6 +54,7 @@ export class AttractionIntegrationService {
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parksService: ParksService,
+    private readonly parkEnrichmentService: ParkEnrichmentService,
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
@@ -378,7 +380,7 @@ export class AttractionIntegrationService {
     // Also fetch park for URL generation
     let parkForUrl: Park | null = null;
     try {
-      // Fetch park entity to get timezone and geo data
+      // Fetch park entity to get timezone, geo data, and holiday-related fields
       const park = await this.parkRepository.findOne({
         where: { id: attraction.parkId },
         select: [
@@ -391,6 +393,9 @@ export class AttractionIntegrationService {
           "country",
           "city",
           "timezone",
+          "countryCode",
+          "regionCode",
+          "influencingRegions",
         ],
       });
       if (!park) {
@@ -469,6 +474,14 @@ export class AttractionIntegrationService {
           dto.schedule = scheduleEntries.map((entry) =>
             ScheduleItemDto.fromEntity(entry),
           );
+
+          // Enrich schedule with holiday data (same logic as park endpoint, but different date range)
+          if (dto.schedule && dto.schedule.length > 0 && parkForUrl) {
+            await this.parkEnrichmentService.enrichScheduleWithHolidays(
+              dto.schedule,
+              parkForUrl,
+            );
+          }
         } catch (error) {
           // Log but don't fail - schedule is optional
           this.logger.warn(

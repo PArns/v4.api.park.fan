@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
-from holiday_utils import calculate_holiday_info, calculate_holiday_info_from_string
+from holiday_utils import normalize_region_code
 from percentile_features import add_percentile_features
 from attraction_features import (
     add_attraction_type_feature,
@@ -311,55 +311,11 @@ def add_holiday_features(
                 & (holidays_df["date"] <= end_date.date())
             ]
 
-    # Extend holidays with weekend extensions (Saturday/Sunday after Friday holidays)
-    # Use holiday_utils to add weekend extensions to the holiday map
-    if not holidays_df.empty:
-        extended_holidays = []
-        for country in holidays_df["country"].unique():
-            country_holidays = holidays_df[holidays_df["country"] == country]
-            # Build holiday map for this country
-            country_holiday_map = {}
-            for _, row in country_holidays.iterrows():
-                date_str = row["date"].strftime("%Y-%m-%d")
-                country_holiday_map[date_str] = row["holiday_type"]
-            
-            # Check all dates in range for weekend extensions
-            check_start = start_date.date()
-            check_end = end_date.date()
-            current_date = check_start
-            while current_date <= check_end:
-                date_str = current_date.strftime("%Y-%m-%d")
-                date_obj = datetime.combine(current_date, time.min)
-                is_holiday, holiday_name, is_bridge = calculate_holiday_info(
-                    date_obj, country_holiday_map
-                )
-                # If it's a weekend extension (is_holiday but not in original map), add it
-                if is_holiday and date_str not in country_holiday_map:
-                    # This is a weekend extension - add it
-                    # Find the Friday's holiday type
-                    day_of_week = current_date.weekday()
-                    if day_of_week == 5 or day_of_week == 6:  # Weekend
-                        days_back = 1 if day_of_week == 5 else 2
-                        friday_date = current_date - timedelta(days=days_back)
-                        friday_str = friday_date.strftime("%Y-%m-%d")
-                        friday_holiday_type = country_holiday_map.get(friday_str)
-                        if friday_holiday_type:
-                            # Add weekend extension with same type as Friday holiday
-                            extended_holidays.append({
-                                "date": current_date,
-                                "country": country,
-                                "holiday_type": friday_holiday_type,
-                                "region": None,
-                                "is_nationwide": True,  # Weekend extensions are treated as nationwide
-                                "name": holiday_name or "Holiday",
-                            })
-                current_date += timedelta(days=1)
-        
-        # Add extended holidays to holidays_df
-        if extended_holidays:
-            extended_df = pd.DataFrame(extended_holidays)
-            holidays_df = pd.concat([holidays_df, extended_df], ignore_index=True)
-            holidays_df = holidays_df.drop_duplicates(subset=["country", "date", "holiday_type"])
+    # Weekend extensions are now handled by the TypeScript API (enrichScheduleWithHolidays)
+    # The API correctly extends ONLY school holidays to weekends, not public holidays
+    # This data is already in the database, so we don't need to calculate it here
+    # This ensures training and prediction use the same holiday logic
+
 
     # Create holiday lookup DataFrames for vectorized merge
     # Regional holidays: (country, region, date) -> holiday_type
@@ -374,18 +330,32 @@ def add_holiday_features(
         else:
             df["date_local"] = pd.to_datetime(df["timestamp"]).dt.date
 
+    # Import region normalization utility
+    from holiday_utils import normalize_region_code
+
     # 1. Primary Location Holiday Check (vectorized)
     if not regional_holidays.empty:
-        # Merge regional holidays
+        # Normalize region codes in both DataFrames for consistent matching
+        regional_holidays = regional_holidays.copy()
+        regional_holidays["region_normalized"] = regional_holidays["region"].apply(
+            normalize_region_code
+        )
+        df["region_code_normalized"] = df["region_code"].apply(normalize_region_code)
+
+        # Merge regional holidays using normalized region codes
         regional_holidays["date_only"] = regional_holidays["date"]
         df_regional = df.merge(
-            regional_holidays[["country", "region", "date_only", "holiday_type"]],
-            left_on=["country", "region_code", "date_local"],
-            right_on=["country", "region", "date_only"],
+            regional_holidays[
+                ["country", "region_normalized", "date_only", "holiday_type"]
+            ],
+            left_on=["country", "region_code_normalized", "date_local"],
+            right_on=["country", "region_normalized", "date_only"],
             how="left",
             suffixes=("", "_regional"),
         )
         df["primary_holiday_type_regional"] = df_regional["holiday_type"]
+        # Clean up temporary column
+        df = df.drop(columns=["region_code_normalized"], errors="ignore")
     else:
         df["primary_holiday_type_regional"] = None
 
@@ -417,6 +387,9 @@ def add_holiday_features(
 
     # 2. Influencing Regions Check (still needs some iteration due to JSON structure)
     # Create lookup maps for faster access
+    # Import region normalization utility
+    from holiday_utils import normalize_region_code
+
     holiday_map_regional = {}
     holiday_map_national = {}
 
@@ -431,7 +404,9 @@ def add_holiday_features(
             if is_nationwide:
                 holiday_map_national[(h_country, h_date)] = h_type
             if h_region:
-                holiday_map_regional[(h_country, h_region, h_date)] = h_type
+                # Normalize region code for consistent matching (handles both "DE-NW" and "NW")
+                normalized_region = normalize_region_code(h_region)
+                holiday_map_regional[(h_country, normalized_region, h_date)] = h_type
 
     def check_neighbor_holidays(row):
         """Check holidays for influencing regions"""
@@ -455,9 +430,12 @@ def add_holiday_features(
                 n_region = region_def.get("regionCode")
 
                 n_type = None
-                # Check regional first
+                # Check regional first (normalize region code for consistent matching)
                 if n_region:
-                    n_type = holiday_map_regional.get((n_country, n_region, date))
+                    normalized_region = normalize_region_code(n_region)
+                    n_type = holiday_map_regional.get(
+                        (n_country, normalized_region, date)
+                    )
 
                 # Check national if no regional match
                 if not n_type:
@@ -1301,11 +1279,13 @@ def add_bridge_day_feature(
     # Build holiday map per country for utility function
     bridge_dates = set()
     for country in set(c for c, _ in holiday_lookup.keys()):
-        # Build holiday map for this country (date string -> holiday name)
+        # Build holiday map for this country (date string -> holiday type)
+        # Use "public" to indicate public holidays for bridge day logic
         country_holiday_map = {}
         for (c, holiday_date), _ in holiday_lookup.items():
             if c == country:
-                country_holiday_map[holiday_date.strftime("%Y-%m-%d")] = "Holiday"
+                # Store as "public" type so bridge day logic works correctly
+                country_holiday_map[holiday_date.strftime("%Y-%m-%d")] = "public"
         
         # Check all dates in the extended range for bridge days
         # Use extended range to catch bridge days at boundaries
