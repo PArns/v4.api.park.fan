@@ -412,7 +412,7 @@ def create_prediction_features(
                     all_countries.update(
                         [r["countryCode"] for r in regions if r.get("countryCode")]
                     )
-            except:
+            except Exception:
                 pass
         elif isinstance(raw_influences, list):
             all_countries.update(
@@ -470,7 +470,7 @@ def create_prediction_features(
 
                 try:
                     influencing_regions = json.loads(raw_influences)
-                except:
+                except Exception:
                     influencing_regions = []
 
             # Fallback for backward compatibility (older DB records)
@@ -870,7 +870,8 @@ def create_prediction_features(
                 trend_7d = 0.0
                 if len(last_14_days) >= 2:
                     # Split into two 7-day periods
-                    mid_point = cutoff_7d_local
+                    # mid_point = cutoff_7d_local (unused)
+
                     recent_7d = last_14_days[
                         pd.to_datetime(last_14_days["date"]).dt.date >= cutoff_7d_local
                     ]

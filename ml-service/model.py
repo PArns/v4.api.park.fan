@@ -92,18 +92,18 @@ class WaitTimeModel:
         # Initialize model with virtual ensembles for uncertainty estimation
         import time
         import os
-        
+
         # Determine thread count (use all available cores by default)
         thread_count = settings.CATBOOST_THREAD_COUNT
         if thread_count == -1:
             # Use all available CPU cores
             thread_count = os.cpu_count() or 4
-        
+
         print(f"   Thread count: {thread_count}")
         print(f"   Task type: {settings.CATBOOST_TASK_TYPE}")
-        
+
         training_start = time.time()
-        
+
         self.model = CatBoostRegressor(
             iterations=settings.CATBOOST_ITERATIONS,
             learning_rate=settings.CATBOOST_LEARNING_RATE,
@@ -121,9 +121,11 @@ class WaitTimeModel:
 
         # Train
         self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
-        
+
         training_time = time.time() - training_start
-        print(f"\n   Training completed in {training_time:.2f}s ({training_time/60:.1f} minutes)")
+        print(
+            f"\n   Training completed in {training_time:.2f}s ({training_time / 60:.1f} minutes)"
+        )
 
         # Calculate metrics
         y_pred = self.model.predict(X_val[self.feature_columns])
@@ -354,7 +356,9 @@ class WaitTimeModel:
         if missing_cols:
             defaults = self._get_default_feature_values()
             # Reduced logging - only log critical missing features
-            critical_missing = [col for col in missing_cols if col in ["parkId", "attractionId"]]
+            critical_missing = [
+                col for col in missing_cols if col in ["parkId", "attractionId"]
+            ]
             if critical_missing:
                 print(
                     f"⚠️  CRITICAL: Missing required features: {critical_missing}. Predictions may be inaccurate."
@@ -364,7 +368,7 @@ class WaitTimeModel:
                 print(
                     f"⚠️  Filling {len(missing_cols)} missing features with defaults (backward compatibility)"
                 )
-            
+
             for col in sorted(missing_cols):
                 # Special handling for categorical features
                 if col in ["parkId", "attractionId"]:

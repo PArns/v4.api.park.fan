@@ -447,13 +447,13 @@ def fetch_prediction_errors_for_training(
 ) -> pd.DataFrame:
     """
     Fetch prediction accuracy errors to calculate sample weights for training
-    
+
     Returns DataFrame with columns:
     - attractionId
     - timestamp (targetTime from prediction_accuracy)
     - absolute_error
     - percentage_error
-    
+
     Used to weight training samples: higher weights for samples with high prediction errors
     """
     query = text("""
@@ -468,7 +468,7 @@ def fetch_prediction_errors_for_training(
             AND pa."absolute_error" IS NOT NULL
             AND pa."absolute_error" >= 0
     """)
-    
+
     try:
         with get_db() as db:
             result = db.execute(query, {"start_date": start_date, "end_date": end_date})

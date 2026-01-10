@@ -38,6 +38,15 @@ export class OccupancyDto {
   baseline90thPercentile: number;
 
   @ApiProperty({
+    description:
+      "Confidence level of the P90 baseline (high: ≥90 days, medium: 30-89 days, low: <30 days)",
+    enum: ["high", "medium", "low"],
+    example: "high",
+    required: false,
+  })
+  confidence?: "high" | "medium" | "low";
+
+  @ApiProperty({
     description: "ISO 8601 timestamp when occupancy was calculated",
     example: "2024-01-15T14:30:00Z",
   })

@@ -164,7 +164,7 @@ def validate_training_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, An
     # Adaptive threshold: Lower for systems with limited historical data
     # Also considers data distribution to avoid filtering out too many attractions
     # during offseason transitions (e.g., when going from 13 to 30+ days)
-    
+
     # Base threshold based on data span
     if data_span_days < 30:
         base_threshold = 10
@@ -179,24 +179,26 @@ def validate_training_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, An
     else:
         base_threshold = 50
         stage = "mature"
-    
+
     # Adjust threshold based on actual data distribution
     # If median samples per attraction is low, don't be too aggressive
     if len(attraction_counts) > 0:
         median_samples = attraction_counts.median()
         q25_samples = attraction_counts.quantile(0.25)
-        
+
         # If median is very low (e.g., offseason), use a more lenient threshold
         # This prevents filtering out too many attractions when transitioning to 30+ days
         if median_samples < base_threshold * 1.5:
             # Use the lower of: base_threshold or (q25 * 1.2)
             # This ensures we don't filter out the bottom 25% of attractions
             adjusted_threshold = min(base_threshold, max(10, int(q25_samples * 1.2)))
-            
+
             if adjusted_threshold < base_threshold:
                 MIN_SAMPLES_PER_ATTRACTION = adjusted_threshold
                 print(f"   📊 Data span: {data_span_days} days ({stage})")
-                print(f"   📊 Data distribution: median={median_samples:.1f}, Q25={q25_samples:.1f}")
+                print(
+                    f"   📊 Data distribution: median={median_samples:.1f}, Q25={q25_samples:.1f}"
+                )
                 print(
                     f"   Using adjusted threshold: {MIN_SAMPLES_PER_ATTRACTION} samples per attraction"
                 )

@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
-from holiday_utils import normalize_region_code
+from holiday_utils import normalize_region_code, calculate_holiday_info
 from percentile_features import add_percentile_features
 from attraction_features import (
     add_attraction_type_feature,
@@ -303,7 +303,7 @@ def add_holiday_features(
     if not holidays_df.empty:
         # Convert to datetime first (handles both date and datetime), then extract date
         holidays_df["date"] = pd.to_datetime(holidays_df["date"]).dt.date
-        
+
         # Filter to date range (cached may include extra days for bridge day calculations)
         if cached_holidays_df is not None:
             holidays_df = holidays_df[
@@ -315,7 +315,6 @@ def add_holiday_features(
     # The API correctly extends ONLY school holidays to weekends, not public holidays
     # This data is already in the database, so we don't need to calculate it here
     # This ensures training and prediction use the same holiday logic
-
 
     # Create holiday lookup DataFrames for vectorized merge
     # Regional holidays: (country, region, date) -> holiday_type
@@ -331,7 +330,6 @@ def add_holiday_features(
             df["date_local"] = pd.to_datetime(df["timestamp"]).dt.date
 
     # Import region normalization utility
-    from holiday_utils import normalize_region_code
 
     # 1. Primary Location Holiday Check (vectorized)
     if not regional_holidays.empty:
@@ -388,7 +386,6 @@ def add_holiday_features(
     # 2. Influencing Regions Check (still needs some iteration due to JSON structure)
     # Create lookup maps for faster access
     # Import region normalization utility
-    from holiday_utils import normalize_region_code
 
     holiday_map_regional = {}
     holiday_map_national = {}
@@ -1098,7 +1095,7 @@ def add_park_schedule_features(
                 how="left",
             )
             df["has_extra_hours"] = df_extra["has_extra"].fillna(0).astype(int)
-    
+
     # Clean up temporary columns (after all merges are done)
     df = df.drop(columns=["schedule_date"], errors="ignore")
 
@@ -1274,7 +1271,7 @@ def add_bridge_day_feature(
             how="left",
         )
         df["country"] = df_country["country"]
-    
+
     # Pre-compute bridge dates per country using holiday_utils
     # Build holiday map per country for utility function
     bridge_dates = set()
@@ -1286,7 +1283,7 @@ def add_bridge_day_feature(
             if c == country:
                 # Store as "public" type so bridge day logic works correctly
                 country_holiday_map[holiday_date.strftime("%Y-%m-%d")] = "public"
-        
+
         # Check all dates in the extended range for bridge days
         # Use extended range to catch bridge days at boundaries
         check_start = start_date - timedelta(days=5)
@@ -1300,14 +1297,12 @@ def add_bridge_day_feature(
             if is_bridge_day:
                 bridge_dates.add((country, current_date))
             current_date += timedelta(days=1)
-    
+
     # Create bridge lookup DataFrame
     if bridge_dates:
-        bridge_df = pd.DataFrame(
-            list(bridge_dates), columns=["country", "bridge_date"]
-        )
+        bridge_df = pd.DataFrame(list(bridge_dates), columns=["country", "bridge_date"])
         bridge_df["is_bridge"] = 1
-        
+
         # Merge with df to find bridge days
         df_bridge = df.merge(
             bridge_df,
@@ -1318,7 +1313,7 @@ def add_bridge_day_feature(
         df["is_bridge_day"] = df_bridge["is_bridge"].fillna(0).astype(int)
     else:
         df["is_bridge_day"] = 0
-    
+
     # Clean up temporary country column if we added it
     if "country" not in df.columns or "park_id" in df.columns:
         df = df.drop(columns=["country", "park_id"], errors="ignore")
@@ -1539,7 +1534,7 @@ def engineer_features(
     percentile_time = time_module.time() - percentile_start
     context_time = time_module.time() - context_start
     interaction_time = time_module.time() - interaction_start
-    
+
     # Use absolute times directly (already calculated correctly above)
     feature_times = {
         "Resampling": resample_time,

@@ -8,7 +8,6 @@ Tests:
 - Weekend extensions (Saturday/Sunday after Friday holidays)
 """
 
-from datetime import datetime
 from holiday_utils import calculate_holiday_info_from_string
 
 # Holiday entry with type
@@ -66,10 +65,10 @@ test_cases = [
     {
         "name": "Weekend extension - Saturday after Friday holiday",
         "date": "2025-12-27",  # Saturday
-        "holiday_map": {"2025-12-26": "Boxing Day"},  # Friday
+        "holiday_map": {"2025-12-26": "school"},  # Friday - school holiday
         "expected": {
             "is_holiday": True,
-            "holiday_name": "Boxing Day",
+            "holiday_name": "school",
             "is_bridge_day": False,
         },
     },
@@ -77,10 +76,10 @@ test_cases = [
     {
         "name": "Weekend extension - Sunday after Friday holiday",
         "date": "2025-12-28",  # Sunday
-        "holiday_map": {"2025-12-26": "Boxing Day"},  # Friday
+        "holiday_map": {"2025-12-26": "school"},  # Friday - school holiday
         "expected": {
             "is_holiday": True,
-            "holiday_name": "Boxing Day",
+            "holiday_name": "school",
             "is_bridge_day": False,
         },
     },
@@ -187,7 +186,9 @@ def run_tests():
         else:
             print(f"❌ {test_case['name']}")
             print(f"   Expected: {expected}")
-            print(f"   Got: (is_holiday={is_holiday}, holiday_name={holiday_name}, is_bridge_day={is_bridge_day})")
+            print(
+                f"   Got: (is_holiday={is_holiday}, holiday_name={holiday_name}, is_bridge_day={is_bridge_day})"
+            )
             failed += 1
 
     print("\n" + "=" * 80)

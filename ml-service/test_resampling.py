@@ -9,7 +9,7 @@ import sys
 sys.path.append("/app")
 
 from db import fetch_training_data
-from features import remove_anomalies
+from train import remove_anomalies
 from model import WaitTimeModel
 from datetime import datetime, timedelta
 import pandas as pd
@@ -104,13 +104,14 @@ for interval in RESAMPLING_INTERVALS:
 
             # Quick model
             model = WaitTimeModel()
+            # Override features for this simplified test
+            model.feature_columns = available_features
+            model.categorical_features = ["parkId", "attractionId"]
             metrics = model.train(
                 X_train,
                 y_train,
                 X_val,
                 y_val,
-                iterations=200,  # Quick training
-                verbose=False,
             )
 
             print("\n📊 Quick Model Performance:")

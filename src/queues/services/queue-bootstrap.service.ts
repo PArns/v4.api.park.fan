@@ -236,8 +236,33 @@ export class QueueBootstrapService implements OnModuleInit {
           removeOnComplete: true,
         },
       );
+
+      // Trigger P90 sliding window pre-aggregation
+      // This pre-computes P90 values for all parks and attractions
+      // Benefits: Faster crowd level calculations, reduced Redis cache misses
+      const p90JobActive = await this.isJobActiveOrWaiting(
+        this.occupancyQueue,
+        "precompute-p90-sliding-window",
+      );
+
+      if (!p90JobActive) {
+        await this.occupancyQueue.add(
+          "precompute-p90-sliding-window",
+          {},
+          {
+            priority: 3,
+            jobId: "bootstrap-p90-precompute",
+            removeOnComplete: true,
+          },
+        );
+        this.logger.log("✅ Boot: P90 sliding window pre-aggregation queued");
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: P90 pre-aggregation already running, skipping",
+        );
+      }
     } catch (e) {
-      this.logger.warn(`Failed to trigger ML jobs: ${e}`);
+      this.logger.warn(`Failed to trigger ML/analytics jobs: ${e}`);
     }
   }
 

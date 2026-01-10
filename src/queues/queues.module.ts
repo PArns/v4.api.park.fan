@@ -21,6 +21,7 @@ import { PredictionGeneratorProcessor } from "./processors/prediction-generator.
 import { ParkEnrichmentProcessor } from "./processors/park-enrichment.processor";
 import { EntityMappingsProcessor } from "./processors/entity-mappings.processor";
 import { QueuePercentileProcessor } from "./processors/queue-percentile.processor";
+import { OccupancyCalculationProcessor } from "./processors/occupancy-calculation.processor";
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { ParksModule } from "../parks/parks.module";
@@ -148,6 +149,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     PredictionGeneratorProcessor,
     ParkEnrichmentProcessor,
     QueuePercentileProcessor,
+    OccupancyCalculationProcessor,
     WartezeitenScheduleProcessor,
     MLMonitoringProcessor,
   ],

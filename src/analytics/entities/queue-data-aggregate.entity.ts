@@ -41,11 +41,9 @@ export class QueueDataAggregate {
   hour: Date; // Hourly bucket (e.g., 2025-01-15 14:00:00)
 
   @Column({ type: "text" })
-  @Index()
   attractionId: string;
 
   @Column({ type: "text" })
-  @Index()
   parkId: string;
 
   // Percentile Distribution (comprehensive coverage)

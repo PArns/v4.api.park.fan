@@ -879,21 +879,17 @@ export class ParkIntegrationService {
         // Previously incorrectly used UTC time instead of park local time
         // Fallback: Get typical wait from historical P90 percentiles
         // Use park's local time for hour/day, not UTC
-        const { toZonedTime } = await import("date-fns-tz");
-        const nowInParkTz = park.timezone
-          ? toZonedTime(new Date(), park.timezone)
-          : new Date();
-        const hour = nowInParkTz.getHours();
-        const day = nowInParkTz.getDay();
+        // Use park's local time for hour/day, not UTC (Legacy comment, simplified logic below)
 
         // Get P90 park-level baseline
-        const p90Park = await this.analyticsService.get90thPercentileOneYear(
-          park.id,
-          hour,
-          day,
-          "park",
-          park.timezone,
-        );
+        // Get P90 park-level baseline (Unified 548-day sliding window)
+        const p90Result =
+          await this.analyticsService.get90thPercentileWithConfidence(
+            park.id,
+            "park",
+            park.timezone,
+          );
+        const p90Park = p90Result.p90;
         // Note: We don't have a "current" wait, so we can't calculate a rating.
         // But we can populate baseline90thPercentile to show "Typical Wait: X min"
 

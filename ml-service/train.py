@@ -92,15 +92,18 @@ def train_model(version: str = None) -> None:
     # 2.6 Remove anomalies
     df = remove_anomalies(df)
     print()
-    
+
     # 3. Feature engineering
     import time
+
     print("🔧 Engineering features...")
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
     print(f"   Features: {len(get_feature_columns())}")
-    print(f"   Feature engineering time: {feature_time:.2f}s ({feature_time/60:.1f} minutes)")
+    print(
+        f"   Feature engineering time: {feature_time:.2f}s ({feature_time / 60:.1f} minutes)"
+    )
     print()
 
     # 4. Drop rows with missing target
@@ -135,7 +138,7 @@ def train_model(version: str = None) -> None:
     feature_columns = get_feature_columns()
     X = df[feature_columns]
     y = df["waitTime"]
-    
+
     # 5.5. Calculate sample weights based on prediction errors (feedback loop)
     # WARNING: Sample weights can improve performance on difficult cases, but:
     # - Too high weights (factor > 1.0) can cause overfitting on errors
@@ -143,75 +146,102 @@ def train_model(version: str = None) -> None:
     # - Should be used conservatively (factor 0.3-0.5 recommended)
     # - Requires sufficient data (>30 days) to avoid overfitting
     sample_weights = None
-    
+
     # Check if we have enough data for sample weights
     data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
     can_use_weights = (
-        settings.ENABLE_SAMPLE_WEIGHTS 
+        settings.ENABLE_SAMPLE_WEIGHTS
         and data_span_days >= settings.MIN_DATA_DAYS_FOR_WEIGHTS
     )
-    
+
     if can_use_weights:
         print("📊 Calculating sample weights from prediction accuracy...")
         from db import fetch_prediction_errors_for_training
         import numpy as np
-        
+
         error_df = fetch_prediction_errors_for_training(start_date, end_date)
-        
+
         if not error_df.empty:
             # Merge errors with training data
             # Match on attractionId and timestamp (within 5 minutes tolerance)
             df_with_errors = df.merge(
-                error_df[["attractionId", "timestamp", "absolute_error", "percentage_error"]],
+                error_df[
+                    ["attractionId", "timestamp", "absolute_error", "percentage_error"]
+                ],
                 on=["attractionId"],
                 how="left",
-                suffixes=("", "_error")
+                suffixes=("", "_error"),
             )
-            
+
             # Match timestamps (within 5 minutes)
             if "timestamp_error" in df_with_errors.columns:
-                time_diff = (df_with_errors["timestamp"] - df_with_errors["timestamp_error"]).abs()
+                time_diff = (
+                    df_with_errors["timestamp"] - df_with_errors["timestamp_error"]
+                ).abs()
                 time_match = time_diff <= pd.Timedelta(minutes=5)
-                
+
                 # Calculate weights: higher weight for higher errors
                 # Weight formula: 1.0 + (error / max_error) * weight_factor
                 # Conservative default: 0.5 = 50% boost (weights: 1.0 - 1.5)
                 # Aggressive: 1.0 = 100% boost (weights: 1.0 - 2.0)
-                max_error = error_df["absolute_error"].max() if len(error_df) > 0 else 1.0
+                max_error = (
+                    error_df["absolute_error"].max() if len(error_df) > 0 else 1.0
+                )
                 weight_factor = settings.SAMPLE_WEIGHT_FACTOR
-                
+
                 sample_weights = np.ones(len(df))
                 matched_mask = time_match & df_with_errors["absolute_error"].notna()
-                
+
                 if matched_mask.sum() > 0:
                     matched_errors = df_with_errors.loc[matched_mask, "absolute_error"]
                     weights = 1.0 + (matched_errors / max_error) * weight_factor
                     sample_weights[matched_mask] = weights
-                    
+
                     matched_count = matched_mask.sum()
                     matched_percentage = (matched_count / len(df)) * 100
                     avg_weight = weights.mean()
                     max_weight = weights.max()
-                    
-                    print(f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors")
-                    print(f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})")
-                    print(f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)")
-                    
+
+                    print(
+                        f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors"
+                    )
+                    print(
+                        f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})"
+                    )
+                    print(
+                        f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)"
+                    )
+
                     # Warning if too many samples are weighted (might indicate systematic issues)
                     if matched_percentage > 50:
-                        print(f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting")
-                        print(f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})")
+                        print(
+                            f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting"
+                        )
+                        print(
+                            f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})"
+                        )
                     elif matched_percentage < 5:
-                        print(f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected")
+                        print(
+                            f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected"
+                        )
                 else:
-                    print("   No matching prediction errors found (using uniform weights)")
+                    print(
+                        "   No matching prediction errors found (using uniform weights)"
+                    )
             else:
                 print("   No prediction errors available (using uniform weights)")
         else:
             print("   No prediction accuracy data available (using uniform weights)")
-    elif settings.ENABLE_SAMPLE_WEIGHTS and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS:
-        print(f"   Sample weights disabled: Only {data_span_days} days of data (< {settings.MIN_DATA_DAYS_FOR_WEIGHTS} days required)")
-        print("      Enable weights when you have more historical data to avoid overfitting")
+    elif (
+        settings.ENABLE_SAMPLE_WEIGHTS
+        and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS
+    ):
+        print(
+            f"   Sample weights disabled: Only {data_span_days} days of data (< {settings.MIN_DATA_DAYS_FOR_WEIGHTS} days required)"
+        )
+        print(
+            "      Enable weights when you have more historical data to avoid overfitting"
+        )
     else:
         print("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
@@ -221,7 +251,7 @@ def train_model(version: str = None) -> None:
     # Note: data_span_days already calculated above for sample weights check
 
     train_mask = None  # Initialize for sample weights split
-    
+
     if len(df) < 100 or data_span_days < 7:
         # Percentage-based split for small datasets
         print("📊 Using percentage-based split (80/20) due to limited data")
@@ -235,11 +265,13 @@ def train_model(version: str = None) -> None:
     else:
         # Time-based split for larger datasets
         validation_cutoff = end_date - timedelta(days=settings.VALIDATION_DAYS)
-        
+
         # Check if validation_cutoff is before data start (fallback to percentage split)
         data_start = df["timestamp"].min()
         if validation_cutoff <= data_start:
-            print(f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})")
+            print(
+                f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})"
+            )
             print("   Falling back to percentage-based split (80/20)")
             split_idx = int(len(df) * 0.8)
             df = df.sort_values("timestamp")
@@ -259,28 +291,32 @@ def train_model(version: str = None) -> None:
     print("📈 Train/Validation Split:")
     print(f"   Training samples: {len(X_train):,}")
     print(f"   Validation samples: {len(X_val):,}")
-    
+
     # Check for empty datasets
     if len(X_train) == 0:
         print("❌ ERROR: Training set is empty after split!")
         print(f"   Total rows: {len(df):,}")
         print(f"   Data span: {data_span_days} days")
-        print(f"   Validation cutoff: {validation_cutoff if data_span_days >= 7 else 'N/A (percentage split)'}")
+        print(
+            f"   Validation cutoff: {validation_cutoff if data_span_days >= 7 else 'N/A (percentage split)'}"
+        )
         return
-    
+
     if len(X_val) == 0:
         print("⚠️  WARNING: Validation set is empty after split!")
         print("   Using all data for training (no validation)")
         X_val = X_train
         y_val = y_train
-    
+
     if len(y_train) == 0:
         print("❌ ERROR: Training labels (y_train) are empty!")
         print(f"   X_train rows: {len(X_train):,}")
         print(f"   waitTime column exists: {'waitTime' in df.columns}")
-        print(f"   waitTime non-null count: {df['waitTime'].notna().sum() if 'waitTime' in df.columns else 'N/A'}")
+        print(
+            f"   waitTime non-null count: {df['waitTime'].notna().sum() if 'waitTime' in df.columns else 'N/A'}"
+        )
         return
-    
+
     print(
         f"   Split ratio: {len(X_train) / (len(X_train) + len(X_val)) * 100:.1f}% / {len(X_val) / (len(X_train) + len(X_val)) * 100:.1f}%"
     )
@@ -298,7 +334,7 @@ def train_model(version: str = None) -> None:
     print()
 
     model = WaitTimeModel(version)
-    
+
     # Prepare sample weights for training set
     train_weights = None
     if sample_weights is not None:
@@ -308,8 +344,8 @@ def train_model(version: str = None) -> None:
             train_weights = sample_weights[train_mask]
         else:
             # Percentage-based split
-            train_weights = sample_weights[:len(X_train)]
-    
+            train_weights = sample_weights[: len(X_train)]
+
     metrics = model.train(X_train, y_train, X_val, y_val, sample_weights=train_weights)
 
     print("\n" + "=" * 60)

@@ -105,9 +105,12 @@ def calculate_holiday_info(
             if friday_type == "school":
                 # If Friday is a school holiday, extend to weekend
                 is_holiday = True
-                holiday_name = friday_holiday if isinstance(friday_holiday, str) else friday_holiday.get("name")
+                holiday_name = (
+                    friday_holiday
+                    if isinstance(friday_holiday, str)
+                    else friday_holiday.get("name")
+                )
             # Public holidays do NOT extend to weekends - weekend after Christmas is just a normal weekend
-
 
     # Check Bridge Day Logic
     # 1. Friday (4) after Thursday Holiday

@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime
+import os
 
 # Mocking db functions to avoid DB dependency in verification
 import sys
@@ -11,10 +12,9 @@ sys.modules["db"] = db_mock
 
 # Mock features module dependencies
 # Add local directory to path
-import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__)))
-import features
+import features  # noqa: E402
 
 
 def test_feature_engineering():
@@ -69,11 +69,7 @@ def test_feature_engineering():
     # Mock schedules
     db_mock.fetch_park_schedules.return_value = pd.DataFrame()  # No special schedule
 
-    # Mock pytz for timezone conversion
-    try:
-        import pytz
-    except ImportError:
-        print("Scipy/pytz might be missing in this env, but logic should handle it.")
+    # Mock pytz for timezone conversion - logic handled elsewhere
 
     # 2. Run feature engineering
     # Using internal functions to test specific logic
