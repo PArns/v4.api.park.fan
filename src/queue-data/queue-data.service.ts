@@ -345,6 +345,17 @@ export class QueueDataService {
       }
     }
 
+    // Heartbeat: Force save if last update was > 60 minutes ago
+    // This ensures we have recent data ("Yes, it's still closed") even if nothing changed
+    if (latest.timestamp) {
+      const now = new Date();
+      const lastUpdate = new Date(latest.timestamp);
+      const diffMinutes = (now.getTime() - lastUpdate.getTime()) / (1000 * 60);
+      if (diffMinutes > 60) {
+        return true;
+      }
+    }
+
     // No significant change
     return false;
   }
