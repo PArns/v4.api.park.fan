@@ -63,7 +63,7 @@ export class AttractionIntegrationService {
     private readonly scheduleEntryRepository: Repository<ScheduleEntry>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
-  ) { }
+  ) {}
 
   /**
    * Build integrated attraction response with live data
@@ -462,7 +462,10 @@ export class AttractionIntegrationService {
           // IMPORTANT: Convert Date objects to date strings (YYYY-MM-DD) for TypeORM query
           // The schedule.date column is of type DATE (not TIMESTAMP), so we need to compare dates, not timestamps
           // This ensures correct timezone handling and prevents off-by-one errors
-          const startDateStr = formatInParkTimezone(startDate, parkForUrl.timezone);
+          const startDateStr = formatInParkTimezone(
+            startDate,
+            parkForUrl.timezone,
+          );
           const endDateStr = formatInParkTimezone(today, parkForUrl.timezone);
 
           // Get schedule entries for the park (only park-level, not attraction-specific)
@@ -470,7 +473,9 @@ export class AttractionIntegrationService {
             .createQueryBuilder("schedule")
             .where("schedule.parkId = :parkId", { parkId: attraction.parkId })
             .andWhere("schedule.attractionId IS NULL") // Only park schedules
-            .andWhere("schedule.date >= :startDate", { startDate: startDateStr })
+            .andWhere("schedule.date >= :startDate", {
+              startDate: startDateStr,
+            })
             .andWhere("schedule.date <= :endDate", { endDate: endDateStr })
             .orderBy("schedule.date", "ASC")
             .addOrderBy("schedule.scheduleType", "ASC")
@@ -644,9 +649,9 @@ export class AttractionIntegrationService {
       // Debug logging
       this.logger.log(
         `History query for attraction ${attractionId}: ` +
-        `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
-        `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
-        `days=${days}, timezone=${timezone}`,
+          `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
+          `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
+          `days=${days}, timezone=${timezone}`,
       );
 
       // Batch fetch schedules for all days in range
@@ -759,12 +764,12 @@ export class AttractionIntegrationService {
       const distinctDates = Array.from(queueDataByDate.keys()).sort();
       console.log(
         `[DEBUG] History query for ${attractionId}: ` +
-        `SQL returned ${queueDataResults.length} hour groups, ` +
-        `${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+          `SQL returned ${queueDataResults.length} hour groups, ` +
+          `${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
       );
       this.logger.log(
         `History query returned ${queueDataResults.length} hour groups, ` +
-        `covering ${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+          `covering ${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
       );
 
       // Create down count map
@@ -808,21 +813,21 @@ export class AttractionIntegrationService {
             const totalAvgWait =
               totalSamples > 0
                 ? dayQueueData.reduce(
-                  (sum, h) => sum + h.avgWait * h.sampleCount,
-                  0,
-                ) / totalSamples
+                    (sum, h) => sum + h.avgWait * h.sampleCount,
+                    0,
+                  ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
-                dayQueueData.length; // Fallback if sample counts missing
+                  dayQueueData.length; // Fallback if sample counts missing
 
             // Get P90 baseline (average of hourly P90s, weighted by sample count)
             const avgP90 =
               totalSamples > 0
                 ? dayQueueData.reduce(
-                  (sum, h) => sum + h.p90 * h.sampleCount,
-                  0,
-                ) / totalSamples
+                    (sum, h) => sum + h.p90 * h.sampleCount,
+                    0,
+                  ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
-                dayQueueData.length; // Fallback if sample counts missing
+                  dayQueueData.length; // Fallback if sample counts missing
 
             // Use analytics service to get crowd level
             if (avgP90 > 0) {
@@ -880,7 +885,7 @@ export class AttractionIntegrationService {
             // Debug logging
             this.logger.debug(
               `Schedule for ${dateStr}: openingTime UTC=${schedule.openingTime.toISOString()}, ` +
-              `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
+                `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
             );
 
             // Extract closing hour in park timezone
