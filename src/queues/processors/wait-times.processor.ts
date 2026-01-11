@@ -75,7 +75,7 @@ export class WaitTimesProcessor {
     private readonly cacheWarmupService: CacheWarmupService,
     private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   @Process("fetch-wait-times")
   async handleSyncWaitTimes(_job: Job): Promise<void> {
@@ -646,8 +646,8 @@ export class WaitTimesProcessor {
             const percent = Math.round(((parkIdx + 1) / totalParks) * 100);
             this.logger.log(
               `Progress: ${parkIdx + 1}/${totalParks} (${percent}%) - ` +
-                `${openParksCount} parks - ` +
-                `${totalAttractions} attractions processed`,
+              `${openParksCount} parks - ` +
+              `${totalAttractions} attractions processed`,
             );
           }
         } catch (error) {
@@ -675,10 +675,9 @@ export class WaitTimesProcessor {
         `🔄 Updated: ${savedAttractions} attractions, ${savedShows} shows, ${savedRestaurants} restaurants (delta-based)`,
       );
       this.logger.log(
-        `📡 Sources: ${
-          Object.entries(sourceStats)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(", ") || "none"
+        `📡 Sources: ${Object.entries(sourceStats)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(", ") || "none"
         }`,
       );
 
@@ -1222,58 +1221,93 @@ export class WaitTimesProcessor {
           const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
           // Get all attractions for this park
-          const attractions = await this.attractionsService
-            .getRepository()
-            .find({
-              where: { parkId: park.id },
-              select: ["id", "name", "externalId"],
-            });
+          const attractions = await this.attractionsService.getRepository().find({
+            where: { parkId: park.id },
+            select: ["id", "name", "externalId"],
+          });
 
           if (attractions.length === 0) {
             continue;
           }
 
-          // Get attractions that have data in the last hour
-          const recentDataResult = await this.queueDataRepository
-            .createQueryBuilder("qd")
-            .select("DISTINCT qd.attractionId", "attractionId")
-            .where("qd.attractionId IN (:...attractionIds)", {
-              attractionIds: attractions.map((a) => a.id),
-            })
-            .andWhere("qd.timestamp >= :oneHourAgo", { oneHourAgo })
-            .getRawMany();
-
-          const attractionsWithRecentData = new Set(
-            recentDataResult.map((r) => r.attractionId),
-          );
-
-          // Write heartbeats for attractions WITHOUT recent data
-          for (const attraction of attractions) {
-            if (attractionsWithRecentData.has(attraction.id)) {
-              continue; // Has recent data, no heartbeat needed
-            }
-
-            try {
-              // Write a CLOSED heartbeat
-              const heartbeatData: Partial<QueueData> = {
-                attractionId: attraction.id,
+          // Get latest queue data for each attraction (STANDBY queue only)
+          const latestDataMap = new Map<string, QueueData>();
+          if (attractions.length > 0) {
+            const latestData = await this.queueDataRepository
+              .createQueryBuilder("qd")
+              .where("qd.attractionId IN (:...attractionIds)", {
+                attractionIds: attractions.map((a) => a.id),
+              })
+              .andWhere("qd.queueType = :queueType", {
                 queueType: QueueType.STANDBY,
-                status: LiveStatus.CLOSED,
-                waitTime: 0,
-                lastUpdated: now,
-              };
+              })
+              .distinctOn(["qd.attractionId"])
+              .orderBy("qd.attractionId", "ASC")
+              .addOrderBy("qd.timestamp", "DESC")
+              .getMany();
 
-              const queueEntry = this.queueDataRepository.create(heartbeatData);
-              await this.queueDataRepository.save(queueEntry);
-              heartbeatCount.total++;
-            } catch (error) {
-              // Log but continue
-              const errorMessage =
-                error instanceof Error ? error.message : String(error);
-              this.logger.warn(
-                `Failed to write heartbeat for ${attraction.name}: ${errorMessage}`,
-              );
+            latestData.forEach((data) => {
+              latestDataMap.set(data.attractionId, data);
+            });
+          }
+
+          // Write heartbeats for attractions that need them
+          for (const attraction of attractions) {
+            const latestData = latestDataMap.get(attraction.id);
+
+            if (!latestData) {
+              // No data at all - write CLOSED heartbeat
+              try {
+                const heartbeatData: Partial<QueueData> = {
+                  attractionId: attraction.id,
+                  queueType: QueueType.STANDBY,
+                  status: LiveStatus.CLOSED,
+                  waitTime: 0,
+                  lastUpdated: now,
+                };
+
+                const queueEntry =
+                  this.queueDataRepository.create(heartbeatData);
+                await this.queueDataRepository.save(queueEntry);
+                heartbeatCount.total++;
+              } catch (error) {
+                const errorMessage =
+                  error instanceof Error ? error.message : String(error);
+                this.logger.warn(
+                  `Failed to write heartbeat for ${attraction.name}: ${errorMessage}`,
+                );
+              }
+              continue;
             }
+
+            // Has data - check if it's older than 1 hour
+            const dataAge = now.getTime() - latestData.timestamp.getTime();
+            const oneHourMs = 60 * 60 * 1000;
+
+            if (dataAge > oneHourMs) {
+              // Data is stale - repeat last known value
+              try {
+                const heartbeatData: Partial<QueueData> = {
+                  attractionId: attraction.id,
+                  queueType: QueueType.STANDBY,
+                  status: latestData.status,
+                  waitTime: latestData.waitTime,
+                  lastUpdated: now,
+                };
+
+                const queueEntry =
+                  this.queueDataRepository.create(heartbeatData);
+                await this.queueDataRepository.save(queueEntry);
+                heartbeatCount.total++;
+              } catch (error) {
+                const errorMessage =
+                  error instanceof Error ? error.message : String(error);
+                this.logger.warn(
+                  `Failed to write heartbeat for ${attraction.name}: ${errorMessage}`,
+                );
+              }
+            }
+            // else: Data is fresh (<1h old), no heartbeat needed
           }
 
           if (heartbeatCount.total > 0) {
