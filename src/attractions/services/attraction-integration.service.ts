@@ -598,18 +598,48 @@ export class AttractionIntegrationService {
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
-        // Apply 5-minute rounding to cached data (in case cache was created before rounding fix)
-        const rounded = parsed.map((day: HistoryDayDto) => ({
-          ...day,
-          hourlyP90: day.hourlyP90.map((h) => ({
-            ...h,
-            value: roundToNearest5Minutes(h.value),
-          })),
-        }));
-        this.logger.log(
-          `Using cached history for ${attractionId}: ${rounded.length} days`,
+
+        // Extract metadata and history data
+        const calculatedAt = parsed.calculatedAt
+          ? new Date(parsed.calculatedAt)
+          : null;
+        const historyData: HistoryDayDto[] = parsed.history || parsed; // Support old format (array) and new format (object with metadata)
+
+        // Check if today should be in the result but isn't in cache
+        // This handles the case where cache was created before today had any data
+        const todayStr = getCurrentDateInTimezone(timezone);
+        const hasTodayInCache = historyData.some(
+          (day: HistoryDayDto) => day.date === todayStr,
         );
-        return rounded;
+
+        // Only invalidate cache if:
+        // 1. Today is missing from cache, AND
+        // 2. Cache is older than 5 minutes (or has no timestamp - old format)
+        // This prevents cache stampede when today has no data yet
+        const cacheAgeMs = calculatedAt
+          ? Date.now() - calculatedAt.getTime()
+          : Infinity;
+        const cacheIsStale = cacheAgeMs > 5 * 60 * 1000; // 5 minutes
+
+        if (!hasTodayInCache && days > 0 && cacheIsStale) {
+          this.logger.log(
+            `Cache stale for today (${todayStr}) in history for ${attractionId} (age: ${Math.round(cacheAgeMs / 1000)}s), recalculating...`,
+          );
+          // Don't return cached data - fall through to recalculate
+        } else {
+          // Apply 5-minute rounding to cached data (in case cache was created before rounding fix)
+          const rounded = historyData.map((day: HistoryDayDto) => ({
+            ...day,
+            hourlyP90: day.hourlyP90.map((h) => ({
+              ...h,
+              value: roundToNearest5Minutes(h.value),
+            })),
+          }));
+          this.logger.log(
+            `Using cached history for ${attractionId}: ${rounded.length} days`,
+          );
+          return rounded;
+        }
       } catch (error) {
         this.logger.warn(
           `Failed to parse cached history for ${attractionId}:`,
@@ -1032,8 +1062,12 @@ export class AttractionIntegrationService {
       const todayInRange = history.some((h) => h.date === todayStr);
       const ttl = todayInRange ? 5 * 60 : 24 * 60 * 60; // 5 min if today included, 24h for history only
 
-      // Cache the result
-      await this.redis.set(cacheKey, JSON.stringify(history), "EX", ttl);
+      // Cache the result with metadata (calculatedAt for smart invalidation)
+      const cachePayload = {
+        calculatedAt: new Date().toISOString(),
+        history,
+      };
+      await this.redis.set(cacheKey, JSON.stringify(cachePayload), "EX", ttl);
 
       return history;
     } catch (error) {
