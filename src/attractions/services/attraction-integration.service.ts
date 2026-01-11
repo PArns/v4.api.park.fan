@@ -952,90 +952,68 @@ export class AttractionIntegrationService {
 
           // Ensure we have opening hour if schedule available
           // openingHour is already in park timezone (from formatInTimeZone)
-          if (openingHour !== null) {
+          // SMART PROJECTION: Only add opening hour if earliest actual data is within 2 hours
+          // This prevents false projections when attraction opened late (e.g., 15:00 instead of 11:00)
+          const earliestDataHour =
+            hourDataMap.size > 0
+              ? Math.min(...Array.from(hourDataMap.keys()))
+              : null;
+
+          // Only project opening hour if we have data AND earliest data is within 2 hours of opening
+          const shouldProjectOpening =
+            openingHour !== null &&
+            earliestDataHour !== null &&
+            earliestDataHour - openingHour <= 2 && // Earliest data within 2 hours of opening
+            earliestDataHour >= openingHour; // Don't project if data is before opening
+
+          if (shouldProjectOpening) {
             // Check if we already have this hour in the array
-            const openingHourStr = `${openingHour.toString().padStart(2, "0")}:00`;
+            const openingHourStr = `${openingHour!.toString().padStart(2, "0")}:00`;
             const hasOpeningHour = hourlyP90.some(
               (h) => h.hour === openingHourStr,
             );
 
             if (!hasOpeningHour) {
-              // Find nearest available hour data (prefer later hours)
-              let nearestHour: number | null = null;
-              let nearestValue: number | null = null;
+              // Use the earliest hour's data for opening
+              const nearestValue = hourDataMap.get(earliestDataHour!)?.p90 || 0;
 
-              // Look for nearest hour with data
-              for (const [hour, data] of hourDataMap.entries()) {
-                if (hour >= openingHour) {
-                  if (nearestHour === null || hour < nearestHour) {
-                    nearestHour = hour;
-                    nearestValue = data.p90;
-                  }
-                }
-              }
-
-              // If no later hour found, use earliest available
-              if (nearestHour === null && hourDataMap.size > 0) {
-                const sortedHours = Array.from(hourDataMap.keys()).sort(
-                  (a, b) => a - b,
-                );
-                nearestHour = sortedHours[0];
-                nearestValue = hourDataMap.get(nearestHour)!.p90;
-              }
-
-              // Add opening hour entry (format as HH:00 since we only track hours)
-              const openingHourStr = `${openingHour.toString().padStart(2, "0")}:00`;
               hourlyP90.push({
                 hour: openingHourStr,
-                value:
-                  nearestValue !== null
-                    ? roundToNearest5Minutes(nearestValue)
-                    : 0,
+                value: roundToNearest5Minutes(nearestValue),
               });
             }
           }
 
           // Ensure we have closing hour if schedule available
           // closingHour is already in park timezone (from formatInTimeZone)
-          if (closingHour !== null) {
+          // SMART PROJECTION: Only add closing hour if latest actual data is within 2 hours
+          // This prevents false projections when attraction closed early
+          const latestDataHour =
+            hourDataMap.size > 0
+              ? Math.max(...Array.from(hourDataMap.keys()))
+              : null;
+
+          // Only project closing hour if we have data AND latest data is within 2 hours of closing
+          const shouldProjectClosing =
+            closingHour !== null &&
+            latestDataHour !== null &&
+            closingHour - latestDataHour <= 2 && // Latest data within 2 hours of closing
+            latestDataHour <= closingHour; // Don't project if data is after closing
+
+          if (shouldProjectClosing) {
             // Check if we already have this hour in the array
-            const closingHourStr = `${closingHour.toString().padStart(2, "0")}:00`;
+            const closingHourStr = `${closingHour!.toString().padStart(2, "0")}:00`;
             const hasClosingHour = hourlyP90.some(
               (h) => h.hour === closingHourStr,
             );
 
             if (!hasClosingHour) {
-              // Find nearest available hour data (prefer earlier hours)
-              let nearestHour: number | null = null;
-              let nearestValue: number | null = null;
+              // Use the latest hour's data for closing
+              const nearestValue = hourDataMap.get(latestDataHour!)?.p90 || 0;
 
-              // Look for nearest hour with data
-              for (const [hour, data] of hourDataMap.entries()) {
-                if (hour <= closingHour) {
-                  if (nearestHour === null || hour > nearestHour) {
-                    nearestHour = hour;
-                    nearestValue = data.p90;
-                  }
-                }
-              }
-
-              // If no earlier hour found, use latest available
-              if (nearestHour === null && hourDataMap.size > 0) {
-                const sortedHours = Array.from(hourDataMap.keys()).sort(
-                  (a, b) => b - a,
-                );
-                nearestHour = sortedHours[0];
-                nearestValue = hourDataMap.get(nearestHour)!.p90;
-              }
-
-              // Add closing hour entry (format as HH:00 since we only track hours)
-              const closingHourStr = `${closingHour.toString().padStart(2, "0")}:00`;
               hourlyP90.push({
                 hour: closingHourStr,
-                value:
-                  nearestValue !== null
-                    ? roundToNearest5Minutes(nearestValue)
-                    : 0,
+                value: roundToNearest5Minutes(nearestValue),
               });
             }
           }

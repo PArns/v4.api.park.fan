@@ -697,6 +697,20 @@ export class WaitTimesProcessor {
         this.logger.warn(`Cache warmup failed: ${errorMessage}`);
         // Don't throw - warmup failure shouldn't fail the entire sync
       }
+
+      // Hourly Heartbeats: Write status for attractions without recent data during park operating hours
+      // This ensures we have actual data points for closed/down attractions instead of projections
+      try {
+        const heartbeatCount = await this.writeHourlyHeartbeats();
+        if (heartbeatCount > 0) {
+          this.logger.log(`💓 Wrote ${heartbeatCount} hourly heartbeats`);
+        }
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Hourly heartbeats failed: ${errorMessage}`);
+        // Don't throw - heartbeat failure shouldn't fail the entire sync
+      }
     } catch (error) {
       this.logger.error("❌ Wait times sync failed", error);
       throw error; // Bull will retry
@@ -1149,5 +1163,139 @@ export class WaitTimesProcessor {
         error instanceof Error ? error.message : String(error);
       this.logger.warn(`Failed to track downtime: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Write hourly heartbeats for attractions missing data during park operating hours
+   *
+   * This ensures we have actual data points (status=CLOSED/DOWN) for attractions
+   * that weren't synced during the last hour, preventing false history projections.
+   *
+   * Logic:
+   * 1. For each park that is currently operating
+   * 2. Find all attractions without queue data in the last 60 minutes
+   * 3. Write a CLOSED heartbeat for each
+   *
+   * This runs after the normal sync to catch attractions that:
+   * - Were not in the live API response (closed/down)
+   * - Weren't synced due to API issues
+   */
+  private async writeHourlyHeartbeats(): Promise<number> {
+    const heartbeatCount = { total: 0 };
+
+    try {
+      // Get all parks
+      const parks = await this.parksService.findAll();
+
+      for (const park of parks) {
+        try {
+          // Check if park is currently operating
+          const todaySchedule = await this.parksService.getTodaySchedule(
+            park.id,
+          );
+          const operatingSchedule = todaySchedule.find(
+            (s) => s.scheduleType === "OPERATING" && s.openingTime,
+          );
+
+          if (!operatingSchedule?.openingTime) {
+            // Park not operating today - skip
+            continue;
+          }
+
+          const now = new Date();
+          const openingTime = new Date(operatingSchedule.openingTime);
+          const closingTime = operatingSchedule.closingTime
+            ? new Date(operatingSchedule.closingTime)
+            : null;
+
+          // Check if we're within operating hours
+          if (now < openingTime) {
+            // Park hasn't opened yet - skip
+            continue;
+          }
+          if (closingTime && now > closingTime) {
+            // Park has closed - skip
+            continue;
+          }
+
+          // Park is currently operating - find attractions without recent data
+          const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+          // Get all attractions for this park
+          const attractions = await this.attractionsService
+            .getRepository()
+            .find({
+              where: { parkId: park.id },
+              select: ["id", "name", "externalId"],
+            });
+
+          if (attractions.length === 0) {
+            continue;
+          }
+
+          // Get attractions that have data in the last hour
+          const recentDataResult = await this.queueDataRepository
+            .createQueryBuilder("qd")
+            .select("DISTINCT qd.attractionId", "attractionId")
+            .where("qd.attractionId IN (:...attractionIds)", {
+              attractionIds: attractions.map((a) => a.id),
+            })
+            .andWhere("qd.timestamp >= :oneHourAgo", { oneHourAgo })
+            .getRawMany();
+
+          const attractionsWithRecentData = new Set(
+            recentDataResult.map((r) => r.attractionId),
+          );
+
+          // Write heartbeats for attractions WITHOUT recent data
+          for (const attraction of attractions) {
+            if (attractionsWithRecentData.has(attraction.id)) {
+              continue; // Has recent data, no heartbeat needed
+            }
+
+            try {
+              // Write a CLOSED heartbeat
+              const heartbeatData: Partial<QueueData> = {
+                attractionId: attraction.id,
+                queueType: QueueType.STANDBY,
+                status: LiveStatus.CLOSED,
+                waitTime: 0,
+                lastUpdated: now,
+              };
+
+              const queueEntry = this.queueDataRepository.create(heartbeatData);
+              await this.queueDataRepository.save(queueEntry);
+              heartbeatCount.total++;
+            } catch (error) {
+              // Log but continue
+              const errorMessage =
+                error instanceof Error ? error.message : String(error);
+              this.logger.warn(
+                `Failed to write heartbeat for ${attraction.name}: ${errorMessage}`,
+              );
+            }
+          }
+
+          if (heartbeatCount.total > 0) {
+            this.logger.debug(
+              `Wrote ${heartbeatCount.total} heartbeats for ${park.name}`,
+            );
+          }
+        } catch (error) {
+          // Log but continue with next park
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.warn(
+            `Failed to process heartbeats for ${park.name}: ${errorMessage}`,
+          );
+        }
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to write hourly heartbeats: ${errorMessage}`);
+    }
+
+    return heartbeatCount.total;
   }
 }
