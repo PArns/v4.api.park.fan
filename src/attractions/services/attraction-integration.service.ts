@@ -63,7 +63,7 @@ export class AttractionIntegrationService {
     private readonly scheduleEntryRepository: Repository<ScheduleEntry>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
-  ) {}
+  ) { }
 
   /**
    * Build integrated attraction response with live data
@@ -663,9 +663,9 @@ export class AttractionIntegrationService {
       // Debug logging
       this.logger.log(
         `History query for attraction ${attractionId}: ` +
-          `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
-          `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
-          `days=${days}, timezone=${timezone}`,
+        `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
+        `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
+        `days=${days}, timezone=${timezone}`,
       );
 
       // Batch fetch schedules for all days in range
@@ -778,12 +778,12 @@ export class AttractionIntegrationService {
       const distinctDates = Array.from(queueDataByDate.keys()).sort();
       console.log(
         `[DEBUG] History query for ${attractionId}: ` +
-          `SQL returned ${queueDataResults.length} hour groups, ` +
-          `${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+        `SQL returned ${queueDataResults.length} hour groups, ` +
+        `${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
       );
       this.logger.log(
         `History query returned ${queueDataResults.length} hour groups, ` +
-          `covering ${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
+        `covering ${queueDataByDate.size} distinct dates: ${distinctDates.join(", ")}`,
       );
 
       // Create down count map
@@ -827,21 +827,21 @@ export class AttractionIntegrationService {
             const totalAvgWait =
               totalSamples > 0
                 ? dayQueueData.reduce(
-                    (sum, h) => sum + h.avgWait * h.sampleCount,
-                    0,
-                  ) / totalSamples
+                  (sum, h) => sum + h.avgWait * h.sampleCount,
+                  0,
+                ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
-                  dayQueueData.length; // Fallback if sample counts missing
+                dayQueueData.length; // Fallback if sample counts missing
 
             // Get P90 baseline (average of hourly P90s, weighted by sample count)
             const avgP90 =
               totalSamples > 0
                 ? dayQueueData.reduce(
-                    (sum, h) => sum + h.p90 * h.sampleCount,
-                    0,
-                  ) / totalSamples
+                  (sum, h) => sum + h.p90 * h.sampleCount,
+                  0,
+                ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
-                  dayQueueData.length; // Fallback if sample counts missing
+                dayQueueData.length; // Fallback if sample counts missing
 
             // Use analytics service to get crowd level
             if (avgP90 > 0) {
@@ -899,7 +899,7 @@ export class AttractionIntegrationService {
             // Debug logging
             this.logger.debug(
               `Schedule for ${dateStr}: openingTime UTC=${schedule.openingTime.toISOString()}, ` +
-                `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
+              `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
             );
 
             // Extract closing hour in park timezone
@@ -1020,6 +1020,41 @@ export class AttractionIntegrationService {
 
           // Sort by hour
           hourlyP90.sort((a, b) => a.hour.localeCompare(b.hour));
+
+          // For today: Add current hour with current wait time
+          // This ensures real-time data is visible in the chart
+          if (dateStr === todayStr) {
+            const now = new Date();
+            const currentHourInTimezone = parseInt(
+              formatInTimeZone(now, timezone, "HH"),
+              10,
+            );
+            const currentHourStr = `${currentHourInTimezone.toString().padStart(2, "0")}:00`;
+
+            // Check if we already have data for current hour
+            const hasCurrentHour = hourlyP90.some(
+              (h) => h.hour === currentHourStr,
+            );
+
+            if (!hasCurrentHour) {
+              // Get the latest available data point (from hourDataMap or last entry)
+              let currentValue = 0;
+
+              if (hourDataMap.size > 0) {
+                // Use the most recent hour's data
+                const latestHour = Math.max(...Array.from(hourDataMap.keys()));
+                currentValue = hourDataMap.get(latestHour)?.p90 || 0;
+              }
+
+              hourlyP90.push({
+                hour: currentHourStr,
+                value: roundToNearest5Minutes(currentValue),
+              });
+
+              // Re-sort after adding current hour
+              hourlyP90.sort((a, b) => a.hour.localeCompare(b.hour));
+            }
+          }
 
           history.push({
             date: dateStr,
