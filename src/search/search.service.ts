@@ -628,11 +628,13 @@ export class SearchService implements OnModuleInit {
           // Exact or Fuzzy on City
           qb.where("park.city ILIKE :query", { query: `%${query}%` })
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
+            .orWhere("levenshtein(LOWER(park.city), LOWER(:query)) <= 3")
             .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
 
             // Exact or Fuzzy on Country
             .orWhere("park.country ILIKE :query")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
+            .orWhere("levenshtein(LOWER(park.country), LOWER(:query)) <= 3")
             .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
         }),
       )
