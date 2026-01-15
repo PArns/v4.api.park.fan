@@ -4,10 +4,10 @@ import { CrowdLevel } from "../../common/types";
 export class SearchResultItemDto {
   @ApiProperty({
     description: "Entity type",
-    enum: ["park", "attraction", "show", "restaurant"],
+    enum: ["park", "attraction", "show", "restaurant", "location"],
     example: "park",
   })
-  type: "park" | "attraction" | "show" | "restaurant";
+  type: "park" | "attraction" | "show" | "restaurant" | "location";
 
   @ApiProperty({ description: "Entity ID", example: "uuid-here" })
   id: string;
@@ -164,6 +164,7 @@ export class SearchResultDto {
       attraction: { returned: 5, total: 156 },
       show: { returned: 3, total: 3 },
       restaurant: { returned: 0, total: 0 },
+      location: { returned: 2, total: 2 },
     },
   })
   counts: {
@@ -171,5 +172,6 @@ export class SearchResultDto {
     attraction: { returned: number; total: number };
     show: { returned: number; total: number };
     restaurant: { returned: number; total: number };
+    location: { returned: number; total: number };
   };
 }

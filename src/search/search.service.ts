@@ -11,7 +11,12 @@ import {
 } from "../parks/entities/schedule-entry.entity";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto, SearchResultItemDto } from "./dto/search-result.dto";
-import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
+import {
+  buildParkUrl,
+  buildAttractionUrl,
+  buildCountryDiscoveryUrl,
+  buildCityDiscoveryUrl,
+} from "../common/utils/url.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -104,6 +109,7 @@ export class SearchService implements OnModuleInit {
           attraction: { returned: 0, total: 0 },
           show: { returned: 0, total: 0 },
           restaurant: { returned: 0, total: 0 },
+          location: { returned: 0, total: 0 },
         } as SearchCounts,
       };
     }
@@ -122,7 +128,7 @@ export class SearchService implements OnModuleInit {
     const searchTypes =
       type && type.length > 0
         ? type
-        : ["park", "attraction", "show", "restaurant"];
+        : ["park", "attraction", "show", "restaurant", "location"];
 
     const results: SearchResultItemDto[] = [];
     const counts: SearchCounts = {
@@ -130,6 +136,7 @@ export class SearchService implements OnModuleInit {
       attraction: { returned: 0, total: 0 },
       show: { returned: 0, total: 0 },
       restaurant: { returned: 0, total: 0 },
+      location: { returned: 0, total: 0 },
     };
 
     // Search parks
@@ -176,6 +183,16 @@ export class SearchService implements OnModuleInit {
       counts.restaurant = {
         returned: enrichedRestaurants.length,
         total: restaurants.length,
+      };
+    }
+
+    // Search locations
+    if (searchTypes.includes("location")) {
+      const locations = await this.searchLocations(q, limit);
+      results.push(...locations);
+      counts.location = {
+        returned: locations.length,
+        total: locations.length,
       };
     }
 
@@ -561,6 +578,136 @@ export class SearchService implements OnModuleInit {
       .setParameter("query", query)
       .limit(limit)
       .getMany();
+  }
+
+  /**
+   * Search distinct cities and countries
+   */
+  private async searchLocations(
+    query: string,
+    limit: number,
+  ): Promise<SearchResultItemDto[]> {
+    // We search for parks that match the location query, then aggregate distinct locations
+    // This is a bit inefficient but leverages existing indices on parks table
+    // A better approach would be to have a materialized view of locations, but distinct query works for now.
+
+    const properties = [
+      "park.continent",
+      "park.continentSlug",
+      "park.country",
+      "park.countrySlug",
+      "park.countryCode",
+      "park.city",
+      "park.citySlug",
+    ];
+
+    const parks = await this.parkRepository
+      .createQueryBuilder("park")
+      .select(properties)
+      .distinct(true) // Ensure distinct rows
+      .where(
+        new Brackets((qb) => {
+          // Exact or Fuzzy on City
+          qb.where("park.city ILIKE :query", { query: `%${query}%` })
+            .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
+            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
+
+            // Exact or Fuzzy on Country
+            .orWhere("park.country ILIKE :query")
+            .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
+            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
+        }),
+      )
+      .limit(limit * 2) // Fetch more to allow for filtering after distinct logic if needed
+      .getRawMany();
+
+    // Map to result items and deduplicate based on unique location (City+Country or just Country)
+    const results: SearchResultItemDto[] = [];
+    const seenLocations = new Set<string>();
+
+    for (const p of parks) {
+      // Check City Match
+      // Ideally we should score them, but for now if it matches query or is similar, we check
+      // For simplicity, we just return the valid locations found in the returned rows
+
+      // Process City
+      if (p.park_city && p.park_citySlug) {
+        // Simple client-side re-check to see if this city actually matches (since OR condition returns rows matching either city OR country)
+        const cityMatch =
+          p.park_city.toLowerCase().includes(query.toLowerCase()) ||
+          this.isSimilar(p.park_city, query);
+
+        if (cityMatch) {
+          const key = `city:${p.park_citySlug}`;
+          if (!seenLocations.has(key)) {
+            seenLocations.add(key);
+            results.push({
+              type: "location",
+              id: key,
+              name: p.park_city,
+              slug: p.park_citySlug,
+              url: buildCityDiscoveryUrl(
+                p.park_continentSlug,
+                p.park_countrySlug,
+                p.park_citySlug,
+              ),
+              continent: p.park_continent,
+              country: p.park_country,
+              countryCode: p.park_countryCode,
+              city: p.park_city,
+              status: null,
+              load: null,
+            });
+          }
+        }
+      }
+
+      // Process Country
+      if (p.park_country && p.park_countrySlug) {
+        const countryMatch =
+          p.park_country.toLowerCase().includes(query.toLowerCase()) ||
+          this.isSimilar(p.park_country, query);
+
+        if (countryMatch) {
+          const key = `country:${p.park_countrySlug}`;
+          if (!seenLocations.has(key)) {
+            seenLocations.add(key);
+            results.push({
+              type: "location",
+              id: key,
+              name: p.park_country,
+              slug: p.park_countrySlug,
+              url: buildCountryDiscoveryUrl(
+                p.park_continentSlug,
+                p.park_countrySlug,
+              ),
+              continent: p.park_continent,
+              country: p.park_country,
+              countryCode: p.park_countryCode,
+              status: null,
+              load: null,
+            });
+          }
+        }
+      }
+    }
+
+    return results.slice(0, limit);
+  }
+
+  /**
+   * Helper for in-memory Similarity check (since we select many rows, we verify which field matched)
+   */
+  private isSimilar(text: string, query: string): boolean {
+    if (!text) return false;
+    // We can't easily access pg_trgm functions here without DB query, so we use a simple JS check
+    // or rely on the fact that the DB returned it.
+    // Given the DB query: WHERE city LIKE ... OR country LIKE ...
+    // If a row is returned, ONE of them matched.
+    // If we want to know WHICH one, strictly speaking we should check.
+    // For now, simple includes is OK, or we assume if it's in the row it's a candidate.
+    // Let's rely on simple includes for now to distinguish if it was the city or country that matched.
+    return text.toLowerCase().includes(query.toLowerCase());
   }
 
   /**

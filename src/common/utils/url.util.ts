@@ -108,3 +108,37 @@ export function buildRestaurantUrl(
   const basePath = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
   return `${basePath}/restaurants/${restaurant.slug}`;
 }
+
+/**
+ * Build discovery URL for a country
+ *
+ * Example: `/discovery/europe/germany`
+ *
+ * @param continentSlug - Continent slug
+ * @param countrySlug - Country slug
+ * @returns Discovery URL
+ */
+export function buildCountryDiscoveryUrl(
+  continentSlug: string,
+  countrySlug: string,
+): string {
+  return `/discovery/${continentSlug}/${countrySlug}`;
+}
+
+/**
+ * Build discovery URL for a city
+ *
+ * Example: `/discovery/europe/germany/bruehl`
+ *
+ * @param continentSlug - Continent slug
+ * @param countrySlug - Country slug
+ * @param citySlug - City slug
+ * @returns Discovery URL
+ */
+export function buildCityDiscoveryUrl(
+  continentSlug: string,
+  countrySlug: string,
+  citySlug: string,
+): string {
+  return `/discovery/${continentSlug}/${countrySlug}/${citySlug}`;
+}
