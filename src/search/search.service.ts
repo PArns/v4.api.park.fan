@@ -475,6 +475,8 @@ export class SearchService implements OnModuleInit {
               { normalizedQuery: `%${normalizedQuery}%` },
             )
             .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
+            .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
+            .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
             .orWhere("similarity(LOWER(show.name), LOWER(:query)) > 0.1")
             .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
             .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
@@ -558,6 +560,8 @@ export class SearchService implements OnModuleInit {
               { normalizedQuery: `%${normalizedQuery}%` },
             )
             .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
+            .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
+            .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
             .orWhere("similarity(LOWER(restaurant.name), LOWER(:query)) > 0.1")
             .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
             .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
