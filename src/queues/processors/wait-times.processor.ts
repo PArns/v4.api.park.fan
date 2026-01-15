@@ -75,7 +75,7 @@ export class WaitTimesProcessor {
     private readonly cacheWarmupService: CacheWarmupService,
     private readonly predictionDeviationService: PredictionDeviationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   @Process("fetch-wait-times")
   async handleSyncWaitTimes(_job: Job): Promise<void> {
@@ -646,8 +646,8 @@ export class WaitTimesProcessor {
             const percent = Math.round(((parkIdx + 1) / totalParks) * 100);
             this.logger.log(
               `Progress: ${parkIdx + 1}/${totalParks} (${percent}%) - ` +
-              `${openParksCount} parks - ` +
-              `${totalAttractions} attractions processed`,
+                `${openParksCount} parks - ` +
+                `${totalAttractions} attractions processed`,
             );
           }
         } catch (error) {
@@ -675,9 +675,10 @@ export class WaitTimesProcessor {
         `🔄 Updated: ${savedAttractions} attractions, ${savedShows} shows, ${savedRestaurants} restaurants (delta-based)`,
       );
       this.logger.log(
-        `📡 Sources: ${Object.entries(sourceStats)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(", ") || "none"
+        `📡 Sources: ${
+          Object.entries(sourceStats)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ") || "none"
         }`,
       );
 
@@ -1218,13 +1219,14 @@ export class WaitTimesProcessor {
           }
 
           // Park is currently operating - find attractions without recent data
-          const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
           // Get all attractions for this park
-          const attractions = await this.attractionsService.getRepository().find({
-            where: { parkId: park.id },
-            select: ["id", "name", "externalId"],
-          });
+          const attractions = await this.attractionsService
+            .getRepository()
+            .find({
+              where: { parkId: park.id },
+              select: ["id", "name", "externalId"],
+            });
 
           if (attractions.length === 0) {
             continue;

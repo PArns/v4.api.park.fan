@@ -51,6 +51,9 @@ export class SearchService implements OnModuleInit {
       await this.parkRepository.query(
         "CREATE EXTENSION IF NOT EXISTS pg_trgm;",
       );
+      await this.parkRepository.query(
+        "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;",
+      );
 
       // Create indices concurrently if possible, but safe here without valid concurrently in transaction block usually
       // Park indices
@@ -251,10 +254,12 @@ export class SearchService implements OnModuleInit {
                 "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // 3. Fuzzy Match
-              .orWhere("similarity(park.name, :query) > 0.3")
-              .orWhere("similarity(park.city, :query) > 0.3")
-              .orWhere("similarity(park.country, :query) > 0.3");
+              // 3. Phonetic Match (Double Metaphone)
+              .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
+              // 4. Fuzzy Match (Case Insensitive)
+              .orWhere("similarity(LOWER(park.name), LOWER(:query)) > 0.3")
+              .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
+              .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
           }),
         )
         .orderBy(
@@ -263,18 +268,20 @@ export class SearchService implements OnModuleInit {
           // 1. Normalized Exact Match (e.g. "F.L.Y." -> "fly" == "fly")
           // 2. Exact City Match (e.g. "Orlando")
           // 3. Prefix Match (e.g. "Flying..." starts with "fly")
-          // 4. Others
+          // 4. Phonetic Match
+          // 5. Others
           `CASE
           WHEN LOWER(park.name) = LOWER(:exactQuery) THEN 0
           WHEN REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
           WHEN LOWER(park.city) = LOWER(:exactQuery) THEN 2
           WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 3
-          ELSE 4
+          WHEN dmetaphone(park.name) = dmetaphone(:query) THEN 4
+          ELSE 5
         END`,
           "ASC",
         )
         // Secondary sort by similarity
-        .addOrderBy("similarity(park.name, :query)", "DESC")
+        .addOrderBy("similarity(LOWER(park.name), LOWER(:query))", "DESC")
         .setParameter("exactQuery", query)
         .setParameter("startsWith", `${query}%`)
         .setParameter("normalizedQueryExact", normalizedQuery)
@@ -351,12 +358,18 @@ export class SearchService implements OnModuleInit {
               .orWhere(
                 "REGEXP_REPLACE(attraction.landName, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               )
-              // Fuzzy Matches
-              .orWhere("similarity(attraction.name, :query) > 0.3")
-              .orWhere("similarity(attraction.landName, :query) > 0.3")
+              // Phonetic Match
+              .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
+              // Fuzzy Matches (Case Insensitive)
+              .orWhere(
+                "similarity(LOWER(attraction.name), LOWER(:query)) > 0.3",
+              )
+              .orWhere(
+                "similarity(LOWER(attraction.landName), LOWER(:query)) > 0.3",
+              )
               // Parent Park Location Fuzzy Matches
-              .orWhere("similarity(park.city, :query) > 0.3")
-              .orWhere("similarity(park.country, :query) > 0.3");
+              .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
+              .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
           }),
         )
         .orderBy(
@@ -364,13 +377,17 @@ export class SearchService implements OnModuleInit {
             WHEN LOWER(attraction.name) = LOWER(:exactQuery) THEN 0
             WHEN REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
             WHEN LOWER(attraction.name) LIKE LOWER(:startsWith) THEN 2
-            ELSE 3
+            WHEN dmetaphone(attraction.name) = dmetaphone(:query) THEN 3
+            ELSE 4
           END`,
           "ASC",
         )
-        .addOrderBy("similarity(attraction.name, :query)", "DESC")
+        .addOrderBy("similarity(LOWER(attraction.name), LOWER(:query))", "DESC")
         // Secondary sort: if searching for land, show land matches
-        .addOrderBy("similarity(attraction.landName, :query)", "DESC")
+        .addOrderBy(
+          "similarity(LOWER(attraction.landName), LOWER(:query))",
+          "DESC",
+        )
         .setParameter("exactQuery", query)
         .setParameter("startsWith", `${query}%`)
         .setParameter("normalizedQueryExact", normalizedQuery)
@@ -438,9 +455,10 @@ export class SearchService implements OnModuleInit {
               "REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
             )
-            .orWhere("similarity(show.name, :query) > 0.1")
-            .orWhere("similarity(park.city, :query) > 0.2")
-            .orWhere("similarity(park.country, :query) > 0.2");
+            .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
+            .orWhere("similarity(LOWER(show.name), LOWER(:query)) > 0.1")
+            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
+            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
         }),
       )
       .orderBy(
@@ -448,11 +466,12 @@ export class SearchService implements OnModuleInit {
           WHEN LOWER(show.name) = LOWER(:exactQuery) THEN 0
           WHEN REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
           WHEN LOWER(show.name) LIKE LOWER(:startsWith) THEN 2
-          ELSE 3
+          WHEN dmetaphone(show.name) = dmetaphone(:query) THEN 3
+          ELSE 4
         END`,
         "ASC",
       )
-      .addOrderBy("similarity(show.name, :query)", "DESC")
+      .addOrderBy("similarity(LOWER(show.name), LOWER(:query))", "DESC")
       .setParameter("exactQuery", query)
       .setParameter("startsWith", `${query}%`)
       .setParameter("normalizedQueryExact", normalizedQuery)
@@ -519,9 +538,10 @@ export class SearchService implements OnModuleInit {
               "REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
             )
-            .orWhere("similarity(restaurant.name, :query) > 0.1")
-            .orWhere("similarity(park.city, :query) > 0.2")
-            .orWhere("similarity(park.country, :query) > 0.2");
+            .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
+            .orWhere("similarity(LOWER(restaurant.name), LOWER(:query)) > 0.1")
+            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
+            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
         }),
       )
       .orderBy(
@@ -529,11 +549,12 @@ export class SearchService implements OnModuleInit {
           WHEN LOWER(restaurant.name) = LOWER(:exactQuery) THEN 0
           WHEN REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
           WHEN LOWER(restaurant.name) LIKE LOWER(:startsWith) THEN 2
-          ELSE 3
+          WHEN dmetaphone(restaurant.name) = dmetaphone(:query) THEN 3
+          ELSE 4
         END`,
         "ASC",
       )
-      .addOrderBy("similarity(restaurant.name, :query)", "DESC")
+      .addOrderBy("similarity(LOWER(restaurant.name), LOWER(:query))", "DESC")
       .setParameter("exactQuery", query)
       .setParameter("startsWith", `${query}%`)
       .setParameter("normalizedQueryExact", normalizedQuery)
