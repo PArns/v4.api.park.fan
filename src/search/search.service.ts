@@ -273,6 +273,8 @@ export class SearchService implements OnModuleInit {
               )
               // 3. Phonetic Match (Double Metaphone)
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
+              .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
+              .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
               // 4. Fuzzy Match (Case Insensitive)
               .orWhere("similarity(LOWER(park.name), LOWER(:query)) > 0.3")
               .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
