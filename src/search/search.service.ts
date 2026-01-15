@@ -275,7 +275,9 @@ export class SearchService implements OnModuleInit {
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
               .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
               .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-              // 4. Fuzzy Match (Case Insensitive)
+              // 4. Levenshtein Distance (typo tolerance)
+              .orWhere("levenshtein(LOWER(park.name), LOWER(:query)) <= 3")
+              // 5. Fuzzy Match (Case Insensitive)
               .orWhere("similarity(LOWER(park.name), LOWER(:query)) > 0.3")
               .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
               .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
@@ -379,6 +381,10 @@ export class SearchService implements OnModuleInit {
               )
               // Phonetic Match
               .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
+              // Levenshtein Distance (typo tolerance)
+              .orWhere(
+                "levenshtein(LOWER(attraction.name), LOWER(:query)) <= 3",
+              )
               // Fuzzy Matches (Case Insensitive)
               .orWhere(
                 "similarity(LOWER(attraction.name), LOWER(:query)) > 0.3",
@@ -477,6 +483,9 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
+            // Levenshtein Distance (typo tolerance)
+            .orWhere("levenshtein(LOWER(show.name), LOWER(:query)) <= 3")
+            // Fuzzy Match (trigram similarity)
             .orWhere("similarity(LOWER(show.name), LOWER(:query)) > 0.1")
             .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
             .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
@@ -562,6 +571,9 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
+            // Levenshtein Distance (typo tolerance)
+            .orWhere("levenshtein(LOWER(restaurant.name), LOWER(:query)) <= 3")
+            // Fuzzy Match (trigram similarity)
             .orWhere("similarity(LOWER(restaurant.name), LOWER(:query)) > 0.1")
             .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
             .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
