@@ -72,7 +72,7 @@ describe("ParksController (E2E)", () => {
 
     it("should return all parks when parks exist", async () => {
       // Seed test data
-      const { parks } = await seedMinimalTestData(app);
+      await seedMinimalTestData(app);
 
       const response = await request(app.getHttpServer())
         .get("/v1/parks")

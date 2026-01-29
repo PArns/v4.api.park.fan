@@ -22,6 +22,22 @@ export class WeatherForecastItemDto {
 
   @ApiProperty({ description: "Wind speed (km/h)", nullable: true })
   windSpeed: number | null;
+
+  @ApiProperty({
+    description: "Is this date a public holiday?",
+    required: false,
+  })
+  isHoliday?: boolean;
+
+  @ApiProperty({
+    description:
+      "Is this date a school holiday (including weekend extensions)?",
+    required: false,
+  })
+  isSchoolHoliday?: boolean;
+
+  @ApiProperty({ description: "Is this date a bridge day?", required: false })
+  isBridgeDay?: boolean;
 }
 
 export class PredictionRequestDto {
@@ -72,6 +88,8 @@ export class PredictionRequestDto {
     downtimeCache?: Record<string, number>; // attractionId -> downtime minutes
     queueData?: Record<string, QueueDataInfo>; // attractionId -> queue info
     isBridgeDay?: Record<string, boolean>; // parkId -> is bridge day?
+    isSchoolHoliday?: Record<string, boolean>; // parkId -> is school holiday?
+    parkHasSchedule?: Record<string, boolean>; // parkId -> has schedule?
   };
 }
 

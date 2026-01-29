@@ -280,7 +280,11 @@ export class CalendarService {
     const extendedHolidays = [...holidays];
 
     for (const h of extendedHolidays) {
-      const hDateStr = formatInParkTimezone(h.date, park.timezone);
+      // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
+      const normalizedDate = new Date(h.date);
+      normalizedDate.setUTCHours(12, 0, 0, 0);
+      const hDateStr = formatInParkTimezone(normalizedDate, park.timezone);
+
       // Use normalized region codes for consistent matching
       const normalizedParkRegion = normalizeRegionCode(park.regionCode);
       const normalizedHolidayRegion = normalizeRegionCode(h.region);
@@ -293,23 +297,25 @@ export class CalendarService {
       if (isLocal) {
         // Add to holidayMap with type information
         const existing = holidayMap.get(hDateStr);
-        const isPublicHoliday =
-          h.holidayType === "public" || h.holidayType === "bank";
+        const hType = h.holidayType;
 
-        if (!existing) {
+        if (!existing || typeof existing === "string") {
           holidayMap.set(hDateStr, {
             name: h.localName || h.name || "",
-            type: h.holidayType,
+            type: hType,
+            allTypes: [hType],
           });
-        } else if (isPublicHoliday) {
-          // Prefer public holidays over school holidays
-          const existingType =
-            typeof existing === "string" ? "public" : existing.type;
-          if (existingType === "school") {
-            holidayMap.set(hDateStr, {
-              name: h.localName || h.name || "",
-              type: h.holidayType,
-            });
+        } else {
+          // Aggregate types
+          if (!existing.allTypes) existing.allTypes = [existing.type];
+          if (!existing.allTypes.includes(hType)) {
+            existing.allTypes.push(hType);
+          }
+
+          // Prioritize public holidays for the main entry (useful for bridge day logic)
+          if (hType === "public" || hType === "bank") {
+            existing.name = h.localName || h.name || "";
+            existing.type = hType;
           }
         }
       }
@@ -326,9 +332,11 @@ export class CalendarService {
     const influencingHolidays: InfluencingHoliday[] = [];
     const seenEvents = new Set<string>();
 
-    const dayHolidays = holidays.filter(
-      (h) => formatInParkTimezone(h.date, park.timezone) === dateStr,
-    );
+    const dayHolidays = holidays.filter((h) => {
+      const normalizedDate = new Date(h.date);
+      normalizedDate.setUTCHours(12, 0, 0, 0);
+      return formatInParkTimezone(normalizedDate, park.timezone) === dateStr;
+    });
 
     for (const h of dayHolidays) {
       const type = h.holidayType === "school" ? "school-holiday" : "holiday";

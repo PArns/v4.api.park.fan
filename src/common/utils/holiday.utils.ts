@@ -1,5 +1,6 @@
 import { formatInParkTimezone } from "./date.util";
 import { formatInTimeZone } from "date-fns-tz";
+import { addDays } from "date-fns";
 
 /**
  * Holiday Calculation Utilities
@@ -35,6 +36,8 @@ export type HolidayType = "public" | "school" | "observance" | "bank";
 export interface HolidayEntry {
   name: string;
   type: HolidayType;
+  // Support for multiple types on the same day (e.g., Public + School)
+  allTypes?: HolidayType[];
 }
 
 /**
@@ -63,57 +66,80 @@ export function calculateHolidayInfo(
   let holidayName: string | null = null;
   let holidayType: HolidayType | null = null;
 
-  if (holidayEntry) {
-    if (typeof holidayEntry === "string") {
-      holidayName = holidayEntry;
-      holidayType = "public"; // Default to public if only string provided
-    } else {
-      holidayName = holidayEntry.name;
-      holidayType = holidayEntry.type;
-    }
-  }
-
-  let isHoliday = !!holidayName;
-
   // Use formatInTimeZone to get day of week in target timezone (1=Mon, ..., 7=Sun)
   // We convert to 0-6 (0=Sun, 1=Mon, ..., 6=Sat) to match JS getDay()
   const dayOfWeekIso = Number(formatInTimeZone(date, timezone, "i"));
   const dayOfWeek = dayOfWeekIso === 7 ? 0 : dayOfWeekIso;
 
-  // Check if weekend after Friday holiday
-  // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
-  // Wenn Freitag noch Ferien sind, soll das Wochenende auch noch als Ferien markiert werden
-  // WICHTIG: Weekend-Extension gilt NUR für Schulferien, nicht für öffentliche Feiertage!
-  if (!isHoliday && (dayOfWeek === 0 || dayOfWeek === 6)) {
-    // Weekend (0 = Sunday, 6 = Saturday)
-    // Check if Friday (5) is a SCHOOL holiday (not public holiday)
-    const fridayDate = new Date(date);
-    // For Saturday: go back 1 day to get Friday
-    // For Sunday: go back 2 days to get Friday
-    const daysBack = dayOfWeek === 6 ? 1 : 2;
-    fridayDate.setDate(date.getDate() - daysBack);
-    const fridayDateStr = formatInParkTimezone(fridayDate, timezone);
+  // Helper to check if a day in the map is a school holiday
+  const isSchoolHolidayInMap = (dateString: string): boolean => {
+    const entry = holidayMap.get(dateString);
+    if (!entry) return false;
+    if (typeof entry === "string") return false; // String default is public
+    return (
+      entry.type === "school" || (entry.allTypes?.includes("school") ?? false)
+    );
+  };
 
-    // Only mark weekend as holiday if Friday is a SCHOOL holiday
-    const fridayHoliday = holidayMap.get(fridayDateStr);
-    if (fridayHoliday) {
-      // Check if it's a school holiday - only extend school holidays to weekends
-      const fridayType =
-        typeof fridayHoliday === "string" ? "public" : fridayHoliday.type;
+  const isPublicHolidayInMap = (dateString: string): boolean => {
+    const entry = holidayMap.get(dateString);
+    if (!entry) return false;
+    if (typeof entry === "string") return true;
+    return (
+      entry.type === "public" ||
+      entry.type === "bank" ||
+      (entry.allTypes?.some((t) => t === "public" || t === "bank") ?? false)
+    );
+  };
 
-      if (fridayType === "school") {
-        // If Friday is a school holiday, extend to weekend
-        isHoliday = true;
-        if (typeof fridayHoliday === "string") {
-          holidayName = fridayHoliday;
-          holidayType = "school";
-        } else {
-          holidayName = fridayHoliday.name;
-          holidayType = fridayHoliday.type;
-        }
+  const currentIsPublic = isPublicHolidayInMap(dateStr);
+  const currentIsSchool = isSchoolHolidayInMap(dateStr);
+
+  // Initial determination
+  holidayName = holidayEntry
+    ? typeof holidayEntry === "string"
+      ? holidayEntry
+      : holidayEntry.name
+    : null;
+
+  // Weekend Extension Logic (Bidirectional)
+  // School holidays extend to weekends if:
+  // - The PRECEDING Friday is a school holiday
+  // - The FOLLOWING Monday is a school holiday
+  let isWeekendBonus = false;
+  if (!currentIsSchool && (dayOfWeek === 0 || dayOfWeek === 6)) {
+    // 1. Check Friday backward (from Sat or Sun)
+    const daysBackToFriday = dayOfWeek === 6 ? 1 : 2;
+    const fridayDate = addDays(date, -daysBackToFriday);
+    const fridayStr = formatInParkTimezone(fridayDate, timezone);
+
+    // 2. Check Monday forward (from Sat or Sun)
+    const daysForwardToMonday = dayOfWeek === 6 ? 2 : 1;
+    const mondayDate = addDays(date, daysForwardToMonday);
+    const mondayStr = formatInParkTimezone(mondayDate, timezone);
+
+    if (isSchoolHolidayInMap(fridayStr) || isSchoolHolidayInMap(mondayStr)) {
+      isWeekendBonus = true;
+      // Use name from Friday or Monday if available
+      const sourceEntry =
+        holidayMap.get(fridayStr) || holidayMap.get(mondayStr);
+      if (!holidayName && sourceEntry) {
+        holidayName =
+          typeof sourceEntry === "string" ? sourceEntry : sourceEntry.name;
       }
-      // Public holidays do NOT extend to weekends - weekend after Christmas is just a normal weekend
     }
+  }
+
+  const isPublicHoliday = currentIsPublic;
+  const isSchoolHoliday = currentIsSchool || isWeekendBonus;
+  const isHoliday = isPublicHoliday || isSchoolHoliday;
+
+  // For backward compatibility: single holidayType
+  // Prioritize public over school if both exist
+  if (isPublicHoliday) {
+    holidayType = "public";
+  } else if (isSchoolHoliday) {
+    holidayType = "school";
   }
 
   // Check Bridge Day Logic
@@ -129,29 +155,29 @@ export function calculateHolidayInfo(
     entry: string | HolidayEntry | undefined,
   ): boolean => {
     if (!entry) return false;
-    if (typeof entry === "string") return true; // Default to public if only string
-    return entry.type === "public" || entry.type === "bank";
+    if (typeof entry === "string") return true;
+    return (
+      entry.type === "public" ||
+      entry.type === "bank" ||
+      (entry.allTypes?.some((t) => t === "public" || t === "bank") ?? false)
+    );
   };
 
   if (dayOfWeek === 5) {
     // Friday - check if Thursday is a public holiday
-    const prevDate = new Date(date);
-    prevDate.setDate(date.getDate() - 1);
+    const prevDate = addDays(date, -1);
     const prevDateStr = formatInParkTimezone(prevDate, timezone);
     if (checkIsPublicHoliday(holidayMap.get(prevDateStr))) isBridgeDay = true;
   } else if (dayOfWeek === 1) {
     // Monday - check if Tuesday is a public holiday
-    const nextDate = new Date(date);
-    nextDate.setDate(date.getDate() + 1);
+    const nextDate = addDays(date, 1);
     const nextDateStr = formatInParkTimezone(nextDate, timezone);
     if (checkIsPublicHoliday(holidayMap.get(nextDateStr))) isBridgeDay = true;
   } else if (dayOfWeek === 2) {
     // Tuesday - check if both Monday and Wednesday are public holidays
-    const prevDate = new Date(date);
-    prevDate.setDate(date.getDate() - 1);
+    const prevDate = addDays(date, -1);
     const prevDateStr = formatInParkTimezone(prevDate, timezone);
-    const nextDate = new Date(date);
-    nextDate.setDate(date.getDate() + 1);
+    const nextDate = addDays(date, 1);
     const nextDateStr = formatInParkTimezone(nextDate, timezone);
     if (
       checkIsPublicHoliday(holidayMap.get(prevDateStr)) &&
@@ -161,11 +187,9 @@ export function calculateHolidayInfo(
     }
   } else if (dayOfWeek === 3) {
     // Wednesday - check if both Tuesday and Thursday are public holidays
-    const prevDate = new Date(date);
-    prevDate.setDate(date.getDate() - 1);
+    const prevDate = addDays(date, -1);
     const prevDateStr = formatInParkTimezone(prevDate, timezone);
-    const nextDate = new Date(date);
-    nextDate.setDate(date.getDate() + 1);
+    const nextDate = addDays(date, 1);
     const nextDateStr = formatInParkTimezone(nextDate, timezone);
     if (
       checkIsPublicHoliday(holidayMap.get(prevDateStr)) &&
@@ -175,11 +199,9 @@ export function calculateHolidayInfo(
     }
   } else if (dayOfWeek === 4) {
     // Thursday - check if both Wednesday and Friday are public holidays
-    const prevDate = new Date(date);
-    prevDate.setDate(date.getDate() - 1);
+    const prevDate = addDays(date, -1);
     const prevDateStr = formatInParkTimezone(prevDate, timezone);
-    const nextDate = new Date(date);
-    nextDate.setDate(date.getDate() + 1);
+    const nextDate = addDays(date, 1);
     const nextDateStr = formatInParkTimezone(nextDate, timezone);
     if (
       checkIsPublicHoliday(holidayMap.get(prevDateStr)) &&
@@ -196,17 +218,13 @@ export function calculateHolidayInfo(
   // Note: "observance" holidays are typically not official public holidays,
   // but some observances (like Christmas Eve in some regions) should be treated as public holidays
   // For now, we only mark "public" and "bank" as public holidays
-  const isPublicHolidayFlag =
-    holidayType === "public" || holidayType === "bank";
-  const isSchoolHolidayFlag = holidayType === "school";
-
   return {
     isHoliday,
     holidayName,
     isBridgeDay: finalIsBridgeDay,
     holidayType,
-    isPublicHoliday: isPublicHolidayFlag,
-    isSchoolHoliday: isSchoolHolidayFlag,
+    isPublicHoliday,
+    isSchoolHoliday,
   };
 }
 

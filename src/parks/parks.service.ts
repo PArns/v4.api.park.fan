@@ -735,26 +735,35 @@ export class ParksService {
               normalizedHolidayRegion === normalizedParkRegion)
           ) {
             // Use park's timezone to determine the holiday date string
-            const dateStr = formatInParkTimezone(h.date, park.timezone);
+            // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
+            const normalizedDate = new Date(h.date);
+            normalizedDate.setUTCHours(12, 0, 0, 0);
+            const dateStr = formatInParkTimezone(normalizedDate, park.timezone);
+
             // If multiple holidays on same day, prefer public holidays over school holidays
             const existing = holidayMap.get(dateStr);
-            const isPublicHoliday =
-              h.holidayType === "public" || h.holidayType === "bank";
+            const hType = h.holidayType;
+
             if (!existing) {
               // Store as HolidayEntry to preserve type information for bridge day logic
               holidayMap.set(dateStr, {
                 name: h.localName || h.name || "",
-                type: h.holidayType,
+                type: hType,
+                allTypes: [hType],
               });
-            } else if (isPublicHoliday) {
-              // Prefer public holidays over school holidays if multiple exist
-              const existingType =
-                typeof existing === "string" ? "public" : existing.type;
-              if (existingType === "school") {
-                holidayMap.set(dateStr, {
-                  name: h.localName || h.name || "",
-                  type: h.holidayType,
-                });
+            } else {
+              if (typeof existing !== "string") {
+                // Aggregate types
+                if (!existing.allTypes) existing.allTypes = [existing.type];
+                if (!existing.allTypes.includes(hType)) {
+                  existing.allTypes.push(hType);
+                }
+
+                // Prioritize public holidays for the main entry
+                if (hType === "public" || hType === "bank") {
+                  existing.name = h.localName || h.name || "";
+                  existing.type = hType;
+                }
               }
             }
           }
@@ -896,26 +905,36 @@ export class ParksService {
         (normalizedParkRegion &&
           normalizedHolidayRegion === normalizedParkRegion)
       ) {
-        const d = formatInParkTimezone(h.date, park.timezone);
+        // Use park's timezone to determine the holiday date string
+        // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
+        const normalizedDate = new Date(h.date);
+        normalizedDate.setUTCHours(12, 0, 0, 0);
+        const d = formatInParkTimezone(normalizedDate, park.timezone);
+
         // If multiple holidays on same day, prefer public holidays over school holidays
         const existing = holidayMap.get(d);
-        const isPublicHoliday =
-          h.holidayType === "public" || h.holidayType === "bank";
+        const hType = h.holidayType;
+
         if (!existing) {
           // Store as HolidayEntry to preserve type information for bridge day logic
           holidayMap.set(d, {
             name: h.localName || h.name || "",
-            type: h.holidayType,
+            type: hType,
+            allTypes: [hType],
           });
-        } else if (isPublicHoliday) {
-          // Prefer public holidays over school holidays if multiple exist
-          const existingType =
-            typeof existing === "string" ? "public" : existing.type;
-          if (existingType === "school") {
-            holidayMap.set(d, {
-              name: h.localName || h.name || "",
-              type: h.holidayType,
-            });
+        } else {
+          if (typeof existing !== "string") {
+            // Aggregate types
+            if (!existing.allTypes) existing.allTypes = [existing.type];
+            if (!existing.allTypes.includes(hType)) {
+              existing.allTypes.push(hType);
+            }
+
+            // Prioritize public holidays for the main entry
+            if (hType === "public" || hType === "bank") {
+              existing.name = h.localName || h.name || "";
+              existing.type = hType;
+            }
           }
         }
       }

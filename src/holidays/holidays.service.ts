@@ -6,7 +6,10 @@ import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { formatInTimeZone } from "date-fns-tz";
+import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
+import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
 
 /**
@@ -239,8 +242,8 @@ export class HolidaysService {
     const holidaysToUpsert: HolidayInput[] = [];
 
     for (const entry of entries) {
-      const start = new Date(entry.startDate);
-      const end = new Date(entry.endDate);
+      const start = new Date(`${entry.startDate}T12:00:00Z`);
+      const end = new Date(`${entry.endDate}T12:00:00Z`);
       const current = new Date(start);
 
       while (current <= end) {
@@ -268,7 +271,7 @@ export class HolidaysService {
             regionsToCheck.length === 0 &&
             entry.regionalScope !== "National"
           ) {
-            current.setDate(current.getDate() + 1);
+            current.setUTCDate(current.getUTCDate() + 1);
             continue;
           }
 
@@ -295,7 +298,7 @@ export class HolidaysService {
             `Failed to process school holiday entry ${entry.id}: ${error}`,
           );
         }
-        current.setDate(current.getDate() + 1);
+        current.setUTCDate(current.getUTCDate() + 1);
       }
     }
 
@@ -378,9 +381,12 @@ export class HolidaysService {
     regionCode?: string,
     timezone?: string,
   ): Promise<boolean> {
-    const dateStr = timezone
-      ? formatInParkTimezone(date, timezone)
-      : date.toISOString().split("T")[0];
+    const effectiveTimezone =
+      timezone && timezone !== "UTC"
+        ? timezone
+        : getTimezoneForCountry(countryCode) || "UTC";
+
+    const dateStr = formatInParkTimezone(date, effectiveTimezone);
     const cacheKey = `holiday:check:${countryCode}:${regionCode || "national"}:${dateStr}`;
 
     const cached = await this.redis.get(cacheKey);
@@ -426,9 +432,12 @@ export class HolidaysService {
     regionCode?: string,
     timezone?: string,
   ): Promise<boolean> {
-    const dateStr = timezone
-      ? formatInParkTimezone(date, timezone)
-      : date.toISOString().split("T")[0];
+    const effectiveTimezone =
+      timezone && timezone !== "UTC"
+        ? timezone
+        : getTimezoneForCountry(countryCode) || "UTC";
+
+    const dateStr = formatInParkTimezone(date, effectiveTimezone);
     const cacheKey = `holiday:school:${countryCode}:${regionCode || "national"}:${dateStr}`;
 
     const cached = await this.redis.get(cacheKey);
@@ -463,6 +472,46 @@ export class HolidaysService {
   }
 
   /**
+   * Check if a date is a SCHOOL holiday, including weekend extensions.
+   * Logic: If Sat/Sun and adjacent Fri/Mon is a holiday, the whole weekend is.
+   */
+  async isEffectiveSchoolHoliday(
+    date: Date,
+    countryCode: string,
+    regionCode?: string,
+    timezone: string = "UTC",
+  ): Promise<boolean> {
+    // 1. Check if it's explicitly a school holiday
+    const isExplicit = await this.isSchoolHoliday(
+      date,
+      countryCode,
+      regionCode,
+      timezone,
+    );
+    if (isExplicit) return true;
+
+    // 2. Weekend Extension Logic
+    const dayOfWeek = Number(formatInTimeZone(date, timezone, "i"));
+    if (dayOfWeek === 6 || dayOfWeek === 7) {
+      // Saturday (6) or Sunday (7)
+      const daysBackToFriday = dayOfWeek === 6 ? 1 : 2;
+      const daysForwardToMonday = dayOfWeek === 6 ? 2 : 1;
+
+      const friday = addDays(date, -daysBackToFriday);
+      const monday = addDays(date, daysForwardToMonday);
+
+      const [isFridayHoliday, isMondayHoliday] = await Promise.all([
+        this.isSchoolHoliday(friday, countryCode, regionCode, timezone),
+        this.isSchoolHoliday(monday, countryCode, regionCode, timezone),
+      ]);
+
+      return isFridayHoliday || isMondayHoliday;
+    }
+
+    return false;
+  }
+
+  /**
    * Check if any influencing region has a school holiday
    * Used for ML features to detect cross-border holiday effects
    */
@@ -477,7 +526,7 @@ export class HolidaysService {
     }[] = [],
   ): Promise<boolean> {
     // 1. Check local region first
-    const isLocal = await this.isSchoolHoliday(
+    const isLocal = await this.isEffectiveSchoolHoliday(
       date,
       localCountryCode,
       localRegionCode || undefined,
@@ -494,7 +543,7 @@ export class HolidaysService {
     // Check all influencing regions in parallel
     const results = await Promise.all(
       influencingRegions.map((region) =>
-        this.isSchoolHoliday(
+        this.isEffectiveSchoolHoliday(
           date,
           region.countryCode,
           region.regionCode || undefined,
@@ -517,14 +566,14 @@ export class HolidaysService {
     date: Date,
     countryCode: string,
     regionCode?: string,
-    timezone?: string,
+    timezone: string = "UTC",
   ): Promise<boolean> {
-    const dayOfWeek = date.getDay(); // 0 = Sun, 1 = Mon, ..., 5 = Fri, 6 = Sat
+    // Get ISO day of week in target timezone (1 = Monday, ..., 5 = Friday, 6 = Saturday, 7 = Sunday)
+    const dayOfWeek = Number(formatInTimeZone(date, timezone, "i"));
 
     // Case 1: Friday (5) bridging Thursday Holiday
     if (dayOfWeek === 5) {
-      const thursday = new Date(date);
-      thursday.setDate(date.getDate() - 1);
+      const thursday = addDays(date, -1);
       const isThuHoliday = await this.isHoliday(
         thursday,
         countryCode,
@@ -536,8 +585,7 @@ export class HolidaysService {
 
     // Case 2: Monday (1) bridging Tuesday Holiday
     if (dayOfWeek === 1) {
-      const tuesday = new Date(date);
-      tuesday.setDate(date.getDate() + 1);
+      const tuesday = addDays(date, 1);
       const isTueHoliday = await this.isHoliday(
         tuesday,
         countryCode,

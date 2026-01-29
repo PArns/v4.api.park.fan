@@ -5,7 +5,11 @@ import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import {
+  getCurrentDateInTimezone,
+  formatInParkTimezone,
+} from "../common/utils/date.util";
+import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import {
   PredictionRequestDto,
   ModelInfoDto,
@@ -208,7 +212,7 @@ export class MLService {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: ["id", "timezone", "countryCode", "regionCode"],
     });
 
     if (!park) {
@@ -291,7 +295,11 @@ export class MLService {
       // 3. Fetch hourly weather forecast (cached by WeatherService)
       let weatherForecast: WeatherForecastItemDto[] = [];
       try {
-        weatherForecast = await this.weatherService.getHourlyForecast(parkId);
+        const rawForecast = await this.weatherService.getHourlyForecast(parkId);
+        weatherForecast = await this.enrichForecastWithHolidays(
+          rawForecast,
+          park,
+        );
       } catch (error) {
         this.logger.warn(`Failed to fetch weather for prediction: ${error} `);
       }
@@ -476,12 +484,17 @@ export class MLService {
         // Get park timezone for downtime cache keys
         const parkForDowntime = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: ["id", "timezone"],
+          select: ["id", "timezone", "countryCode"],
         });
 
-        const today = parkForDowntime?.timezone
-          ? getCurrentDateInTimezone(parkForDowntime.timezone)
-          : new Date().toISOString().split("T")[0];
+        const today = formatInParkTimezone(
+          new Date(),
+          parkForDowntime?.timezone ||
+            (parkForDowntime?.countryCode
+              ? getTimezoneForCountry(parkForDowntime.countryCode)
+              : null) ||
+            "UTC",
+        );
         const keys = attractionIds.map((id) => `downtime:daily:${id}:${today}`);
 
         const downtimeValues = await this.redis.mget(...keys);
@@ -531,10 +544,12 @@ export class MLService {
         });
 
         if (park?.countryCode) {
+          const now = new Date();
           const isBridge = await this.holidaysService.isBridgeDay(
-            new Date(),
+            now,
             park.countryCode,
             park.regionCode,
+            park.timezone,
           );
           isBridgeDay[parkId] = isBridge;
         }
@@ -577,9 +592,10 @@ export class MLService {
         });
 
         if (park?.countryCode) {
+          const now = new Date();
           const isSchool =
             await this.holidaysService.isSchoolHolidayInInfluenceZone(
-              new Date(),
+              now,
               park.countryCode,
               park.regionCode,
               park.timezone,
@@ -1025,5 +1041,52 @@ export class MLService {
       .execute();
 
     return result.affected || 0;
+  }
+
+  /**
+   * Enrich weather forecast items with holiday information for ML
+   * @private
+   */
+  private async enrichForecastWithHolidays(
+    forecast: WeatherForecastItemDto[],
+    park: Park,
+  ): Promise<WeatherForecastItemDto[]> {
+    if (forecast.length === 0 || !park.countryCode) {
+      return forecast;
+    }
+
+    // Process forecast items and add holiday flags
+    return await Promise.all(
+      forecast.map(async (item) => {
+        const date = new Date(item.time);
+        const [isHoliday, isSchoolHoliday, isBridgeDay] = await Promise.all([
+          this.holidaysService.isHoliday(
+            date,
+            park.countryCode,
+            park.regionCode || undefined,
+            park.timezone,
+          ),
+          this.holidaysService.isEffectiveSchoolHoliday(
+            date,
+            park.countryCode,
+            park.regionCode || undefined,
+            park.timezone,
+          ),
+          this.holidaysService.isBridgeDay(
+            date,
+            park.countryCode,
+            park.regionCode || undefined,
+            park.timezone,
+          ),
+        ]);
+
+        return {
+          ...item,
+          isHoliday,
+          isSchoolHoliday,
+          isBridgeDay,
+        };
+      }),
+    );
   }
 }

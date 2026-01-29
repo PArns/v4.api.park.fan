@@ -1,6 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { HolidaysService } from "../holidays/holidays.service";
 import { getWeekendDaysForCountry } from "./constants/weekend-rules.constant";
+import { formatInParkTimezone } from "../common/utils/date.util";
+import { formatInTimeZone } from "date-fns-tz";
+import { getTimezoneForCountry } from "../common/utils/timezone.util";
 
 /**
  * Date Features Service
@@ -35,8 +38,16 @@ export class DateFeaturesService {
    * // Sunday in Saudi Arabia (Fri+Sat weekend)
    * isWeekend(new Date('2025-11-23'), 'SA') // false
    */
-  isWeekend(date: Date, countryCode: string): boolean {
-    const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  isWeekend(
+    date: Date,
+    countryCode: string,
+    timezone: string = "UTC",
+  ): boolean {
+    // formatInTimeZone with "i" returns ISO day-of-week: 1=Mon, 2=Tue, ..., 7=Sun
+    // We need JavaScript day-of-week: 0=Sun, 1=Mon, ..., 6=Sat
+    const isoDayOfWeek = Number(formatInTimeZone(date, timezone, "i"));
+    const dayOfWeek = isoDayOfWeek === 7 ? 0 : isoDayOfWeek;
+
     const weekendDays = getWeekendDaysForCountry(countryCode);
 
     return weekendDays.includes(dayOfWeek);
@@ -58,55 +69,65 @@ export class DateFeaturesService {
     date: Date,
     countryCode: string,
     region?: string,
+    timezone: string = "UTC",
   ): Promise<boolean> {
-    // Normalize date to start of day (ignore time)
-    const normalizedDate = new Date(
-      date.getFullYear(),
-      date.getMonth(),
-      date.getDate(),
-    );
-
     // Check if it's a holiday in the specific region (or national holiday)
     // If region is provided, strict filtering is applied (National OR Region-Specific).
     // If no region provided, it checks generally for the country.
     const isHolidayResult = await this.holidaysService.isHoliday(
-      normalizedDate,
+      date,
       countryCode,
       region,
+      timezone,
     );
 
     return isHolidayResult;
   }
 
   /**
-   * Check if a date is a peak day (weekend OR holiday)
+   * Check if a date is a school holiday
+   */
+  async isSchoolHoliday(
+    date: Date,
+    countryCode: string,
+    region?: string,
+    timezone: string = "UTC",
+  ): Promise<boolean> {
+    return this.holidaysService.isEffectiveSchoolHoliday(
+      date,
+      countryCode,
+      region,
+      timezone,
+    );
+  }
+
+  /**
+   * Check if a date is a peak day (weekend OR holiday OR school holiday)
    *
    * Peak days typically have higher park attendance.
    *
    * @param date The date to check
    * @param countryCode ISO 3166-1 alpha-2 country code
    * @param region Optional region/state code
+   * @param timezone Optional timezone
    * @returns True if the date is either a weekend or a holiday
-   *
-   * @example
-   * // Saturday in US
-   * await isPeakDay(new Date('2025-11-22'), 'US') // true (weekend)
-   *
-   * // Thursday (Thanksgiving) in US
-   * await isPeakDay(new Date('2025-11-27'), 'US') // true (holiday)
-   *
-   * // Regular Tuesday in US
-   * await isPeakDay(new Date('2025-11-25'), 'US') // false
    */
   async isPeakDay(
     date: Date,
     countryCode: string,
     region?: string,
+    timezone: string = "UTC",
   ): Promise<boolean> {
-    const weekend = this.isWeekend(date, countryCode);
-    const holiday = await this.isHoliday(date, countryCode, region);
+    const weekend = this.isWeekend(date, countryCode, timezone);
+    const holiday = await this.isHoliday(date, countryCode, region, timezone);
+    const schoolHoliday = await this.isSchoolHoliday(
+      date,
+      countryCode,
+      region,
+      timezone,
+    );
 
-    return weekend || holiday;
+    return weekend || holiday || schoolHoliday;
   }
 
   /**
@@ -115,45 +136,60 @@ export class DateFeaturesService {
    * @param date The date to analyze
    * @param countryCode ISO 3166-1 alpha-2 country code
    * @param region Optional region/state code
+   * @param timezone Optional timezone
    * @returns Object with all date features
-   *
-   * @example
-   * await getDateFeatures(new Date('2025-12-25'), 'US')
-   * // {
-   * //   date: '2025-12-25',
-   * //   dayOfWeek: 4, // Thursday
-   * //   isWeekend: false,
-   * //   isHoliday: true, // Christmas
-   * //   isPeakDay: true,
-   * //   countryCode: 'US'
-   * // }
    */
   async getDateFeatures(
     date: Date,
     countryCode: string,
     region?: string,
+    timezone: string = "UTC",
   ): Promise<{
     date: string;
     dayOfWeek: number;
     isWeekend: boolean;
     isHoliday: boolean;
+    isSchoolHoliday: boolean;
     isBridgeDay: boolean;
     isPeakDay: boolean;
     countryCode: string;
     region?: string;
   }> {
-    const isWeekend = this.isWeekend(date, countryCode);
-    const isHoliday = await this.isHoliday(date, countryCode, region);
+    const effectiveTimezone =
+      timezone && timezone !== "UTC"
+        ? timezone
+        : getTimezoneForCountry(countryCode) || "UTC";
+
+    const isWeekend = this.isWeekend(date, countryCode, effectiveTimezone);
+    const isHoliday = await this.isHoliday(
+      date,
+      countryCode,
+      region,
+      effectiveTimezone,
+    );
+    const isSchoolHoliday = await this.isSchoolHoliday(
+      date,
+      countryCode,
+      region,
+      effectiveTimezone,
+    );
     const isBridgeDay =
       !isHoliday &&
-      (await this.holidaysService.isBridgeDay(date, countryCode, region));
-    const isPeakDay = isWeekend || isHoliday || isBridgeDay;
+      !isSchoolHoliday &&
+      (await this.holidaysService.isBridgeDay(
+        date,
+        countryCode,
+        region,
+        effectiveTimezone,
+      ));
+    const isPeakDay = isWeekend || isHoliday || isSchoolHoliday || isBridgeDay;
 
     return {
-      date: date.toISOString().split("T")[0], // YYYY-MM-DD
-      dayOfWeek: date.getDay(),
+      date: formatInParkTimezone(date, effectiveTimezone),
+      dayOfWeek: Number(formatInTimeZone(date, effectiveTimezone, "i")),
       isWeekend,
       isHoliday,
+      isSchoolHoliday,
       isBridgeDay,
       isPeakDay,
       countryCode,

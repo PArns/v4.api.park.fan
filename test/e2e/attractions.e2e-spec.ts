@@ -78,7 +78,7 @@ describe("AttractionsController (E2E)", () => {
 
     it("should return all attractions when attractions exist", async () => {
       // Seed test data
-      const { attractions } = await seedMinimalTestData(app);
+      await seedMinimalTestData(app);
 
       const response = await request(app.getHttpServer())
         .get("/v1/attractions")
@@ -95,7 +95,7 @@ describe("AttractionsController (E2E)", () => {
 
     it("should filter attractions by park", async () => {
       // Seed test data
-      const { parks, attractions } = await seedMinimalTestData(app);
+      const { parks } = await seedMinimalTestData(app);
       const firstPark = parks[0];
 
       const response = await request(app.getHttpServer())

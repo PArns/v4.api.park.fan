@@ -5,14 +5,14 @@ const prettierConfig = require('eslint-config-prettier');
 
 module.exports = [
     {
-        ignores: ['dist/**', 'node_modules/**', 'test/**'],
+        ignores: ['dist/**', 'node_modules/**'],
     },
     {
         files: ['**/*.ts', '**/*.js'],
         languageOptions: {
             parser: typescriptEslintParser,
             parserOptions: {
-                project: 'tsconfig.json',
+                project: 'tsconfig.eslint.json',
                 tsconfigRootDir: __dirname,
                 sourceType: 'module',
             },

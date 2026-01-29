@@ -123,7 +123,7 @@ export class MockThemeParksClient {
     };
   }
 
-  async getParkLiveData(parkId: string): Promise<any> {
+  async getParkLiveData(_parkId: string): Promise<any> {
     return {
       liveData: [
         {

@@ -6,7 +6,6 @@ import { MLService } from "../../src/ml/ml.service";
 import { HolidaysService } from "../../src/holidays/holidays.service";
 import { AttractionsService } from "../../src/attractions/attractions.service";
 import { ShowsService } from "../../src/shows/shows.service";
-import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 
 /**

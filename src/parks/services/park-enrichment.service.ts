@@ -93,17 +93,18 @@ export class ParkEnrichmentService {
   private async getBatchSchoolHolidayStatus(
     parks: Park[],
   ): Promise<Map<string, boolean>> {
-    const today = new Date();
     const results = await Promise.all(
       parks.map(async (park) => {
         if (!park.countryCode) return { id: park.id, isSchoolHoliday: false };
         try {
-          const isSchoolHoliday = await this.holidaysService.isSchoolHoliday(
-            today,
-            park.countryCode,
-            park.regionCode,
-            park.timezone,
-          );
+          const now = new Date();
+          const isSchoolHoliday =
+            await this.holidaysService.isEffectiveSchoolHoliday(
+              now,
+              park.countryCode,
+              park.regionCode,
+              park.timezone,
+            );
           return { id: park.id, isSchoolHoliday };
         } catch (error) {
           this.logger.warn(
