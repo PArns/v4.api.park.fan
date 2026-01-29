@@ -490,6 +490,26 @@ export class HolidaysService {
     );
     if (isExplicit) return true;
 
+    // 1.5 Gap Filling: If Public Holiday, check if adjacent to School Holiday
+    const isPublic = await this.isHoliday(
+      date,
+      countryCode,
+      regionCode,
+      timezone,
+    );
+
+    if (isPublic) {
+      const yesterday = addDays(date, -1);
+      const tomorrow = addDays(date, 1);
+
+      const [isYesterdaySchool, isTomorrowSchool] = await Promise.all([
+        this.isSchoolHoliday(yesterday, countryCode, regionCode, timezone),
+        this.isSchoolHoliday(tomorrow, countryCode, regionCode, timezone),
+      ]);
+
+      if (isYesterdaySchool || isTomorrowSchool) return true;
+    }
+
     // 2. Weekend Extension Logic
     const dayOfWeek = Number(formatInTimeZone(date, timezone, "i"));
     if (dayOfWeek === 6 || dayOfWeek === 7) {
@@ -500,12 +520,46 @@ export class HolidaysService {
       const friday = addDays(date, -daysBackToFriday);
       const monday = addDays(date, daysForwardToMonday);
 
-      const [isFridayHoliday, isMondayHoliday] = await Promise.all([
+      // Check explicit School Holidays first
+      const [isFridaySchool, isMondaySchool] = await Promise.all([
         this.isSchoolHoliday(friday, countryCode, regionCode, timezone),
         this.isSchoolHoliday(monday, countryCode, regionCode, timezone),
       ]);
 
-      return isFridayHoliday || isMondayHoliday;
+      if (isFridaySchool || isMondaySchool) return true;
+
+      // Deep Check: Ensure Public Holidays act as bridges for School Holidays
+      // If Friday is Public Holiday, check if Thursday is School Holiday
+      // If Monday is Public Holiday, check if Tuesday is School Holiday
+
+      const [isFridayPublic, isMondayPublic] = await Promise.all([
+        this.isHoliday(friday, countryCode, regionCode, timezone),
+        this.isHoliday(monday, countryCode, regionCode, timezone),
+      ]);
+
+      if (isFridayPublic) {
+        const thursday = addDays(friday, -1);
+        const isThursdaySchool = await this.isSchoolHoliday(
+          thursday,
+          countryCode,
+          regionCode,
+          timezone,
+        );
+        if (isThursdaySchool) return true;
+      }
+
+      if (isMondayPublic) {
+        const tuesday = addDays(monday, 1);
+        const isTuesdaySchool = await this.isSchoolHoliday(
+          tuesday,
+          countryCode,
+          regionCode,
+          timezone,
+        );
+        if (isTuesdaySchool) return true;
+      }
+
+      return false;
     }
 
     return false;

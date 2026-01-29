@@ -102,10 +102,10 @@ export function calculateHolidayInfo(
       : holidayEntry.name
     : null;
 
-  // Weekend Extension Logic (Bidirectional)
+  // Weekend Extension Logic (Bidirectional & Deep)
   // School holidays extend to weekends if:
-  // - The PRECEDING Friday is a school holiday
-  // - The FOLLOWING Monday is a school holiday
+  // - The PRECEDING Friday is a school holiday OR a Public Holiday adjacent to a School Holiday
+  // - The FOLLOWING Monday is a school holiday OR a Public Holiday adjacent to a School Holiday
   let isWeekendBonus = false;
   if (!currentIsSchool && (dayOfWeek === 0 || dayOfWeek === 6)) {
     // 1. Check Friday backward (from Sat or Sun)
@@ -118,20 +118,92 @@ export function calculateHolidayInfo(
     const mondayDate = addDays(date, daysForwardToMonday);
     const mondayStr = formatInParkTimezone(mondayDate, timezone);
 
-    if (isSchoolHolidayInMap(fridayStr) || isSchoolHolidayInMap(mondayStr)) {
+    const isFridaySchool = isSchoolHolidayInMap(fridayStr);
+    const isFridayPublic = isPublicHolidayInMap(fridayStr);
+
+    const isMondaySchool = isSchoolHolidayInMap(mondayStr);
+    const isMondayPublic = isPublicHolidayInMap(mondayStr);
+
+    // Deep check: If Friday/Monday is Public, does IT attach to a School holiday?
+    let isFridayEffectiveSchool = isFridaySchool;
+    if (isFridayPublic && !isFridaySchool) {
+      // Check Thursday
+      const thursdayDate = addDays(fridayDate, -1);
+      const thursdayStr = formatInParkTimezone(thursdayDate, timezone);
+      if (isSchoolHolidayInMap(thursdayStr)) {
+        isFridayEffectiveSchool = true;
+      }
+    }
+
+    let isMondayEffectiveSchool = isMondaySchool;
+    if (isMondayPublic && !isMondaySchool) {
+      // Check Tuesday
+      const tuesdayDate = addDays(mondayDate, 1);
+      const tuesdayStr = formatInParkTimezone(tuesdayDate, timezone);
+      if (isSchoolHolidayInMap(tuesdayStr)) {
+        isMondayEffectiveSchool = true;
+      }
+    }
+
+    if (isFridayEffectiveSchool || isMondayEffectiveSchool) {
       isWeekendBonus = true;
-      // Use name from Friday or Monday if available
-      const sourceEntry =
-        holidayMap.get(fridayStr) || holidayMap.get(mondayStr);
-      if (!holidayName && sourceEntry) {
-        holidayName =
-          typeof sourceEntry === "string" ? sourceEntry : sourceEntry.name;
+      // Improved Naming Logic:
+      // Try to find the name from the "Effective School Holiday" source
+      if (!holidayName) {
+        if (isFridayEffectiveSchool) {
+          const friEntry = holidayMap.get(fridayStr);
+          if (isFridaySchool && friEntry) {
+            holidayName =
+              typeof friEntry === "string" ? friEntry : friEntry.name;
+          } else if (isFridayPublic) {
+            // It was public, but effective school because of Thursday
+            const thuEntry = holidayMap.get(
+              formatInParkTimezone(addDays(fridayDate, -1), timezone),
+            );
+            if (thuEntry)
+              holidayName =
+                typeof thuEntry === "string" ? thuEntry : thuEntry.name;
+          }
+        } else if (isMondayEffectiveSchool) {
+          const monEntry = holidayMap.get(mondayStr);
+          if (isMondaySchool && monEntry) {
+            holidayName =
+              typeof monEntry === "string" ? monEntry : monEntry.name;
+          } else if (isMondayPublic) {
+            // It was public, but effective school because of Tuesday
+            const tueEntry = holidayMap.get(
+              formatInParkTimezone(addDays(mondayDate, 1), timezone),
+            );
+            if (tueEntry)
+              holidayName =
+                typeof tueEntry === "string" ? tueEntry : tueEntry.name;
+          }
+        }
       }
     }
   }
 
+  // Public Holiday Continuity Logic
+  // If today is a Public Holiday, check if it's adjacent to a School Holiday
+  // If so, treat it as School Holiday as well (important for ML and continuity)
+  let isEffectiveSchoolFromAdjancency = false;
+  if (currentIsPublic && !currentIsSchool) {
+    const yesterday = addDays(date, -1);
+    const tomorrow = addDays(date, 1);
+    const yesterdayStr = formatInParkTimezone(yesterday, timezone);
+    const tomorrowStr = formatInParkTimezone(tomorrow, timezone);
+
+    if (
+      isSchoolHolidayInMap(yesterdayStr) ||
+      isSchoolHolidayInMap(tomorrowStr)
+    ) {
+      isEffectiveSchoolFromAdjancency = true;
+    }
+  }
+
   const isPublicHoliday = currentIsPublic;
-  const isSchoolHoliday = currentIsSchool || isWeekendBonus;
+  const isSchoolHoliday =
+    currentIsSchool || isWeekendBonus || isEffectiveSchoolFromAdjancency;
   const isHoliday = isPublicHoliday || isSchoolHoliday;
 
   // For backward compatibility: single holidayType
