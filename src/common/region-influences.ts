@@ -612,6 +612,10 @@ export function getInfluencingRegions(
   // Normalize region code to handle variants (e.g. NRW -> NW)
   const normalizedRegion = normalizeRegionCode(regionCode);
 
+  if (!normalizedRegion) {
+    return [];
+  }
+
   // If regionCode already defines the uniqueness (e.g. "DE-BW"), use it directly.
   // Otherwise, prepend countryCode (e.g. "BW" -> "DE-BW").
   const key = normalizedRegion.includes("-")
