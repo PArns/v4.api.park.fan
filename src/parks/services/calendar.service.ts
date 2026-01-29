@@ -358,7 +358,9 @@ export class CalendarService {
           name: h.name,
           source: {
             countryCode: h.country,
-            regionCode: h.region ? (h.region.split("-").pop() ?? null) : null,
+            regionCode: h.region
+              ? normalizeRegionCode(h.region.split("-").pop() ?? null)
+              : null,
           },
           holidayType: h.holidayType,
         });

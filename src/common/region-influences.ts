@@ -1,3 +1,5 @@
+import { normalizeRegionCode } from "./utils/region.util";
+
 /**
  * Regional Influence Mapping (Bundesländer/States/Provinces)
  *
@@ -607,10 +609,13 @@ export function getInfluencingRegions(
   countryCode: string,
   regionCode: string,
 ): RegionInfluence[] {
+  // Normalize region code to handle variants (e.g. NRW -> NW)
+  const normalizedRegion = normalizeRegionCode(regionCode);
+
   // If regionCode already defines the uniqueness (e.g. "DE-BW"), use it directly.
   // Otherwise, prepend countryCode (e.g. "BW" -> "DE-BW").
-  const key = regionCode.includes("-")
-    ? regionCode
-    : `${countryCode}-${regionCode}`;
+  const key = normalizedRegion.includes("-")
+    ? normalizedRegion
+    : `${countryCode}-${normalizedRegion}`;
   return REGION_INFLUENCES[key] || [];
 }

@@ -281,7 +281,8 @@ export class ParkEnrichmentService {
           // Skip primary region (already checked above)
           if (
             reg.countryCode === park.countryCode &&
-            reg.regionCode === park.regionCode
+            normalizeRegionCode(reg.regionCode) ===
+              normalizeRegionCode(park.regionCode)
           ) {
             return false;
           }
