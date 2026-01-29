@@ -970,7 +970,7 @@ export class ParkMetadataProcessor {
         }
 
         const scheduleResponse =
-          await this.themeParksClient.getSchedule(wikiExternalId);
+          await this.themeParksClient.getScheduleExtended(wikiExternalId, 12);
         const savedEntries = await this.parksService.saveScheduleData(
           park.id,
           scheduleResponse.schedule,

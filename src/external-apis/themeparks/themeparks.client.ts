@@ -244,4 +244,95 @@ export class ThemeParksClient {
 
     return response.json();
   }
+
+  /**
+   * GET /v1/entity/{id}/schedule/{year}/{month}
+   *
+   * Fetches schedule data for a specific month.
+   * Month must be zero-padded (e.g., "03" not "3").
+   */
+  async getScheduleForMonth(
+    entityId: string,
+    year: number,
+    month: number,
+  ): Promise<{ schedule: any[] }> {
+    const monthStr = month.toString().padStart(2, "0");
+    const response = await this.fetchWithRetry(
+      `${this.baseUrl}/entity/${entityId}/schedule/${year}/${monthStr}`,
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch schedule for ${entityId} (${year}/${monthStr}): ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Fetches schedule data for a range of months
+   *
+   * IMPORTANT: Some parks don't return data from the generic /schedule endpoint,
+   * but DO return data from month-specific endpoints. This method queries
+   * multiple months and aggregates the results.
+   *
+   * @param entityId - Park entity ID
+   * @param monthsAhead - Number of months to fetch ahead (default: 12)
+   * @returns Combined schedule data from all months
+   */
+  async getScheduleExtended(
+    entityId: string,
+    monthsAhead: number = 12,
+  ): Promise<{ schedule: any[] }> {
+    const now = new Date();
+    const allSchedules: any[] = [];
+
+    // Try generic endpoint first (faster if it works)
+    try {
+      const genericResponse = await this.getSchedule(entityId);
+      if (genericResponse.schedule && genericResponse.schedule.length > 0) {
+        this.logger.log(
+          `✅ Generic schedule endpoint returned ${genericResponse.schedule.length} entries for ${entityId}`,
+        );
+        return genericResponse;
+      }
+      this.logger.warn(
+        `Generic schedule endpoint returned empty for ${entityId}, falling back to month-specific queries`,
+      );
+    } catch (error: any) {
+      this.logger.warn(
+        `Generic schedule endpoint failed for ${entityId}: ${error.message}`,
+      );
+    }
+
+    // Fallback: Query each month individually
+    for (let i = 0; i < monthsAhead; i++) {
+      const targetDate = new Date(now);
+      targetDate.setMonth(now.getMonth() + i);
+      const year = targetDate.getFullYear();
+      const month = targetDate.getMonth() + 1; // JavaScript months are 0-indexed
+
+      try {
+        const monthResponse = await this.getScheduleForMonth(
+          entityId,
+          year,
+          month,
+        );
+        if (monthResponse.schedule && monthResponse.schedule.length > 0) {
+          allSchedules.push(...monthResponse.schedule);
+        }
+      } catch (error: any) {
+        this.logger.warn(
+          `Failed to fetch schedule for ${entityId} (${year}/${month}): ${error.message}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `📅 Fetched ${allSchedules.length} schedule entries across ${monthsAhead} months for ${entityId}`,
+    );
+
+    return { schedule: allSchedules };
+  }
 }

@@ -7,6 +7,7 @@ import { MLService } from "../../ml/ml.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
+import { QueueDataService } from "../../queue-data/queue-data.service";
 import {
   IntegratedCalendarResponse,
   CalendarDay,
@@ -25,11 +26,16 @@ import { InfluencingHoliday } from "../dto/schedule-item.dto";
 import { WeatherData } from "../entities/weather-data.entity";
 import { Holiday } from "../../holidays/entities/holiday.entity";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
   isSameDayInTimezone,
 } from "../../common/utils/date.util";
+import {
+  calculateHolidayInfo,
+  HolidayEntry,
+} from "../../common/utils/holiday.utils";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import { addDays, parseISO } from "date-fns";
 
@@ -51,6 +57,7 @@ export class CalendarService {
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
+    private readonly queueDataService: QueueDataService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -82,55 +89,91 @@ export class CalendarService {
       return JSON.parse(cached);
     }
 
+    const today = getCurrentDateInTimezone(park.timezone);
     this.logger.debug(
       `Building calendar for ${park.slug} from ${formatInParkTimezone(fromDate, park.timezone)} to ${formatInParkTimezone(toDate, park.timezone)}`,
     );
 
     // Fetch all data in parallel
-    const [schedules, weatherData, mlPredictions, holidays, refurbishments] =
-      await Promise.all([
-        this.parksService.getSchedule(park.id, fromDate, toDate),
-        this.weatherService
-          .getWeatherData(park.id, fromDate, toDate)
-          .catch((err) => {
-            this.logger.warn(
-              `Weather data unavailable for ${park.slug}: ${err.message}`,
-            );
-            return [];
-          }),
-        this.mlService.getParkPredictions(park.id, "daily").catch((err) => {
+    const [
+      schedules,
+      weatherData,
+      mlPredictions,
+      holidays,
+      refurbishments,
+      historicalQueueData,
+    ] = await Promise.all([
+      this.parksService.getSchedule(park.id, fromDate, toDate),
+      this.weatherService
+        .getWeatherData(park.id, fromDate, toDate)
+        .catch((err) => {
           this.logger.warn(
-            `ML predictions unavailable for ${park.slug}: ${err.message}`,
-          );
-          return { predictions: [] };
-        }),
-        (() => {
-          const countries = [
-            park.countryCode,
-            ...(park.influencingRegions || []).map((r) => r.countryCode),
-          ];
-          const uniqueCountries = [...new Set(countries)];
-
-          return Promise.all(
-            uniqueCountries.map((cc) =>
-              this.holidaysService.getHolidays(cc, fromDate, toDate),
-            ),
-          )
-            .then((res) => res.flat())
-            .catch((err) => {
-              this.logger.warn(
-                `Holidays data partially unavailable for ${park.slug}: ${err.message}`,
-              );
-              return [];
-            });
-        })(),
-        this.getRefurbishmentsList(park.id).catch((err) => {
-          this.logger.warn(
-            `Refurbishments data unavailable for ${park.slug}: ${err.message}`,
+            `Weather data unavailable for ${park.slug}: ${err.message}`,
           );
           return [];
         }),
-      ]);
+      this.mlService.getParkPredictions(park.id, "daily").catch((err) => {
+        this.logger.warn(
+          `ML predictions unavailable for ${park.slug}: ${err.message}`,
+        );
+        return { predictions: [] };
+      }),
+      (() => {
+        const countries = [
+          park.countryCode,
+          ...(park.influencingRegions || []).map((r) => r.countryCode),
+        ];
+        const uniqueCountries = [...new Set(countries)];
+
+        return Promise.all(
+          uniqueCountries.map((cc) =>
+            this.holidaysService.getHolidays(
+              cc,
+              formatInParkTimezone(fromDate, park.timezone),
+              formatInParkTimezone(toDate, park.timezone),
+            ),
+          ),
+        )
+          .then((res) => res.flat())
+          .catch((err) => {
+            this.logger.warn(
+              `Holidays data partially unavailable for ${park.slug}: ${err.message}`,
+            );
+            return [];
+          });
+      })(),
+      this.getRefurbishmentsList(park.id).catch((err) => {
+        this.logger.warn(
+          `Refurbishments data unavailable for ${park.slug}: ${err.message}`,
+        );
+        return [];
+      }),
+      (async () => {
+        // Optimized: Only fetch queue data if range includes today or past
+        // And use optimized date-range query instead of full park dump
+        const rangeStartStr = formatInParkTimezone(fromDate, park.timezone);
+        if (rangeStartStr > today) {
+          return []; // Future only request - no queue data needed
+        }
+
+        try {
+          // Add 1 day buffer to end date to ensure we cover full day in UTC
+          const queryEnd = new Date(toDate);
+          queryEnd.setDate(queryEnd.getDate() + 1);
+
+          return await this.queueDataService.findHistoricalDataForDateRange(
+            park.id,
+            fromDate,
+            queryEnd,
+          );
+        } catch (err: any) {
+          this.logger.debug(
+            `Historical queue data unavailable for ${park.slug}: ${err.message}`,
+          );
+          return [];
+        }
+      })(),
+    ]);
 
     // Build calendar days
     const days: CalendarDay[] = [];
@@ -146,6 +189,8 @@ export class CalendarService {
         holidays,
         refurbishments,
         includeHourly,
+        historicalQueueData,
+        today,
       );
       days.push(dayData);
       currentDate.setDate(currentDate.getDate() + 1);
@@ -166,14 +211,18 @@ export class CalendarService {
       days,
     };
 
+    // Determine cache TTL based on date range
+    // If range includes today, use shorter TTL because crowd levels change with new queue data
+    const includesHistoricalData = days.some((d) => d.date <= today);
+    const cacheTTL = includesHistoricalData
+      ? 5 * 60 // 5 minutes for current/historical data (frequent updates)
+      : this.CALENDAR_CACHE_TTL; // 1 hour for future predictions (stable)
+
     // Cache the response
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(response),
-      "EX",
-      this.CALENDAR_CACHE_TTL,
+    await this.redis.set(cacheKey, JSON.stringify(response), "EX", cacheTTL);
+    this.logger.debug(
+      `Cached calendar response: ${cacheKey} (TTL: ${cacheTTL}s)`,
     );
-    this.logger.debug(`Cached calendar response: ${cacheKey}`);
 
     return response;
   }
@@ -190,9 +239,11 @@ export class CalendarService {
     holidays: Holiday[],
     refurbishments: string[],
     includeHourly: string,
+    historicalQueueData: QueueData[],
+    today: string,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
-    const today = getCurrentDateInTimezone(park.timezone);
+    // today is passed as argument
     const tomorrow = formatInParkTimezone(
       addDays(parseISO(today), 1),
       park.timezone,
@@ -217,7 +268,51 @@ export class CalendarService {
         ) === dateStr,
     );
 
-    // Build events array (deduplicated) and separate local/influencing holidays
+    // Build holiday map for calculateHolidayInfo utility (includes ±1 day for bridge day detection)
+    const holidayMap = new Map<string, string | HolidayEntry>();
+    const extendedHolidays = [...holidays];
+
+    for (const h of extendedHolidays) {
+      const hDateStr = formatInParkTimezone(h.date, park.timezone);
+      const isLocal =
+        h.country === park.countryCode &&
+        (h.isNationwide ||
+          !h.region ||
+          h.region === park.regionCode ||
+          (park.regionCode && h.region.endsWith(`-${park.regionCode}`)));
+
+      if (isLocal) {
+        // Add to holidayMap with type information
+        const existing = holidayMap.get(hDateStr);
+        const isPublicHoliday =
+          h.holidayType === "public" || h.holidayType === "bank";
+
+        if (!existing) {
+          holidayMap.set(hDateStr, {
+            name: h.localName || h.name || "",
+            type: h.holidayType,
+          });
+        } else if (isPublicHoliday) {
+          // Prefer public holidays over school holidays
+          const existingType =
+            typeof existing === "string" ? "public" : existing.type;
+          if (existingType === "school") {
+            holidayMap.set(hDateStr, {
+              name: h.localName || h.name || "",
+              type: h.holidayType,
+            });
+          }
+        }
+      }
+    }
+
+    // Use utility function to calculate holiday info including bridge days
+    const holidayInfo = calculateHolidayInfo(date, holidayMap, park.timezone);
+    const isHoliday = holidayInfo.isPublicHoliday; // Only public holidays, not school
+    const isBridgeDay = holidayInfo.isBridgeDay;
+    const isSchoolVacation = holidayInfo.isSchoolHoliday;
+
+    // Build events array and influencing holidays
     const events: CalendarEvent[] = [];
     const influencingHolidays: InfluencingHoliday[] = [];
     const seenEvents = new Set<string>();
@@ -225,10 +320,6 @@ export class CalendarService {
     const dayHolidays = holidays.filter(
       (h) => formatInParkTimezone(h.date, park.timezone) === dateStr,
     );
-
-    let localHolidayFound = false;
-    let localBridgeDayFound = false;
-    let localSchoolVacationFound = false;
 
     for (const h of dayHolidays) {
       const type = h.holidayType === "school" ? "school-holiday" : "holiday";
@@ -250,15 +341,6 @@ export class CalendarService {
             isNationwide: h.isNationwide,
           });
         }
-
-        // Only set localHolidayFound for regular holidays, not school holidays
-        if (h.holidayType !== "school") {
-          localHolidayFound = true;
-        }
-        if (h.holidayType === "school") {
-          localSchoolVacationFound = true;
-        }
-        // Bridge day is calculated separately, not stored in holiday metadata
       } else {
         // Influencing but not local
         influencingHolidays.push({
@@ -271,10 +353,6 @@ export class CalendarService {
         });
       }
     }
-
-    const isHoliday = localHolidayFound;
-    const isBridgeDay = localBridgeDayFound;
-    const isSchoolVacation = localSchoolVacationFound;
 
     // Determine park status
     const status: ParkStatus =
@@ -299,9 +377,32 @@ export class CalendarService {
       hours = await this.inferOperatingHours(park, date);
     }
 
-    // Map crowd level
-    const crowdLevel: CrowdLevel | "closed" =
-      status === "CLOSED" ? "closed" : mlPrediction?.crowdLevel || "moderate";
+    // Map crowd level based on date
+    const isHistorical = dateStr <= today;
+    let crowdLevel: CrowdLevel | "closed";
+
+    if (status === "CLOSED") {
+      crowdLevel = "closed";
+    } else if (isHistorical) {
+      // Use actual wait time data for today and past dates
+      const dayQueueData = historicalQueueData.filter(
+        (q) =>
+          formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
+          q.waitTime !== null &&
+          q.waitTime > 0,
+      );
+
+      if (dayQueueData.length > 0) {
+        const avgWaitTime = this.calculateAverageWaitTime(dayQueueData);
+        crowdLevel = this.mapWaitTimeToCrowdLevel(avgWaitTime);
+      } else {
+        // No actual data available, fallback to prediction or moderate
+        crowdLevel = mlPrediction?.crowdLevel || "moderate";
+      }
+    } else {
+      // Future date: use ML prediction
+      crowdLevel = mlPrediction?.crowdLevel || "moderate";
+    }
 
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
@@ -676,5 +777,29 @@ export class CalendarService {
       );
       return [];
     }
+  }
+
+  /**
+   * Calculate average wait time from queue data
+   */
+  private calculateAverageWaitTime(queueData: QueueData[]): number {
+    const waitTimes = queueData
+      .filter((q) => q.waitTime !== null && q.waitTime > 0)
+      .map((q) => q.waitTime!);
+
+    if (waitTimes.length === 0) return 0;
+
+    return waitTimes.reduce((sum, wt) => sum + wt, 0) / waitTimes.length;
+  }
+
+  /**
+   * Map average wait time to crowd level
+   */
+  private mapWaitTimeToCrowdLevel(avgWaitTime: number): CrowdLevel {
+    if (avgWaitTime <= 15) return "very_low";
+    if (avgWaitTime <= 30) return "low";
+    if (avgWaitTime <= 45) return "moderate";
+    if (avgWaitTime <= 60) return "high";
+    return "very_high";
   }
 }

@@ -331,19 +331,23 @@ export class HolidaysService {
 
   /**
    * Get holidays for a specific country and date range
+   *
+   * @param countryCode - Country code
+   * @param startDate - Start date (YYYY-MM-DD)
+   * @param endDate - End date (YYYY-MM-DD)
    */
   async getHolidays(
     countryCode: string,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<Holiday[]> {
-    // Use getMany() without explicit select to ensure all fields are loaded
-    // TypeORM will automatically load all entity fields including enums
+    // Use CAST to ensure we compare date strings (YYYY-MM-DD)
+    // regardless of the stored time component or execution timezone
     return this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("holiday.date >= :startDate", { startDate })
-      .andWhere("holiday.date <= :endDate", { endDate })
+      .andWhere("CAST(holiday.date AS DATE) >= :startDate", { startDate })
+      .andWhere("CAST(holiday.date AS DATE) <= :endDate", { endDate })
       .orderBy("holiday.date", "ASC")
       .getMany();
   }

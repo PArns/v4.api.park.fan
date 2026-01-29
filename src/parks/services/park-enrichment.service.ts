@@ -220,7 +220,11 @@ export class ParkEnrichmentService {
       ];
       const allHolidays = await Promise.all(
         countryCodes.map((cc) =>
-          this.holidaysService.getHolidays(cc, minDate, maxDate),
+          this.holidaysService.getHolidays(
+            cc,
+            formatInParkTimezone(minDate, park.timezone),
+            formatInParkTimezone(maxDate, park.timezone),
+          ),
         ),
       );
       const holidays = allHolidays.flat();

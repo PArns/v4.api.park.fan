@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Inject,
   UseInterceptors,
+  Res,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -328,13 +329,12 @@ export class ParksController {
    * @throws BadRequestException if date format invalid or range > 90 days
    */
   @Get(":continent/:country/:city/:parkSlug/calendar")
-  @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get integrated calendar (geographic path)",
     description:
       "Returns unified calendar data combining schedule, weather forecasts, ML predictions, holidays, and events. " +
       "All dates are in the park's local timezone. Includes hourly predictions for today/tomorrow by default. " +
-      "Cache TTL: 1 hour (HTTP + Redis) for fresh hourly predictions.",
+      "Cache TTL: Dynamic (5 min for today/past, 1 hour for future) for optimal data freshness.",
   })
   @ApiParam({
     name: "continent",
@@ -399,6 +399,7 @@ export class ParksController {
     @Query("to") to?: string,
     @Query("includeHourly")
     includeHourly?: "today+tomorrow" | "today" | "none" | "all",
+    @Res({ passthrough: true }) res?: any,
   ): Promise<IntegratedCalendarResponse> {
     const park = await this.parksService.findByGeographicPath(
       continent,
@@ -425,12 +426,28 @@ export class ParksController {
     // Validate range (max 90 days)
     validateDateRange(fromDate, toDate, 90);
 
-    return this.calendarService.buildCalendarResponse(
+    const response = await this.calendarService.buildCalendarResponse(
       park,
       fromDate,
       toDate,
       includeHourly || "today+tomorrow",
     );
+
+    // Set dynamic cache headers based on date range
+    const { getCurrentDateInTimezone } =
+      await import("../common/utils/date.util");
+    const today = getCurrentDateInTimezone(park.timezone);
+    const includesHistoricalData = response.days.some((d) => d.date <= today);
+    const cacheTTL = includesHistoricalData ? 5 * 60 : 60 * 60;
+
+    if (res) {
+      res.setHeader(
+        "Cache-Control",
+        `public, max-age=${cacheTTL}, s-maxage=${cacheTTL}`,
+      );
+    }
+
+    return response;
   }
 
   /**

@@ -36,6 +36,35 @@ export class QueueDataService {
   ) {}
 
   /**
+   * Fetch historical queue data for a specific park and date range.
+   * Optimized for calendar generation.
+   *
+   * @param parkId - Park ID
+   * @param fromDate - Start date
+   * @param toDate - End date
+   * @returns List of queue data entries
+   */
+  async findHistoricalDataForDateRange(
+    parkId: string,
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<QueueData[]> {
+    return (
+      this.queueDataRepository
+        .createQueryBuilder("qd")
+        .innerJoin("qd.attraction", "attraction")
+        .where("attraction.parkId = :parkId", { parkId })
+        .andWhere("qd.timestamp >= :from", { from: fromDate })
+        .andWhere("qd.timestamp <= :to", { to: toDate })
+        .andWhere("qd.waitTime IS NOT NULL")
+        .andWhere("qd.waitTime > 0")
+        // Order by timestamp to help with averaging later
+        .orderBy("qd.timestamp", "ASC")
+        .getMany()
+    );
+  }
+
+  /**
    * Saves queue data for an attraction from ThemeParks.wiki live API response.
    *
    * @param attractionId - Our internal attraction ID (UUID)

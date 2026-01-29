@@ -718,8 +718,8 @@ export class ParksService {
 
         const holidays = await this.holidaysService.getHolidays(
           park.countryCode,
-          minDate,
-          maxDate,
+          formatInParkTimezone(minDate, park.timezone),
+          formatInParkTimezone(maxDate, park.timezone),
         );
 
         const fullRegion = park.regionCode
@@ -804,6 +804,7 @@ export class ParksService {
           existing.closingTime?.getTime() !==
             scheduleEntry.closingTime?.getTime() ||
           existing.description !== scheduleEntry.description ||
+          existing.purchases !== scheduleEntry.purchases ||
           existing.isHoliday !== scheduleEntry.isHoliday ||
           existing.holidayName !== scheduleEntry.holidayName ||
           existing.isBridgeDay !== scheduleEntry.isBridgeDay;
@@ -813,6 +814,16 @@ export class ParksService {
           savedCount++;
           await this.invalidateScheduleCache(parkId);
         }
+      }
+
+      // Cleanup UNKNOWN entries if we have a real schedule now
+      // This happens when "filling gaps" created a placeholder, but now we have actual data
+      if (scheduleEntry.scheduleType !== ScheduleType.UNKNOWN) {
+        await this.scheduleRepository.delete({
+          parkId,
+          date: scheduleEntry.date,
+          scheduleType: ScheduleType.UNKNOWN,
+        });
       }
     }
 
@@ -863,8 +874,8 @@ export class ParksService {
 
     const holidays = await this.holidaysService.getHolidays(
       park.countryCode,
-      minDate,
-      maxDate,
+      formatInParkTimezone(minDate, park.timezone),
+      formatInParkTimezone(maxDate, park.timezone),
     );
 
     // Map Holidays by Date (with type information for bridge day logic)
