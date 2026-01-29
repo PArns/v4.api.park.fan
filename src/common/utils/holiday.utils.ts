@@ -1,4 +1,5 @@
 import { formatInParkTimezone } from "./date.util";
+import { formatInTimeZone } from "date-fns-tz";
 
 /**
  * Holiday Calculation Utilities
@@ -74,7 +75,10 @@ export function calculateHolidayInfo(
 
   let isHoliday = !!holidayName;
 
-  const dayOfWeek = date.getDay();
+  // Use formatInTimeZone to get day of week in target timezone (1=Mon, ..., 7=Sun)
+  // We convert to 0-6 (0=Sun, 1=Mon, ..., 6=Sat) to match JS getDay()
+  const dayOfWeekIso = Number(formatInTimeZone(date, timezone, "i"));
+  const dayOfWeek = dayOfWeekIso === 7 ? 0 : dayOfWeekIso;
 
   // Check if weekend after Friday holiday
   // Ferien gelten nur übers Wochenende, wenn freitags ein ferientag ist
@@ -248,7 +252,9 @@ export function calculateHolidayInfoFromString<
   // Parse date string (YYYY-MM-DD) - create date at midnight in UTC
   // This ensures consistent date formatting regardless of timezone
   const [year, month, day] = dateStr.split("-").map(Number);
-  // Create date in UTC to avoid timezone issues
-  const date = new Date(Date.UTC(year, month - 1, day));
+  // Create date at noon UTC to avoid issues with date shifting across timezones.
+  // Midnight UTC (00:00:00) can shift to the previous day in Western timezones (e.g., US),
+  // whereas Noon UTC is safely within the same calendar day for all timezones between UTC-12 and UTC+12.
+  const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
   return calculateHolidayInfo(date, entryMap, timezone);
 }

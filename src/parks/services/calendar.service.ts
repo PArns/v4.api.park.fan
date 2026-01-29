@@ -32,6 +32,7 @@ import {
   getCurrentDateInTimezone,
   isSameDayInTimezone,
 } from "../../common/utils/date.util";
+import { normalizeRegionCode } from "../../common/utils/region.util";
 import {
   calculateHolidayInfo,
   HolidayEntry,
@@ -125,12 +126,18 @@ export class CalendarService {
         ];
         const uniqueCountries = [...new Set(countries)];
 
+        // Extend holiday fetch range by +/- 1 day to support bridge day detection
+        const extendedFromDate = new Date(fromDate);
+        extendedFromDate.setDate(fromDate.getDate() - 1);
+        const extendedToDate = new Date(toDate);
+        extendedToDate.setDate(toDate.getDate() + 1);
+
         return Promise.all(
           uniqueCountries.map((cc) =>
             this.holidaysService.getHolidays(
               cc,
-              formatInParkTimezone(fromDate, park.timezone),
-              formatInParkTimezone(toDate, park.timezone),
+              formatInParkTimezone(extendedFromDate, park.timezone),
+              formatInParkTimezone(extendedToDate, park.timezone),
             ),
           ),
         )
@@ -274,12 +281,14 @@ export class CalendarService {
 
     for (const h of extendedHolidays) {
       const hDateStr = formatInParkTimezone(h.date, park.timezone);
+      // Use normalized region codes for consistent matching
+      const normalizedParkRegion = normalizeRegionCode(park.regionCode);
+      const normalizedHolidayRegion = normalizeRegionCode(h.region);
       const isLocal =
         h.country === park.countryCode &&
         (h.isNationwide ||
           !h.region ||
-          h.region === park.regionCode ||
-          (park.regionCode && h.region.endsWith(`-${park.regionCode}`)));
+          normalizedHolidayRegion === normalizedParkRegion);
 
       if (isLocal) {
         // Add to holidayMap with type information
@@ -325,12 +334,14 @@ export class CalendarService {
       const type = h.holidayType === "school" ? "school-holiday" : "holiday";
       const key = `${type}:${h.name}`;
 
+      // Use normalized region codes for consistent matching
+      const normalizedParkRegion = normalizeRegionCode(park.regionCode);
+      const normalizedHolidayRegion = normalizeRegionCode(h.region);
       const isLocal =
         h.country === park.countryCode &&
         (h.isNationwide ||
           !h.region ||
-          h.region === park.regionCode ||
-          (park.regionCode && h.region.endsWith(`-${park.regionCode}`)));
+          normalizedHolidayRegion === normalizedParkRegion);
 
       if (isLocal) {
         if (!seenEvents.has(key)) {
@@ -454,7 +465,7 @@ export class CalendarService {
       );
       day.advisoryKeys = advisoryKeys;
       day.recommendation = this.generateRecommendationString(advisoryKeys);
-      day.showTimes = await this.getShowTimes(park.id, date);
+      // Note: Show times are available via dedicated /parks/:id/shows endpoint
     }
 
     // Add hourly data if requested

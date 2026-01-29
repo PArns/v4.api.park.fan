@@ -6,6 +6,7 @@ import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { normalizeRegionCode } from "../common/utils/region.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
 
 /**
@@ -393,8 +394,10 @@ export class HolidaysService {
       .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr });
 
     if (regionCode) {
+      // Normalize region code to handle variants (e.g., NRW -> NW)
+      const normalizedRegion = normalizeRegionCode(regionCode);
       // Check for National Holidays OR Regional Holidays for this specific region
-      const fullRegionCode = `${countryCode}-${regionCode}`;
+      const fullRegionCode = `${countryCode}-${normalizedRegion}`;
       query.andWhere(
         "(holiday.isNationwide = true OR holiday.region = :fullRegionCode)",
         { fullRegionCode },
@@ -440,7 +443,9 @@ export class HolidaysService {
       .andWhere("holiday.holidayType = 'school'");
 
     if (regionCode) {
-      const fullRegionCode = `${countryCode}-${regionCode}`;
+      // Normalize region code to handle variants (e.g., NRW -> NW)
+      const normalizedRegion = normalizeRegionCode(regionCode);
+      const fullRegionCode = `${countryCode}-${normalizedRegion}`;
       query.andWhere(
         "(holiday.isNationwide = true OR holiday.region = :fullRegionCode)",
         { fullRegionCode },

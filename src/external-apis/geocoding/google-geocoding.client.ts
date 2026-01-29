@@ -8,6 +8,7 @@ import {
 } from "./google-geocoding.types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { normalizeRegionCode } from "../../common/utils/region.util";
 
 /**
  * Google Geocoding API Client
@@ -456,7 +457,7 @@ export class GoogleGeocodingClient {
       countryCode,
       continent,
       region: region || undefined,
-      regionCode: regionCode || undefined,
+      regionCode: normalizeRegionCode(regionCode) || undefined,
     };
   }
 

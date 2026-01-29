@@ -10,6 +10,7 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
 import { formatInParkTimezone } from "../common/utils/date.util";
+import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   calculateHolidayInfo,
   HolidayEntry,
@@ -722,13 +723,17 @@ export class ParksService {
           formatInParkTimezone(maxDate, park.timezone),
         );
 
-        const fullRegion = park.regionCode
-          ? `${park.countryCode}-${park.regionCode}`
-          : "";
+        // Normalize region codes for consistent comparison
+        const normalizedParkRegion = normalizeRegionCode(park.regionCode);
 
         for (const h of holidays) {
-          // Logic mirrors isHoliday: Nationwide OR region matches
-          if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
+          // Match: Nationwide holidays OR region matches (using normalized codes)
+          const normalizedHolidayRegion = normalizeRegionCode(h.region);
+          if (
+            h.isNationwide ||
+            (normalizedParkRegion &&
+              normalizedHolidayRegion === normalizedParkRegion)
+          ) {
             // Use park's timezone to determine the holiday date string
             const dateStr = formatInParkTimezone(h.date, park.timezone);
             // If multiple holidays on same day, prefer public holidays over school holidays
@@ -880,12 +885,17 @@ export class ParksService {
 
     // Map Holidays by Date (with type information for bridge day logic)
     const holidayMap = new Map<string, string | HolidayEntry>();
-    const fullRegion = park.regionCode
-      ? `${park.countryCode}-${park.regionCode}`
-      : "";
+    // Normalize region codes for consistent comparison
+    const normalizedParkRegion = normalizeRegionCode(park.regionCode);
 
     for (const h of holidays) {
-      if (h.isNationwide || (park.regionCode && h.region === fullRegion)) {
+      // Match: Nationwide holidays OR region matches (using normalized codes)
+      const normalizedHolidayRegion = normalizeRegionCode(h.region);
+      if (
+        h.isNationwide ||
+        (normalizedParkRegion &&
+          normalizedHolidayRegion === normalizedParkRegion)
+      ) {
         const d = formatInParkTimezone(h.date, park.timezone);
         // If multiple holidays on same day, prefer public holidays over school holidays
         const existing = holidayMap.get(d);
