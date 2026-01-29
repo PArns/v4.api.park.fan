@@ -281,8 +281,8 @@ export class AnalyticsService {
     });
     const timezone = park?.timezone || "UTC";
 
-    // Get current "Spot" average wait time (Latest snapshot)
-    const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
+    // Get current "Spot" P90 wait time (Latest snapshot)
+    const currentAvgWait = await this.getCurrentSpotP90WaitTime(parkId);
 
     if (currentAvgWait === null) {
       return {
@@ -430,8 +430,8 @@ export class AnalyticsService {
     // const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
     // const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
-    // Get current average wait time
-    const currentAvgWait = await this.getCurrentSpotAverageWaitTime(parkId);
+    // Get current P90 wait time
+    const currentAvgWait = await this.getCurrentSpotP90WaitTime(parkId);
 
     if (currentAvgWait === null) {
       return 100;
@@ -566,14 +566,16 @@ export class AnalyticsService {
   }
 
   /**
-   * Get current "Spot" average wait time across all operating attractions in a park.
-   * Calculates the average of the LATEST wait time for each attraction.
+   * Get current "Spot" P90 wait time across all operating attractions in a park.
+   * Calculates the 90th percentile of the LATEST wait time for each attraction.
+   *
+   * This handles the "Headliner" problem better than average.
    *
    * @param parkId - Park ID
    * @param minWaitTime - Minimum wait time threshold (default: 5 min to exclude walk-ons)
-   * @returns Average wait time or null if no data
+   * @returns P90 wait time or null if no data
    */
-  private async getCurrentSpotAverageWaitTime(
+  private async getCurrentSpotP90WaitTime(
     parkId: string,
     minWaitTime: number = 5,
   ): Promise<number | null> {
@@ -581,7 +583,7 @@ export class AnalyticsService {
     const windowAgo = new Date(Date.now() - 60 * 60 * 1000);
 
     // Subquery to get the latest timestamp per operating attraction
-    // Then calculate average of those latest wait times
+    // Then calculate P90 of those latest wait times
     const result = await this.queueDataRepository.query(
       `
       WITH LatestWaits AS (
@@ -598,7 +600,7 @@ export class AnalyticsService {
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT 
-        AVG("waitTime") as "avgWait",
+        PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY "waitTime") as "p90Wait",
         COUNT(*) as "count"
       FROM LatestWaits
     `,
@@ -613,10 +615,10 @@ export class AnalyticsService {
       parseInt(row.count) < this.MIN_SAMPLE_SIZE_FOR_THRESHOLD &&
       minWaitTime > 0
     ) {
-      return this.getCurrentSpotAverageWaitTime(parkId, 0); // Recursive with 0 threshold
+      return this.getCurrentSpotP90WaitTime(parkId, 0); // Recursive with 0 threshold
     }
 
-    return row?.avgWait ? parseFloat(row.avgWait) : null;
+    return row?.p90Wait ? Math.round(parseFloat(row.p90Wait)) : null;
   }
 
   /**
@@ -787,7 +789,7 @@ export class AnalyticsService {
         WHERE "parkId" = $1
       )
       SELECT 
-        ROUND(AVG(CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)) as current_avg_wait,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
@@ -1080,7 +1082,7 @@ export class AnalyticsService {
       `
       SELECT 
         to_timestamp(floor(extract(epoch from qd.timestamp) / 600) * 600) AT TIME ZONE 'UTC' as interval_timestamp,
-        ROUND(AVG(qd."waitTime")) as avg_wait
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric) as avg_wait
       FROM queue_data qd
       INNER JOIN attractions a ON a.id = qd."attractionId"
       WHERE a."parkId" = $1
@@ -2276,7 +2278,7 @@ export class AnalyticsService {
           p."continentSlug",
           p."countrySlug",
           p."citySlug",
-          AVG(lu."waitTime") as avg_wait,
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY lu."waitTime")::numeric) as avg_wait,
           COUNT(*) as active_rides,
           (SELECT COUNT(*) FROM attractions WHERE "parkId" = p.id) as total_attractions,
             (SELECT COUNT(*)

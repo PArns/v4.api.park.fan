@@ -52,7 +52,7 @@ export class QueueDataService {
     return (
       this.queueDataRepository
         .createQueryBuilder("qd")
-        .innerJoin("qd.attraction", "attraction")
+        .innerJoinAndSelect("qd.attraction", "attraction")
         .where("attraction.parkId = :parkId", { parkId })
         .andWhere("qd.timestamp >= :from", { from: fromDate })
         .andWhere("qd.timestamp <= :to", { to: toDate })

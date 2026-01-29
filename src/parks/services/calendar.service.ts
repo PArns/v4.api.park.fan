@@ -393,7 +393,7 @@ export class CalendarService {
       );
 
       if (dayQueueData.length > 0) {
-        const avgWaitTime = this.calculateAverageWaitTime(dayQueueData);
+        const avgWaitTime = this.calculateP90WaitTime(dayQueueData);
         crowdLevel = this.mapWaitTimeToCrowdLevel(avgWaitTime);
       } else {
         // No actual data available, fallback to prediction or moderate
@@ -782,14 +782,19 @@ export class CalendarService {
   /**
    * Calculate average wait time from queue data
    */
-  private calculateAverageWaitTime(queueData: QueueData[]): number {
+  private calculateP90WaitTime(queueData: QueueData[]): number {
     const waitTimes = queueData
-      .filter((q) => q.waitTime !== null && q.waitTime > 0)
-      .map((q) => q.waitTime!);
+      .filter(
+        (q) =>
+          q.waitTime !== null && q.waitTime > 0 && q.queueType === "STANDBY",
+      ) // Ensure STANDBY and valid
+      .map((q) => q.waitTime!)
+      .sort((a, b) => a - b);
 
     if (waitTimes.length === 0) return 0;
 
-    return waitTimes.reduce((sum, wt) => sum + wt, 0) / waitTimes.length;
+    const percentileIndex = Math.ceil(waitTimes.length * 0.9) - 1;
+    return waitTimes[percentileIndex];
   }
 
   /**
