@@ -43,13 +43,18 @@ export class StatsService {
    */
   async calculateAndStoreDailyStats(
     parkId: string,
-    date: Date,
+    date: Date | string,
   ): Promise<ParkDailyStats | null> {
     try {
       const park = await this.parkRepository.findOne({ where: { id: parkId } });
       if (!park) throw new Error("Park not found");
 
-      const dateStr = formatInParkTimezone(date, park.timezone);
+      let dateStr: string;
+      if (typeof date === "string") {
+        dateStr = date;
+      } else {
+        dateStr = formatInParkTimezone(date, park.timezone);
+      }
 
       // Define day boundaries in UTC based on park timezone
       // NOTE: This logic mimics CalendarService queue retrieval
@@ -58,9 +63,9 @@ export class StatsService {
 
       // Strategy: Fetch all queue data for the park in a broad 48h window around the date
       // then filter by converted timestamp. This is safer for timezones.
-      const queryStart = new Date(date);
+      const queryStart = new Date(dateStr);
       queryStart.setDate(queryStart.getDate() - 1);
-      const queryEnd = new Date(date);
+      const queryEnd = new Date(dateStr);
       queryEnd.setDate(queryEnd.getDate() + 2);
 
       const queueData = await this.queueDataRepository

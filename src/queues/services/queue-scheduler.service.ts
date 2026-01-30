@@ -43,7 +43,9 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("wartezeiten-schedule")
     private wartezeitenScheduleQueue: Queue,
     @InjectQueue("ml-monitoring")
+    @InjectQueue("ml-monitoring")
     private mlMonitoringQueue: Queue,
+    @InjectQueue("stats") private statsQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -367,6 +369,42 @@ export class QueueSchedulerService implements OnModuleInit {
           },
         );
       }
+    }
+
+    // Stats: Update current day (Hourly)
+    const hasStatsTodayCron = await this.hasRepeatableJob(
+      this.statsQueue,
+      "stats-today-cron",
+    );
+    if (!hasStatsTodayCron) {
+      await this.statsQueue.add(
+        "update-today-stats",
+        {},
+        {
+          repeat: {
+            cron: "0 * * * *", // Hourly at minute 0
+          },
+          jobId: "stats-today-cron",
+        },
+      );
+    }
+
+    // Stats: Finalize yesterday (Daily at 1am)
+    const hasStatsYesterdayCron = await this.hasRepeatableJob(
+      this.statsQueue,
+      "stats-yesterday-cron",
+    );
+    if (!hasStatsYesterdayCron) {
+      await this.statsQueue.add(
+        "finalize-yesterday-stats",
+        {},
+        {
+          repeat: {
+            cron: "0 1 * * *", // Daily at 1am
+          },
+          jobId: "stats-yesterday-cron",
+        },
+      );
     }
 
     this.logger.log("🎉 All scheduled jobs registered!");

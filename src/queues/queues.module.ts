@@ -42,6 +42,8 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays.module";
 import { DiscoveryModule } from "../discovery/discovery.module";
 import { RedisModule } from "../common/redis/redis.module";
+import { StatsModule } from "../stats/stats.module";
+import { StatsProcessor } from "./processors/stats.processor";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
@@ -108,6 +110,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
       { name: "analytics" },
       { name: "wartezeiten-schedule" },
       { name: "ml-monitoring" },
+      { name: "stats" },
     ),
 
     // Feature modules for processors
@@ -128,6 +131,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     WartezeitenModule,
     AnalyticsModule,
     DiscoveryModule,
+    StatsModule,
     RedisModule, // For cache warmup service
   ],
   providers: [
@@ -152,6 +156,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     OccupancyCalculationProcessor,
     WartezeitenScheduleProcessor,
     MLMonitoringProcessor,
+    StatsProcessor,
   ],
   exports: [BullModule], // Export for use in other modules
 })
