@@ -12,10 +12,12 @@ import { Request, Response } from "express";
 /**
  * Global logging interceptor for HTTP requests.
  *
- * Logs:
- * - Incoming requests (method, URL, IP)
- * - Response time
- * - Status code
+ * Only logs interesting events:
+ * - Errors (4xx, 5xx status codes)
+ * - Slow requests (>1000ms)
+ * - Admin/ML endpoints
+ *
+ * Filters out routine GET/POST requests to reduce log spam.
  */
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
@@ -36,9 +38,18 @@ export class LoggingInterceptor implements NestInterceptor {
         const { statusCode } = response;
         const responseTime = Date.now() - startTime;
 
-        this.logger.log(
-          `${method} ${url} ${statusCode} - ${responseTime}ms - ${ip} ${userAgent}`,
-        );
+        // Only log interesting events:
+        const isError = statusCode >= 400;
+        const isSlow = responseTime > 1000; // >1s
+        const isAdminOrML =
+          url.includes("/admin") || url.includes("/ml") || url.includes("/train");
+
+        if (isError || isSlow || isAdminOrML) {
+          const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
+          this.logger.log(
+            `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms - ${ip}`,
+          );
+        }
       }),
     );
   }

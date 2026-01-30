@@ -5,6 +5,8 @@ Model training script
 import argparse
 from datetime import datetime, timedelta, timezone
 import pandas as pd
+import psutil
+import os
 
 from config import get_settings
 from db import fetch_training_data
@@ -13,6 +15,13 @@ from model import WaitTimeModel
 from data_validation import validate_training_data
 
 settings = get_settings()
+
+
+def get_memory_usage():
+    """Get current memory usage in GB"""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / (1024 ** 3)  # Convert to GB
 
 
 def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,6 +76,10 @@ def train_model(version: str = None) -> None:
     print(f"   Version: {version}")
     print(f"{'=' * 60}\n")
 
+    # Memory monitoring - initial
+    initial_memory = get_memory_usage()
+    print(f"💾 Initial Memory: {initial_memory:.2f} GB\n")
+
     # 1. Define training period (last 2 years + 1 day buffer for today's data)
     end_date = datetime.now(timezone.utc) + timedelta(days=1)
     start_date = end_date - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
@@ -79,7 +92,9 @@ def train_model(version: str = None) -> None:
     # 2. Fetch training data
     print("📊 Fetching training data from PostgreSQL...")
     df = fetch_training_data(start_date, end_date)
+    after_fetch_memory = get_memory_usage()
     print(f"   Rows fetched: {len(df):,}")
+    print(f"   Memory after fetch: {after_fetch_memory:.2f} GB (+{after_fetch_memory - initial_memory:.2f} GB)")
     print()
 
     if len(df) == 0:
@@ -97,13 +112,16 @@ def train_model(version: str = None) -> None:
     import time
 
     print("🔧 Engineering features...")
+    before_features_memory = get_memory_usage()
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
+    after_features_memory = get_memory_usage()
     print(f"   Features: {len(get_feature_columns())}")
     print(
         f"   Feature engineering time: {feature_time:.2f}s ({feature_time / 60:.1f} minutes)"
     )
+    print(f"   Memory after features: {after_features_memory:.2f} GB (+{after_features_memory - before_features_memory:.2f} GB)")
     print()
 
     # 4. Drop rows with missing target

@@ -17,3 +17,4 @@ sqlalchemy==2.0.36
 # Utilities
 python-dateutil==2.9.0.post0
 pytz==2025.2
+psutil==6.1.1  # Memory monitoring (latest stable)
