@@ -21,12 +21,13 @@ async function generateSwaggerSpec(): Promise<void> {
   // Swagger generation only needs metadata, not actual DB connection
   const originalNodeEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "build"; // Special mode for build-time spec generation
-  
+
   // Set very short connection timeout to fail fast if connection is attempted
   // Use invalid host to prevent actual connection
   process.env.DB_HOST = "127.0.0.1";
   process.env.DB_PORT = "1"; // Invalid port
   process.env.DB_CONNECTION_TIMEOUT = "100";
+  process.env.SKIP_REDIS = "true"; // Skip Redis connection
 
   let app;
   try {
@@ -40,13 +41,13 @@ async function generateSwaggerSpec(): Promise<void> {
     // TypeORM connection failure is expected during build
     // Swagger generation only needs decorator metadata, not DB connection
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
     // If it's a connection error, we can still try to generate the spec
     // by catching the error at the module level
     if (errorMessage.includes("connect") || errorMessage.includes("ECONNREFUSED") || errorMessage.includes("timeout")) {
       console.warn("⚠️  Database connection failed during build (expected)");
       console.warn("⚠️  Attempting to generate Swagger spec without DB connection...");
-      
+
       // Try to create app with abortOnError: false to skip connection errors
       try {
         app = await NestFactory.create(AppModule, {
@@ -81,8 +82,8 @@ async function generateSwaggerSpec(): Promise<void> {
     .setTitle("park.fan API v4")
     .setDescription(
       "Real-time theme park intelligence powered by machine learning. " +
-        "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-        "for optimal theme park experiences worldwide.",
+      "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
+      "for optimal theme park experiences worldwide.",
     )
     .setVersion(packageJson.version)
     .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")

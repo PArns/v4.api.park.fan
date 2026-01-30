@@ -10,6 +10,16 @@ export const REDIS_CLIENT = "REDIS_CLIENT";
     {
       provide: REDIS_CLIENT,
       useFactory: (configService: ConfigService) => {
+        if (process.env.SKIP_REDIS === "true") {
+          return {
+            on: () => {},
+            get: () => Promise.resolve(null),
+            set: () => Promise.resolve("OK"),
+            quit: () => Promise.resolve("OK"),
+            disconnect: () => Promise.resolve("OK"),
+            readonly: true,
+          };
+        }
         return new Redis({
           host: configService.get<string>("REDIS_HOST") || "localhost",
           port: parseInt(configService.get<string>("REDIS_PORT") || "6379", 10),
