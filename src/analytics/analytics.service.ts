@@ -88,7 +88,7 @@ export class AnalyticsService {
     @InjectRepository(QueueDataAggregate)
     private queueDataAggregateRepository: Repository<QueueDataAggregate>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Determine the effective start time for analytics filtering
@@ -782,8 +782,9 @@ export class AnalyticsService {
         LIMIT 1
        ),
        -- Conditionally calculate daily stats if NOT found in optimization
-       ${!optimizedStats
-        ? `
+       ${
+         !optimizedStats
+           ? `
        today_max AS (
         -- Find max wait time for the park today
         SELECT MAX(qd."waitTime") as max_wait_today
@@ -806,8 +807,8 @@ export class AnalyticsService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" > 0
       ),`
-        : ""
-      }
+           : ""
+       }
       attraction_counts AS (
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
@@ -819,14 +820,16 @@ export class AnalyticsService {
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
-        ${optimizedStats
-        ? `${optimizedStats.avgWait} as avg_wait_today,`
-        : `(SELECT avg_wait_today FROM today_avg) as avg_wait_today,`
-      }
-        ${optimizedStats
-        ? `${optimizedStats.maxWait} as max_wait_today,`
-        : `(SELECT max_wait_today FROM today_max) as max_wait_today,`
-      }
+        ${
+          optimizedStats
+            ? `${optimizedStats.avgWait} as avg_wait_today,`
+            : `(SELECT avg_wait_today FROM today_avg) as avg_wait_today,`
+        }
+        ${
+          optimizedStats
+            ? `${optimizedStats.maxWait} as max_wait_today,`
+            : `(SELECT max_wait_today FROM today_max) as max_wait_today,`
+        }
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
@@ -2383,57 +2386,57 @@ export class AnalyticsService {
     const mostCrowdedPark =
       openParks.length > 0
         ? {
-          id: openParks[0].id,
-          name: openParks[0].name,
-          slug: openParks[0].slug,
-          city: openParks[0].city,
-          country: openParks[0].country,
-          countrySlug: openParks[0].countrySlug,
-          averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
-          url: buildParkUrl(openParks[0]),
-          totalAttractions: parseInt(openParks[0].total_attractions || "0"),
-          operatingAttractions: Math.max(
-            0,
-            parseInt(openParks[0].total_attractions || "0") -
-            parseInt(openParks[0].explicitly_closed_attractions || "0"),
-          ),
-          closedAttractions: parseInt(
-            openParks[0].explicitly_closed_attractions || "0",
-          ),
-        }
+            id: openParks[0].id,
+            name: openParks[0].name,
+            slug: openParks[0].slug,
+            city: openParks[0].city,
+            country: openParks[0].country,
+            countrySlug: openParks[0].countrySlug,
+            averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
+            url: buildParkUrl(openParks[0]),
+            totalAttractions: parseInt(openParks[0].total_attractions || "0"),
+            operatingAttractions: Math.max(
+              0,
+              parseInt(openParks[0].total_attractions || "0") -
+                parseInt(openParks[0].explicitly_closed_attractions || "0"),
+            ),
+            closedAttractions: parseInt(
+              openParks[0].explicitly_closed_attractions || "0",
+            ),
+          }
         : null;
 
     const leastCrowdedPark =
       openParks.length > 0
         ? {
-          id: openParks[openParks.length - 1].id,
-          name: openParks[openParks.length - 1].name,
-          slug: openParks[openParks.length - 1].slug,
-          city: openParks[openParks.length - 1].city,
-          country: openParks[openParks.length - 1].country,
-          countrySlug: openParks[openParks.length - 1].countrySlug,
-          averageWaitTime: Math.round(
-            openParks[openParks.length - 1].avg_wait,
-          ),
-          url: buildParkUrl(openParks[openParks.length - 1]),
-          totalAttractions: parseInt(
-            openParks[openParks.length - 1].total_attractions || "0",
-          ),
-          operatingAttractions: Math.max(
-            0,
-            parseInt(
-              openParks[openParks.length - 1].total_attractions || "0",
-            ) -
-            parseInt(
-              openParks[openParks.length - 1]
-                .explicitly_closed_attractions || "0",
+            id: openParks[openParks.length - 1].id,
+            name: openParks[openParks.length - 1].name,
+            slug: openParks[openParks.length - 1].slug,
+            city: openParks[openParks.length - 1].city,
+            country: openParks[openParks.length - 1].country,
+            countrySlug: openParks[openParks.length - 1].countrySlug,
+            averageWaitTime: Math.round(
+              openParks[openParks.length - 1].avg_wait,
             ),
-          ),
-          closedAttractions: parseInt(
-            openParks[openParks.length - 1].explicitly_closed_attractions ||
-            "0",
-          ),
-        }
+            url: buildParkUrl(openParks[openParks.length - 1]),
+            totalAttractions: parseInt(
+              openParks[openParks.length - 1].total_attractions || "0",
+            ),
+            operatingAttractions: Math.max(
+              0,
+              parseInt(
+                openParks[openParks.length - 1].total_attractions || "0",
+              ) -
+                parseInt(
+                  openParks[openParks.length - 1]
+                    .explicitly_closed_attractions || "0",
+                ),
+            ),
+            closedAttractions: parseInt(
+              openParks[openParks.length - 1].explicitly_closed_attractions ||
+                "0",
+            ),
+          }
         : null;
 
     // 3. Find Longest/Shortest Wait Ride (Global)
@@ -2483,39 +2486,39 @@ export class AnalyticsService {
     const longestWaitRide =
       rideStats.length > 0
         ? {
-          id: rideStats[0].attractionId,
-          name: rideStats[0].attractionName,
-          slug: rideStats[0].attractionSlug,
-          parkName: rideStats[0].parkName,
-          parkSlug: rideStats[0].slug,
-          parkCity: rideStats[0].city,
-          parkCountry: rideStats[0].country,
-          parkCountrySlug: rideStats[0].countrySlug,
-          waitTime: rideStats[0].waitTime,
-          url: buildAttractionUrl(rideStats[0], {
+            id: rideStats[0].attractionId,
+            name: rideStats[0].attractionName,
             slug: rideStats[0].attractionSlug,
-          }),
-          crowdLevel: null,
-        }
+            parkName: rideStats[0].parkName,
+            parkSlug: rideStats[0].slug,
+            parkCity: rideStats[0].city,
+            parkCountry: rideStats[0].country,
+            parkCountrySlug: rideStats[0].countrySlug,
+            waitTime: rideStats[0].waitTime,
+            url: buildAttractionUrl(rideStats[0], {
+              slug: rideStats[0].attractionSlug,
+            }),
+            crowdLevel: null,
+          }
         : null;
 
     const shortestWaitRide =
       rideStats.length > 0
         ? {
-          id: rideStats[rideStats.length - 1].attractionId,
-          name: rideStats[rideStats.length - 1].attractionName,
-          slug: rideStats[rideStats.length - 1].attractionSlug,
-          parkName: rideStats[rideStats.length - 1].parkName,
-          parkSlug: rideStats[rideStats.length - 1].slug,
-          parkCity: rideStats[rideStats.length - 1].city,
-          parkCountry: rideStats[rideStats.length - 1].country,
-          parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
-          waitTime: rideStats[rideStats.length - 1].waitTime,
-          url: buildAttractionUrl(rideStats[rideStats.length - 1], {
+            id: rideStats[rideStats.length - 1].attractionId,
+            name: rideStats[rideStats.length - 1].attractionName,
             slug: rideStats[rideStats.length - 1].attractionSlug,
-          }),
-          crowdLevel: null,
-        }
+            parkName: rideStats[rideStats.length - 1].parkName,
+            parkSlug: rideStats[rideStats.length - 1].slug,
+            parkCity: rideStats[rideStats.length - 1].city,
+            parkCountry: rideStats[rideStats.length - 1].country,
+            parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
+            waitTime: rideStats[rideStats.length - 1].waitTime,
+            url: buildAttractionUrl(rideStats[rideStats.length - 1], {
+              slug: rideStats[rideStats.length - 1].attractionSlug,
+            }),
+            crowdLevel: null,
+          }
         : null;
 
     // 4. Calculate Details for Top/Bottom Stats (Parallel & Optimized)
@@ -2532,89 +2535,89 @@ export class AnalyticsService {
     const mostCrowdedParkDetails =
       mostCrowdedPark && mostCrowdedOccupancy
         ? {
-          ...mostCrowdedPark,
-          crowdLevel: this.determineCrowdLevel(mostCrowdedOccupancy.current),
-          occupancy: mostCrowdedOccupancy.current,
-          comparedToTypical: mostCrowdedOccupancy.comparisonStatus,
-        }
+            ...mostCrowdedPark,
+            crowdLevel: this.determineCrowdLevel(mostCrowdedOccupancy.current),
+            occupancy: mostCrowdedOccupancy.current,
+            comparedToTypical: mostCrowdedOccupancy.comparisonStatus,
+          }
         : mostCrowdedPark
           ? {
-            ...mostCrowdedPark,
-            crowdLevel: null,
-            occupancy: null,
-            comparedToTypical: null,
-          }
+              ...mostCrowdedPark,
+              crowdLevel: null,
+              occupancy: null,
+              comparedToTypical: null,
+            }
           : null;
 
     const leastCrowdedParkDetails =
       leastCrowdedPark && leastCrowdedOccupancy
         ? {
-          ...leastCrowdedPark,
-          crowdLevel: this.determineCrowdLevel(leastCrowdedOccupancy.current),
-          occupancy: leastCrowdedOccupancy.current,
-          comparedToTypical: leastCrowdedOccupancy.comparisonStatus,
-        }
+            ...leastCrowdedPark,
+            crowdLevel: this.determineCrowdLevel(leastCrowdedOccupancy.current),
+            occupancy: leastCrowdedOccupancy.current,
+            comparedToTypical: leastCrowdedOccupancy.comparisonStatus,
+          }
         : leastCrowdedPark
           ? {
-            ...leastCrowdedPark,
-            crowdLevel: null,
-            occupancy: null,
-            comparedToTypical: null,
-          }
+              ...leastCrowdedPark,
+              crowdLevel: null,
+              occupancy: null,
+              comparedToTypical: null,
+            }
           : null;
 
     // Calculate load ratings for both rides in parallel
     const [longestRideRating, shortestRideRating] = await Promise.all([
       longestWaitRide
         ? this.get90thPercentileWithConfidence(
-          longestWaitRide.id,
-          "attraction",
-        ).then((p90Res) =>
-          this.getLoadRating(longestWaitRide.waitTime, p90Res.p90),
-        )
+            longestWaitRide.id,
+            "attraction",
+          ).then((p90Res) =>
+            this.getLoadRating(longestWaitRide.waitTime, p90Res.p90),
+          )
         : Promise.resolve(null),
       shortestWaitRide
         ? this.get90thPercentileWithConfidence(
-          shortestWaitRide.id,
-          "attraction",
-        ).then((p90Res) =>
-          this.getLoadRating(shortestWaitRide.waitTime, p90Res.p90),
-        )
+            shortestWaitRide.id,
+            "attraction",
+          ).then((p90Res) =>
+            this.getLoadRating(shortestWaitRide.waitTime, p90Res.p90),
+          )
         : Promise.resolve(null),
     ]);
 
     const longestWaitRideDetails =
       longestWaitRide && longestRideRating
         ? {
-          ...longestWaitRide,
-          crowdLevel: longestRideRating.rating,
-          baseline: longestRideRating.baseline,
-          comparison: this.getComparisonText(longestRideRating.rating),
-        }
+            ...longestWaitRide,
+            crowdLevel: longestRideRating.rating,
+            baseline: longestRideRating.baseline,
+            comparison: this.getComparisonText(longestRideRating.rating),
+          }
         : longestWaitRide
           ? {
-            ...longestWaitRide,
-            crowdLevel: null,
-            baseline: null,
-            comparison: null,
-          }
+              ...longestWaitRide,
+              crowdLevel: null,
+              baseline: null,
+              comparison: null,
+            }
           : null;
 
     const shortestWaitRideDetails =
       shortestWaitRide && shortestRideRating
         ? {
-          ...shortestWaitRide,
-          crowdLevel: shortestRideRating.rating,
-          baseline: shortestRideRating.baseline,
-          comparison: this.getComparisonText(shortestRideRating.rating),
-        }
+            ...shortestWaitRide,
+            crowdLevel: shortestRideRating.rating,
+            baseline: shortestRideRating.baseline,
+            comparison: this.getComparisonText(shortestRideRating.rating),
+          }
         : shortestWaitRide
           ? {
-            ...shortestWaitRide,
-            crowdLevel: null,
-            baseline: null,
-            comparison: null,
-          }
+              ...shortestWaitRide,
+              crowdLevel: null,
+              baseline: null,
+              comparison: null,
+            }
           : null;
 
     // Count open vs closed attractions
@@ -2832,8 +2835,8 @@ export class AnalyticsService {
             averageWaitTime:
               cityData.parkCount > 0
                 ? roundToNearest5Minutes(
-                  cityData.totalWaitTime / cityData.parkCount,
-                )
+                    cityData.totalWaitTime / cityData.parkCount,
+                  )
                 : null,
           });
         }
@@ -2844,8 +2847,8 @@ export class AnalyticsService {
           averageWaitTime:
             countryData.parkCount > 0
               ? roundToNearest5Minutes(
-                countryData.totalWaitTime / countryData.parkCount,
-              )
+                  countryData.totalWaitTime / countryData.parkCount,
+                )
               : null,
           cities,
         });
@@ -2857,8 +2860,8 @@ export class AnalyticsService {
         averageWaitTime:
           continentData.parkCount > 0
             ? roundToNearest5Minutes(
-              continentData.totalWaitTime / continentData.parkCount,
-            )
+                continentData.totalWaitTime / continentData.parkCount,
+              )
             : null,
         countries,
       });
