@@ -21,6 +21,7 @@ import { LocationModule } from "./location/location.module";
 import { DiscoveryModule } from "./discovery/discovery.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { AdminModule } from "./admin/admin.module";
+import { StatsModule } from "./stats/stats.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 
@@ -59,7 +60,7 @@ import { AppService } from "./app.service";
     // Phase 5: Analytics & ML
     AnalyticsModule,
     MLModule,
-
+    StatsModule,
     // Phase 6.3: Search & Filtering
     SearchModule,
 

@@ -40,6 +40,9 @@ import {
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import { addDays, parseISO } from "date-fns";
 
+import { ParkDailyStats } from "../../stats/entities/park-daily-stats.entity";
+import { StatsService } from "../../stats/stats.service";
+
 /**
  * Calendar Service
  *
@@ -59,6 +62,7 @@ export class CalendarService {
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     private readonly queueDataService: QueueDataService,
+    private readonly statsService: StatsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -103,6 +107,7 @@ export class CalendarService {
       holidays,
       refurbishments,
       historicalQueueData,
+      dailyStats,
     ] = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate),
       this.weatherService
@@ -180,6 +185,18 @@ export class CalendarService {
           return [];
         }
       })(),
+      this.statsService
+        .getDailyStats(
+          park.id,
+          formatInParkTimezone(fromDate, park.timezone),
+          formatInParkTimezone(toDate, park.timezone),
+        )
+        .catch((err) => {
+          this.logger.warn(
+            `Stats unavailable for ${park.slug}: ${err.message}`,
+          );
+          return [];
+        }),
     ]);
 
     // Build calendar days
@@ -197,6 +214,7 @@ export class CalendarService {
         refurbishments,
         includeHourly,
         historicalQueueData,
+        dailyStats as ParkDailyStats[], // Pass stats
         today,
       );
       days.push(dayData);
@@ -247,6 +265,7 @@ export class CalendarService {
     refurbishments: string[],
     includeHourly: string,
     historicalQueueData: QueueData[],
+    parkStats: ParkDailyStats[],
     today: string,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
@@ -405,20 +424,28 @@ export class CalendarService {
     if (status === "CLOSED") {
       crowdLevel = "closed";
     } else if (isHistorical) {
-      // Use actual wait time data for today and past dates
-      const dayQueueData = historicalQueueData.filter(
-        (q) =>
-          formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
-          q.waitTime !== null &&
-          q.waitTime > 0,
-      );
+      // Use cached P90 from ParkDailyStats if available
+      // If not, fall back to historicalQueueData calculation (legacy/fallback)
+      const cachedStat = this.findCachedStat(dateStr, parkStats);
 
-      if (dayQueueData.length > 0) {
-        const avgWaitTime = this.calculateP90WaitTime(dayQueueData);
-        crowdLevel = this.mapWaitTimeToCrowdLevel(avgWaitTime);
+      if (cachedStat && cachedStat.p90WaitTime !== null) {
+        crowdLevel = this.mapWaitTimeToCrowdLevel(cachedStat.p90WaitTime);
       } else {
-        // No actual data available, fallback to prediction or moderate
-        crowdLevel = mlPrediction?.crowdLevel || "moderate";
+        // Legacy Fallback: Use actual wait time data day dump
+        const dayQueueData = historicalQueueData.filter(
+          (q) =>
+            formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
+            q.waitTime !== null &&
+            q.waitTime > 0,
+        );
+
+        if (dayQueueData.length > 0) {
+          const avgWaitTime = this.calculateP90WaitTime(dayQueueData);
+          crowdLevel = this.mapWaitTimeToCrowdLevel(avgWaitTime);
+        } else {
+          // No actual data available, fallback to prediction or moderate
+          crowdLevel = mlPrediction?.crowdLevel || "moderate";
+        }
       }
     } else {
       // Future date: use ML prediction
@@ -827,5 +854,15 @@ export class CalendarService {
     if (avgWaitTime <= 45) return "moderate";
     if (avgWaitTime <= 60) return "high";
     return "very_high";
+  }
+
+  /**
+   * Helper to find cached stat for a specific date
+   */
+  private findCachedStat(
+    dateStr: string,
+    stats: ParkDailyStats[],
+  ): ParkDailyStats | undefined {
+    return stats.find((s) => s.date === dateStr);
   }
 }
