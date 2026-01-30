@@ -16,6 +16,7 @@ import { ShowLiveData } from "../shows/entities/show-live-data.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
       PredictionAccuracy,
       WaitTimePrediction,
       QueueDataAggregate,
+      ParkDailyStats,
     ]),
   ],
   providers: [AnalyticsService],

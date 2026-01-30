@@ -16,6 +16,7 @@ import { ShowLiveData } from "../shows/entities/show-live-data.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -87,6 +88,8 @@ export class AnalyticsService {
     private waitTimePredictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueDataAggregate)
     private queueDataAggregateRepository: Repository<QueueDataAggregate>,
+    @InjectRepository(ParkDailyStats)
+    private parkDailyStatsRepository: Repository<ParkDailyStats>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -729,27 +732,29 @@ export class AnalyticsService {
     // Single optimized query combining all statistics
     // OPTIMIZATION: Try to use ParkDailyStats for "avg_wait_today" and "max_wait_today"
     // This avoids the heavy aggregation on queue_data for the entire day
-    let optimizedStats: { avgWait: number; maxWait: number } | null = null;
+    let optimizedAvgWait: number | null = null;
+    let optimizedMaxWait: number | null = null;
     try {
       const todayStr = getCurrentDateInTimezone(resolvedTimezone);
-      const dailyStats = await this.parkRepository.manager
-        .createQueryBuilder("ParkDailyStats", "stats")
-        .where("stats.parkId = :parkId", { parkId })
-        .andWhere("stats.date = :todayStr", { todayStr })
-        .getOne();
+      const dailyStats = await this.parkDailyStatsRepository.findOne({
+        where: { parkId, date: todayStr },
+      });
 
       if (dailyStats) {
-        optimizedStats = {
-          avgWait: dailyStats.p90WaitTime || 0, // USE P90 AS AVG (User preference)
-          maxWait: dailyStats.maxWaitTime || 0,
-        };
+        optimizedAvgWait = dailyStats.p90WaitTime; // USE P90 AS AVG (User preference)
+        optimizedMaxWait = dailyStats.maxWaitTime;
       }
     } catch (_e) {
       // Ignore errors, fall back to aggregation
     }
 
-    const result = await this.queueDataRepository.query(
-      `
+    // Build SQL query conditionally based on whether we have optimized stats
+    let query: string;
+    let queryParams: any[];
+
+    if (optimizedAvgWait !== null && optimizedMaxWait !== null) {
+      // Fast path: Use pre-computed stats from ParkDailyStats
+      query = `
       WITH latest_queue AS (
         -- Get latest queue data per attraction (for current stats)
         SELECT DISTINCT ON (qd."attractionId")
@@ -780,35 +785,7 @@ export class AnalyticsService {
         GROUP BY hour
         ORDER BY hour_avg DESC
         LIMIT 1
-       ),
-       -- Conditionally calculate daily stats if NOT found in optimization
-       ${
-         !optimizedStats
-           ? `
-       today_max AS (
-        -- Find max wait time for the park today
-        SELECT MAX(qd."waitTime") as max_wait_today
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
-          AND qd.timestamp BETWEEN $3 AND $4
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
       ),
-      today_avg AS (
-        -- Overall average for today
-        SELECT AVG(qd."waitTime") as avg_wait_today
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
-          AND qd.timestamp BETWEEN $3 AND $4
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" > 0
-      ),`
-           : ""
-       }
       attraction_counts AS (
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
@@ -820,30 +797,108 @@ export class AnalyticsService {
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
-        ${
-          optimizedStats
-            ? `${optimizedStats.avgWait} as avg_wait_today,`
-            : `(SELECT avg_wait_today FROM today_avg) as avg_wait_today,`
-        }
-        ${
-          optimizedStats
-            ? `${optimizedStats.maxWait} as max_wait_today,`
-            : `(SELECT max_wait_today FROM today_max) as max_wait_today,`
-        }
+        $7::numeric as avg_wait_today,
+        $8::numeric as max_wait_today,
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1
-      `,
-      [
+      `;
+      queryParams = [
         parkId,
         windowAgo,
         startOfDay,
         now,
         resolvedTimezone,
         this.MIN_WAIT_TIME_THRESHOLD,
-      ],
-    );
+        optimizedAvgWait,
+        optimizedMaxWait,
+      ];
+    } else {
+      // Slow path: Calculate from queue_data
+      query = `
+      WITH latest_queue AS (
+        -- Get latest queue data per attraction (for current stats)
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime",
+          qd.status,
+          qd.timestamp
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $2  -- Last 2 hours window
+        ORDER BY qd."attractionId", 
+          CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
+          qd.timestamp DESC
+      ),
+      today_hourly AS (
+        -- Aggregate by hour to find peak (using Park Timezone)
+        SELECT 
+          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $5) as hour,
+          AVG(qd."waitTime") as hour_avg
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $3  -- Start of today (Effective)
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+        GROUP BY hour
+        ORDER BY hour_avg DESC
+        LIMIT 1
+      ),
+      today_max AS (
+        -- Find max wait time for the park today
+        SELECT MAX(qd."waitTime") as max_wait_today
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND qd.timestamp BETWEEN $3 AND $4
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+      ),
+      today_avg AS (
+        -- Overall P90 for today (not average - we use P90 as the representative metric)
+        SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as avg_wait_today
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND qd.timestamp BETWEEN $3 AND $4
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" > 0
+      ),
+      attraction_counts AS (
+        -- Total attraction count
+        SELECT COUNT(*) as total_attractions
+        FROM attractions
+        WHERE "parkId" = $1
+      )
+      SELECT 
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
+        -- Count explicitly closed attractions (has recent data AND not OPERATING)
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
+        (SELECT total_attractions FROM attraction_counts) as total_count,
+        (SELECT avg_wait_today FROM today_avg) as avg_wait_today,
+        (SELECT max_wait_today FROM today_max) as max_wait_today,
+        (SELECT hour FROM today_hourly) as peak_hour
+      FROM attractions a
+      LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
+      WHERE a."parkId" = $1
+      `;
+      queryParams = [
+        parkId,
+        windowAgo,
+        startOfDay,
+        now,
+        resolvedTimezone,
+        this.MIN_WAIT_TIME_THRESHOLD,
+      ];
+    }
+
+    const result = await this.queueDataRepository.query(query, queryParams);
 
     const stats = result[0];
 
