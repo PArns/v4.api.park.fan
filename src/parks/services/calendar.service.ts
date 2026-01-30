@@ -109,7 +109,12 @@ export class CalendarService {
       historicalQueueData,
       dailyStats,
     ] = await Promise.all([
-      this.parksService.getSchedule(park.id, fromDate, toDate),
+      this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
+        this.logger.warn(
+          `Schedule unavailable for ${park.slug}: ${err.message}`,
+        );
+        return [];
+      }),
       this.weatherService
         .getWeatherData(park.id, fromDate, toDate)
         .catch((err) => {
