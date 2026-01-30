@@ -25,4 +25,6 @@ RUN mkdir -p /app/models
 EXPOSE 8000
 
 # Run FastAPI with uvicorn (production mode)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log: Suppress HTTP request logs (GET /health spam)
+# Application logs (logger.info) are still shown
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
