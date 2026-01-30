@@ -67,12 +67,6 @@ services:
         condition: service_healthy
     networks:
       - parkfan-network
-    deploy:
-      resources:
-        limits:
-          memory: 10G  # Maximum memory for ML training (handles 1.3M+ rows with feature engineering)
-        reservations:
-          memory: 8G   # Reserved memory to ensure training doesn't OOM
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

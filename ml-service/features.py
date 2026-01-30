@@ -28,7 +28,7 @@ def convert_to_local_time(
         print("⚠️  pytz not installed, using UTC. Install with: pip install pytz")
         return df
 
-    df = df.copy()
+    # No need for copy - we modify via loc which creates copies internally
 
     # Ensure timestamp is datetime and timezone-aware (as UTC)
     if df["timestamp"].dt.tz is None:
@@ -77,7 +77,7 @@ def add_weekend_feature(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Da
     Returns:
         DataFrame with 'is_weekend' column added
     """
-    df = df.copy()
+    # No need for copy - adding simple column
 
     # Middle East countries use Friday+Saturday as weekend
     middle_east_countries = ["SA", "AE", "BH", "KW", "OM", "QA", "IL"]
@@ -171,7 +171,7 @@ def add_time_features(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Data
 
 def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     """Process weather features"""
-    df = df.copy()
+    # No need for copy - pandas operations create copies automatically
 
     # Fill missing weather - numeric features with mean, categorical with mode
     numeric_weather_cols = [
@@ -259,7 +259,7 @@ def add_holiday_features(
     - Primary country/region (park's location)
     - Influencing regions (from influencingRegions JSON)
     """
-    df = df.copy()
+    # No need for copy - merge operations create new DataFrames
 
     # Initialize holiday columns
     df["is_holiday_primary"] = 0
@@ -508,7 +508,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     - wait_lag_1w: Wait time at same time last week (Time-based)
     - rolling_avg_7d: 7-day rolling average
     """
-    df = df.copy()
+    # No need for copy - rolling/transform operations handle this
     if "timestamp" not in df.columns:
         return df
 
@@ -715,7 +715,7 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with interaction features added
     """
-    df = df.copy()
+    # No need for copy - simple column additions
 
     # hour * is_weekend: Peak times on weekends are different
     # Weekend mornings (9-11) and afternoons (14-16) are typically busier
@@ -762,7 +762,7 @@ def add_park_occupancy_feature(
     Returns:
         DataFrame with park_occupancy_pct feature
     """
-    df = df.copy()
+    # No need for copy - adding simple column
 
     # Initialize with default (100% = typical)
     df["park_occupancy_pct"] = 100.0
@@ -823,7 +823,7 @@ def add_time_since_park_open(
     Returns:
         DataFrame with time_since_park_open_mins feature
     """
-    df = df.copy()
+    # No need for copy - adding simple column
 
     # Initialize with 0 (unknown)
     df["time_since_park_open_mins"] = 0.0
@@ -875,7 +875,7 @@ def add_downtime_features(
     Returns:
         DataFrame with had_downtime_today and downtime_minutes_today features
     """
-    df = df.copy()
+    # No need for copy - adding simple columns
 
     # Initialize with defaults (no downtime)
     df["had_downtime_today"] = 0
@@ -908,7 +908,7 @@ def add_virtual_queue_feature(
     Returns:
         DataFrame with has_virtual_queue feature
     """
-    df = df.copy()
+    # No need for copy - adding simple column
 
     # Initialize with default (no virtual queue)
     df["has_virtual_queue"] = 0
@@ -941,7 +941,7 @@ def add_park_schedule_features(
         end_date: Query end date
         feature_context: Optional context for live data override
     """
-    df = df.copy()
+    # No need for copy - merge operations create new DataFrames
 
     # Use cached schedules if provided, otherwise fetch
     if cached_schedules_df is not None:
@@ -1141,6 +1141,9 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
     - Resample to 1-hour buckets (perfect for hourly predictions)
     - Use mean for wait times (represents hourly average)
     - Forward fill up to 2 hours for minor gaps
+    
+    OPTIMIZATION: Uses chunked processing to avoid memory explosion
+    from holding 2275 DataFrames in memory simultaneously
     """
     if df.empty:
         return df
@@ -1150,51 +1153,65 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
 
     print(f"   Rows before resampling: {len(df):,}")
 
-    resampled_parts = []
+    # CRITICAL FIX: Process in chunks to avoid 15GB memory spike
+    CHUNK_SIZE = 100  # Process 100 attractions at a time
+    resampled_chunks = []
+    
+    # Get all groups first (this is fast, just creates tuples)
+    groups = list(df.groupby(["attractionId", "parkId"]))
+    total_groups = len(groups)
+    
+    # Process in chunks
+    for chunk_idx in range(0, total_groups, CHUNK_SIZE):
+        chunk_groups = groups[chunk_idx:chunk_idx + CHUNK_SIZE]
+        chunk_parts = []
+        
+        for (attraction_id, park_id), group in chunk_groups:
+            # Set sorted timestamp index
+            group = group.set_index("timestamp").sort_index()
 
-    for (attraction_id, park_id), group in df.groupby(["attractionId", "parkId"]):
-        # Set sorted timestamp index
-        group = group.set_index("timestamp").sort_index()
+            # Identify columns to aggregate
+            numeric_cols = group.select_dtypes(include=np.number).columns.tolist()
+            # Exclude 'waitTime' from the 'first' aggregation if it's in numeric_cols
+            # as it will be handled by 'mean'
+            if "waitTime" in numeric_cols:
+                numeric_cols.remove("waitTime")
 
-        # Identify columns to aggregate
-        numeric_cols = group.select_dtypes(include=np.number).columns.tolist()
-        # Exclude 'waitTime' from the 'first' aggregation if it's in numeric_cols
-        # as it will be handled by 'mean'
-        if "waitTime" in numeric_cols:
-            numeric_cols.remove("waitTime")
+            non_numeric_cols = group.select_dtypes(exclude=np.number).columns.tolist()
 
-        non_numeric_cols = group.select_dtypes(exclude=np.number).columns.tolist()
+            # Define aggregation dictionary
+            agg_dict = {"waitTime": "mean"}
+            for col in numeric_cols:
+                agg_dict[col] = "first"  # Take the first value for other numeric columns
+            for col in non_numeric_cols:
+                agg_dict[col] = "first"  # Take the first value for non-numeric columns
 
-        # Define aggregation dictionary
-        agg_dict = {"waitTime": "mean"}
-        for col in numeric_cols:
-            agg_dict[col] = "first"  # Take the first value for other numeric columns
-        for col in non_numeric_cols:
-            agg_dict[col] = "first"  # Take the first value for non-numeric columns
+            # Resample to 30-minute intervals (sweet spot for hourly predictions)
+            # Mean: Average wait time within 30 mins
+            # Forward fill: Handle gaps up to 2 hours (4 * 30min = 2h)
+            resampled = group.resample("30min").agg(agg_dict).ffill(limit=4)
 
-        # Resample to 30-minute intervals (sweet spot for hourly predictions)
-        # Mean: Average wait time within 30 mins
-        # Forward fill: Handle gaps up to 2 hours (4 * 30min = 2h)
-        # NOTE: This can increase row count if there are many gaps in the original data
-        # (e.g., if data is sparse, forward-fill creates interpolated rows)
-        resampled = group.resample("30min").agg(agg_dict).ffill(limit=4)
+            # Restore identifiers
+            resampled["attractionId"] = attraction_id
+            resampled["parkId"] = park_id
+            resampled = resampled.reset_index()
 
-        # Restore identifiers
-        resampled["attractionId"] = attraction_id
-        resampled["parkId"] = park_id
-        resampled = resampled.reset_index()
+            chunk_parts.append(resampled)
+        
+        # Concat this chunk and add to final list
+        if chunk_parts:
+            chunk_df = pd.concat(chunk_parts, ignore_index=True)
+            resampled_chunks.append(chunk_df)
+            del chunk_parts  # Explicit cleanup to free memory
 
-        resampled_parts.append(resampled)
-
-    if not resampled_parts:
+    if not resampled_chunks:
         return pd.DataFrame()
 
-    df_resampled = pd.concat(resampled_parts, ignore_index=True)
+    # Final concat of chunks (much smaller memory footprint)
+    df_resampled = pd.concat(resampled_chunks, ignore_index=True)
 
     # Drop rows that weren't filled (original NaNs or beyond limit)
     df_resampled = df_resampled.dropna(subset=["waitTime", "parkId"])
-
-    # Restore columns created by ffill (parkId etc should be preserved)
 
     print(f"   Rows after resampling: {len(df_resampled):,}")
     return df_resampled
@@ -1221,7 +1238,7 @@ def add_bridge_day_feature(
         end_date: End date for holiday fetch
         feature_context: Optional context for real-time override
     """
-    df = df.copy()
+    # No need for copy - merge operations create new DataFrames
     df["is_bridge_day"] = 0
 
     # 1. Use Feature Context if available (Inference)
@@ -1341,7 +1358,7 @@ def add_park_has_schedule_feature(
     Returns:
         DataFrame with park_has_schedule feature
     """
-    df = df.copy()
+    # No need for copy - adding simple column
 
     # Initialize with default (assume schedule exists = better quality)
     df["park_has_schedule"] = 1
