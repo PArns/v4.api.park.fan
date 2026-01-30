@@ -87,13 +87,15 @@ export class StatsService {
       if (dayQueueData.length === 0) {
         // No data for this day
         // We still might want to store a record with nulls to prevent re-calc
-        return this.upsertStats(parkId, dateStr, null, null);
+        return this.upsertStats(parkId, dateStr, null, null, null);
       }
 
-      // Calculate P90
-      const p90 = this.calculateP90(dayQueueData.map((q) => q.waitTime!));
+      // Calculate P90 and Max
+      const waitTimes = dayQueueData.map((q) => q.waitTime!);
+      const p90 = this.calculateP90(waitTimes);
+      const max = Math.max(...waitTimes);
 
-      return this.upsertStats(parkId, dateStr, p90, dayQueueData.length);
+      return this.upsertStats(parkId, dateStr, p90, max, dayQueueData.length);
     } catch (error) {
       this.logger.error(
         `Failed to calculate stats for ${parkId} on ${date}: ${error}`,
@@ -106,6 +108,7 @@ export class StatsService {
     parkId: string,
     date: string,
     p90: number | null,
+    max: number | null,
     sampleSize: number | null,
   ): Promise<ParkDailyStats> {
     const existing = await this.statsRepository.findOne({
@@ -114,6 +117,7 @@ export class StatsService {
 
     if (existing) {
       existing.p90WaitTime = p90;
+      existing.maxWaitTime = max;
       existing.metadata = {
         ...existing.metadata,
         sampleSize,
@@ -126,6 +130,7 @@ export class StatsService {
       parkId,
       date,
       p90WaitTime: p90,
+      maxWaitTime: max,
       metadata: { sampleSize, lastUpdated: new Date() },
     });
     return this.statsRepository.save(newItem);

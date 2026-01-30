@@ -30,6 +30,9 @@ export class ParkDailyStats {
   p90WaitTime: number | null;
 
   @Column({ type: "int", nullable: true })
+  maxWaitTime: number | null;
+
+  @Column({ type: "int", nullable: true })
   attendance: number | null;
 
   @Column({ type: "jsonb", nullable: true })
