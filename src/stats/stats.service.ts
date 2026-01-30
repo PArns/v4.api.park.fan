@@ -71,7 +71,8 @@ export class StatsService {
       const queueData = await this.queueDataRepository
         .createQueryBuilder("q")
         .select(["q.waitTime", "q.timestamp"])
-        .where("q.parkId = :parkId", { parkId })
+        .innerJoin("q.attraction", "a")
+        .where("a.parkId = :parkId", { parkId })
         .andWhere("q.timestamp >= :queryStart", { queryStart })
         .andWhere("q.timestamp < :queryEnd", { queryEnd })
         .andWhere("q.queueType = :qt", { qt: QueueType.STANDBY })
