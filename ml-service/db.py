@@ -95,31 +95,38 @@ def fetch_training_data(
     - avg_wait_last_24h, avg_wait_same_hour_last_week
     """
 
-    query = text("""
-        WITH queue_with_park AS (
+    query = text(
+        """
+        WITH hourly_queue AS (
+            -- Aggregate 5-min data to hourly buckets (reduces ~12x data volume)
             SELECT
-                qd.id,
                 qd."attractionId",
                 a."parkId",
                 a."attractionType",
-                qd.timestamp,
-                qd."waitTime",
-                EXTRACT(HOUR FROM qd.timestamp) as hour,
-                EXTRACT(DOW FROM qd.timestamp) as day_of_week,
-                EXTRACT(MONTH FROM qd.timestamp) as month,
+                DATE_TRUNC('hour', qd.timestamp) as timestamp,
+                -- Use median for robustness against outliers
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "waitTime",
+                EXTRACT(HOUR FROM DATE_TRUNC('hour', qd.timestamp)) as hour,
+                EXTRACT(DOW FROM DATE_TRUNC('hour', qd.timestamp)) as day_of_week,
+                EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) as month,
                 CASE
-                    WHEN EXTRACT(MONTH FROM qd.timestamp) IN (12, 1, 2) THEN 0  -- Winter
-                    WHEN EXTRACT(MONTH FROM qd.timestamp) IN (3, 4, 5) THEN 1   -- Spring
-                    WHEN EXTRACT(MONTH FROM qd.timestamp) IN (6, 7, 8) THEN 2   -- Summer
-                    ELSE 3                                                        -- Fall
+                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (12, 1, 2) THEN 0
+                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (3, 4, 5) THEN 1
+                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (6, 7, 8) THEN 2
+                    ELSE 3
                 END as season
             FROM queue_data qd
             INNER JOIN attractions a ON a.id = qd."attractionId"
-            WHERE qd."queueType" = 'STANDBY'  -- Use index-friendly order: queueType first
+            WHERE qd."queueType" = 'STANDBY'
                 AND qd.status = 'OPERATING'
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 0
+            GROUP BY 
+                qd."attractionId",
+                a."parkId",
+                a."attractionType",
+                DATE_TRUNC('hour', qd.timestamp)
         ),
         weather_daily AS (
             SELECT
@@ -136,18 +143,19 @@ def fetch_training_data(
                 AND "dataType" = 'historical'
         )
         SELECT
-            qwp.*,
+            hq.*,
             wd."temperatureMax",
             wd."temperatureMin",
             wd."precipitationSum" as precipitation,
             wd."snowfallSum" as "snowfallSum",
             wd."windSpeedMax" as "windSpeedMax",
             wd."weatherCode"
-        FROM queue_with_park qwp
-        LEFT JOIN weather_daily wd ON wd."parkId" = qwp."parkId"
-            AND DATE(qwp.timestamp) = wd.date
-        ORDER BY qwp.timestamp
-    """)
+        FROM hourly_queue hq
+        LEFT JOIN weather_daily wd ON wd."parkId" = hq."parkId"
+            AND DATE(hq.timestamp) = wd.date
+        ORDER BY hq.timestamp
+    """
+    )
 
     import time
 
@@ -158,6 +166,7 @@ def fetch_training_data(
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         query_time = time.time() - start_time
         print(f"   Query execution time: {query_time:.2f}s")
+
         return convert_df_types(df)
 
 
@@ -200,7 +209,8 @@ def fetch_queue_aggregates(
         ts = ts.replace(minute=0, second=0, microsecond=0)
         target_timestamps.append(ts)
 
-    query = text("""
+    query = text(
+        """
         SELECT
             "attractionId" as attraction_id,
             hour,
@@ -219,7 +229,8 @@ def fetch_queue_aggregates(
         WHERE "attractionId" = ANY(:attraction_ids)
           AND hour = ANY(:target_hours)
         ORDER BY "attractionId", hour DESC
-    """)
+    """
+    )
 
     with engine.connect() as conn:
         result = conn.execute(
@@ -241,13 +252,15 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
 
     Returns: {park_id: [country_codes]}
     """
-    query = text("""
+    query = text(
+        """
         SELECT
             id as park_id,
             COALESCE("influencingCountries", ARRAY["countryCode"]) as countries
         FROM parks
         WHERE "countryCode" IS NOT NULL
-    """)
+    """
+    )
 
     with get_db() as db:
         result = db.execute(query)
@@ -267,7 +280,8 @@ def fetch_holidays(
     - holiday_type
     - is_nationwide
     """
-    query = text("""
+    query = text(
+        """
         SELECT
             date,
             country,
@@ -277,7 +291,8 @@ def fetch_holidays(
         FROM holidays
         WHERE country = ANY(:countries)
             AND date BETWEEN :start_date AND :end_date
-    """)
+    """
+    )
 
     with get_db() as db:
         result = db.execute(
@@ -324,7 +339,8 @@ def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
         if age < _parks_metadata_cache_ttl:
             return _parks_metadata_cache.copy()
 
-    query = text("""
+    query = text(
+        """
         SELECT
             p.id as park_id,
             p.name,
@@ -340,7 +356,8 @@ def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
         LEFT JOIN attractions a ON a."parkId" = p.id
         GROUP BY p.id, p.name, p."countryCode", p."regionCode", p.timezone, 
                  p."influencingRegions", p."influenceRadiusKm", p.latitude, p.longitude
-    """)
+    """
+    )
 
     with get_db() as db:
         result = db.execute(query)
@@ -379,7 +396,8 @@ def fetch_park_schedules(
     - opening_time
     - closing_time
     """
-    query = text("""
+    query = text(
+        """
         SELECT
             "parkId" as park_id,
             "attractionId" as attraction_id,
@@ -398,7 +416,8 @@ def fetch_park_schedules(
                 OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT')
             )
         ORDER BY "parkId", date, "scheduleType"
-    """)
+    """
+    )
 
     with get_db() as db:
         # Extract date() from datetime objects for SQL query
@@ -420,12 +439,14 @@ def fetch_active_model_version() -> str:
         Model version string (e.g., 'v1.1.0')
         Falls back to 'v1.0.0' if no active model found
     """
-    query = text("""
+    query = text(
+        """
         SELECT version
         FROM ml_models
         WHERE "isActive" = true
         LIMIT 1
-    """)
+    """
+    )
 
     try:
         with get_db() as db:
@@ -456,7 +477,8 @@ def fetch_prediction_errors_for_training(
 
     Used to weight training samples: higher weights for samples with high prediction errors
     """
-    query = text("""
+    query = text(
+        """
         SELECT
             pa."attraction_id" as "attractionId",
             pa."target_time" as timestamp,
@@ -467,7 +489,8 @@ def fetch_prediction_errors_for_training(
             AND pa."target_time" BETWEEN :start_date AND :end_date
             AND pa."absolute_error" IS NOT NULL
             AND pa."absolute_error" >= 0
-    """)
+    """
+    )
 
     try:
         with get_db() as db:

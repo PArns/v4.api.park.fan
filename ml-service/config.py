@@ -37,11 +37,16 @@ class Settings(BaseSettings):
     VALIDATION_DAYS: int = 30
 
     # Sample Weight Configuration (Feedback Loop)
-    # Feature is enabled by default, but only activates when sufficient data is available
-    # With limited data (<30 days), sample weights are automatically disabled to avoid overfitting
-    ENABLE_SAMPLE_WEIGHTS: bool = (
-        True  # Feature enabled, but requires MIN_DATA_DAYS_FOR_WEIGHTS
-    )
+    # DISABLED: Currently deactivated due to performance concerns with large prediction_accuracy table.
+    # The JOIN on prediction_accuracy significantly slows down training queries.
+    #
+    # Future Alternative (when > 6 months of data):
+    # Instead of timestamp-level matching, use attraction-level aggregated weights:
+    #   SELECT attractionId, AVG(absolute_error) as avg_error FROM prediction_accuracy GROUP BY attractionId
+    # This reduces the weight calculation to O(attractions) instead of O(training_rows).
+    #
+    # For now: Train with uniform weights. 59 features + 2 years lookback is sufficient.
+    ENABLE_SAMPLE_WEIGHTS: bool = False  # Disabled for performance
     SAMPLE_WEIGHT_FACTOR: float = (
         0.3  # Conservative default (0.3 = 30% boost, weights: 1.0 - 1.3)
     )

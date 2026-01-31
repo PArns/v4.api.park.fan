@@ -31,7 +31,7 @@ def get_memory_usage():
     """Get current memory usage in GB"""
     process = psutil.Process(os.getpid())
     mem_info = process.memory_info()
-    return mem_info.rss / (1024 ** 3)  # Convert to GB
+    return mem_info.rss / (1024**3)  # Convert to GB
 
 
 def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
@@ -90,21 +90,62 @@ def train_model(version: str = None) -> None:
     initial_memory = get_memory_usage()
     logger.info(f"💾 Initial Memory: {initial_memory:.2f} GB\n")
 
-    # 1. Define training period (last 2 years + 1 day buffer for today's data)
-    end_date = datetime.now(timezone.utc) + timedelta(days=1)
-    start_date = end_date - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
+    # 1. Define training period - use actual data range instead of fixed lookback
+    # This prevents querying years of empty data
+    logger.info("📅 Determining training period from actual data...")
 
-    logger.info("📅 Training Period:")
-    logger.info(f"   Start: {start_date.strftime('%Y-%m-%d')}")
-    logger.info(f"   End: {end_date.strftime('%Y-%m-%d')}")
-    logger.info("")
+    from db import get_db
+    from sqlalchemy import text
+
+    with get_db() as db:
+        # Get actual data range
+        range_query = text(
+            """
+            SELECT 
+                MIN(timestamp) as earliest,
+                MAX(timestamp) as latest,
+                COUNT(*) as total_rows
+            FROM queue_data
+            WHERE "queueType" = 'STANDBY'
+                AND status = 'OPERATING'
+                AND "waitTime" IS NOT NULL
+        """
+        )
+        result = db.execute(range_query).fetchone()
+
+        if result.total_rows == 0:
+            logger.error("❌ No queue data found in database!")
+            return
+
+        # Use actual range, or limit to configured lookback (whichever is smaller)
+        data_start = result.earliest
+        data_end = result.latest
+
+        # Apply configured limit (don't train on more than X years even if available)
+        max_lookback = data_end - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
+        start_date = max(data_start, max_lookback)
+        end_date = data_end + timedelta(days=1)  # +1 day buffer for today's data
+
+        actual_days = (data_end - data_start).days
+        training_days = (end_date - start_date).days
+
+        logger.info(
+            f"   Actual data range: {data_start.strftime('%Y-%m-%d')} to {data_end.strftime('%Y-%m-%d')} ({actual_days} days)"
+        )
+        logger.info(
+            f"   Training period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} ({training_days} days)"
+        )
+        logger.info(f"   Total rows available: {result.total_rows:,}")
+        logger.info("")
 
     # 2. Fetch training data
     logger.info("📊 Fetching training data from PostgreSQL...")
     df = fetch_training_data(start_date, end_date)
     after_fetch_memory = get_memory_usage()
     logger.info(f"   Rows fetched: {len(df):,}")
-    logger.info(f"   Memory after fetch: {after_fetch_memory:.2f} GB (+{after_fetch_memory - initial_memory:.2f} GB)")
+    logger.info(
+        f"   Memory after fetch: {after_fetch_memory:.2f} GB (+{after_fetch_memory - initial_memory:.2f} GB)"
+    )
     logger.info("")
 
     if len(df) == 0:
@@ -131,7 +172,9 @@ def train_model(version: str = None) -> None:
     logger.info(
         f"   Feature engineering time: {feature_time:.2f}s ({feature_time / 60:.1f} minutes)"
     )
-    logger.info(f"   Memory after features: {after_features_memory:.2f} GB (+{after_features_memory - before_features_memory:.2f} GB)")
+    logger.info(
+        f"   Memory after features: {after_features_memory:.2f} GB (+{after_features_memory - before_features_memory:.2f} GB)"
+    )
     logger.info("")
 
     # 4. Drop rows with missing target
@@ -148,10 +191,14 @@ def train_model(version: str = None) -> None:
         logger.warning(
             "⚠️  WARNING: Very limited data (< 10 rows). Model will have poor accuracy."
         )
-        logger.warning("   Training anyway - model will improve as more data accumulates.")
+        logger.warning(
+            "   Training anyway - model will improve as more data accumulates."
+        )
         logger.info("")
     elif len(df) < 100:
-        logger.warning("⚠️  WARNING: Limited data (< 100 rows). Model accuracy will be limited.")
+        logger.warning(
+            "⚠️  WARNING: Limited data (< 100 rows). Model accuracy will be limited."
+        )
         logger.warning(
             "   Model will improve significantly as more data is collected over time."
         )
@@ -168,6 +215,8 @@ def train_model(version: str = None) -> None:
     y = df["waitTime"]
 
     # 5.5. Calculate sample weights based on prediction errors (feedback loop)
+    # NOTE: Errors are now included directly in the training data via SQL JOIN
+    # This avoids loading a second massive DataFrame and merging in Python
     # WARNING: Sample weights can improve performance on difficult cases, but:
     # - Too high weights (factor > 1.0) can cause overfitting on errors
     # - Only a small subset of data will have weights (only those with predictions)
@@ -184,82 +233,59 @@ def train_model(version: str = None) -> None:
 
     if can_use_weights:
         logger.info("📊 Calculating sample weights from prediction accuracy...")
-        from db import fetch_prediction_errors_for_training
         import numpy as np
 
-        error_df = fetch_prediction_errors_for_training(start_date, end_date)
+        # Check if we have error data (from SQL JOIN)
+        if "absolute_error" in df.columns:
+            # Calculate weights: higher weight for higher errors
+            # Weight formula: 1.0 + (error / max_error) * weight_factor
+            # Conservative default: 0.5 = 50% boost (weights: 1.0 - 1.5)
+            # Aggressive: 1.0 = 100% boost (weights: 1.0 - 2.0)
 
-        if not error_df.empty:
-            # Merge errors with training data
-            # Match on attractionId and timestamp (within 5 minutes tolerance)
-            df_with_errors = df.merge(
-                error_df[
-                    ["attractionId", "timestamp", "absolute_error", "percentage_error"]
-                ],
-                on=["attractionId"],
-                how="left",
-                suffixes=("", "_error"),
-            )
+            error_mask = df["absolute_error"].notna()
+            matched_count = error_mask.sum()
 
-            # Match timestamps (within 5 minutes)
-            if "timestamp_error" in df_with_errors.columns:
-                time_diff = (
-                    df_with_errors["timestamp"] - df_with_errors["timestamp_error"]
-                ).abs()
-                time_match = time_diff <= pd.Timedelta(minutes=5)
-
-                # Calculate weights: higher weight for higher errors
-                # Weight formula: 1.0 + (error / max_error) * weight_factor
-                # Conservative default: 0.5 = 50% boost (weights: 1.0 - 1.5)
-                # Aggressive: 1.0 = 100% boost (weights: 1.0 - 2.0)
-                max_error = (
-                    error_df["absolute_error"].max() if len(error_df) > 0 else 1.0
-                )
+            if matched_count > 0:
+                max_error = df.loc[error_mask, "absolute_error"].max()
                 weight_factor = settings.SAMPLE_WEIGHT_FACTOR
 
                 sample_weights = np.ones(len(df))
-                matched_mask = time_match & df_with_errors["absolute_error"].notna()
+                matched_errors = df.loc[error_mask, "absolute_error"]
+                weights = 1.0 + (matched_errors / max_error) * weight_factor
+                sample_weights[error_mask] = weights
 
-                if matched_mask.sum() > 0:
-                    matched_errors = df_with_errors.loc[matched_mask, "absolute_error"]
-                    weights = 1.0 + (matched_errors / max_error) * weight_factor
-                    sample_weights[matched_mask] = weights
+                matched_percentage = (matched_count / len(df)) * 100
+                avg_weight = weights.mean()
+                max_weight = weights.max()
 
-                    matched_count = matched_mask.sum()
-                    matched_percentage = (matched_count / len(df)) * 100
-                    avg_weight = weights.mean()
-                    max_weight = weights.max()
+                logger.info(
+                    f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors"
+                )
+                logger.info(
+                    f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})"
+                )
+                logger.info(
+                    f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)"
+                )
 
-                    logger.info(
-                        f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors"
+                # Warning if too many samples are weighted (might indicate systematic issues)
+                if matched_percentage > 50:
+                    logger.warning(
+                        f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting"
                     )
-                    logger.info(
-                        f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})"
+                    logger.warning(
+                        f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})"
                     )
+                elif matched_percentage < 5:
                     logger.info(
-                        f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)"
-                    )
-
-                    # Warning if too many samples are weighted (might indicate systematic issues)
-                    if matched_percentage > 50:
-                        logger.warning(
-                            f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting"
-                        )
-                        logger.warning(
-                            f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})"
-                        )
-                    elif matched_percentage < 5:
-                        logger.info(
-                            f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected"
-                        )
-                else:
-                    logger.info(
-                        "   No matching prediction errors found (using uniform weights)"
+                        f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected"
                     )
             else:
-                logger.info("   No prediction errors available (using uniform weights)")
+                logger.info(
+                    "   No matching prediction errors found (using uniform weights)"
+                )
         else:
-            logger.info("   No prediction accuracy data available (using uniform weights)")
+            logger.info("   No prediction errors available (using uniform weights)")
     elif (
         settings.ENABLE_SAMPLE_WEIGHTS
         and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS

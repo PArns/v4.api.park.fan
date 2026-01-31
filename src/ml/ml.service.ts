@@ -873,6 +873,13 @@ export class MLService {
     );
 
     // Record predictions for accuracy tracking (feedback loop)
+    // OPTIMIZATION: Sample-based storage to reduce DB load (90% reduction)
+    // Statistical sampling is sufficient for MAE calculation
+    // ACCURACY_SAMPLE_RATE: 0.1 = 10% (1000s of samples daily = valid stats)
+    const ACCURACY_SAMPLE_RATE = parseFloat(
+      process.env.ACCURACY_SAMPLE_RATE || "0.1", // Default: 10% sampling
+    );
+
     // ONLY record predictions for OPERATING status (park was open)
     // This prevents recording predictions for scheduled closed periods
     // Unplanned closures will still be detected in compareWithActuals()
@@ -881,6 +888,7 @@ export class MLService {
     );
 
     let recordedCount = 0;
+    let sampledCount = 0;
 
     if (validPredictionsForFeedback.length < savedPredictions.length) {
       this.logger.debug(
@@ -889,6 +897,12 @@ export class MLService {
     }
 
     for (let i = 0; i < validPredictionsForFeedback.length; i++) {
+      // Apply sampling: Only record X% of predictions
+      if (Math.random() >= ACCURACY_SAMPLE_RATE) {
+        sampledCount++;
+        continue; // Skip this prediction (not in sample)
+      }
+
       try {
         await this.predictionAccuracyService.recordPrediction(
           validPredictionsForFeedback[i],
@@ -905,7 +919,8 @@ export class MLService {
     }
 
     this.logger.verbose(
-      `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} OPERATING predictions for accuracy tracking`,
+      `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} predictions for accuracy tracking ` +
+        `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
     );
   }
 
