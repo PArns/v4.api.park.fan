@@ -455,6 +455,17 @@ export class ParkWithAttractionsDto {
   })
   crowdForecast?: ParkDailyPredictionDto[];
 
+  @ApiProperty({
+    description: "Next scheduled opening day",
+    required: false,
+    nullable: true,
+  })
+  nextSchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
+
   static fromEntity(park: Park): ParkWithAttractionsDto {
     return {
       id: park.id,

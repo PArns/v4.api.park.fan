@@ -165,20 +165,24 @@ export class ParkIntegrationService {
     // These all only depend on park.id so they can run simultaneously
     // Queue data uses park opening hours to determine valid cutoff (not fixed 6 hours)
 
-    const [weatherData, schedule, queueDataMap, mlPredictionsResult] =
-      await Promise.all([
-        this.weatherService.getCurrentAndForecast(park.id),
-        this.parksService.getUpcomingSchedule(park.id, 7),
-        this.queueDataService.findCurrentStatusByPark(park.id),
-        Promise.all([
-          this.mlService
-            .getParkPredictions(park.id, "hourly")
-            .catch(() => null),
-          this.mlService
-            .getParkPredictions(park.id, "daily", 16)
-            .catch(() => null),
-        ]),
-      ]);
+    const [
+      weatherData,
+      schedule,
+      queueDataMap,
+      mlPredictionsResult,
+      nextSchedule,
+    ] = await Promise.all([
+      this.weatherService.getCurrentAndForecast(park.id),
+      this.parksService.getUpcomingSchedule(park.id, 7),
+      this.queueDataService.findCurrentStatusByPark(park.id),
+      Promise.all([
+        this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
+        this.mlService
+          .getParkPredictions(park.id, "daily", 16)
+          .catch(() => null),
+      ]),
+      this.parksService.getNextSchedule(park.id).catch(() => null),
+    ]);
     const [hourlyRes, dailyRes] = mlPredictionsResult;
 
     dto.weather = {
@@ -390,6 +394,15 @@ export class ParkIntegrationService {
     }
 
     dto.crowdForecast = dailyPredictions;
+
+    // Attach next schedule
+    if (nextSchedule) {
+      dto.nextSchedule = {
+        openingTime: nextSchedule.openingTime?.toISOString() || "",
+        closingTime: nextSchedule.closingTime?.toISOString() || "",
+        scheduleType: nextSchedule.scheduleType,
+      };
+    }
 
     // Initialize counters for attraction status tracking
     let totalAttractionsCount = 0;
