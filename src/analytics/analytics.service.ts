@@ -773,7 +773,7 @@ export class AnalyticsService {
       today_hourly AS (
         -- Aggregate by hour to find peak (using Park Timezone)
         SELECT 
-          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $5) as hour,
+          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4) as hour,
           AVG(qd."waitTime") as hour_avg
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
@@ -793,26 +793,25 @@ export class AnalyticsService {
         WHERE "parkId" = $1
       )
       SELECT 
-        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $5 THEN lq."waitTime" END)::numeric) as current_avg_wait,
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
         COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
-        $7::numeric as avg_wait_today,
-        $8::numeric as max_wait_today,
+        $6::numeric as avg_wait_today,
+        $7::numeric as max_wait_today,
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1
       `;
       queryParams = [
-        parkId,
-        windowAgo,
-        startOfDay,
-        now,
-        resolvedTimezone,
-        this.MIN_WAIT_TIME_THRESHOLD,
-        optimizedAvgWait,
-        optimizedMaxWait,
+        parkId, // $1
+        windowAgo, // $2
+        startOfDay, // $3
+        resolvedTimezone, // $4 (was $5)
+        this.MIN_WAIT_TIME_THRESHOLD, // $5 (was $6)
+        optimizedAvgWait, // $6 (was $7)
+        optimizedMaxWait, // $7 (was $8)
       ];
     } else {
       // Slow path: Calculate from queue_data
