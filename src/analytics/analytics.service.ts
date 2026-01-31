@@ -2286,24 +2286,11 @@ export class AnalyticsService {
     rating: "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme";
     baseline: number;
   } {
-    // If baseline is 0 (no historical data), use absolute thresholds
-    if (baseline === 0) {
-      let rating:
-        | "very_low"
-        | "low"
-        | "moderate"
-        | "high"
-        | "very_high"
-        | "extreme";
-
-      if (current === 0) rating = "very_low";
-      else if (current <= 15) rating = "low";
-      else if (current <= 30) rating = "moderate";
-      else if (current <= 50) rating = "high";
-      else if (current <= 75) rating = "very_high";
-      else rating = "extreme";
-
-      return { rating, baseline };
+    // STRICT P90-RELATIVE: No absolute threshold fallbacks!
+    // If no baseline available (no P90 data), default to 'moderate'
+    // This avoids arbitrary absolute thresholds and is honest about lack of data
+    if (baseline === 0 || current === 0) {
+      return { rating: "moderate", baseline };
     }
 
     // Calculate occupancy percentage: (current / baseline) * 100
