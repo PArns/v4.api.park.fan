@@ -1123,18 +1123,18 @@ def predict_wait_times(
             ratio = 1.0  # Default if no baseline
 
         # Categorize crowd level using unified thresholds
-        # Same thresholds as TypeScript determineCrowdLevel (based on occupancy %)
+        # MUST MATCH TypeScript determineCrowdLevel thresholds EXACTLY!
         # occupancy = (pred_wait / baseline) * 100, so ratio = occupancy / 100
         occupancy_pct = ratio * 100
-        if occupancy_pct <= 20:
+        if occupancy_pct <= 15:
             crowd_level = "very_low"
-        elif occupancy_pct <= 40:
+        elif occupancy_pct <= 35:
             crowd_level = "low"
-        elif occupancy_pct <= 70:
+        elif occupancy_pct <= 65:
             crowd_level = "moderate"
-        elif occupancy_pct <= 90:
+        elif occupancy_pct <= 100:  # CRITICAL: 100% = P90 = "high" baseline
             crowd_level = "high"
-        elif occupancy_pct <= 120:
+        elif occupancy_pct <= 130:
             crowd_level = "very_high"
         else:
             crowd_level = "extreme"
