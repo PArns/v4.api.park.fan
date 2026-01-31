@@ -4,6 +4,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
+import { AnalyticsService } from "../../analytics/analytics.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -58,13 +59,14 @@ export class CalendarService {
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
     private readonly mlService: MLService,
+    private readonly analyticsService: AnalyticsService,
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     private readonly queueDataService: QueueDataService,
     private readonly statsService: StatsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Build integrated calendar response
@@ -475,18 +477,18 @@ export class CalendarService {
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
       ? {
-          condition: weather.weatherCode
-            ? getWeatherDescription(weather.weatherCode)
-            : "Unknown",
-          icon: weather.weatherCode || 0,
-          tempMin: weather.temperatureMin || 0,
-          tempMax: weather.temperatureMax || 0,
-          rainChance: Math.round(
-            (weather.precipitationSum ?? 0) > 0
-              ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
-              : 0,
-          ),
-        }
+        condition: weather.weatherCode
+          ? getWeatherDescription(weather.weatherCode)
+          : "Unknown",
+        icon: weather.weatherCode || 0,
+        tempMin: weather.temperatureMin || 0,
+        tempMax: weather.temperatureMax || 0,
+        rainChance: Math.round(
+          (weather.precipitationSum ?? 0) > 0
+            ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
+            : 0,
+        ),
+      }
       : null;
 
     // Build calendar day
