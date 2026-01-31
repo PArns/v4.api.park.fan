@@ -224,7 +224,7 @@ def filter_predictions_by_schedule(
                         date_value = date_value.date()
                     operating_dates.add(date_value)
 
-                print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
+                # print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
 
                 # Filter predictions
                 for pred in park_preds:
@@ -259,12 +259,11 @@ def filter_predictions_by_schedule(
     removed_count = original_count - filtered_count
 
     # Filtering stats logging removed to reduce log spam
-    # Only log if significant filtering occurred (>50% removed)
     if removed_count > 0:
         removal_percentage = (
             (removed_count / original_count * 100) if original_count > 0 else 0
         )
-        if removal_percentage > 50:
+        if removal_percentage > 99:
             print(
                 f"📊 Filtering: {removal_percentage:.1f}% predictions filtered out ({filtered_count}/{original_count} kept)"
             )
