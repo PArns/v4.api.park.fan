@@ -55,7 +55,7 @@
     "ioredis": "^5.9.2",
     "luxon": "^3.7.2",
     "marked": "^17.0.1",
-    "pg": "^8.17.2",
+    "pg": "^8.18.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "slugify": "^1.6.6",
@@ -91,5 +91,5 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3"
   },
-  "packageManager": "pnpm@10.26.2"
+  "packageManager": "pnpm@10.28.2"
 }
