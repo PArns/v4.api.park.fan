@@ -1122,19 +1122,20 @@ def predict_wait_times(
         else:
             ratio = 1.0  # Default if no baseline
 
-        # Categorize crowd level using unified thresholds
+        # Categorize crowd level using unified thresholds (Option B)
         # MUST MATCH TypeScript determineCrowdLevel thresholds EXACTLY!
+        # P90 (100%) = "moderate" (expected baseline by park standards)
         # occupancy = (pred_wait / baseline) * 100, so ratio = occupancy / 100
         occupancy_pct = ratio * 100
-        if occupancy_pct <= 15:
+        if occupancy_pct <= 40:
             crowd_level = "very_low"
-        elif occupancy_pct <= 35:
+        elif occupancy_pct <= 70:
             crowd_level = "low"
-        elif occupancy_pct <= 65:
+        elif occupancy_pct <= 100:  # 100% = P90 = "moderate" (expected baseline)
             crowd_level = "moderate"
-        elif occupancy_pct <= 100:  # CRITICAL: 100% = P90 = "high" baseline
-            crowd_level = "high"
         elif occupancy_pct <= 130:
+            crowd_level = "high"
+        elif occupancy_pct <= 160:
             crowd_level = "very_high"
         else:
             crowd_level = "extreme"

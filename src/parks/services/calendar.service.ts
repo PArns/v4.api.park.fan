@@ -66,7 +66,7 @@ export class CalendarService {
     private readonly queueDataService: QueueDataService,
     private readonly statsService: StatsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Build integrated calendar response
@@ -477,18 +477,18 @@ export class CalendarService {
     // Build weather summary
     const weatherSummary: WeatherSummary | null = weather
       ? {
-        condition: weather.weatherCode
-          ? getWeatherDescription(weather.weatherCode)
-          : "Unknown",
-        icon: weather.weatherCode || 0,
-        tempMin: weather.temperatureMin || 0,
-        tempMax: weather.temperatureMax || 0,
-        rainChance: Math.round(
-          (weather.precipitationSum ?? 0) > 0
-            ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
-            : 0,
-        ),
-      }
+          condition: weather.weatherCode
+            ? getWeatherDescription(weather.weatherCode)
+            : "Unknown",
+          icon: weather.weatherCode || 0,
+          tempMin: weather.temperatureMin || 0,
+          tempMax: weather.temperatureMax || 0,
+          rainChance: Math.round(
+            (weather.precipitationSum ?? 0) > 0
+              ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
+              : 0,
+          ),
+        }
       : null;
 
     // Build calendar day
