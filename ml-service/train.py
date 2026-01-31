@@ -7,12 +7,22 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import psutil
 import os
+import logging
+import sys
 
 from config import get_settings
 from db import fetch_training_data
 from features import engineer_features, get_feature_columns
 from model import WaitTimeModel
 from data_validation import validate_training_data
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -33,7 +43,7 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    print("   🧹 Filtering anomalies...")
+    logger.info("   🧹 Filtering anomalies...")
     initial_count = len(df)
 
     # Ensure timestamp sort
@@ -54,7 +64,7 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     df_clean = df_clean.drop(columns=["rolling_median"])
 
     removed = initial_count - len(df_clean)
-    print(
+    logger.info(
         f"   Removed {removed} rows ({(removed / initial_count) * 100:.2f}%) identified as anomalies"
     )
 
@@ -71,34 +81,34 @@ def train_model(version: str = None) -> None:
     if version is None:
         version = settings.MODEL_VERSION
 
-    print(f"\n{'=' * 60}")
-    print("🚀 Training Wait Time Prediction Model")
-    print(f"   Version: {version}")
-    print(f"{'=' * 60}\n")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("🚀 Training Wait Time Prediction Model")
+    logger.info(f"   Version: {version}")
+    logger.info(f"{'=' * 60}\n")
 
     # Memory monitoring - initial
     initial_memory = get_memory_usage()
-    print(f"💾 Initial Memory: {initial_memory:.2f} GB\n")
+    logger.info(f"💾 Initial Memory: {initial_memory:.2f} GB\n")
 
     # 1. Define training period (last 2 years + 1 day buffer for today's data)
     end_date = datetime.now(timezone.utc) + timedelta(days=1)
     start_date = end_date - timedelta(days=settings.TRAIN_LOOKBACK_YEARS * 365)
 
-    print("📅 Training Period:")
-    print(f"   Start: {start_date.strftime('%Y-%m-%d')}")
-    print(f"   End: {end_date.strftime('%Y-%m-%d')}")
-    print()
+    logger.info("📅 Training Period:")
+    logger.info(f"   Start: {start_date.strftime('%Y-%m-%d')}")
+    logger.info(f"   End: {end_date.strftime('%Y-%m-%d')}")
+    logger.info("")
 
     # 2. Fetch training data
-    print("📊 Fetching training data from PostgreSQL...")
+    logger.info("📊 Fetching training data from PostgreSQL...")
     df = fetch_training_data(start_date, end_date)
     after_fetch_memory = get_memory_usage()
-    print(f"   Rows fetched: {len(df):,}")
-    print(f"   Memory after fetch: {after_fetch_memory:.2f} GB (+{after_fetch_memory - initial_memory:.2f} GB)")
-    print()
+    logger.info(f"   Rows fetched: {len(df):,}")
+    logger.info(f"   Memory after fetch: {after_fetch_memory:.2f} GB (+{after_fetch_memory - initial_memory:.2f} GB)")
+    logger.info("")
 
     if len(df) == 0:
-        print("❌ No training data found!")
+        logger.error("❌ No training data found!")
         return
 
     # 2.5 Validate data quality
@@ -106,51 +116,51 @@ def train_model(version: str = None) -> None:
 
     # 2.6 Remove anomalies
     df = remove_anomalies(df)
-    print()
+    logger.info("")
 
     # 3. Feature engineering
     import time
 
-    print("🔧 Engineering features...")
+    logger.info("🔧 Engineering features...")
     before_features_memory = get_memory_usage()
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
     after_features_memory = get_memory_usage()
-    print(f"   Features: {len(get_feature_columns())}")
-    print(
+    logger.info(f"   Features: {len(get_feature_columns())}")
+    logger.info(
         f"   Feature engineering time: {feature_time:.2f}s ({feature_time / 60:.1f} minutes)"
     )
-    print(f"   Memory after features: {after_features_memory:.2f} GB (+{after_features_memory - before_features_memory:.2f} GB)")
-    print()
+    logger.info(f"   Memory after features: {after_features_memory:.2f} GB (+{after_features_memory - before_features_memory:.2f} GB)")
+    logger.info("")
 
     # 4. Drop rows with missing target
     df = df.dropna(subset=["waitTime"])
-    print(f"   Rows after cleaning: {len(df):,}")
-    print()
+    logger.info(f"   Rows after cleaning: {len(df):,}")
+    logger.info("")
 
     # Data sufficiency check
     if len(df) == 0:
-        print("❌ No data available for training after validation/cleaning.")
+        logger.error("❌ No data available for training after validation/cleaning.")
         return
 
     if len(df) < 10:
-        print(
+        logger.warning(
             "⚠️  WARNING: Very limited data (< 10 rows). Model will have poor accuracy."
         )
-        print("   Training anyway - model will improve as more data accumulates.")
-        print()
+        logger.warning("   Training anyway - model will improve as more data accumulates.")
+        logger.info("")
     elif len(df) < 100:
-        print("⚠️  WARNING: Limited data (< 100 rows). Model accuracy will be limited.")
-        print(
+        logger.warning("⚠️  WARNING: Limited data (< 100 rows). Model accuracy will be limited.")
+        logger.warning(
             "   Model will improve significantly as more data is collected over time."
         )
-        print()
+        logger.info("")
     elif len(df) < 1000:
-        print(
+        logger.info(
             "ℹ️  Notice: Moderate data available. Model will improve with more historical data."
         )
-        print()
+        logger.info("")
 
     # 5. Prepare features and target
     feature_columns = get_feature_columns()
@@ -173,7 +183,7 @@ def train_model(version: str = None) -> None:
     )
 
     if can_use_weights:
-        print("📊 Calculating sample weights from prediction accuracy...")
+        logger.info("📊 Calculating sample weights from prediction accuracy...")
         from db import fetch_prediction_errors_for_training
         import numpy as np
 
@@ -220,48 +230,48 @@ def train_model(version: str = None) -> None:
                     avg_weight = weights.mean()
                     max_weight = weights.max()
 
-                    print(
+                    logger.info(
                         f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors"
                     )
-                    print(
+                    logger.info(
                         f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})"
                     )
-                    print(
+                    logger.info(
                         f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)"
                     )
 
                     # Warning if too many samples are weighted (might indicate systematic issues)
                     if matched_percentage > 50:
-                        print(
+                        logger.warning(
                             f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting"
                         )
-                        print(
+                        logger.warning(
                             f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})"
                         )
                     elif matched_percentage < 5:
-                        print(
+                        logger.info(
                             f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected"
                         )
                 else:
-                    print(
+                    logger.info(
                         "   No matching prediction errors found (using uniform weights)"
                     )
             else:
-                print("   No prediction errors available (using uniform weights)")
+                logger.info("   No prediction errors available (using uniform weights)")
         else:
-            print("   No prediction accuracy data available (using uniform weights)")
+            logger.info("   No prediction accuracy data available (using uniform weights)")
     elif (
         settings.ENABLE_SAMPLE_WEIGHTS
         and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS
     ):
-        print(
+        logger.info(
             f"   Sample weights disabled: Only {data_span_days} days of data (< {settings.MIN_DATA_DAYS_FOR_WEIGHTS} days required)"
         )
-        print(
+        logger.info(
             "      Enable weights when you have more historical data to avoid overfitting"
         )
     else:
-        print("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
+        logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
     # 6. Train/test split
     # For small datasets (< 100 rows or < 7 days), use percentage split
@@ -272,7 +282,7 @@ def train_model(version: str = None) -> None:
 
     if len(df) < 100 or data_span_days < 7:
         # Percentage-based split for small datasets
-        print("📊 Using percentage-based split (80/20) due to limited data")
+        logger.info("📊 Using percentage-based split (80/20) due to limited data")
         split_idx = int(len(df) * 0.8)
         df = df.sort_values("timestamp")  # Ensure time ordering
 
@@ -287,10 +297,10 @@ def train_model(version: str = None) -> None:
         # Check if validation_cutoff is before data start (fallback to percentage split)
         data_start = df["timestamp"].min()
         if validation_cutoff <= data_start:
-            print(
+            logger.warning(
                 f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})"
             )
-            print("   Falling back to percentage-based split (80/20)")
+            logger.warning("   Falling back to percentage-based split (80/20)")
             split_idx = int(len(df) * 0.8)
             df = df.sort_values("timestamp")
             X_train = X.iloc[:split_idx]
@@ -306,50 +316,50 @@ def train_model(version: str = None) -> None:
             X_val = X[val_mask]
             y_val = y[val_mask]
 
-    print("📈 Train/Validation Split:")
-    print(f"   Training samples: {len(X_train):,}")
-    print(f"   Validation samples: {len(X_val):,}")
+    logger.info("📈 Train/Validation Split:")
+    logger.info(f"   Training samples: {len(X_train):,}")
+    logger.info(f"   Validation samples: {len(X_val):,}")
 
     # Check for empty datasets
     if len(X_train) == 0:
-        print("❌ ERROR: Training set is empty after split!")
-        print(f"   Total rows: {len(df):,}")
-        print(f"   Data span: {data_span_days} days")
-        print(
+        logger.error("❌ ERROR: Training set is empty after split!")
+        logger.error(f"   Total rows: {len(df):,}")
+        logger.error(f"   Data span: {data_span_days} days")
+        logger.error(
             f"   Validation cutoff: {validation_cutoff if data_span_days >= 7 else 'N/A (percentage split)'}"
         )
         return
 
     if len(X_val) == 0:
-        print("⚠️  WARNING: Validation set is empty after split!")
-        print("   Using all data for training (no validation)")
+        logger.warning("⚠️  WARNING: Validation set is empty after split!")
+        logger.warning("   Using all data for training (no validation)")
         X_val = X_train
         y_val = y_train
 
     if len(y_train) == 0:
-        print("❌ ERROR: Training labels (y_train) are empty!")
-        print(f"   X_train rows: {len(X_train):,}")
-        print(f"   waitTime column exists: {'waitTime' in df.columns}")
-        print(
+        logger.error("❌ ERROR: Training labels (y_train) are empty!")
+        logger.error(f"   X_train rows: {len(X_train):,}")
+        logger.error(f"   waitTime column exists: {'waitTime' in df.columns}")
+        logger.error(
             f"   waitTime non-null count: {df['waitTime'].notna().sum() if 'waitTime' in df.columns else 'N/A'}"
         )
         return
 
-    print(
+    logger.info(
         f"   Split ratio: {len(X_train) / (len(X_train) + len(X_val)) * 100:.1f}% / {len(X_val) / (len(X_train) + len(X_val)) * 100:.1f}%"
     )
-    print()
+    logger.info("")
 
     # 7. Train model
-    print("🤖 Training CatBoost model...")
-    print(f"   Training samples: {len(X_train):,}")
-    print(f"   Validation samples: {len(X_val):,}")
-    print(f"   Features: {len(feature_columns)}")
-    print(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
-    print(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
-    print(f"   Depth: {settings.CATBOOST_DEPTH}")
-    print("   Early stopping: 50 rounds")
-    print()
+    logger.info("🤖 Training CatBoost model...")
+    logger.info(f"   Training samples: {len(X_train):,}")
+    logger.info(f"   Validation samples: {len(X_val):,}")
+    logger.info(f"   Features: {len(feature_columns)}")
+    logger.info(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
+    logger.info(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
+    logger.info(f"   Depth: {settings.CATBOOST_DEPTH}")
+    logger.info("   Early stopping: 50 rounds")
+    logger.info("")
 
     model = WaitTimeModel(version)
 
@@ -366,31 +376,31 @@ def train_model(version: str = None) -> None:
 
     metrics = model.train(X_train, y_train, X_val, y_val, sample_weights=train_weights)
 
-    print("\n" + "=" * 60)
-    print("✅ Training Complete!")
-    print(f"{'=' * 60}")
-    print("\n📊 Validation Metrics:")
-    print(f"   MAE:  {metrics['mae']:.2f} minutes")
-    print(f"   RMSE: {metrics['rmse']:.2f} minutes")
-    print(f"   MAPE: {metrics['mape']:.2f}%")
-    print(f"   R²:   {metrics['r2']:.4f}")
-    print()
+    logger.info("\n" + "=" * 60)
+    logger.info("✅ Training Complete!")
+    logger.info(f"{'=' * 60}")
+    logger.info("\n📊 Validation Metrics:")
+    logger.info(f"   MAE:  {metrics['mae']:.2f} minutes")
+    logger.info(f"   RMSE: {metrics['rmse']:.2f} minutes")
+    logger.info(f"   MAPE: {metrics['mape']:.2f}%")
+    logger.info(f"   R²:   {metrics['r2']:.4f}")
+    logger.info("")
 
     # 8. Feature importance
-    print("🔍 Top 10 Feature Importances:")
+    logger.info("🔍 Top 10 Feature Importances:")
     importance = model.get_feature_importance().head(10)
     for idx, row in importance.iterrows():
-        print(f"   {row['feature']:30s} {row['importance']:>8.2f}")
-    print()
+        logger.info(f"   {row['feature']:30s} {row['importance']:>8.2f}")
+    logger.info("")
 
     # 9. Save model
-    print("💾 Saving model...")
+    logger.info("💾 Saving model...")
     model.save()
-    print()
+    logger.info("")
 
-    print("=" * 60)
-    print(f"✅ Model {version} ready for deployment!")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info(f"✅ Model {version} ready for deployment!")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
@@ -403,8 +413,8 @@ if __name__ == "__main__":
     try:
         train_model(version=args.version)
     except Exception as e:
-        print(f"\n❌ FATAL ERROR during training: {e}")
+        logger.error(f"\n❌ FATAL ERROR during training: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         exit(1)
