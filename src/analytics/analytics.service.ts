@@ -2963,6 +2963,11 @@ export class AnalyticsService {
   /**
    * Public utility: Get attraction crowd level from wait time and P90 baseline
    * Single source of truth for attraction crowd level calculation
+   *
+   * CRITICAL: This method REQUIRES a P90 baseline for accurate crowd level calculation.
+   * If no P90 is available, returns null to force caller to handle missing data.
+   *
+   * DO NOT add absolute threshold fallbacks - they break adaptive scaling!
    */
   public getAttractionCrowdLevel(
     waitTime: number | undefined,
@@ -2970,19 +2975,15 @@ export class AnalyticsService {
   ): CrowdLevel | null {
     if (!waitTime || waitTime === 0) return null;
 
-    // If we have a P90 baseline, calculate relative occupancy
+    // ONLY use P90-relative calculation (no absolute threshold fallback!)
     if (p90 && p90 > 0) {
       const occupancy = (waitTime / p90) * 100;
       return this.determineCrowdLevel(occupancy);
     }
 
-    // Fallback to static thresholds if no baseline available
-    if (waitTime < 15) return "very_low";
-    if (waitTime < 30) return "low";
-    if (waitTime < 60) return "moderate";
-    if (waitTime < 90) return "high";
-    if (waitTime < 120) return "very_high";
-    return "extreme";
+    // If no P90 baseline available, return null
+    // Caller should either fetch P90 or use a default like "moderate"
+    return null;
   }
 
   /**
@@ -3104,13 +3105,10 @@ export class AnalyticsService {
     if (hasData && p90Result.p90 > 0) {
       percentage = Math.round((avgWaitResult.avgWait! / p90Result.p90) * 100);
       crowdLevel = this.determineCrowdLevel(percentage);
-    } else if (hasData && type === "attraction") {
-      // Fallback for attractions without P90 baseline
-      const result = this.getAttractionCrowdLevel(
-        avgWaitResult.avgWait!,
-        undefined,
-      );
-      crowdLevel = result || "very_low";
+    } else if (hasData) {
+      // No P90 baseline available - use moderate as default
+      // (better than no crowd level, and avoids absolute threshold fallbacks)
+      crowdLevel = "moderate";
       percentage = 50; // Default when no baseline
     }
 

@@ -839,7 +839,7 @@ export class SearchService implements OnModuleInit {
       const p90 = isParkOpen ? p90Map.get(attraction.id) : undefined;
 
       const load = isParkOpen
-        ? this.determineAttractionLoad(waitTime ?? undefined, p90)
+        ? this.getCrowdLevelForSearch(waitTime ?? undefined, p90)
         : null;
 
       return {
@@ -1082,11 +1082,13 @@ export class SearchService implements OnModuleInit {
    * Determine attraction load level from wait time
    * REFACTORED: Delegates to AnalyticsService for consistent logic
    */
-  private determineAttractionLoad(
+  private getCrowdLevelForSearch(
     waitTime: number | undefined,
     p90: number | undefined,
   ): CrowdLevel | null {
-    return this.analyticsService.getAttractionCrowdLevel(waitTime, p90);
+    const level = this.analyticsService.getAttractionCrowdLevel(waitTime, p90);
+    // Default to 'moderate' if P90 baseline not available
+    return level || "moderate";
   }
 
   /**

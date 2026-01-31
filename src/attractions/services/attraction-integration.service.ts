@@ -288,18 +288,15 @@ export class AttractionIntegrationService {
               "attraction",
             );
 
-          // Use unified crowd level calculation
-          crowdLevel = this.analyticsService.getAttractionCrowdLevel(
+          // Use unified crowd level calculation (P90-relative)
+          const calculatedLevel = this.analyticsService.getAttractionCrowdLevel(
             wait,
             p90Result.p90,
           );
 
-          // If still null (shouldn't happen), use fallback
-          if (!crowdLevel) {
-            crowdLevel = currentPred?.crowdLevel
-              ? (currentPred.crowdLevel as CrowdLevel)
-              : "very_low";
-          }
+          // If P90 baseline not available (returns null), use 'moderate' as sensible default
+          // This avoids absolute thresholds while still providing useful data
+          crowdLevel = calculatedLevel || "moderate";
         } catch (error) {
           // If percentile lookup fails, fallback to ML prediction
           this.logger.warn(
@@ -308,7 +305,7 @@ export class AttractionIntegrationService {
           );
           crowdLevel = currentPred?.crowdLevel
             ? (currentPred.crowdLevel as CrowdLevel)
-            : "very_low";
+            : "moderate";
         }
       } else {
         // 2. Fallback to ML Prediction if no live data

@@ -434,7 +434,15 @@ export class CalendarService {
       const cachedStat = this.findCachedStat(dateStr, parkStats);
 
       if (cachedStat && cachedStat.p90WaitTime !== null) {
-        crowdLevel = this.mapWaitTimeToCrowdLevel(cachedStat.p90WaitTime);
+        // Use P90-relative calculation (consistent with ML predictions)
+        const crowdData =
+          await this.analyticsService.calculateCrowdLevelForDate(
+            park.id,
+            "park",
+            dateStr,
+            park.timezone,
+          );
+        crowdLevel = crowdData.crowdLevel;
       } else {
         // Legacy Fallback: Use actual wait time data day dump
         const dayQueueData = historicalQueueData.filter(
@@ -445,8 +453,15 @@ export class CalendarService {
         );
 
         if (dayQueueData.length > 0) {
-          const avgWaitTime = this.calculateP90WaitTime(dayQueueData);
-          crowdLevel = this.mapWaitTimeToCrowdLevel(avgWaitTime);
+          // Use P90-relative calculation for consistency
+          const crowdData =
+            await this.analyticsService.calculateCrowdLevelForDate(
+              park.id,
+              "park",
+              dateStr,
+              park.timezone,
+            );
+          crowdLevel = crowdData.crowdLevel;
         } else {
           // No actual data available, fallback to prediction or moderate
           crowdLevel = mlPrediction?.crowdLevel || "moderate";
@@ -851,15 +866,19 @@ export class CalendarService {
   }
 
   /**
-   * Map average wait time to crowd level
+   * Map average wait time to crowd level (DEPRECATED - kept for reference only)
+   * DO NOT USE - Use AnalyticsService.calculateCrowdLevelForDate() instead
+   *
+   * This method used absolute thresholds which don't adapt to park-specific baselines.
+   * All crowd level calculations MUST use P90-relative percentages.
    */
-  private mapWaitTimeToCrowdLevel(avgWaitTime: number): CrowdLevel {
-    if (avgWaitTime <= 15) return "very_low";
-    if (avgWaitTime <= 30) return "low";
-    if (avgWaitTime <= 45) return "moderate";
-    if (avgWaitTime <= 60) return "high";
-    return "very_high";
-  }
+  // private mapWaitTimeToCrowdLevel(avgWaitTime: number): CrowdLevel {
+  //   if (avgWaitTime <= 15) return "very_low";
+  //   if (avgWaitTime <= 30) return "low";
+  //   if (avgWaitTime <= 45) return "moderate";
+  //   if (avgWaitTime <= 60) return "high";
+  //   return "very_high";
+  // }
 
   /**
    * Helper to find cached stat for a specific date
