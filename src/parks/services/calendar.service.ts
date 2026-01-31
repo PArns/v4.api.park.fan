@@ -644,12 +644,14 @@ export class CalendarService {
 
   /**
    * Map ML crowd score to CrowdLevel enum
+   * Note: This is a legacy method for score-based systems
+   * New code should use determineCrowdLevel with P90-relative percentages
    */
   private mapCrowdLevel(score: number): CrowdLevel {
-    if (score <= 20) return "very_low";
-    if (score <= 40) return "low";
-    if (score <= 60) return "moderate";
-    if (score <= 80) return "high";
+    if (score <= 40) return "very_low";
+    if (score <= 70) return "low";
+    if (score <= 85) return "moderate";
+    if (score <= 95) return "high";
     return "very_high";
   }
 
@@ -680,14 +682,14 @@ export class CalendarService {
       crowdScore = crowdData;
     } else if (typeof crowdData === "string") {
       const levelMap: Record<string, number> = {
-        very_low: 20,
-        low: 35,
-        moderate: 50,
-        high: 70,
-        very_high: 85,
-        extreme: 95,
+        very_low: 30,
+        low: 55,
+        moderate: 80,
+        high: 110,
+        very_high: 140,
+        extreme: 170,
       };
-      crowdScore = levelMap[crowdData] || 50;
+      crowdScore = levelMap[crowdData] || 80;
     }
 
     if (crowdScore !== undefined) {
