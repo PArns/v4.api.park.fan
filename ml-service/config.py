@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2
     TRAIN_TEST_SPLIT: float = 0.8
-    VALIDATION_DAYS: int = 30
+    VALIDATION_DAYS: int = (
+        30  # Used for large datasets (>60 days); smaller datasets use adaptive % split
+    )
 
     # Sample Weight Configuration (Feedback Loop)
     # DISABLED: Currently deactivated due to performance concerns with large prediction_accuracy table.

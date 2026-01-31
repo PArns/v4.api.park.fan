@@ -299,36 +299,62 @@ def train_model(version: str = None) -> None:
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
-    # 6. Train/test split
-    # For small datasets (< 100 rows or < 7 days), use percentage split
-    # For larger datasets, use time-based split (last N days as validation)
-    # Note: data_span_days already calculated above for sample weights check
+    # 6. Train/Validation Split - ADAPTIVE
+    # Strategy:
+    # - Small datasets (< 14 days): Use percentage split (80/20)
+    # - Growing datasets (14-60 days): Scale validation from 20% up to 30 days
+    # - Large datasets (> 60 days): Use fixed 30-day validation window
+    # This ensures proper train/val ratio as data accumulates
 
-    train_mask = None  # Initialize for sample weights split
+    # Calculate actual data span
+    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
 
-    if len(df) < 100 or data_span_days < 7:
-        # Percentage-based split for small datasets
-        logger.info("📊 Using percentage-based split (80/20) due to limited data")
-        split_idx = int(len(df) * 0.8)
+    # Adaptive validation sizing
+    if data_span_days < 14:
+        # Very small dataset: use percentage split
+        validation_method = "percentage"
+        validation_ratio = 0.2  # 20% for validation
+        logger.info(
+            f"📊 Using percentage-based split (80/20) - only {data_span_days} days of data"
+        )
+
         df = df.sort_values("timestamp")  # Ensure time ordering
+        split_idx = int(len(df) * (1 - validation_ratio))
 
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
         X_val = X.iloc[split_idx:]
         y_val = y.iloc[split_idx:]
+
     else:
         # Time-based split for larger datasets
-        validation_cutoff = end_date - timedelta(days=settings.VALIDATION_DAYS)
+        # Scale validation days from 20% of span (min) to 30 days (max)
+        if data_span_days < 60:
+            # Growing phase: use 20% of data span, capped at 30 days
+            validation_days = min(int(data_span_days * 0.2), 30)
+            logger.info(
+                f"📊 Using adaptive time-based split - {validation_days} days validation ({data_span_days} days total)"
+            )
+        else:
+            # Stable phase: use fixed 30 days
+            validation_days = settings.VALIDATION_DAYS
+            logger.info(
+                f"📊 Using time-based split - {validation_days} days validation ({data_span_days} days total)"
+            )
 
-        # Check if validation_cutoff is before data start (fallback to percentage split)
+        validation_cutoff = end_date - timedelta(days=validation_days)
+
+        # Safety check: ensure validation cutoff is after data start
         data_start = df["timestamp"].min()
         if validation_cutoff <= data_start:
+            # Fallback to percentage split
             logger.warning(
                 f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})"
             )
             logger.warning("   Falling back to percentage-based split (80/20)")
-            split_idx = int(len(df) * 0.8)
             df = df.sort_values("timestamp")
+            split_idx = int(len(df) * 0.8)
+
             X_train = X.iloc[:split_idx]
             y_train = y.iloc[:split_idx]
             X_val = X.iloc[split_idx:]

@@ -851,7 +851,9 @@ def add_time_since_park_open(
 
                     df.loc[mask, "time_since_park_open_mins"] = (
                         (df.loc[mask, time_col] - opening_time).dt.total_seconds() / 60
-                    ).clip(lower=0)  # Negative = park not yet open, clip to 0
+                    ).clip(
+                        lower=0
+                    )  # Negative = park not yet open, clip to 0
 
             except Exception as e:
                 print(f"⚠️  Failed to parse opening time for park {park_id}: {e}")
@@ -1141,7 +1143,7 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
     - Resample to 1-hour buckets (perfect for hourly predictions)
     - Use mean for wait times (represents hourly average)
     - Forward fill up to 2 hours for minor gaps
-    
+
     OPTIMIZATION: Uses chunked processing to avoid memory explosion
     from holding 2275 DataFrames in memory simultaneously
     """
@@ -1156,16 +1158,16 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
     # CRITICAL FIX: Process in chunks to avoid 15GB memory spike
     CHUNK_SIZE = 100  # Process 100 attractions at a time
     resampled_chunks = []
-    
+
     # Get all groups first (this is fast, just creates tuples)
     groups = list(df.groupby(["attractionId", "parkId"]))
     total_groups = len(groups)
-    
+
     # Process in chunks
     for chunk_idx in range(0, total_groups, CHUNK_SIZE):
-        chunk_groups = groups[chunk_idx:chunk_idx + CHUNK_SIZE]
+        chunk_groups = groups[chunk_idx : chunk_idx + CHUNK_SIZE]
         chunk_parts = []
-        
+
         for (attraction_id, park_id), group in chunk_groups:
             # Set sorted timestamp index
             group = group.set_index("timestamp").sort_index()
@@ -1182,7 +1184,9 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
             # Define aggregation dictionary
             agg_dict = {"waitTime": "mean"}
             for col in numeric_cols:
-                agg_dict[col] = "first"  # Take the first value for other numeric columns
+                agg_dict[col] = (
+                    "first"  # Take the first value for other numeric columns
+                )
             for col in non_numeric_cols:
                 agg_dict[col] = "first"  # Take the first value for non-numeric columns
 
@@ -1197,7 +1201,7 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
             resampled = resampled.reset_index()
 
             chunk_parts.append(resampled)
-        
+
         # Concat this chunk and add to final list
         if chunk_parts:
             chunk_df = pd.concat(chunk_parts, ignore_index=True)
@@ -1390,12 +1394,14 @@ def add_park_has_schedule_feature(
                 from sqlalchemy import text
 
                 with get_db() as db:
-                    query = text("""
+                    query = text(
+                        """
                         SELECT DISTINCT "parkId"::text
                         FROM schedule_entries
                         WHERE "parkId"::text = ANY(:park_ids)
                           AND "scheduleType" = 'OPERATING'
-                    """)
+                    """
+                    )
                     result = db.execute(query, {"park_ids": park_ids})
                     parks_with_schedule = set(row[0] for row in result.fetchall())
 
@@ -1434,9 +1440,17 @@ def engineer_features(
     total_start = time_module.time()
 
     # 0. Resample to fix delta-compression gaps
+    # DISABLED: SQL query (db.py fetch_training_data) now returns HOURLY aggregated data
+    # Resampling to 30-min buckets would INCREASE rows (hourly → 30min = 2x explosion!)
+    # The SQL aggregation already handles:
+    # - Delta compression (PERCENTILE_CONT median)
+    # - Gaps (GROUP BY hour)
+    # - Multiple readings (aggregation)
+    #
+    # Only enable if fetching RAW 5-minute data again
     resample_start = time_module.time()
-    df = resample_data(df)
-    print(f"   Resampling time: {time_module.time() - resample_start:.2f}s")
+    # df = resample_data(df)  # SKIP: Already aggregated by SQL
+    print(f"   Resampling: SKIPPED (data already hourly-aggregated by SQL)")
 
     # Fetch park metadata (needed for region-specific weekends & holidays)
     metadata_start = time_module.time()
