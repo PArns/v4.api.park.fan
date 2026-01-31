@@ -35,13 +35,15 @@ def add_attraction_type_feature(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     try:
-        query = text("""
+        query = text(
+            """
             SELECT
                 id::text as "attractionId",
                 COALESCE("attractionType", 'UNKNOWN') as "attraction_type"
             FROM attractions
             WHERE id::text = ANY(:attraction_ids)
-        """)
+        """
+        )
 
         with get_db() as db:
             result = db.execute(query, {"attraction_ids": attraction_ids})
@@ -98,7 +100,8 @@ def add_park_attraction_count_feature(
         return df
 
     try:
-        query = text("""
+        query = text(
+            """
             SELECT
                 p.id::text as "parkId",
                 COUNT(DISTINCT a.id) as attraction_count
@@ -106,7 +109,8 @@ def add_park_attraction_count_feature(
             LEFT JOIN attractions a ON a."parkId" = p.id
             WHERE p.id::text = ANY(:park_ids)
             GROUP BY p.id
-        """)
+        """
+        )
 
         with get_db() as db:
             result = db.execute(query, {"park_ids": park_ids})

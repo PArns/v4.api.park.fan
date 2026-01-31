@@ -101,7 +101,8 @@ def filter_predictions_by_schedule(
             continue
 
         # Query schedule for these dates
-        query = text("""
+        query = text(
+            """
             SELECT
                 date,
                 "scheduleType",
@@ -112,7 +113,8 @@ def filter_predictions_by_schedule(
                 AND "attractionId" IS NULL
                 AND date = ANY(CAST(:dates AS DATE[]))
                 AND "scheduleType" = 'OPERATING'
-        """)
+        """
+        )
 
         with get_db() as db:
             result = db.execute(

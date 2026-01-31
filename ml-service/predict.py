@@ -65,7 +65,8 @@ def fetch_recent_wait_times(
 
     # Aggregate to daily values for efficiency (2 years of hourly data = too much)
     # Calculate: avg per day, avg per hour-of-day, avg per day-of-week
-    query = text("""
+    query = text(
+        """
         SELECT
             "attractionId"::text as "attractionId",
             DATE(timestamp) as date,
@@ -81,7 +82,8 @@ def fetch_recent_wait_times(
             AND "queueType" = 'STANDBY'
         GROUP BY "attractionId", DATE(timestamp), EXTRACT(HOUR FROM timestamp), EXTRACT(DOW FROM timestamp)
         ORDER BY "attractionId", date DESC, hour
-    """)
+    """
+    )
 
     with get_db() as db:
         result = db.execute(
@@ -300,7 +302,8 @@ def create_prediction_features(
         else:
             prediction_month = datetime.now(timezone.utc).month
 
-        weather_query = text("""
+        weather_query = text(
+            """
             SELECT
                 "parkId"::text as "parkId",
                 AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
@@ -313,7 +316,8 @@ def create_prediction_features(
                 AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
                 AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 years of historical data
             GROUP BY "parkId"
-        """)
+        """
+        )
 
         try:
             with get_db() as db:
@@ -540,7 +544,8 @@ def create_prediction_features(
             )
 
     # Park schedule features (check if park is open at predicted time)
-    schedule_query = text("""
+    schedule_query = text(
+        """
         SELECT
             "parkId"::text as "parkId",
             "attractionId"::text as "attractionId",
@@ -555,7 +560,8 @@ def create_prediction_features(
                 ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
                 OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT')
             )
-    """)
+    """
+    )
 
     with get_db() as db:
         # Determine date range for schedule query using park local timezone
