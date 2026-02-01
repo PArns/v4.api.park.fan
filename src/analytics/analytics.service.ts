@@ -3526,16 +3526,20 @@ export class AnalyticsService {
     await this.headlinerAttractionRepository.save(headliners);
 
     // Save park P50 baseline
-    await this.parkP50BaselineRepository.save({
-      parkId,
-      p50Baseline: baseline.p50,
-      headlinerCount: headliners.length,
-      tier: baseline.tier,
-      sampleCount: baseline.sampleCount,
-      distinctDays: baseline.distinctDays,
-      confidence: baseline.confidence,
-      calculatedAt: new Date(),
-    });
+    // Save park P50 baseline (Upsert to prevent duplicate key errors)
+    await this.parkP50BaselineRepository.upsert(
+      {
+        parkId,
+        p50Baseline: baseline.p50,
+        headlinerCount: headliners.length,
+        tier: baseline.tier,
+        sampleCount: baseline.sampleCount,
+        distinctDays: baseline.distinctDays,
+        confidence: baseline.confidence,
+        calculatedAt: new Date(),
+      },
+      ["parkId"], // Conflict path
+    );
 
     // Cache in Redis (24h TTL)
     const cacheKey = `park:p50:${parkId}`;
