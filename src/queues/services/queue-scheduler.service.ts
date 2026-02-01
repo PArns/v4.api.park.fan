@@ -46,7 +46,7 @@ export class QueueSchedulerService implements OnModuleInit {
     private mlMonitoringQueue: Queue,
     @InjectQueue("stats") private statsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline
-  ) { }
+  ) {}
 
   async onModuleInit(): Promise<void> {
     // Skip scheduler if SKIP_QUEUE_BOOTSTRAP is set (for scripts)

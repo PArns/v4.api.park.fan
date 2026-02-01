@@ -388,7 +388,8 @@ export class MLService {
       // This ensures TypeScript and Python ML service produce identical crowd levels
       let p50Baseline: number | undefined;
       try {
-        p50Baseline = await this.analyticsService.getP50BaselineFromCache(parkId);
+        p50Baseline =
+          await this.analyticsService.getP50BaselineFromCache(parkId);
         if (p50Baseline === 0) {
           p50Baseline = undefined; // Let Python fallback to rolling_avg_7d
         }
@@ -506,10 +507,10 @@ export class MLService {
         const today = formatInParkTimezone(
           new Date(),
           parkForDowntime?.timezone ||
-          (parkForDowntime?.countryCode
-            ? getTimezoneForCountry(parkForDowntime.countryCode)
-            : null) ||
-          "UTC",
+            (parkForDowntime?.countryCode
+              ? getTimezoneForCountry(parkForDowntime.countryCode)
+              : null) ||
+            "UTC",
         );
         const keys = attractionIds.map((id) => `downtime:daily:${id}:${today}`);
 
@@ -936,7 +937,7 @@ export class MLService {
 
     this.logger.verbose(
       `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} predictions for accuracy tracking ` +
-      `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
+        `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
     );
   }
 
