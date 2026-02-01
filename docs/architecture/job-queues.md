@@ -11,7 +11,7 @@ The application relies heavily on background processing for data consistency and
 
 ### Data Synchronization (The "Heartbeat")
 | Processor | Schedule | Purpose |
-|path|---|---|
+| --- | --- | --- |
 | `WaitTimesProcessor` | Every 5 min | Fetches live wait times from external APIs (Themeparks, etc.) and pushes to DB/Redis. |
 | `WeatherProcessor` | Hourly | Syncs current weather for all parks. |
 | `HolidaysProcessor` | Daily | Syncs public/school holidays for next 365 days. |
@@ -19,7 +19,7 @@ The application relies heavily on background processing for data consistency and
 
 ### Analytics & ML
 | Processor | Schedule | Purpose |
-|path|---|---|
+| --- | --- | --- |
 | `OccupancyCalculationProcessor` | Every 5 min | Calculates current crowd levels based on live data. |
 | `P50BaselineProcessor` | Daily (3 AM) | Recalculates historical P50 baselines for next day. |
 | `QueuePercentileProcessor` | Daily | Pre-computes hourly percentiles (P50/P90) for fast lookups. |
@@ -28,7 +28,7 @@ The application relies heavily on background processing for data consistency and
 
 ### Helper & Cleanups
 | Processor | Purpose |
-|path|---|
+| --- | --- |
 | `CacheWarmupProcessor` | Pre-fills Redis caches after data syncs to ensure low latency. |
 | `EntityMappingsProcessor` | Maps external IDs (e.g., from different APIs) to our internal UUIDs. |
 | `PredictionAccuracyProcessor` | Compares past predictions vs actuals to score model performance. |

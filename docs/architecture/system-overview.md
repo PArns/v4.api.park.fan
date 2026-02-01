@@ -32,6 +32,7 @@ A lightweight FastAPI microservice dedicated to machine learning tasks.
 Primary data store.
 - **Extensions**: TimescaleDB (implied for time-series optimization).
 - **Entities**: Parks, Attractions, QueueData, Weather, Schedules.
+- **Cache tables**: Precomputed analytics (e.g. `park_p50_baselines`, `attraction_p50_baselines`, `park_daily_stats`); see [Caching Strategy](caching-strategy.md) and [Schema](../database/schema.md).
 - **ORM**: TypeORM (with `synchronize: true` in dev).
 
 ### 4. Redis

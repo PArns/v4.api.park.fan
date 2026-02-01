@@ -53,6 +53,20 @@ Operating hours for parks.
 - **One-to-Many**: Attraction -> QueueData
 - **One-to-Many**: Attraction -> Predictions
 
+## Cache & Precomputed Tables
+
+Precomputed analytics are stored in dedicated tables and optionally mirrored in Redis. See [Caching Strategy](../architecture/caching-strategy.md) for Redis keys and TTLs.
+
+| Table | Purpose |
+|-------|---------|
+| `park_p50_baselines` | Park P50 baseline (headliner attractions only); used for park occupancy/crowd level. |
+| `attraction_p50_baselines` | Per-attraction P50 baseline; used for ride crowd level. |
+| `headliner_attractions` | Which attractions were selected as headliners per park (for baseline calculation). |
+| `park_daily_stats` | Daily stats per park (P90, max wait, etc.); updated hourly for today, daily for yesterday. |
+| `queue_data_aggregates` | Precomputed hourly percentiles (P25/P50/P75/P90) per attraction for fast lookups. |
+
+Sliding-window percentiles (548-day) are not stored in DB; they are computed and cached in Redis only.
+
 ## Extensions
 
 - **TimescaleDB**: Used for `queue_data` and potentially `wait_time_predictions` to handle high-volume time-series data efficiently.

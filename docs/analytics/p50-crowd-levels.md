@@ -1,22 +1,31 @@
 # P50 Unified Crowd Level System
 
-> **Summary**: The Park Fan API uses a **P50 (Median) Baseline** system to calculate Crowd Levels. This creates a "Normal" (100%) reference point that represents a typical day at the park, rather than a peak day (P90).
+> **Summary**: The Park Fan API uses a **P50 (Median) Baseline** system for both **parks** and **attractions**. This creates a "Normal" (100%) reference point that represents a typical day (park) or typical wait (attraction), rather than a peak (P90).
+
+**Related**: [Caching Strategy](../architecture/caching-strategy.md) (Redis keys and DB cache tables), [Headliner Logic](headliner-logic.md) (park baseline only).
 
 ---
 
 ## 1. Core Concept
 
-Historical wait time data is analyzed over a **sliding window of 548 days** (approx 1.5 years) to account for seasonality. We calculate the **Median (P50)** wait time for "Headliner" attractions.
+### Parks
+Historical wait time data is analyzed over a **sliding window of 548 days** (approx 1.5 years). We calculate the **Median (P50)** wait time for **Headliner** attractions only and use that as the park baseline.
 
-- **Why P50?** P90 (90th percentile) represents "Peak" wait times. Comparing a current Tuesday morning to a historical Peak baseline often resulted in artificially low crowd levels (e.g., "Very Low" on a normal day). P50 represents the "Expected" wait time.
-- **Goal:** If `Current Wait == Historical Median`, the Crowd Level is **100% (Moderate)**.
+- **Why P50?** P90 represents "Peak" wait times. Comparing current waits to a Peak baseline often resulted in artificially low crowd levels (e.g., "Very Low" on a normal day). P50 represents the "Expected" wait time.
+- **Goal:** If `Current Park Median == Park P50 Baseline`, Occupancy is **100% (Moderate)**.
 
-### Formula
+### Attractions (Rides)
+Each attraction has its own **P50 baseline** (548-day median for that attraction). Crowd level for a ride uses that baseline so "moderate" means typical for that ride.
+
+- **Source**: Table `attraction_p50_baselines`, filled by the same daily P50 job. Redis: `attraction:p50:{attractionId}`.
+- **Fallback**: If no P50 baseline exists, we use the 548-day sliding-window P50 or P90 from `get90thPercentileWithConfidence`.
+
+### Formula (same for park and attraction)
 ```typescript
-CrowdLevel% = (Current_Park_Median / Historical_P50_Baseline) * 100
+CrowdLevel% = (Current_Wait_or_Median / P50_Baseline) * 100
 ```
 
-> **API Note:** The API response may still use legacy field names like `baseline90thPercentile`, but the *value* populated is now the P50 Baseline.
+> **API Note:** The API may still use legacy field names like `baseline90thPercentile`; the *value* is the P50 baseline.
 
 ---
 
@@ -67,22 +76,29 @@ We map the percentage (Current / Baseline) to a human-readable level using **Rel
 
 ## 4. Technical Architecture
 
-### Database Entities
-- `park_p50_baselines`: Stores the calculated baseline per park.
-- `headliner_attractions`: Logs which attractions were selected as headliners.
-- `attraction_p50_baselines`: Stores individual attraction baselines (for per-ride crowd levels).
+### Database (cache tables)
+| Table | Purpose |
+|-------|--------|
+| `park_p50_baselines` | Park P50 baseline (headliners only). |
+| `attraction_p50_baselines` | Per-attraction P50 baseline (for ride crowd level). |
+| `headliner_attractions` | Which attractions were selected as headliners per park. |
 
-### Redis Cache
-- **Key**: `park:p50:{parkId}`
-- **TTL**: 24 hours
-- **Content**: Plain number (e.g., "25.5")
+See [Caching Strategy](../architecture/caching-strategy.md) for `park_daily_stats` and `queue_data_aggregates`.
+
+### Redis
+| Key | TTL | Content |
+|-----|-----|--------|
+| `park:p50:{parkId}` | 24h | Park P50 baseline (number). |
+| `attraction:p50:{attractionId}` | 24h | Attraction P50 baseline (number). |
+| `analytics:percentile:sliding:park:{parkId}` | 24h | 548-day P90/P50 fallback (JSON). |
+| `analytics:percentile:sliding:attraction:{id}` | 24h | 548-day P90/P50 fallback; shared by single and batch percentile reads. |
 
 ### Services
 - **`AnalyticsService`**:
-  - `identifyHeadliners()`: Implements the Tier/Fallback logic.
-  - `saveP50Baselines()`: Uses `upsert` to save daily calculations.
-  - `getLoadRating()`: Applies the threshold table.
-- **`P50BaselineProcessor`**: Background Bull queue processor that runs the nightly calculation.
+  - **Park**: `getP50BaselineFromCache(parkId)` → headliner P50; fallback `get90thPercentileWithConfidence(..., "park")`.
+  - **Attraction**: `getAttractionP50BaselineFromCache(attractionId)`, `getBatchAttractionP50s(ids)`; fallback sliding-window P50/P90.
+  - `getLoadRating(current, baseline)`, `getAttractionCrowdLevel(waitTime, baseline)` → same threshold table.
+- **`P50BaselineProcessor`**: Bull job (daily) for park and attraction P50 baselines.
 
 ---
 

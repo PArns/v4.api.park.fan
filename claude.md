@@ -76,8 +76,9 @@ ml-service/            # 🐍 Python CatBoost Service
 
 ### 3. Unified Crowd Levels (P50 Baseline)
 
-- **Baseline**: Static P50 (Median) of **Headliner Attractions** (548-day window).
-- **Current**: Median wait time of operating attractions.
+- **Detailed Guide**: [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md)
+- **Baseline**: Static P50 (Median) of **Headliner Attractions** (548-day window); attractions use per-ride P50 from `attraction_p50_baselines`.
+- **Current**: Median wait time of operating attractions (park) or current wait (attraction).
 - **Formula**: `(current / p50) * 100` (100% = Normal Day).
 - **Never** mix P90 with P50 logic.
 

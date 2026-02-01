@@ -81,17 +81,20 @@ const dateStr = formatInParkTimezone(someDateObj, park.timezone);
 
 When writing tests, **always mock the system time** or use fixed dates. Do not rely on the test runner's local time.
 
-## 6. Strict Date-Only Handling (Holidays & Events)
+## 6. Strict Date-Only Handling (Holidays, Schedules & Events)
+
+**Feiertage und Ferien** (holidays, school holidays) sowie **Schedule-Einträge** speichern **nur das Datum** (keine Uhrzeit). In der DB steht ggf. ein DATE oder Timestamp; semantisch bedeuten sie immer **den vollen Kalendertag 00:00–23:59 in der Park-Zeitzone**.
 
 To prevent "Timeshifting" (e.g., a holiday on Dec 25th becoming Dec 24th 23:00 UTC), **Pure Dates** must be handled as strings (`YYYY-MM-DD`).
 
 > [!CAUTION]
 > **NEVER** verify a Date-Only value by converting it to a `Date` object without explicit Noon-UTC forcing.
 
-**The Golden Rule for Holidays:**
-1.  **Storage**: DB stores as `DATE` type.
-2.  **Transport**: JSON sends as `"2025-12-25"` (String).
-3.  **Application**: logic should treat it as a `string` or strict `Date` at **12:00:00 UTC**.
+**The Golden Rule for Holidays & Schedules:**
+1.  **Storage**: DB stores as `DATE` type (holidays, `schedule_entries.date`).
+2.  **Meaning**: The date always means **that calendar day in the park’s timezone** (00:00–23:59 park time).
+3.  **"Today"**: Use `getCurrentDateInTimezone(park.timezone)` to get today’s date string; use that for holiday checks and for schedule queries.
+4.  **Queries**: Prefer **date-string equality** (`schedule.date = :todayStr`) over timestamp ranges when filtering by a single calendar day, so results do not depend on the DB session timezone.
 
 #### Why?
 `new Date("2025-12-25")` defaults to `00:00:00` UTC.
@@ -105,5 +108,11 @@ const holidayDate = new Date(holiday.date); // Risk of shift
 // GOOD
 const dateStr = holiday.date; // Use "YYYY-MM-DD" string
 const isMatch = dateStr === targetDateStr;
+```
+
+**Schedule "today" (timezone-safe):**
+```typescript
+const todayStr = getCurrentDateInTimezone(park.timezone);
+const schedule = await this.getScheduleForDate(parkId, todayStr); // DATE = :todayStr
 ```
 

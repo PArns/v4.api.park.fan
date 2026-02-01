@@ -42,3 +42,5 @@ When investigating "weird" crowd levels (e.g., "Very Low" when it looks busy):
    - *Example*: If P50 is 5 mins, the park will always look "Extreme". If P50 is 90 mins, it will always look "Very Low".
 3. **Check Real-Time Data**: Are the headliners actually operating?
    - If all headliners are `DOWN`, the system falls back to available rides, which might skew comparisons.
+
+**Attraction-level baselines:** Per-ride P50 baselines are stored in `attraction_p50_baselines` and used for ride crowd levels (load rating). See [P50 Crowd Levels](p50-crowd-levels.md).
