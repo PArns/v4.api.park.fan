@@ -3358,13 +3358,13 @@ export class AnalyticsService {
     );
 
     this.logger.log(
-      `Identified ${result.length} headliners for park ${parkId} (Tiers: T1=${result.filter((r) => r.tier === "tier1").length}, T2=${result.filter((r) => r.tier === "tier2").length}, T3=${result.filter((r) => r.tier === "tier3").length})`,
+      `Identified ${result.length} headliners for park ${parkId} (Tiers: T1=${result.filter((r: any) => r.tier === 'tier1').length}, T2=${result.filter((r: any) => r.tier === 'tier2').length}, T3=${result.filter((r: any) => r.tier === 'tier3').length})`,
     );
 
-    return result.map((row) => ({
+    return result.map((row: any) => ({
       parkId,
       attractionId: row.attraction_id,
-      tier: row.tier as "tier1" | "tier2" | "tier3",
+      tier: row.tier as 'tier1' | 'tier2' | 'tier3',
       avgWait548d: parseFloat(row.avg_wait),
       p50Wait548d: parseFloat(row.p50_wait),
       p90Wait548d: parseFloat(row.p90_wait),
