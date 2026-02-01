@@ -17,6 +17,9 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
+import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
+import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -90,8 +93,14 @@ export class AnalyticsService {
     private queueDataAggregateRepository: Repository<QueueDataAggregate>,
     @InjectRepository(ParkDailyStats)
     private parkDailyStatsRepository: Repository<ParkDailyStats>,
+    @InjectRepository(HeadlinerAttraction)
+    private headlinerAttractionRepository: Repository<HeadlinerAttraction>,
+    @InjectRepository(ParkP50Baseline)
+    private parkP50BaselineRepository: Repository<ParkP50Baseline>,
+    @InjectRepository(AttractionP50Baseline)
+    private attractionP50BaselineRepository: Repository<AttractionP50Baseline>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Determine the effective start time for analytics filtering
@@ -1392,17 +1401,17 @@ export class AnalyticsService {
    * **Single Source of Truth** for crowd level calculation across all services.
    * All services should use this method instead of implementing their own logic.
    *
-   * **Unified Thresholds (Option B - P90 as Expected Baseline):**
-   * Both parks and attractions use P90 (90th percentile) as baseline: occupancy = (current / p90) * 100
-   * - 100% = P90 = **"moderate"** baseline (expected by park standards)
-   * - very_low: ≤ 40% (≤ 0.4x P90) - Much quieter than expected
-   * - low: 41-70% (0.41-0.7x P90) - Below expected
-   * - moderate: 71-100% (0.71-1.0x P90) - At expected baseline (P90)
-   * - high: 101-130% (1.01-1.3x P90) - Above expected
-   * - very_high: 131-160% (1.31-1.6x P90) - Significantly above expected
-   * - extreme: > 160% (> 1.6x P90) - Exceptionally crowded
+   * **NEW: P50-Relative Thresholds (±20% Around Median):**
+   * Uses P50 (median) as baseline: occupancy = (current / p50) * 100
+   * - 100% = P50 = **"moderate"** baseline (expected/typical day)
+   * - very_low: ≤ 50% (≤ 0.5x P50) - Much quieter than expected
+   * - low: 51-79% (0.51-0.79x P50) - Below expected
+   * - moderate: 80-120% (0.8-1.2x P50) - Around expected baseline (±20%)
+   * - high: 121-170% (1.21-1.7x P50) - Above expected
+   * - very_high: 171-250% (1.71-2.5x P50) - Significantly above expected
+   * - extreme: > 250% (> 2.5x P50) - Exceptionally crowded
    *
-   * @param occupancy - Occupancy percentage relative to P90 baseline (0-200+)
+   * @param occupancy - Occupancy percentage relative to P50 baseline (0-300+)
    * @returns Crowd level rating
    *
    * @public - Use this method from other services instead of duplicating logic
@@ -1410,12 +1419,12 @@ export class AnalyticsService {
   public determineCrowdLevel(
     occupancy: number,
   ): "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme" {
-    // Option B thresholds: 100% = moderate (P90 = expected baseline)
-    if (occupancy <= 40) return "very_low";
-    if (occupancy <= 70) return "low";
-    if (occupancy <= 100) return "moderate";
-    if (occupancy <= 130) return "high";
-    if (occupancy <= 160) return "very_high";
+    // P50-relative thresholds (±20% around P50 for moderate)
+    if (occupancy <= 50) return "very_low";
+    if (occupancy <= 79) return "low";
+    if (occupancy <= 120) return "moderate"; // 80-120%: ±20% around P50
+    if (occupancy <= 170) return "high";
+    if (occupancy <= 250) return "very_high";
     return "extreme";
   }
 
@@ -2427,57 +2436,57 @@ export class AnalyticsService {
     const mostCrowdedPark =
       openParks.length > 0
         ? {
-            id: openParks[0].id,
-            name: openParks[0].name,
-            slug: openParks[0].slug,
-            city: openParks[0].city,
-            country: openParks[0].country,
-            countrySlug: openParks[0].countrySlug,
-            averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
-            url: buildParkUrl(openParks[0]),
-            totalAttractions: parseInt(openParks[0].total_attractions || "0"),
-            operatingAttractions: Math.max(
-              0,
-              parseInt(openParks[0].total_attractions || "0") -
-                parseInt(openParks[0].explicitly_closed_attractions || "0"),
-            ),
-            closedAttractions: parseInt(
-              openParks[0].explicitly_closed_attractions || "0",
-            ),
-          }
+          id: openParks[0].id,
+          name: openParks[0].name,
+          slug: openParks[0].slug,
+          city: openParks[0].city,
+          country: openParks[0].country,
+          countrySlug: openParks[0].countrySlug,
+          averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
+          url: buildParkUrl(openParks[0]),
+          totalAttractions: parseInt(openParks[0].total_attractions || "0"),
+          operatingAttractions: Math.max(
+            0,
+            parseInt(openParks[0].total_attractions || "0") -
+            parseInt(openParks[0].explicitly_closed_attractions || "0"),
+          ),
+          closedAttractions: parseInt(
+            openParks[0].explicitly_closed_attractions || "0",
+          ),
+        }
         : null;
 
     const leastCrowdedPark =
       openParks.length > 0
         ? {
-            id: openParks[openParks.length - 1].id,
-            name: openParks[openParks.length - 1].name,
-            slug: openParks[openParks.length - 1].slug,
-            city: openParks[openParks.length - 1].city,
-            country: openParks[openParks.length - 1].country,
-            countrySlug: openParks[openParks.length - 1].countrySlug,
-            averageWaitTime: Math.round(
-              openParks[openParks.length - 1].avg_wait,
-            ),
-            url: buildParkUrl(openParks[openParks.length - 1]),
-            totalAttractions: parseInt(
+          id: openParks[openParks.length - 1].id,
+          name: openParks[openParks.length - 1].name,
+          slug: openParks[openParks.length - 1].slug,
+          city: openParks[openParks.length - 1].city,
+          country: openParks[openParks.length - 1].country,
+          countrySlug: openParks[openParks.length - 1].countrySlug,
+          averageWaitTime: Math.round(
+            openParks[openParks.length - 1].avg_wait,
+          ),
+          url: buildParkUrl(openParks[openParks.length - 1]),
+          totalAttractions: parseInt(
+            openParks[openParks.length - 1].total_attractions || "0",
+          ),
+          operatingAttractions: Math.max(
+            0,
+            parseInt(
               openParks[openParks.length - 1].total_attractions || "0",
+            ) -
+            parseInt(
+              openParks[openParks.length - 1]
+                .explicitly_closed_attractions || "0",
             ),
-            operatingAttractions: Math.max(
-              0,
-              parseInt(
-                openParks[openParks.length - 1].total_attractions || "0",
-              ) -
-                parseInt(
-                  openParks[openParks.length - 1]
-                    .explicitly_closed_attractions || "0",
-                ),
-            ),
-            closedAttractions: parseInt(
-              openParks[openParks.length - 1].explicitly_closed_attractions ||
-                "0",
-            ),
-          }
+          ),
+          closedAttractions: parseInt(
+            openParks[openParks.length - 1].explicitly_closed_attractions ||
+            "0",
+          ),
+        }
         : null;
 
     // 3. Find Longest/Shortest Wait Ride (Global)
@@ -2527,39 +2536,39 @@ export class AnalyticsService {
     const longestWaitRide =
       rideStats.length > 0
         ? {
-            id: rideStats[0].attractionId,
-            name: rideStats[0].attractionName,
+          id: rideStats[0].attractionId,
+          name: rideStats[0].attractionName,
+          slug: rideStats[0].attractionSlug,
+          parkName: rideStats[0].parkName,
+          parkSlug: rideStats[0].slug,
+          parkCity: rideStats[0].city,
+          parkCountry: rideStats[0].country,
+          parkCountrySlug: rideStats[0].countrySlug,
+          waitTime: rideStats[0].waitTime,
+          url: buildAttractionUrl(rideStats[0], {
             slug: rideStats[0].attractionSlug,
-            parkName: rideStats[0].parkName,
-            parkSlug: rideStats[0].slug,
-            parkCity: rideStats[0].city,
-            parkCountry: rideStats[0].country,
-            parkCountrySlug: rideStats[0].countrySlug,
-            waitTime: rideStats[0].waitTime,
-            url: buildAttractionUrl(rideStats[0], {
-              slug: rideStats[0].attractionSlug,
-            }),
-            crowdLevel: null,
-          }
+          }),
+          crowdLevel: null,
+        }
         : null;
 
     const shortestWaitRide =
       rideStats.length > 0
         ? {
-            id: rideStats[rideStats.length - 1].attractionId,
-            name: rideStats[rideStats.length - 1].attractionName,
+          id: rideStats[rideStats.length - 1].attractionId,
+          name: rideStats[rideStats.length - 1].attractionName,
+          slug: rideStats[rideStats.length - 1].attractionSlug,
+          parkName: rideStats[rideStats.length - 1].parkName,
+          parkSlug: rideStats[rideStats.length - 1].slug,
+          parkCity: rideStats[rideStats.length - 1].city,
+          parkCountry: rideStats[rideStats.length - 1].country,
+          parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
+          waitTime: rideStats[rideStats.length - 1].waitTime,
+          url: buildAttractionUrl(rideStats[rideStats.length - 1], {
             slug: rideStats[rideStats.length - 1].attractionSlug,
-            parkName: rideStats[rideStats.length - 1].parkName,
-            parkSlug: rideStats[rideStats.length - 1].slug,
-            parkCity: rideStats[rideStats.length - 1].city,
-            parkCountry: rideStats[rideStats.length - 1].country,
-            parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
-            waitTime: rideStats[rideStats.length - 1].waitTime,
-            url: buildAttractionUrl(rideStats[rideStats.length - 1], {
-              slug: rideStats[rideStats.length - 1].attractionSlug,
-            }),
-            crowdLevel: null,
-          }
+          }),
+          crowdLevel: null,
+        }
         : null;
 
     // 4. Calculate Details for Top/Bottom Stats (Parallel & Optimized)
@@ -2576,89 +2585,89 @@ export class AnalyticsService {
     const mostCrowdedParkDetails =
       mostCrowdedPark && mostCrowdedOccupancy
         ? {
-            ...mostCrowdedPark,
-            crowdLevel: this.determineCrowdLevel(mostCrowdedOccupancy.current),
-            occupancy: mostCrowdedOccupancy.current,
-            comparedToTypical: mostCrowdedOccupancy.comparisonStatus,
-          }
+          ...mostCrowdedPark,
+          crowdLevel: this.determineCrowdLevel(mostCrowdedOccupancy.current),
+          occupancy: mostCrowdedOccupancy.current,
+          comparedToTypical: mostCrowdedOccupancy.comparisonStatus,
+        }
         : mostCrowdedPark
           ? {
-              ...mostCrowdedPark,
-              crowdLevel: null,
-              occupancy: null,
-              comparedToTypical: null,
-            }
+            ...mostCrowdedPark,
+            crowdLevel: null,
+            occupancy: null,
+            comparedToTypical: null,
+          }
           : null;
 
     const leastCrowdedParkDetails =
       leastCrowdedPark && leastCrowdedOccupancy
         ? {
-            ...leastCrowdedPark,
-            crowdLevel: this.determineCrowdLevel(leastCrowdedOccupancy.current),
-            occupancy: leastCrowdedOccupancy.current,
-            comparedToTypical: leastCrowdedOccupancy.comparisonStatus,
-          }
+          ...leastCrowdedPark,
+          crowdLevel: this.determineCrowdLevel(leastCrowdedOccupancy.current),
+          occupancy: leastCrowdedOccupancy.current,
+          comparedToTypical: leastCrowdedOccupancy.comparisonStatus,
+        }
         : leastCrowdedPark
           ? {
-              ...leastCrowdedPark,
-              crowdLevel: null,
-              occupancy: null,
-              comparedToTypical: null,
-            }
+            ...leastCrowdedPark,
+            crowdLevel: null,
+            occupancy: null,
+            comparedToTypical: null,
+          }
           : null;
 
     // Calculate load ratings for both rides in parallel
     const [longestRideRating, shortestRideRating] = await Promise.all([
       longestWaitRide
         ? this.get90thPercentileWithConfidence(
-            longestWaitRide.id,
-            "attraction",
-          ).then((p90Res) =>
-            this.getLoadRating(longestWaitRide.waitTime, p90Res.p90),
-          )
+          longestWaitRide.id,
+          "attraction",
+        ).then((p90Res) =>
+          this.getLoadRating(longestWaitRide.waitTime, p90Res.p90),
+        )
         : Promise.resolve(null),
       shortestWaitRide
         ? this.get90thPercentileWithConfidence(
-            shortestWaitRide.id,
-            "attraction",
-          ).then((p90Res) =>
-            this.getLoadRating(shortestWaitRide.waitTime, p90Res.p90),
-          )
+          shortestWaitRide.id,
+          "attraction",
+        ).then((p90Res) =>
+          this.getLoadRating(shortestWaitRide.waitTime, p90Res.p90),
+        )
         : Promise.resolve(null),
     ]);
 
     const longestWaitRideDetails =
       longestWaitRide && longestRideRating
         ? {
-            ...longestWaitRide,
-            crowdLevel: longestRideRating.rating,
-            baseline: longestRideRating.baseline,
-            comparison: this.getComparisonText(longestRideRating.rating),
-          }
+          ...longestWaitRide,
+          crowdLevel: longestRideRating.rating,
+          baseline: longestRideRating.baseline,
+          comparison: this.getComparisonText(longestRideRating.rating),
+        }
         : longestWaitRide
           ? {
-              ...longestWaitRide,
-              crowdLevel: null,
-              baseline: null,
-              comparison: null,
-            }
+            ...longestWaitRide,
+            crowdLevel: null,
+            baseline: null,
+            comparison: null,
+          }
           : null;
 
     const shortestWaitRideDetails =
       shortestWaitRide && shortestRideRating
         ? {
-            ...shortestWaitRide,
-            crowdLevel: shortestRideRating.rating,
-            baseline: shortestRideRating.baseline,
-            comparison: this.getComparisonText(shortestRideRating.rating),
-          }
+          ...shortestWaitRide,
+          crowdLevel: shortestRideRating.rating,
+          baseline: shortestRideRating.baseline,
+          comparison: this.getComparisonText(shortestRideRating.rating),
+        }
         : shortestWaitRide
           ? {
-              ...shortestWaitRide,
-              crowdLevel: null,
-              baseline: null,
-              comparison: null,
-            }
+            ...shortestWaitRide,
+            crowdLevel: null,
+            baseline: null,
+            comparison: null,
+          }
           : null;
 
     // Count open vs closed attractions
@@ -2876,8 +2885,8 @@ export class AnalyticsService {
             averageWaitTime:
               cityData.parkCount > 0
                 ? roundToNearest5Minutes(
-                    cityData.totalWaitTime / cityData.parkCount,
-                  )
+                  cityData.totalWaitTime / cityData.parkCount,
+                )
                 : null,
           });
         }
@@ -2888,8 +2897,8 @@ export class AnalyticsService {
           averageWaitTime:
             countryData.parkCount > 0
               ? roundToNearest5Minutes(
-                  countryData.totalWaitTime / countryData.parkCount,
-                )
+                countryData.totalWaitTime / countryData.parkCount,
+              )
               : null,
           cities,
         });
@@ -2901,8 +2910,8 @@ export class AnalyticsService {
         averageWaitTime:
           continentData.parkCount > 0
             ? roundToNearest5Minutes(
-                continentData.totalWaitTime / continentData.parkCount,
-              )
+              continentData.totalWaitTime / continentData.parkCount,
+            )
             : null,
         countries,
       });
@@ -3224,5 +3233,317 @@ export class AnalyticsService {
         confidence: p90Result.confidence,
       };
     });
+  }
+
+  // ==================================================================================
+  // P50 BASELINE SYSTEM - HEADLINER IDENTIFICATION & CROWD LEVEL CALCULATION
+  // ==================================================================================
+
+  /**
+   * Identify headliner attractions for a park using 3-tier adaptive strategy
+   *
+   * Tier 1 (Major Parks): Absolute thresholds (AVG > 15min, P90 > 25min)
+   * Tier 2 (Medium Parks): Relative thresholds (Top 50%, P90 > 1.5x P50)
+   * Tier 3 (Small Parks): All attractions with AVG > 3min (fallback)
+   *
+   * @param parkId - Park ID
+   * @returns Array of headliner attractions with tier classification
+   */
+  async identifyHeadliners(parkId: string): Promise<HeadlinerAttraction[]> {
+    const SLIDING_WINDOW_DAYS = 548; // 1.5 years
+
+    // Get park timezone
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+
+    // Calculate cutoff date
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, timezone, "yyyy-MM-dd");
+    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
+
+    // 3-Tier Adaptive Headliner Identification
+    const result = await this.queueDataRepository.query(
+      `
+      -- Step 1: Calculate statistics for all attractions
+      WITH attraction_stats AS (
+        SELECT
+          a.id as attraction_id,
+          a."parkId" as park_id,
+          ROUND(AVG(qd."waitTime")::numeric, 2) as avg_wait,
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50_wait,
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90_wait,
+          COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as operating_days,
+          COUNT(*) as sample_count
+        FROM queue_data qd
+        INNER JOIN attractions a ON qd."attractionId" = a.id
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $3
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" > 0
+        GROUP BY a.id, a."parkId"
+      ),
+      -- Step 2: Calculate park-wide stats for relative thresholds
+      park_stats AS (
+        SELECT
+          COUNT(*) as total_attractions,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY avg_wait) as park_median_wait,
+          MAX(operating_days) as max_operating_days
+        FROM attraction_stats
+      ),
+      -- Tier 1: Absolute thresholds (major parks)
+      tier1_headliners AS (
+        SELECT
+          attraction_id,
+          park_id,
+          'tier1' as tier,
+          avg_wait,
+          p50_wait,
+          p90_wait,
+          operating_days,
+          sample_count
+        FROM attraction_stats ast
+        CROSS JOIN park_stats ps
+        WHERE ast.avg_wait > 15
+          AND ast.p90_wait > 25
+          AND ast.operating_days > (ps.max_operating_days * 0.8)
+      ),
+      -- Tier 2: Relative thresholds (medium parks) - only if Tier 1 < 3
+      tier2_headliners AS (
+        SELECT
+          ast.attraction_id,
+          ast.park_id,
+          'tier2' as tier,
+          ast.avg_wait,
+          ast.p50_wait,
+          ast.p90_wait,
+          ast.operating_days,
+          ast.sample_count
+        FROM attraction_stats ast
+        CROSS JOIN park_stats ps
+        WHERE (SELECT COUNT(*) FROM tier1_headliners) < 3
+          AND ast.avg_wait >= ps.park_median_wait  -- Top 50%
+          AND ast.p90_wait > ast.p50_wait * 1.5    -- Can spike
+          AND ast.operating_days > (ps.max_operating_days * 0.7)
+      ),
+      -- Tier 3: All attractions fallback (small parks) - only if Tier 1+2 < 3
+      tier3_headliners AS (
+        SELECT
+          attraction_id,
+          park_id,
+          'tier3' as tier,
+          avg_wait,
+          p50_wait,
+          p90_wait,
+          operating_days,
+          sample_count
+        FROM attraction_stats
+        WHERE (SELECT COUNT(*) FROM tier1_headliners) < 3
+          AND (SELECT COUNT(*) FROM tier2_headliners) < 3
+          AND avg_wait > 3  -- Exclude always-closed/walk-through
+      )
+      -- Union all tiers (priority: Tier 1 > Tier 2 > Tier 3)
+      SELECT * FROM tier1_headliners
+      UNION ALL
+      SELECT * FROM tier2_headliners
+      UNION ALL
+      SELECT * FROM tier3_headliners
+      ORDER BY tier, avg_wait DESC;
+      `,
+      [parkId, timezone, cutoff],
+    );
+
+    this.logger.log(
+      `Identified ${result.length} headliners for park ${parkId} (Tiers: T1=${result.filter((r) => r.tier === "tier1").length}, T2=${result.filter((r) => r.tier === "tier2").length}, T3=${result.filter((r) => r.tier === "tier3").length})`,
+    );
+
+    return result.map((row) => ({
+      parkId,
+      attractionId: row.attraction_id,
+      tier: row.tier as "tier1" | "tier2" | "tier3",
+      avgWait548d: parseFloat(row.avg_wait),
+      p50Wait548d: parseFloat(row.p50_wait),
+      p90Wait548d: parseFloat(row.p90_wait),
+      operatingDays: parseInt(row.operating_days, 10),
+      sampleCount: parseInt(row.sample_count, 10),
+      lastCalculatedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+  }
+
+  /**
+   * Calculate P50 (median) baseline for a park using headliners only
+   *
+   * @param parkId - Park ID
+   * @param headliners - Array of headliner attractions
+   * @returns P50 baseline object with value, confidence, and metadata
+   */
+  async calculateP50Baseline(
+    parkId: string,
+    headliners: HeadlinerAttraction[],
+  ): Promise<{
+    p50: number;
+    sampleCount: number;
+    distinctDays: number;
+    confidence: "high" | "medium" | "low";
+    tier: "tier1" | "tier2" | "tier3";
+  }> {
+    if (headliners.length === 0) {
+      return {
+        p50: 0,
+        sampleCount: 0,
+        distinctDays: 0,
+        confidence: "low",
+        tier: "tier3",
+      };
+    }
+
+    const SLIDING_WINDOW_DAYS = 548;
+
+    // Get park timezone
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+
+    // Calculate cutoff date
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, timezone, "yyyy-MM-dd");
+    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
+
+    // Query P50 from headliners only
+    const result = await this.queueDataRepository.query(
+      `
+      SELECT
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
+        COUNT(*) as sample_count,
+        COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as distinct_days
+      FROM queue_data qd
+      WHERE qd."attractionId" = ANY($3::uuid[])
+        AND qd.timestamp >= $4
+        AND qd."queueType" = 'STANDBY'
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" > 0
+      `,
+      [parkId, timezone, headliners.map((h) => h.attractionId), cutoff],
+    );
+
+    const p50 = result[0]?.p50 ? parseFloat(result[0].p50) : 0;
+    const sampleCount = result[0]?.sample_count
+      ? parseInt(result[0].sample_count, 10)
+      : 0;
+    const distinctDays = result[0]?.distinct_days
+      ? parseInt(result[0].distinct_days, 10)
+      : 0;
+
+    // Determine confidence level
+    let confidence: "high" | "medium" | "low" = "low";
+    if (distinctDays >= 90) {
+      confidence = "high";
+    } else if (distinctDays >= 30) {
+      confidence = "medium";
+    }
+
+    // Determine tier (use highest tier from headliners)
+    const tier =
+      headliners.find((h) => h.tier === "tier1")?.tier ||
+      headliners.find((h) => h.tier === "tier2")?.tier ||
+      "tier3";
+
+    this.logger.log(
+      `Calculated P50 baseline for park ${parkId}: ${p50}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
+    );
+
+    return {
+      p50,
+      sampleCount,
+      distinctDays,
+      confidence,
+      tier,
+    };
+  }
+
+  /**
+   * Save P50 baseline to database and cache
+   *
+   * @param parkId - Park ID
+   * @param baseline - P50 baseline object
+   * @param headliners - Array of headliner attractions
+   */
+  async saveP50Baselines(
+    parkId: string,
+    baseline: {
+      p50: number;
+      sampleCount: number;
+      distinctDays: number;
+      confidence: "high" | "medium" | "low";
+      tier: "tier1" | "tier2" | "tier3";
+    },
+    headliners: HeadlinerAttraction[],
+  ): Promise<void> {
+    // Save headliners
+    await this.headlinerAttractionRepository.delete({ parkId });
+    await this.headlinerAttractionRepository.save(headliners);
+
+    // Save park P50 baseline
+    await this.parkP50BaselineRepository.save({
+      parkId,
+      p50Baseline: baseline.p50,
+      headlinerCount: headliners.length,
+      tier: baseline.tier,
+      sampleCount: baseline.sampleCount,
+      distinctDays: baseline.distinctDays,
+      confidence: baseline.confidence,
+      calculatedAt: new Date(),
+    });
+
+    // Cache in Redis (24h TTL)
+    const cacheKey = `park:p50:${parkId}`;
+    await this.redis.set(cacheKey, baseline.p50.toString(), "EX", 86400);
+
+    this.logger.log(
+      `Saved P50 baseline for park ${parkId}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier})`,
+    );
+  }
+
+  /**
+   * Get P50 baseline from cache or database
+   *
+   * @param parkId - Park ID
+   * @returns P50 baseline value (minutes)
+   */
+  async getP50BaselineFromCache(parkId: string): Promise<number> {
+    // Try Redis cache first
+    const cacheKey = `park:p50:${parkId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return parseFloat(cached);
+    }
+
+    // Fallback to database
+    const baseline = await this.parkP50BaselineRepository.findOne({
+      where: { parkId },
+    });
+
+    if (baseline) {
+      // Re-cache for 24h
+      await this.redis.set(
+        cacheKey,
+        baseline.p50Baseline.toString(),
+        "EX",
+        86400,
+      );
+      return parseFloat(baseline.p50Baseline.toString());
+    }
+
+    // No baseline found - return 0 (will trigger fallback to P90)
+    return 0;
   }
 }
