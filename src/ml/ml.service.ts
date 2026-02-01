@@ -384,6 +384,21 @@ export class MLService {
         activeAttractionIds,
       );
 
+      // 4b. Fetch P50 baseline for crowd level calculation
+      // This ensures TypeScript and Python ML service produce identical crowd levels
+      let p50Baseline: number | undefined;
+      try {
+        p50Baseline = await this.analyticsService.getP50BaselineFromCache(parkId);
+        if (p50Baseline === 0) {
+          p50Baseline = undefined; // Let Python fallback to rolling_avg_7d
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch P50 baseline for park ${parkId}: ${error}`,
+        );
+        p50Baseline = undefined; // Graceful degradation
+      }
+
       // 5. Call ML Service via POST (Bulk Prediction)
       const payload: PredictionRequestDto = {
         attractionIds: activeAttractionIds,
@@ -393,6 +408,7 @@ export class MLService {
         currentWaitTimes,
         recentWaitTimes, // ~30 mins ago
         featureContext, // Phase 2: Real-time context features
+        p50Baseline, // NEW: P50 baseline for crowd level alignment
       };
 
       const response = await this.mlClient.post<BulkPredictionResponseDto>(
@@ -490,10 +506,10 @@ export class MLService {
         const today = formatInParkTimezone(
           new Date(),
           parkForDowntime?.timezone ||
-            (parkForDowntime?.countryCode
-              ? getTimezoneForCountry(parkForDowntime.countryCode)
-              : null) ||
-            "UTC",
+          (parkForDowntime?.countryCode
+            ? getTimezoneForCountry(parkForDowntime.countryCode)
+            : null) ||
+          "UTC",
         );
         const keys = attractionIds.map((id) => `downtime:daily:${id}:${today}`);
 
@@ -920,7 +936,7 @@ export class MLService {
 
     this.logger.verbose(
       `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} predictions for accuracy tracking ` +
-        `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
+      `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
     );
   }
 

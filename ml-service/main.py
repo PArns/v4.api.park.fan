@@ -74,6 +74,7 @@ class PredictionRequest(BaseModel):
     currentWaitTimes: Optional[Dict[str, int]] = None
     recentWaitTimes: Optional[Dict[str, int]] = None  # ~30 mins ago for velocity
     featureContext: Optional[Dict[str, Any]] = None  # Phase 2 features
+    p50Baseline: Optional[float] = None  # P50 (median) baseline for crowd level calculation
 
 
 class PredictionResponse(BaseModel):
@@ -325,7 +326,7 @@ async def predict(request: PredictionRequest):
             request.currentWaitTimes,
             request.recentWaitTimes,
             request.featureContext,
-        )
+            request.p50Baseline,  # NEW: Pass P50 baseline\n        )
 
         # Apply schedule filtering for both hourly and daily predictions
         # Hourly: Only hours within operating times

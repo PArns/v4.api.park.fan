@@ -1016,11 +1016,12 @@ def predict_wait_times(
     attraction_ids: List[str],
     park_ids: List[str],
     prediction_type: str = "hourly",
-    base_time: datetime = None,
-    weather_forecast: List[Any] = None,
-    current_wait_times: Dict[str, int] = None,
-    recent_wait_times: Dict[str, int] = None,
-    feature_context: Dict[str, Any] = None,
+    base_time: Optional[datetime] = None,
+    weather_forecast: Optional[List[Dict[str, Any]]] = None,
+    current_wait_times: Optional[Dict[str, int]] = None,
+    recent_wait_times: Optional[Dict[str, int]] = None,
+    feature_context: Optional[Dict[str, Any]] = None,
+    p50_baseline: Optional[float] = None,  # NEW: P50 baseline for crowd level
 ) -> List[Dict[str, Any]]:
     """
     Predict wait times for attractions
@@ -1114,28 +1115,41 @@ def predict_wait_times(
         # Combined confidence (weighted average)
         confidence = 0.6 * time_confidence + 0.4 * model_confidence
 
-        # Calculate crowd level based on predicted wait time vs baseline (rolling_avg_7d)
-        baseline = row.get("rolling_avg_7d", 30.0)  # Default to 30 min if missing
+        # Calculate crowd level based on predicted wait time vs P50 baseline
+        # P50 BASELINE SYSTEM:
+        # - Uses P50 (median) from TypeScript service (passed via API)
+        # - Replaces internal rolling_avg_7d calculation
+        # - Ensures TypeScript and Python produce IDENTICAL crowd levels
+        #
+        # Fallback chain (graceful degradation):
+        #   1. P50 baseline from API (preferred)
+        #   2. rolling_avg_7d from features (legacy)
+        #   3. Default 30 min (safeguard)
+        if p50_baseline is not None and p50_baseline > 0:
+            baseline = p50_baseline  # Use P50 baseline from TypeScript
+        else:
+            # Fallback to rolling_avg_7d during migration period
+            baseline = row.get("rolling_avg_7d", 30.0)
 
         if baseline > 0:
             ratio = pred_wait / baseline
         else:
             ratio = 1.0  # Default if no baseline
 
-        # Categorize crowd level using unified thresholds (Option B)
-        # MUST MATCH TypeScript determineCrowdLevel thresholds EXACTLY!
-        # P90 (100%) = "moderate" (expected baseline by park standards)
-        # occupancy = (pred_wait / baseline) * 100, so ratio = occupancy / 100
+        # Categorize crowd level using P50-RELATIVE THRESHOLDS
+        # MUST MATCH TypeScript determineCrowdLevel() EXACTLY!
+        # TypeScript: 50, 79, 120, 170, 250
+        # P50 (100%) = "moderate" (expected/typical baseline)
         occupancy_pct = ratio * 100
-        if occupancy_pct <= 40:
+        if occupancy_pct <= 50:
             crowd_level = "very_low"
-        elif occupancy_pct <= 70:
+        elif occupancy_pct <= 79:
             crowd_level = "low"
-        elif occupancy_pct <= 100:  # 100% = P90 = "moderate" (expected baseline)
+        elif occupancy_pct <= 120:  # 80-120%: ±20% around P50 = moderate
             crowd_level = "moderate"
-        elif occupancy_pct <= 130:
+        elif occupancy_pct <= 170:
             crowd_level = "high"
-        elif occupancy_pct <= 160:
+        elif occupancy_pct <= 250:
             crowd_level = "very_high"
         else:
             crowd_level = "extreme"

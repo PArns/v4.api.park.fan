@@ -91,6 +91,12 @@ export class PredictionRequestDto {
     isSchoolHoliday?: Record<string, boolean>; // parkId -> is school holiday?
     parkHasSchedule?: Record<string, boolean>; // parkId -> has schedule?
   };
+
+  @ApiProperty({
+    description: "P50 (median) baseline for crowd level calculation",
+    required: false,
+  })
+  p50Baseline?: number;
 }
 
 export class ParkPredictionRequestDto {
