@@ -19,7 +19,7 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `temperature`: Numerical (Celsius)
   - `temperature_deviation`: Difference from monthly average
   - `precipitation`: Current & Last 3 Hours (accumulated)
-  - `park_occupancy_pct`: Estimated crowd level (Current / P90 Baseline)
+  - `park_occupancy_pct`: Park-wide occupancy (Current median / P50 baseline, 0–200%). Aligned with API occupancy; training uses P50 for consistency.
   - `wait_time_momentum`: Velocity of change over last 30 mins
   - `trend_7d`: Linear regression slope of last 7 days
 
@@ -50,6 +50,12 @@ Content-Type: application/json
   "features": { ... }
 }
 ```
+
+## Alignment with API (P50 & Occupancy)
+
+- **Park occupancy** at inference comes from the NestJS API (`getCurrentOccupancy`), which uses the **P50 (headliner) baseline**. The ML service receives this as `featureContext.parkOccupancy` and uses it for `park_occupancy_pct`.
+- **Training**: `add_park_occupancy_feature` in training mode uses **P50 (median)** of historical wait times per park so the scale matches inference. Previously P90 was used; retraining is recommended after this change.
+- **Crowd level** on predictions: The API passes `p50Baseline` (per attraction or park). Python uses it for `crowdLevel` (very_low … extreme) so TypeScript and Python produce identical labels.
 
 ## Holiday Logic
 

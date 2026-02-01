@@ -474,16 +474,21 @@ export class MLService {
         this.logger.warn(`Failed to get park occupancy: ${error}`);
       }
 
-      // 2. Get park opening time today
+      // 2. Get park opening time today (today = park timezone)
       let parkOpeningTimes: Record<string, string> = {};
       try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const park = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: ["id", "timezone"],
+        });
+        const todayStr = park?.timezone
+          ? getCurrentDateInTimezone(park.timezone)
+          : getCurrentDateInTimezone("UTC");
 
         const schedule = await this.scheduleEntryRepository.findOne({
           where: {
             parkId,
-            date: today,
+            date: todayStr as any,
             scheduleType: ScheduleType.OPERATING,
           },
         });

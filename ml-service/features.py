@@ -752,8 +752,9 @@ def add_park_occupancy_feature(
     """
     Add park-wide occupancy percentage feature
 
-    Occupancy % = (current avg wait / P90 baseline) * 100
-    Helps ML learn park-wide crowd patterns
+    Occupancy % = (current avg wait / baseline) * 100
+    - Inference: API passes occupancy from TypeScript (P50 baseline, headliner).
+    - Training: Reconstruct using P50 (median) so train/inference scale matches.
 
     Args:
         df: DataFrame with parkId column
@@ -768,7 +769,7 @@ def add_park_occupancy_feature(
     df["park_occupancy_pct"] = 100.0
 
     if feature_context and "parkOccupancy" in feature_context:
-        # Inference Mode: Use provided real-time context
+        # Inference Mode: Use provided real-time context (P50-based from API)
         park_occupancy_map = feature_context["parkOccupancy"]
 
         # Map occupancy to each row based on parkId
@@ -779,10 +780,9 @@ def add_park_occupancy_feature(
             df.loc[mask, "park_occupancy_pct"] = float(occupancy_pct)
 
     else:
-        # Training Mode: Reconstruct historical occupancy from the data itself
-        # 1. Calculate Baseline (P90 of wait times per park)
-        # Using 90th percentile as a proxy for "Full Capacity"
-        park_baselines = df.groupby("parkId")["waitTime"].quantile(0.90)
+        # Training Mode: Reconstruct historical occupancy to match inference scale
+        # Use P50 (median) so park_occupancy_pct aligns with API (P50 baseline)
+        park_baselines = df.groupby("parkId")["waitTime"].quantile(0.50)
 
         # 2. Calculate Instantaneous Park Average (per timestamp)
         # Group by Park + Timestamp to get the average wait at that moment
