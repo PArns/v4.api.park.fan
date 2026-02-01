@@ -36,8 +36,9 @@ lerna-debug.log*
 .env
 .env.*
 
-# Debug scripts with DB credentials (keep local only)
-scripts/
+# Debug scripts with DB credentials (keep local only); README is tracked
+scripts/*
+!scripts/README.md
 
 # Temporary markdown files (keep README.md and DEPLOYMENT.md)
 *.md
