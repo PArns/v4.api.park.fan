@@ -772,7 +772,6 @@ export class AttractionIntegrationService {
       }
 
       // Debug: Log query results
-      const distinctDates = Array.from(queueDataByDate.keys()).sort();
 
       // Create down count map
       const downCountMap = new Map<string, number>();

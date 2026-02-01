@@ -35,7 +35,7 @@ export class OccupancyCalculationProcessor {
     private attractionRepository: Repository<Attraction>,
     private analyticsService: AnalyticsService,
     @Inject(REDIS_CLIENT) private redis: Redis,
-  ) { }
+  ) {}
 
   /**
    * Pre-compute P90 sliding window values for all parks and attractions
