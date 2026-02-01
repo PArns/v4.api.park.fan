@@ -91,10 +91,16 @@ export class StatsService {
         return this.upsertStats(parkId, dateStr, null, null, null);
       }
 
-      // Calculate P90 and Max
+      // Calculate P90 and Max; cap max to avoid single bad queue_data poisoning ParkDailyStats/cache
       const waitTimes = dayQueueData.map((q) => q.waitTime!);
       const p90 = this.calculateP90(waitTimes);
-      const max = Math.max(...waitTimes);
+      const rawMax = Math.max(...waitTimes);
+      // Outlier protection: one bad row (e.g. 450 instead of 45) must not feed into cache.
+      // Cap max at 3× P90 (typical peak vs typical level) or 120 min, whichever is higher but sane.
+      const max =
+        p90 > 0
+          ? Math.min(rawMax, Math.max(120, p90 * 3))
+          : Math.min(rawMax, 120);
 
       return this.upsertStats(parkId, dateStr, p90, max, dayQueueData.length);
     } catch (error) {

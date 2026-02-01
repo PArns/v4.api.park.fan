@@ -281,21 +281,24 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          // Use unified method with confidence score
-          const p90Result =
-            await this.analyticsService.get90thPercentileWithConfidence(
+          // Use P50 baseline when available (same as parks), else sliding-window P50/P90
+          let baseline =
+            await this.analyticsService.getAttractionP50BaselineFromCache(
               attraction.id,
-              "attraction",
             );
+          if (baseline === 0) {
+            const percentiles =
+              await this.analyticsService.get90thPercentileWithConfidence(
+                attraction.id,
+                "attraction",
+              );
+            baseline = percentiles.p50 || percentiles.p90;
+          }
 
-          // Use unified crowd level calculation (P90-relative)
           const calculatedLevel = this.analyticsService.getAttractionCrowdLevel(
             wait,
-            p90Result.p90,
+            baseline,
           );
-
-          // If P90 baseline not available (returns null), use 'moderate' as sensible default
-          // This avoids absolute thresholds while still providing useful data
           crowdLevel = calculatedLevel || "moderate";
         } catch (error) {
           // If percentile lookup fails, fallback to ML prediction
@@ -316,21 +319,30 @@ export class AttractionIntegrationService {
     }
     dto.crowdLevel = crowdLevel;
 
-    // Calculate baseline and comparison (same logic as park-integration)
+    // Calculate baseline and comparison (P50 when available, else P90)
     if (dto.effectiveStatus === "OPERATING") {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          const p90Result =
-            await this.analyticsService.get90thPercentileWithConfidence(
+          let baseline =
+            await this.analyticsService.getAttractionP50BaselineFromCache(
               attraction.id,
-              "attraction",
-              attraction.park?.timezone,
             );
-          const p90 = p90Result.p90;
+          if (baseline === 0) {
+            const percentiles =
+              await this.analyticsService.get90thPercentileWithConfidence(
+                attraction.id,
+                "attraction",
+                attraction.park?.timezone,
+              );
+            baseline = percentiles.p50 || percentiles.p90;
+          }
 
-          if (p90 > 0) {
-            const loadRating = this.analyticsService.getLoadRating(wait, p90);
+          if (baseline > 0) {
+            const loadRating = this.analyticsService.getLoadRating(
+              wait,
+              baseline,
+            );
             dto.baseline = loadRating.baseline;
             dto.comparison = this.analyticsService.getComparisonText(
               loadRating.rating,
@@ -784,6 +796,12 @@ export class AttractionIntegrationService {
         downCountMap.set(dateStr, parseInt(row.down_count, 10) || 0);
       }
 
+      // P50 baseline for utilization (same as crowd level); use once per attraction
+      const attractionP50Baseline =
+        await this.analyticsService.getAttractionP50BaselineFromCache(
+          attractionId,
+        );
+
       // Build history entries for each day
       const history: HistoryDayDto[] = [];
       const currentDate = new Date(startDate);
@@ -820,7 +838,7 @@ export class AttractionIntegrationService {
                 : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
                   dayQueueData.length; // Fallback if sample counts missing
 
-            // Get P90 baseline (average of hourly P90s, weighted by sample count)
+            // Baseline: P50 when available, else average of hourly P90s for this day
             const avgP90 =
               totalSamples > 0
                 ? dayQueueData.reduce(
@@ -828,13 +846,14 @@ export class AttractionIntegrationService {
                     0,
                   ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
-                  dayQueueData.length; // Fallback if sample counts missing
+                  dayQueueData.length;
+            const baseline =
+              attractionP50Baseline > 0 ? attractionP50Baseline : avgP90;
 
-            // Use analytics service to get crowd level
-            if (avgP90 > 0) {
+            if (baseline > 0) {
               utilization = this.analyticsService.getAttractionCrowdLevel(
                 totalAvgWait,
-                avgP90,
+                baseline,
               ) as CrowdLevel;
             } else {
               utilization = "closed";

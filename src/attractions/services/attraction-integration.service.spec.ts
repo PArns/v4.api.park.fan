@@ -34,6 +34,10 @@ describe("AttractionIntegrationService", () => {
     getAttractionStatistics: jest.fn(),
     getEffectiveStartTime: jest.fn(),
     getAttractionCrowdLevel: jest.fn(),
+    getAttractionP50BaselineFromCache: jest.fn().mockResolvedValue(0),
+    get90thPercentileWithConfidence: jest
+      .fn()
+      .mockResolvedValue({ p50: 15, p90: 25 }),
   };
 
   const mockMLService = {

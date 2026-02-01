@@ -3,20 +3,16 @@
  *
  * Standard 6-level crowd rating used across all park and attraction endpoints.
  *
- * **Unified Thresholds (Option B - P90 as Expected Baseline):**
- * Both parks and attractions use P90 (90th percentile) as baseline: occupancy = (current / p90) * 100
- * - 100% = P90 = **"moderate"** (expected baseline by park standards)
+ * **Park occupancy:** Uses P50 (median) baseline from headliners only: occupancy = (current / p50) * 100
+ * - 100% = P50 = **"moderate"** (typical day). Baseline from getP50BaselineFromCache.
  *
- * Thresholds (based on occupancy percentage relative to P90):
- * - very_low: ≤ 40% (≤ 0.4x P90) - Much quieter than expected
- * - low: 41-70% (0.41-0.7x P90) - Below expected
- * - moderate: 71-100% (0.71-1.0x P90) - At expected baseline (P90)
- * - high: 101-130% (1.01-1.3x P90) - Above expected
- * - very_high: 131-160% (1.31-1.6x P90) - Significantly above expected
- * - extreme: > 160% (> 1.6x P90) - Exceptionally crowded
+ * **Attraction crowd level:** Uses per-attraction P90 (or P50 where used) for load rating.
  *
- * **Fallback (when P90 unavailable):**
- * Returns 'moderate' to avoid arbitrary absolute thresholds.
+ * Thresholds (P50-relative for parks, see determineCrowdLevel):
+ * - very_low: ≤ 50%  - low: 51-79%  - moderate: 80-120%  - high: 121-170%
+ * - very_high: 171-250%  - extreme: > 250%
+ *
+ * **Fallback (when baseline unavailable):** Returns 'moderate'.
  */
 export type CrowdLevel =
   | "very_low"

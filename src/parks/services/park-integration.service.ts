@@ -414,7 +414,7 @@ export class ParkIntegrationService {
       dto.attractions &&
       dto.attractions.length > 0
     ) {
-      // Batch fetch P90 baselines for all attractions (for relative crowd calculation)
+      // Batch fetch P50 baselines (for crowd level) and P90 fallbacks; then accuracy, stats, etc.
       const attractionIds = dto.attractions.map((a) => a.id);
 
       // Determine start time for analytics filtering
@@ -423,8 +423,9 @@ export class ParkIntegrationService {
         park.timezone,
       );
 
-      // Batch fetch P90s, pre-aggregated accuracy stats, and deviation flags in parallel
+      // Batch fetch P50s (prefer) and P90s (fallback), then accuracy, deviation, stats, history, trends
       const [
+        attractionP50s,
         attractionP90s,
         accuracyStats,
         deviationMap,
@@ -432,6 +433,7 @@ export class ParkIntegrationService {
         attractionHistoryMap,
         trendsMap,
       ] = await Promise.all([
+        this.analyticsService.getBatchAttractionP50s(attractionIds),
         this.analyticsService.getBatchAttractionP90s(attractionIds),
         this.accuracyStatsRepository.find({
           where: { attractionId: In(attractionIds) },
@@ -553,9 +555,15 @@ export class ParkIntegrationService {
           // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
-            // Use historical P90 baseline for relative crowd level (context-aware)
-            const p90 = attractionP90s.get(attraction.id) || 0;
-            const { rating } = this.analyticsService.getLoadRating(wait, p90);
+            // P50 baseline when available, else P90 (same as attraction detail)
+            const baseline =
+              attractionP50s.get(attraction.id) ||
+              attractionP90s.get(attraction.id) ||
+              0;
+            const { rating } = this.analyticsService.getLoadRating(
+              wait,
+              baseline,
+            );
             crowdLevel = rating;
           } else {
             // 2. Fallback to ML Prediction if no live data
@@ -601,13 +609,19 @@ export class ParkIntegrationService {
         }
         attraction.trend = trend;
 
-        // Determine Baseline and Comparison using AnalyticsService
+        // Determine Baseline and Comparison using AnalyticsService (P50 when available)
         if (attraction.effectiveStatus === "OPERATING") {
           const wait = attraction.queues?.[0]?.waitTime;
-          const p90 = attractionP90s.get(attraction.id) || 0;
+          const baseline =
+            attractionP50s.get(attraction.id) ||
+            attractionP90s.get(attraction.id) ||
+            0;
 
-          if (wait !== undefined && wait !== null && p90 > 0) {
-            const loadRating = this.analyticsService.getLoadRating(wait, p90);
+          if (wait !== undefined && wait !== null && baseline > 0) {
+            const loadRating = this.analyticsService.getLoadRating(
+              wait,
+              baseline,
+            );
 
             // Use baseline from loadRating (consistent with analytics)
             attraction.baseline = loadRating.baseline;
@@ -887,24 +901,19 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // Use park's local time for percentile lookup
-        // Get typical rating for "right now" in park's timezone
-        // Previously incorrectly used UTC time instead of park local time
-        // Fallback: Get typical wait from historical P90 percentiles
-        // Use park's local time for hour/day, not UTC
-        // Use park's local time for hour/day, not UTC (Legacy comment, simplified logic below)
-
-        // Get P90 park-level baseline
-        // Get P90 park-level baseline (Unified 548-day sliding window)
-        const p90Result =
-          await this.analyticsService.get90thPercentileWithConfidence(
-            park.id,
-            "park",
-            park.timezone,
-          );
-        const p90Park = p90Result.p90;
-        // Note: We don't have a "current" wait, so we can't calculate a rating.
-        // But we can populate baseline90thPercentile to show "Typical Wait: X min"
+        // Typical wait for display: use P50 baseline (headliner) when available, else P90 sliding window (same as operating parks).
+        let typicalWait = await this.analyticsService.getP50BaselineFromCache(
+          park.id,
+        );
+        if (typicalWait === 0) {
+          const p90Result =
+            await this.analyticsService.get90thPercentileWithConfidence(
+              park.id,
+              "park",
+              park.timezone,
+            );
+          typicalWait = p90Result.p50 || p90Result.p90;
+        }
 
         dto.analytics = {
           occupancy: {
@@ -912,11 +921,11 @@ export class ParkIntegrationService {
             trend: "stable",
             comparedToTypical: 0,
             comparisonStatus: "closed",
-            baseline90thPercentile: p90Park || 0, // Show typical wait for this time
+            baseline90thPercentile: typicalWait || 0, // Typical wait (P50 when available)
             updatedAt: new Date().toISOString(),
             breakdown: {
               currentAvgWait: 0,
-              typicalAvgWait: p90Park || 0, // Use p90 as proxy for typical
+              typicalAvgWait: typicalWait || 0,
               activeAttractions: 0,
             },
           },

@@ -805,19 +805,22 @@ export class SearchService implements OnModuleInit {
       }
     });
 
-    // 3. Batch fetch wait times, status, and P90s ONLY for operating attractions
+    // 3. Batch fetch wait times, status, P50s (prefer), and P90s (fallback) for operating attractions
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
+    let p50Map = new Map<string, number>();
     let p90Map = new Map<string, number>();
 
     if (operatingAttractionIds.length > 0) {
-      const [waitTimes, statuses, p90s] = await Promise.all([
+      const [waitTimes, statuses, p50s, p90s] = await Promise.all([
         this.getBatchWaitTimes(operatingAttractionIds),
         this.getBatchAttractionStatus(operatingAttractionIds),
+        this.analyticsService.getBatchAttractionP50s(operatingAttractionIds),
         this.analyticsService.getBatchAttractionP90s(operatingAttractionIds),
       ]);
       waitTimesMap = waitTimes;
       statusMap = statuses;
+      p50Map = p50s;
       p90Map = p90s;
     }
 
@@ -827,7 +830,6 @@ export class SearchService implements OnModuleInit {
         : "CLOSED";
       const isParkOpen = parkStatus === "OPERATING";
 
-      // If park is closed, force attraction status to CLOSED and wait time to null
       const status = isParkOpen
         ? statusMap.get(attraction.id)?.status
         : "CLOSED";
@@ -836,10 +838,13 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
-      const p90 = isParkOpen ? p90Map.get(attraction.id) : undefined;
+      // P50 when available, else P90 (same as attraction detail)
+      const baseline = isParkOpen
+        ? (p50Map.get(attraction.id) ?? p90Map.get(attraction.id))
+        : undefined;
 
       const load = isParkOpen
-        ? this.getCrowdLevelForSearch(waitTime ?? undefined, p90)
+        ? this.getCrowdLevelForSearch(waitTime ?? undefined, baseline)
         : null;
 
       return {
@@ -1080,14 +1085,16 @@ export class SearchService implements OnModuleInit {
 
   /**
    * Determine attraction load level from wait time
-   * REFACTORED: Delegates to AnalyticsService for consistent logic
+   * REFACTORED: Delegates to AnalyticsService for consistent logic (P50 baseline when available).
    */
   private getCrowdLevelForSearch(
     waitTime: number | undefined,
-    p90: number | undefined,
+    baseline: number | undefined,
   ): CrowdLevel | null {
-    const level = this.analyticsService.getAttractionCrowdLevel(waitTime, p90);
-    // Default to 'moderate' if P90 baseline not available
+    const level = this.analyticsService.getAttractionCrowdLevel(
+      waitTime,
+      baseline,
+    );
     return level || "moderate";
   }
 
