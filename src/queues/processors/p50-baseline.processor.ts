@@ -43,8 +43,21 @@ export class P50BaselineProcessor {
       let successCount = 0;
       let failureCount = 0;
 
+      const WINDOW_DAYS = 548;
       for (const park of parks) {
         try {
+          // Skip parks with no queue_data in window (reduces log noise; headliner logic would fail anyway)
+          const hasData = await this.analyticsService.parkHasQueueDataInWindow(
+            park.id,
+            WINDOW_DAYS,
+          );
+          if (!hasData) {
+            this.logger.debug(
+              `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
+            );
+            continue;
+          }
+
           // Step 1: Identify headliners using 3-tier system
           const headliners = await this.analyticsService.identifyHeadliners(
             park.id,
@@ -180,9 +193,21 @@ export class P50BaselineProcessor {
     job: Job<{ parkId: string }>,
   ): Promise<void> {
     const { parkId } = job.data;
+    const WINDOW_DAYS = 548;
     this.logger.log(`🔄 Backfilling P50 baseline for park ${parkId}...`);
 
     try {
+      const hasData = await this.analyticsService.parkHasQueueDataInWindow(
+        parkId,
+        WINDOW_DAYS,
+      );
+      if (!hasData) {
+        this.logger.warn(
+          `Skipping backfill: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days for park ${parkId}`,
+        );
+        return;
+      }
+
       // Identify headliners
       const headliners = await this.analyticsService.identifyHeadliners(parkId);
 

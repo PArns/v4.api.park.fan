@@ -3307,6 +3307,45 @@ export class AnalyticsService {
   // ==================================================================================
 
   /**
+   * Check if a park has any queue_data (STANDBY, OPERATING, waitTime>0) in the given window.
+   * Use to skip P50 baseline calculation for parks with no historical data and reduce log noise.
+   *
+   * @param parkId - Park ID
+   * @param windowDays - Number of days to look back (default 548)
+   * @returns true if at least one row exists in the window
+   */
+  async parkHasQueueDataInWindow(
+    parkId: string,
+    windowDays: number = 548,
+  ): Promise<boolean> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, timezone, "yyyy-MM-dd");
+    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+    const cutoff = subDays(today, windowDays);
+
+    const rows = await this.queueDataRepository.query(
+      `
+      SELECT 1
+      FROM queue_data qd
+      INNER JOIN attractions a ON qd."attractionId" = a.id
+      WHERE a."parkId" = $1
+        AND qd.timestamp >= $2
+        AND qd."queueType" = 'STANDBY'
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" > 0
+      LIMIT 1
+      `,
+      [parkId, cutoff],
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  /**
    * Identify headliner attractions for a park using 3-tier adaptive strategy
    *
    * Tier 1 (Major Parks): Absolute thresholds (AVG > 15min, P90 > 25min)
@@ -3464,28 +3503,47 @@ export class AnalyticsService {
         result.push(...fallbackResult);
       } else {
         this.logger.warn(
-          `Fallback failed: No operating attractions with wait times found for park ${parkId}`,
+          `Fallback failed: No queue_data (STANDBY, OPERATING, waitTime>0) in the last ${SLIDING_WINDOW_DAYS} days for any attraction in park ${parkId} – check data coverage or seasonal closure`,
         );
       }
     }
 
+    // Deduplicate by (parkId, attractionId): same attraction can appear in multiple tiers (UNION ALL).
+    // Keep one row per attraction with best tier (tier1 > tier2 > tier3).
+    const tierOrder = { tier1: 1, tier2: 2, tier3: 3 } as const;
+    const byAttraction = new Map<
+      string,
+      { row: any; tierRank: number }
+    >();
+    for (const row of result) {
+      const id = row.attraction_id as string;
+      const rank = tierOrder[row.tier as keyof typeof tierOrder] ?? 3;
+      const existing = byAttraction.get(id);
+      if (!existing || rank < existing.tierRank) {
+        byAttraction.set(id, { row, tierRank: rank });
+      }
+    }
+    const deduped = Array.from(byAttraction.values()).map(({ row }) => row);
+
     this.logger.log(
-      `Identified ${result.length} headliners for park ${parkId} (Tiers: T1=${result.filter((r: any) => r.tier === "tier1").length}, T2=${result.filter((r: any) => r.tier === "tier2").length}, T3=${result.filter((r: any) => r.tier === "tier3").length})`,
+      `Identified ${deduped.length} headliners for park ${parkId} (Tiers: T1=${deduped.filter((r: any) => r.tier === "tier1").length}, T2=${deduped.filter((r: any) => r.tier === "tier2").length}, T3=${deduped.filter((r: any) => r.tier === "tier3").length})`,
     );
 
-    return result.map((row: any) => ({
-      parkId,
-      attractionId: row.attraction_id,
-      tier: row.tier as "tier1" | "tier2" | "tier3",
-      avgWait548d: parseFloat(row.avg_wait),
-      p50Wait548d: parseFloat(row.p50_wait),
-      p90Wait548d: parseFloat(row.p90_wait),
-      operatingDays: parseInt(row.operating_days, 10),
-      sampleCount: parseInt(row.sample_count, 10),
-      lastCalculatedAt: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }));
+    return deduped.map((row: any) =>
+      Object.assign(new HeadlinerAttraction(), {
+        parkId,
+        attractionId: row.attraction_id,
+        tier: row.tier as "tier1" | "tier2" | "tier3",
+        avgWait548d: parseFloat(row.avg_wait),
+        p50Wait548d: parseFloat(row.p50_wait),
+        p90Wait548d: parseFloat(row.p90_wait),
+        operatingDays: parseInt(row.operating_days, 10),
+        sampleCount: parseInt(row.sample_count, 10),
+        lastCalculatedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
   }
 
   /**
