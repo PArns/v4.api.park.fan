@@ -30,6 +30,9 @@ export class ParkDailyStats {
   p90WaitTime: number | null;
 
   @Column({ type: "int", nullable: true })
+  p50WaitTime: number | null; // P50 (median) wait time - NEW!
+
+  @Column({ type: "int", nullable: true })
   maxWaitTime: number | null;
 
   @Column({ type: "int", nullable: true })

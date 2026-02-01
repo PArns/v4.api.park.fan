@@ -17,6 +17,9 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
+import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
+import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 
 @Module({
   imports: [
@@ -34,6 +37,10 @@ import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
       WaitTimePrediction,
       QueueDataAggregate,
       ParkDailyStats,
+      // P50 Baseline System
+      HeadlinerAttraction,
+      ParkP50Baseline,
+      AttractionP50Baseline,
     ]),
   ],
   providers: [AnalyticsService],
