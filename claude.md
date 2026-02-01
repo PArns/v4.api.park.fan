@@ -13,12 +13,28 @@
 
 ## 📚 Documentation Index
 
-- **Architecture**: [System Overview](docs/architecture/system-overview.md)
-- **Database**: [Schema & Entities](docs/database/schema.md)
-- **Analytics**: [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md)
-- **Machine Learning**: [Model & Training](docs/ml/model-overview.md)
-- **Development**: [Setup & Guidelines](docs/development/setup.md) | [Date & Time Handling](docs/development/datetime-handling.md)
-- **Deployment**: [Coolify Guide](docs/deployment/coolify.md)
+### 🏗️ Architecture & Infrastructure
+- [System Overview](docs/architecture/system-overview.md) - High-level component design.
+- [Job Queues & Processors](docs/architecture/job-queues.md) - Background BullMQ infrastructure.
+- [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
+- [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
+
+### 📊 Analytics & Logic
+- [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
+- [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
+
+### 🤖 Machine Learning
+- [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training.
+
+### 💾 Database
+- [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
+
+### 💻 Development
+- [Setup Guide](docs/development/setup.md) - Local development instructions.
+- [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
+
+### 🚀 Deployment
+- [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.
 
 ---
 

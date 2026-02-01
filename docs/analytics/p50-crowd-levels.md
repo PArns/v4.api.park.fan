@@ -16,6 +16,8 @@ Historical wait time data is analyzed over a **sliding window of 548 days** (app
 CrowdLevel% = (Current_Park_Median / Historical_P50_Baseline) * 100
 ```
 
+> **API Note:** The API response may still use legacy field names like `baseline90thPercentile`, but the *value* populated is now the P50 Baseline.
+
 ---
 
 ## 2. Calculation Methodology
