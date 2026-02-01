@@ -3390,6 +3390,50 @@ export class AnalyticsService {
       [parkId, timezone, cutoff],
     );
 
+    // Fallback: If no headliners found (e.g. small parks with low wait times),
+    // pick Top 5 attractions by P90 wait time to ensure we have a baseline.
+    if (result.length === 0) {
+      this.logger.warn(
+        `No headliners identified for park ${parkId} using standard tiers. Attempting fallback...`,
+      );
+
+      const fallbackResult = await this.queueDataRepository.query(
+        `
+        SELECT
+          a.id as attraction_id,
+          a."parkId" as park_id,
+          'tier3' as tier,
+          ROUND(AVG(qd."waitTime")::numeric, 2) as avg_wait,
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50_wait,
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90_wait,
+          COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as operating_days,
+          COUNT(*) as sample_count
+        FROM queue_data qd
+        INNER JOIN attractions a ON qd."attractionId" = a.id
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $3
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" > 0
+        GROUP BY a.id, a."parkId"
+        ORDER BY p90_wait DESC
+        LIMIT 5
+        `,
+        [parkId, timezone, cutoff],
+      );
+
+      if (fallbackResult.length > 0) {
+        this.logger.log(
+          `Fallback: Identified ${fallbackResult.length} headliners for park ${parkId} (Top P90)`,
+        );
+        result.push(...fallbackResult);
+      } else {
+        this.logger.warn(
+          `Fallback failed: No operating attractions with wait times found for park ${parkId}`,
+        );
+      }
+    }
+
     this.logger.log(
       `Identified ${result.length} headliners for park ${parkId} (Tiers: T1=${result.filter((r: any) => r.tier === "tier1").length}, T2=${result.filter((r: any) => r.tier === "tier2").length}, T3=${result.filter((r: any) => r.tier === "tier3").length})`,
     );
