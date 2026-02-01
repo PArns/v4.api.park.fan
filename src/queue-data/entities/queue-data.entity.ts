@@ -56,6 +56,9 @@ import {
 @Index("idx_queue_data_down", ["attractionId", "timestamp"], {
   where: "\"status\" = 'DOWN'",
 })
+// Index for global timestamp queries (cleanup tasks, global analytics)
+// Used by: Data cleanup jobs (DELETE WHERE timestamp < X)
+@Index("idx_queue_data_timestamp", ["timestamp"])
 export class QueueData {
   @PrimaryColumn({ type: "uuid" })
   id: string;
