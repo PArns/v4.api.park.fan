@@ -1,3 +1,4 @@
+import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 /**
@@ -105,9 +106,10 @@ export function isSameDayInTimezone(
  * getTomorrowDateInTimezone("America/Los_Angeles") // "2024-01-02" (UTC-8, still 15:00 on 2024-01-01 local)
  */
 export function getTomorrowDateInTimezone(timezone: string): string {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  return formatInTimeZone(tomorrow, timezone, "yyyy-MM-dd");
+  const todayStr = getCurrentDateInTimezone(timezone);
+  const noonInTz = fromZonedTime(`${todayStr}T12:00:00`, timezone);
+  const tomorrowInTz = addDays(noonInTz, 1);
+  return formatInTimeZone(tomorrowInTz, timezone, "yyyy-MM-dd");
 }
 
 /**

@@ -9,7 +9,11 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
+} from "../common/utils/date.util";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   calculateHolidayInfo,
@@ -1158,18 +1162,31 @@ export class ParksService {
   }
 
   /**
-   * Get today's schedule for a park
-   *
-   * Convenience method for integrated park endpoint.
-   * Returns all schedule entries for today only.
+   * Get schedule for a single calendar date (YYYY-MM-DD).
+   * Use this for "today" / "tomorrow" to avoid timezone ambiguity:
+   * schedule.date is a DATE column; comparing with a string is timezone-safe.
+   */
+  async getScheduleForDate(
+    parkId: string,
+    dateStr: string,
+  ): Promise<ScheduleEntry[]> {
+    return this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .where("schedule.parkId = :parkId", { parkId })
+      .andWhere("schedule.date = :dateStr", { dateStr })
+      .orderBy("schedule.scheduleType", "ASC")
+      .getMany();
+  }
+
+  /**
+   * Get today's schedule for a park.
+   * "Today" is the current calendar day in the park's timezone (00:00–23:59 park time).
+   * Uses date-string equality so results are independent of DB session timezone.
    *
    * @param parkId - Park ID (UUID)
    * @returns Today's schedule entries
    */
   async getTodaySchedule(parkId: string): Promise<ScheduleEntry[]> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["id", "timezone"],
@@ -1177,7 +1194,8 @@ export class ParksService {
 
     if (!park) return [];
 
-    const cacheKey = `schedule:today:${parkId}:${formatInParkTimezone(today, park.timezone)}`;
+    const todayStr = getCurrentDateInTimezone(park.timezone || "UTC");
+    const cacheKey = `schedule:today:${parkId}:${todayStr}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1190,10 +1208,7 @@ export class ParksService {
       })) as ScheduleEntry[];
     }
 
-    const endOfToday = new Date(today);
-    endOfToday.setHours(23, 59, 59, 999);
-
-    const schedule = await this.getSchedule(parkId, today, endOfToday);
+    const schedule = await this.getScheduleForDate(parkId, todayStr);
 
     // Cache result
     await this.redis.set(
@@ -1215,6 +1230,10 @@ export class ParksService {
    * @param parkId - Park ID (UUID)
    * @returns Next operating schedule entry or null if none found
    */
+  /**
+   * Get next scheduled opening for a park.
+   * "Tomorrow" is the next calendar day in the park's timezone; query uses date string for consistency.
+   */
   async getNextSchedule(parkId: string): Promise<ScheduleEntry | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -1223,11 +1242,8 @@ export class ParksService {
 
     if (!park) return null;
 
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-
-    const cacheKey = `schedule:next:${parkId}:${formatInParkTimezone(tomorrow, park.timezone)}`;
+    const tomorrowStr = getTomorrowDateInTimezone(park.timezone || "UTC");
+    const cacheKey = `schedule:next:${parkId}:${tomorrowStr}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1241,14 +1257,14 @@ export class ParksService {
       } as ScheduleEntry;
     }
 
-    // Look ahead up to 365 days for next operating schedule
-    const lookAheadDate = new Date(tomorrow);
+    // Look ahead: from park's "tomorrow" up to 365 days (use date string for lower bound)
+    const lookAheadDate = new Date(tomorrowStr + "T12:00:00.000Z");
     lookAheadDate.setDate(lookAheadDate.getDate() + 365);
 
     const nextSchedule = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .where("schedule.parkId = :parkId", { parkId })
-      .andWhere("schedule.date >= :tomorrow", { tomorrow })
+      .andWhere("schedule.date >= :tomorrowStr", { tomorrowStr })
       .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
       .andWhere("schedule.scheduleType = :type", {
         type: ScheduleType.OPERATING,
@@ -1300,19 +1316,14 @@ export class ParksService {
       timezoneMap.set(park.id, park.timezone || "UTC");
     }
 
-    // Try to get from cache first
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
+    // Try to get from cache first (today/tomorrow in each park's timezone)
     const cacheKeysToday = parks.map(
       (p) =>
-        `schedule:today:${p.id}:${formatInParkTimezone(today, p.timezone || "UTC")}`,
+        `schedule:today:${p.id}:${getCurrentDateInTimezone(p.timezone || "UTC")}`,
     );
     const cacheKeysNext = parks.map(
       (p) =>
-        `schedule:next:${p.id}:${formatInParkTimezone(tomorrow, p.timezone || "UTC")}`,
+        `schedule:next:${p.id}:${getTomorrowDateInTimezone(p.timezone || "UTC")}`,
     );
 
     const cachedToday = await this.redis.mget(...cacheKeysToday);
@@ -1396,16 +1407,13 @@ export class ParksService {
 
       const todayPromises = Array.from(timezoneGroups.entries()).map(
         async ([timezone, ids]) => {
-          const todayStr = formatInParkTimezone(today, timezone);
-          const endOfToday = new Date(today);
-          endOfToday.setHours(23, 59, 59, 999);
+          const todayStr = getCurrentDateInTimezone(timezone);
 
-          // Batch query schedules for all parks in this timezone group
+          // Query by date string (schedule.date is DATE); avoids session-timezone ambiguity
           const schedules = await this.scheduleRepository
             .createQueryBuilder("schedule")
             .where("schedule.parkId IN (:...parkIds)", { parkIds: ids })
-            .andWhere("schedule.date >= :startDate", { startDate: today })
-            .andWhere("schedule.date <= :endDate", { endDate: endOfToday })
+            .andWhere("schedule.date = :todayStr", { todayStr })
             .orderBy("schedule.parkId", "ASC")
             .addOrderBy("schedule.date", "ASC")
             .addOrderBy("schedule.scheduleType", "ASC")
@@ -1446,7 +1454,13 @@ export class ParksService {
         parksNeedingNextQuery.includes(p.id),
       );
 
-      const lookAheadDate = new Date(tomorrow);
+      // Earliest "tomorrow" among parks (for query start); lookAhead = +365 days
+      const tomorrowStrs = parksForNext.map((p) =>
+        getTomorrowDateInTimezone(p.timezone || "UTC"),
+      );
+      const minTomorrowStr = tomorrowStrs.sort()[0];
+      const minTomorrowDate = new Date(minTomorrowStr + "T12:00:00Z");
+      const lookAheadDate = new Date(minTomorrowDate);
       lookAheadDate.setDate(lookAheadDate.getDate() + 365);
 
       // Fetch all next schedules in one query
@@ -1455,7 +1469,9 @@ export class ParksService {
         .where("schedule.parkId IN (:...parkIds)", {
           parkIds: parksNeedingNextQuery,
         })
-        .andWhere("schedule.date >= :tomorrow", { tomorrow })
+        .andWhere("schedule.date >= :tomorrow", {
+          tomorrow: minTomorrowStr,
+        })
         .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
         .andWhere("schedule.scheduleType = :type", {
           type: ScheduleType.OPERATING,
@@ -1478,7 +1494,7 @@ export class ParksService {
       for (const park of parksForNext) {
         const schedule = nextScheduleMap.get(park.id) || null;
         const timezone = park.timezone || "UTC";
-        const cacheKey = `schedule:next:${park.id}:${formatInParkTimezone(tomorrow, timezone)}`;
+        const cacheKey = `schedule:next:${park.id}:${getTomorrowDateInTimezone(timezone)}`;
         await this.redis.set(
           cacheKey,
           JSON.stringify(schedule),
