@@ -773,6 +773,8 @@ def add_park_occupancy_feature(
 
         # Map occupancy to each row based on parkId
         for park_id, occupancy_pct in park_occupancy_map.items():
+            if occupancy_pct is None:
+                continue
             mask = df["parkId"] == park_id
             df.loc[mask, "park_occupancy_pct"] = float(occupancy_pct)
 
