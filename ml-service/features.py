@@ -851,9 +851,7 @@ def add_time_since_park_open(
 
                     df.loc[mask, "time_since_park_open_mins"] = (
                         (df.loc[mask, time_col] - opening_time).dt.total_seconds() / 60
-                    ).clip(
-                        lower=0
-                    )  # Negative = park not yet open, clip to 0
+                    ).clip(lower=0)  # Negative = park not yet open, clip to 0
 
             except Exception as e:
                 print(f"⚠️  Failed to parse opening time for park {park_id}: {e}")
@@ -1450,7 +1448,7 @@ def engineer_features(
     # Only enable if fetching RAW 5-minute data again
     resample_start = time_module.time()
     # df = resample_data(df)  # SKIP: Already aggregated by SQL
-    print(f"   Resampling: SKIPPED (data already hourly-aggregated by SQL)")
+    print("   Resampling: SKIPPED (data already hourly-aggregated by SQL)")
 
     # Fetch park metadata (needed for region-specific weekends & holidays)
     metadata_start = time_module.time()

@@ -3,7 +3,7 @@ Model training script
 """
 
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import pandas as pd
 import psutil
 import os
@@ -312,7 +312,7 @@ def train_model(version: str = None) -> None:
     # Adaptive validation sizing
     if data_span_days < 14:
         # Very small dataset: use percentage split
-        validation_method = "percentage"
+        # Very small dataset: use percentage split
         validation_ratio = 0.2  # 20% for validation
         logger.info(
             f"📊 Using percentage-based split (80/20) - only {data_span_days} days of data"
