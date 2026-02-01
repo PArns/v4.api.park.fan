@@ -3040,12 +3040,42 @@ export class AnalyticsService {
       }
     }
 
-    // Get P90 baseline with confidence
-    const p90Result = await this.get90thPercentileWithConfidence(
-      entityId,
-      type,
-      timezone,
+    // Step 1: Try to get P50 baseline (new system)
+    let baseline = 0;
+    let baselineType: 'p50' | 'p90' = 'p50';
+    let baselineConfidence: 'high' | 'medium' | 'low' = 'low';
+
+    const p50Baseline = await this.getP50BaselineFromCache(
+      type === 'park' ? entityId : '', // Only works for parks currently
     );
+
+    if (p50Baseline > 0 && type === 'park') {
+      // Use P50 baseline (new system)
+      baseline = p50Baseline;
+      baselineType = 'p50';
+
+      // Get confidence from P50 baseline table
+      const p50Record = await this.parkP50BaselineRepository.findOne({
+        where: { parkId: entityId },
+      });
+      baselineConfidence = p50Record?.confidence || 'low';
+    } else {
+      // Fallback to P90 baseline (legacy system)
+      const p90Result = await this.get90thPercentileWithConfidence(
+        entityId,
+        type,
+        timezone,
+      );
+      baseline = p90Result.p90;
+      baselineType = 'p90';
+      baselineConfidence = p90Result.confidence;
+
+      if (baseline === 0 || p90Result.distinctDays < 30) {
+        this.logger.warn(
+          `No reliable baseline for ${type} ${entityId} (P90: ${baseline}, days: ${p90Result.distinctDays})`,
+        );
+      }
+    }
 
     // Calculate date range for the specific day
     const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
@@ -3098,25 +3128,25 @@ export class AnalyticsService {
     let crowdLevel: CrowdLevel = "very_low";
     const hasData = avgWaitResult.avgWait !== null && avgWaitResult.count > 0;
 
-    if (hasData && p90Result.p90 > 0) {
-      percentage = Math.round((avgWaitResult.avgWait! / p90Result.p90) * 100);
+    if (hasData && baseline > 0) {
+      percentage = Math.round((avgWaitResult.avgWait! / baseline) * 100);
       crowdLevel = this.determineCrowdLevel(percentage);
     } else if (hasData) {
-      // No P90 baseline available - use moderate as default
-      // (better than no crowd level, and avoids absolute threshold fallbacks)
+      // No baseline available - use moderate as default
       crowdLevel = "moderate";
-      percentage = 50; // Default when no baseline
+      percentage = 100; // Default when no baseline (changed from 50 to match P50=100%)
     }
 
     const response = {
       percentage,
       crowdLevel,
       hasData,
-      confidence: p90Result.confidence,
+      confidence: baselineConfidence,
       avgWaitTime: avgWaitResult.avgWait
         ? roundToNearest5Minutes(avgWaitResult.avgWait)
         : null,
-      p90Baseline: p90Result.p90,
+      p90Baseline: baseline, // Keep field name for backward compatibility
+      baselineType, // NEW: Indicates which baseline was used
       sampleCount: avgWaitResult.count,
       isToday,
     };
@@ -3546,4 +3576,135 @@ export class AnalyticsService {
     // No baseline found - return 0 (will trigger fallback to P90)
     return 0;
   }
+
+  /**
+   * Calculate P50 (median) baseline for an individual attraction
+   *
+   * @param attractionId - Attraction ID
+   * @returns P50 baseline object with value, confidence, and metadata
+   */
+  async calculateAttractionP50(attractionId: string): Promise<{
+    p50: number;
+    sampleCount: number;
+    distinctDays: number;
+    confidence: 'high' | 'medium' | 'low';
+    isHeadliner: boolean;
+  }> {
+    const SLIDING_WINDOW_DAYS = 548;
+
+    // Get attraction and park info
+    const attraction = await this.attractionRepository.findOne({
+      where: { id: attractionId },
+      relations: ['park'],
+      select: ['id', 'parkId'],
+    });
+
+    if (!attraction) {
+      return {
+        p50: 0,
+        sampleCount: 0,
+        distinctDays: 0,
+        confidence: 'low',
+        isHeadliner: false,
+      };
+    }
+
+    const timezone = attraction.park?.timezone || 'UTC';
+
+    // Calculate cutoff date
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, timezone, 'yyyy-MM-dd');
+    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
+
+    // Query P50 for this attraction
+    const result = await this.queueDataRepository.query(
+      `
+      SELECT
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
+        COUNT(*) as sample_count,
+        COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as distinct_days
+      FROM queue_data qd
+      WHERE qd."attractionId" = $1
+        AND qd.timestamp >= $3
+        AND qd."queueType" = 'STANDBY'
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" > 0
+      `,
+      [attractionId, timezone, cutoff],
+    );
+
+    const p50 = result[0]?.p50 ? parseFloat(result[0].p50) : 0;
+    const sampleCount = result[0]?.sample_count
+      ? parseInt(result[0].sample_count, 10)
+      : 0;
+    const distinctDays = result[0]?.distinct_days
+      ? parseInt(result[0].distinct_days, 10)
+      : 0;
+
+    // Determine confidence level
+    let confidence: 'high' | 'medium' | 'low' = 'low';
+    if (distinctDays >= 90) {
+      confidence = 'high';
+    } else if (distinctDays >= 30) {
+      confidence = 'medium';
+    }
+
+    // Check if this is a headliner
+    const headliner = await this.headlinerAttractionRepository.findOne({
+      where: { attractionId, parkId: attraction.parkId },
+    });
+
+    this.logger.log(
+      `Calculated P50 baseline for attraction ${attractionId}: ${p50}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, headliner: ${!!headliner})`,
+    );
+
+    return {
+      p50,
+      sampleCount,
+      distinctDays,
+      confidence,
+      isHeadliner: !!headliner,
+    };
+  }
+
+  /**
+   * Save attraction P50 baseline to database and cache
+   *
+   * @param attractionId - Attraction ID
+   * @param parkId - Park ID
+   * @param baseline - P50 baseline object
+   */
+  async saveAttractionP50Baseline(
+    attractionId: string,
+    parkId: string,
+    baseline: {
+      p50: number;
+      sampleCount: number;
+      distinctDays: number;
+      confidence: 'high' | 'medium' | 'low';
+      isHeadliner: boolean;
+    },
+  ): Promise<void> {
+    // Save to database
+    await this.attractionP50BaselineRepository.save({
+      attractionId,
+      parkId,
+      p50Baseline: baseline.p50,
+      isHeadliner: baseline.isHeadliner,
+      sampleCount: baseline.sampleCount,
+      distinctDays: baseline.distinctDays,
+      confidence: baseline.confidence,
+      calculatedAt: new Date(),
+    });
+
+    // Cache in Redis (24h TTL)
+    const cacheKey = `attraction:p50:${attractionId}`;
+    await this.redis.set(cacheKey, baseline.p50.toString(), 'EX', 86400);
+
+    this.logger.log(
+      `Saved P50 baseline for attraction ${attractionId}: ${baseline.p50}min`,
+    );
+  }
 }
+
