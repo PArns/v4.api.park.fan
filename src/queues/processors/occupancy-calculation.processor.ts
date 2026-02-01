@@ -35,7 +35,7 @@ export class OccupancyCalculationProcessor {
     private attractionRepository: Repository<Attraction>,
     private analyticsService: AnalyticsService,
     @Inject(REDIS_CLIENT) private redis: Redis,
-  ) {}
+  ) { }
 
   /**
    * Pre-compute P90 sliding window values for all parks and attractions
@@ -74,7 +74,7 @@ export class OccupancyCalculationProcessor {
             );
 
           this.logger.debug(
-            `   ✓ Park [${park.name}]: P90=${parkP90.p90}min, confidence=${parkP90.confidence}, samples=${parkP90.sampleCount}`,
+            `   ✓ Park [${park.name}]: P90=${parkP90.p90}min, P50=${parkP90.p50}min, confidence=${parkP90.confidence}, samples=${parkP90.sampleCount}`,
           );
           parkCount++;
 
@@ -94,9 +94,9 @@ export class OccupancyCalculationProcessor {
                   park.timezone,
                 );
 
-              if (attractionP90.p90 > 0) {
+              if (attractionP90.p90 > 0 || attractionP90.p50 > 0) {
                 this.logger.debug(
-                  `     ✓ Attraction [${attraction.name}]: P90=${attractionP90.p90}min, confidence=${attractionP90.confidence}`,
+                  `     ✓ Attraction [${attraction.name}]: P90=${attractionP90.p90}min, P50=${attractionP90.p50}min, confidence=${attractionP90.confidence}`,
                 );
               }
               attractionCount++;

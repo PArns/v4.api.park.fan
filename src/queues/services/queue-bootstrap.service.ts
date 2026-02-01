@@ -43,7 +43,7 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
-  ) {}
+  ) { }
 
   /**
    * Runs after all modules initialized.
@@ -168,7 +168,7 @@ export class QueueBootstrapService implements OnModuleInit {
         "bootstrap-parks-sync",
       );
       if (existingJob) {
-        await existingJob.remove().catch(() => {});
+        await existingJob.remove().catch(() => { });
       }
 
       await this.parkMetadataQueue.add(
@@ -198,7 +198,7 @@ export class QueueBootstrapService implements OnModuleInit {
       // Remove stale job first if any (completed/failed)
       const existingJob = await this.holidaysQueue.getJob("bootstrap-holidays");
       if (existingJob) {
-        await existingJob.remove().catch(() => {});
+        await existingJob.remove().catch(() => { });
       }
 
       await this.holidaysQueue.add(
@@ -256,7 +256,9 @@ export class QueueBootstrapService implements OnModuleInit {
             removeOnComplete: true,
           },
         );
-        this.logger.log("✅ Boot: P90 sliding window pre-aggregation queued");
+        this.logger.log(
+          "✅ Boot: P90/P50 sliding window pre-aggregation queued",
+        );
       } else {
         this.logger.debug(
           "⏭️  Boot: P90 pre-aggregation already running, skipping",
