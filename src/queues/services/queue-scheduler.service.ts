@@ -43,10 +43,10 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("wartezeiten-schedule")
     private wartezeitenScheduleQueue: Queue,
     @InjectQueue("ml-monitoring")
-    @InjectQueue("ml-monitoring")
     private mlMonitoringQueue: Queue,
     @InjectQueue("stats") private statsQueue: Queue,
-  ) {}
+    @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline
+  ) { }
 
   async onModuleInit(): Promise<void> {
     // Skip scheduler if SKIP_QUEUE_BOOTSTRAP is set (for scripts)
@@ -403,6 +403,42 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 1 * * *", // Daily at 1am
           },
           jobId: "stats-yesterday-cron",
+        },
+      );
+    }
+
+    // P50 Baseline: Daily at 3am (after percentile calculation at 2am)
+    const hasP50ParkBaselineCron = await this.hasRepeatableJob(
+      this.p50BaselineQueue,
+      "p50-park-baseline-cron",
+    );
+    if (!hasP50ParkBaselineCron) {
+      await this.p50BaselineQueue.add(
+        "calculate-park-baselines",
+        {},
+        {
+          repeat: {
+            cron: "0 3 * * *", // Daily at 3am
+          },
+          jobId: "p50-park-baseline-cron",
+        },
+      );
+    }
+
+    // P50 Attraction Baseline: Daily at 4am (after park baselines)
+    const hasP50AttrBaselineCron = await this.hasRepeatableJob(
+      this.p50BaselineQueue,
+      "p50-attraction-baseline-cron",
+    );
+    if (!hasP50AttrBaselineCron) {
+      await this.p50BaselineQueue.add(
+        "calculate-attraction-baselines",
+        {},
+        {
+          repeat: {
+            cron: "0 4 * * *", // Daily at 4am
+          },
+          jobId: "p50-attraction-baseline-cron",
         },
       );
     }

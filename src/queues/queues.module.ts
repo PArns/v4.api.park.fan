@@ -24,6 +24,7 @@ import { QueuePercentileProcessor } from "./processors/queue-percentile.processo
 import { OccupancyCalculationProcessor } from "./processors/occupancy-calculation.processor";
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
+import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
 import { AttractionsModule } from "../attractions/attractions.module";
@@ -111,6 +112,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
       { name: "wartezeiten-schedule" },
       { name: "ml-monitoring" },
       { name: "stats" },
+      { name: "p50-baseline" }, // P50 baseline calculation
     ),
 
     // Feature modules for processors
@@ -157,6 +159,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     WartezeitenScheduleProcessor,
     MLMonitoringProcessor,
     StatsProcessor,
+    P50BaselineProcessor, // P50 baseline processor
   ],
   exports: [BullModule], // Export for use in other modules
 })

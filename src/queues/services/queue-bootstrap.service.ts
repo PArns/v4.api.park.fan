@@ -39,6 +39,7 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("prediction-accuracy") private predictionAccuracyQueue: Queue,
+    @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
@@ -263,6 +264,60 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     } catch (e) {
       this.logger.warn(`Failed to trigger ML/analytics jobs: ${e}`);
+    }
+
+    // 5. Trigger P50 Baseline Calculation (NEW: P50-based crowd level system)
+    // This ensures P50 baselines are calculated on startup for all parks
+    try {
+      const p50ParkJobActive = await this.isJobActiveOrWaiting(
+        this.p50BaselineQueue,
+        "calculate-park-baselines",
+      );
+
+      if (!p50ParkJobActive) {
+        await this.p50BaselineQueue.add(
+          "calculate-park-baselines",
+          {},
+          {
+            priority: 4,
+            jobId: "bootstrap-p50-parks",
+            removeOnComplete: true,
+          },
+        );
+        this.logger.log("✅ Boot: P50 park baselines calculation queued");
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: P50 park baselines already running, skipping",
+        );
+      }
+
+      // Trigger attraction P50 calculation (runs after park baselines)
+      const p50AttrJobActive = await this.isJobActiveOrWaiting(
+        this.p50BaselineQueue,
+        "calculate-attraction-baselines",
+      );
+
+      if (!p50AttrJobActive) {
+        await this.p50BaselineQueue.add(
+          "calculate-attraction-baselines",
+          {},
+          {
+            priority: 5,
+            jobId: "bootstrap-p50-attractions",
+            removeOnComplete: true,
+            delay: 60000, // Delay 1min to let park baselines finish first
+          },
+        );
+        this.logger.log(
+          "✅ Boot: P50 attraction baselines calculation queued (delayed 1min)",
+        );
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: P50 attraction baselines already running, skipping",
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`Failed to trigger P50 baseline jobs: ${e}`);
     }
   }
 
