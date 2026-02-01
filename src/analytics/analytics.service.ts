@@ -126,6 +126,30 @@ export class AnalyticsService {
   }
 
   /**
+   * Get today's effective closing time for analytics filtering and validation.
+   * Used to ensure peak hour and peak wait stats are not shown beyond operating hours.
+   *
+   * @param parkId - Park ID
+   * @param timezone - Park timezone (for date alignment)
+   * @returns Closing time in UTC, or null if no schedule or no closing time
+   */
+  async getEffectiveEndTime(
+    parkId: string,
+    timezone: string,
+  ): Promise<Date | null> {
+    const todayStr = getCurrentDateInTimezone(timezone);
+    const schedule = await this.scheduleEntryRepository.findOne({
+      where: {
+        parkId,
+        date: todayStr as any,
+        scheduleType: ScheduleType.OPERATING,
+      },
+      order: { openingTime: "ASC" },
+    });
+    return schedule?.closingTime ?? null;
+  }
+
+  /**
    * Get effective start times for multiple parks in batch
    * Optimized to avoid N+1 queries by fetching all schedules in a single query
    *
@@ -294,8 +318,20 @@ export class AnalyticsService {
     });
     const timezone = park?.timezone || "UTC";
 
-    // Get current "Spot" P50 wait time (Latest snapshot)
-    const currentAvgWait = await this.getCurrentSpotWaitTime(parkId, 0.5);
+    // Headliner-only for current + trend (same rides as P50 baseline and peakWaitToday)
+    const headliners = await this.headlinerAttractionRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    const headlinerIds = headliners.map((h) => h.attractionId);
+
+    // Get current "Spot" P50 wait time (Latest snapshot) – headliner-only when available
+    const currentAvgWait = await this.getCurrentSpotWaitTime(
+      parkId,
+      0.5,
+      5,
+      headlinerIds.length > 0 ? headlinerIds : undefined,
+    );
 
     if (currentAvgWait === null) {
       return {
@@ -352,43 +388,82 @@ export class AnalyticsService {
     // Calculate occupancy as percentage of P50 baseline (headliner P50 when available)
     const occupancyPercentage = (currentAvgWait / p50Baseline) * 100;
 
-    // Calculate Park Trend (Hybrid Logic)
-    // 1. Fetch [Last 1h Avg] and [Previous 1h Avg]
+    // Calculate Park Trend (Hybrid Logic) – headliner-only, Durchschnitt pro Headliner dann / Anzahl
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
     const twoHoursAgo = new Date(now.getTime() - 120 * 60 * 1000);
 
-    const trendQuery = `
-      SELECT
-        CASE
-          WHEN qd.timestamp >= $3 THEN 1 -- Last 1h (Recent)
-          WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2 -- 1h-2h
-        END as bucket,
-        AVG(qd."waitTime") as avg_wait
-      FROM queue_data qd
-      JOIN attractions a ON qd."attractionId" = a.id
-      WHERE a."parkId" = $1
-        AND qd.timestamp >= $2
-        AND qd.status = 'OPERATING'
-        AND qd."waitTime" IS NOT NULL
-        AND qd."queueType" = 'STANDBY'
-      GROUP BY bucket
-    `;
+    let avgLastHour: number | null = null;
+    let avgPrevHour: number | null = null;
 
-    const trendResult = await this.queueDataRepository.query(trendQuery, [
-      parkId,
-      twoHoursAgo,
-      oneHourAgo,
-    ]);
-
-    const buckets: Record<number, number> = {};
-    for (const row of trendResult) {
-      if (row.bucket && row.avg_wait) {
-        buckets[row.bucket] = parseFloat(row.avg_wait);
+    if (headlinerIds.length > 0) {
+      // Per-headliner average per bucket, then average of those (each headliner counts once)
+      const trendQuery = `
+        WITH per_ride_bucket AS (
+          SELECT
+            qd."attractionId",
+            CASE
+              WHEN qd.timestamp >= $3 THEN 1
+              WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
+            END as bucket,
+            AVG(qd."waitTime") as avg_wait
+          FROM queue_data qd
+          WHERE qd."attractionId" = ANY($1)
+            AND qd.timestamp >= $2
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."queueType" = 'STANDBY'
+          GROUP BY qd."attractionId", bucket
+        )
+        SELECT bucket, AVG(avg_wait) as bucket_avg
+        FROM per_ride_bucket
+        WHERE bucket IS NOT NULL
+        GROUP BY bucket
+      `;
+      const trendResult = await this.queueDataRepository.query(trendQuery, [
+        headlinerIds,
+        twoHoursAgo,
+        oneHourAgo,
+      ]);
+      const buckets: Record<number, number> = {};
+      for (const row of trendResult) {
+        if (row.bucket != null && row.bucket_avg != null) {
+          buckets[row.bucket] = parseFloat(row.bucket_avg);
+        }
       }
+      avgLastHour = buckets[1] ?? null;
+      avgPrevHour = buckets[2] ?? null;
+    } else {
+      // Fallback: all attractions (legacy)
+      const trendQuery = `
+        SELECT
+          CASE
+            WHEN qd.timestamp >= $3 THEN 1
+            WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
+          END as bucket,
+          AVG(qd."waitTime") as avg_wait
+        FROM queue_data qd
+        JOIN attractions a ON qd."attractionId" = a.id
+        WHERE a."parkId" = $1
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY bucket
+      `;
+      const trendResult = await this.queueDataRepository.query(trendQuery, [
+        parkId,
+        twoHoursAgo,
+        oneHourAgo,
+      ]);
+      const buckets: Record<number, number> = {};
+      for (const row of trendResult) {
+        if (row.bucket && row.avg_wait) {
+          buckets[row.bucket] = parseFloat(row.avg_wait);
+        }
+      }
+      avgLastHour = buckets[1] || null;
+      avgPrevHour = buckets[2] || null;
     }
-
-    const avgLastHour = buckets[1] || null;
-    const avgPrevHour = buckets[2] || null;
 
     let trend: "up" | "down" | "stable" = "stable";
     if (avgLastHour !== null) {
@@ -441,12 +516,18 @@ export class AnalyticsService {
     });
     const timezone = park?.timezone || "UTC";
 
-    // Calculate current hour and day of week in PARK TIMEZONE (not UTC)
-    // const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
-    // const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
-
-    // Get current P50 wait time
-    const currentAvgWait = await this.getCurrentSpotWaitTime(parkId, 0.5);
+    // Get current P50 wait time (headliner-only when available, same as calculateParkOccupancy)
+    const headliners = await this.headlinerAttractionRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    const headlinerIds = headliners.map((h) => h.attractionId);
+    const currentAvgWait = await this.getCurrentSpotWaitTime(
+      parkId,
+      0.5,
+      5,
+      headlinerIds.length > 0 ? headlinerIds : undefined,
+    );
 
     if (currentAvgWait === null) {
       return 100;
@@ -585,24 +666,62 @@ export class AnalyticsService {
   }
 
   /**
-   * Get current "Spot" wait time at a specific percentile across all operating attractions in a park.
-   * Calculates the percentile of the LATEST wait time for each attraction.
+   * Get current park wait time for occupancy/trend consistency.
+   * - With headliners: per-headliner AVG(wait) in last 60 min, then sum/count (same as trend/peak).
+   * - Without headliners: median of latest wait per attraction (legacy).
    *
    * @param parkId - Park ID
-   * @param percentile - Percentile to calculate (0.5 = Median, 0.9 = P90). Default: 0.5 (P50)
+   * @param percentile - Percentile when not using headliners (0.5 = Median). Ignored when headlinerIds set.
    * @param minWaitTime - Minimum wait time threshold (default: 5 min to exclude walk-ons)
-   * @returns Wait time at percentile or null if no data
+   * @param headlinerIds - Optional: restrict to headliners and use Durchschnitt pro Headliner dann / Anzahl
+   * @returns Wait time in minutes or null if no data
    */
   private async getCurrentSpotWaitTime(
     parkId: string,
     percentile: number = 0.5,
     minWaitTime: number = 5,
+    headlinerIds?: string[],
   ): Promise<number | null> {
-    // Look back 60 minutes for "live" data. safely covers sync intervals.
     const windowAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const useHeadliners = headlinerIds && headlinerIds.length > 0;
 
-    // Subquery to get the latest timestamp per operating attraction
-    // Then calculate Percentile of those latest wait times
+    if (useHeadliners) {
+      // Same formula as trend/peak: per headliner AVG(wait) in window, then sum / count
+      const perRideResult = await this.queueDataRepository.query(
+        `
+        SELECT qd."attractionId", AVG(qd."waitTime") as avg_wait
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1)
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" >= $3
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY qd."attractionId"
+        `,
+        [headlinerIds, windowAgo, minWaitTime],
+      );
+      if (perRideResult.length === 0) {
+        if (minWaitTime > 0) {
+          return this.getCurrentSpotWaitTime(
+            parkId,
+            percentile,
+            0,
+            headlinerIds,
+          );
+        }
+        return null;
+      }
+      const sum = perRideResult.reduce(
+        (acc: number, row: { avg_wait: string | number }) =>
+          acc + Number(row.avg_wait ?? 0),
+        0,
+      );
+      const avg = sum / perRideResult.length;
+      return Math.round(avg);
+    }
+
+    // Legacy: all attractions, median of latest wait per attraction
     const result = await this.queueDataRepository.query(
       `
       WITH LatestWaits AS (
@@ -627,16 +746,13 @@ export class AnalyticsService {
     );
 
     const row = result[0];
-
-    // Unified fallback strategy: If insufficient samples meet threshold, include all data
     if (
       row?.count &&
       parseInt(row.count) < this.MIN_SAMPLE_SIZE_FOR_THRESHOLD &&
       minWaitTime > 0
     ) {
-      return this.getCurrentSpotWaitTime(parkId, percentile, 0); // Recursive with 0 threshold
+      return this.getCurrentSpotWaitTime(parkId, percentile, 0);
     }
-
     return row?.pWait ? Math.round(parseFloat(row.pWait)) : null;
   }
 
@@ -923,7 +1039,37 @@ export class AnalyticsService {
 
     // Get TODAY's aggregate statistics for history
     const avgWaitToday = roundToNearest5Minutes(stats?.avg_wait_today || 0);
-    const peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
+    // Park-Höchststand: Durchschnitt der Spitzen (pro Headliner MAX heute, dann / Anzahl) – typische Spitzenlast, nicht von einem Ride dominiert
+    let peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
+    const headliners = await this.headlinerAttractionRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    const headlinerIds = headliners.map((h) => h.attractionId);
+    if (headlinerIds.length > 0) {
+      const headlinerMaxPerRide = await this.queueDataRepository.query(
+        `
+        SELECT qd."attractionId", MAX(qd."waitTime") as max_wait
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1)
+          AND qd.timestamp BETWEEN $2 AND $3
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+        GROUP BY qd."attractionId"
+        `,
+        [headlinerIds, startOfDay, now],
+      );
+      if (headlinerMaxPerRide.length > 0) {
+        const sum = headlinerMaxPerRide.reduce(
+          (acc: number, row: { max_wait: string | number }) =>
+            acc + Number(row.max_wait ?? 0),
+          0,
+        );
+        const avgHeadlinerMax = sum / headlinerMaxPerRide.length;
+        peakWaitToday = roundToNearest5Minutes(avgHeadlinerMax);
+      }
+    }
 
     // Optimistic calculation: totalAttractions - explicitlyClosedCount
     // This matches Discovery Service logic and prevents showing "0 operating" during data gaps
@@ -976,6 +1122,22 @@ export class AnalyticsService {
         displayPeakHour = typicalPeakHour;
       }
       // If currentHour > typicalHour and we have displayPeakHour (Actual), keep Actual.
+    }
+
+    // Validate against today's operating hours: do not show peak hour after closing (e.g. Efteling 19:00)
+    const closingTime = await this.getEffectiveEndTime(
+      parkId,
+      resolvedTimezone,
+    );
+    if (closingTime && displayPeakHour) {
+      const closingHour = parseInt(
+        formatInTimeZone(closingTime, resolvedTimezone, "H"),
+        10,
+      );
+      const peakHour = parseInt(displayPeakHour.split(":")[0], 10);
+      if (peakHour >= closingHour) {
+        displayPeakHour = null;
+      }
     }
 
     let history: import("./types/analytics-response.type").WaitTimeHistoryItem[] =
@@ -3511,10 +3673,7 @@ export class AnalyticsService {
     // Deduplicate by (parkId, attractionId): same attraction can appear in multiple tiers (UNION ALL).
     // Keep one row per attraction with best tier (tier1 > tier2 > tier3).
     const tierOrder = { tier1: 1, tier2: 2, tier3: 3 } as const;
-    const byAttraction = new Map<
-      string,
-      { row: any; tierRank: number }
-    >();
+    const byAttraction = new Map<string, { row: any; tierRank: number }>();
     for (const row of result) {
       const id = row.attraction_id as string;
       const rank = tierOrder[row.tier as keyof typeof tierOrder] ?? 3;

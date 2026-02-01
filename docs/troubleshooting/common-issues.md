@@ -68,3 +68,20 @@ Short guide for frequent problems and how to fix them.
 3. **P50 baseline**: API passes `p50Baseline` for crowd level; Python uses it so labels match TypeScript.
 
 **See**: [Model Overview](../ml/model-overview.md) (§ Alignment with API).
+
+---
+
+## Stoßzeit / Park-Höchststand außerhalb Öffnungszeiten
+
+**Symptom**: Dashboard zeigt z. B. Stoßzeit 22:00 oder Park-Höchststand 500 Min, obwohl der Park heute nur bis 19:00 geöffnet hat.
+
+**Ursache**: Die „typische“ Stoßzeit stammt aus 60 Tagen Historie (oft längere Sommer-Öffnungszeiten). Park-Höchststand konnte aus Tagesstatistiken kommen, die nicht auf die heutige Betriebszeit begrenzt waren.
+
+**Fix (implementiert)**:
+
+1. **Stoßzeit (peakHour)**: Liegt die angezeigte Stoßstunde in der Park-Zeitzone **nach** der heutigen Schließzeit, wird sie nicht angezeigt (`peakHour: null`).
+2. **Park-Höchststand (peakWaitToday)**: Wird **nur aus Headliner-Attraktionen** berechnet (gleiche Rides wie P50/Crowd Level). **Durchschnitt der Spitzen**: Pro Headliner MAX(Wartezeit heute), dann Summe / Anzahl Headliner. Das ist bewusst so gewählt – es beschreibt die typische Spitzenlast über die Headliner hinweg und wird nicht von einem einzelnen Ausreißer-Ride dominiert. Ohne Headliner-Fallback: Max über alle Attraktionen.
+
+3. **Trend (occupancy.trend)**: Wird **nur aus Headliner-Attraktionen** berechnet. Pro Headliner: Durchschnitt Wartezeit in der letzten 1h bzw. 1h–2h; dann **Durchschnitt** = Summe dieser Pro-Headliner-Durchschnitte / Anzahl Headliner (keine Summe über alle Datenpunkte). Aktuelle Wartezeit für Occupancy (`getCurrentSpotWaitTime`) ist ebenfalls Headliner-only, wenn Headliner vorhanden sind.
+
+**Relevanter Code**: `AnalyticsService.getParkStatistics` (Stoßzeit, Park-Höchststand), `AnalyticsService.calculateParkOccupancy` (Trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.
