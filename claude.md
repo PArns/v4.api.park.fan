@@ -32,6 +32,10 @@
 ### 💻 Development
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
+- [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
+
+### 🔧 Troubleshooting
+- [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
 
 ### 🚀 Deployment
 - [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.
