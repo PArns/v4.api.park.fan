@@ -676,11 +676,14 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
             slope = 0.0
             volatility = 0.0
 
+        # Dampen volatility with log(1 + x) so it acts as modifier, not dominant driver
+        volatility_dampened = np.log1p(max(0.0, volatility))
+
         # Return DataFrame with same index as group
         return pd.DataFrame(
             {
                 "trend_7d": [slope] * len(group),
-                "volatility_7d": [volatility] * len(group),
+                "volatility_7d": [volatility_dampened] * len(group),
             },
             index=group.index,
         )

@@ -891,12 +891,12 @@ def create_prediction_features(
                         # Trend = difference per day (approximation)
                         trend_7d = (recent_avg - previous_avg) / 7.0
 
-                # Calculate volatility (standard deviation) - NEW
+                # Calculate volatility (std of last 7d), dampened with log(1+x) to match training
                 volatility_7d = 0.0
                 if len(last_7_days) > 1:
-                    volatility_7d = last_7_days["avg_wait"].std()
-                    if pd.isna(volatility_7d):
-                        volatility_7d = 0.0
+                    raw_std = last_7_days["avg_wait"].std()
+                    if not pd.isna(raw_std) and raw_std >= 0:
+                        volatility_7d = np.log1p(raw_std)
 
                 # Apply to all rows for this attraction
                 mask = df["attractionId"] == attraction_id
