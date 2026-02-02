@@ -8,7 +8,9 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
+import { CalendarService } from "../../parks/services/calendar.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 
 /**
  * Cache Warmup Service
@@ -18,6 +20,7 @@ import { DiscoveryService } from "../../discovery/discovery.service";
  *
  * Strategy:
  * - Parks: Warm up OPERATING parks or parks opening within 12h
+ * - Calendar: Warm up calendar (current + next month) once per day for all parks (warmup-calendar-daily job)
  * - Attractions: Warm up top 100 most popular attractions (based on queue data frequency)
  * - Skip if cache is fresh (< 2 min old) to avoid redundant work
  */
@@ -36,6 +39,7 @@ export class CacheWarmupService {
     private readonly parksService: ParksService,
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
+    private readonly calendarService: CalendarService,
     private readonly discoveryService: DiscoveryService,
   ) {}
 
@@ -82,6 +86,77 @@ export class CacheWarmupService {
     }
 
     return successCount;
+  }
+
+  /**
+   * Warm up calendar cache for one park: current month + next month (park timezone).
+   * Called from warmupCalendarForAllParks (daily warmup at 5am).
+   */
+  private async warmupCalendarForPark(park: Park): Promise<void> {
+    try {
+      const tz = park.timezone || "UTC";
+      const todayStr = getCurrentDateInTimezone(tz);
+      const [y, m] = todayStr.split("-").map(Number); // m = 1..12
+      const fromStr = `${y}-${String(m).padStart(2, "0")}-01`;
+      const nextM = m === 12 ? 1 : m + 1; // 1–12
+      const nextY = m === 12 ? y + 1 : y;
+      const lastDay = new Date(nextY, nextM, 0).getDate(); // month 0-indexed: day 0 = last of prev month
+      const toStr = `${nextY}-${String(nextM).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      const fromDate = new Date(`${fromStr}T12:00:00.000Z`);
+      const toDate = new Date(`${toStr}T12:00:00.000Z`);
+      await this.calendarService.buildCalendarResponse(
+        park,
+        fromDate,
+        toDate,
+        "today+tomorrow",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.debug(`Calendar warmup skipped for ${park.slug}: ${msg}`);
+    }
+  }
+
+  /**
+   * Warm up calendar cache (current month + next month) for all parks.
+   * Called once per day by warmup-calendar-daily job (e.g. 5am), not every 5 min with park warmup.
+   *
+   * @returns Number of parks for which calendar was warmed (or attempted)
+   */
+  async warmupCalendarForAllParks(): Promise<number> {
+    const startTime = Date.now();
+    this.logger.verbose(
+      "🔥 Starting calendar warmup for all parks (once daily)...",
+    );
+
+    try {
+      const parks = await this.parkRepository.find({
+        relations: ["influencingRegions"],
+      });
+      if (parks.length === 0) {
+        this.logger.warn("No parks found, skipping calendar warmup");
+        return 0;
+      }
+
+      const warmedCount = await this.processBatch(
+        parks,
+        2,
+        "CalendarWarmup",
+        async (park) => {
+          await this.warmupCalendarForPark(park);
+          return true;
+        },
+      );
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      this.logger.log(
+        `✅ Calendar warmup complete: ${warmedCount}/${parks.length} parks in ${duration}s`,
+      );
+      return warmedCount;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Calendar warmup failed: ${msg}`);
+      return 0;
+    }
   }
 
   /**
@@ -143,9 +218,7 @@ export class CacheWarmupService {
       // Warm up cache by calling integration service (bypass cache read if forced)
       await this.parkIntegrationService.buildIntegratedResponse(park, force);
 
-      // this.logger.debug(
-      //   `✓ Warmed cache for park: ${park.slug} (force=${force})`,
-      // );
+      // Calendar is warmed once per day via warmup-calendar-daily job, not every 5 min
       return true;
     } catch (error: unknown) {
       const errorMessage =

@@ -15,7 +15,7 @@ The application relies heavily on background processing for data consistency and
 | `WaitTimesProcessor` | Every 5 min | Fetches live wait times from external APIs (Themeparks, etc.) and pushes to DB/Redis. |
 | `WeatherProcessor` | Hourly | Syncs current weather for all parks. |
 | `HolidaysProcessor` | Daily | Syncs public/school holidays for next 365 days. |
-| `ParkMetadataProcessor` | Daily/Weekly | Syncs static data (geo, images) for parks. |
+| `ParkMetadataProcessor` | Daily 03:00 (`sync-all-parks`), Daily 15:00 (`sync-schedules-only`) | Syncs static data (geo, images) and **opening hours** for parks. Job names must be `sync-all-parks` / `sync-schedules-only` (not `fetch-all-parks`). See [Schedule Sync & Calendar](schedule-sync-and-calendar.md). |
 
 ### Analytics & ML
 | Processor | Schedule | Purpose |

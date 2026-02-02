@@ -52,9 +52,44 @@ Sliding-window percentiles (548-day) are not stored in DB; they are computed and
 
 ## Cache Warmup
 
-A background processor `CacheWarmupProcessor` runs every 5 minutes (via BullMQ) to pre-calculate and cache:
-- Park Statistics
-- Park Occupancy
-- Integrated Park Responses
+**Service**: `CacheWarmupService` (`src/queues/services/cache-warmup.service.ts`).  
+Warmup is **not** a separate BullMQ processor; it is invoked **after** data-sync jobs (e.g. wait-times, predictions) from the respective processors.
 
-This ensures that the first user request is always fast (hitting Redis).
+### When Warmup Runs
+
+| Trigger | When | What gets warmed |
+| --- | --- | --- |
+| **Wait-times sync** (every 5 min) | After `WaitTimesProcessor` finishes | All parks (park integrated only), top 100 attractions, park occupancy; then async: discovery geo, global stats, park statistics (OPERATING parks). **Calendar** is **not** warmed here. |
+| **Hourly predictions** | After `PredictionGeneratorProcessor` | Parks opening in next 12h (park integrated only). |
+| **warmup-calendar-daily** (once per day, 5am) | Cron on `park-metadata` queue | **Calendar** for **all parks** (current month + next month, park timezone). |
+
+### What Gets Warmed (per park, every 5 min)
+
+When a park is warmed via `warmupParkCache(parkId, force)`:
+
+1. **Park integrated response** — `park:integrated:{parkId}` (weather, schedule, attractions, live data). **Calendar is not warmed** in this flow.
+
+**Skip logic**: If park integrated cache is already fresh (TTL > 2 min), the whole park warmup is skipped unless `force === true`. OPERATING parks are warmed with `force = true`; CLOSED parks with `force = false`.
+
+### Calendar warmup (once per day)
+
+Job **`warmup-calendar-daily`** runs daily at **5:00** (cron on `park-metadata` queue). It calls `warmupCalendarForAllParks()` and warms **per-month** keys `calendar:month:{parkId}:YYYY-MM:today+tomorrow` for **current month + next month** (park timezone) for **all parks**. So the calendar endpoint is fast after the first request of the day without warming every 5 min.
+
+### Other Warmup Methods
+
+- **Discovery**: `warmupDiscovery()` — geo structure and live stats (`/discovery/geo`).
+- **Attractions**: `warmupTopAttractions(limit)` — top N attractions by queue-data frequency.
+- **Occupancy**: `warmupParkOccupancy(parkIds)` — `park:occupancy:{parkId}` for given parks.
+- **Statistics**: `warmupParkStatistics(parkIds)` — `park:statistics:{parkId}` for OPERATING parks.
+- **Global stats**: `warmupGlobalStats()` — expensive global analytics query.
+
+### Redis Keys Touched by Warmup
+
+- `park:integrated:{parkId}`
+- `calendar:month:{parkId}:YYYY-MM:today+tomorrow` (current + next month, per-month cache)
+- `attraction:integrated:{attractionId}`
+- `park:occupancy:{parkId}`
+- `park:statistics:{parkId}`
+- Discovery/structure caches (see DiscoveryService)
+
+This keeps the first user request for parks and calendar fast (cache hit).

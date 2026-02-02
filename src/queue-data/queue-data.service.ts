@@ -49,19 +49,16 @@ export class QueueDataService {
     fromDate: Date,
     toDate: Date,
   ): Promise<QueueData[]> {
-    return (
-      this.queueDataRepository
-        .createQueryBuilder("qd")
-        .innerJoinAndSelect("qd.attraction", "attraction")
-        .where("attraction.parkId = :parkId", { parkId })
-        .andWhere("qd.timestamp >= :from", { from: fromDate })
-        .andWhere("qd.timestamp <= :to", { to: toDate })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime > 0")
-        // Order by timestamp to help with averaging later
-        .orderBy("qd.timestamp", "ASC")
-        .getMany()
-    );
+    return this.queueDataRepository
+      .createQueryBuilder("qd")
+      .innerJoin("qd.attraction", "a")
+      .where("a.parkId = :parkId", { parkId })
+      .andWhere("qd.timestamp >= :from", { from: fromDate })
+      .andWhere("qd.timestamp <= :to", { to: toDate })
+      .andWhere("qd.waitTime IS NOT NULL")
+      .andWhere("qd.waitTime > 0")
+      .orderBy("qd.timestamp", "ASC")
+      .getMany();
   }
 
   /**

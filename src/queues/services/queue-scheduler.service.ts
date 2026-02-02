@@ -93,13 +93,49 @@ export class QueueSchedulerService implements OnModuleInit {
 
     if (!hasParkMetadataCron) {
       await this.parkMetadataQueue.add(
-        "fetch-all-parks",
+        "sync-all-parks",
         {},
         {
           repeat: {
             cron: "0 3 * * *", // Daily at 3am
           },
           jobId: "park-metadata-cron",
+        },
+      );
+    }
+
+    // Schedule-only sync: Daily at 15:00 so new opening hours (e.g. Efteling March+) appear same day
+    const hasSchedulesOnlyCron = await this.hasRepeatableJob(
+      this.parkMetadataQueue,
+      "park-schedules-only-cron",
+    );
+    if (!hasSchedulesOnlyCron) {
+      await this.parkMetadataQueue.add(
+        "sync-schedules-only",
+        {},
+        {
+          repeat: {
+            cron: "0 15 * * *", // Daily at 3pm
+          },
+          jobId: "park-schedules-only-cron",
+        },
+      );
+    }
+
+    // Calendar warmup: once per day (5am) so /calendar is fast without warming every 5 min
+    const hasCalendarWarmupCron = await this.hasRepeatableJob(
+      this.parkMetadataQueue,
+      "warmup-calendar-daily-cron",
+    );
+    if (!hasCalendarWarmupCron) {
+      await this.parkMetadataQueue.add(
+        "warmup-calendar-daily",
+        {},
+        {
+          repeat: {
+            cron: "0 5 * * *", // Daily at 5am
+          },
+          jobId: "warmup-calendar-daily-cron",
         },
       );
     }

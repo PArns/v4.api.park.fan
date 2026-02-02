@@ -32,7 +32,7 @@ export enum ScheduleType {
 }
 
 @Entity("schedule_entries")
-@Index(["parkId", "date", "scheduleType"])
+@Index(["parkId", "date", "scheduleType"]) // Covers range queries getSchedule(parkId, from, to) via leftmost prefix
 @Index(["date"])
 @Index(["attractionId", "date"])
 export class ScheduleEntry {

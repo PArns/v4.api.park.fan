@@ -266,44 +266,44 @@ export class WeatherService {
   }
 
   /**
-   * Get weather data for a park within a date range
+   * Get weather data for a park within a date range.
+   * @param timezone - Optional; when provided (e.g. from calendar with park already loaded), skips park lookup.
    */
   async getWeatherData(
     parkId: string,
     startDate: Date,
     endDate: Date,
+    timezone?: string,
   ): Promise<WeatherData[]> {
-    // Get park timezone for correct date comparison
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["id", "timezone"],
-    });
-
-    if (!park || !park.timezone) {
-      this.logger.warn(
-        `Cannot query weather data correctly: Park ${parkId} has no timezone`,
-      );
-      // Fallback to simple query (may be incorrect for non-UTC timezones)
-      return this.weatherDataRepository
-        .createQueryBuilder("weather")
-        .where("weather.parkId = :parkId", { parkId })
-        .andWhere("weather.date >= :startDate", { startDate })
-        .andWhere("weather.date <= :endDate", { endDate })
-        .orderBy("weather.date", "ASC")
-        .getMany();
+    let tz = timezone;
+    if (!tz) {
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["id", "timezone"],
+      });
+      if (!park || !park.timezone) {
+        this.logger.warn(
+          `Cannot query weather data correctly: Park ${parkId} has no timezone`,
+        );
+        return this.weatherDataRepository
+          .createQueryBuilder("weather")
+          .where("weather.parkId = :parkId", { parkId })
+          .andWhere("weather.date >= :startDate", { startDate })
+          .andWhere("weather.date <= :endDate", { endDate })
+          .orderBy("weather.date", "ASC")
+          .getMany();
+      }
+      tz = park.timezone;
     }
 
-    // Convert dates to YYYY-MM-DD strings in park timezone for comparison
-    const startStr = formatInParkTimezone(startDate, park.timezone);
-    const endStr = formatInParkTimezone(endDate, park.timezone);
+    const startStr = formatInParkTimezone(startDate, tz);
+    const endStr = formatInParkTimezone(endDate, tz);
 
-    // Use PostgreSQL's AT TIME ZONE to compare dates correctly
-    // This ensures we match the calendar day in the park's timezone
     return this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
       .andWhere("DATE(weather.date AT TIME ZONE :tz) BETWEEN :start AND :end", {
-        tz: park.timezone,
+        tz,
         start: startStr,
         end: endStr,
       })

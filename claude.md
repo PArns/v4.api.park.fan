@@ -17,6 +17,7 @@
 - [System Overview](docs/architecture/system-overview.md) - High-level component design.
 - [Job Queues & Processors](docs/architecture/job-queues.md) - Background BullMQ infrastructure.
 - [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
+- [Schedule Sync & Calendar](docs/architecture/schedule-sync-and-calendar.md) - Opening hours sync (ThemeParks Wiki), on-demand refresh, calendar first-request slowness.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 
 ### 📊 Analytics & Logic

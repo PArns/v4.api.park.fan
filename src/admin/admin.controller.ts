@@ -319,8 +319,8 @@ export class AdminController {
     await this.holidaysQueue.add("fetch-holidays", {}, { priority: 100 });
     jobsTriggered.push("fetch-holidays");
 
-    await this.parkMetadataQueue.add("fetch-all-parks", {}, { priority: 90 });
-    jobsTriggered.push("fetch-all-parks");
+    await this.parkMetadataQueue.add("sync-all-parks", {}, { priority: 90 });
+    jobsTriggered.push("sync-all-parks");
 
     await this.childrenQueue.add("fetch-all-children", {}, { priority: 80 });
     jobsTriggered.push("fetch-all-children");

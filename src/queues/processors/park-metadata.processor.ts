@@ -14,6 +14,7 @@ import { ParkMetadata } from "../../external-apis/data-sources/interfaces/data-s
 import { generateSlug } from "../../common/utils/slug.util";
 import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources/config/wartezeiten-only-parks";
 import { ParkValidatorService } from "../../parks/services/park-validator.service";
+import { CacheWarmupService } from "../services/cache-warmup.service";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -34,6 +35,7 @@ export class ParkMetadataProcessor {
     private geocodingClient: GoogleGeocodingClient,
     private orchestrator: MultiSourceOrchestrator,
     private parkValidatorService: ParkValidatorService,
+    private cacheWarmupService: CacheWarmupService,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
@@ -43,6 +45,87 @@ export class ParkMetadataProcessor {
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
   ) {}
+
+  /**
+   * Sync schedule for a single park (ThemeParks Wiki).
+   * Used for on-demand refresh when calendar is requested and schedule is missing for the range.
+   */
+  @Process("sync-park-schedule")
+  async handleSyncParkSchedule(job: Job<{ parkId: string }>): Promise<void> {
+    const { parkId } = job.data;
+    if (!parkId) {
+      this.logger.warn("sync-park-schedule: missing parkId");
+      return;
+    }
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "name", "wikiEntityId", "dataSources"],
+    });
+    if (!park) {
+      this.logger.warn(`sync-park-schedule: park ${parkId} not found`);
+      return;
+    }
+    if (!park.dataSources?.includes("themeparks-wiki")) {
+      this.logger.debug(
+        `sync-park-schedule: ${park.name} has no themeparks-wiki, skipping`,
+      );
+      return;
+    }
+    let wikiExternalId = park.wikiEntityId;
+    if (!wikiExternalId) {
+      const mapping = await this.mappingRepository.findOne({
+        where: {
+          internalEntityId: park.id,
+          internalEntityType: "park",
+          externalSource: "themeparks-wiki",
+        },
+      });
+      if (!mapping) {
+        this.logger.warn(
+          `sync-park-schedule: No Wiki ID for ${park.name}, skipping`,
+        );
+        return;
+      }
+      wikiExternalId = mapping.externalEntityId;
+    }
+    try {
+      const scheduleResponse = await this.themeParksClient.getScheduleExtended(
+        wikiExternalId!,
+        12,
+      );
+      const savedEntries = await this.parksService.saveScheduleData(
+        park.id,
+        scheduleResponse.schedule,
+      );
+      await this.parksService.fillScheduleGaps(park.id);
+      this.logger.log(
+        `sync-park-schedule: ${park.name} saved ${savedEntries} schedule entries`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `sync-park-schedule: Failed for ${park.name}: ${error}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Sync only schedules (ThemeParks Wiki) for all parks. Lighter than full sync.
+   * Used at 15:00 so new opening hours (e.g. when published in March) appear same day.
+   */
+  @Process("sync-schedules-only")
+  async handleSyncSchedulesOnly(_job: Job): Promise<void> {
+    await this.syncSchedulesForAllParks();
+  }
+
+  /**
+   * Warm up calendar cache (current month + next month) for all parks.
+   * Runs once per day (e.g. 5am) so calendar endpoint is fast without warming every 5 min.
+   */
+  @Process("warmup-calendar-daily")
+  async handleWarmupCalendarDaily(_job: Job): Promise<void> {
+    await this.cacheWarmupService.warmupCalendarForAllParks();
+  }
 
   @Process("sync-all-parks")
   async handleFetchParks(_job: Job): Promise<void> {
