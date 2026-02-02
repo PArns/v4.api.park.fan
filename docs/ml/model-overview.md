@@ -22,7 +22,7 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `park_occupancy_pct`: Park-wide occupancy (Current median / P50 baseline, 0–200%). Aligned with API occupancy; training uses P50 for consistency.
   - `wait_time_momentum`: Velocity of change over last 30 mins
   - `trend_7d`: Linear regression slope of last 7 days
-  - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` so it acts as a modifier (occupancy and time remain primary drivers).
+  - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` and **capped** at `VOLATILITY_CAP_STD_MINUTES` (default 40 min) so it acts as a modifier; occupancy and time remain primary drivers.
 
 ## Training Pipeline
 

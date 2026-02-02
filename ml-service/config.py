@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     HOURLY_PREDICTIONS: int = 24  # Next 24 hours (internal use)
     DAILY_PREDICTIONS: int = 365  # Next 365 days (1 year)
 
+    # Volatility feature cap (7d std in minutes). Values above this are capped so
+    # volatility_7d doesn't dominate feature importance; occupancy/time stay primary.
+    VOLATILITY_CAP_STD_MINUTES: float = 40
+
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
 

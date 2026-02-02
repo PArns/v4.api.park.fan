@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
 from holiday_utils import normalize_region_code, calculate_holiday_info
+from config import get_settings
 from percentile_features import add_percentile_features
 from attraction_features import (
     add_attraction_type_feature,
@@ -676,8 +677,9 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
             slope = 0.0
             volatility = 0.0
 
-        # Dampen volatility with log(1 + x) so it acts as modifier, not dominant driver
-        volatility_dampened = np.log1p(max(0.0, volatility))
+        # Dampen with log(1+x) and cap so extreme volatility doesn't dominate importance
+        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
+        volatility_dampened = min(np.log1p(max(0.0, volatility)), np.log1p(cap_std))
 
         # Return DataFrame with same index as group
         return pd.DataFrame(
