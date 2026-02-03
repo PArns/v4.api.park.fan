@@ -7,9 +7,11 @@
 /**
  * Park Status
  *
- * Parks have simpler status: either operating or closed
+ * - OPERATING: Park is open
+ * - CLOSED: Park is closed (confirmed)
+ * - UNKNOWN: Used in calendar when no schedule data from source yet (not yet published or placeholder)
  */
-export type ParkStatus = "OPERATING" | "CLOSED";
+export type ParkStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
 
 /**
  * Attraction Status

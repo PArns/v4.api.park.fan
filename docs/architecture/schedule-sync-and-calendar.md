@@ -17,15 +17,16 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 ## Source: ThemeParks Wiki
 
 - **Client**: `ThemeParksClient` (`src/external-apis/themeparks/themeparks.client.ts`).
-- **Extended fetch**: `getScheduleExtended(entityId, 12)` — generic `/schedule` (≈30 days) plus **month-by-month** for up to **12 months** ahead.
-- Some parks (e.g. Efteling) may not expose far-future months until the park publishes them; until then, those months stay empty in our DB and the **on-demand** trigger helps once the source adds data.
+- **Extended fetch**: `getScheduleExtended(entityId, 12)` **always** requests each of the next **12 months** via the month endpoint (`/entity/{id}/schedule/{year}/{month}`). Month is **zero-padded** (e.g. `05` for May) per Wiki API. Optionally merges with generic `/schedule` (~30 days) for the near term.
+- Some parks (e.g. Efteling) may return empty/404 for far-future months until the park publishes them; we still **request** every month (01–12 ahead) so data appears as soon as the source adds it. **On-demand** `sync-park-schedule` helps when a user requests a range we don’t have yet.
 
-## UNKNOWN Handling
+## UNKNOWN vs CLOSED
 
-- **`ScheduleType.UNKNOWN`**: Used for **holiday/bridge-day placeholders** when we have no real operating hours from the source (e.g. fillScheduleGaps).
+- **`ScheduleType.CLOSED`**: Park has **confirmed** closed (e.g. from Wiki).
+- **`ScheduleType.UNKNOWN`**: **No data from source yet** — placeholder from `fillScheduleGaps` (holiday/bridge-day) or date not yet published by the park.
 - **Creation**: `fillScheduleGaps(parkId)` creates UNKNOWN entries for dates that have no schedule but are holidays/bridge days, so the calendar can still show holiday info.
 - **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)` so only OPERATING/CLOSED remains.
-- **Calendar**: UNKNOWN days are shown as **CLOSED** with no operating hours (no times). Only OPERATING entries get opening/closing times.
+- **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend can show "Opening hours not yet available" for `UNKNOWN` and "Closed" for `CLOSED`.
 - **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. So we do **not** trigger when the requested range is already covered by UNKNOWN placeholders (e.g. March all UNKNOWN from fillScheduleGaps). We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).
 
 ## Persistence

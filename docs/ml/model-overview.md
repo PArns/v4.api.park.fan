@@ -64,3 +64,15 @@ Holidays are critical for prediction accuracy.
 - **Source**: `holiday_utils.py`
 - **Logic**: Checks school and public holidays for the park's specific region (e.g., NRW for Phantasialand).
 - **Bridge Days**: Detects bridging days between holidays and weekends.
+
+## Schedule Status (OPERATING / CLOSED / UNKNOWN)
+
+Predictions are aligned with park schedule from `schedule_entries` **only when the park has schedule integration** (at least one OPERATING row somewhere). Not all parks have a schedule.
+
+- **Park has no schedule** (no rows, or only UNKNOWN/CLOSED and never OPERATING): Treated as “no schedule” → predictions are **kept** (assume open). No filtering.
+- **Park has schedule integration** (at least one OPERATING row):
+  - **OPERATING**: Predict wait times; filter by operating hours.
+  - **CLOSED**: `predictedWaitTime = 0`, `crowdLevel = "closed"`; daily predictions for that date excluded.
+  - **UNKNOWN**: No schedule from source yet (placeholder) → same as CLOSED for that date; excluded from daily.
+
+In **predict.py**, UNKNOWN/CLOSED-only for a date is only applied when `park_has_operating` (park has at least one OPERATING row); otherwise the row is left open. In **schedule_filter.py**, if the query returns only UNKNOWN/CLOSED (no OPERATING dates), we keep all predictions for that park instead of filtering everything out.

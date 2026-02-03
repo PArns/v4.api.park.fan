@@ -118,9 +118,9 @@ export class CalendarService {
         allDays.push(...days);
       }
       allDays.sort((a, b) => a.date.localeCompare(b.date));
-      const daysInRange = allDays.filter(
-        (d) => d.date >= fromStr && d.date <= toStr,
-      );
+      const daysInRange = allDays
+        .filter((d) => d.date >= fromStr && d.date <= toStr)
+        .map((d) => ({ ...d, status: d.status ?? "UNKNOWN" }));
       const response: IntegratedCalendarResponse = {
         meta: {
           parkId: park.id,
@@ -603,15 +603,15 @@ export class CalendarService {
       }
     }
 
-    // Determine park status
+    // status = ParkStatus (OPERATING | CLOSED | UNKNOWN); UNKNOWN = no schedule data yet
     const status: ParkStatus =
       schedule?.scheduleType === ScheduleType.OPERATING
         ? "OPERATING"
         : schedule?.scheduleType === ScheduleType.CLOSED
           ? "CLOSED"
-          : mlPrediction?.crowdLevel === "closed"
-            ? "CLOSED"
-            : "CLOSED";
+          : schedule?.scheduleType === ScheduleType.UNKNOWN
+            ? "UNKNOWN"
+            : "UNKNOWN";
 
     // Build operating hours
     let hours: OperatingHours | null = null;
@@ -630,7 +630,7 @@ export class CalendarService {
     const isHistorical = dateStr <= today;
     let crowdLevel: CrowdLevel | "closed";
 
-    if (status === "CLOSED") {
+    if (status !== "OPERATING") {
       crowdLevel = "closed";
     } else if (isHistorical) {
       const prefetched = prefetchedCrowdLevels.get(dateStr);
@@ -776,7 +776,7 @@ export class CalendarService {
     timezone: string,
     hourlyPredictions: PredictionDto[],
   ): HourlyPrediction[] {
-    if (dayStatus === "CLOSED" || !hourlyPredictions.length) {
+    if (dayStatus !== "OPERATING" || !hourlyPredictions.length) {
       return [];
     }
     const dateStr = formatInParkTimezone(date, timezone);

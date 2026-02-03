@@ -115,4 +115,3 @@ const isMatch = dateStr === targetDateStr;
 const todayStr = getCurrentDateInTimezone(park.timezone);
 const schedule = await this.getScheduleForDate(parkId, todayStr); // DATE = :todayStr
 ```
-

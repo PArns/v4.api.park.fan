@@ -273,9 +273,11 @@ export class ThemeParksClient {
   /**
    * Fetches schedule data for a range of months
    *
-   * IMPORTANT: Some parks don't return data from the generic /schedule endpoint,
-   * but DO return data from month-specific endpoints. This method queries
-   * multiple months and aggregates the results.
+   * Always requests each of the next monthsAhead months via the month-specific endpoint
+   * (e.g. /entity/{id}/schedule/2026/05 for May). Month is zero-padded (05 not 5) per Wiki API.
+   * Some parks (e.g. Efteling) only expose data when the source has published that month.
+   *
+   * Optionally merges with the generic /schedule endpoint (~30 days) for the near term.
    *
    * @param entityId - Park entity ID
    * @param monthsAhead - Number of months to fetch ahead (default: 12)
@@ -287,24 +289,14 @@ export class ThemeParksClient {
   ): Promise<{ schedule: any[] }> {
     const now = new Date();
     const allSchedules: any[] = [];
-    let fetchedUntilDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Yesterday
 
-    // Try generic endpoint first
+    // Optional: try generic endpoint first for near-term data (~30 days)
     try {
       const genericResponse = await this.getSchedule(entityId);
       if (genericResponse.schedule && genericResponse.schedule.length > 0) {
         allSchedules.push(...genericResponse.schedule);
-
-        // Calculate how far into the future we got data
-        const dates = genericResponse.schedule.map((entry: any) =>
-          new Date(entry.date).getTime(),
-        );
-        fetchedUntilDate = new Date(Math.max(...dates));
-
         this.logger.log(
-          `✅ Generic schedule endpoint returned ${
-            genericResponse.schedule.length
-          } entries for ${entityId} (until ${fetchedUntilDate.toISOString().split("T")[0]})`,
+          `✅ Generic schedule returned ${genericResponse.schedule.length} entries for ${entityId}`,
         );
       }
     } catch (error: any) {
@@ -313,63 +305,32 @@ export class ThemeParksClient {
       );
     }
 
-    // Determine target date
-    const targetDateMax = new Date(now);
-    targetDateMax.setMonth(now.getMonth() + monthsAhead);
+    // Always fetch each of the next monthsAhead months via month endpoint (YYYY/MM with MM zero-padded)
+    this.logger.log(
+      `Fetching ${monthsAhead} months (month-by-month) for ${entityId}...`,
+    );
+    for (let i = 0; i < monthsAhead; i++) {
+      const iterDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const year = iterDate.getFullYear();
+      const month = iterDate.getMonth() + 1; // 1–12; getScheduleForMonth pads to "01".."12"
 
-    // If generic data didn't reach target date, fetch missing months
-    if (fetchedUntilDate < targetDateMax) {
-      const missingMonthsStart = new Date(fetchedUntilDate);
-      missingMonthsStart.setDate(1); // Start from beginning of the month where data ended
-      // Actually slightly safer to start from next month if we have data for current month,
-      // but overlapping requests are fine, we dedup later or service handles upserts.
-      // Optimally: Start from month of fetchedUntilDate.
-
-      // But wait: if generic returned 30 days, fetchedUntilDate is next month.
-      // So we just iterate from now to monthsAhead and skip months covered by fetchedUntilDate.
-
-      this.logger.log(
-        `Generic data only until ${fetchedUntilDate.toISOString().split("T")[0]}. Fetching remaining months...`,
-      );
-
-      for (let i = 0; i < monthsAhead; i++) {
-        const iterDate = new Date(now);
-        iterDate.setMonth(now.getMonth() + i);
-        iterDate.setDate(1); // First of month
-
-        // If this month is already fully covered by generic data, skip it
-        // We consider "covered" if fetchedUntilDate is after the end of this month
-        const endOfMonth = new Date(
-          iterDate.getFullYear(),
-          iterDate.getMonth() + 1,
-          0,
+      try {
+        const monthResponse = await this.getScheduleForMonth(
+          entityId,
+          year,
+          month,
         );
-        if (fetchedUntilDate >= endOfMonth) {
-          continue;
-        }
-
-        const year = iterDate.getFullYear();
-        const month = iterDate.getMonth() + 1;
-
-        try {
-          const monthResponse = await this.getScheduleForMonth(
-            entityId,
-            year,
-            month,
-          );
-          if (monthResponse.schedule && monthResponse.schedule.length > 0) {
-            allSchedules.push(...monthResponse.schedule);
-            this.logger.debug(
-              `Fetched ${monthResponse.schedule.length} entries for ${year}/${month}`,
-            );
-          }
-        } catch (error: any) {
-          // It's normal for some far-future months to be empty or 404
-          // Only log if it's a "real" error, or just verbose
-          this.logger.verbose(
-            `Failed to fetch schedule for ${entityId} (${year}/${month}): ${error.message}`,
+        if (monthResponse.schedule && monthResponse.schedule.length > 0) {
+          allSchedules.push(...monthResponse.schedule);
+          this.logger.debug(
+            `Fetched ${monthResponse.schedule.length} entries for ${year}/${String(month).padStart(2, "0")}`,
           );
         }
+      } catch (error: any) {
+        // Far-future months may be empty or 404 until the park publishes
+        this.logger.verbose(
+          `No schedule for ${entityId} ${year}/${String(month).padStart(2, "0")}: ${error.message}`,
+        );
       }
     }
 

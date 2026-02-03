@@ -127,7 +127,11 @@ export class CalendarDay {
   @ApiProperty()
   date: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      "OPERATING (open), CLOSED (confirmed closed), or UNKNOWN (no schedule data yet – not published or placeholder)",
+    enum: ["OPERATING", "CLOSED", "UNKNOWN"],
+  })
   status: ParkStatus;
 
   @ApiProperty()

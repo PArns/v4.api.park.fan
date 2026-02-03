@@ -100,7 +100,8 @@ def filter_predictions_by_schedule(
         if not date_set:
             continue
 
-        # Query schedule for these dates
+        # Query schedule for these dates (OPERATING, CLOSED, UNKNOWN)
+        # Only OPERATING days get predictions; CLOSED/UNKNOWN = no schedule or confirmed closed
         query = text(
             """
             SELECT
@@ -112,7 +113,7 @@ def filter_predictions_by_schedule(
             WHERE "parkId"::text = :park_id
                 AND "attractionId" IS NULL
                 AND date = ANY(CAST(:dates AS DATE[]))
-                AND "scheduleType" = 'OPERATING'
+                AND "scheduleType" IN ('OPERATING', 'CLOSED', 'UNKNOWN')
         """
         )
 
@@ -148,7 +149,20 @@ def filter_predictions_by_schedule(
                     pass
 
         if schedules:
-            # PRIMARY LOGIC: Filter by schedule
+            # Build set of dates when park is OPERATING (exclude CLOSED/UNKNOWN-only days)
+            operating_dates_from_query = set()
+            for s in schedules:
+                if s[1] == "OPERATING":  # scheduleType
+                    d = s[0]  # date
+                    if isinstance(d, datetime):
+                        d = d.date()
+                    operating_dates_from_query.add(d)
+
+            # Not all parks have schedule integration. If we have only UNKNOWN/CLOSED rows
+            # (no OPERATING at all), treat like "no schedule" → keep all predictions.
+            if not operating_dates_from_query and prediction_type == "daily":
+                filtered_predictions.extend(park_preds)
+                continue
 
             if prediction_type == "hourly":
                 # HOURLY: Only show predictions for TODAY (in park's timezone)
@@ -215,16 +229,8 @@ def filter_predictions_by_schedule(
                         continue
 
             elif prediction_type == "daily":
-                # DAILY: Filter by date (only days when park is open)
-                # Build set of dates when park is OPERATING
-                operating_dates = set()
-                for schedule_row in schedules:
-                    # CRITICAL FIX: PostgreSQL DATE columns may return datetime objects
-                    # depending on the driver. Ensure we're comparing date objects, not datetimes.
-                    date_value = schedule_row[0]
-                    if isinstance(date_value, datetime):
-                        date_value = date_value.date()
-                    operating_dates.add(date_value)
+                # DAILY: Only keep predictions for dates when park is OPERATING (exclude CLOSED/UNKNOWN-only)
+                operating_dates = operating_dates_from_query
 
                 # print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
 

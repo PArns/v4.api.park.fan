@@ -558,7 +558,7 @@ def create_prediction_features(
             AND date BETWEEN :start_date AND :end_date
             AND (
                 ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
-                OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT')
+                OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT', 'UNKNOWN')
             )
     """
     )
@@ -611,6 +611,18 @@ def create_prediction_features(
                 schedules_df["attractionId"].fillna("nan").astype(str)
             )
 
+        # Parks without schedule integration: no OPERATING rows at all → treat as "no schedule"
+        # (keep predictions; don't zero out for UNKNOWN/CLOSED-only).
+        park_level = schedules_df[
+            (schedules_df["attractionId"].isin(["nan", "None"]))
+            | (schedules_df["attractionId"].isna())
+        ]
+        park_has_operating = (
+            park_level.groupby("parkId")["scheduleType"]
+            .apply(lambda x: (x == "OPERATING").any())
+            .to_dict()
+        )
+
         for idx, row in df.iterrows():
             park_id = row["parkId"]
             attraction_id = str(row["attractionId"])
@@ -645,7 +657,7 @@ def create_prediction_features(
                 ]
 
                 if not global_schedules.empty:
-                    # Operating hours
+                    # Operating hours: only OPERATING has times; CLOSED/UNKNOWN = no prediction or closed
                     operating = global_schedules[
                         global_schedules["scheduleType"] == "OPERATING"
                     ]
@@ -673,6 +685,18 @@ def create_prediction_features(
 
                         if not is_open:
                             df.at[idx, "status"] = "CLOSED"
+                    else:
+                        # No OPERATING for this date: only CLOSED/UNKNOWN. Only treat as closed/unknown
+                        # if this park has schedule integration (at least one OPERATING row elsewhere).
+                        if park_has_operating.get(park_id, False):
+                            has_unknown = (
+                                global_schedules["scheduleType"] == "UNKNOWN"
+                            ).any()
+                            df.at[idx, "is_park_open"] = 0
+                            df.at[idx, "status"] = (
+                                "UNKNOWN" if has_unknown else "CLOSED"
+                            )
+                        # else: park has no OPERATING at all (no schedule integration) → leave open
 
                     # Special events / Extra hours
                     if any(
@@ -1199,8 +1223,8 @@ def predict_wait_times(
             else:
                 results[-1]["trend"] = "stable"
 
-        # Override if status is CLOSED
-        if row["status"] == "CLOSED":
+        # Override if status is CLOSED or UNKNOWN (no schedule / not open)
+        if row["status"] in ("CLOSED", "UNKNOWN"):
             results[-1]["predictedWaitTime"] = 0
             results[-1]["confidence"] = 100.0
             results[-1]["crowdLevel"] = "closed"
