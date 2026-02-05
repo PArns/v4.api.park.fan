@@ -39,25 +39,28 @@ export class GeoipService implements OnModuleInit {
     const dir = path.dirname(this.dbPath);
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
 
-    let exists = await this.openDatabaseIfExists();
+    const exists = await this.openDatabaseIfExists();
     if (!exists) {
       const hasCredentials =
         !!this.configService.get<string>("GEOIP_MAXMIND_ACCOUNT_ID") &&
         !!this.configService.get<string>("GEOIP_MAXMIND_LICENSE_KEY");
       if (hasCredentials) {
         this.logger.log(
-          "GeoLite2-City database not found. Downloading on first start...",
+          "GeoLite2-City database not found. Downloading in background (app start not blocked).",
         );
-        try {
-          await this.downloadAndReplace();
-          exists = await this.openDatabaseIfExists();
-        } catch (err) {
-          this.logger.warn(
-            `GeoLite2-City download on start failed: ${err}. Nearby without lat/lng will fail until DB is present.`,
-          );
-        }
-      }
-      if (!exists) {
+        this.downloadAndReplace()
+          .then(() => this.openDatabaseIfExists())
+          .then((loaded) => {
+            if (loaded) {
+              this.logger.log("GeoLite2-City loaded after background download.");
+            }
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `GeoLite2-City download on start failed: ${err}. Nearby without lat/lng will fail until DB is present or next 48h update.`,
+            );
+          });
+      } else {
         this.logger.warn(
           "GeoLite2-City database not available. Set GEOIP_MAXMIND_ACCOUNT_ID and GEOIP_MAXMIND_LICENSE_KEY to download on start, or run the geoip-update job. Nearby without lat/lng will fail until DB is present.",
         );

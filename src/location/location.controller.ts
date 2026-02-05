@@ -196,7 +196,8 @@ export class LocationController {
     }
 
     if (latitude === null || longitude === null) {
-      const ip = ipParam?.trim() || this.getClientIp(req) || "";
+      const rawIp = ipParam?.trim() || this.getClientIp(req) || "";
+      const ip = rawIp ? this.normalizeIp(rawIp) : "";
       if (!ip || !this.geoipService.isAvailable()) {
         throw new BadRequestException(
           "Location required. Provide lat and lng, or ensure GeoIP is configured (GEOIP_* env) and the request carries a valid client IP (e.g. X-Forwarded-For).",
