@@ -25,6 +25,8 @@ import { OccupancyCalculationProcessor } from "./processors/occupancy-calculatio
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
+import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
+import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
 import { AttractionsModule } from "../attractions/attractions.module";
@@ -113,6 +115,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
       { name: "ml-monitoring" },
       { name: "stats" },
       { name: "p50-baseline" }, // P50 baseline calculation
+      { name: "geoip-update" }, // GeoLite2-City every 48h
     ),
 
     // Feature modules for processors
@@ -135,6 +138,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     DiscoveryModule,
     StatsModule,
     RedisModule, // For cache warmup service
+    GeoipModule,
   ],
   providers: [
     QueueBootstrapService,
@@ -160,6 +164,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     MLMonitoringProcessor,
     StatsProcessor,
     P50BaselineProcessor, // P50 baseline processor
+    GeoipUpdateProcessor,
   ],
   exports: [BullModule], // Export for use in other modules
 })

@@ -19,6 +19,7 @@ import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
 import { LocationModule } from "./location/location.module";
 import { DiscoveryModule } from "./discovery/discovery.module";
+import { GeoipModule } from "./geoip/geoip.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { AdminModule } from "./admin/admin.module";
 import { StatsModule } from "./stats/stats.module";
@@ -65,6 +66,7 @@ import { AppService } from "./app.service";
     SearchModule,
 
     // Geographic Discovery
+    GeoipModule,
     LocationModule,
     DiscoveryModule,
 

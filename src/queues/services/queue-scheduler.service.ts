@@ -18,6 +18,7 @@ import { Queue } from "bull";
  * - ml-training: Daily at 6am (retrain model with new data)
  * - prediction-accuracy: Every hour (compare predictions with actuals)
  * - occupancy-calculation: Every 15 minutes (placeholder for Phase 5)
+ * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
  */
 @Injectable()
 export class QueueSchedulerService implements OnModuleInit {
@@ -46,6 +47,7 @@ export class QueueSchedulerService implements OnModuleInit {
     private mlMonitoringQueue: Queue,
     @InjectQueue("stats") private statsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline
+    @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -475,6 +477,24 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 4 * * *", // Daily at 4am
           },
           jobId: "p50-attraction-baseline-cron",
+        },
+      );
+    }
+
+    // GeoIP (GeoLite2-City): Every 48 hours (0:00 every 2 days)
+    const hasGeoipCron = await this.hasRepeatableJob(
+      this.geoipUpdateQueue,
+      "geoip-update-cron",
+    );
+    if (!hasGeoipCron) {
+      await this.geoipUpdateQueue.add(
+        "update-geolite2-city",
+        {},
+        {
+          repeat: {
+            cron: "0 0 */2 * *", // Every 2 days at midnight
+          },
+          jobId: "geoip-update-cron",
         },
       );
     }

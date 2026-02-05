@@ -2,11 +2,14 @@ import {
   Controller,
   Get,
   Query,
+  Req,
   BadRequestException,
   UseInterceptors,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from "@nestjs/swagger";
+import { Request } from "express";
 import { LocationService } from "./location.service";
+import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
@@ -19,7 +22,10 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("discovery")
 @Controller("discovery")
 export class LocationController {
-  constructor(private readonly locationService: LocationService) {}
+  constructor(
+    private readonly locationService: LocationService,
+    private readonly geoipService: GeoipService,
+  ) {}
 
   /**
    * GET /v1/discovery/nearby
@@ -39,17 +45,26 @@ export class LocationController {
   })
   @ApiQuery({
     name: "lat",
-    description: "User latitude",
+    description:
+      "User latitude. If omitted, location is derived from IP (GeoLite2-City) when possible.",
     example: 48.266,
-    required: true,
+    required: false,
     type: Number,
   })
   @ApiQuery({
     name: "lng",
-    description: "User longitude",
+    description:
+      "User longitude. If omitted, location is derived from IP (GeoLite2-City) when possible.",
     example: 7.722,
-    required: true,
+    required: false,
     type: Number,
+  })
+  @ApiQuery({
+    name: "ip",
+    description:
+      "IP address for GeoIP lookup (debug). If omitted, uses X-Forwarded-For or request IP.",
+    required: false,
+    type: String,
   })
   @ApiQuery({
     name: "radius",
@@ -153,24 +168,48 @@ export class LocationController {
     },
   })
   async getNearby(
-    @Query("lat") lat: string,
-    @Query("lng") lng: string,
+    @Query("lat") lat: string | undefined,
+    @Query("lng") lng: string | undefined,
+    @Query("ip") ipParam: string | undefined,
     @Query("radius") radius?: string,
     @Query("limit") limit?: string,
+    @Req() req?: Request,
   ): Promise<NearbyResponseDto> {
-    // Parse and validate coordinates
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
+    // Resolve coordinates: 1) lat/lng params, 2) ip param (debug), 3) X-Forwarded-For, 4) request IP → GeoIP
+    let latitude: number | null = null;
+    let longitude: number | null = null;
 
-    if (
-      isNaN(latitude) ||
-      isNaN(longitude) ||
-      latitude < -90 ||
-      latitude > 90 ||
-      longitude < -180 ||
-      longitude > 180
-    ) {
-      throw new BadRequestException("Invalid latitude or longitude");
+    if (lat != null && lng != null) {
+      const parsedLat = parseFloat(lat);
+      const parsedLng = parseFloat(lng);
+      if (
+        !Number.isNaN(parsedLat) &&
+        !Number.isNaN(parsedLng) &&
+        parsedLat >= -90 &&
+        parsedLat <= 90 &&
+        parsedLng >= -180 &&
+        parsedLng <= 180
+      ) {
+        latitude = parsedLat;
+        longitude = parsedLng;
+      }
+    }
+
+    if (latitude === null || longitude === null) {
+      const ip = ipParam?.trim() || this.getClientIp(req) || "";
+      if (!ip || !this.geoipService.isAvailable()) {
+        throw new BadRequestException(
+          "Location required. Provide lat and lng, or ensure GeoIP is configured (GEOIP_* env) and the request carries a valid client IP (e.g. X-Forwarded-For).",
+        );
+      }
+      const coords = this.geoipService.lookupCoordinates(ip);
+      if (!coords) {
+        throw new BadRequestException(
+          "Could not resolve location from IP. Provide lat and lng explicitly.",
+        );
+      }
+      latitude = coords.latitude;
+      longitude = coords.longitude;
     }
 
     // Parse and validate radius
@@ -205,5 +244,21 @@ export class LocationController {
       radiusInMeters,
       limitCount,
     );
+  }
+
+  /**
+   * Get client IP: X-Forwarded-For (first entry) or request IP / socket.
+   */
+  private getClientIp(req: Request | undefined): string | null {
+    if (!req) return null;
+    const forwarded = req.headers["x-forwarded-for"];
+    if (forwarded) {
+      const first = typeof forwarded === "string" ? forwarded : forwarded[0];
+      const ip = (first ?? "").trim().split(",")[0]?.trim();
+      if (ip) return ip;
+    }
+    const ip = req.ip ?? req.socket?.remoteAddress;
+    if (ip) return ip;
+    return null;
   }
 }

@@ -3,8 +3,8 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install pnpm (version must match package.json packageManager)
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
 # Copy package files (including pnpm-lock.yaml)
 COPY package.json pnpm-lock.yaml ./
@@ -215,9 +215,9 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
-# Install curl for health checks and pnpm
+# Install curl for health checks and pnpm (version must match package.json packageManager)
 RUN apk add --no-cache curl && \
-    corepack enable && corepack prepare pnpm@latest --activate
+    corepack enable && corepack prepare pnpm@10.28.2 --activate
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
