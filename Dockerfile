@@ -246,6 +246,7 @@ COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --chown=nestjs:nodejs README.md ./
 
 # GeoIP DB: writable dir for GeoLite2-City.mmdb (download on first start or 48h job)
+RUN mkdir -p /app/geoip && chown -R nestjs:nodejs /app/geoip
 ENV GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
 
 # Switch to non-root user
