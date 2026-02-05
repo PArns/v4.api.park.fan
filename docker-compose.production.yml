@@ -91,6 +91,9 @@ services:
       - ML_SERVICE_URL=http://ml-service:8000
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
+      - GEOIP_DATABASE_PATH=${GEOIP_DATABASE_PATH:-/app/geoip/GeoLite2-City.mmdb}
+    volumes:
+      - /data/parkfan/geoip:/app/geoip
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
