@@ -39,32 +39,59 @@ export class GeoipService implements OnModuleInit {
     const dir = path.dirname(this.dbPath);
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
 
+    const hasCredentials =
+      !!this.configService.get<string>("GEOIP_MAXMIND_ACCOUNT_ID") &&
+      !!this.configService.get<string>("GEOIP_MAXMIND_LICENSE_KEY");
+    this.logger.log(
+      `GeoIP: path=${this.dbPath}, credentials=${hasCredentials ? "set" : "missing"}`,
+    );
+
     const exists = await this.openDatabaseIfExists();
     if (!exists) {
-      const hasCredentials =
-        !!this.configService.get<string>("GEOIP_MAXMIND_ACCOUNT_ID") &&
-        !!this.configService.get<string>("GEOIP_MAXMIND_LICENSE_KEY");
       if (hasCredentials) {
-        this.logger.log(
-          "GeoLite2-City database not found. Downloading in background (app start not blocked).",
-        );
-        this.downloadAndReplace()
-          .then(() => this.openDatabaseIfExists())
-          .then((loaded) => {
-            if (loaded) {
-              this.logger.log("GeoLite2-City loaded after background download.");
-            }
-          })
-          .catch((err) => {
-            this.logger.warn(
-              `GeoLite2-City download on start failed: ${err}. Nearby without lat/lng will fail until DB is present or next 48h update.`,
-            );
-          });
+        const canWrite = await this.checkDirWritable(dir);
+        if (!canWrite) {
+          this.logger.warn(
+            `GeoIP: directory not writable: ${dir}. Fix volume permissions (e.g. chown) so GeoLite2-City can be downloaded.`,
+          );
+        } else {
+          this.logger.log(
+            "GeoLite2-City database not found. Downloading in background (app start not blocked).",
+          );
+          this.downloadAndReplace()
+            .then(() => this.openDatabaseIfExists())
+            .then((loaded) => {
+              if (loaded) {
+                this.logger.log("GeoLite2-City loaded after background download.");
+              }
+            })
+            .catch((err) => {
+              const msg =
+                err?.response?.status != null
+                  ? `HTTP ${err.response.status}`
+                  : err?.message ?? String(err);
+              this.logger.warn(
+                `GeoLite2-City download on start failed: ${msg}. Nearby without lat/lng will fail until DB is present or next 48h update.`,
+              );
+            });
+        }
       } else {
         this.logger.warn(
           "GeoLite2-City database not available. Set GEOIP_MAXMIND_ACCOUNT_ID and GEOIP_MAXMIND_LICENSE_KEY to download on start, or run the geoip-update job. Nearby without lat/lng will fail until DB is present.",
         );
       }
+    }
+  }
+
+  /** Check if the GeoIP target directory is writable (e.g. volume permissions). */
+  private async checkDirWritable(dir: string): Promise<boolean> {
+    try {
+      const probe = path.join(dir, `.write-probe-${Date.now()}`);
+      await fs.writeFile(probe, "");
+      await fs.unlink(probe);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -145,16 +172,25 @@ export class GeoipService implements OnModuleInit {
       await fs.mkdir(tmpDir, { recursive: true });
 
       this.logger.log("Downloading GeoLite2-City from MaxMind...");
-      const response = await axios.get(GEOIP_DOWNLOAD_URL, {
-        responseType: "arraybuffer",
-        auth: {
-          username: accountId,
-          password: licenseKey,
-        },
-        timeout: 120_000,
-        maxContentLength: 100 * 1024 * 1024, // 100 MB
-        maxRedirects: 5, // MaxMind redirects to R2 presigned URL; must follow redirects
-      });
+      let response;
+      try {
+        response = await axios.get(GEOIP_DOWNLOAD_URL, {
+          responseType: "arraybuffer",
+          auth: {
+            username: accountId,
+            password: licenseKey,
+          },
+          timeout: 120_000,
+          maxContentLength: 100 * 1024 * 1024, // 100 MB
+          maxRedirects: 5, // MaxMind redirects to R2 presigned URL; must follow redirects
+        });
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const msg = (err as { message?: string })?.message ?? String(err);
+        throw new Error(
+          status != null ? `MaxMind download failed: HTTP ${status} - ${msg}` : `MaxMind download failed: ${msg}`,
+        );
+      }
 
       await fs.writeFile(archivePath, response.data);
 

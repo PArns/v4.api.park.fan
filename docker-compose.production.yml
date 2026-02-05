@@ -91,7 +91,12 @@ services:
       - ML_SERVICE_URL=http://ml-service:8000
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
-      - GEOIP_DATABASE_PATH=${GEOIP_DATABASE_PATH:-/app/geoip/GeoLite2-City.mmdb}
+      # Always use volume path so .env cannot override with ./data/... (which is not mounted)
+      - GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
+      - GEOIP_MAXMIND_ACCOUNT_ID=${GEOIP_MAXMIND_ACCOUNT_ID}
+      - GEOIP_MAXMIND_LICENSE_KEY=${GEOIP_MAXMIND_LICENSE_KEY}
+    volumes:
+      - /data/parkfan/geoip:/app/geoip
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

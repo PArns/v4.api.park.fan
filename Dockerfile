@@ -235,6 +235,9 @@ RUN addgroup -g 1001 -S nodejs && \
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
 
+# Install su-exec for user switching in entrypoint
+RUN apk add --no-cache su-exec
+
 # Install only production dependencies
 RUN pnpm install --prod --frozen-lockfile && \
     pnpm store prune
@@ -249,8 +252,10 @@ COPY --chown=nestjs:nodejs README.md ./
 RUN mkdir -p /app/geoip && chown -R nestjs:nodejs /app/geoip
 ENV GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
 
-# Switch to non-root user
-USER nestjs
+# Copy entrypoint script
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/
+
+# Note: No USER switch here - entrypoint runs as root, then switches to nestjs
 
 # Expose port
 EXPOSE 3000
@@ -259,5 +264,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:3000/v1/health || exit 1
 
-# Start the application
+# Entrypoint handles permissions, then switches to nestjs user
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/src/main.js"]
