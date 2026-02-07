@@ -62,14 +62,16 @@ export class GeoipService implements OnModuleInit {
             .then(() => this.openDatabaseIfExists())
             .then((loaded) => {
               if (loaded) {
-                this.logger.log("GeoLite2-City loaded after background download.");
+                this.logger.log(
+                  "GeoLite2-City loaded after background download.",
+                );
               }
             })
             .catch((err) => {
               const msg =
                 err?.response?.status != null
                   ? `HTTP ${err.response.status}`
-                  : err?.message ?? String(err);
+                  : (err?.message ?? String(err));
               this.logger.warn(
                 `GeoLite2-City download on start failed: ${msg}. Nearby without lat/lng will fail until DB is present or next 48h update.`,
               );
@@ -185,10 +187,13 @@ export class GeoipService implements OnModuleInit {
           maxRedirects: 5, // MaxMind redirects to R2 presigned URL; must follow redirects
         });
       } catch (err: unknown) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
+        const status = (err as { response?: { status?: number } })?.response
+          ?.status;
         const msg = (err as { message?: string })?.message ?? String(err);
         throw new Error(
-          status != null ? `MaxMind download failed: HTTP ${status} - ${msg}` : `MaxMind download failed: ${msg}`,
+          status != null
+            ? `MaxMind download failed: HTTP ${status} - ${msg}`
+            : `MaxMind download failed: ${msg}`,
         );
       }
 

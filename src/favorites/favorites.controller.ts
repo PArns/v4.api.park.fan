@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseInterceptors } from "@nestjs/common";
+import { Controller, Get, Query, Req, UseInterceptors } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -6,6 +6,9 @@ import {
   ApiQuery,
   ApiExtraModels,
 } from "@nestjs/swagger";
+import { Request } from "express";
+import { getClientIp, normalizeIp } from "../common/utils/request.util";
+import { GeoipService } from "../geoip/geoip.service";
 import { FavoritesService } from "./favorites.service";
 import { FavoritesQueryDto } from "./dto/favorites-request.dto";
 import { FavoritesResponseDto } from "./dto/favorites-response.dto";
@@ -26,7 +29,10 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 @ApiTags("favorites")
 @Controller("favorites")
 export class FavoritesController {
-  constructor(private readonly favoritesService: FavoritesService) {}
+  constructor(
+    private readonly favoritesService: FavoritesService,
+    private readonly geoipService: GeoipService,
+  ) {}
 
   /**
    * GET /v1/favorites
@@ -49,7 +55,7 @@ export class FavoritesController {
       "Returns favorite parks, attractions, shows, and restaurants with complete information " +
       "including live data (status, wait times, showtimes, dining availability, etc.). " +
       "Data is grouped by entity type for easy consumption. " +
-      "If latitude and longitude are provided, distances from user location are calculated in meters. " +
+      "If latitude and longitude are provided (or derived from IP via GeoIP when omitted), distances from user location are calculated in meters. " +
       "Cached in Redis and HTTP cache for 2 minutes for optimal performance. " +
       "Uses stale-while-revalidate pattern to refresh cache in background when TTL < 1 minute.",
   })
@@ -88,8 +94,7 @@ export class FavoritesController {
   @ApiQuery({
     name: "lat",
     description:
-      "User latitude for distance calculation (WGS84). Must be between -90 and 90. " +
-      "If provided with lng, distances will be calculated for all entities with coordinates.",
+      "User latitude for distance calculation (WGS84). If omitted, location may be derived from IP (GeoLite2-City) when available.",
     example: 48.266,
     required: false,
     type: Number,
@@ -97,11 +102,17 @@ export class FavoritesController {
   @ApiQuery({
     name: "lng",
     description:
-      "User longitude for distance calculation (WGS84). Must be between -180 and 180. " +
-      "If provided with lat, distances will be calculated for all entities with coordinates.",
+      "User longitude for distance calculation (WGS84). If omitted, location may be derived from IP (GeoLite2-City) when available.",
     example: 7.722,
     required: false,
     type: Number,
+  })
+  @ApiQuery({
+    name: "ip",
+    description:
+      "IP address for GeoIP lookup (debug). If omitted, uses X-Forwarded-For or request IP.",
+    required: false,
+    type: String,
   })
   @ApiResponse({
     status: 200,
@@ -115,12 +126,41 @@ export class FavoritesController {
   })
   async getFavorites(
     @Query() query: FavoritesQueryDto,
+    @Query("ip") ipParam: string | undefined,
+    @Req() req: Request | undefined,
   ): Promise<FavoritesResponseDto> {
-    // Build user location if provided
-    const userLocation =
-      query.lat !== undefined && query.lng !== undefined
-        ? { latitude: query.lat, longitude: query.lng }
-        : undefined;
+    // Resolve user location: 1) lat/lng params, 2) ip param or request IP → GeoIP
+    let userLocation: { latitude: number; longitude: number } | undefined =
+      undefined;
+
+    if (query.lat !== undefined && query.lng !== undefined) {
+      const lat = Number(query.lat);
+      const lng = Number(query.lng);
+      if (
+        !Number.isNaN(lat) &&
+        !Number.isNaN(lng) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+      ) {
+        userLocation = { latitude: lat, longitude: lng };
+      }
+    }
+
+    if (!userLocation && this.geoipService.isAvailable()) {
+      const rawIp = ipParam?.trim() || getClientIp(req ?? undefined) || "";
+      const ip = rawIp ? normalizeIp(rawIp) : "";
+      if (ip) {
+        const coords = this.geoipService.lookupCoordinates(ip);
+        if (coords) {
+          userLocation = {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          };
+        }
+      }
+    }
 
     return this.favoritesService.getFavorites(
       query.parkIds || [],

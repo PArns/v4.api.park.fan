@@ -19,6 +19,7 @@
 - [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
 - [Schedule Sync & Calendar](docs/architecture/schedule-sync-and-calendar.md) - Opening hours sync (ThemeParks Wiki), on-demand refresh, calendar first-request slowness.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
+- [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
 
 ### 📊 Analytics & Logic
 - [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
@@ -56,6 +57,7 @@ src/
 ├── parks/             # Park entities & logic
 ├── attractions/       # Attraction entities & logic
 ├── queue-data/        # Raw wait time ingestion
+├── geoip/             # GeoLite2-City for IP → coordinates (nearby, favorites)
 ├── ml/                # ML Service Client
 └── common/            # Shared Utilities & Types
 

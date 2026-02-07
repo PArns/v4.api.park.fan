@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from "@nestjs/swagger";
 import { Request } from "express";
+import { getClientIp, normalizeIp } from "../common/utils/request.util";
 import { LocationService } from "./location.service";
 import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
@@ -196,8 +197,8 @@ export class LocationController {
     }
 
     if (latitude === null || longitude === null) {
-      const rawIp = ipParam?.trim() || this.getClientIp(req) || "";
-      const ip = rawIp ? this.normalizeIp(rawIp) : "";
+      const rawIp = ipParam?.trim() || getClientIp(req ?? undefined) || "";
+      const ip = rawIp ? normalizeIp(rawIp) : "";
       if (!ip || !this.geoipService.isAvailable()) {
         throw new BadRequestException(
           "Location required. Provide lat and lng, or ensure GeoIP is configured (GEOIP_* env) and the request carries a valid client IP (e.g. X-Forwarded-For).",
@@ -245,55 +246,5 @@ export class LocationController {
       radiusInMeters,
       limitCount,
     );
-  }
-
-  /**
-   * Get client IP from request, checking common proxy headers then connection.
-   * Order: X-Forwarded-For (first), CF-Connecting-IP, True-Client-IP, X-Real-IP,
-   * X-Forwarding-IP, req.ip, socket.remoteAddress.
-   */
-  private getClientIp(req: Request | undefined): string | null {
-    if (!req) return null;
-    const raw =
-      this.getFirstHeader(req, "x-forwarded-for") ??
-      this.getFirstHeader(req, "cf-connecting-ip") ??
-      this.getFirstHeader(req, "true-client-ip") ??
-      this.getFirstHeader(req, "x-real-ip") ??
-      this.getFirstHeader(req, "x-forwarding-ip") ??
-      req.ip ??
-      req.socket?.remoteAddress ??
-      null;
-    return raw ? this.normalizeIp(raw) : null;
-  }
-
-  private getFirstHeader(req: Request, name: string): string | null {
-    const value = req.headers[name];
-    if (!value) return null;
-    const s = typeof value === "string" ? value : value[0];
-    const first = (s ?? "").trim().split(",")[0]?.trim();
-    return first || null;
-  }
-
-  /**
-   * Normalize IP for GeoIP: strip port (e.g. 1.2.3.4:8080 or [::1]:8080) and IPv4-mapped prefix.
-   */
-  private normalizeIp(ip: string): string {
-    let trimmed = ip.trim();
-    // IPv6 with port: [2001:db8::1]:8080 -> 2001:db8::1
-    if (trimmed.startsWith("[") && trimmed.includes("]:")) {
-      const end = trimmed.indexOf("]:");
-      trimmed = trimmed.slice(1, end);
-    }
-    // IPv4 with port: 1.2.3.4:8080 -> 1.2.3.4 (only if dotted quad + :digits)
-    else if (trimmed.includes(".") && trimmed.includes(":")) {
-      const lastColon = trimmed.lastIndexOf(":");
-      const after = trimmed.slice(lastColon + 1);
-      if (/^\d+$/.test(after) && parseInt(after, 10) <= 65535) {
-        trimmed = trimmed.slice(0, lastColon);
-      }
-    }
-    // IPv4-mapped: ::ffff:1.2.3.4 -> 1.2.3.4
-    if (trimmed.startsWith("::ffff:")) trimmed = trimmed.slice(7);
-    return trimmed;
   }
 }
