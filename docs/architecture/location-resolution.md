@@ -44,6 +44,15 @@ If after this no coordinates are available:
 | `GET /v1/discovery/nearby` | Yes                | 400 Bad Request                     |
 | `GET /v1/favorites`        | No                 | 200 OK, no `userLocation`, no distances |
 
+## Caching (CDN / Cloudflare)
+
+Both endpoints **must not** be cached by Cloudflare or other shared caches, because the response can depend on the client IP (GeoIP lookup). They use `NoCdnCacheInterceptor`, which sets:
+
+- `Cache-Control: private, no-store, no-cache, must-revalidate`
+- `Pragma: no-cache`
+
+So only the client (browser) may cache; CDNs will not serve a cached copy for another user.
+
 ## Frontend / API Consumers
 
 - Prefer sending `lat` and `lng` when the client has GPS or user-selected position.

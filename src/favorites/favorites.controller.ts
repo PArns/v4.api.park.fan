@@ -18,7 +18,7 @@ import {
   RestaurantWithDistanceDto,
 } from "./dto/favorites-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
-import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 
 /**
  * Favorites Controller
@@ -41,7 +41,7 @@ export class FavoritesController {
    * Supports optional distance calculation if user location is provided.
    */
   @Get()
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live data
+  @UseInterceptors(new NoCdnCacheInterceptor()) // Response can depend on client IP (GeoIP) – must not be CDN-cached
   @ApiExtraModels(
     FavoritesResponseDto,
     ParkWithDistanceDto,

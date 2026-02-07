@@ -12,7 +12,7 @@ import { getClientIp, normalizeIp } from "../common/utils/request.util";
 import { LocationService } from "./location.service";
 import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
-import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 
 /**
  * Location Controller
@@ -36,7 +36,7 @@ export class LocationController {
    * Otherwise, returns up to 5 nearest parks.
    */
   @Get("nearby")
-  @UseInterceptors(new HttpCacheInterceptor(60)) // 1 minute - fresher park status
+  @UseInterceptors(new NoCdnCacheInterceptor()) // Response depends on client IP (GeoIP) – must not be CDN-cached
   @ApiOperation({
     summary: "Find nearby parks or rides",
     description:
