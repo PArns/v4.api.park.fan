@@ -604,7 +604,7 @@ export class CalendarService {
     }
 
     // status = ParkStatus (OPERATING | CLOSED | UNKNOWN); UNKNOWN = no schedule data yet
-    const status: ParkStatus =
+    let status: ParkStatus =
       schedule?.scheduleType === ScheduleType.OPERATING
         ? "OPERATING"
         : schedule?.scheduleType === ScheduleType.CLOSED
@@ -613,29 +613,14 @@ export class CalendarService {
             ? "UNKNOWN"
             : "UNKNOWN";
 
-    // Build operating hours
-    let hours: OperatingHours | null = null;
-    if (schedule && schedule.scheduleType === ScheduleType.OPERATING) {
-      hours = {
-        openingTime: schedule.openingTime?.toISOString() || "",
-        closingTime: schedule.closingTime?.toISOString() || "",
-        type: schedule.scheduleType,
-        isInferred: false,
-      };
-    } else if (status === "OPERATING" && mlPrediction) {
-      hours = await this.inferOperatingHours(park, date);
-    }
-
-    // Map crowd level based on date
+    // Compute crowd level for the day (needed even when no schedule, to infer open/closed)
     const isHistorical = dateStr <= today;
-    let crowdLevel: CrowdLevel | "closed";
+    let inferredCrowdLevel: CrowdLevel | "closed";
 
-    if (status !== "OPERATING") {
-      crowdLevel = "closed";
-    } else if (isHistorical) {
+    if (isHistorical) {
       const prefetched = prefetchedCrowdLevels.get(dateStr);
       if (prefetched !== undefined) {
-        crowdLevel = prefetched;
+        inferredCrowdLevel = prefetched;
       } else {
         const cachedStat = this.findCachedStat(dateStr, parkStats);
         if (cachedStat && cachedStat.p90WaitTime !== null) {
@@ -646,7 +631,7 @@ export class CalendarService {
               dateStr,
               park.timezone,
             );
-          crowdLevel = crowdData.crowdLevel;
+          inferredCrowdLevel = crowdData.crowdLevel;
         } else {
           const dayQueueData = historicalQueueData.filter(
             (q) =>
@@ -662,15 +647,47 @@ export class CalendarService {
                 dateStr,
                 park.timezone,
               );
-            crowdLevel = crowdData.crowdLevel;
+            inferredCrowdLevel = crowdData.crowdLevel;
           } else {
-            crowdLevel = mlPrediction?.crowdLevel || "moderate";
+            inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
           }
         }
       }
     } else {
-      // Future date: use ML prediction
-      crowdLevel = mlPrediction?.crowdLevel || "moderate";
+      inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
+    }
+
+    // Past + Today only: treat existing (non-closed) crowd level as park open so we have something to show.
+    // Future: keep schedule-based status (OPEN/CLOSED/UNKNOWN); UNKNOWN future days still get crowdLevel from ML below.
+    if (
+      isHistorical &&
+      status === "UNKNOWN" &&
+      inferredCrowdLevel !== "closed"
+    ) {
+      status = "OPERATING";
+    }
+
+    // Future UNKNOWN (no schedule): show ML crowd prediction; past/today non-OPERATING or CLOSED → closed
+    let crowdLevel: CrowdLevel | "closed";
+    if (status === "OPERATING") {
+      crowdLevel = inferredCrowdLevel;
+    } else if (status === "UNKNOWN" && !isHistorical) {
+      crowdLevel = inferredCrowdLevel; // future day without schedule: still show prediction
+    } else {
+      crowdLevel = "closed";
+    }
+
+    // Build operating hours
+    let hours: OperatingHours | null = null;
+    if (schedule && schedule.scheduleType === ScheduleType.OPERATING) {
+      hours = {
+        openingTime: schedule.openingTime?.toISOString() || "",
+        closingTime: schedule.closingTime?.toISOString() || "",
+        type: schedule.scheduleType,
+        isInferred: false,
+      };
+    } else if (status === "OPERATING" && mlPrediction) {
+      hours = await this.inferOperatingHours(park, date);
     }
 
     // Build weather summary

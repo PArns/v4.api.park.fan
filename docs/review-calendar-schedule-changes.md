@@ -1,85 +1,85 @@
 # Review: Calendar & Schedule Sync Changes
 
-Kurzes Review aller Änderungen aus der Session (Plausibilität & Vollständigkeit).
+Short review of all changes from the session (plausibility and completeness).
 
 ---
 
-## 1. Schedule-Sync & Öffnungszeiten
+## 1. Schedule sync & opening hours
 
-| Änderung | Plausibel | Vollständig |
-|----------|-----------|-------------|
-| **Job-Name** `fetch-all-parks` → `sync-all-parks` in Scheduler + Admin | ✅ Processor lauscht nur auf `sync-all-parks`; Cron und Admin legen jetzt denselben Job. | ✅ Beide Stellen angepasst. |
-| **Neuer Job** `sync-schedules-only` (täglich 15:00) | ✅ Nur Schedules, kein Full Discovery; entlastet und bringt neue Monate schneller. | ✅ Handler + Cron registriert. |
-| **On-Demand** `sync-park-schedule` (einzelner Park) | ✅ Wird aus Calendar getriggert, wenn Range 14+ Tage über letztem Schedule endet; Rate-Limit 12h. | ✅ Handler + Trigger in CalendarService; UNKNOWN zählt als „Daten bis X“. |
-| **Weniger aggressiv**: Gap 14 Tage, Rate-Limit 12h | ✅ Weniger API-Last, trotzdem zeitnahe Aktualisierung. | ✅ Konstanten + Doku angepasst. |
-
----
-
-## 2. Calendar-Warmup
-
-| Änderung | Plausibel | Vollständig |
-|----------|-----------|-------------|
-| Calendar **nicht** mehr im 5-Min-Park-Warmup | ✅ Calendar 1× täglich reicht; spart Last. | ✅ Aufruf aus `warmupParkCache` entfernt. |
-| **Neuer Job** `warmup-calendar-daily` (täglich 5:00) | ✅ Nach Schedules-Sync, vor typischem Traffic. | ✅ Processor + Cron; `warmupCalendarForAllParks()` nutzt `warmupCalendarForPark()` pro Park. |
-| Warmup baut Range „aktueller + nächster Monat“ | ✅ fromStr = 1. des Monats, toStr = letzter Tag nächster Monat (JS `new Date(y, m, 0)` für letzten Tag). | ✅ Zeitraum in Park-Timezone; Kommentar angepasst (nur noch von warmupCalendarForAllParks). |
+| Change | Plausible | Complete |
+|--------|-----------|----------|
+| **Job name** `fetch-all-parks` → `sync-all-parks` in Scheduler + Admin | ✅ Processor only listens for `sync-all-parks`; cron and admin now enqueue the same job. | ✅ Both places updated. |
+| **New job** `sync-schedules-only` (daily 15:00) | ✅ Schedules only, no full discovery; reduces load and brings new months sooner. | ✅ Handler + cron registered. |
+| **On-demand** `sync-park-schedule` (single park) | ✅ Triggered from calendar when range ends 14+ days beyond last schedule; rate limit 12h. | ✅ Handler + trigger in CalendarService; UNKNOWN counts as “data until X”. |
+| **Less aggressive:** gap 14 days, rate limit 12h | ✅ Less API load, still timely updates. | ✅ Constants + docs updated. |
 
 ---
 
-## 3. Per-Monat-Cache (Calendar)
+## 2. Calendar warmup
 
-| Änderung | Plausibel | Vollständig |
-|----------|-----------|-------------|
-| **Nur** Per-Monat-Keys: `calendar:month:{parkId}:YYYY-MM:{includeHourly}` | ✅ Überlappende Ranges (z. B. Feb 1–15 und Feb 10–28) teilen denselben Monat. | ✅ Full-Range-Cache entfernt; Lesen nur noch aus Monats-Cache. |
-| **Lesen**: Monate im Range holen, mergen, auf [from, to] slicen | ✅ `getMonthsInRange` timezone-sicher (formatInParkTimezone pro Tag). | ✅ Leerer Range (z. B. from > to) → `monthsInRange = []` → `[].every(...)` = true → leere Response; in Praxis durch Controller abgedeckt. |
-| **Schreiben**: Nur **vollständige** Monate cachen | ✅ Prüfung: Länge = letzter Tag, erster Tag = YYYY-MM-01, letzter = YYYY-MM-lastDay. | ✅ TTL: 5 min wenn Monat „heute“ enthält, sonst 1h. |
+| Change | Plausible | Complete |
+|--------|-----------|----------|
+| Calendar **no longer** in 5-min park warmup | ✅ Calendar once daily is enough; saves load. | ✅ Call removed from `warmupParkCache`. |
+| **New job** `warmup-calendar-daily` (daily 5:00) | ✅ After schedule sync, before typical traffic. | ✅ Processor + cron; `warmupCalendarForAllParks()` uses `warmupCalendarForPark()` per park. |
+| Warmup builds range “current + next month” | ✅ fromStr = 1st of month, toStr = last day of next month (JS `new Date(y, m, 0)` for last day). | ✅ Range in park timezone; comment updated (only from warmupCalendarForAllParks). |
 
 ---
 
-## 4. Query-Optimierungen
+## 3. Per-month cache (calendar)
 
-| Änderung | Plausibel | Vollständig |
-|----------|-----------|-------------|
-| **Weather** `getWeatherData(..., timezone?)` | ✅ Calendar hat Park inkl. timezone; ein Park-Lookup pro Build gespart. | ✅ Nur Calendar übergibt timezone; Controller/andere Aufrufer unverändert (3 Argumente). |
-| **QueueData** `innerJoin` statt `innerJoinAndSelect` | ✅ Calendar nutzt nur `timestamp` und `waitTime`, keine Attraction-Felder. | ✅ Kein Zugriff auf `qd.attraction` im Calendar-Code (geprüft). |
-| **Crowd-Level** Redis-MGET für historische Tage | ✅ Ein MGET statt N GETs; Keys = `analytics:crowdlevel:park:{parkId}:{date}`. | ✅ Prefetch-Map wird an `buildCalendarDay` übergeben; bei Treffer kein `calculateCrowdLevelForDate`. |
-| **Hourly ML** einmal pro Build, dann `buildHourlyPredictionsFromList` | ✅ Kein N+1 mehr (z. B. 2 ML-Calls → 1). | ✅ Nur bei `includeHourly !== "none"` geholt. |
+| Change | Plausible | Complete |
+|--------|-----------|----------|
+| **Only** per-month keys: `calendar:month:{parkId}:YYYY-MM:{includeHourly}` | ✅ Overlapping ranges (e.g. Feb 1–15 and Feb 10–28) share the same month. | ✅ Full-range cache removed; read only from month cache. |
+| **Read:** fetch months in range, merge, slice to [from, to] | ✅ `getMonthsInRange` timezone-safe (formatInParkTimezone per day). | ✅ Empty range (e.g. from > to) → `monthsInRange = []` → `[].every(...)` = true → empty response; in practice covered by controller. |
+| **Write:** only cache **full** months | ✅ Check: length = last day, first day = YYYY-MM-01, last = YYYY-MM-lastDay. | ✅ TTL: 5 min if month includes today, else 1h. |
+
+---
+
+## 4. Query optimisations
+
+| Change | Plausible | Complete |
+|--------|-----------|----------|
+| **Weather** `getWeatherData(..., timezone?)` | ✅ Calendar has park including timezone; one park lookup saved per build. | ✅ Only calendar passes timezone; controller/other callers unchanged (3 args). |
+| **QueueData** `innerJoin` instead of `innerJoinAndSelect` | ✅ Calendar only uses `timestamp` and `waitTime`, no attraction fields. | ✅ No access to `qd.attraction` in calendar code (verified). |
+| **Crowd level** Redis MGET for historical days | ✅ One MGET instead of N GETs; keys = `analytics:crowdlevel:park:{parkId}:{date}`. | ✅ Prefetch map passed to `buildCalendarDay`; on hit no `calculateCrowdLevelForDate`. |
+| **Hourly ML** once per build, then `buildHourlyPredictionsFromList` | ✅ No N+1 (e.g. 2 ML calls → 1). | ✅ Only fetched when `includeHourly !== "none"`. |
 
 ---
 
 ## 5. Index
 
-| Änderung | Plausibel | Vollständig |
-|----------|-----------|-------------|
-| **Kein** zusätzlicher Index `(parkId, date)` auf `schedule_entries` | ✅ `(parkId, date, scheduleType)` deckt Range-Abfragen per Leftmost-Prefix ab; doppelter Index entfernt. | ✅ Entity und Doku konsistent. |
+| Change | Plausible | Complete |
+|--------|-----------|----------|
+| **No** extra index `(parkId, date)` on `schedule_entries` | ✅ `(parkId, date, scheduleType)` covers range queries via leftmost prefix; duplicate index removed. | ✅ Entity and docs consistent. |
 
 ---
 
-## 6. Doku & Kommentare
+## 6. Docs & comments
 
-| Stelle | Status |
-|--------|--------|
-| `docs/architecture/schedule-sync-and-calendar.md` | ✅ Sync, UNKNOWN, Calendar, Optimierungen, Warmup (inkl. Per-Monat-Key). |
-| `docs/architecture/caching-strategy.md` | ✅ Warmup-Calendar als Per-Monat-Key beschrieben. |
-| `docs/architecture/job-queues.md` | ✅ Park-Metadata + Schedule-Sync erwähnt. |
-| `CLAUDE.md` | ✅ Link auf Schedule Sync & Calendar. |
-| Cache-Warmup-Kommentar „Called from warmupParkCache“ | ✅ Auf „warmupCalendarForAllParks (daily warmup)“ geändert. |
-| Schedule-sync doc „Effect: Warms calendar:…“ | ✅ Auf „per-month keys calendar:month:…“ korrigiert. |
-
----
-
-## 7. Tests & Build
-
-- **Build**: `npm run build` erfolgreich.
-- **Calendar Unit-Test** (`test/unit/calendar.service.spec.ts`): Mockt nur Parks, Weather, ML, Holidays, Attractions, Shows, Redis; **nicht** QueueDataService, StatsService, AnalyticsService, park-metadata Queue. Beim Ausführen der Unit-Tests könnte `buildCalendarResponse` daher fehlschlagen, sobald diese Dependencies aufgerufen werden. Optional: fehlende Mocks ergänzen, falls die Calendar-Specs laufen sollen.
+| Location | Status |
+|----------|--------|
+| `docs/architecture/schedule-sync-and-calendar.md` | ✅ Sync, UNKNOWN, calendar, optimisations, warmup (incl. per-month key). |
+| `docs/architecture/caching-strategy.md` | ✅ Warmup calendar as per-month key described. |
+| `docs/architecture/job-queues.md` | ✅ Park metadata + schedule sync mentioned. |
+| `CLAUDE.md` | ✅ Link to Schedule Sync & Calendar. |
+| Cache warmup comment “Called from warmupParkCache” | ✅ Changed to “warmupCalendarForAllParks (daily warmup)”. |
+| Schedule sync doc “Effect: Warms calendar:…” | ✅ Corrected to “per-month keys calendar:month:…”. |
 
 ---
 
-## 8. Edge Cases (stichprobenartig)
+## 7. Tests & build
 
-- **Leerer Monats-Range** (z. B. from > to): `getMonthsInRange` → `[]`, `monthCached.every(...)` = true → Response mit leeren `days`; in Praxis durch Controller-Validierung abgefangen.
-- **Park ohne timezone**: Weather-Fallback (einfache Datums-Range) bzw. Calendar übergibt `park.timezone`; wenn undefined, wird in Warmup `tz = park.timezone || "UTC"` verwendet.
-- **QueueData nach Join**: Calendar liest nur `timestamp` und `waitTime`; kein Zugriff auf `attraction` → `innerJoin` ohne Select unkritisch.
+- **Build:** `npm run build` succeeds.
+- **Calendar unit test** (`test/unit/calendar.service.spec.ts`): Mocks only Parks, Weather, ML, Holidays, Attractions, Shows, Redis; **not** QueueDataService, StatsService, AnalyticsService, park-metadata Queue. Running the unit tests may cause `buildCalendarResponse` to fail once these dependencies are used. Optional: add missing mocks if calendar specs should run.
 
 ---
 
-**Fazit**: Änderungen sind plausibel und konsistent umgesetzt; Doku und Kommentare angepasst. Einzige optionale Nachbesserung: Calendar-Unit-Test um fehlende Mocks erweitern, falls die Specs ausgeführt werden.
+## 8. Edge cases (spot check)
+
+- **Empty month range** (e.g. from > to): `getMonthsInRange` → `[]`, `monthCached.every(...)` = true → response with empty `days`; in practice validated by controller.
+- **Park without timezone:** Weather fallback (simple date range); calendar passes `park.timezone`; if undefined, warmup uses `tz = park.timezone || "UTC"`.
+- **QueueData after join:** Calendar only reads `timestamp` and `waitTime`; no access to `attraction` → `innerJoin` without select is fine.
+
+---
+
+**Conclusion:** Changes are plausible and implemented consistently; docs and comments updated. Only optional follow-up: extend calendar unit test with missing mocks if the specs should be run.

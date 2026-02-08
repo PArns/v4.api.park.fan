@@ -76,3 +76,5 @@ Predictions are aligned with park schedule from `schedule_entries` **only when t
   - **UNKNOWN**: No schedule from source yet (placeholder) → same as CLOSED for that date; excluded from daily.
 
 In **predict.py**, UNKNOWN/CLOSED-only for a date is only applied when `park_has_operating` (park has at least one OPERATING row); otherwise the row is left open. In **schedule_filter.py**, if the query returns only UNKNOWN/CLOSED (no OPERATING dates), we keep all predictions for that park instead of filtering everything out.
+
+**Full rules (Calendar API + Schedule Sync + ML):** [Calendar, Schedule & ML Rules](../architecture/calendar-schedule-and-ml-rules.md).

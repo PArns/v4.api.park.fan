@@ -1,36 +1,36 @@
 # Calendar: status (ParkStatus) – UNKNOWN vs CLOSED
 
-Kurze Anleitung fürs Frontend: Wie ihr **Öffnungszeiten** im Kalender sauber darstellt und **UNKNOWN** von **CLOSED** unterscheidet.
+Short guide for the frontend: how to display **opening hours** in the calendar and how to tell **UNKNOWN** from **CLOSED**.
 
-## Feld: `status` (ParkStatus)
+## Field: `status` (ParkStatus)
 
-Jeder Kalendertag hat **ein** Feld:
+Each calendar day has **one** field:
 
 - **`status`**: `ParkStatus` = `"OPERATING"` | `"CLOSED"` | `"UNKNOWN"`
 
-Daran erkennt ihr sowohl „Park offen/zu“ als auch „haben wir überhaupt Schedule-Daten?“.
+From this you can tell both “park open/closed” and “do we have schedule data at all?”.
 
 ---
 
-## Bedeutungen
+## Meanings
 
-| status      | Bedeutung | Anzeige-Empfehlung |
-|------------|-----------|--------------------|
-| **OPERATING** | Park hat Öffnungszeiten (von der Quelle). | Öffnungs- und Schließzeiten anzeigen (z.B. aus `hours.openingTime` / `hours.closingTime`). |
-| **CLOSED**    | Park ist an diesem Tag **bestätigt geschlossen** (Quelle liefert „Closed“). | Z.B. „Geschlossen“ oder „Closed“ – kein Zeitbereich. |
-| **UNKNOWN**   | **Noch keine Öffnungszeiten von der Quelle** (Monat noch nicht veröffentlicht oder Placeholder). | Z.B. „Öffnungszeiten noch nicht verfügbar“ oder „Noch nicht veröffentlicht“ – **nicht** „Geschlossen“. |
-
----
-
-## Wichtig
-
-- **UNKNOWN ≠ geschlossen.** UNKNOWN heißt: Wir haben für diesen Tag noch keine echten Schedule-Daten (z.B. Mai 2026, bis der Park den Monat veröffentlicht).
-- **CLOSED** nur nutzen, wenn der Park für den Tag explizit als geschlossen gemeldet ist.
-- Wenn `status === "UNKNOWN"`: Keine Öffnungszeiten anzeigen und klar kommunizieren, dass die Infos noch fehlen (nicht dass der Park zu ist).
+| status      | Meaning | Display recommendation |
+|------------|---------|--------------------------|
+| **OPERATING** | Park has opening hours (from source). | Show opening and closing times (e.g. from `hours.openingTime` / `hours.closingTime`). |
+| **CLOSED**    | Park is **confirmed closed** on this day (source returns “Closed”). | e.g. “Closed” – no time range. |
+| **UNKNOWN**   | **No opening hours from source yet** (month not yet published or placeholder). | e.g. “Opening hours not yet available” or “Not yet published” – **not** “Closed”. |
 
 ---
 
-## Beispiel (TypeScript)
+## Important
+
+- **UNKNOWN ≠ closed.** UNKNOWN means: we don’t have real schedule data for this day yet (e.g. May 2026 until the park publishes that month).
+- Use **CLOSED** only when the park is explicitly reported as closed for that day.
+- When `status === "UNKNOWN"`: don’t show opening hours and make it clear that the info is still missing (not that the park is closed).
+
+---
+
+## Example (TypeScript)
 
 ```ts
 function getScheduleLabel(day: CalendarDay): string {
@@ -38,20 +38,20 @@ function getScheduleLabel(day: CalendarDay): string {
     case "OPERATING":
       return day.hours
         ? `${formatTime(day.hours.openingTime)} – ${formatTime(day.hours.closingTime)}`
-        : "Geöffnet";
+        : "Open";
     case "CLOSED":
-      return "Geschlossen";
+      return "Closed";
     case "UNKNOWN":
     default:
-      return "Öffnungszeiten noch nicht verfügbar";
+      return "Opening hours not yet available";
   }
 }
 ```
 
 ---
 
-## API-Referenz
+## API reference
 
 - **Endpoint:** `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`
-- **Response:** `days[]` mit je `date`, **`status`** (ParkStatus: OPERATING | CLOSED | UNKNOWN), `hours?`, …
-- Backend-Details: [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md)
+- **Response:** `days[]` with each `date`, **`status`** (ParkStatus: OPERATING | CLOSED | UNKNOWN), `hours?`, …
+- Backend details: [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md)

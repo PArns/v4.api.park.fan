@@ -789,10 +789,17 @@ export class ParksService {
         park!.timezone,
       );
 
+      // Normalize API type: "Closed"/"CLOSED" → CLOSED so off-season (e.g. Phantasialand Feb) is persisted
+      const rawType = entry.type?.toString().toUpperCase();
+      const scheduleType: ScheduleType =
+        rawType === "CLOSED"
+          ? ScheduleType.CLOSED
+          : (entry.type as ScheduleType);
+
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
         date: new Date(entry.date),
-        scheduleType: entry.type as ScheduleType,
+        scheduleType,
         openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
         description: entry.description || null,
@@ -834,7 +841,7 @@ export class ParksService {
         }
       }
 
-      // Cleanup UNKNOWN entries if we have a real schedule now
+      // Cleanup UNKNOWN entries if we have a real schedule now (OPERATING or CLOSED from API)
       // This happens when "filling gaps" created a placeholder, but now we have actual data
       if (scheduleEntry.scheduleType !== ScheduleType.UNKNOWN) {
         await this.scheduleRepository.delete({

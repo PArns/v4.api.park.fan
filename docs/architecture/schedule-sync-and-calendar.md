@@ -66,6 +66,7 @@ So the calendar endpoint is fast after the first request of the day without warm
 
 ## Related
 
+- [Calendar, Schedule & ML Rules](calendar-schedule-and-ml-rules.md) — Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Job Queues & Processors](job-queues.md) — cron and job names.
 - [Data Ingestion](data-ingestion.md) — multi-source overview.
 - [Caching Strategy](caching-strategy.md) — Redis keys and TTLs.

@@ -71,17 +71,16 @@ Short guide for frequent problems and how to fix them.
 
 ---
 
-## Stoßzeit / Park-Höchststand außerhalb Öffnungszeiten
+## Peak hour / park peak outside operating hours
 
-**Symptom**: Dashboard zeigt z. B. Stoßzeit 22:00 oder Park-Höchststand 500 Min, obwohl der Park heute nur bis 19:00 geöffnet hat.
+**Symptom:** Dashboard shows e.g. peak hour 22:00 or park peak 500 min, even though the park is only open until 19:00 today.
 
-**Ursache**: Die „typische“ Stoßzeit stammt aus 60 Tagen Historie (oft längere Sommer-Öffnungszeiten). Park-Höchststand konnte aus Tagesstatistiken kommen, die nicht auf die heutige Betriebszeit begrenzt waren.
+**Cause:** The “typical” peak hour comes from 60 days of history (often longer summer hours). Park peak could come from daily stats that were not limited to today’s operating hours.
 
-**Fix (implementiert)**:
+**Fix (implemented):**
 
-1. **Stoßzeit (peakHour)**: Liegt die angezeigte Stoßstunde in der Park-Zeitzone **nach** der heutigen Schließzeit, wird sie nicht angezeigt (`peakHour: null`).
-2. **Park-Höchststand (peakWaitToday)**: Wird **nur aus Headliner-Attraktionen** berechnet (gleiche Rides wie P50/Crowd Level). **Durchschnitt der Spitzen**: Pro Headliner MAX(Wartezeit heute), dann Summe / Anzahl Headliner. Das ist bewusst so gewählt – es beschreibt die typische Spitzenlast über die Headliner hinweg und wird nicht von einem einzelnen Ausreißer-Ride dominiert. Ohne Headliner-Fallback: Max über alle Attraktionen.
+1. **Peak hour (peakHour):** If the displayed peak hour in the park’s timezone is **after** today’s closing time, it is not shown (`peakHour: null`).
+2. **Park peak (peakWaitToday):** Computed **only from headliner attractions** (same rides as P50/crowd level). **Average of peaks:** per headliner MAX(wait time today), then sum / number of headliners. This is intentional – it describes typical peak load across headliners and is not dominated by a single outlier ride. Without headliner fallback: max over all attractions.
+3. **Trend (occupancy.trend):** Computed **only from headliner attractions**. Per headliner: average wait time in the last 1h and 1h–2h; then **average** = sum of these per-headliner averages / number of headliners (not sum over all data points). Current wait time for occupancy (`getCurrentSpotWaitTime`) is also headliner-only when headliners exist.
 
-3. **Trend (occupancy.trend)**: Wird **nur aus Headliner-Attraktionen** berechnet. Pro Headliner: Durchschnitt Wartezeit in der letzten 1h bzw. 1h–2h; dann **Durchschnitt** = Summe dieser Pro-Headliner-Durchschnitte / Anzahl Headliner (keine Summe über alle Datenpunkte). Aktuelle Wartezeit für Occupancy (`getCurrentSpotWaitTime`) ist ebenfalls Headliner-only, wenn Headliner vorhanden sind.
-
-**Relevanter Code**: `AnalyticsService.getParkStatistics` (Stoßzeit, Park-Höchststand), `AnalyticsService.calculateParkOccupancy` (Trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.
+**Relevant code:** `AnalyticsService.getParkStatistics` (peak hour, park peak), `AnalyticsService.calculateParkOccupancy` (trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.

@@ -18,6 +18,7 @@
 - [Job Queues & Processors](docs/architecture/job-queues.md) - Background BullMQ infrastructure.
 - [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
 - [Schedule Sync & Calendar](docs/architecture/schedule-sync-and-calendar.md) - Opening hours sync (ThemeParks Wiki), on-demand refresh, calendar first-request slowness.
+- [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md) - Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 - [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
 
@@ -26,7 +27,7 @@
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
 
 ### 🤖 Machine Learning
-- [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training.
+- [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
 
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
@@ -35,6 +36,9 @@
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
 - [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
+
+### 🖥️ Frontend
+- [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.

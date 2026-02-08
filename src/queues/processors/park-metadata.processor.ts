@@ -49,6 +49,9 @@ export class ParkMetadataProcessor {
   /**
    * Sync schedule for a single park (ThemeParks Wiki).
    * Used for on-demand refresh when calendar is requested and schedule is missing for the range.
+   * Fetches 12 months (getScheduleExtended); OPERATING and CLOSED from the API are persisted.
+   * Off-season (e.g. Phantasialand February) shows as CLOSED only if the API returns type CLOSED
+   * for those dates; otherwise fillScheduleGaps creates UNKNOWN for missing dates.
    */
   @Process("sync-park-schedule")
   async handleSyncParkSchedule(job: Job<{ parkId: string }>): Promise<void> {
