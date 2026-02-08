@@ -348,7 +348,16 @@ export class ParkIntegrationService {
     const { isParkOpen } =
       await import("../../common/utils/status-calculator.util");
     const isOpen = isParkOpen(schedule, rideStatusData);
-    dto.status = isOpen ? "OPERATING" : "CLOSED";
+    const hasSchedule =
+      schedule.length > 0 &&
+      schedule.some((s) => s.scheduleType === ScheduleType.OPERATING);
+    if (hasSchedule) {
+      dto.status = isOpen ? "OPERATING" : "CLOSED";
+    } else {
+      // Park has NO schedule: use recovered status from live APIs (Wartezeiten/Queue-Times/ThemeParks)
+      // so we show OPERATING when e.g. opened_today is true even before first queue data arrives
+      dto.status = status === "OPERATING" || isOpen ? "OPERATING" : "CLOSED";
+    }
 
     // ML Predictions already fetched in parallel above - process results
     // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)

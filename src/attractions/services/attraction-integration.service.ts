@@ -27,7 +27,7 @@ import {
   getStartOfDayInTimezone,
 } from "../../common/utils/date.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
-import { subDays } from "date-fns";
+import { addDays, subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
@@ -631,7 +631,7 @@ export class AttractionIntegrationService {
         const cacheIsStale = cacheAgeMs > 5 * 60 * 1000; // 5 minutes
 
         if (!hasTodayInCache && days > 0 && cacheIsStale) {
-          this.logger.log(
+          this.logger.debug(
             `Cache stale for today (${todayStr}) in history for ${attractionId} (age: ${Math.round(cacheAgeMs / 1000)}s), recalculating...`,
           );
           // Don't return cached data - fall through to recalculate
@@ -644,7 +644,7 @@ export class AttractionIntegrationService {
               value: roundToNearest5Minutes(h.value),
             })),
           }));
-          this.logger.log(
+          this.logger.debug(
             `Using cached history for ${attractionId}: ${rounded.length} days`,
           );
           return rounded;
@@ -669,12 +669,8 @@ export class AttractionIntegrationService {
       const tomorrowStr = getTomorrowDateInTimezone(timezone);
       const endDate = fromZonedTime(`${tomorrowStr}T00:00:00`, timezone);
 
-      // Debug logging
-      this.logger.log(
-        `History query for attraction ${attractionId}: ` +
-          `todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, ` +
-          `startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, ` +
-          `days=${days}, timezone=${timezone}`,
+      this.logger.debug(
+        `History query for attraction ${attractionId}: todayStr=${todayStr}, tomorrowStr=${tomorrowStr}, startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, days=${days}, timezone=${timezone}`,
       );
 
       // Batch fetch schedules for all days in range
@@ -908,8 +904,9 @@ export class AttractionIntegrationService {
                 `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
             );
 
-            // Extract closing hour in park timezone
-            // Validate that closingTime is on the same day as the schedule date
+            // Extract closing hour in park timezone.
+            // closingTime may be on the schedule date or the next calendar day (e.g. close at 00:30 or 01:00).
+            // scheduleDateStr and closingDateStr are both in park timezone (formatInParkTimezone).
             const scheduleDateStr = formatInParkTimezone(
               schedule.date,
               timezone,
@@ -918,9 +915,18 @@ export class AttractionIntegrationService {
               schedule.closingTime,
               timezone,
             );
+            // Next calendar day (timezone-neutral UTC arithmetic so server TZ doesn't matter)
+            const nextDayStr = addDays(
+              new Date(scheduleDateStr + "T00:00:00.000Z"),
+              1,
+            )
+              .toISOString()
+              .slice(0, 10);
+            const closingSameOrNextDay =
+              closingDateStr === scheduleDateStr ||
+              closingDateStr === nextDayStr;
 
-            // Only use closingTime if it's on the same day (handle data quality issues)
-            if (scheduleDateStr === closingDateStr) {
+            if (closingSameOrNextDay) {
               const closingTimeStr = formatInTimeZone(
                 schedule.closingTime,
                 timezone,
@@ -938,11 +944,9 @@ export class AttractionIntegrationService {
                 closingHour = closingHourRaw;
               }
             } else {
-              // Log warning but don't fail - use opening hour + reasonable default
               this.logger.warn(
-                `Invalid closingTime for ${dateStr}: closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr})`,
+                `Invalid closingTime for ${dateStr}: closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr}) or next day (${nextDayStr})`,
               );
-              // Don't set closingHour - we'll just use opening hour
             }
           }
 

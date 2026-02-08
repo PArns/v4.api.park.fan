@@ -1805,7 +1805,7 @@ export class ParksService {
 
       if (parksNeedingFallback.length > 0) {
         // For parks without schedules: Check if rides are actively operating
-        // Criteria: Recent data (last 30 min) + Wait time > 0
+        // Criteria: Recent data (last 30 min) + OPERATING + waitTime > 0 (closed parks often show 0/5)
         const stats = await this.parkRepository.manager.query(
           `
           SELECT
@@ -1839,7 +1839,7 @@ export class ParksService {
         for (const stat of stats) {
           const operating = parseInt(stat.operating, 10);
 
-          // If at least one ride is actively operating with wait > 0, mark park as open
+          // If at least one ride is OPERATING with waitTime > 0, mark park as open
           if (operating > 0) {
             statusMap.set(stat.parkId, "OPERATING");
           }

@@ -261,19 +261,5 @@ def filter_predictions_by_schedule(
             # Logging removed to reduce spam (only log if it's a real issue)
             filtered_predictions.extend(park_preds)
 
-    # Log filtering statistics
-    original_count = len(predictions)
-    filtered_count = len(filtered_predictions)
-    removed_count = original_count - filtered_count
-
-    # Filtering stats logging removed to reduce log spam
-    if removed_count > 0:
-        removal_percentage = (
-            (removed_count / original_count * 100) if original_count > 0 else 0
-        )
-        if removal_percentage > 99:
-            print(
-                f"📊 Filtering: {removal_percentage:.1f}% predictions filtered out ({filtered_count}/{original_count} kept)"
-            )
-
+    # Filtering stats not logged to avoid spam (many parks × frequent requests).
     return filtered_predictions

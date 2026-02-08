@@ -78,7 +78,8 @@ export function isParkOpen(
     return false; // Keine aktuellen Daten → CLOSED
   }
 
-  // Prüfe ob mindestens eine Ride OPERATING ist UND Wartezeit > 0 hat
+  // Prüfe ob mindestens eine Ride OPERATING ist UND Wartezeit > 0 hat.
+  // Geschlossene Parks zeigen oft 0 oder 5 Min (Stale/Platzhalter) – nur echte Wartezeit zählt.
   const operatingRides = recentRides.filter(
     (r) => r.status === "OPERATING" && r.waitTime !== null && r.waitTime > 0,
   );
