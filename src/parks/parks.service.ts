@@ -877,7 +877,7 @@ export class ParksService {
    *
    * This allows the calendar to show "Closed" vs "Opening hours not yet available" correctly.
    */
-  async fillScheduleGaps(parkId: string, lookAheadDays = 90): Promise<number> {
+  async fillScheduleGaps(parkId: string, lookAheadDays = 120): Promise<number> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["id", "countryCode", "regionCode", "timezone"],

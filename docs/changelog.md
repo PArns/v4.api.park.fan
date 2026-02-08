@@ -8,6 +8,17 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ---
 
+## [4.6.2] – 2026-02-08
+
+### Changed
+
+- **Schedule sync / Gap-fill**
+  - **Doc:** "When gap-fill runs (DB updates are automatic)" in [Schedule Sync & Calendar](architecture/schedule-sync-and-calendar.md): gap-fill runs after every schedule sync (sync-all-parks, sync-schedules-only, sync-park-schedule); optional job `fill-all-gaps` for all parks. No one-off DB correction needed when using park-timezone range.
+  - **lookAheadDays:** Default increased from 90 to **120 days** so the DB is filled further ahead (typical 4‑month planning).
+- **Calendar warmup:** Range extended from "current + 2 months" to **-1 to +3 months** (last month through 3 months ahead, park timezone) so the typical user range (recap + planning) is cache-hot after daily warmup.
+
+---
+
 ## [4.6.1] – 2026-02-08
 
 ### Added

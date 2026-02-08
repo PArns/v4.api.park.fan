@@ -40,7 +40,7 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 - **ThemeParks API:** 12 months are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
 - **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
 - **Cleanup when saving from API:** When we save **OPERATING** for a date, we also delete any **CLOSED** row for that date so gap-fill CLOSED is removed and OPERATING wins (getSchedule orders by scheduleType ASC).
-- **Gaps:** `fillScheduleGaps(parkId)` fills **missing** days (from today up to 90 days ahead) with holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
+- **Gaps:** `fillScheduleGaps(parkId)` fills **missing** days (from today up to 120 days ahead, park timezone) with holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
   - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
   - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".
 

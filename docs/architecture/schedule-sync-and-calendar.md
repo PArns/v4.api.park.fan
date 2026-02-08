@@ -31,9 +31,16 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 ## Gap-fill rules (fillScheduleGaps)
 
+### When gap-fill runs (DB updates are automatic)
+
+- **After every schedule sync:** Both `sync-all-parks` (daily 03:00) and `sync-schedules-only` (daily 15:00) call `saveScheduleData` then `fillScheduleGaps(park.id)` for each Wiki park. On-demand `sync-park-schedule` does the same for a single park.
+- **Optional job:** `fill-all-gaps` runs `fillAllParksGaps()` (all parks, no API fetch). Used e.g. after holiday data updates. No one-off DB correction is needed when switching to park-timezone range — the next sync fills using the new range.
+
+### Range and classification
+
 **Timezone:** All range and date logic uses **park timezone** (see [Date & Time Handling](../development/datetime-handling.md)). The filled range is "today" through "today + lookAheadDays" in the park’s calendar, not server date.
 
-- **Range**: From **today in park timezone** through today + `lookAheadDays` (default 90), using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
+- **Range**: From **today in park timezone** through today + `lookAheadDays` (default 120), using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
 - **Classification** (no existing entry for that date):
   - **CLOSED**: The park has at least one OPERATING date **before** and one **after** this date (min/max OPERATING over all stored entries). The gap is "in the middle" of known opening — we treat it as a closed day (e.g. mid-week closure).
   - **UNKNOWN**: Otherwise: no OPERATING at all for the park, or this date is **before** the first OPERATING date (e.g. before season or before we stored data), or **on or after** the last OPERATING date (schedule not yet published). We cannot infer closed vs not yet published.
@@ -43,7 +50,7 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 - **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
 - **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed, delete `UNKNOWN` placeholders when real data exists.
-- **Gaps**: After saving, `fillScheduleGaps(parkId)` fills missing dates (up to 90 days ahead) with CLOSED or UNKNOWN and holiday/bridge metadata; see **Gap-fill rules** above.
+- **Gaps**: After saving, `fillScheduleGaps(parkId)` fills missing dates (up to `lookAheadDays` ahead, default 120) with CLOSED or UNKNOWN and holiday/bridge metadata; see **Gap-fill rules** above.
 
 ## Calendar Endpoint & First-Request Slowness
 
@@ -70,7 +77,7 @@ Calendar is warmed **once per day**, not every 5 min with park warmup:
 
 - **Job**: `warmup-calendar-daily` on the `park-metadata` queue.
 - **Schedule**: Daily at **5:00** (cron).
-- **Effect**: Warms **per-month** keys `calendar:month:{parkId}:YYYY-MM:today+tomorrow` for **current month + next month** (park timezone) for **all parks**.
+- **Effect**: Warms **per-month** keys `calendar:month:{parkId}:YYYY-MM:today+tomorrow` for **-1 to +3 months** (last month through 3 months ahead, park timezone) for **all parks**, covering the typical user range (recap + planning).
 
 So the calendar endpoint is fast after the first request of the day without warming on every wait-times sync. See [Caching Strategy – Cache Warmup](caching-strategy.md#cache-warmup).
 

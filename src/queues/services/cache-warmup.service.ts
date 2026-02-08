@@ -89,7 +89,8 @@ export class CacheWarmupService {
   }
 
   /**
-   * Warm up calendar cache for one park: current month + next month (park timezone).
+   * Warm up calendar cache for one park: -1 month to +3 months (park timezone).
+   * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
    * Called from warmupCalendarForAllParks (daily warmup at 5am).
    */
   private async warmupCalendarForPark(park: Park): Promise<void> {
@@ -97,11 +98,23 @@ export class CacheWarmupService {
       const tz = park.timezone || "UTC";
       const todayStr = getCurrentDateInTimezone(tz);
       const [y, m] = todayStr.split("-").map(Number); // m = 1..12
-      const fromStr = `${y}-${String(m).padStart(2, "0")}-01`;
-      const nextM = m === 12 ? 1 : m + 1; // 1–12
-      const nextY = m === 12 ? y + 1 : y;
-      const lastDay = new Date(nextY, nextM, 0).getDate(); // month 0-indexed: day 0 = last of prev month
-      const toStr = `${nextY}-${String(nextM).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      // From: 1st of (current - 1 month)
+      let fromM = m - 1;
+      let fromY = y;
+      if (fromM < 1) {
+        fromM += 12;
+        fromY -= 1;
+      }
+      const fromStr = `${fromY}-${String(fromM).padStart(2, "0")}-01`;
+      // To: last day of (current + 3 months)
+      let endM = m + 3;
+      let endY = y;
+      while (endM > 12) {
+        endM -= 12;
+        endY += 1;
+      }
+      const lastDay = new Date(endY, endM, 0).getDate();
+      const toStr = `${endY}-${String(endM).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
       const fromDate = new Date(`${fromStr}T12:00:00.000Z`);
       const toDate = new Date(`${toStr}T12:00:00.000Z`);
       await this.calendarService.buildCalendarResponse(
@@ -117,7 +130,7 @@ export class CacheWarmupService {
   }
 
   /**
-   * Warm up calendar cache (current month + next month) for all parks.
+   * Warm up calendar cache (-1 to +3 months) for all parks.
    * Called once per day by warmup-calendar-daily job (e.g. 5am), not every 5 min with park warmup.
    *
    * @returns Number of parks for which calendar was warmed (or attempted)
