@@ -1,6 +1,6 @@
 import { Injectable, Inject, OnModuleInit, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Brackets, Between } from "typeorm";
+import { Repository, Brackets } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
@@ -17,6 +17,7 @@ import {
   buildCountryDiscoveryUrl,
   buildCityDiscoveryUrl,
 } from "../common/utils/url.util";
+import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -1107,7 +1108,8 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Batch fetch today's operating hours for parks
+   * Batch fetch today's operating hours for parks.
+   * Uses each park's timezone for "today" (never server date).
    */
   private async getBatchParkHours(
     parkIds: string[],
@@ -1117,30 +1119,26 @@ export class SearchService implements OnModuleInit {
       { open: string; close: string; type: string }
     >();
 
-    // Get today's date range in local timezone
-    const now = new Date();
-    const todayStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-    );
-    const todayEnd = new Date(todayStart);
-    todayEnd.setDate(todayEnd.getDate() + 1);
+    const parks = await this.parkRepository.find({
+      where: parkIds.map((id) => ({ id })),
+      select: ["id", "timezone"],
+    });
 
     await Promise.all(
-      parkIds.map(async (parkId) => {
+      parks.map(async (park) => {
         try {
+          const todayStr = getCurrentDateInTimezone(park.timezone || "UTC");
           const schedule = await this.scheduleRepository.findOne({
             where: {
-              parkId,
-              date: Between(todayStart, todayEnd),
+              parkId: park.id,
+              date: todayStr as any,
               scheduleType: ScheduleType.OPERATING,
             },
             order: { date: "ASC" },
           });
 
           if (schedule && schedule.openingTime && schedule.closingTime) {
-            hoursMap.set(parkId, {
+            hoursMap.set(park.id, {
               open: schedule.openingTime.toISOString(),
               close: schedule.closingTime.toISOString(),
               type: schedule.scheduleType,

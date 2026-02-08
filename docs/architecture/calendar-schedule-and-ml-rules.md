@@ -39,7 +39,10 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 
 - **ThemeParks API:** 12 months are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
 - **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
-- **Gaps:** `fillScheduleGaps(parkId)` creates **UNKNOWN** entries for missing days (up to 90 days ahead) with holiday/bridge metadata. Real CLOSED days only exist when the API returns CLOSED for those dates.
+- **Cleanup when saving from API:** When we save **OPERATING** for a date, we also delete any **CLOSED** row for that date so gap-fill CLOSED is removed and OPERATING wins (getSchedule orders by scheduleType ASC).
+- **Gaps:** `fillScheduleGaps(parkId)` fills **missing** days (from today up to 90 days ahead) with holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
+  - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
+  - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".
 
 Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 
@@ -89,8 +92,8 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 
 ## 5. Implementation checklist
 
-- [ ] Calendar: Status only from schedule + rule “past/today + crowd level = OPEN”; no status override by crowdLevel.
-- [ ] Calendar: Future UNKNOWN days always have a crowdLevel (ML or “moderate”), never blanket “closed”.
-- [ ] Schedule sync: API type “Closed”/“CLOSED” is stored as `ScheduleType.CLOSED`.
-- [ ] ML: Daily predictions only for OPERATING days (filter_predictions_by_schedule); fallback “no schedule integration” → keep all.
-- [ ] ML: CLOSED/UNKNOWN in predict.py → `crowdLevel: "closed"` in response.
+- [x] Calendar: Status only from schedule + rule “past/today + crowd level = OPEN”; no status override by crowdLevel.
+- [x] Calendar: Future UNKNOWN days always have a crowdLevel (ML or “moderate”), never blanket “closed”.
+- [x] Schedule sync: API type “Closed”/“CLOSED” is stored as `ScheduleType.CLOSED`.
+- [x] ML: Daily predictions only for OPERATING days (filter_predictions_by_schedule); fallback “no schedule integration” → keep all.
+- [x] ML: CLOSED/UNKNOWN in predict.py → `crowdLevel: "closed"` in response.

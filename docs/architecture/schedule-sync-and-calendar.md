@@ -22,18 +22,28 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 ## UNKNOWN vs CLOSED
 
-- **`ScheduleType.CLOSED`**: Park has **confirmed** closed (e.g. from Wiki).
-- **`ScheduleType.UNKNOWN`**: **No data from source yet** — placeholder from `fillScheduleGaps` (holiday/bridge-day) or date not yet published by the park.
-- **Creation**: `fillScheduleGaps(parkId)` creates UNKNOWN entries for dates that have no schedule but are holidays/bridge days, so the calendar can still show holiday info.
-- **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)` so only OPERATING/CLOSED remains.
-- **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend can show "Opening hours not yet available" for `UNKNOWN` and "Closed" for `CLOSED`.
-- **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. So we do **not** trigger when the requested range is already covered by UNKNOWN placeholders (e.g. March all UNKNOWN from fillScheduleGaps). We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).
+- **`ScheduleType.CLOSED`**: Park is **confirmed** closed: from API (e.g. Wiki) or from **gap-fill** when the day has no schedule but lies **strictly between** two OPERATING days (see Gap-fill rules below).
+- **`ScheduleType.UNKNOWN`**: **No schedule data yet** — either before we have any OPERATING data, after the last known OPERATING day, or the park has no OPERATING entries. Calendar shows "Opening hours not yet available".
+- **Gap-fill** (`fillScheduleGaps`): For each missing date we create an entry with holiday/bridge metadata. We set **CLOSED** only when there is at least one OPERATING day **before** and one **after** that date; otherwise **UNKNOWN**. This keeps "Closed" vs "no data yet" distinguishable.
+- **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)`. When the API provides **OPERATING** for a date we also delete any **CLOSED** row for that date (so gap-fill CLOSED is removed and OPERATING wins). Only the API's OPERATING/CLOSED then remains for that date.
+- **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend shows "Closed" for `CLOSED` and "Opening hours not yet available" for `UNKNOWN`.
+- **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).
+
+## Gap-fill rules (fillScheduleGaps)
+
+**Timezone:** All range and date logic uses **park timezone** (see [Date & Time Handling](../development/datetime-handling.md)). The filled range is "today" through "today + lookAheadDays" in the park’s calendar, not server date.
+
+- **Range**: From **today in park timezone** through today + `lookAheadDays` (default 90), using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
+- **Classification** (no existing entry for that date):
+  - **CLOSED**: The park has at least one OPERATING date **before** and one **after** this date (min/max OPERATING over all stored entries). The gap is "in the middle" of known opening — we treat it as a closed day (e.g. mid-week closure).
+  - **UNKNOWN**: Otherwise: no OPERATING at all for the park, or this date is **before** the first OPERATING date (e.g. before season or before we stored data), or **on or after** the last OPERATING date (schedule not yet published). We cannot infer closed vs not yet published.
+- **Existing UNKNOWN entries**: When re-running gap-fill, if an existing entry is UNKNOWN and is now "in the middle" (OPERATING before and after), we update it to CLOSED. We never overwrite OPERATING or API-provided CLOSED.
 
 ## Persistence
 
 - **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
 - **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed, delete `UNKNOWN` placeholders when real data exists.
-- **Gaps**: After saving, `fillScheduleGaps(parkId)` fills holiday/bridge-day metadata for missing dates (up to 90 days ahead).
+- **Gaps**: After saving, `fillScheduleGaps(parkId)` fills missing dates (up to 90 days ahead) with CLOSED or UNKNOWN and holiday/bridge metadata; see **Gap-fill rules** above.
 
 ## Calendar Endpoint & First-Request Slowness
 

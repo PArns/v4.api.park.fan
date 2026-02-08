@@ -8,10 +8,14 @@
 > 1. Create a detailed markdown file in the `docs/` directory (e.g., `docs/troubleshooting/my-issue.md`).
 > 2. Link it in the "Documentation Index" below.
 > 3. Keep this file (`claude.md`) concise.
+> 4. Record notable changes in [Changelog](docs/changelog.md) with version and date.
 
 ---
 
 ## 📚 Documentation Index
+
+### 📋 Changelog
+- [Changelog](docs/changelog.md) – Versioned changes (date, version, added/changed/fixed).
 
 ### 🏗️ Architecture & Infrastructure
 - [System Overview](docs/architecture/system-overview.md) - High-level component design.
@@ -35,6 +39,7 @@
 ### 💻 Development
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
+- [Timezone Audit](docs/development/timezone-audit.md) - Audit of all time operations against park timezone (2026-02-08).
 - [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
 
 ### 🖥️ Frontend
@@ -74,11 +79,11 @@ ml-service/            # 🐍 Python CatBoost Service
 
 ### 1. Park Timezone (ALWAYS)
 
-**⚠️ NEVER use `new Date()` directly.** Parks are global.
+**⚠️ NEVER use `new Date()` directly for business logic.** Parks are global; "today" and date ranges must be in **park timezone** for all time operations (schedule, calendar, gap-fill, ML, analytics).
 
 - **Detailed Guide**: [Date & Time Handling](docs/development/datetime-handling.md)
-- Always use `park.timezone`.
-- **Utils**: `src/common/utils/date.util.ts` (`getCurrentDateInTimezone`).
+- Always use `park.timezone` and the date utils for "today", ranges, and formatting.
+- **Utils**: `src/common/utils/date.util.ts` (`getCurrentDateInTimezone`, `getStartOfDayInTimezone`, `formatInParkTimezone`).
 
 ### 2. TypeORM AutoSync
 

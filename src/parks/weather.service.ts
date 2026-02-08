@@ -16,6 +16,7 @@ import {
   getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
 import { parseDateInTimezone } from "../common/utils/timezone.util";
+import { addDays } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 
 /**
@@ -105,17 +106,21 @@ export class WeatherService {
         `Failed to fetch hourly weather for park ${parkId}: ${errorMessage}. Attempting DB fallback...`,
       );
 
-      // Fallback: Try to synthesize hourly data from stored daily data
+      // Fallback: Try to synthesize hourly data from stored daily data (use park timezone)
       try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const next7Days = new Date(today);
-        next7Days.setDate(next7Days.getDate() + 7);
+        const park = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: ["timezone"],
+        });
+        const tz = park?.timezone || "UTC";
+        const today = getCurrentDateInTimezone(tz);
+        const todayStart = fromZonedTime(`${today}T00:00:00`, tz);
+        const next7Days = addDays(todayStart, 7);
 
         const dailyData = await this.weatherDataRepository.find({
           where: {
             parkId,
-            date: Between(today, next7Days),
+            date: Between(todayStart, next7Days),
           },
           order: { date: "ASC" },
         });
@@ -329,7 +334,7 @@ export class WeatherService {
    * Mark past weather data as historical
    *
    * Updates all weather_data records where:
-   * - date < today
+   * - date < today (in each park's timezone)
    * - dataType != 'historical'
    *
    * This ensures that past data is properly categorized for ML training.
@@ -337,28 +342,33 @@ export class WeatherService {
    * @returns Number of records updated
    */
   async markPastDataAsHistorical(): Promise<number> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of today
-
     try {
-      const result = await this.weatherDataRepository
-        .createQueryBuilder()
-        .update(WeatherData)
-        .set({ dataType: "historical" })
-        .where("date < :today", { today })
-        .andWhere("dataType != :historical", { historical: "historical" })
-        .execute();
+      const parks = await this.parkRepository.find({
+        select: ["id", "timezone"],
+      });
+      let totalUpdated = 0;
 
-      const updatedCount = result.affected || 0;
+      for (const park of parks) {
+        const todayStr = getCurrentDateInTimezone(park.timezone || "UTC");
+        const result = await this.weatherDataRepository
+          .createQueryBuilder()
+          .update(WeatherData)
+          .set({ dataType: "historical" })
+          .where("parkId = :parkId", { parkId: park.id })
+          .andWhere("date < :todayStr", { todayStr })
+          .andWhere("dataType != :historical", { historical: "historical" })
+          .execute();
 
-      if (updatedCount > 0) {
-        this.logger.log(
-          `✅ Marked ${updatedCount} past weather records as historical`,
-        );
-      } else {
+        totalUpdated += result.affected || 0;
       }
 
-      return updatedCount;
+      if (totalUpdated > 0) {
+        this.logger.log(
+          `✅ Marked ${totalUpdated} past weather records as historical`,
+        );
+      }
+
+      return totalUpdated;
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

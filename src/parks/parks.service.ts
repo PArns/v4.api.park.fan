@@ -12,8 +12,10 @@ import { normalizeSortDirection } from "../common/utils/query.util";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
+  getStartOfDayInTimezone,
   getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
+import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   calculateHolidayInfo,
@@ -841,13 +843,21 @@ export class ParksService {
         }
       }
 
-      // Cleanup UNKNOWN entries if we have a real schedule now (OPERATING or CLOSED from API)
-      // This happens when "filling gaps" created a placeholder, but now we have actual data
+      // Cleanup placeholders when we have real data from the API
+      // - Delete UNKNOWN (gap-fill or old placeholder) so only OPERATING/CLOSED from API remains
+      // - When saving OPERATING, also delete gap-fill CLOSED for this date so OPERATING wins (getSchedule orders by scheduleType ASC, so CLOSED would otherwise be found first)
       if (scheduleEntry.scheduleType !== ScheduleType.UNKNOWN) {
         await this.scheduleRepository.delete({
           parkId,
           date: scheduleEntry.date,
           scheduleType: ScheduleType.UNKNOWN,
+        });
+      }
+      if (scheduleEntry.scheduleType === ScheduleType.OPERATING) {
+        await this.scheduleRepository.delete({
+          parkId,
+          date: scheduleEntry.date,
+          scheduleType: ScheduleType.CLOSED,
         });
       }
     }
@@ -856,9 +866,16 @@ export class ParksService {
   }
 
   /**
-   * Fills missing schedule entries for Holidays and Bridge Days
-   * Ensures that even if the park has no operating hours listed,
-   * we still expose the Holiday/Bridge Day status.
+   * Fills missing schedule entries with CLOSED or UNKNOWN and holiday/bridge metadata.
+   *
+   * Gap classification (CLOSED vs UNKNOWN):
+   * - CLOSED: Day has no schedule but there is at least one OPERATING day before AND after
+   *   (in our stored schedule). So we know the park was closed that day (e.g. mid-week closure).
+   * - UNKNOWN: Day has no schedule and we have no OPERATING at or after it, or no OPERATING
+   *   before it. So either "before season / before we have data" or "after last known schedule".
+   *   Also: if the park has no OPERATING entries at all, all gaps stay UNKNOWN.
+   *
+   * This allows the calendar to show "Closed" vs "Opening hours not yet available" correctly.
    */
   async fillScheduleGaps(parkId: string, lookAheadDays = 90): Promise<number> {
     const park = await this.parkRepository.findOne({
@@ -868,10 +885,42 @@ export class ParksService {
 
     if (!park?.countryCode) return 0;
 
-    const startDate = new Date();
-    startDate.setHours(0, 0, 0, 0);
-    const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + lookAheadDays);
+    // Range: "today" through "today + lookAheadDays" in PARK timezone (never server date)
+    const startDate = getStartOfDayInTimezone(park.timezone);
+    const endDate = addDays(startDate, lookAheadDays);
+
+    // 0. Min/max OPERATING dates for this park (any time) to classify gaps as CLOSED vs UNKNOWN
+    const operatingRange = await this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .select("MIN(schedule.date)", "minDate")
+      .addSelect("MAX(schedule.date)", "maxDate")
+      .where("schedule.parkId = :parkId", { parkId })
+      .andWhere("schedule.scheduleType = :type", {
+        type: ScheduleType.OPERATING,
+      })
+      .getRawOne<{ minDate: Date | null; maxDate: Date | null }>();
+
+    const minOpStr = operatingRange?.minDate
+      ? formatInParkTimezone(
+          operatingRange.minDate instanceof Date
+            ? operatingRange.minDate
+            : new Date(operatingRange.minDate),
+          park.timezone,
+        )
+      : null;
+    const maxOpStr = operatingRange?.maxDate
+      ? formatInParkTimezone(
+          operatingRange.maxDate instanceof Date
+            ? operatingRange.maxDate
+            : new Date(operatingRange.maxDate),
+          park.timezone,
+        )
+      : null;
+
+    const isGapClosed = (dateStr: string): boolean => {
+      if (!minOpStr || !maxOpStr) return false; // no OPERATING at all → UNKNOWN
+      return dateStr > minOpStr && dateStr < maxOpStr; // strictly between
+    };
 
     // 1. Fetch existing entries
     const existingEntries = await this.scheduleRepository
@@ -964,12 +1013,15 @@ export class ParksService {
         park.timezone,
       );
 
-      // If no entry exists for this date, create it
+      // If no entry exists for this date, create it (CLOSED if between OPERATING days, else UNKNOWN)
       if (!existingDates.has(dateStr)) {
+        const scheduleType = isGapClosed(dateStr)
+          ? ScheduleType.CLOSED
+          : ScheduleType.UNKNOWN;
         await this.scheduleRepository.save({
           parkId,
           date: new Date(currentDate),
-          scheduleType: ScheduleType.UNKNOWN,
+          scheduleType,
           isHoliday: holidayInfo.isHoliday,
           holidayName: holidayInfo.holidayName,
           isBridgeDay: holidayInfo.isBridgeDay,
@@ -978,7 +1030,7 @@ export class ParksService {
         });
         filledCount++;
       } else {
-        // Entry exists, check if holiday info needs updating
+        // Entry exists: update holiday info and optionally promote UNKNOWN → CLOSED if now in middle
         const existing = existingEntries.find((e) => {
           const eDateStr = formatInParkTimezone(
             e.date instanceof Date ? e.date : new Date(e.date),
@@ -987,18 +1039,25 @@ export class ParksService {
           return eDateStr === dateStr;
         });
 
-        if (
-          existing &&
-          (existing.isHoliday !== holidayInfo.isHoliday ||
-            existing.holidayName !== holidayInfo.holidayName ||
-            existing.isBridgeDay !== holidayInfo.isBridgeDay)
-        ) {
+        if (!existing) continue;
+
+        const holidayChanged =
+          existing.isHoliday !== holidayInfo.isHoliday ||
+          existing.holidayName !== holidayInfo.holidayName ||
+          existing.isBridgeDay !== holidayInfo.isBridgeDay;
+        const shouldBeClosed =
+          existing.scheduleType === ScheduleType.UNKNOWN &&
+          isGapClosed(dateStr);
+        if (holidayChanged || shouldBeClosed) {
           await this.scheduleRepository.update(existing.id, {
-            isHoliday: holidayInfo.isHoliday,
-            holidayName: holidayInfo.holidayName,
-            isBridgeDay: holidayInfo.isBridgeDay,
+            ...(holidayChanged && {
+              isHoliday: holidayInfo.isHoliday,
+              holidayName: holidayInfo.holidayName,
+              isBridgeDay: holidayInfo.isBridgeDay,
+            }),
+            ...(shouldBeClosed && { scheduleType: ScheduleType.CLOSED }),
           });
-          filledCount++; // Count updates too
+          filledCount++;
         }
       }
 
@@ -1519,17 +1578,6 @@ export class ParksService {
     parkId: string,
     days: number = 7,
   ): Promise<ScheduleEntry[]> {
-    const today = new Date();
-    // Start from yesterday to ensure we capture schedules for parks in earlier timezones (e.g. US West Coast from Europe)
-    // and correctly handle late-night operating hours that cross midnight
-    today.setDate(today.getDate() - 2);
-    today.setHours(0, 0, 0, 0);
-
-    const endDate = new Date(today);
-    // Adjust end date calculation since we started 1 day earlier
-    endDate.setDate(endDate.getDate() + days + 1);
-    endDate.setHours(23, 59, 59, 999);
-
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["id", "timezone"],
@@ -1537,7 +1585,13 @@ export class ParksService {
 
     if (!park) return [];
 
-    const cacheKey = `schedule:upcoming:${parkId}:${formatInParkTimezone(today, park.timezone)}:${days}`;
+    const tz = park.timezone || "UTC";
+    // Range in PARK timezone: start 2 days ago (for late-night hours, cross-timezone), end today + days
+    const startDate = getStartOfDayInTimezone(tz);
+    const twoDaysAgo = addDays(startDate, -2);
+    const endDate = addDays(startDate, days + 1);
+
+    const cacheKey = `schedule:upcoming:${parkId}:${getCurrentDateInTimezone(tz)}:${days}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1550,7 +1604,7 @@ export class ParksService {
       })) as ScheduleEntry[];
     }
 
-    const schedule = await this.getSchedule(parkId, today, endDate);
+    const schedule = await this.getSchedule(parkId, twoDaysAgo, endDate);
 
     // Cache result (1 hour TTL)
     await this.redis.set(
@@ -1659,24 +1713,14 @@ export class ParksService {
       return false;
     }
 
-    // Get current time (UTC)
     const now = new Date();
-
-    // Get current date in park's timezone (YYYY-MM-DD)
-    const parkTimeStr = now.toLocaleString("en-US", {
-      timeZone: park.timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const [month, day, year] = parkTimeStr.split("/");
-    const parkDateStr = `${year}-${month}-${day}`;
+    const parkDateStr = getCurrentDateInTimezone(park.timezone);
 
     // Query schedule for today in park's timezone
     const todaySchedule = await this.scheduleRepository.findOne({
       where: {
         parkId,
-        date: parkDateStr as any, // TypeORM will handle the date comparison
+        date: parkDateStr as any,
         scheduleType: "OPERATING" as ScheduleType,
       },
     });
@@ -1715,18 +1759,7 @@ export class ParksService {
       return false;
     }
 
-    // Get current time (UTC)
-    const now = new Date();
-
-    // Get current date in park's timezone (YYYY-MM-DD)
-    const parkTimeStr = now.toLocaleString("en-US", {
-      timeZone: park.timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const [month, day, year] = parkTimeStr.split("/");
-    const parkDateStr = `${year}-${month}-${day}`;
+    const parkDateStr = getCurrentDateInTimezone(park.timezone);
 
     // Query schedule for today in park's timezone
     const todaySchedule = await this.scheduleRepository.findOne({

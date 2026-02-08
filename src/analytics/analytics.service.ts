@@ -566,11 +566,14 @@ export class AnalyticsService {
     p90: number;
     p95: number;
   } | null> {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const startOfDay = getStartOfDayInTimezone(park?.timezone || "UTC");
 
     try {
-      // Query aggregates for all attractions in this park today
+      // Query aggregates for all attractions in this park today (park timezone)
       const result = await this.queueDataAggregateRepository
         .createQueryBuilder("agg")
         .select("percentile_cont(0.50) WITHIN GROUP (ORDER BY agg.p50)", "p50")
@@ -619,8 +622,14 @@ export class AnalyticsService {
     iqr: number;
     sampleCount: number;
   } | null> {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const attraction = await this.attractionRepository.findOne({
+      where: { id: attractionId },
+      relations: ["park"],
+      select: { park: { timezone: true } },
+    });
+    const startOfDay = getStartOfDayInTimezone(
+      attraction?.park?.timezone || "UTC",
+    );
 
     try {
       const result = await this.queueDataAggregateRepository

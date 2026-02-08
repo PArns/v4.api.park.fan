@@ -23,6 +23,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
   getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { buildAttractionUrl } from "../../common/utils/url.util";
@@ -374,15 +375,9 @@ export class ParkIntegrationService {
       : new Date().toISOString().split("T")[0];
 
     // Get tomorrow's date in park's timezone (for hourly predictions when park is closed)
-    const tomorrowDate = new Date();
-    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrowInParkTz = park.timezone
-      ? (() => {
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          return formatInParkTimezone(tomorrow, park.timezone).split("T")[0];
-        })()
-      : tomorrowDate.toISOString().split("T")[0];
+      ? getTomorrowDateInTimezone(park.timezone)
+      : new Date().toISOString().split("T")[0];
 
     const targetDateStr =
       dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
