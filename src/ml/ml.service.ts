@@ -74,7 +74,7 @@ export class MLService {
 
     this.mlClient = axios.create({
       baseURL: this.ML_SERVICE_URL,
-      timeout: 30000, // 30 seconds
+      timeout: 5000, // 5 seconds (prevent blocking request path)
       headers: {
         "Content-Type": "application/json",
       },
@@ -94,12 +94,17 @@ export class MLService {
    */
   async isHealthy(): Promise<boolean> {
     try {
-      const response = await this.mlClient.get("/health");
-      return response.status === 200;
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      this.logger.warn("ML service health check failed:", errorMessage);
+      const cached = await this.redis.get("ml:health:status");
+      if (cached !== null) {
+        return cached === "1";
+      }
+
+      const response = await this.mlClient.get("/health", { timeout: 2000 });
+      const healthy = response.status === 200;
+      await this.redis.set("ml:health:status", healthy ? "1" : "0", "EX", 60);
+      return healthy;
+    } catch (_error) {
+      await this.redis.set("ml:health:status", "0", "EX", 60).catch(() => {});
       return false;
     }
   }

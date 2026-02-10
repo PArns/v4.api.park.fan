@@ -8,16 +8,18 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
+import { recordSlowRequest } from "../slow-request.logger";
+
+/** Threshold in ms above which a request is considered slow and written to the slow-request log. */
+const SLOW_THRESHOLD_MS = 1000;
 
 /**
  * Global logging interceptor for HTTP requests.
  *
- * Only logs interesting events:
- * - Errors (4xx, 5xx status codes)
- * - Slow requests (>1000ms)
- * - Admin/ML endpoints
- *
- * Filters out routine GET/POST requests to reduce log spam.
+ * - Errors (4xx, 5xx): always logged to main stream.
+ * - Slow requests (>1s): written to dedicated file (see SLOW_REQUEST_LOG_PATH) so they are not
+ *   lost in the log stream; one short line is still logged to the main stream.
+ * - Admin/ML endpoints: logged to main stream.
  */
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
@@ -37,16 +39,29 @@ export class LoggingInterceptor implements NestInterceptor {
         const { statusCode } = response;
         const responseTime = Date.now() - startTime;
 
-        // Only log interesting events:
         const isError = statusCode >= 400;
-        const isSlow = responseTime > 1000; // >1s
+        const isSlow = responseTime > SLOW_THRESHOLD_MS;
         const isAdminOrML =
           url.includes("/admin") ||
           url.includes("/ml") ||
           url.includes("/train");
 
-        if (isError || isSlow || isAdminOrML) {
-          const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
+        if (isSlow) {
+          recordSlowRequest({
+            ts: new Date().toISOString(),
+            method,
+            url,
+            statusCode,
+            responseTimeMs: responseTime,
+            ip: ip || undefined,
+          });
+          this.logger.warn(
+            `Slow request (see slow-request log): ${method} ${url} ${statusCode} - ${responseTime}ms`,
+          );
+        }
+
+        if (isError || isAdminOrML) {
+          const emoji = isError ? "❌" : "🔧";
           this.logger.log(
             `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms - ${ip}`,
           );

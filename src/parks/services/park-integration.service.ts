@@ -717,24 +717,30 @@ export class ParkIntegrationService {
 
     // Removed problematic fallback heuristic - timezone-aware status is reliable
 
-    // Fetch current status for shows
-    if (park.shows && park.shows.length > 0) {
-      let showLiveDataMap = new Map<string, ShowLiveData>();
-      // Always fetch to check for overrides?
-      // For shows/restaurants, less critical, but let's be consistent:
-      // If Park is now OPERATING (potentially via override), we fetch live data.
-      if (dto.status === "OPERATING") {
-        showLiveDataMap = await this.showsService.findCurrentStatusByPark(
-          park.id,
-        );
-      } else {
-        // Park remains CLOSED
-        showLiveDataMap = await this.showsService.findTodayOperatingDataByPark(
-          park.id,
-          park.timezone,
-        );
-      }
+    // Fetch show + restaurant live data in parallel
+    const hasShows = park.shows && park.shows.length > 0;
+    const hasRestaurants = park.restaurants && park.restaurants.length > 0;
 
+    const [showLiveDataMap, restaurantLiveDataMap] = await Promise.all([
+      hasShows
+        ? dto.status === "OPERATING"
+          ? this.showsService.findCurrentStatusByPark(park.id)
+          : this.showsService.findTodayOperatingDataByPark(
+              park.id,
+              park.timezone,
+            )
+        : Promise.resolve(new Map<string, ShowLiveData>()),
+      hasRestaurants
+        ? dto.status === "OPERATING"
+          ? this.restaurantsService.findCurrentStatusByPark(park.id)
+          : this.restaurantsService.findTodayOperatingDataByPark(
+              park.id,
+              park.timezone,
+            )
+        : Promise.resolve(new Map<string, RestaurantLiveData>()),
+    ]);
+
+    if (hasShows) {
       for (const show of dto.shows || []) {
         const liveData = showLiveDataMap.get(show.id);
         if (liveData) {
@@ -791,22 +797,7 @@ export class ParkIntegrationService {
       );
     }
 
-    // Fetch current status for restaurants
-    if (park.restaurants && park.restaurants.length > 0) {
-      let restaurantLiveDataMap = new Map<string, RestaurantLiveData>();
-
-      if (dto.status === "OPERATING") {
-        restaurantLiveDataMap =
-          await this.restaurantsService.findCurrentStatusByPark(park.id);
-      } else {
-        // Park is CLOSED - Fetch "Today's" operating data
-        restaurantLiveDataMap =
-          await this.restaurantsService.findTodayOperatingDataByPark(
-            park.id,
-            park.timezone,
-          );
-      }
-
+    if (hasRestaurants) {
       for (const restaurant of dto.restaurants || []) {
         const liveData = restaurantLiveDataMap.get(restaurant.id);
         if (liveData) {

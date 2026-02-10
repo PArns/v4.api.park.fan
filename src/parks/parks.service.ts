@@ -1779,8 +1779,12 @@ export class ParksService {
     return true;
   }
 
+  /** TTL for park status cache (90s) – status changes at park open/close, short cache is enough */
+  private readonly TTL_PARK_STATUS = 90;
+
   /**
-   * Checks operating status for multiple parks efficiently
+   * Checks operating status for multiple parks efficiently.
+   * Uses Redis cache per park (park:status:{parkId}) to avoid repeated schedule queries.
    *
    * @param parkIds - Array of Park IDs
    * @returns Map of Park ID -> Status ("OPERATING" or "CLOSED")
@@ -1792,10 +1796,53 @@ export class ParksService {
       return new Map();
     }
 
+    const statusMap = new Map<string, "OPERATING" | "CLOSED">();
+    const cacheKeys = parkIds.map((id) => `park:status:${id}`);
+    const cached = await this.redis.mget(...cacheKeys);
+
+    const uncachedIds: string[] = [];
+    for (let i = 0; i < parkIds.length; i++) {
+      const id = parkIds[i];
+      const raw = cached[i];
+      if (raw === "1") {
+        statusMap.set(id, "OPERATING");
+      } else if (raw === "0") {
+        statusMap.set(id, "CLOSED");
+      } else {
+        uncachedIds.push(id);
+      }
+    }
+
+    if (uncachedIds.length > 0) {
+      const fresh = await this.getBatchParkStatusFromDb(uncachedIds);
+      for (const [id, status] of fresh) {
+        statusMap.set(id, status);
+      }
+      const pipe = this.redis.pipeline();
+      for (const id of uncachedIds) {
+        const s = statusMap.get(id)!;
+        pipe.set(
+          `park:status:${id}`,
+          s === "OPERATING" ? "1" : "0",
+          "EX",
+          this.TTL_PARK_STATUS,
+        );
+      }
+      await pipe.exec().catch(() => {});
+    }
+
+    return statusMap;
+  }
+
+  /**
+   * Fetches park status from DB (schedule + fallback for parks without schedule).
+   * Used by getBatchParkStatus for uncached park IDs.
+   */
+  private async getBatchParkStatusFromDb(
+    parkIds: string[],
+  ): Promise<Map<string, "OPERATING" | "CLOSED">> {
     const now = new Date();
 
-    // Find any OPERATING schedule that works for right now
-    // We rely on openingTime/closingTime being absolute UTC timestamps
     const activeSchedules = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .select("schedule.parkId", "parkId")
@@ -1806,88 +1853,71 @@ export class ParksService {
       .getRawMany();
 
     const statusMap = new Map<string, "OPERATING" | "CLOSED">();
-
-    // Default all to CLOSED
     for (const id of parkIds) {
       statusMap.set(id, "CLOSED");
     }
-
-    // Mark active ones as OPERATING based on schedule
     for (const schedule of activeSchedules) {
       statusMap.set(schedule.parkId, "OPERATING");
     }
 
-    // Heuristic Fallback: For parks WITHOUT schedules, check if rides are actively operating
-    // ONLY applies to parks that have NO schedule (to avoid overriding schedule-based logic)
-    // Uses RECENT data (last 30 minutes) and checks for meaningful wait times
     const closedParkIds = parkIds.filter(
       (id) => statusMap.get(id) === "CLOSED",
     );
+    if (closedParkIds.length === 0) return statusMap;
 
-    if (closedParkIds.length > 0) {
-      // Check if these parks have schedules
-      // Only apply ride-based logic for parks WITHOUT schedules
-      const parksWithoutSchedules = await this.scheduleRepository
-        .createQueryBuilder("schedule")
-        .select("DISTINCT schedule.parkId", "parkId")
-        .where("schedule.parkId = ANY(:parkIds)", { parkIds: closedParkIds })
-        .andWhere("schedule.scheduleType = 'OPERATING'")
-        .getRawMany();
+    const parksWithoutSchedules = await this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .select("DISTINCT schedule.parkId", "parkId")
+      .where("schedule.parkId = ANY(:parkIds)", { parkIds: closedParkIds })
+      .andWhere("schedule.scheduleType = 'OPERATING'")
+      .getRawMany();
 
-      const parkIdsWithSchedule = new Set(
-        parksWithoutSchedules.map((p) => p.parkId),
+    const parkIdsWithSchedule = new Set(
+      parksWithoutSchedules.map((p: { parkId: string }) => p.parkId),
+    );
+    const parksNeedingFallback = closedParkIds.filter(
+      (id) => !parkIdsWithSchedule.has(id),
+    );
+
+    if (parksNeedingFallback.length > 0) {
+      const stats = await this.parkRepository.manager.query(
+        `
+        SELECT
+          p.id as "parkId",
+          COUNT(a.id) as "total",
+          SUM(
+            CASE 
+              WHEN q.status = 'OPERATING' 
+                AND q."waitTime" > 0 
+                AND q.timestamp > NOW() - INTERVAL '30 minutes'
+              THEN 1 
+              ELSE 0 
+            END
+          ) as "operating"
+        FROM parks p
+        JOIN attractions a ON a."parkId" = p.id
+        JOIN LATERAL (
+          SELECT status, "waitTime", timestamp
+          FROM queue_data qd
+          WHERE qd."attractionId" = a.id
+            AND qd.timestamp > NOW() - INTERVAL '30 minutes'
+          ORDER BY timestamp DESC
+          LIMIT 1
+        ) q ON true
+        WHERE p.id = ANY($1)
+        GROUP BY p.id
+      `,
+        [parksNeedingFallback],
       );
 
-      // Filter to only parks WITHOUT schedules
-      const parksNeedingFallback = closedParkIds.filter(
-        (id) => !parkIdsWithSchedule.has(id),
-      );
-
-      if (parksNeedingFallback.length > 0) {
-        // For parks without schedules: Check if rides are actively operating
-        // Criteria: Recent data (last 30 min) + OPERATING + waitTime > 0 (closed parks often show 0/5)
-        const stats = await this.parkRepository.manager.query(
-          `
-          SELECT
-            p.id as "parkId",
-            COUNT(a.id) as "total",
-            SUM(
-              CASE 
-                WHEN q.status = 'OPERATING' 
-                  AND q."waitTime" > 0 
-                  AND q.timestamp > NOW() - INTERVAL '30 minutes'
-                THEN 1 
-                ELSE 0 
-              END
-            ) as "operating"
-          FROM parks p
-          JOIN attractions a ON a."parkId" = p.id
-          JOIN LATERAL (
-            SELECT status, "waitTime", timestamp
-            FROM queue_data qd
-            WHERE qd."attractionId" = a.id
-              AND qd.timestamp > NOW() - INTERVAL '30 minutes'
-            ORDER BY timestamp DESC
-            LIMIT 1
-          ) q ON true
-          WHERE p.id = ANY($1)
-          GROUP BY p.id
-        `,
-          [parksNeedingFallback],
-        );
-
-        for (const stat of stats) {
-          const operating = parseInt(stat.operating, 10);
-
-          // If at least one ride is OPERATING with waitTime > 0, mark park as open
-          if (operating > 0) {
-            statusMap.set(stat.parkId, "OPERATING");
-          }
+      for (const stat of stats) {
+        const operating = parseInt(stat.operating, 10);
+        if (operating > 0) {
+          statusMap.set(stat.parkId, "OPERATING");
         }
       }
     }
 
-    // ... logic ...
     return statusMap;
   }
 

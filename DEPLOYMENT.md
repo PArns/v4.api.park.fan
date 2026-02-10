@@ -186,6 +186,10 @@ Your persistent volumes are stored in:
 - `/var/lib/docker/volumes/<project-name>_redisdata`
 - `/var/lib/docker/volumes/<project-name>_ml-models`
 
+With `docker-compose.production.yml`, the API also uses bind mounts:
+- `/data/parkfan/geoip` – GeoIP database
+- `/data/parkfan/logs` – **Slow-request log** (`slow-requests.log`); requests >1s are appended here so they are easy to find and not lost in the main log stream
+
 ## Troubleshooting
 
 ### Service Won't Start

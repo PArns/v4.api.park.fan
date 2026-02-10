@@ -54,7 +54,7 @@ export class ThemeParksClient {
       throw new Error(`ThemeParks API: Global Rate Limit (blocked)`);
     }
 
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
     // Check for 429 (Too Many Requests) OR 5xx (Server Errors)
     if (

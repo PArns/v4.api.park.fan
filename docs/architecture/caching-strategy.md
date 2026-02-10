@@ -20,8 +20,10 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
 - **Keys**:
   - `park:statistics:{parkId}` (TTL: 5 min) - Aggregated wait times, active attraction counts.
   - `park:occupancy:{parkId}` (TTL: 5 min) - Current crowd level % calculation.
+  - `park:status:{parkId}` (TTL: 90s) - Park OPERATING/CLOSED from schedule (+ fallback); used by `getBatchParkStatus`.
   - `park:p50:{parkId}` (TTL: 24h) - Park P50 baseline from headliners (table: `park_p50_baselines`).
   - `attraction:p50:{attractionId}` (TTL: 24h) - Attraction P50 baseline (table: `attraction_p50_baselines`).
+  - `attraction:accuracy:{attractionId}:{days}` (TTL: 10 min) - Prediction accuracy badge/stats for display.
   - `analytics:percentile:sliding:park:{parkId}` (TTL: 24h) - 548-day sliding P90/P50 for park (fallback).
   - `analytics:percentile:sliding:attraction:{attractionId}` (TTL: 24h) - 548-day sliding P90/P50 for attraction; shared by `get90thPercentileWithConfidence` and `getBatchAttractionP90s`.
 
@@ -93,3 +95,9 @@ Job **`warmup-calendar-daily`** runs daily at **5:00** (cron on `park-metadata` 
 - Discovery/structure caches (see DiscoveryService)
 
 This keeps the first user request for parks and calendar fast (cache hit).
+
+---
+
+## Optional DB index (if schedule status queries are slow)
+
+If `getBatchParkStatusFromDb` (schedule_entries: `parkId`, `scheduleType`, `openingTime`, `closingTime`) shows up in slow-query logs, consider adding a composite index, e.g. `(parkId, scheduleType, openingTime)` so the planner can use an index range scan on `openingTime <= :now` and `closingTime > :now`. With `park:status:{parkId}` cache (90s), this is only hit on cache miss.

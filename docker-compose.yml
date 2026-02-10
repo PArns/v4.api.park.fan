@@ -115,6 +115,9 @@ services:
       ML_SERVICE_URL: http://ml-service:8000
       BULL_PREFIX: parkfan
       NODE_ENV: development
+      SLOW_REQUEST_LOG_PATH: /app/logs/slow-requests.log
+    volumes:
+      - api-logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,6 +140,8 @@ volumes:
   redisdata:
     driver: local
   ml-models:
+    driver: local
+  api-logs:
     driver: local
 
 networks:

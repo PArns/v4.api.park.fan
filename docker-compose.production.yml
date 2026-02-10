@@ -95,8 +95,10 @@ services:
       - GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
       - GEOIP_MAXMIND_ACCOUNT_ID=${GEOIP_MAXMIND_ACCOUNT_ID}
       - GEOIP_MAXMIND_LICENSE_KEY=${GEOIP_MAXMIND_LICENSE_KEY}
+      - SLOW_REQUEST_LOG_PATH=/app/logs/slow-requests.log
     volumes:
       - /data/parkfan/geoip:/app/geoip
+      - /data/parkfan/logs:/app/logs
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

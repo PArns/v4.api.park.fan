@@ -27,7 +27,7 @@ export class QueueTimesClient {
     const url = `${this.baseUrl}/parks.json`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
       if (!response.ok) {
         throw new Error(
@@ -63,7 +63,7 @@ export class QueueTimesClient {
     ).toString();
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
       if (!response.ok) {
         throw new Error(

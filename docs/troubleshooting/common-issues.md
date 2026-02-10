@@ -57,6 +57,21 @@ Short guide for frequent problems and how to fix them.
 
 ---
 
+## Slow API requests (where to look)
+
+**Symptom**: Some requests take many seconds (e.g. 30s+) and are easy to miss in the main log stream.
+
+**Where they are stored**: Slow requests (>1s) are written to a **dedicated log file** (JSON Lines) so they are not lost in the main logs. Default path: `logs/slow-requests.log` (overridable with `SLOW_REQUEST_LOG_PATH`). One short line is still printed to the main stream: `Slow request (see slow-request log): GET /v1/... 30179ms`.
+
+**How to use**:
+- Tail the file: `tail -f logs/slow-requests.log`
+- In production, ship this file separately (e.g. different log panel or alert when new lines appear)
+- Each line is JSON: `{"ts":"...","method","url","statusCode","responseTimeMs","ip"}`
+
+**See**: [Caching Strategy](../architecture/caching-strategy.md), parallelisation in `attraction-integration.service` and `park-integration.service`.
+
+---
+
 ## ML predictions missing or wrong scale
 
 **Symptom**: Predictions fail or crowd level from ML doesn’t match API.

@@ -252,6 +252,10 @@ COPY --chown=nestjs:nodejs README.md ./
 RUN mkdir -p /app/geoip && chown -R nestjs:nodejs /app/geoip
 ENV GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
 
+# Slow-request log: writable dir (mount volume in compose to persist on host)
+RUN mkdir -p /app/logs && chown -R nestjs:nodejs /app/logs
+ENV SLOW_REQUEST_LOG_PATH=/app/logs/slow-requests.log
+
 # Copy entrypoint script
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/
 

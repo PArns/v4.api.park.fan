@@ -671,6 +671,9 @@ export class QueueDataService {
    * @param hours - Number of hours ahead to fetch (default: 24)
    * @returns Forecast data
    */
+  /**
+   * Forecasts for the next N hours (ThemeParks.wiki). No relations loaded – callers only need predictedTime/predictedWaitTime.
+   */
   async findForecastsByAttraction(
     attractionId: string,
     hours: number = 24,
@@ -683,7 +686,6 @@ export class QueueDataService {
         attractionId,
         predictedTime: Between(now, futureTime),
       },
-      relations: ["attraction", "attraction.park"],
       order: { predictedTime: "ASC" },
     });
   }

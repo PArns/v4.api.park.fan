@@ -1,9 +1,14 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThan } from "typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+
+/** TTL for attraction accuracy cache (10 min) – stats change slowly */
+const TTL_ACCURACY_CACHE = 10 * 60;
 
 /**
  * PredictionAccuracyService
@@ -25,6 +30,8 @@ export class PredictionAccuracyService {
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
+    @Inject(REDIS_CLIENT)
+    private readonly redis: Redis,
   ) {}
 
   /**
@@ -570,7 +577,8 @@ export class PredictionAccuracyService {
   }
 
   /**
-   * Get prediction accuracy with badge for display in API
+   * Get prediction accuracy with badge for display in API.
+   * Cached in Redis (attraction:accuracy:{id}:{days}) to avoid repeated DB work on hot paths.
    */
   async getAttractionAccuracyWithBadge(
     attractionId: string,
@@ -586,13 +594,23 @@ export class PredictionAccuracyService {
     };
     message?: string;
   }> {
+    const cacheKey = `attraction:accuracy:${attractionId}:${days}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // invalid cache, fall through
+      }
+    }
+
     const stats = await this.getAttractionAccuracyStats(attractionId, days);
     const badgeInfo = this.calculateAccuracyBadge(
       stats.averageAbsoluteError,
       stats.comparedPredictions,
     );
 
-    return {
+    const result = {
       badge: badgeInfo.badge,
       last30Days: {
         mae: stats.averageAbsoluteError,
@@ -603,11 +621,18 @@ export class PredictionAccuracyService {
       },
       message: badgeInfo.message,
     };
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(result), "EX", TTL_ACCURACY_CACHE)
+      .catch(() => {});
+
+    return result;
   }
 
   /**
-   * Get prediction accuracy with badge for multiple attractions in a single query
-   * OPTIMIZED: Uses single SQL query with IN clause instead of N individual queries
+   * Get prediction accuracy with badge for multiple attractions.
+   * Uses same Redis keys as getAttractionAccuracyWithBadge (cache-aside): cache hit = no DB.
+   * Only uncached IDs hit the batch SQL query (no backfill to cache from here).
    *
    * @param attractionIds - Array of attraction IDs
    * @param days - Number of days to look back (default: 30)
@@ -645,10 +670,53 @@ export class PredictionAccuracyService {
       return resultMap;
     }
 
+    const cacheKeys = attractionIds.map(
+      (id) => `attraction:accuracy:${id}:${days}`,
+    );
+    const cached = await this.redis.mget(...cacheKeys);
+    const uncachedIds: string[] = [];
+
+    for (let i = 0; i < attractionIds.length; i++) {
+      const id = attractionIds[i];
+      const raw = cached[i];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as {
+            badge: string;
+            last30Days: {
+              comparedPredictions: number;
+              totalPredictions: number;
+            };
+            message?: string;
+          };
+          resultMap.set(id, {
+            badge: parsed.badge as
+              | "excellent"
+              | "good"
+              | "fair"
+              | "poor"
+              | "insufficient_data",
+            last30Days: {
+              comparedPredictions: parsed.last30Days.comparedPredictions,
+              totalPredictions: parsed.last30Days.totalPredictions,
+            },
+            message: parsed.message,
+          });
+        } catch {
+          uncachedIds.push(id);
+        }
+      } else {
+        uncachedIds.push(id);
+      }
+    }
+
+    if (uncachedIds.length === 0) {
+      return resultMap;
+    }
+
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     try {
-      // Single SQL query with aggregation for all attractions
       const results = await this.accuracyRepository.query(
         `
         SELECT 
@@ -661,7 +729,7 @@ export class PredictionAccuracyService {
           AND target_time >= $2
         GROUP BY attraction_id
         `,
-        [attractionIds, startDate],
+        [uncachedIds, startDate],
       );
 
       // Process results
@@ -682,8 +750,8 @@ export class PredictionAccuracyService {
         });
       }
 
-      // Set insufficient_data for attractions with no records
-      for (const id of attractionIds) {
+      // Set insufficient_data for attractions with no records (only uncached IDs)
+      for (const id of uncachedIds) {
         if (!resultMap.has(id)) {
           resultMap.set(id, {
             badge: "insufficient_data",
@@ -697,8 +765,7 @@ export class PredictionAccuracyService {
       }
     } catch (error) {
       this.logger.warn(`Failed to batch fetch accuracy:`, error);
-      // Fallback: set insufficient_data for all
-      for (const id of attractionIds) {
+      for (const id of uncachedIds) {
         resultMap.set(id, {
           badge: "insufficient_data",
           last30Days: {
