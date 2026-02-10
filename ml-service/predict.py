@@ -293,9 +293,6 @@ def create_prediction_features(
             )
             use_forecast = True
         except Exception as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
             logger.warning(
                 f"Failed to use weather forecast in features: {e}. Falling back to DB."
             )
@@ -340,9 +337,6 @@ def create_prediction_features(
                 weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 weather_df = convert_df_types(weather_df)
         except Exception as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
             logger.warning(
                 f"Failed to fetch historical weather data: {e}. Using defaults."
             )

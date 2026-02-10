@@ -45,6 +45,7 @@ import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { Park } from "./entities/park.entity";
+import { formatInParkTimezone } from "../common/utils/date.util";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
@@ -728,6 +729,19 @@ export class ParksController {
       toDate,
     );
 
+    // One entry per date: getSchedule orders by date ASC, scheduleType ASC (CLOSED before OPERATING).
+    // Deduplicate so we expose a single status per day; CLOSED wins when both exist (stale OPERATING).
+    const seen = new Set<string>();
+    const deduped = schedules.filter((s) => {
+      const dateStr = formatInParkTimezone(
+        s.date instanceof Date ? s.date : new Date(s.date),
+        park.timezone,
+      );
+      if (seen.has(dateStr)) return false;
+      seen.add(dateStr);
+      return true;
+    });
+
     return {
       park: {
         id: park.id,
@@ -735,7 +749,7 @@ export class ParksController {
         slug: park.slug,
         timezone: park.timezone,
       },
-      schedule: schedules.map((s) => ScheduleItemDto.fromEntity(s)),
+      schedule: deduped.map((s) => ScheduleItemDto.fromEntity(s)),
     };
   }
 

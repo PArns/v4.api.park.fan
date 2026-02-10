@@ -845,7 +845,8 @@ export class ParksService {
 
       // Cleanup placeholders when we have real data from the API
       // - Delete UNKNOWN (gap-fill or old placeholder) so only OPERATING/CLOSED from API remains
-      // - When saving OPERATING, also delete gap-fill CLOSED for this date so OPERATING wins (getSchedule orders by scheduleType ASC, so CLOSED would otherwise be found first)
+      // - When saving OPERATING, delete CLOSED for this date so OPERATING wins
+      // - When saving CLOSED, delete OPERATING for this date so API CLOSED overwrites stale OPERATING (e.g. Phantasialand entire February)
       if (scheduleEntry.scheduleType !== ScheduleType.UNKNOWN) {
         await this.scheduleRepository.delete({
           parkId,
@@ -858,6 +859,13 @@ export class ParksService {
           parkId,
           date: scheduleEntry.date,
           scheduleType: ScheduleType.CLOSED,
+        });
+      }
+      if (scheduleEntry.scheduleType === ScheduleType.CLOSED) {
+        await this.scheduleRepository.delete({
+          parkId,
+          date: scheduleEntry.date,
+          scheduleType: ScheduleType.OPERATING,
         });
       }
     }
@@ -885,9 +893,11 @@ export class ParksService {
 
     if (!park?.countryCode) return 0;
 
-    // Range: "today" through "today + lookAheadDays" in PARK timezone (never server date)
-    const startDate = getStartOfDayInTimezone(park.timezone);
-    const endDate = addDays(startDate, lookAheadDays);
+    // Range: "today" through "today + lookAheadDays" in PARK timezone (never server date).
+    // If the park has OPERATING in the past, start from the day after last OPERATING so we fill
+    // closure gaps (e.g. Jan 26–Feb 9 when park closed after last Sunday in Jan; Wiki returns no CLOSED).
+    const todayStart = getStartOfDayInTimezone(park.timezone);
+    const endDate = addDays(todayStart, lookAheadDays);
 
     // 0. Min/max OPERATING dates for this park (any time) to classify gaps as CLOSED vs UNKNOWN
     const operatingRange = await this.scheduleRepository
@@ -917,9 +927,57 @@ export class ParksService {
         )
       : null;
 
+    // Start from day after last OPERATING when that is before today, so we fill/override closure gaps in the past
+    let startDate = todayStart;
+    if (operatingRange?.maxDate) {
+      const maxDateVal =
+        operatingRange.maxDate instanceof Date
+          ? operatingRange.maxDate
+          : new Date(operatingRange.maxDate);
+      const dayAfterMax = addDays(maxDateVal, 1);
+      if (dayAfterMax < todayStart) startDate = dayAfterMax;
+    }
+
+    // Next OPERATING date after maxOp (e.g. first day of next season). ThemeParks Wiki returns only
+    // OPERATING days; closed seasons (e.g. Phantasialand Feb) come as empty, so we need to treat
+    // "after last OPERATING until next OPERATING" as CLOSED.
+    let nextOpAfterMaxStr: string | null = null;
+    if (operatingRange?.maxDate) {
+      const maxDate =
+        operatingRange.maxDate instanceof Date
+          ? operatingRange.maxDate
+          : new Date(operatingRange.maxDate);
+      const nextOp = await this.scheduleRepository
+        .createQueryBuilder("schedule")
+        .select("MIN(schedule.date)", "nextDate")
+        .where("schedule.parkId = :parkId", { parkId })
+        .andWhere("schedule.scheduleType = :type", {
+          type: ScheduleType.OPERATING,
+        })
+        .andWhere("schedule.date > :maxDate", { maxDate })
+        .getRawOne<{ nextDate: Date | null }>();
+      if (nextOp?.nextDate) {
+        nextOpAfterMaxStr = formatInParkTimezone(
+          nextOp.nextDate instanceof Date
+            ? nextOp.nextDate
+            : new Date(nextOp.nextDate),
+          park.timezone,
+        );
+      }
+    }
+
     const isGapClosed = (dateStr: string): boolean => {
       if (!minOpStr || !maxOpStr) return false; // no OPERATING at all → UNKNOWN
-      return dateStr > minOpStr && dateStr < maxOpStr; // strictly between
+      // Strictly between two OPERATING days (e.g. closed weekday)
+      if (dateStr > minOpStr && dateStr < maxOpStr) return true;
+      // After last OPERATING but before next OPERATING (e.g. winter closure; Wiki returns no CLOSED entries)
+      if (
+        nextOpAfterMaxStr &&
+        dateStr > maxOpStr &&
+        dateStr < nextOpAfterMaxStr
+      )
+        return true;
+      return false;
     };
 
     // 1. Fetch existing entries
@@ -1030,14 +1088,15 @@ export class ParksService {
         });
         filledCount++;
       } else {
-        // Entry exists: update holiday info and optionally promote UNKNOWN → CLOSED if now in middle
-        const existing = existingEntries.find((e) => {
+        // Entry exists: update holiday info; promote UNKNOWN → CLOSED or replace OPERATING → CLOSED when in closure gap
+        const existingForDate = existingEntries.filter((e) => {
           const eDateStr = formatInParkTimezone(
             e.date instanceof Date ? e.date : new Date(e.date),
             park.timezone,
           );
           return eDateStr === dateStr;
         });
+        const existing = existingForDate[0];
 
         if (!existing) continue;
 
@@ -1045,17 +1104,38 @@ export class ParksService {
           existing.isHoliday !== holidayInfo.isHoliday ||
           existing.holidayName !== holidayInfo.holidayName ||
           existing.isBridgeDay !== holidayInfo.isBridgeDay;
-        const shouldBeClosed =
-          existing.scheduleType === ScheduleType.UNKNOWN &&
-          isGapClosed(dateStr);
-        if (holidayChanged || shouldBeClosed) {
+        const shouldBeClosed = isGapClosed(dateStr);
+        const promoteUnknownToClosed =
+          existing.scheduleType === ScheduleType.UNKNOWN && shouldBeClosed;
+        // ThemeParks Wiki returns only OPERATING days; closed seasons have no entries. If we have
+        // OPERATING for this date but it falls in a closure gap (e.g. after last Jan OPERATING,
+        // before first Mar OPERATING), replace with CLOSED.
+        const replaceOperatingWithClosed =
+          existing.scheduleType === ScheduleType.OPERATING && shouldBeClosed;
+
+        if (replaceOperatingWithClosed) {
+          await this.scheduleRepository.delete(existing.id);
+          await this.scheduleRepository.save({
+            parkId,
+            date: new Date(currentDate),
+            scheduleType: ScheduleType.CLOSED,
+            isHoliday: holidayInfo.isHoliday,
+            holidayName: holidayInfo.holidayName,
+            isBridgeDay: holidayInfo.isBridgeDay,
+            openingTime: null,
+            closingTime: null,
+          });
+          filledCount++;
+        } else if (holidayChanged || promoteUnknownToClosed) {
           await this.scheduleRepository.update(existing.id, {
             ...(holidayChanged && {
               isHoliday: holidayInfo.isHoliday,
               holidayName: holidayInfo.holidayName,
               isBridgeDay: holidayInfo.isBridgeDay,
             }),
-            ...(shouldBeClosed && { scheduleType: ScheduleType.CLOSED }),
+            ...(promoteUnknownToClosed && {
+              scheduleType: ScheduleType.CLOSED,
+            }),
           });
           filledCount++;
         }

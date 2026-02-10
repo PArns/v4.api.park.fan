@@ -307,13 +307,12 @@ export class CalendarService {
       const results = await Promise.all(
         missingCrowdDates.map(async (dateStr) => {
           try {
-            const data =
-              await this.analyticsService.calculateCrowdLevelForDate(
-                park.id,
-                "park",
-                dateStr,
-                park.timezone,
-              );
+            const data = await this.analyticsService.calculateCrowdLevelForDate(
+              park.id,
+              "park",
+              dateStr,
+              park.timezone,
+            );
             return [dateStr, data.crowdLevel] as const;
           } catch {
             return [dateStr, "moderate" as CrowdLevel] as const;
@@ -833,10 +832,7 @@ export class CalendarService {
   /**
    * Infer operating hours based on ML predictions and historical data (sync; no I/O).
    */
-  private inferOperatingHours(
-    park: Park,
-    date: Date,
-  ): OperatingHours {
+  private inferOperatingHours(park: Park, date: Date): OperatingHours {
     const dayOfWeek = date.getDay();
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const openingHour = isWeekend ? 9 : 10;

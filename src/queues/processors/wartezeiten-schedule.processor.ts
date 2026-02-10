@@ -6,6 +6,7 @@ import { ParksService } from "../../parks/parks.service";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 
 /**
  * Wartezeiten Schedule Processor
@@ -127,7 +128,19 @@ export class WartezeitenScheduleProcessor {
                 `✅ Updated schedule for ${park.name}: ${today.open_from} - ${today.closed_from}`,
               );
             } else {
-              this.logger.verbose(`${park.name} is closed today`);
+              // Persist CLOSED for today so calendar shows closed (Wiki does not return CLOSED entries)
+              const tz = park.timezone || "Europe/Berlin";
+              const todayStr = getCurrentDateInTimezone(tz);
+              await this.parksService.saveScheduleData(park.id, [
+                {
+                  date: todayStr,
+                  type: "CLOSED",
+                  description: "Wartezeiten.app (closed today)",
+                },
+              ]);
+              this.logger.verbose(
+                `${park.name} is closed today → persisted CLOSED`,
+              );
               skipCount++;
             }
           }

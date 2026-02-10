@@ -6,6 +6,14 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed
+
+- **Calendar / Schedule (ThemeParks Wiki):** The Wiki API returns **only OPERATING days**; it does **not** return CLOSED entries for closed days or months (e.g. Phantasialand January 26–31 and entire February come as empty/missing). Two changes fix the calendar:
+  1. **saveScheduleData:** When the API does provide CLOSED for a date, any existing OPERATING row for that date is now deleted so the calendar shows CLOSED.
+  2. **fillScheduleGaps:** (a) Gaps **after** the last OPERATING date and **before** the next OPERATING date (e.g. winter closure) are now classified as CLOSED, not UNKNOWN. (b) The fill range starts from the day after last OPERATING when that is before today, so closure gaps in the past (e.g. Jan 26–Feb 9) are filled or corrected. (c) When a date in that closure gap already has an OPERATING entry (stale/wrong), gap-fill now replaces it with CLOSED. Phantasialand and similar parks will show the correct closed season after the next schedule sync.
+- **Schedule data sources:** Documented in [Schedule Sync & Calendar](architecture/schedule-sync-and-calendar.md): ThemeParks Wiki (no CLOSED), Wartezeiten (CLOSED for today when `opened_today: false`), Wait-Times live (OPERATING only), Queue-Times (no schedule). **Wartezeiten:** When the API returns `opened_today: false`, we now persist CLOSED for today (park timezone) so the calendar shows closed for parks that use Wartezeiten when they are closed.
+- **Park schedule endpoint** (`GET .../schedule`): Response is deduplicated to one entry per date (park timezone). When the DB has both OPERATING and CLOSED for the same date, we now expose only CLOSED so the schedule response matches the calendar (closed wins over stale OPERATING).
+
 ---
 
 ## [4.6.2] – 2026-02-08

@@ -20,11 +20,24 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 - **Extended fetch**: `getScheduleExtended(entityId, 12)` **always** requests each of the next **12 months** via the month endpoint (`/entity/{id}/schedule/{year}/{month}`). Month is **zero-padded** (e.g. `05` for May) per Wiki API. Optionally merges with generic `/schedule` (~30 days) for the near term.
 - Some parks (e.g. Efteling) may return empty/404 for far-future months until the park publishes them; we still **request** every month (01–12 ahead) so data appears as soon as the source adds it. **On-demand** `sync-park-schedule` helps when a user requests a range we don’t have yet.
 
+- **CLOSED not returned:** The Wiki returns **only OPERATING days**. It does **not** return `type: "CLOSED"` for closed days or months (e.g. Phantasialand Jan 26–31 and entire February come as missing or `schedule: []`). Gap-fill therefore treats "after last OPERATING until next OPERATING" as CLOSED so off-season shows correctly.
+
+## Schedule data sources (all)
+
+| Source | Used for schedule? | OPERATING | CLOSED | Notes |
+|--------|--------------------|----------|--------|--------|
+| **ThemeParks Wiki** (schedule API) | Yes (primary) | Yes, per day/month | **No** – closed days/months are missing or empty | `getScheduleExtended` → `saveScheduleData`. Gap-fill fills closure gaps. |
+| **Wartezeiten** (`/v1/openingtimes`) | Yes (fallback when no Wiki today) | Yes, when `opened_today: true` | **Yes, for today** – when `opened_today: false` we persist CLOSED for today (park timezone) | Daily job `fetch-opening-times`. Only today; no historical/future. |
+| **Wait-Times processor** (live `operatingHours`) | Yes (fallback when no Wiki today) | Yes, from merged live data | No – only persists when `operatingHours.length > 0` (open windows) | Wiki/Wartezeiten live merge; type from window (typically OPERATING). |
+| **Queue-Times** | No | – | – | No operating hours in API; does not feed `schedule_entries`. |
+
+So **CLOSED** can come from: (1) ThemeParks Wiki only if the API ever returns it (currently it does not), (2) Wartezeiten for **today** when the park reports closed, (3) **Gap-fill** for missing days between OPERATING ranges and for “after last OPERATING until next OPERATING”.
+
 ## UNKNOWN vs CLOSED
 
 - **`ScheduleType.CLOSED`**: Park is **confirmed** closed: from API (e.g. Wiki) or from **gap-fill** when the day has no schedule but lies **strictly between** two OPERATING days (see Gap-fill rules below).
 - **`ScheduleType.UNKNOWN`**: **No schedule data yet** — either before we have any OPERATING data, after the last known OPERATING day, or the park has no OPERATING entries. Calendar shows "Opening hours not yet available".
-- **Gap-fill** (`fillScheduleGaps`): For each missing date we create an entry with holiday/bridge metadata. We set **CLOSED** only when there is at least one OPERATING day **before** and one **after** that date; otherwise **UNKNOWN**. This keeps "Closed" vs "no data yet" distinguishable.
+- **Gap-fill** (`fillScheduleGaps`): For each missing date we create an entry with holiday/bridge metadata. We set **CLOSED** when (1) the date is strictly **between** two OPERATING days, or (2) the date is **after** the last OPERATING but **before** the next OPERATING (e.g. winter closure; Wiki returns no CLOSED). Otherwise **UNKNOWN**. Existing OPERATING entries that fall in such a closure gap are replaced with CLOSED. The fill range can start from the day after last OPERATING when that is before today, so past closure gaps are filled/corrected.
 - **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)`. When the API provides **OPERATING** for a date we also delete any **CLOSED** row for that date (so gap-fill CLOSED is removed and OPERATING wins). Only the API's OPERATING/CLOSED then remains for that date.
 - **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend shows "Closed" for `CLOSED` and "Opening hours not yet available" for `UNKNOWN`.
 - **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).

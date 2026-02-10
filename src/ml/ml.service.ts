@@ -728,10 +728,12 @@ export class MLService {
 
     const parkTimezone =
       (attraction.park as { timezone?: string } | undefined)?.timezone ??
-      (await this.parkRepository.findOne({
-        where: { id: attraction.parkId },
-        select: ["timezone"],
-      }))?.timezone ??
+      (
+        await this.parkRepository.findOne({
+          where: { id: attraction.parkId },
+          select: ["timezone"],
+        })
+      )?.timezone ??
       "UTC";
     const today = getCurrentDateInTimezone(parkTimezone);
     const cacheKey = `ml:attraction:${attractionId}:${predictionType}:${today}`;

@@ -123,11 +123,12 @@ export class AttractionIntegrationService {
         return r;
       });
     const tStatus = Date.now();
-    const parkStatusPromise = (attraction.parkId
-      ? this.parksService
-          .getBatchParkStatus([attraction.parkId])
-          .catch(() => new Map<string, "OPERATING" | "CLOSED">())
-      : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">())
+    const parkStatusPromise = (
+      attraction.parkId
+        ? this.parksService
+            .getBatchParkStatus([attraction.parkId])
+            .catch(() => new Map<string, "OPERATING" | "CLOSED">())
+        : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">())
     ).then((r) => {
       recordTiming("attraction_phase1_park_status_ms", Date.now() - tStatus);
       return r;
@@ -141,27 +142,28 @@ export class AttractionIntegrationService {
         return r;
       });
     const tPark = Date.now();
-    const parkForUrlPromise = (attraction.parkId
-      ? this.parkRepository
-          .findOne({
-            where: { id: attraction.parkId },
-            select: [
-              "id",
-              "slug",
-              "continentSlug",
-              "countrySlug",
-              "citySlug",
-              "continent",
-              "country",
-              "city",
-              "timezone",
-              "countryCode",
-              "regionCode",
-              "influencingRegions",
-            ],
-          })
-          .catch(() => null)
-      : Promise.resolve(null)
+    const parkForUrlPromise = (
+      attraction.parkId
+        ? this.parkRepository
+            .findOne({
+              where: { id: attraction.parkId },
+              select: [
+                "id",
+                "slug",
+                "continentSlug",
+                "countrySlug",
+                "citySlug",
+                "continent",
+                "country",
+                "city",
+                "timezone",
+                "countryCode",
+                "regionCode",
+                "influencingRegions",
+              ],
+            })
+            .catch(() => null)
+        : Promise.resolve(null)
     ).then((r) => {
       recordTiming("attraction_phase1_park_url_ms", Date.now() - tPark);
       return r;
