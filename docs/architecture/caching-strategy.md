@@ -4,6 +4,30 @@
 
 Redis is used aggressively to cache expensive computations and ensure low-latency API responses.
 
+## Redis key index (no double-caching)
+
+| Key pattern | Where used | Purpose |
+|-------------|------------|--------|
+| `park:integrated:{parkId}` | ParkIntegrationService | Full park DTO (weather, schedule, queue, ML, attractions). **Not** double-cache: piece caches (weather/schedule/ML) are separate; integrated is a **layer** so one read serves the whole response. |
+| `park:status:{parkId}` | ParksService.getBatchParkStatus | OPERATING/CLOSED from **schedule DB + queue_data fallback** (no external API). |
+| `park:status_live:{parkId}` | ParkIntegrationService (fallback block) | Result of **external** live API (Queue-Times/ThemeParks/Wartezeiten) when schedule says CLOSED. Different source than `park:status` → no double-cache. |
+| `schedule:today:{parkId}:{date}` | ParksService.getTodaySchedule | Today's schedule entries. |
+| `schedule:next:{parkId}:{date}` | ParksService.getNextSchedule | Next operating day. |
+| `schedule:upcoming:{parkId}:{date}:{days}` | ParksService.getUpcomingSchedule | Upcoming N days. |
+| `weather:forecast:{parkId}` | WeatherService.getCurrentAndForecast | Current + 16-day forecast. |
+| `weather:hourly:park:{parkId}` | WeatherService (ML uses it) | Hourly forecast for ML. |
+| `ml:park:{parkId}:{hourly\|daily}:{today}` | MLService.getParkPredictions | Hourly or daily predictions. |
+| `ml:attraction:{attractionId}:{hourly\|daily}:{today}` | MLService.getAttractionPredictions | Single-attraction predictions (attraction detail). |
+| `ml:health:status` | MLService.isHealthy | Health check result. |
+| `attraction:integrated:{attractionId}` | AttractionIntegrationService | Full attraction DTO. |
+| `attraction:accuracy:{id}:{days}` | PredictionAccuracyService | Accuracy badge/stats. |
+| `attraction:p50:{attractionId}` | AnalyticsService | P50 baseline. |
+| `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}` | CalendarService | Per-month calendar days. |
+| `analytics:crowdlevel:park:{parkId}:{date}` | CalendarService / Analytics | Crowd level per day. |
+| `analytics:percentile:sliding:park\|attraction:*` | AnalyticsService | 548-day P50/P90. |
+
+**Conclusion:** No redundant cache for the same logical value. `park:status` vs `park:status_live` are different (DB/schedule vs external API). Integrated caches are an aggregation layer on top of piece caches.
+
 ## Key Patterns
 
 ### 1. Integrated Responses
@@ -21,6 +45,7 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
   - `park:statistics:{parkId}` (TTL: 5 min) - Aggregated wait times, active attraction counts.
   - `park:occupancy:{parkId}` (TTL: 5 min) - Current crowd level % calculation.
   - `park:status:{parkId}` (TTL: 90s) - Park OPERATING/CLOSED from schedule (+ fallback); used by `getBatchParkStatus`.
+  - `park:status_live:{parkId}` (TTL: 2 min OPERATING / 1 min CLOSED) - Result of external live-API fallback (Queue-Times/ThemeParks/Wartezeiten) when schedule says CLOSED; avoids repeated external calls in `buildIntegratedResponse`.
   - `park:p50:{parkId}` (TTL: 24h) - Park P50 baseline from headliners (table: `park_p50_baselines`).
   - `attraction:p50:{attractionId}` (TTL: 24h) - Attraction P50 baseline (table: `attraction_p50_baselines`).
   - `attraction:accuracy:{attractionId}:{days}` (TTL: 10 min) - Prediction accuracy badge/stats for display.

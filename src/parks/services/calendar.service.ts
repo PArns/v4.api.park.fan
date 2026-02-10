@@ -45,6 +45,7 @@ import { addDays, parseISO } from "date-fns";
 
 import { ParkDailyStats } from "../../stats/entities/park-daily-stats.entity";
 import { StatsService } from "../../stats/stats.service";
+import { recordTiming } from "../../common/request-timings";
 
 /** TTL for "schedule refresh requested" rate-limit key (avoid hammering ThemeParks API). */
 const SCHEDULE_REFRESH_RATE_LIMIT_TTL_SEC = 12 * 60 * 60; // 12 hours (was 6h – less aggressive)
@@ -141,6 +142,7 @@ export class CalendarService {
     );
 
     // Fetch all data in parallel
+    const phase1Start = Date.now();
     const [
       schedules,
       weatherData,
@@ -244,6 +246,7 @@ export class CalendarService {
           return [];
         }),
     ]);
+    recordTiming("calendar_phase1_ms", Date.now() - phase1Start);
 
     // On-demand schedule refresh: if requested range has little/no schedule data, trigger
     // a background sync so next request may get updated opening hours (e.g. when source publishes new months).
@@ -259,6 +262,7 @@ export class CalendarService {
     );
 
     // Fetch hourly ML predictions once (used for today+tomorrow when includeHourly) to avoid N+1
+    const phase2Start = Date.now();
     const hourlyPredictionsList: PredictionDto[] =
       includeHourly !== "none"
         ? (
@@ -295,29 +299,63 @@ export class CalendarService {
       }
     });
 
-    // Build calendar days
-    const days: CalendarDay[] = [];
-    const currentDate = new Date(fromDate);
-
-    while (currentDate <= toDate) {
-      const dayData = await this.buildCalendarDay(
-        park,
-        currentDate,
-        schedules,
-        weatherData,
-        mlPredictions.predictions,
-        holidays,
-        refurbishments,
-        includeHourly,
-        historicalQueueData,
-        dailyStats as ParkDailyStats[], // Pass stats
-        today,
-        hourlyPredictionsList,
-        prefetchedCrowdLevels,
+    // Resolve missing historical crowd levels in parallel (avoids N sequential await in phase 3)
+    const missingCrowdDates = historicalDateStrs.filter(
+      (d) => !prefetchedCrowdLevels.has(d),
+    );
+    if (missingCrowdDates.length > 0) {
+      const results = await Promise.all(
+        missingCrowdDates.map(async (dateStr) => {
+          try {
+            const data =
+              await this.analyticsService.calculateCrowdLevelForDate(
+                park.id,
+                "park",
+                dateStr,
+                park.timezone,
+              );
+            return [dateStr, data.crowdLevel] as const;
+          } catch {
+            return [dateStr, "moderate" as CrowdLevel] as const;
+          }
+        }),
       );
-      days.push(dayData);
-      currentDate.setDate(currentDate.getDate() + 1);
+      results.forEach(([dateStr, level]) =>
+        prefetchedCrowdLevels.set(dateStr, level),
+      );
     }
+    recordTiming("calendar_phase2_ms", Date.now() - phase2Start);
+
+    // Build calendar days (no per-day analytics I/O; inferOperatingHours is sync)
+    const phase3Start = Date.now();
+    const dateList: Date[] = [];
+    const walkDate = new Date(fromDate);
+    while (walkDate <= toDate) {
+      dateList.push(new Date(walkDate));
+      walkDate.setDate(walkDate.getDate() + 1);
+    }
+    const days: CalendarDay[] = await Promise.all(
+      dateList.map((currentDate) =>
+        this.buildCalendarDay(
+          park,
+          currentDate,
+          schedules,
+          weatherData,
+          mlPredictions.predictions,
+          holidays,
+          refurbishments,
+          includeHourly,
+          historicalQueueData,
+          dailyStats as ParkDailyStats[], // Pass stats
+          today,
+          hourlyPredictionsList,
+          prefetchedCrowdLevels,
+        ),
+      ),
+    );
+    // Restore chronological order (Promise.all order is stable)
+    days.sort((a, b) => a.date.localeCompare(b.date));
+    recordTiming("calendar_phase3_ms", Date.now() - phase3Start);
 
     // Build response
     const response: IntegratedCalendarResponse = {
@@ -421,7 +459,15 @@ export class CalendarService {
     const maxScheduleDate =
       schedules.length > 0
         ? formatInParkTimezone(
-            new Date(Math.max(...schedules.map((s) => s.date.getTime()))),
+            new Date(
+              Math.max(
+                ...schedules.map((s) =>
+                  typeof s.date === "string"
+                    ? new Date(s.date).getTime()
+                    : s.date.getTime(),
+                ),
+              ),
+            ),
             park.timezone,
           )
         : null;
@@ -618,41 +664,12 @@ export class CalendarService {
     let inferredCrowdLevel: CrowdLevel | "closed";
 
     if (isHistorical) {
+      // Phase 2 pre-fills prefetchedCrowdLevels for all historical dates (cache + parallel analytics).
       const prefetched = prefetchedCrowdLevels.get(dateStr);
-      if (prefetched !== undefined) {
-        inferredCrowdLevel = prefetched;
-      } else {
-        const cachedStat = this.findCachedStat(dateStr, parkStats);
-        if (cachedStat && cachedStat.p90WaitTime !== null) {
-          const crowdData =
-            await this.analyticsService.calculateCrowdLevelForDate(
-              park.id,
-              "park",
-              dateStr,
-              park.timezone,
-            );
-          inferredCrowdLevel = crowdData.crowdLevel;
-        } else {
-          const dayQueueData = historicalQueueData.filter(
-            (q) =>
-              formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
-              q.waitTime !== null &&
-              q.waitTime > 0,
-          );
-          if (dayQueueData.length > 0) {
-            const crowdData =
-              await this.analyticsService.calculateCrowdLevelForDate(
-                park.id,
-                "park",
-                dateStr,
-                park.timezone,
-              );
-            inferredCrowdLevel = crowdData.crowdLevel;
-          } else {
-            inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
-          }
-        }
-      }
+      inferredCrowdLevel =
+        prefetched !== undefined
+          ? prefetched
+          : (mlPrediction?.crowdLevel as CrowdLevel) || "moderate";
     } else {
       inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
     }
@@ -687,7 +704,7 @@ export class CalendarService {
         isInferred: false,
       };
     } else if (status === "OPERATING" && mlPrediction) {
-      hours = await this.inferOperatingHours(park, date);
+      hours = this.inferOperatingHours(park, date);
     }
 
     // Build weather summary
@@ -814,19 +831,16 @@ export class CalendarService {
   }
 
   /**
-   * Infer operating hours based on ML predictions and historical data
+   * Infer operating hours based on ML predictions and historical data (sync; no I/O).
    */
-  private async inferOperatingHours(
+  private inferOperatingHours(
     park: Park,
     date: Date,
-  ): Promise<OperatingHours> {
-    // Simple heuristic: use standard theme park hours
+  ): OperatingHours {
     const dayOfWeek = date.getDay();
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
     const openingHour = isWeekend ? 9 : 10;
     const closingHour = isWeekend ? 20 : 18;
-
     const dateStr = formatInParkTimezone(date, park.timezone);
     const openingTime = new Date(
       `${dateStr}T${String(openingHour).padStart(2, "0")}:00:00`,
@@ -834,7 +848,6 @@ export class CalendarService {
     const closingTime = new Date(
       `${dateStr}T${String(closingHour).padStart(2, "0")}:00:00`,
     );
-
     return {
       openingTime: openingTime.toISOString(),
       closingTime: closingTime.toISOString(),

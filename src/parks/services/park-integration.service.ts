@@ -36,6 +36,7 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { recordTiming } from "../../common/request-timings";
 
 /**
  * Park Integration Service
@@ -62,6 +63,9 @@ export class ParkIntegrationService {
   private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
   private readonly TTL_QUEUE_DATA = 5 * 60; // 5 minutes (matches update frequency)
   private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
+  /** TTL for cached "live" status from external APIs (Queue-Times/ThemeParks/Wartezeiten) to avoid repeated calls */
+  private readonly TTL_STATUS_LIVE_OPERATING = 2 * 60; // 2 min when API said OPERATING
+  private readonly TTL_STATUS_LIVE_CLOSED = 60; // 1 min when API said CLOSED (recheck sooner)
 
   constructor(
     private readonly parksService: ParksService,
@@ -165,7 +169,46 @@ export class ParkIntegrationService {
     // Fetch weather, schedule, queue data, and ML predictions in parallel
     // These all only depend on park.id so they can run simultaneously
     // Queue data uses park opening hours to determine valid cutoff (not fixed 6 hours)
-
+    const phase1Start = Date.now();
+    const tWeather = Date.now();
+    const weatherPromise = this.weatherService
+      .getCurrentAndForecast(park.id)
+      .then((r) => {
+        recordTiming("park_phase1_weather_ms", Date.now() - tWeather);
+        return r;
+      });
+    const tSchedule = Date.now();
+    const schedulePromise = this.parksService
+      .getUpcomingSchedule(park.id, 7)
+      .then((r) => {
+        recordTiming("park_phase1_schedule_ms", Date.now() - tSchedule);
+        return r;
+      });
+    const tQueue = Date.now();
+    const queuePromise = this.queueDataService
+      .findCurrentStatusByPark(park.id)
+      .then((r) => {
+        recordTiming("park_phase1_queue_ms", Date.now() - tQueue);
+        return r;
+      });
+    const tMl = Date.now();
+    const mlPromise = Promise.all([
+      this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
+      this.mlService
+        .getParkPredictions(park.id, "daily", 16)
+        .catch(() => null),
+    ]).then((r) => {
+      recordTiming("park_phase1_ml_ms", Date.now() - tMl);
+      return r;
+    });
+    const tNext = Date.now();
+    const nextSchedulePromise = this.parksService
+      .getNextSchedule(park.id)
+      .catch(() => null)
+      .then((r) => {
+        recordTiming("park_phase1_next_schedule_ms", Date.now() - tNext);
+        return r;
+      });
     const [
       weatherData,
       schedule,
@@ -173,17 +216,13 @@ export class ParkIntegrationService {
       mlPredictionsResult,
       nextSchedule,
     ] = await Promise.all([
-      this.weatherService.getCurrentAndForecast(park.id),
-      this.parksService.getUpcomingSchedule(park.id, 7),
-      this.queueDataService.findCurrentStatusByPark(park.id),
-      Promise.all([
-        this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
-        this.mlService
-          .getParkPredictions(park.id, "daily", 16)
-          .catch(() => null),
-      ]),
-      this.parksService.getNextSchedule(park.id).catch(() => null),
+      weatherPromise,
+      schedulePromise,
+      queuePromise,
+      mlPromise,
+      nextSchedulePromise,
     ]);
+    recordTiming("park_phase1_ms", Date.now() - phase1Start);
     const [hourlyRes, dailyRes] = mlPredictionsResult;
 
     dto.weather = {
@@ -215,12 +254,18 @@ export class ParkIntegrationService {
     // B. Fallback: Check Live Data for Operating Hours (if Schedule missing or Closed)
     // Sometimes the schedule API is empty/stale, but the Live API returns "Operating" with hours
     // Only attempt this if we are currently CLOSED (don't override valid Operating schedule)
+    // Use short-lived cache to avoid hitting external API on every request (no feature loss).
     if (status === "CLOSED" && park.externalId) {
-      try {
-        const eid = park.externalId;
+      const statusLiveKey = `park:status_live:${park.id}`;
+      const cachedLive = await this.redis.get(statusLiveKey);
+      if (cachedLive === "OPERATING" || cachedLive === "CLOSED") {
+        status = cachedLive as ParkStatus;
+      } else {
+        try {
+          const eid = park.externalId;
 
-        // --- STRATEGY 1: Queue-Times (qt-) ---
-        if (eid.startsWith("qt-")) {
+          // --- STRATEGY 1: Queue-Times (qt-) ---
+          if (eid.startsWith("qt-")) {
           // Extract ID (e.g. "qt-51" -> 51)
           const qtIdStr = eid.replace("qt-", "");
           const qtId = parseInt(qtIdStr, 10);
@@ -322,11 +367,17 @@ export class ParkIntegrationService {
             }
           }
         }
-      } catch (err) {
-        this.logger.warn(
-          `Failed to fetch fallback live data for ${park.name}: ${err}`,
-        );
-      } finally {
+        } catch (err) {
+          this.logger.warn(
+            `Failed to fetch fallback live data for ${park.name}: ${err}`,
+          );
+        } finally {
+          const ttl =
+            status === "OPERATING"
+              ? this.TTL_STATUS_LIVE_OPERATING
+              : this.TTL_STATUS_LIVE_CLOSED;
+          await this.redis.set(statusLiveKey, status, "EX", ttl).catch(() => {});
+        }
       }
     }
     // Queue data already fetched in parallel above - just use it to detect activity
@@ -428,6 +479,7 @@ export class ParkIntegrationService {
       );
 
       // Batch fetch P50s (prefer) and P90s (fallback), then accuracy, deviation, stats, history, trends
+      const phase2Start = Date.now();
       const [
         attractionP50s,
         attractionP90s,
@@ -453,6 +505,7 @@ export class ParkIntegrationService {
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
       ]);
+      recordTiming("park_phase2_ms", Date.now() - phase2Start);
 
       // Build accuracy map from pre-aggregated stats
       const accuracyMap = new Map<

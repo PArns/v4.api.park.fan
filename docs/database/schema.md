@@ -67,6 +67,10 @@ Precomputed analytics are stored in dedicated tables and optionally mirrored in 
 
 Sliding-window percentiles (548-day) are not stored in DB; they are computed and cached in Redis only.
 
+## Indexes
+
+See [Indexes](indexes.md) for which indexes exist and which queries they cover (including ML: queue_data, schedule_entries, holidays, weather_data).
+
 ## Extensions
 
 - **TimescaleDB**: Used for `queue_data` and potentially `wait_time_predictions` to handle high-volume time-series data efficiently.

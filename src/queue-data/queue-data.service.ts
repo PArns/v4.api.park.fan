@@ -442,21 +442,26 @@ export class QueueDataService {
    *
    * @param attractionId - Attraction ID
    * @param maxAgeMinutes - Fallback maximum age in minutes (optional, default: 6 hours)
+   * @param parkId - Optional; when provided (e.g. from caller), skips extra findOne to resolve park
    * @returns Most recent queue data for all queue types
    */
   async findCurrentStatusByAttraction(
     attractionId: string,
     maxAgeMinutes?: number,
+    parkId?: string,
   ): Promise<QueueData[]> {
-    // Get attraction to find park
-    const attraction = await this.attractionRepository.findOne({
-      where: { id: attractionId },
-      select: ["parkId"],
-    });
+    const resolvedParkId =
+      parkId ??
+      (
+        await this.attractionRepository.findOne({
+          where: { id: attractionId },
+          select: ["parkId"],
+        })
+      )?.parkId;
 
     let cutoff: Date | undefined;
-    if (attraction?.parkId) {
-      cutoff = await this.getValidDataCutoff(attraction.parkId, maxAgeMinutes);
+    if (resolvedParkId) {
+      cutoff = await this.getValidDataCutoff(resolvedParkId, maxAgeMinutes);
     } else if (maxAgeMinutes) {
       // Fallback if no park found
       cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);

@@ -43,6 +43,11 @@ import {
 @Index("idx_queue_data_operating", ["attractionId", "timestamp"], {
   where: "\"status\" = 'OPERATING'",
 })
+// Partial index for ML fetch_recent_wait_times (OPERATING + STANDBY only); smallest index for that query
+// Used by: ml-service/predict.py fetch_recent_wait_times()
+@Index("idx_queue_data_ml_recent", ["attractionId", "timestamp"], {
+  where: "\"status\" = 'OPERATING' AND \"queueType\" = 'STANDBY'",
+})
 // Index for queueType + status + timestamp queries (used by ML service training data)
 // Used by: ml-service/db.py fetch_training_data (WHERE queueType = 'STANDBY' AND status = 'OPERATING')
 @Index(["queueType", "status", "timestamp"])

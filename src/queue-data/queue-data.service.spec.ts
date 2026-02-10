@@ -3,9 +3,19 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { QueueDataService } from "./queue-data.service";
 import { QueueData } from "./entities/queue-data.entity";
 import { ForecastData } from "./entities/forecast-data.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
+import { ParksService } from "../parks/parks.service";
 
 describe("QueueDataService", () => {
   let service: QueueDataService;
+
+  const mockAttractionRepository = {
+    findOne: jest.fn().mockResolvedValue({ parkId: "park-1" }),
+  };
+
+  const mockParksService = {
+    getTodaySchedule: jest.fn().mockResolvedValue([]),
+  };
 
   // Mock repositories
   const mockQueueDataRepository = {
@@ -21,10 +31,8 @@ describe("QueueDataService", () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockReturnThis(),
-      skip: jest.fn().mockReturnThis(),
-      take: jest.fn().mockReturnThis(),
-      groupBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      distinctOn: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getOne: jest.fn().mockResolvedValue(null),
       getRawMany: jest.fn().mockResolvedValue([]),
@@ -72,6 +80,14 @@ describe("QueueDataService", () => {
           provide: getRepositoryToken(ForecastData),
           useValue: mockForecastDataRepository,
         },
+        {
+          provide: getRepositoryToken(Attraction),
+          useValue: mockAttractionRepository,
+        },
+        {
+          provide: ParksService,
+          useValue: mockParksService,
+        },
       ],
     }).compile();
 
@@ -96,19 +112,45 @@ describe("QueueDataService", () => {
         timestamp: new Date(),
       };
 
-      // Mock findOne to return data when called
-      mockQueueDataRepository.findOne.mockResolvedValue(mockQueueData);
+      const chain = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        distinctOn: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([mockQueueData]),
+      };
+
+      mockQueueDataRepository.createQueryBuilder.mockReturnValueOnce(
+        chain as any,
+      );
 
       const result = await service.findCurrentStatusByAttraction(attractionId);
 
-      // Should return array of results (one per queue type found)
-      expect(result).toHaveLength(6); // 6 queue types checked
+      expect(result).toHaveLength(1);
       expect(result[0]).toEqual(mockQueueData);
-      expect(mockQueueDataRepository.findOne).toHaveBeenCalled();
+      expect(mockAttractionRepository.findOne).toHaveBeenCalledWith({
+        where: { id: attractionId },
+        select: ["parkId"],
+      });
+    });
+
+    it("should skip attraction lookup when parkId is provided", async () => {
+      mockAttractionRepository.findOne.mockClear();
+      const qb = mockQueueDataRepository.createQueryBuilder();
+      (qb.getMany as jest.Mock).mockResolvedValue([]);
+
+      await service.findCurrentStatusByAttraction(
+        "attr-123",
+        undefined,
+        "park-1",
+      );
+
+      expect(mockAttractionRepository.findOne).not.toHaveBeenCalled();
     });
 
     it("should return empty array when no data available", async () => {
-      mockQueueDataRepository.findOne.mockResolvedValue(null);
+      mockAttractionRepository.findOne.mockResolvedValue(null);
 
       const result = await service.findCurrentStatusByAttraction("attr-999");
 

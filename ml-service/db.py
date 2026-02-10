@@ -431,6 +431,44 @@ def fetch_park_schedules(
         return convert_df_types(df)
 
 
+def fetch_schedule_entries_for_prediction(
+    park_ids: List[str], start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
+    """
+    Fetch schedule entries for given parks and date range (for ML prediction features).
+    Column names match what predict.create_prediction_features expects.
+    """
+    query = text(
+        """
+        SELECT
+            "parkId"::text as "parkId",
+            "attractionId"::text as "attractionId",
+            date,
+            "scheduleType",
+            "openingTime",
+            "closingTime"
+        FROM schedule_entries
+        WHERE "parkId"::text = ANY(:park_ids)
+            AND date BETWEEN :start_date AND :end_date
+            AND (
+                ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
+                OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT', 'UNKNOWN')
+            )
+    """
+    )
+    with get_db() as db:
+        result = db.execute(
+            query,
+            {
+                "park_ids": park_ids,
+                "start_date": start_date.date() if hasattr(start_date, "date") else start_date,
+                "end_date": end_date.date() if hasattr(end_date, "date") else end_date,
+            },
+        )
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        return convert_df_types(df)
+
+
 def fetch_active_model_version() -> str:
     """
     Fetch the active model version from the database

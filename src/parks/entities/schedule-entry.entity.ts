@@ -33,6 +33,7 @@ export enum ScheduleType {
 
 @Entity("schedule_entries")
 @Index(["parkId", "date", "scheduleType"]) // Covers range queries getSchedule(parkId, from, to) via leftmost prefix
+@Index(["parkId", "scheduleType", "openingTime"]) // getBatchParkStatusFromDb: active now (openingTime <= now, closingTime > now)
 @Index(["date"])
 @Index(["attractionId", "date"])
 export class ScheduleEntry {

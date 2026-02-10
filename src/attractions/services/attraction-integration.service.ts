@@ -31,6 +31,7 @@ import { addDays, subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
+import { recordTiming } from "../../common/request-timings";
 
 /**
  * Attraction Integration Service
@@ -108,6 +109,95 @@ export class AttractionIntegrationService {
     const dto = AttractionResponseDto.fromEntity(attraction);
 
     // === PHASE 1: Parallel fetch of all independent data sources ===
+    const phase1Start = Date.now();
+    const tQueue = Date.now();
+    const queuePromise = this.queueDataService
+      .findCurrentStatusByAttraction(
+        attraction.id,
+        undefined,
+        attraction.parkId ?? undefined,
+      )
+      .catch(() => [])
+      .then((r) => {
+        recordTiming("attraction_phase1_queue_ms", Date.now() - tQueue);
+        return r;
+      });
+    const tStatus = Date.now();
+    const parkStatusPromise = (attraction.parkId
+      ? this.parksService
+          .getBatchParkStatus([attraction.parkId])
+          .catch(() => new Map<string, "OPERATING" | "CLOSED">())
+      : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">())
+    ).then((r) => {
+      recordTiming("attraction_phase1_park_status_ms", Date.now() - tStatus);
+      return r;
+    });
+    const tForecasts = Date.now();
+    const forecastsPromise = this.queueDataService
+      .findForecastsByAttraction(attraction.id, 24)
+      .catch(() => [])
+      .then((r) => {
+        recordTiming("attraction_phase1_forecasts_ms", Date.now() - tForecasts);
+        return r;
+      });
+    const tPark = Date.now();
+    const parkForUrlPromise = (attraction.parkId
+      ? this.parkRepository
+          .findOne({
+            where: { id: attraction.parkId },
+            select: [
+              "id",
+              "slug",
+              "continentSlug",
+              "countrySlug",
+              "citySlug",
+              "continent",
+              "country",
+              "city",
+              "timezone",
+              "countryCode",
+              "regionCode",
+              "influencingRegions",
+            ],
+          })
+          .catch(() => null)
+      : Promise.resolve(null)
+    ).then((r) => {
+      recordTiming("attraction_phase1_park_url_ms", Date.now() - tPark);
+      return r;
+    });
+    const tMl = Date.now();
+    const mlPromise = this.mlService
+      .isHealthy()
+      .then((healthy) =>
+        healthy
+          ? this.mlService.getAttractionPredictionsWithFallback(
+              attraction.id,
+              "hourly",
+            )
+          : [],
+      )
+      .catch(() => [])
+      .then((r) => {
+        recordTiming("attraction_phase1_ml_ms", Date.now() - tMl);
+        return r;
+      });
+    const tP50 = Date.now();
+    const p50Promise = this.analyticsService
+      .getAttractionP50BaselineFromCache(attraction.id)
+      .catch(() => 0)
+      .then((r) => {
+        recordTiming("attraction_phase1_p50_ms", Date.now() - tP50);
+        return r;
+      });
+    const tP90 = Date.now();
+    const p90Promise = this.analyticsService
+      .get90thPercentileWithConfidence(attraction.id, "attraction")
+      .catch(() => ({ p50: 0, p90: 0 }))
+      .then((r) => {
+        recordTiming("attraction_phase1_p90_ms", Date.now() - tP90);
+        return r;
+      });
     const [
       queueData,
       parkStatusResult,
@@ -117,56 +207,15 @@ export class AttractionIntegrationService {
       p50Baseline,
       p90Result,
     ] = await Promise.all([
-      this.queueDataService
-        .findCurrentStatusByAttraction(attraction.id)
-        .catch(() => []),
-      attraction.parkId
-        ? this.parksService
-            .getBatchParkStatus([attraction.parkId])
-            .catch(() => new Map<string, "OPERATING" | "CLOSED">())
-        : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">()),
-      this.queueDataService
-        .findForecastsByAttraction(attraction.id, 24)
-        .catch(() => []),
-      attraction.parkId
-        ? this.parkRepository
-            .findOne({
-              where: { id: attraction.parkId },
-              select: [
-                "id",
-                "slug",
-                "continentSlug",
-                "countrySlug",
-                "citySlug",
-                "continent",
-                "country",
-                "city",
-                "timezone",
-                "countryCode",
-                "regionCode",
-                "influencingRegions",
-              ],
-            })
-            .catch(() => null)
-        : Promise.resolve(null),
-      this.mlService
-        .isHealthy()
-        .then((healthy) =>
-          healthy
-            ? this.mlService.getAttractionPredictionsWithFallback(
-                attraction.id,
-                "hourly",
-              )
-            : [],
-        )
-        .catch(() => []),
-      this.analyticsService
-        .getAttractionP50BaselineFromCache(attraction.id)
-        .catch(() => 0),
-      this.analyticsService
-        .get90thPercentileWithConfidence(attraction.id, "attraction")
-        .catch(() => ({ p50: 0, p90: 0 })),
+      queuePromise,
+      parkStatusPromise,
+      forecastsPromise,
+      parkForUrlPromise,
+      mlPromise,
+      p50Promise,
+      p90Promise,
     ]);
+    recordTiming("attraction_phase1_ms", Date.now() - phase1Start);
 
     // Resolve baseline once (used for crowd level + comparison)
     const baseline = p50Baseline || p90Result.p50 || p90Result.p90 || 0;
@@ -343,6 +392,7 @@ export class AttractionIntegrationService {
         parkForUrl.timezone,
       );
 
+      const phase2Start = Date.now();
       const [statistics, history, accuracy] = await Promise.all([
         this.analyticsService.getAttractionStatistics(
           attraction.id,
@@ -367,6 +417,7 @@ export class AttractionIntegrationService {
           .getAttractionAccuracyWithBadge(attraction.id, 30)
           .catch(() => null),
       ]);
+      recordTiming("attraction_phase2_ms", Date.now() - phase2Start);
 
       dto.statistics = {
         avgWaitToday: statistics.avgWaitToday,

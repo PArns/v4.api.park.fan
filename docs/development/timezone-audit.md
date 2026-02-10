@@ -1,12 +1,12 @@
-# Timezone Audit – Park-Zeitzone bei allen Zeitoperationen
+# Timezone Audit – Park timezone in all time operations
 
-> **Stand:** 2026-02-08  
-> **Regel:** Alle Zeitoperationen müssen die Park-Zeitzone berücksichtigen. Siehe [Date & Time Handling](datetime-handling.md).
+> **As of:** 2026-02-08  
+> **Rule:** All time operations must respect the park timezone. See [Date & Time Handling](datetime-handling.md).
 
-## Status-Übersicht
+## Status overview
 
-| Datei | Status | Priorität |
-|-------|--------|-----------|
+| File | Status | Priority |
+|------|--------|----------|
 | `parks.service.ts` getUpcomingSchedule | ✅ FIXED (2026-02-08) | – |
 | `parks.service.ts` isParkCurrentlyOpen / isParkOperatingToday | ✅ FIXED (getCurrentDateInTimezone) | – |
 | `weather.service.ts` Fallback fetchHourlyForecast | ✅ FIXED (2026-02-08) | – |
@@ -25,64 +25,64 @@
 
 ### 1. `parks.service.ts` – `getUpcomingSchedule` ✅ FIXED
 
-**Problem:** `today` und `endDate` wurden mit `new Date()` berechnet (Server-Zeit).
+**Problem:** `today` and `endDate` were computed with `new Date()` (server time).
 
-**Fix:** Range in Park-Zeitzone: `getStartOfDayInTimezone(tz)`, `addDays(startDate, -2)` bis `addDays(startDate, days + 1)`.
+**Fix:** Range in park timezone: `getStartOfDayInTimezone(tz)`, `addDays(startDate, -2)` through `addDays(startDate, days + 1)`.
 
 ### 2. `weather.service.ts` – Fallback in `fetchHourlyForecast` ✅ FIXED
 
-**Problem:** `today = new Date()` und `Between(today, next7Days)` nutzten Server-Datum.
+**Problem:** `today = new Date()` and `Between(today, next7Days)` used server date.
 
-**Fix:** Park laden, `getCurrentDateInTimezone(tz)`, `fromZonedTime`, `addDays(todayStart, 7)`.
+**Fix:** Load park, `getCurrentDateInTimezone(tz)`, `fromZonedTime`, `addDays(todayStart, 7)`.
 
 ### 3. `weather.service.ts` – `markPastDataAsHistorical` ✅ FIXED
 
-**Problem:** `today = new Date()` – globales „heute“ in Server-Zeit.
+**Problem:** `today = new Date()` – global “today” in server time.
 
-**Fix:** Pro Park iterieren, `getCurrentDateInTimezone(park.timezone)` für `todayStr`, Update mit `date < :todayStr` und `parkId = :parkId`.
+**Fix:** Iterate per park, `getCurrentDateInTimezone(park.timezone)` for `todayStr`, update with `date < :todayStr` and `parkId = :parkId`.
 
 ### 4. `search.service.ts` – `getBatchParkHours` ✅ FIXED
 
-**Problem:** `Between(todayStart, todayEnd)` mit Server-Datum für alle Parks.
+**Problem:** `Between(todayStart, todayEnd)` with server date for all parks.
 
-**Fix:** Parks laden, pro Park `date = getCurrentDateInTimezone(park.timezone)` (String-Gleichheit).
+**Fix:** Load parks, per park `date = getCurrentDateInTimezone(park.timezone)` (string equality).
 
 ### 5. `analytics.service.ts` – `getParkPercentilesToday` / `getAttractionPercentilesToday` ✅ FIXED
 
-**Problem:** `startOfDay = new Date()` – Server-Mitternacht.
+**Problem:** `startOfDay = new Date()` – server midnight.
 
-**Fix:** Park/Attraction laden, `getStartOfDayInTimezone(park.timezone)` bzw. `attraction.park.timezone`.
+**Fix:** Load park/attraction, `getStartOfDayInTimezone(park.timezone)` or `attraction.park.timezone`.
 
 ### 6. `park-integration.service.ts` – `tomorrowInParkTz` ✅ FIXED
 
-**Problem:** `tomorrow = new Date(); tomorrow.setDate(...)` – Server-Morgen, nicht Park-Morgen.
+**Problem:** `tomorrow = new Date(); tomorrow.setDate(...)` – server tomorrow, not park tomorrow.
 
 **Fix:** `getTomorrowDateInTimezone(park.timezone)`.
 
 ### 7. `parks.service.ts` – `isParkCurrentlyOpen` / `isParkOperatingToday` ✅ FIXED
 
-**Status:** Jetzt mit `getCurrentDateInTimezone(park.timezone)` für Konsistenz.
+**Status:** Now uses `getCurrentDateInTimezone(park.timezone)` for consistency.
 
 ---
 
-## ✅ Bereits korrekt
+## Already correct
 
 - `parks.service.ts`: `getTodaySchedule`, `getNextSchedule`, `fillScheduleGaps`, `getScheduleForDate`
-- `calendar.service.ts`: verwendet `formatInParkTimezone`, `getCurrentDateInTimezone`
-- `cache-warmup.service.ts`: `warmupCalendarForPark` nutzt `getCurrentDateInTimezone(tz)`
-- `parks.controller.ts`: Weather nutzt `getCurrentDateInTimezone(park.timezone)`
-- `wait-times.processor.ts`: `formatInParkTimezone(new Date(), timezone)` für `todayStr`
-- `stats.service.ts`: `formatInParkTimezone` für Datumsvergleiche
-- `ml.service.ts`: `getCurrentDateInTimezone(park.timezone)` für Predictions
+- `calendar.service.ts`: uses `formatInParkTimezone`, `getCurrentDateInTimezone`
+- `cache-warmup.service.ts`: `warmupCalendarForPark` uses `getCurrentDateInTimezone(tz)`
+- `parks.controller.ts`: weather uses `getCurrentDateInTimezone(park.timezone)`
+- `wait-times.processor.ts`: `formatInParkTimezone(new Date(), timezone)` for `todayStr`
+- `stats.service.ts`: `formatInParkTimezone` for date comparisons
+- `ml.service.ts`: `getCurrentDateInTimezone(park.timezone)` for predictions
 
 ---
 
-## Unkritische Verwendungen von `new Date()`
+## Acceptable uses of `new Date()`
 
-Diese sind **OK**, da sie keine park-spezifische „heute“-Logik haben:
+These are **OK** because they do not implement park-specific “today” logic:
 
-- **Metadata:** `lastUpdated`, `generatedAt`, `geocodingAttemptedAt` – Absolutzeit
-- **Retry-Delays:** `nextRetryDate = new Date(Date.now() + ...)` – Relativzeit
-- **UTC-Vergleiche:** `openingTime`/`closingTime` sind UTC; `now >= openingTime` ist korrekt
-- **Relative Fenster:** z.B. `Date.now() - 2 * 60 * 60 * 1000` für „Daten der letzten 2 Stunden“ – absolute Uhrzeit
-- **Parsing:** `new Date(row.timestamp)` – Umwandlung von DB-Timestamps
+- **Metadata:** `lastUpdated`, `generatedAt`, `geocodingAttemptedAt` – absolute time
+- **Retry delays:** `nextRetryDate = new Date(Date.now() + ...)` – relative time
+- **UTC comparisons:** `openingTime`/`closingTime` are UTC; `now >= openingTime` is correct
+- **Relative windows:** e.g. `Date.now() - 2 * 60 * 60 * 1000` for “data from the last 2 hours” – absolute clock time
+- **Parsing:** `new Date(row.timestamp)` – conversion of DB timestamps

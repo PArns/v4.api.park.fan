@@ -32,6 +32,7 @@
 
 ### 🤖 Machine Learning
 - [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
+- [ML Service Performance](docs/ml/ml-service-performance.md) - Where 2–5 s latency comes from (feature building, DB), and optimization options.
 
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.

@@ -6,6 +6,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
+import { runWithTimings } from "./common/request-timings";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
 import * as packageJson from "../package.json";
@@ -22,6 +23,20 @@ async function bootstrap(): Promise<void> {
   app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("X-Powered-By", "api.park.fan");
     next();
+  });
+
+  // Request timings context for slow-request log breakdown (which phase was slow).
+  // Keep context until response finishes so async controller work (e.g. calendar phases)
+  // runs inside the same context and recordTiming() is visible to getTimings().
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const done = new Promise<void>((resolve) => {
+      res.once("finish", resolve);
+      res.once("close", resolve);
+    });
+    runWithTimings(async () => {
+      next();
+      await done;
+    });
   });
 
   // Global validation pipe for DTOs

@@ -8,9 +8,36 @@ export interface SlowRequestEntry {
   ts: string;
   method: string;
   url: string;
+  /** Short label for grouping/alerting (e.g. attraction_detail, park_detail, search) */
+  endpoint?: string;
+  /** Query string only (e.g. "days=30") for debugging */
+  query?: string;
   statusCode: number;
   responseTimeMs: number;
   ip?: string;
+  /** Per-phase or per-operation timings (ms) to see where time was spent */
+  breakdown?: Record<string, number>;
+}
+
+/**
+ * Derive endpoint label from path for slow-request log (no query string).
+ */
+export function getEndpointLabel(pathname: string): string {
+  const p = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  if (p.includes("/health")) return "health";
+  if (p.includes("/search")) return "search";
+  if (p.includes("/calendar")) return "calendar";
+  // /v1/parks/:c/:country/:city/:parkSlug/attractions/:attractionSlug
+  if (/\/v1\/parks\/[^/]+\/[^/]+\/[^/]+\/[^/]+\/attractions\/[^/]+/.test(p))
+    return "attraction_detail";
+  // /v1/parks/:c/:country/:city/:parkSlug (exactly 4 segments after /parks/)
+  if (/\/v1\/parks\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(p)) return "park_detail";
+  if (p.includes("/parks/")) return "parks";
+  if (p.includes("/attractions/")) return "attractions";
+  if (p.includes("/discovery")) return "discovery";
+  if (p.includes("/admin") || p.includes("/ml")) return "admin_ml";
+  const first = p.split("/").filter(Boolean)[1]; // v1, admin, ...
+  return first || "other";
 }
 
 /**

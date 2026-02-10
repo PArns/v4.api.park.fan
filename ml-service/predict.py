@@ -2,18 +2,30 @@
 Prediction logic for hourly and daily forecasts
 """
 
+import logging
+import time
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy import text
 
+from concurrent.futures import ThreadPoolExecutor
+
 from model import WaitTimeModel
 from percentile_features import add_percentile_features
-from db import fetch_parks_metadata, get_db, fetch_holidays, convert_df_types
+from db import (
+    fetch_parks_metadata,
+    get_db,
+    fetch_holidays,
+    fetch_schedule_entries_for_prediction,
+    convert_df_types,
+)
 from config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def round_to_nearest_5(value: float) -> int:
@@ -423,7 +435,43 @@ def create_prediction_features(
                 [r["countryCode"] for r in raw_influences if r.get("countryCode")]
             )
 
-    holidays_df = fetch_holidays(list(all_countries), df_start, df_end)
+    # Parallelise DB fetches (holidays, schedule, recent wait times) to reduce wall-clock time
+    if "local_timestamp" in df.columns:
+        start_date_local = df["local_timestamp"].min().date()
+        end_date_local = df["local_timestamp"].max().date()
+    else:
+        start_date_local = df["timestamp"].min().date()
+        end_date_local = df["timestamp"].max().date()
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        fut_holidays = executor.submit(
+            fetch_holidays, list(all_countries), df_start, df_end
+        )
+        fut_schedule = executor.submit(
+            fetch_schedule_entries_for_prediction,
+            list(set(park_ids)),
+            start_date_local,
+            end_date_local,
+        )
+        lookback_days = get_settings().PREDICTION_LOOKBACK_DAYS
+        fut_recent = executor.submit(fetch_recent_wait_times, attraction_ids, lookback_days)
+        _t0 = time.perf_counter()
+        holidays_df = fut_holidays.result()
+        t_holidays_ms = (time.perf_counter() - _t0) * 1000
+        _t0 = time.perf_counter()
+        schedules_df = fut_schedule.result()
+        t_schedule_ms = (time.perf_counter() - _t0) * 1000
+        _t0 = time.perf_counter()
+        recent_data = fut_recent.result()
+        t_recent_ms = (time.perf_counter() - _t0) * 1000
+        if t_holidays_ms + t_schedule_ms + t_recent_ms > 500:
+            logger.info(
+                "create_prediction_features db: holidays=%.0fms schedule=%.0fms recent_wait=%.0fms lookback=%dd",
+                t_holidays_ms,
+                t_schedule_ms,
+                t_recent_ms,
+                lookback_days,
+            )
 
     if not holidays_df.empty:
         holidays_df["date"] = pd.to_datetime(holidays_df["date"])
@@ -543,57 +591,7 @@ def create_prediction_features(
                 has_local_school or has_neighbor_school
             )
 
-    # Park schedule features (check if park is open at predicted time)
-    schedule_query = text(
-        """
-        SELECT
-            "parkId"::text as "parkId",
-            "attractionId"::text as "attractionId",
-            date,
-            "scheduleType",
-            "openingTime",
-            "closingTime"
-        FROM schedule_entries
-        WHERE "parkId"::text = ANY(:park_ids)
-            AND date BETWEEN :start_date AND :end_date
-            AND (
-                ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
-                OR "scheduleType" IN ('MAINTENANCE', 'CLOSED', 'INFO', 'TICKETED_EVENT', 'PRIVATE_EVENT', 'UNKNOWN')
-            )
-    """
-    )
-
-    with get_db() as db:
-        # Determine date range for schedule query using park local timezone
-        # Schedules are stored as DATE type (park's local calendar dates)
-        # We must query using dates in the park's timezone, not UTC
-        # df has 'local_timestamp' column added by convert_to_local_time() earlier
-        if "local_timestamp" in df.columns:
-            # Extract date range from LOCAL timestamps (already in park TZ)
-            start_date_local = df["local_timestamp"].min().date()
-            end_date_local = df["local_timestamp"].max().date()
-        else:
-            # Fallback to UTC dates (should not happen in production)
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "No local_timestamp column - using UTC for schedule dates (may miss boundary dates)"
-            )
-            # FIX: Use df['timestamp'] instead of undefined df_start/df_end
-            start_date_local = df["timestamp"].min().date()
-            end_date_local = df["timestamp"].max().date()
-
-        result = db.execute(
-            schedule_query,
-            {
-                "park_ids": list(set(park_ids)),
-                "start_date": start_date_local,
-                "end_date": end_date_local,
-            },
-        )
-        schedules_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-
+    # Park schedule features (schedules_df already fetched in parallel above)
     # Initialize schedule features and status
     df["is_park_open"] = 1  # Assume open if no schedule found
     df["has_special_event"] = 0
@@ -728,10 +726,7 @@ def create_prediction_features(
                         # technically park is open but this ride isn't.
                         # But we are overriding prediction anyway, so feature value matters less.
 
-    # Historical features (most important!)
-    # Fetch up to 2 years of aggregated daily data (efficient for large datasets)
-    recent_data = fetch_recent_wait_times(attraction_ids, lookback_days=730)
-
+    # Historical features (recent_data already fetched in parallel above)
     # Initialize with defaults
     df["avg_wait_last_24h"] = 30.0
     df["avg_wait_last_1h"] = 30.0
@@ -1079,9 +1074,7 @@ def predict_wait_times(
     timestamps = generate_future_timestamps(base_time, prediction_type)
 
     # Create features with all DB-loaded data
-    # Reduced logging - only log summary, not details
-
-    # Features
+    _t_features = time.perf_counter()
     features_df = create_prediction_features(
         attraction_ids,
         park_ids,
@@ -1092,8 +1085,10 @@ def predict_wait_times(
         recent_wait_times,
         feature_context,
     )
+    t_features_elapsed = (time.perf_counter() - _t_features) * 1000
 
     # Predict with uncertainty estimation
+    _t_predict = time.perf_counter()
     try:
         uncertainty_results = model.predict_with_uncertainty(features_df)
         predictions = uncertainty_results["predictions"]
@@ -1107,6 +1102,16 @@ def predict_wait_times(
         predictions = model.predict(features_df)
         uncertainties = np.zeros(len(predictions))
         use_uncertainty = False
+    t_predict_elapsed = (time.perf_counter() - _t_predict) * 1000
+
+    if t_features_elapsed > 1000 or t_predict_elapsed > 500:
+        logger.info(
+            "predict_wait_times: features=%.0fms model=%.0fms n_attractions=%d n_rows=%d",
+            t_features_elapsed,
+            t_predict_elapsed,
+            len(attraction_ids),
+            len(features_df),
+        )
 
     # Format results
     results = []

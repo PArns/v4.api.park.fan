@@ -1057,29 +1057,27 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Batch fetch attraction status from queue data
+   * Batch fetch attraction status from queue data.
+   * Uses single findCurrentStatusByAttractionIds query instead of N× findCurrentStatusByAttraction.
    */
   private async getBatchAttractionStatus(
     attractionIds: string[],
   ): Promise<Map<string, { status: string }>> {
     const statusMap = new Map<string, { status: string }>();
+    if (attractionIds.length === 0) return statusMap;
 
-    await Promise.all(
-      attractionIds.map(async (attractionId) => {
-        try {
-          const queueData =
-            await this.queueDataService.findCurrentStatusByAttraction(
-              attractionId,
-            );
-          // Use first queue data status (usually STANDBY)
-          if (queueData && queueData.length > 0 && queueData[0].status) {
-            statusMap.set(attractionId, { status: queueData[0].status });
-          }
-        } catch {
-          // Skip attractions without status data
-        }
-      }),
-    );
+    const queueDataMap =
+      await this.queueDataService.findCurrentStatusByAttractionIds(
+        attractionIds,
+      );
+
+    for (const [attractionId, queueDataList] of queueDataMap.entries()) {
+      const standby = queueDataList.find((q) => q.queueType === "STANDBY");
+      const first = standby ?? queueDataList[0];
+      if (first?.status) {
+        statusMap.set(attractionId, { status: first.status });
+      }
+    }
 
     return statusMap;
   }

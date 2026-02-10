@@ -83,7 +83,7 @@ When writing tests, **always mock the system time** or use fixed dates. Do not r
 
 ## 6. Strict Date-Only Handling (Holidays, Schedules & Events)
 
-**Feiertage und Ferien** (holidays, school holidays) sowie **Schedule-Einträge** speichern **nur das Datum** (keine Uhrzeit). In der DB steht ggf. ein DATE oder Timestamp; semantisch bedeuten sie immer **den vollen Kalendertag 00:00–23:59 in der Park-Zeitzone**.
+**Holidays and school holidays** as well as **schedule entries** store **the date only** (no time of day). The DB may use a DATE type or timestamp; semantically they always mean **the full calendar day 00:00–23:59 in the park’s timezone**.
 
 To prevent "Timeshifting" (e.g., a holiday on Dec 25th becoming Dec 24th 23:00 UTC), **Pure Dates** must be handled as strings (`YYYY-MM-DD`).
 

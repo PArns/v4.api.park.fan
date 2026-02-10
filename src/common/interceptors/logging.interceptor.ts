@@ -8,16 +8,17 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
-import { recordSlowRequest } from "../slow-request.logger";
+import { recordSlowRequest, getEndpointLabel } from "../slow-request.logger";
+import { getTimings } from "../request-timings";
 
 /** Threshold in ms above which a request is considered slow and written to the slow-request log. */
-const SLOW_THRESHOLD_MS = 1000;
+const SLOW_THRESHOLD_MS = 3000;
 
 /**
  * Global logging interceptor for HTTP requests.
  *
  * - Errors (4xx, 5xx): always logged to main stream.
- * - Slow requests (>1s): written to dedicated file (see SLOW_REQUEST_LOG_PATH) so they are not
+ * - Slow requests (>3s): written to dedicated file (see SLOW_REQUEST_LOG_PATH) so they are not
  *   lost in the log stream; one short line is still logged to the main stream.
  * - Admin/ML endpoints: logged to main stream.
  */
@@ -31,6 +32,9 @@ export class LoggingInterceptor implements NestInterceptor {
     const response = ctx.getResponse<Response>();
 
     const { method, url, ip } = request;
+    const [pathname, queryString] = url.includes("?")
+      ? url.split("?", 2)
+      : [url, undefined];
 
     const startTime = Date.now();
 
@@ -51,9 +55,12 @@ export class LoggingInterceptor implements NestInterceptor {
             ts: new Date().toISOString(),
             method,
             url,
+            endpoint: getEndpointLabel(pathname),
+            query: queryString || undefined,
             statusCode,
             responseTimeMs: responseTime,
             ip: ip || undefined,
+            breakdown: getTimings(),
           });
           this.logger.warn(
             `Slow request (see slow-request log): ${method} ${url} ${statusCode} - ${responseTime}ms`,

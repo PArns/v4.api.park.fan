@@ -43,7 +43,7 @@ export class MLService {
   private readonly ML_SERVICE_URL: string;
 
   // Cache TTLs based on prediction generation frequency
-  private readonly TTL_HOURLY_PREDICTIONS = 60 * 60; // 1 hour - aligned with hourly generation
+  private readonly TTL_HOURLY_PREDICTIONS = 2 * 60 * 60; // 2 hours - balance freshness vs cache hit rate
   private readonly TTL_DAILY_PREDICTIONS = 6 * 60 * 60; // 6 hours - more stable, less volatile
 
   constructor(
@@ -74,7 +74,7 @@ export class MLService {
 
     this.mlClient = axios.create({
       baseURL: this.ML_SERVICE_URL,
-      timeout: 5000, // 5 seconds (prevent blocking request path)
+      timeout: 15000, // 15 seconds (cold ML can take 2–5s; large parks need headroom)
       headers: {
         "Content-Type": "application/json",
       },
@@ -708,21 +708,36 @@ export class MLService {
   }
 
   /**
-   * Get predictions for a single attraction
+   * Get predictions for a single attraction.
+   * Cached in Redis (ml:attraction:{id}:{type}:{today}) so repeat requests skip the ML service.
    */
   async getAttractionPredictions(
     attractionId: string,
     predictionType: "hourly" | "daily" = "hourly",
   ): Promise<PredictionDto[]> {
-    // 1. Fetch park to get coordinates (for weather)
+    // 1. Fetch attraction and park (for weather + cache key)
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      relations: ["park"], // Fetch park relationship
+      relations: ["park"],
       select: ["id", "parkId"],
     });
 
     if (!attraction) {
       throw new HttpException("Attraction not found", 404);
+    }
+
+    const parkTimezone =
+      (attraction.park as { timezone?: string } | undefined)?.timezone ??
+      (await this.parkRepository.findOne({
+        where: { id: attraction.parkId },
+        select: ["timezone"],
+      }))?.timezone ??
+      "UTC";
+    const today = getCurrentDateInTimezone(parkTimezone);
+    const cacheKey = `ml:attraction:${attractionId}:${predictionType}:${today}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as PredictionDto[];
     }
 
     // 2. Fetch hourly weather forecast (if we have coordinates)
@@ -788,7 +803,7 @@ export class MLService {
     // 4. Request predictions
     const request: PredictionRequestDto = {
       attractionIds: [attractionId],
-      parkIds: [attraction.parkId], // property actually accessed from loaded relation or column
+      parkIds: [attraction.parkId],
       predictionType,
       weatherForecast,
       currentWaitTimes,
@@ -796,6 +811,16 @@ export class MLService {
     };
 
     const response = await this.getPredictions(request);
+    const ttl =
+      predictionType === "hourly"
+        ? this.TTL_HOURLY_PREDICTIONS
+        : this.TTL_DAILY_PREDICTIONS;
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(response.predictions),
+      "EX",
+      ttl,
+    );
     return response.predictions;
   }
 

@@ -61,12 +61,19 @@ Short guide for frequent problems and how to fix them.
 
 **Symptom**: Some requests take many seconds (e.g. 30s+) and are easy to miss in the main log stream.
 
-**Where they are stored**: Slow requests (>1s) are written to a **dedicated log file** (JSON Lines) so they are not lost in the main logs. Default path: `logs/slow-requests.log` (overridable with `SLOW_REQUEST_LOG_PATH`). One short line is still printed to the main stream: `Slow request (see slow-request log): GET /v1/... 30179ms`.
+**Where they are stored**: Slow requests (>3s) are written to a **dedicated log file** (JSON Lines) so they are not lost in the main logs. Default path: `logs/slow-requests.log` (overridable with `SLOW_REQUEST_LOG_PATH`). One short line is still printed to the main stream: `Slow request (see slow-request log): GET /v1/... 30179ms`.
 
 **How to use**:
 - Tail the file: `tail -f logs/slow-requests.log`
 - In production, ship this file separately (e.g. different log panel or alert when new lines appear)
-- Each line is JSON: `{"ts":"...","method","url","statusCode","responseTimeMs","ip"}`
+- Each line is JSON: `ts`, `method`, `url`, `endpoint`, `query`, `statusCode`, `responseTimeMs`, `ip`, and **`breakdown`** (where time was spent), e.g. `{"attraction_phase1_ms":5200,"attraction_phase2_ms":800}` or `{"park_phase1_ms":1200,"park_phase2_ms":3100}`.
+- **Breakdown keys**: `attraction_phase1_ms` (total), `attraction_phase1_queue_ms`, `attraction_phase1_park_status_ms`, `attraction_phase1_forecasts_ms`, `attraction_phase1_park_url_ms`, `attraction_phase1_ml_ms`, `attraction_phase1_p50_ms`, `attraction_phase1_p90_ms`, `attraction_phase2_ms`; `park_phase1_ms` (total), `park_phase1_weather_ms`, `park_phase1_schedule_ms`, `park_phase1_queue_ms`, `park_phase1_ml_ms`, `park_phase1_next_schedule_ms`, `park_phase2_ms`; `calendar_phase1_ms`, `calendar_phase2_ms`, `calendar_phase3_ms`. Use sub-keys to see which dependency is slow.
+- Group by `endpoint`: `jq -r '.endpoint' logs/slow-requests.log | sort | uniq -c`
+- Inspect breakdown: `jq '.breakdown' logs/slow-requests.log`
+
+**Phase1 optimizations (no feature loss)**:
+- **Park status fallback**: When schedule says CLOSED we used to call Queue-Times/ThemeParks/Wartezeiten on every request. We now cache the result in `park:status_live:{parkId}` (2 min when OPERATING, 1 min when CLOSED) so repeat requests skip the external API. Status and behaviour unchanged.
+- Weather, schedule, ML predictions, and park status (`getBatchParkStatus`) are already cached (see [Caching Strategy](../architecture/caching-strategy.md)). Cold cache is still slow; warmup and TTLs reduce how often phase1 runs.
 
 **See**: [Caching Strategy](../architecture/caching-strategy.md), parallelisation in `attraction-integration.service` and `park-integration.service`.
 

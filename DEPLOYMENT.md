@@ -188,7 +188,7 @@ Your persistent volumes are stored in:
 
 With `docker-compose.production.yml`, the API also uses bind mounts:
 - `/data/parkfan/geoip` – GeoIP database
-- `/data/parkfan/logs` – **Slow-request log** (`slow-requests.log`); requests >1s are appended here so they are easy to find and not lost in the main log stream
+- `/data/parkfan/logs` – **Slow-request log** (`slow-requests.log`); requests >3s are appended here so they are easy to find and not lost in the main log stream
 
 ## Troubleshooting
 

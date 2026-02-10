@@ -317,6 +317,9 @@ async def predict(request: PredictionRequest):
             raise HTTPException(status_code=400, detail="Invalid baseTime format")
 
     try:
+        import time
+
+        t_start = time.perf_counter()
         # Make predictions
         predictions = predict_wait_times(
             model,
@@ -330,6 +333,7 @@ async def predict(request: PredictionRequest):
             request.featureContext,
             request.p50Baseline,
         )
+        t_after_predict = time.perf_counter()
 
         # Apply schedule filtering for both hourly and daily predictions
         # Hourly: Only hours within operating times
@@ -337,6 +341,18 @@ async def predict(request: PredictionRequest):
         predictions = filter_predictions_by_schedule(
             predictions, request.parkIds, request.predictionType
         )
+        t_after_filter = time.perf_counter()
+
+        total_ms = (t_after_filter - t_start) * 1000
+        if total_ms > 1000:
+            logger.info(
+                "predict: total=%.0fms (predict_wait_times=%.0fms, filter=%.0fms) attractions=%d type=%s",
+                total_ms,
+                (t_after_predict - t_start) * 1000,
+                (t_after_filter - t_after_predict) * 1000,
+                len(request.attractionIds),
+                request.predictionType,
+            )
 
         return BulkPredictionResponse(
             predictions=[PredictionResponse(**p) for p in predictions],

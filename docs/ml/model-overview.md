@@ -37,6 +37,10 @@ The ML Service is a standalone Python application responsible for predicting wai
    - Model artifacts saved to `models/`.
 4. **Validation**: RMSE/MAE metrics are logged.
 
+## Performance (2–5 s latency)
+
+Slow requests show most time in `*_phase1_ml_ms`. The ML service spends most of that in **feature building** (DB: `fetch_recent_wait_times` 730d, holidays, schedule; plus row-wise logic), not in HTTP or model inference. See **[ML Service Performance](ml-service-performance.md)** for the request flow, where time is spent, and optimization options.
+
 ## Usage
 
 The API requests predictions via HTTP:
