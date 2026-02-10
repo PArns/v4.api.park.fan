@@ -13,6 +13,7 @@ import {
   ParkReferenceDto,
   AttractionReferenceDto,
 } from "./dto/geo-structure.dto";
+import { ParksService } from "../parks/parks.service";
 
 /**
  * Discovery Service
@@ -33,6 +34,7 @@ export class DiscoveryService {
     private readonly parkRepository: Repository<Park>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
+    private readonly parksService: ParksService,
   ) {}
 
   /**
@@ -242,7 +244,23 @@ export class DiscoveryService {
   private async hydrateStructure(
     structure: GeoStructureDto,
   ): Promise<GeoStructureDto> {
-    const liveStats = await this.getLiveStats();
+    const allParkIds: string[] = [];
+    for (const continent of structure.continents) {
+      for (const country of continent.countries) {
+        for (const city of country.cities) {
+          for (const park of city.parks) {
+            allParkIds.push(park.id);
+          }
+        }
+      }
+    }
+
+    const [liveStats, schedules] = await Promise.all([
+      this.getLiveStats(),
+      allParkIds.length > 0
+        ? this.parksService.getBatchSchedules(allParkIds)
+        : Promise.resolve({ today: new Map(), next: new Map() }),
+    ]);
 
     for (const continent of structure.continents) {
       let continentOpenCount = 0;
@@ -295,6 +313,29 @@ export class DiscoveryService {
               // Default offline status
               park.status = "CLOSED";
             }
+
+            // Hydrate Schedules
+            const todaySchedule = schedules.today.get(park.id);
+            const nextSchedule = schedules.next.get(park.id);
+
+            park.todaySchedule =
+              todaySchedule && todaySchedule.length > 0
+                ? {
+                    openingTime:
+                      todaySchedule[0].openingTime?.toISOString() || "",
+                    closingTime:
+                      todaySchedule[0].closingTime?.toISOString() || "",
+                    scheduleType: todaySchedule[0].scheduleType,
+                  }
+                : undefined;
+
+            park.nextSchedule = nextSchedule
+              ? {
+                  openingTime: nextSchedule.openingTime?.toISOString() || "",
+                  closingTime: nextSchedule.closingTime?.toISOString() || "",
+                  scheduleType: nextSchedule.scheduleType,
+                }
+              : undefined;
           }
 
           city.openParkCount = cityOpenCount;

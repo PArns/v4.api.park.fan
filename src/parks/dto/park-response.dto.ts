@@ -115,6 +115,28 @@ export class ParkResponseDto {
   })
   isSchoolVacation?: boolean;
 
+  @ApiProperty({
+    description: "Today's operating schedule",
+    required: false,
+    nullable: true,
+  })
+  todaySchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  } | null;
+
+  @ApiProperty({
+    description: "Next scheduled opening day",
+    required: false,
+    nullable: true,
+  })
+  nextSchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  } | null;
+
   // Additional Data
   @ApiProperty({
     description: "Operating schedule",

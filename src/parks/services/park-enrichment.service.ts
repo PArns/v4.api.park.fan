@@ -4,6 +4,7 @@ import { ParkResponseDto } from "../dto/park-response.dto";
 import { ParksService } from "../parks.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { OccupancyDto, ParkStatisticsDto } from "../../analytics/dto";
+import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ScheduleItemDto, InfluencingHoliday } from "../dto/schedule-item.dto";
 import {
@@ -65,14 +66,20 @@ export class ParkEnrichmentService {
       context.set(park.id, { timezone: park.timezone, startTime });
     }
 
-    // Batch fetch all data in parallel (4 queries total regardless of park count)
-    const [statusMap, occupancyMap, statisticsMap, schoolHolidayMap] =
-      await Promise.all([
-        this.parksService.getBatchParkStatus(parkIds),
-        this.analyticsService.getBatchParkOccupancy(parkIds),
-        this.analyticsService.getBatchParkStatistics(parkIds, context),
-        this.getBatchSchoolHolidayStatus(parks),
-      ]);
+    // Batch fetch all data in parallel (5 queries total regardless of park count)
+    const [
+      statusMap,
+      occupancyMap,
+      statisticsMap,
+      schoolHolidayMap,
+      schedules,
+    ] = await Promise.all([
+      this.parksService.getBatchParkStatus(parkIds),
+      this.analyticsService.getBatchParkOccupancy(parkIds),
+      this.analyticsService.getBatchParkStatistics(parkIds, context),
+      this.getBatchSchoolHolidayStatus(parks),
+      this.parksService.getBatchSchedules(parkIds),
+    ]);
 
     // Map each park using fetched data
     return parks.map((park) =>
@@ -82,6 +89,8 @@ export class ParkEnrichmentService {
         occupancyMap,
         statisticsMap,
         schoolHolidayMap,
+        schedules.today,
+        schedules.next,
       ),
     );
   }
@@ -128,6 +137,8 @@ export class ParkEnrichmentService {
     occupancyMap: Map<string, OccupancyDto>,
     statisticsMap: Map<string, ParkStatisticsDto>,
     schoolHolidayMap: Map<string, boolean>,
+    todayScheduleMap: Map<string, ScheduleEntry[]>,
+    nextScheduleMap: Map<string, ScheduleEntry | null>,
   ): ParkResponseDto {
     const dto = ParkResponseDto.fromEntity(park);
 
@@ -166,6 +177,27 @@ export class ParkEnrichmentService {
         },
       };
     }
+
+    // Schedules
+    const todaySchedule = todayScheduleMap.get(park.id);
+    const nextSchedule = nextScheduleMap.get(park.id);
+
+    dto.todaySchedule =
+      todaySchedule && todaySchedule.length > 0
+        ? {
+            openingTime: todaySchedule[0].openingTime?.toISOString() || "",
+            closingTime: todaySchedule[0].closingTime?.toISOString() || "",
+            scheduleType: todaySchedule[0].scheduleType,
+          }
+        : undefined;
+
+    dto.nextSchedule = nextSchedule
+      ? {
+          openingTime: nextSchedule.openingTime?.toISOString() || "",
+          closingTime: nextSchedule.closingTime?.toISOString() || "",
+          scheduleType: nextSchedule.scheduleType,
+        }
+      : undefined;
 
     return dto;
   }

@@ -99,6 +99,38 @@ export class ParkReferenceDto {
       totalAttractions: number;
     };
   };
+
+  @ApiProperty({
+    description: "Today's operating schedule",
+    nullable: true,
+    required: false,
+    example: {
+      openingTime: "2024-01-15T09:00:00.000Z",
+      closingTime: "2024-01-15T20:00:00.000Z",
+      scheduleType: "OPERATING",
+    },
+  })
+  todaySchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
+
+  @ApiProperty({
+    description: "Next scheduled operating day",
+    nullable: true,
+    required: false,
+    example: {
+      openingTime: "2024-01-16T09:00:00.000Z",
+      closingTime: "2024-01-16T20:00:00.000Z",
+      scheduleType: "OPERATING",
+    },
+  })
+  nextSchedule?: {
+    openingTime: string;
+    closingTime: string;
+    scheduleType: string;
+  };
 }
 
 /**
