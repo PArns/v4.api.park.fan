@@ -149,6 +149,7 @@ export class CalendarService {
       refurbishments,
       historicalQueueData,
       dailyStats,
+      parkHasOperatingSchedule,
     ] = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
         this.logger.warn(
@@ -243,6 +244,7 @@ export class CalendarService {
           );
           return [];
         }),
+      this.parksService.hasOperatingSchedule(park.id),
     ]);
 
     // On-demand schedule refresh: if requested range has little/no schedule data, trigger
@@ -314,6 +316,7 @@ export class CalendarService {
         today,
         hourlyPredictionsList,
         prefetchedCrowdLevels,
+        parkHasOperatingSchedule,
       );
       days.push(dayData);
       currentDate.setDate(currentDate.getDate() + 1);
@@ -476,6 +479,7 @@ export class CalendarService {
     today: string,
     hourlyPredictionsPreFetched: PredictionDto[] = [],
     prefetchedCrowdLevels: Map<string, CrowdLevel | "closed"> = new Map(),
+    parkHasOperatingSchedule: boolean = false,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // today is passed as argument
@@ -657,12 +661,13 @@ export class CalendarService {
       inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
     }
 
-    // Past + Today only: treat existing (non-closed) crowd level as park open so we have something to show.
-    // Future: keep schedule-based status (OPEN/CLOSED/UNKNOWN); UNKNOWN future days still get crowdLevel from ML below.
+    // Past + Today: only infer OPERATING from crowd level when park has NO OPERATING schedule at all.
+    // Parks with OPERATING entries: keep UNKNOWN for days without schedule (gap-fill UNKNOWN).
     if (
       isHistorical &&
       status === "UNKNOWN" &&
-      inferredCrowdLevel !== "closed"
+      inferredCrowdLevel !== "closed" &&
+      !parkHasOperatingSchedule
     ) {
       status = "OPERATING";
     }

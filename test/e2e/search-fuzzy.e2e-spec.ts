@@ -25,6 +25,7 @@ describe("Search Fuzzy (E2E)", () => {
     saveScheduleData: jest.fn().mockResolvedValue(undefined),
     findParksWithoutGeodata: jest.fn().mockResolvedValue([]),
     fillScheduleGaps: jest.fn().mockResolvedValue(undefined),
+    hasOperatingSchedule: jest.fn().mockResolvedValue(false),
     onModuleInit: jest.fn(),
   };
 

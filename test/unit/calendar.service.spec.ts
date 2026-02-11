@@ -25,6 +25,7 @@ describe("CalendarService - Basic Verification", () => {
 
     const mockParksService = {
       getSchedule: jest.fn().mockResolvedValue([]),
+      hasOperatingSchedule: jest.fn().mockResolvedValue(false),
     };
 
     const mockWeatherService = {

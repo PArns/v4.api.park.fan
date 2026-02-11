@@ -38,9 +38,9 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 ### Range and classification
 
-**Timezone:** All range and date logic uses **park timezone** (see [Date & Time Handling](../development/datetime-handling.md)). The filled range is "today" through "today + lookAheadDays" in the park’s calendar, not server date.
+**Timezone:** All range and date logic uses **park timezone** (see [Date & Time Handling](../development/datetime-handling.md)). The filled range is (today - lookBackDays) through (today + lookAheadDays) in the park’s calendar, not server date.
 
-- **Range**: From **today in park timezone** through today + `lookAheadDays` (default 120), using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
+- **Range**: From (today - lookBackDays) in park timezone through (today + lookAheadDays). Also extends lookBackDays into the past. Defaults: lookBackDays = 182, lookAheadDays = 182. Using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
 - **Classification** (no existing entry for that date):
   - **CLOSED**: The park has at least one OPERATING date **before** and one **after** this date (min/max OPERATING over all stored entries). The gap is "in the middle" of known opening — we treat it as a closed day (e.g. mid-week closure).
   - **UNKNOWN**: Otherwise: no OPERATING at all for the park, or this date is **before** the first OPERATING date (e.g. before season or before we stored data), or **on or after** the last OPERATING date (schedule not yet published). We cannot infer closed vs not yet published.
@@ -51,7 +51,7 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 - **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
 - **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed. **Bidirectional cleanup**: when saving OPERATING, delete CLOSED for that date; when saving CLOSED, delete OPERATING for that date. Also delete UNKNOWN placeholders when real data exists.
-- **Gaps**: After saving, `fillScheduleGaps(parkId)` fills missing dates (up to `lookAheadDays` ahead, default 120) with CLOSED or UNKNOWN and holiday/bridge metadata; see **Gap-fill rules** above.
+- **Gaps**: After saving, `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills missing dates. Defaults: `lookAheadDays = 182`, `lookBackDays = 182` (~½ year each). Range: (today − lookBackDays) through (today + lookAheadDays). See **Gap-fill rules** above.
 
 ## Calendar Endpoint & First-Request Slowness
 

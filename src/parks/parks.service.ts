@@ -15,7 +15,7 @@ import {
   getStartOfDayInTimezone,
   getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
-import { addDays } from "date-fns";
+import { addDays, subDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   calculateHolidayInfo,
@@ -873,6 +873,17 @@ export class ParksService {
   }
 
   /**
+   * True if park has at least one OPERATING schedule entry (any date).
+   * Used to decide whether we trust schedule as source of truth for UNKNOWN→OPERATING inference.
+   */
+  async hasOperatingSchedule(parkId: string): Promise<boolean> {
+    const count = await this.scheduleRepository.count({
+      where: { parkId, scheduleType: ScheduleType.OPERATING },
+    });
+    return count > 0;
+  }
+
+  /**
    * Fills missing schedule entries with CLOSED or UNKNOWN and holiday/bridge metadata.
    *
    * Gap classification (CLOSED vs UNKNOWN):
@@ -887,7 +898,11 @@ export class ParksService {
    *
    * This allows the calendar to show "Closed" vs "Opening hours not yet available" correctly.
    */
-  async fillScheduleGaps(parkId: string, lookAheadDays = 120): Promise<number> {
+  async fillScheduleGaps(
+    parkId: string,
+    lookAheadDays = 182,
+    lookBackDays = 182,
+  ): Promise<number> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["id", "countryCode", "regionCode", "timezone"],
@@ -895,9 +910,10 @@ export class ParksService {
 
     if (!park?.countryCode) return 0;
 
-    // Range: "today" through "today + lookAheadDays" in PARK timezone (never server date)
-    const startDate = getStartOfDayInTimezone(park.timezone);
-    const endDate = addDays(startDate, lookAheadDays);
+    // Range: (today - lookBackDays) through (today + lookAheadDays) in PARK timezone
+    const today = getStartOfDayInTimezone(park.timezone);
+    const startDate = subDays(today, lookBackDays);
+    const endDate = addDays(today, lookAheadDays);
 
     // 0. Min/max OPERATING dates for this park (any time) to classify gaps as CLOSED vs UNKNOWN
     const operatingRange = await this.scheduleRepository

@@ -18,7 +18,7 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 |------|----------------|
 | **Future:** OPEN/CLOSED from schedule | `status` comes from `schedule?.scheduleType`: OPERATING → `"OPERATING"`, CLOSED → `"CLOSED"`, UNKNOWN or no entry → `"UNKNOWN"`. |
 | **Future:** Days without schedule = UNKNOWN, but with crowd prediction | Future days without schedule keep `status: "UNKNOWN"`. They still get a **crowdLevel** (ML prediction or fallback `"moderate"`), not `"closed"`. |
-| **Past + Today:** With crowd level treated as OPEN | Only for **past + today** (`dateStr <= today`): if `status === "UNKNOWN"` and computed crowd level ≠ `"closed"` → `status = "OPERATING"` so we have something to show. Future UNKNOWN are **not** upgraded to OPERATING. |
+| **Past + Today:** With crowd level treated as OPEN | Only for Parks **without** OPERATING entries in `schedule_entries`: if `status === "UNKNOWN"` and crowd level ≠ `"closed"` → `status = "OPERATING"`. Parks with OPERATING schedules keep UNKNOWN for days without schedule (DB-check via `hasOperatingSchedule`). |
 
 ### 1.2 Crowd Level
 
@@ -40,7 +40,7 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 - **ThemeParks API:** The previous month plus 12 months ahead are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
 - **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
 - **Cleanup when saving from API:** Bidirectional: when we save **OPERATING** for a date, we delete any **CLOSED** row; when we save **CLOSED** for a date, we delete any **OPERATING** row. This ensures one source of truth per date.
-- **Gaps:** `fillScheduleGaps(parkId)` fills **missing** days (from today up to 120 days ahead, park timezone) with holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
+- **Gaps:** `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills **missing** days. Range: (today - lookBackDays) through (today + lookAheadDays). Defaults: 182 days each (~½ year). Park timezone. Holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
   - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
   - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".
   - **Demotion:** Gap-fill CLOSED (no opening/closing times) that is now after the last OPERATING gets demoted to UNKNOWN.
