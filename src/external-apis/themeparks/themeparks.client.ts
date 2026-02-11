@@ -277,6 +277,8 @@ export class ThemeParksClient {
    * (e.g. /entity/{id}/schedule/2026/05 for May). Month is zero-padded (05 not 5) per Wiki API.
    * Some parks (e.g. Efteling) only expose data when the source has published that month.
    *
+   * Starts from last month (now - 1) to clean up discrepancies in recently past data.
+   *
    * Optionally merges with the generic /schedule endpoint (~30 days) for the near term.
    *
    * @param entityId - Park entity ID
@@ -306,11 +308,13 @@ export class ThemeParksClient {
       );
     }
 
-    // Always fetch each of the next monthsAhead months via month endpoint (YYYY/MM with MM zero-padded)
+    // Always fetch from last month (now - 1) through monthsAhead to clean up discrepancies
+    // Start at i = -1 to include last month for cleanup
+    const totalMonths = monthsAhead + 1; // +1 for the previous month
     this.logger.log(
-      `Fetching ${monthsAhead} months (month-by-month) for ${entityId}...`,
+      `Fetching ${totalMonths} months (from last month through +${monthsAhead} months) for ${entityId}...`,
     );
-    for (let i = 0; i < monthsAhead; i++) {
+    for (let i = -1; i < monthsAhead; i++) {
       const iterDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
       const year = iterDate.getFullYear();
       const month = iterDate.getMonth() + 1; // 1–12; getScheduleForMonth pads to "01".."12"
