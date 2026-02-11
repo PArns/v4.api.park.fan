@@ -737,6 +737,8 @@ export class ParksService {
         this.logger.log(
           `🧹 Cleaned up ${deletedCount} stale schedule entries for ${fetchedMonths.length} months`,
         );
+        // Invalidate schedule cache after cleanup to ensure nextSchedule and calendar use fresh data
+        await this.invalidateScheduleCache(parkId);
       }
     }
 
