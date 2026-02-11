@@ -281,14 +281,15 @@ export class ThemeParksClient {
    *
    * @param entityId - Park entity ID
    * @param monthsAhead - Number of months to fetch ahead (default: 12)
-   * @returns Combined schedule data from all months
+   * @returns Combined schedule data from all months + metadata about fetched months
    */
   async getScheduleExtended(
     entityId: string,
     monthsAhead: number = 12,
-  ): Promise<{ schedule: any[] }> {
+  ): Promise<{ schedule: any[]; fetchedMonths: string[] }> {
     const now = new Date();
     const allSchedules: any[] = [];
+    const fetchedMonths: string[] = []; // Track which months we attempted to fetch (YYYY-MM format)
 
     // Optional: try generic endpoint first for near-term data (~30 days)
     try {
@@ -313,6 +314,10 @@ export class ThemeParksClient {
       const iterDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
       const year = iterDate.getFullYear();
       const month = iterDate.getMonth() + 1; // 1–12; getScheduleForMonth pads to "01".."12"
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      
+      // Always track that we fetched this month, even if it returns empty/404
+      fetchedMonths.push(monthKey);
 
       try {
         const monthResponse = await this.getScheduleForMonth(
@@ -323,21 +328,26 @@ export class ThemeParksClient {
         if (monthResponse.schedule && monthResponse.schedule.length > 0) {
           allSchedules.push(...monthResponse.schedule);
           this.logger.debug(
-            `Fetched ${monthResponse.schedule.length} entries for ${year}/${String(month).padStart(2, "0")}`,
+            `Fetched ${monthResponse.schedule.length} entries for ${monthKey}`,
+          );
+        } else {
+          this.logger.debug(
+            `No entries returned for ${monthKey} (park closed or not yet published)`,
           );
         }
       } catch (error: any) {
         // Far-future months may be empty or 404 until the park publishes
+        // We still track that we fetched it, so we can clean up stale data for that month
         this.logger.verbose(
-          `No schedule for ${entityId} ${year}/${String(month).padStart(2, "0")}: ${error.message}`,
+          `No schedule for ${entityId} ${monthKey}: ${error.message}`,
         );
       }
     }
 
     this.logger.log(
-      `📅 Fetched total ${allSchedules.length} schedule entries for ${entityId}`,
+      `📅 Fetched total ${allSchedules.length} schedule entries for ${entityId} across ${fetchedMonths.length} months`,
     );
 
-    return { schedule: allSchedules };
+    return { schedule: allSchedules, fetchedMonths };
   }
 }

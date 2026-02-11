@@ -693,15 +693,55 @@ export class ParksService {
    * Saves schedule data for a park from ThemeParks.wiki API.
    *
    * Strategy:
-   * - Upsert based on (parkId, date, scheduleType)
-   * - Update if changed, otherwise skip
-   * - Keep historical schedule entries for analysis
+   * - Clean up stale entries: Delete all existing entries for fetched months first
+   * - Then save new data (or none if month is closed)
+   * - This ensures old entries don't persist when parks change schedules
    *
    * @param parkId - Our internal park ID (UUID)
    * @param scheduleData - Schedule data from ThemeParks.wiki API
+   * @param fetchedMonths - Array of YYYY-MM strings for which we fetched data (optional for backwards compatibility)
    */
-  async saveScheduleData(parkId: string, scheduleData: any[]): Promise<number> {
+  async saveScheduleData(
+    parkId: string,
+    scheduleData: any[],
+    fetchedMonths?: string[],
+  ): Promise<number> {
+    // 0. Clean up stale entries for fetched months BEFORE saving new data
+    // This ensures that if a park changes schedule (e.g., closes a month), old entries are removed
+    if (fetchedMonths && fetchedMonths.length > 0) {
+      let deletedCount = 0;
+      for (const monthKey of fetchedMonths) {
+        // monthKey format: YYYY-MM (e.g., "2026-02")
+        const [year, month] = monthKey.split("-");
+        const monthStart = new Date(`${year}-${month}-01`);
+        // Get last day of month
+        const monthEnd = new Date(parseInt(year), parseInt(month), 0); // Day 0 = last day of previous month, so month (not month-1) gives last day of that month
+
+        const result = await this.scheduleRepository
+          .createQueryBuilder()
+          .delete()
+          .from(ScheduleEntry)
+          .where("parkId = :parkId", { parkId })
+          .andWhere("date >= :monthStart", { monthStart })
+          .andWhere("date <= :monthEnd", { monthEnd })
+          .execute();
+
+        if (result.affected && result.affected > 0) {
+          deletedCount += result.affected;
+          this.logger.debug(
+            `Cleaned up ${result.affected} stale entries for ${monthKey}`,
+          );
+        }
+      }
+      if (deletedCount > 0) {
+        this.logger.log(
+          `🧹 Cleaned up ${deletedCount} stale schedule entries for ${fetchedMonths.length} months`,
+        );
+      }
+    }
+
     if (!scheduleData || scheduleData.length === 0) {
+      // Even if no data, we cleaned up stale entries above (e.g., park closed for winter)
       return 0;
     }
 

@@ -99,6 +99,7 @@ export class ParkMetadataProcessor {
       const savedEntries = await this.parksService.saveScheduleData(
         park.id,
         scheduleResponse.schedule,
+        scheduleResponse.fetchedMonths, // Pass fetched months for cleanup
       );
       await this.parksService.fillScheduleGaps(park.id);
       this.logger.log(
@@ -1060,6 +1061,7 @@ export class ParkMetadataProcessor {
         const savedEntries = await this.parksService.saveScheduleData(
           park.id,
           scheduleResponse.schedule,
+          scheduleResponse.fetchedMonths, // Pass fetched months for cleanup
         );
         totalScheduleEntries += savedEntries;
 
