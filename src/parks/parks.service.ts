@@ -690,24 +690,34 @@ export class ParksService {
   }
 
   /**
-   * Saves schedule data for a park from ThemeParks.wiki API.
+   * Saves schedule data for a park from multiple sources.
    *
    * Strategy:
-   * - Clean up stale entries: Delete all existing entries for fetched months first
-   * - Then save new data (or none if month is closed)
+   * - If fetchedMonths provided (ThemeParks full sync): Delete ALL existing entries for those months first
+   * - Then save new data via upsert (or none if month is closed)
    * - This ensures old entries don't persist when parks change schedules
    *
+   * IMPORTANT: Multiple sources can call this method:
+   * - ThemeParks Wiki (primary): Full month sync with fetchedMonths → triggers cleanup
+   * - Wartezeiten API (fallback): Single day updates without fetchedMonths → no cleanup
+   * - Queue-Times live (fallback): Single day updates without fetchedMonths → no cleanup
+   *
+   * The cleanup (fetchedMonths) should ONLY be used by ThemeParks full sync to avoid
+   * sources deleting each other's data. Other sources use upsert for single days.
+   *
    * @param parkId - Our internal park ID (UUID)
-   * @param scheduleData - Schedule data from ThemeParks.wiki API
-   * @param fetchedMonths - Array of YYYY-MM strings for which we fetched data (optional for backwards compatibility)
+   * @param scheduleData - Schedule data from any source
+   * @param fetchedMonths - Array of YYYY-MM strings (ONLY for ThemeParks full sync!)
    */
   async saveScheduleData(
     parkId: string,
     scheduleData: any[],
     fetchedMonths?: string[],
   ): Promise<number> {
-    // 0. Clean up stale entries for fetched months BEFORE saving new data
-    // This ensures that if a park changes schedule (e.g., closes a month), old entries are removed
+    // 0. Clean up stale entries for fetched months BEFORE any other operation
+    // CRITICAL: This must happen FIRST to avoid race conditions between sources
+    // Only ThemeParks Wiki should pass fetchedMonths - this deletes ALL entries (any source)
+    // for those months to ensure clean slate for the primary data source
     if (fetchedMonths && fetchedMonths.length > 0) {
       let deletedCount = 0;
       for (const monthKey of fetchedMonths) {
