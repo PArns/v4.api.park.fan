@@ -1093,9 +1093,20 @@ def predict_wait_times(
         feature_context,
     )
 
-    # Predict with uncertainty estimation
+    # OPTIMIZATION: Skip ML inference for CLOSED/UNKNOWN days when schedule exists.
+    # Those predictions would be overwritten and filtered out anyway; computing them wastes CPU.
+    #
+    # CRITICAL - Parks with "quasi keine" schedules still get predictions:
+    # - No schedule in DB for prediction range → status stays OPERATING (default) → we keep all rows
+    # - Only UNKNOWN/CLOSED in range (no OPERATING) → park_has_operating=False → we keep default
+    # - Empty df_inference only when every date has explicit CLOSED/UNKNOWN (park has OPERATING elsewhere)
+    df_inference = features_df[features_df["status"] == "OPERATING"]
+    if df_inference.empty:
+        return []  # All days explicitly closed/unknown; filter_predictions_by_schedule would return [] anyway
+
+    # Predict with uncertainty estimation (only for OPERATING rows)
     try:
-        uncertainty_results = model.predict_with_uncertainty(features_df)
+        uncertainty_results = model.predict_with_uncertainty(df_inference)
         predictions = uncertainty_results["predictions"]
         uncertainties = uncertainty_results["uncertainty"]
         use_uncertainty = True
@@ -1104,14 +1115,14 @@ def predict_wait_times(
         # Reduced logging - only log if it's a real issue
         if "missing" not in str(e).lower():
             print(f"⚠️  Uncertainty estimation failed: {e}")
-        predictions = model.predict(features_df)
+        predictions = model.predict(df_inference)
         uncertainties = np.zeros(len(predictions))
         use_uncertainty = False
 
-    # Format results
+    # Format results (only OPERATING rows; CLOSED/UNKNOWN never reach the client)
     results = []
-    for idx, row in features_df.iterrows():
-        pred_wait = round_to_nearest_5(predictions[idx])
+    for i, (idx, row) in enumerate(df_inference.iterrows()):
+        pred_wait = round_to_nearest_5(predictions[i])
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600
@@ -1129,7 +1140,7 @@ def predict_wait_times(
         # Model-based confidence from uncertainty (40% weight)
         if use_uncertainty and pred_wait > 0:
             # Calculate relative uncertainty (uncertainty / prediction)
-            relative_uncertainty = uncertainties[idx] / max(pred_wait, 1)
+            relative_uncertainty = uncertainties[i] / max(pred_wait, 1)
             # Convert to confidence: low uncertainty = high confidence
             # Cap relative uncertainty at 100% (1.0) for confidence calculation
             model_confidence = max(30, 100 * (1 - min(relative_uncertainty, 1.0)))
@@ -1212,7 +1223,7 @@ def predict_wait_times(
                 results[-1]["trend"] = "decreasing"
             else:
                 results[-1]["trend"] = "stable"
-        elif idx > 0 and results[-2]["attractionId"] == row["attractionId"]:
+        elif len(results) > 1 and results[-2]["attractionId"] == row["attractionId"]:
             # If no current actual, compare to previous hour prediction
             prev_pred = results[-2]["predictedWaitTime"]
             diff = pred_wait - prev_pred
@@ -1223,13 +1234,8 @@ def predict_wait_times(
             else:
                 results[-1]["trend"] = "stable"
 
-        # Override if status is CLOSED or UNKNOWN (no schedule / not open)
-        if row["status"] in ("CLOSED", "UNKNOWN"):
-            results[-1]["predictedWaitTime"] = 0
-            results[-1]["confidence"] = 100.0
-            results[-1]["crowdLevel"] = "closed"
-
-    # NOTE: Schedule filtering will be applied after this function returns
+    # NOTE: CLOSED/UNKNOWN rows were excluded before inference (no ML call for closed days).
+    # Schedule filtering will be applied after this function returns.
     # See filter_predictions_by_schedule() for operating hours filtering
     return results
 

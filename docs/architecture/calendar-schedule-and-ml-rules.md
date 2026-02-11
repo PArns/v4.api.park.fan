@@ -37,12 +37,13 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 
 **Jobs:** `sync-park-schedule` (on-demand), `sync-schedules-only` (daily 15:00), `sync-all-parks` (daily 03:00).
 
-- **ThemeParks API:** 12 months are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
+- **ThemeParks API:** The previous month plus 12 months ahead are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
 - **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
-- **Cleanup when saving from API:** When we save **OPERATING** for a date, we also delete any **CLOSED** row for that date so gap-fill CLOSED is removed and OPERATING wins (getSchedule orders by scheduleType ASC).
+- **Cleanup when saving from API:** Bidirectional: when we save **OPERATING** for a date, we delete any **CLOSED** row; when we save **CLOSED** for a date, we delete any **OPERATING** row. This ensures one source of truth per date.
 - **Gaps:** `fillScheduleGaps(parkId)` fills **missing** days (from today up to 120 days ahead, park timezone) with holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
   - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
   - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".
+  - **Demotion:** Gap-fill CLOSED (no opening/closing times) that is now after the last OPERATING gets demoted to UNKNOWN.
 
 Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 
@@ -65,7 +66,7 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 | Component | File | Behaviour |
 |-----------|------|-----------|
 | **Schedule filter (after prediction)** | `ml-service/schedule_filter.py` | Filters predictions by `schedule_entries`. |
-| **Inference (features + output)** | `ml-service/predict.py` | Sets `is_park_open`, `status`; overrides output to `crowdLevel = "closed"` for CLOSED/UNKNOWN. |
+| **Inference (features + output)** | `ml-service/predict.py` | Sets `is_park_open`, `status`; skips model inference for CLOSED/UNKNOWN rows (reduces load). |
 
 ### 4.2 filter_predictions_by_schedule (schedule_filter.py)
 
@@ -78,13 +79,13 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 ### 4.3 predict.py (Inference)
 
 - **Schedule features:** From `schedule_entries`, OPERATING/CLOSED/UNKNOWN are evaluated per park/date. A park with no OPERATING entry at all is treated as “no schedule” → predictions are kept.
-- **Output override:** If for the predicted time `status === "CLOSED"` or `"UNKNOWN"` (park not OPERATING that day), the response object is set to: `predictedWaitTime = 0`, `confidence = 100`, **`crowdLevel = "closed"`**. The calendar API does not use these values to set status (status comes from schedule/rules), but the ML response is then consistently “closed”.
+- **Inference skip for CLOSED/UNKNOWN:** Rows with `status === "CLOSED"` or `"UNKNOWN"` are **excluded before** model.predict. No inference is run for definitively closed days (reduces system load; those predictions would be filtered out anyway).
 
 ### 4.4 Summary: ML ↔ Calendar
 
 | Aspect | Calendar (API) | ML Service |
 |--------|----------------|------------|
-| CLOSED day | `status: "CLOSED"`, `crowdLevel: "closed"` | Daily prediction is not returned (filter_predictions_by_schedule); if one were returned, predict.py would set `crowdLevel: "closed"`. |
+| CLOSED day | `status: "CLOSED"`, `crowdLevel: "closed"` | No inference run (predict.py skips CLOSED rows); filter_predictions_by_schedule would remove anyway. |
 | UNKNOWN day (future) | `status: "UNKNOWN"`, `crowdLevel` = ML or fallback “moderate” | Daily prediction is **not** returned (only OPERATING days); calendar uses fallback “moderate”. |
 | Past/today without schedule | With crowd level → `status: "OPERATING"` | Independent; calendar derives status from crowd data. |
 

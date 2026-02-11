@@ -860,6 +860,13 @@ export class ParksService {
           scheduleType: ScheduleType.CLOSED,
         });
       }
+      if (scheduleEntry.scheduleType === ScheduleType.CLOSED) {
+        await this.scheduleRepository.delete({
+          parkId,
+          date: scheduleEntry.date,
+          scheduleType: ScheduleType.OPERATING,
+        });
+      }
     }
 
     return savedCount;
@@ -874,6 +881,9 @@ export class ParksService {
    * - UNKNOWN: Day has no schedule and we have no OPERATING at or after it, or no OPERATING
    *   before it. So either "before season / before we have data" or "after last known schedule".
    *   Also: if the park has no OPERATING entries at all, all gaps stay UNKNOWN.
+   *
+   * Demotion: Gap-fill CLOSED (no opening/closing times) that is now after the last OPERATING
+   * date gets demoted to UNKNOWN — e.g. when the API removes future OPERATING entries.
    *
    * This allows the calendar to show "Closed" vs "Opening hours not yet available" correctly.
    */
@@ -1022,6 +1032,7 @@ export class ParksService {
           parkId,
           date: new Date(currentDate),
           scheduleType,
+          description: "Gap-filled", // Distinguishes from API-provided entries (prevents wrong demotion)
           isHoliday: holidayInfo.isHoliday,
           holidayName: holidayInfo.holidayName,
           isBridgeDay: holidayInfo.isBridgeDay,
@@ -1048,14 +1059,23 @@ export class ParksService {
         const shouldBeClosed =
           existing.scheduleType === ScheduleType.UNKNOWN &&
           isGapClosed(dateStr);
-        if (holidayChanged || shouldBeClosed) {
+        const shouldBeUnknown =
+          existing.scheduleType === ScheduleType.CLOSED &&
+          existing.description === "Gap-filled" && // Only demote gap-fill, never API-provided CLOSED
+          maxOpStr !== null &&
+          dateStr > maxOpStr;
+        if (holidayChanged || shouldBeClosed || shouldBeUnknown) {
           await this.scheduleRepository.update(existing.id, {
             ...(holidayChanged && {
               isHoliday: holidayInfo.isHoliday,
               holidayName: holidayInfo.holidayName,
               isBridgeDay: holidayInfo.isBridgeDay,
             }),
-            ...(shouldBeClosed && { scheduleType: ScheduleType.CLOSED }),
+            ...(shouldBeClosed && {
+              scheduleType: ScheduleType.CLOSED,
+              description: "Gap-filled", // Mark so we can safely demote later if maxOp shrinks
+            }),
+            ...(shouldBeUnknown && { scheduleType: ScheduleType.UNKNOWN }),
           });
           filledCount++;
         }
