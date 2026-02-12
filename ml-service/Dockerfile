@@ -26,5 +26,6 @@ EXPOSE 8000
 
 # Run FastAPI with uvicorn (production mode)
 # --no-access-log: Suppress HTTP request logs (GET /health spam)
+# --workers 4: Run 4 worker processes for better parallelism
 # Application logs (logger.info) are still shown
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--workers", "4"]

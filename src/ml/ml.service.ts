@@ -75,7 +75,7 @@ export class MLService {
 
     this.mlClient = axios.create({
       baseURL: this.ML_SERVICE_URL,
-      timeout: 30000, // 30 seconds
+      timeout: 90000, // 90 seconds (ML predictions + DB queries can be slow)
       headers: {
         "Content-Type": "application/json",
       },

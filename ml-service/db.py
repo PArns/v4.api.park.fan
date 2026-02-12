@@ -64,7 +64,13 @@ def get_db_url() -> str:
     )
 
 
-engine = create_engine(get_db_url(), pool_pre_ping=True, pool_size=10)
+engine = create_engine(
+    get_db_url(),
+    pool_pre_ping=True,
+    pool_size=20,  # Increased from 10
+    max_overflow=10,  # Allow 10 extra connections beyond pool_size
+    pool_timeout=30,  # Wait max 30s for connection from pool
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
