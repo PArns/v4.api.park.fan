@@ -84,3 +84,39 @@ Short guide for frequent problems and how to fix them.
 3. **Trend (occupancy.trend):** Computed **only from headliner attractions**. Per headliner: average wait time in the last 1h and 1h–2h; then **average** = sum of these per-headliner averages / number of headliners (not sum over all data points). Current wait time for occupancy (`getCurrentSpotWaitTime`) is also headliner-only when headliners exist.
 
 **Relevant code:** `AnalyticsService.getParkStatistics` (peak hour, park peak), `AnalyticsService.calculateParkOccupancy` (trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.
+
+---
+
+## Duplicate or conflicting schedule entries
+
+**Symptom**: Calendar shows conflicting opening hours (e.g. both OPERATING and CLOSED for the same date), or schedule queries return unexpected multiple entries for a single day.
+
+**Cause**: Parallel schedule syncs or interrupted processes may create duplicate entries with different schedule types for the same `(parkId, date)`. This can happen when:
+- Multiple schedule sync jobs run simultaneously for the same park (rare, but possible with manual triggers)
+- Race condition between `saveScheduleData` and `fillScheduleGaps` when running concurrently
+- API provides conflicting data that gets saved before cleanup runs
+
+**Automatic fixes**:
+
+1. **Per-park cleanup (immediate)**: `fillScheduleGaps(parkId)` automatically calls `cleanupDuplicateScheduleEntriesForPark(parkId)` **before** gap-filling. This removes duplicates for that specific park using SQL window functions:
+   - **Same-type duplicates**: Multiple entries with identical `(parkId, date, scheduleType)` → keeps most recent by `updatedAt`
+   - **Cross-type conflicts**: Multiple entries for same `(parkId, date)` with different scheduleTypes → applies priority (OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN)
+
+2. **Global cleanup (daily)**: `cleanupDuplicateScheduleEntries()` runs as part of `fillAllParksGaps()` job, processing all parks. Uses optimized SQL (2 queries total instead of N+1 pattern).
+
+**Manual fix** (if needed before automatic cleanup):
+
+```bash
+# Run gap-fill for a specific park (triggers per-park cleanup)
+npm run script:fill-gaps -- --parkId=<park-uuid>
+
+# Or run global cleanup for all parks
+npm run script:fill-all-gaps
+```
+
+**Prevention**:
+- Ensure only one schedule sync job runs per park at a time (BullMQ queue handles this automatically for cron jobs)
+- Avoid concurrent manual API calls to `saveScheduleData` for the same park
+- The batch DELETE operations in `saveScheduleData` now clean up cross-type conflicts automatically (OPERATING deletes CLOSED, CLOSED deletes OPERATING, etc.)
+
+**Technical details**: See [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md) (§ Performance optimization, § Persistence).

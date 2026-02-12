@@ -47,10 +47,23 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 - **Existing UNKNOWN entries**: When re-running gap-fill, if an existing entry is UNKNOWN and is now "in the middle" (OPERATING before and after), we update it to CLOSED. We never overwrite OPERATING or API-provided CLOSED.
 - **Demotion (gap-fill CLOSED → UNKNOWN)**: If an existing entry is CLOSED with `description = "Gap-filled"` and its date is **after** the last OPERATING date, we demote it to UNKNOWN. This corrects entries that were gap-filled as CLOSED when we had future OPERATING; when those are removed (API no longer returns them), we treat the date as "schedule not yet published". We only demote gap-fill entries (never API-provided CLOSED) to avoid overwriting explicit winter-closure data from ThemeParks.
 
+### Performance optimization (batch operations)
+
+Gap-fill uses **batch INSERT/UPDATE operations** to minimize database round-trips:
+
+- **Batch INSERT**: All missing dates are collected during the range iteration, then inserted in bulk using `createQueryBuilder().insert().into(ScheduleEntry).values(entriesToInsert)`. Reduces ~182 individual inserts to **1 batch operation**.
+- **Batch UPDATE (status promotions)**: UNKNOWN → CLOSED promotions are batched using `whereInIds(statusPromotions)`. Reduces ~N individual updates to **1 batch operation**.
+- **Batch UPDATE (status demotions)**: Gap-filled CLOSED → UNKNOWN demotions are batched using `whereInIds(statusDemotions)`. Reduces ~N individual updates to **1 batch operation**.
+- **Individual UPDATE (holiday changes)**: Holiday metadata updates (non-status changes) are applied individually as fields may differ per entry.
+
+**Impact**: Reduced from ~364 individual save/update queries to **~5 batch operations** for a typical 365-day range (98.6% reduction).
+
+**Deduplication**: Before gap-fill runs, `cleanupDuplicateScheduleEntriesForPark(parkId)` removes any same-type or cross-type duplicates for that specific park. This prevents conflicts from parallel schedule syncs and ensures duplicate entries don't accumulate between the daily global cleanup (`cleanupDuplicateScheduleEntries`).
+
 ## Persistence
 
 - **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
-- **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed. **Bidirectional cleanup**: when saving OPERATING, delete CLOSED for that date; when saving CLOSED, delete OPERATING for that date. Also delete UNKNOWN placeholders when real data exists.
+- **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed. **Bidirectional cleanup** (batch operations): when saving OPERATING entries, delete CLOSED for those dates; when saving CLOSED entries, delete OPERATING for those dates. Also delete UNKNOWN placeholders when real data exists. All DELETE operations are **batched** using `date IN (:...dates)` to reduce database round-trips (reduces ~300 individual deletes to **3 batch deletes**, 99% reduction).
 - **Gaps**: After saving, `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills missing dates. Defaults: `lookAheadDays = 182`, `lookBackDays = 182` (~½ year each). Range: (today − lookBackDays) through (today + lookAheadDays). See **Gap-fill rules** above.
 
 ## Calendar Endpoint & First-Request Slowness
