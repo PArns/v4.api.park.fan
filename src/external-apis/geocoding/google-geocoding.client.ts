@@ -50,7 +50,7 @@ export class GoogleGeocodingClient {
     }
 
     this.httpClient = axios.create({
-      timeout: 10000, // 10 seconds
+      timeout: 20000, // 20 seconds (increased to reduce timeout errors)
     });
   }
 

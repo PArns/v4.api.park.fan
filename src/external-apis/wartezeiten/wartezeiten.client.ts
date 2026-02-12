@@ -43,7 +43,7 @@ export class WartezeitenClient {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {
     this.client = axios.create({
       baseURL: this.baseURL,
-      timeout: 10000,
+      timeout: 20000, // 20 seconds (increased to reduce timeout errors)
     });
 
     // Add response interceptor for error handling

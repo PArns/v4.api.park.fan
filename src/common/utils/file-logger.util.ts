@@ -41,6 +41,9 @@ export function logToFile(filename: string, data: Record<string, any>): void {
 
 /**
  * Log external API errors with enhanced details
+ *
+ * Note: Timeout errors (ETIMEDOUT, ECONNABORTED) are NOT logged to avoid log spam.
+ * These are transient network errors that are common and expected.
  */
 export function logExternalApiError(
   source: string,
@@ -48,6 +51,27 @@ export function logExternalApiError(
   error: any,
   context?: Record<string, any>,
 ): void {
+  // Skip logging timeout errors (too noisy, transient network issues)
+  const isTimeoutError =
+    error?.code === "ETIMEDOUT" ||
+    error?.code === "ECONNABORTED" ||
+    error?.message?.toLowerCase().includes("timeout");
+
+  // Also check AggregateError sub-errors for timeouts
+  const hasOnlyTimeouts =
+    error?.name === "AggregateError" &&
+    Array.isArray(error.errors) &&
+    error.errors.every(
+      (e: any) =>
+        e?.code === "ETIMEDOUT" ||
+        e?.code === "ECONNABORTED" ||
+        e?.message?.toLowerCase().includes("timeout"),
+    );
+
+  if (isTimeoutError || hasOnlyTimeouts) {
+    return; // Don't log timeouts
+  }
+
   const errorDetails: Record<string, any> = {
     source,
     operation,

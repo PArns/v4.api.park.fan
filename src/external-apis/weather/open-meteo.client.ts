@@ -38,7 +38,7 @@ export class OpenMeteoClient {
   ) {
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 10000,
+      timeout: 20000, // 20 seconds (increased to reduce timeout errors)
     });
   }
 

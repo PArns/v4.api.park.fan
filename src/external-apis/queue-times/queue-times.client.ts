@@ -24,7 +24,7 @@ export class QueueTimesClient {
   constructor() {
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 10000,
+      timeout: 30000, // 30 seconds (increased from 10s to reduce timeout errors)
     });
   }
 
