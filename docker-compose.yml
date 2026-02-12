@@ -115,6 +115,8 @@ services:
       ML_SERVICE_URL: http://ml-service:8000
       BULL_PREFIX: parkfan
       NODE_ENV: development
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy

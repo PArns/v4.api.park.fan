@@ -21,7 +21,6 @@ export class OpenHolidaysClient {
       baseURL: this.baseUrl,
       timeout: 15000,
       headers: {
-        "User-Agent": "park.fan API v4 (https://park.fan)",
         Accept: "application/json",
       },
     });

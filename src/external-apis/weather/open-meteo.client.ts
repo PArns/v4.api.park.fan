@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { logRateLimitBlock } from "../../common/utils/file-logger.util";
 
 /**
  * Open-Meteo Weather API Client
@@ -83,6 +84,17 @@ export class OpenMeteoClient {
         if (status === 429) {
           // Set Global Block (60s default)
           await this.redis.set(this.BLOCKED_KEY, "true", "EX", 60);
+
+          // Log to dedicated file
+          logRateLimitBlock(
+            "open-meteo.com",
+            1,
+            "429 Too Many Requests - API rate limit exceeded",
+            {
+              url,
+              retriesLeft: retries,
+            },
+          );
 
           if (retries > 0) {
             this.logger.warn(

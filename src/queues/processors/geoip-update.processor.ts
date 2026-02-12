@@ -2,6 +2,7 @@ import { Processor, Process } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { GeoipService } from "../../geoip/geoip.service";
+import { logJobFailure } from "../../common/utils/file-logger.util";
 
 /**
  * GeoIP Update Processor
@@ -23,6 +24,13 @@ export class GeoipUpdateProcessor {
       this.logger.log("GeoLite2-City update complete.");
     } catch (err) {
       this.logger.error(`GeoLite2-City update failed: ${err}`);
+
+      // Log to dedicated file - critical for location features
+      logJobFailure("update-geolite2-city", "geoip-update", err, {
+        accountId: process.env.GEOIP_MAXMIND_ACCOUNT_ID ? "set" : "missing",
+        licenseKey: process.env.GEOIP_MAXMIND_LICENSE_KEY ? "set" : "missing",
+      });
+
       throw err;
     }
   }

@@ -10,6 +10,7 @@ import {
   formatInParkTimezone,
 } from "../common/utils/date.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
+import { logMLServiceError } from "../common/utils/file-logger.util";
 import {
   PredictionRequestDto,
   ModelInfoDto,
@@ -115,6 +116,12 @@ export class MLService {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.error("Failed to get model info:", errorMessage);
+
+      // Log to dedicated file
+      logMLServiceError("getModelInfo", error, {
+        mlServiceUrl: this.ML_SERVICE_URL,
+      });
+
       throw new HttpException("ML service unavailable", 503);
     }
   }
@@ -152,6 +159,15 @@ export class MLService {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.error("Prediction request failed:", errorMessage);
+
+      // Log to dedicated file
+      logMLServiceError("getPredictions", error, {
+        mlServiceUrl: this.ML_SERVICE_URL,
+        parkCount: request.parkIds?.length || 0,
+        attractionCount: request.attractionIds?.length || 0,
+        predictionType: request.predictionType,
+        durationMs: duration,
+      });
 
       // Log failed request
       this.logRequest(request, duration, 0, modelVersion).catch((err) => {

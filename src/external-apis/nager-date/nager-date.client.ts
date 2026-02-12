@@ -33,9 +33,6 @@ export class NagerDateClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
-      headers: {
-        "User-Agent": "park.fan API v4 (https://park.fan)",
-      },
     });
   }
 

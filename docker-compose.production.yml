@@ -97,6 +97,7 @@ services:
       - GEOIP_MAXMIND_LICENSE_KEY=${GEOIP_MAXMIND_LICENSE_KEY}
     volumes:
       - /data/parkfan/geoip:/app/geoip
+      - /data/parkfan/logs:/app/logs
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

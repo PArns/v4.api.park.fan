@@ -6,6 +6,7 @@ import {
   WartezeitenOpeningTimeResponse,
   WartezeitenCrowdLevelResponse,
 } from "./wartezeiten.types";
+import { logRateLimitBlock } from "../../common/utils/file-logger.util";
 
 /**
  * Wartezeiten.app API Client
@@ -43,9 +44,6 @@ export class WartezeitenClient {
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: 10000,
-      headers: {
-        "User-Agent": "park.fan/1.0",
-      },
     });
 
     // Add response interceptor for error handling
@@ -127,6 +125,17 @@ export class WartezeitenClient {
           );
           // Set global block in Redis for 15 minutes
           await this.redis.set(this.BLOCKED_KEY, "true", "EX", 15 * 60);
+
+          // Log to dedicated file
+          logRateLimitBlock(
+            "wartezeiten.app",
+            15,
+            "429 Too Many Requests - API rate limit exceeded",
+            {
+              requestsThisWindow: this.requestCount,
+              maxRequestsPerMinute: this.maxRequestsPerMinute,
+            },
+          );
 
           throw new Error(
             "Wartezeiten API: Rate limit exceeded (blocked for 15 minutes)",

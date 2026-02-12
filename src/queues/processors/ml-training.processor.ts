@@ -10,6 +10,7 @@ import { Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import axios from "axios";
+import { logJobFailure } from "../../common/utils/file-logger.util";
 
 const _execAsync = promisify(exec);
 
@@ -183,6 +184,12 @@ export class MLTrainingProcessor {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.error(`❌ Training failed: ${errorMessage}`);
+
+      // Log to dedicated file for critical job failures
+      logJobFailure("train-model", "ml-training", error, {
+        mlServiceUrl: process.env.ML_SERVICE_URL || "http://ml-service:8000",
+      });
+
       throw error;
     }
   }
