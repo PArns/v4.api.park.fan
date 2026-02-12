@@ -26,6 +26,9 @@ describe("Search Fuzzy (E2E)", () => {
     findParksWithoutGeodata: jest.fn().mockResolvedValue([]),
     fillScheduleGaps: jest.fn().mockResolvedValue(undefined),
     hasOperatingSchedule: jest.fn().mockResolvedValue(false),
+    getOperatingDateRange: jest
+      .fn()
+      .mockResolvedValue({ minDate: null, maxDate: null }),
     onModuleInit: jest.fn(),
   };
 

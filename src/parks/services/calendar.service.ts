@@ -149,7 +149,7 @@ export class CalendarService {
       refurbishments,
       historicalQueueData,
       dailyStats,
-      parkHasOperatingSchedule,
+      operatingDateRange,
     ] = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
         this.logger.warn(
@@ -244,8 +244,13 @@ export class CalendarService {
           );
           return [];
         }),
-      this.parksService.hasOperatingSchedule(park.id),
+      this.parksService.getOperatingDateRange(park.id, park.timezone),
     ]);
+
+    // Derive booleans / range info from operatingDateRange
+    const parkHasOperatingSchedule =
+      operatingDateRange.minDate !== null &&
+      operatingDateRange.maxDate !== null;
 
     // On-demand schedule refresh: if requested range has little/no schedule data, trigger
     // a background sync so next request may get updated opening hours (e.g. when source publishes new months).
@@ -317,6 +322,7 @@ export class CalendarService {
         hourlyPredictionsList,
         prefetchedCrowdLevels,
         parkHasOperatingSchedule,
+        operatingDateRange,
       );
       days.push(dayData);
       currentDate.setDate(currentDate.getDate() + 1);
@@ -480,6 +486,10 @@ export class CalendarService {
     hourlyPredictionsPreFetched: PredictionDto[] = [],
     prefetchedCrowdLevels: Map<string, CrowdLevel | "closed"> = new Map(),
     parkHasOperatingSchedule: boolean = false,
+    operatingDateRange: {
+      minDate: string | null;
+      maxDate: string | null;
+    } = { minDate: null, maxDate: null },
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // today is passed as argument
@@ -616,6 +626,19 @@ export class CalendarService {
           : schedule?.scheduleType === ScheduleType.UNKNOWN
             ? "UNKNOWN"
             : "UNKNOWN";
+
+    // Fallback: if no schedule entry exists (or UNKNOWN) and date is strictly between
+    // known operating dates, infer CLOSED (seasonal closure gap, e.g. Phantasialand Jan-Mar).
+    // This prevents showing predictions for days that are clearly closed.
+    if (
+      status === "UNKNOWN" &&
+      operatingDateRange.minDate &&
+      operatingDateRange.maxDate &&
+      dateStr > operatingDateRange.minDate &&
+      dateStr < operatingDateRange.maxDate
+    ) {
+      status = "CLOSED";
+    }
 
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)
     const isHistorical = dateStr <= today;
