@@ -915,13 +915,13 @@ export class AttractionIntegrationService {
               schedule.closingTime,
               timezone,
             );
-            // Next calendar day (timezone-neutral UTC arithmetic so server TZ doesn't matter)
-            const nextDayStr = addDays(
-              new Date(scheduleDateStr + "T00:00:00.000Z"),
-              1,
-            )
-              .toISOString()
-              .slice(0, 10);
+            // Next calendar day (timezone-aware calculation using park timezone)
+            const scheduleDate = fromZonedTime(
+              `${scheduleDateStr}T00:00:00`,
+              timezone,
+            );
+            const nextDay = addDays(scheduleDate, 1);
+            const nextDayStr = formatInParkTimezone(nextDay, timezone);
             const closingSameOrNextDay =
               closingDateStr === scheduleDateStr ||
               closingDateStr === nextDayStr;

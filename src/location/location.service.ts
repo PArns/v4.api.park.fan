@@ -22,6 +22,7 @@ import {
   NearbyParkInfoDto,
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
+import { CrowdLevel } from "../common/types/crowd-level.type";
 
 /**
  * Location Service
@@ -207,13 +208,42 @@ export class LocationService {
     const attractionIds = attractions.map((a) => a.id);
     const latestQueueData = await this.getLatestQueueData(attractionIds);
 
-    // Build ride DTOs
-    const rides: RideWithDistanceDto[] = await Promise.all(
-      attractionsWithDistance.map(async (attraction) => {
+    // Batch-fetch P50 baselines for crowd level calculation
+    const p50Baselines =
+      await this.analyticsService.getBatchAttractionP50s(attractionIds);
+    const p90Baselines =
+      await this.analyticsService.getBatchAttractionP90s(attractionIds);
+
+    // Batch-fetch analytics for all attractions at once
+    const analyticsMap =
+      await this.analyticsService.getBatchAttractionPercentilesToday(
+        attractionIds,
+      );
+
+    // Build ride DTOs (no async needed inside map)
+    const rides: RideWithDistanceDto[] = attractionsWithDistance.map(
+      (attraction) => {
         const queueData = latestQueueData.get(attraction.id);
-        const analytics = await this.analyticsService
-          .getAttractionPercentilesToday(attraction.id)
-          .catch(() => null);
+        const analytics = analyticsMap.get(attraction.id) || null;
+
+        // Calculate crowd level
+        const waitTime = queueData?.waitTime;
+        let crowdLevel: CrowdLevel | null = null;
+
+        if (
+          waitTime !== null &&
+          waitTime !== undefined &&
+          queueData?.status === "OPERATING"
+        ) {
+          const baseline =
+            p50Baselines.get(attraction.id) || p90Baselines.get(attraction.id);
+          if (baseline && baseline > 0) {
+            crowdLevel = this.analyticsService.getAttractionCrowdLevel(
+              waitTime,
+              baseline,
+            );
+          }
+        }
 
         return {
           id: attraction.id,
@@ -225,6 +255,7 @@ export class LocationService {
               ? roundToNearest5Minutes(queueData.waitTime)
               : null,
           status: queueData?.status || "CLOSED",
+          crowdLevel,
           analytics: analytics
             ? {
                 p50: analytics.p50,
@@ -233,7 +264,7 @@ export class LocationService {
             : undefined,
           url: buildAttractionUrl(park, attraction) || "",
         };
-      }),
+      },
     );
 
     // Build park info
@@ -329,28 +360,22 @@ export class LocationService {
       this.batchFetchSchedules(parkIds),
     ]);
 
-    // Get statistics for each park (with timezone context)
-    const statisticsMap = new Map<string, any>();
-    await Promise.all(
-      parkIds.map(async (parkId) => {
-        try {
-          const park = parks.find((p) => p.id === parkId);
-          if (park) {
-            const startTime = await this.analyticsService.getEffectiveStartTime(
-              park.id,
-              park.timezone,
-            );
-            const stats = await this.analyticsService.getParkStatistics(
-              parkId,
-              park.timezone,
-              startTime,
-            );
-            statisticsMap.set(parkId, stats);
-          }
-        } catch (_e) {
-          // Ignore errors
-        }
-      }),
+    // Get statistics for each park (with timezone context) - Batch optimized
+    const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
+      parks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
+    );
+    const context = new Map<string, { timezone: string; startTime: Date }>();
+    for (const park of parks) {
+      const startTime = startTimeMap.get(park.id)!;
+      context.set(park.id, {
+        timezone: park.timezone || "UTC",
+        startTime,
+      });
+    }
+
+    const statisticsMap = await this.analyticsService.getBatchParkStatistics(
+      parkIds,
+      context,
     );
 
     // Build park DTOs

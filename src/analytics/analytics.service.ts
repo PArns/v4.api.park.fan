@@ -675,6 +675,121 @@ export class AnalyticsService {
   }
 
   /**
+   * Batch version of getAttractionPercentilesToday for multiple attractions
+   * Groups by park timezone to minimize queries
+   */
+  async getBatchAttractionPercentilesToday(
+    attractionIds: string[],
+  ): Promise<
+    Map<
+      string,
+      {
+        p25: number;
+        p50: number;
+        p75: number;
+        p90: number;
+        iqr: number;
+        sampleCount: number;
+      } | null
+    >
+  > {
+    if (attractionIds.length === 0) {
+      return new Map();
+    }
+
+    // Fetch park info for timezone lookup (single query)
+    const attractions = await this.attractionRepository.find({
+      where: { id: In(attractionIds) },
+      relations: ["park"],
+      select: { id: true, park: { timezone: true } },
+    });
+
+    // Group attractions by park timezone (like getBatchEffectiveStartTime)
+    const timezoneGroups = new Map<string, string[]>();
+
+    for (const attr of attractions) {
+      const tz = attr.park?.timezone || "UTC";
+      if (!timezoneGroups.has(tz)) {
+        timezoneGroups.set(tz, []);
+      }
+      timezoneGroups.get(tz)!.push(attr.id);
+    }
+
+    const resultMap = new Map();
+
+    // Query all timezone groups in parallel
+    const queryPromises = Array.from(timezoneGroups.entries()).map(
+      async ([timezone, ids]) => {
+        const startOfDay = getStartOfDayInTimezone(timezone);
+
+        try {
+          const result = await this.queueDataAggregateRepository
+            .createQueryBuilder("agg")
+            .select("agg.attractionId", "attractionId")
+            .addSelect(
+              "PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY agg.p25)",
+              "p25",
+            )
+            .addSelect(
+              "PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY agg.p50)",
+              "p50",
+            )
+            .addSelect(
+              "PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY agg.p75)",
+              "p75",
+            )
+            .addSelect(
+              "PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY agg.p90)",
+              "p90",
+            )
+            .addSelect("AVG(agg.iqr)", "iqr")
+            .addSelect("SUM(agg.sampleCount)", "sampleCount")
+            .where("agg.attractionId IN (:...ids)", { ids })
+            .andWhere("agg.hour >= :startOfDay", { startOfDay })
+            .groupBy("agg.attractionId")
+            .getRawMany();
+
+          return result;
+        } catch (error) {
+          this.logger.warn(
+            `Failed to fetch batch percentiles for timezone ${timezone}:`,
+            error,
+          );
+          return [];
+        }
+      },
+    );
+
+    const allResults = (await Promise.all(queryPromises)).flat();
+
+    // Build result map
+    for (const row of allResults) {
+      if (!row || row.p50 === null) {
+        resultMap.set(row.attractionId, null);
+        continue;
+      }
+
+      resultMap.set(row.attractionId, {
+        p25: Math.round(parseFloat(row.p25)),
+        p50: Math.round(parseFloat(row.p50)),
+        p75: Math.round(parseFloat(row.p75)),
+        p90: Math.round(parseFloat(row.p90)),
+        iqr: Math.round(parseFloat(row.iqr || "0")),
+        sampleCount: parseInt(row.sampleCount || "0", 10),
+      });
+    }
+
+    // Fill in nulls for attractions with no data
+    for (const id of attractionIds) {
+      if (!resultMap.has(id)) {
+        resultMap.set(id, null);
+      }
+    }
+
+    return resultMap;
+  }
+
+  /**
    * Get current park wait time for occupancy/trend consistency.
    * - With headliners: per-headliner AVG(wait) in last 60 min, then sum/count (same as trend/peak).
    * - Without headliners: median of latest wait per attraction (legacy).
@@ -1580,15 +1695,15 @@ export class AnalyticsService {
    * **Single Source of Truth** for crowd level calculation across all services.
    * All services should use this method instead of implementing their own logic.
    *
-   * **NEW: P50-Relative Thresholds (±20% Around Median):**
+   * **NEW: P50-Relative Thresholds (±10% Around Median):**
    * Uses P50 (median) as baseline: occupancy = (current / p50) * 100
    * - 100% = P50 = **"moderate"** baseline (expected/typical day)
-   * - very_low: ≤ 50% (≤ 0.5x P50) - Much quieter than expected
-   * - low: 51-79% (0.51-0.79x P50) - Below expected
-   * - moderate: 80-120% (0.8-1.2x P50) - Around expected baseline (±20%)
-   * - high: 121-170% (1.21-1.7x P50) - Above expected
-   * - very_high: 171-250% (1.71-2.5x P50) - Significantly above expected
-   * - extreme: > 250% (> 2.5x P50) - Exceptionally crowded
+   * - very_low: ≤ 60% (≤ 0.6x P50) - Much quieter than expected
+   * - low: 61-89% (0.61-0.89x P50) - Below expected
+   * - moderate: 90-110% (0.9-1.1x P50) - Around expected baseline (±10%)
+   * - high: 111-150% (1.11-1.5x P50) - Above expected
+   * - very_high: 151-200% (1.51-2.0x P50) - Significantly above expected
+   * - extreme: > 200% (> 2.0x P50) - Exceptionally crowded
    *
    * @param occupancy - Occupancy percentage relative to P50 baseline (0-300+)
    * @returns Crowd level rating
@@ -1598,12 +1713,12 @@ export class AnalyticsService {
   public determineCrowdLevel(
     occupancy: number,
   ): "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme" {
-    // P50-relative thresholds (±20% around P50 for moderate)
-    if (occupancy <= 50) return "very_low";
-    if (occupancy <= 79) return "low";
-    if (occupancy <= 120) return "moderate"; // 80-120%: ±20% around P50
-    if (occupancy <= 170) return "high";
-    if (occupancy <= 250) return "very_high";
+    // P50-relative thresholds (±10% around P50 for moderate)
+    if (occupancy <= 60) return "very_low";
+    if (occupancy <= 89) return "low";
+    if (occupancy <= 110) return "moderate"; // 90-110%: ±10% around P50
+    if (occupancy <= 150) return "high";
+    if (occupancy <= 200) return "very_high";
     return "extreme";
   }
 
@@ -3520,8 +3635,8 @@ export class AnalyticsService {
    * Identify headliner attractions for a park using 3-tier adaptive strategy
    *
    * Tier 1 (Major Parks): Absolute thresholds (AVG > 15min, P90 > 25min)
-   * Tier 2 (Medium Parks): Relative thresholds (Top 50%, P90 > 1.5x P50)
-   * Tier 3 (Small Parks): All attractions with AVG > 3min (fallback)
+   * Tier 2 (Medium Parks): Relative thresholds (Top 40%, P90 > 1.5x P50)
+   * Tier 3 (Small Parks): Relative thresholds (Top 50% - median wait) (fallback)
    *
    * @param parkId - Park ID
    * @returns Array of headliner attractions with tier classification
@@ -3611,18 +3726,19 @@ export class AnalyticsService {
       -- Tier 3: All attractions fallback (small parks) - only if Tier 1+2 < 3
       tier3_headliners AS (
         SELECT
-          attraction_id,
-          park_id,
+          ast.attraction_id,
+          ast.park_id,
           'tier3' as tier,
-          avg_wait,
-          p50_wait,
-          p90_wait,
-          operating_days,
-          sample_count
-        FROM attraction_stats
+          ast.avg_wait,
+          ast.p50_wait,
+          ast.p90_wait,
+          ast.operating_days,
+          ast.sample_count
+        FROM attraction_stats ast
+        CROSS JOIN park_stats ps
         WHERE (SELECT COUNT(*) FROM tier1_headliners) < 3
           AND (SELECT COUNT(*) FROM tier2_headliners) < 3
-          AND avg_wait > 3  -- Exclude always-closed/walk-through
+          AND ast.avg_wait >= ps.park_median_wait  -- Relative threshold (Top 50%)
       )
       -- Union all tiers (priority: Tier 1 > Tier 2 > Tier 3)
       SELECT * FROM tier1_headliners

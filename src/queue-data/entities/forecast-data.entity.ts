@@ -18,7 +18,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  * API Source: GET /entity/{id}/live -> liveData[].forecast[]
  */
 @Entity("forecast_data")
-@Index(["attraction", "predictedTime"])
+@Index(["attractionId", "predictedTime"])
 @Index("forecast_data_createdAt_idx", ["createdAt"])
 export class ForecastData {
   @PrimaryColumn({ type: "uuid" })

@@ -75,11 +75,56 @@ export class MLService {
 
     this.mlClient = axios.create({
       baseURL: this.ML_SERVICE_URL,
-      timeout: 90000, // 90 seconds (ML predictions + DB queries can be slow)
+      timeout: 120000, // 120 seconds (ML predictions + DB queries can be slow)
       headers: {
         "Content-Type": "application/json",
+        Connection: "keep-alive",
       },
+      // Improve connection stability
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      // Retry configuration for transient network errors
+      validateStatus: (status) => status < 500, // Don't throw on 4xx
     });
+
+    // Add retry interceptor for transient connection errors (ECONNRESET, etc.)
+    this.mlClient.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const config = error.config;
+
+        // Check if this is a retryable error
+        const isRetryable =
+          error.code === "ECONNRESET" ||
+          error.code === "ETIMEDOUT" ||
+          error.code === "ECONNABORTED" ||
+          error.message?.includes("socket hang up");
+
+        // Initialize retry count
+        if (!config._retryCount) {
+          config._retryCount = 0;
+        }
+
+        // Retry up to 2 times for connection errors (total 3 attempts)
+        if (isRetryable && config._retryCount < 2) {
+          config._retryCount += 1;
+
+          // Exponential backoff: 1s, 2s
+          const delay = 1000 * config._retryCount;
+
+          this.logger.warn(
+            `ML service connection error (${error.code}), retry ${config._retryCount}/2 in ${delay}ms`,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, delay));
+
+          return this.mlClient.request(config);
+        }
+
+        // If not retryable or max retries exceeded, throw the error
+        return Promise.reject(error);
+      },
+    );
 
     if (process.env.ML_SERVICE_URL) {
       this.logger.log(`ML Service URL: ${this.ML_SERVICE_URL} `);

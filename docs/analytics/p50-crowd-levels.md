@@ -63,12 +63,12 @@ We map the percentage (Current / Baseline) to a human-readable level using **Rel
 
 | Level | Range (Relative to Baseline) | Description |
 |-------|------------------------------|-------------|
-| **Very Low** | **0% - 50%** | Walk-on conditions (≤ 0.5x Normal) |
-| **Low** | **51% - 79%** | Shorter than average waits |
-| **Moderate** | **80% - 120%** | **Typical Day** (Within ±20% of median) |
-| **High** | **121% - 170%** | Busy day (1.2x - 1.7x Normal) |
-| **Very High** | **171% - 250%** | Peak season / Holidays |
-| **Extreme** | **> 250%** | Major events / Capacity reached |
+| **Very Low** | **0% - 60%** | Walk-on conditions (≤ 0.6x Normal) |
+| **Low** | **61% - 89%** | Shorter than average waits |
+| **Moderate** | **90% - 110%** | **Typical Day** (Within ±10% of median) |
+| **High** | **111% - 150%** | Busy day (1.1x - 1.5x Normal) |
+| **Very High** | **151% - 200%** | Peak season / Holidays |
+| **Extreme** | **> 200%** | Major events / Capacity reached |
 
 > **Note:** "Moderate" is the target for a standard operating day.
 

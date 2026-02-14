@@ -1174,18 +1174,18 @@ def predict_wait_times(
 
         # Categorize crowd level using P50-RELATIVE THRESHOLDS
         # MUST MATCH TypeScript determineCrowdLevel() EXACTLY!
-        # TypeScript: 50, 79, 120, 170, 250
+        # TypeScript: 60, 89, 110, 150, 200
         # P50 (100%) = "moderate" (expected/typical baseline)
         occupancy_pct = ratio * 100
-        if occupancy_pct <= 50:
+        if occupancy_pct <= 60:
             crowd_level = "very_low"
-        elif occupancy_pct <= 79:
+        elif occupancy_pct <= 89:
             crowd_level = "low"
-        elif occupancy_pct <= 120:  # 80-120%: ±20% around P50 = moderate
+        elif occupancy_pct <= 110:  # 90-110%: ±10% around P50 = moderate
             crowd_level = "moderate"
-        elif occupancy_pct <= 170:
+        elif occupancy_pct <= 150:
             crowd_level = "high"
-        elif occupancy_pct <= 250:
+        elif occupancy_pct <= 200:
             crowd_level = "very_high"
         else:
             crowd_level = "extreme"

@@ -87,8 +87,8 @@ export class SearchResultItemDto {
 
   @ApiProperty({
     description: "Current crowd/wait level (parks, attractions)",
-    enum: ["very_low", "low", "normal", "higher", "high", "extreme"],
-    example: "normal",
+    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    example: "moderate",
     required: false,
   })
   load?: CrowdLevel | null;

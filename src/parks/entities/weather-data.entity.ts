@@ -26,7 +26,7 @@ import { Park } from "./park.entity";
  * - Forecast: 16 days ahead, updated every 12 hours
  */
 @Entity("weather_data")
-@Index(["park", "date"])
+@Index("idx_weather_1", ["parkId", "date"])
 @Index("weather_data_date_idx", ["date"])
 export class WeatherData {
   @ManyToOne(() => Park, { onDelete: "CASCADE" })

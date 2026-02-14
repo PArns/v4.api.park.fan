@@ -56,7 +56,7 @@ export class Attraction {
   park: Park;
 
   @Column()
-  // Index covered by ["parkId", "slug"]
+  @Index("idx_attraction_park_id", ["parkId"])
   parkId: string;
 
   @Column({ type: "decimal", precision: 10, scale: 7, nullable: true })

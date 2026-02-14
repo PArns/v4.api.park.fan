@@ -9,8 +9,8 @@
  * **Attraction crowd level:** Uses per-attraction P90 (or P50 where used) for load rating.
  *
  * Thresholds (P50-relative for parks, see determineCrowdLevel):
- * - very_low: ≤ 50%  - low: 51-79%  - moderate: 80-120%  - high: 121-170%
- * - very_high: 171-250%  - extreme: > 250%
+ * - very_low: ≤ 60%  - low: 61-89%  - moderate: 90-110%  - high: 111-150%
+ * - very_high: 151-200%  - extreme: > 200%
  *
  * **Fallback (when baseline unavailable):** Returns 'moderate'.
  */
