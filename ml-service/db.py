@@ -273,11 +273,19 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
         return {row.park_id: row.countries for row in result}
 
 
+# Cache for holidays (never changes for past dates)
+_holidays_cache = {}
+_holidays_cache_ttl = 3600  # 1 hour in seconds
+
+
 def fetch_holidays(
     country_codes: List[str], start_date: datetime.datetime, end_date: datetime.datetime
 ) -> pd.DataFrame:
     """
     Fetch holidays for specified countries
+
+    OPTIMIZATION: Caches results for 1 hour to avoid repeated DB queries.
+    Holidays never change for past dates, so caching is safe.
 
     Returns DataFrame with columns:
     - date
@@ -286,6 +294,18 @@ def fetch_holidays(
     - holiday_type
     - is_nationwide
     """
+    # Create cache key from sorted countries and date range
+    cache_key = f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
+
+    # Check cache
+    if cache_key in _holidays_cache:
+        cached_data, cache_time = _holidays_cache[cache_key]
+        import time
+
+        if time.time() - cache_time < _holidays_cache_ttl:
+            return cached_data.copy()
+
+    # Cache miss - load from DB
     query = text(
         """
         SELECT
@@ -310,7 +330,14 @@ def fetch_holidays(
             },
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
-        return convert_df_types(df)
+        df = convert_df_types(df)
+
+        # Update cache
+        import time
+
+        _holidays_cache[cache_key] = (df.copy(), time.time())
+
+        return df
 
 
 # Cache for parks metadata (5 minute TTL)
@@ -380,11 +407,19 @@ def fetch_parks_metadata(use_cache: bool = True) -> pd.DataFrame:
         return df
 
 
+# Cache for park schedules (short-lived, 5 minutes)
+_schedules_cache = {}
+_schedules_cache_ttl = 300  # 5 minutes in seconds
+
+
 def fetch_park_schedules(
     start_date: datetime.datetime, end_date: datetime.datetime
 ) -> pd.DataFrame:
     """
     Fetch park opening hours/schedules including special events
+
+    OPTIMIZATION: Caches results for 5 minutes to avoid repeated DB queries
+    during batch prediction requests.
 
     IMPORTANT: This function expects start_date and end_date to represent dates
     in the park's local timezone (not UTC). The dates are converted using .date()
@@ -402,6 +437,18 @@ def fetch_park_schedules(
     - opening_time
     - closing_time
     """
+    # Create cache key from date range
+    cache_key = f"{start_date.date()}:{end_date.date()}"
+
+    # Check cache
+    if cache_key in _schedules_cache:
+        cached_data, cache_time = _schedules_cache[cache_key]
+        import time
+
+        if time.time() - cache_time < _schedules_cache_ttl:
+            return cached_data.copy()
+
+    # Cache miss - load from DB
     query = text(
         """
         SELECT
@@ -415,7 +462,7 @@ def fetch_park_schedules(
             "isBridgeDay" as is_bridge_day
         FROM schedule_entries
         WHERE date BETWEEN :start_date AND :end_date
-            -- For park schedules: opening/closing must be present (OPERATING) 
+            -- For park schedules: opening/closing must be present (OPERATING)
             -- OR it can be an event/info/maintenance without times
             AND (
                 ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
@@ -434,7 +481,14 @@ def fetch_park_schedules(
             query, {"start_date": start_date.date(), "end_date": end_date.date()}
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
-        return convert_df_types(df)
+        df = convert_df_types(df)
+
+        # Update cache
+        import time
+
+        _schedules_cache[cache_key] = (df.copy(), time.time())
+
+        return df
 
 
 def fetch_active_model_version() -> str:

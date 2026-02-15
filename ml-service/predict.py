@@ -15,6 +15,10 @@ from config import get_settings
 
 settings = get_settings()
 
+# Cache for weather historical data (1 hour TTL)
+_weather_historical_cache = {}
+_weather_historical_cache_ttl = 3600  # 1 hour
+
 
 def round_to_nearest_5(value: float) -> int:
     """
@@ -47,40 +51,83 @@ def round_to_nearest_5(value: float) -> int:
     return int((value + 2.5) // 5) * 5
 
 
+# Cache for recent wait times (short-lived, 2 minutes)
+_recent_wait_times_cache = {}
+_recent_wait_times_cache_ttl = 120  # 2 minutes
+
+
 def fetch_recent_wait_times(
     attraction_ids: List[str], lookback_days: int = 730
 ) -> pd.DataFrame:
     """
     Fetch recent wait times aggregated by day for historical features
 
+    OPTIMIZATION:
+    - Caches results for 2 minutes (burst request protection)
+    - Pre-computes rolling averages in DB instead of Python
+    - Uses window functions for efficiency
+
     Args:
         attraction_ids: List of attraction IDs
         lookback_days: How many days to look back (default: 730 = 2 years)
 
     Returns:
-        DataFrame with daily aggregated queue data
+        DataFrame with daily aggregated queue data + pre-computed rolling averages
     """
     if not attraction_ids:
         return pd.DataFrame()
 
-    # Aggregate to daily values for efficiency (2 years of hourly data = too much)
-    # Calculate: avg per day, avg per hour-of-day, avg per day-of-week
+    # Create cache key from sorted attraction IDs
+    cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}"
+
+    # Check cache
+    if cache_key in _recent_wait_times_cache:
+        cached_data, cache_time = _recent_wait_times_cache[cache_key]
+        import time
+
+        if time.time() - cache_time < _recent_wait_times_cache_ttl:
+            return cached_data.copy()
+
+    # OPTIMIZATION: Pre-compute rolling averages in DB using window functions
+    # This avoids shipping raw data to Python and doing calculations there
     query = text(
         """
+        WITH hourly_agg AS (
+            SELECT
+                "attractionId"::text as "attractionId",
+                DATE(timestamp) as date,
+                EXTRACT(HOUR FROM timestamp) as hour,
+                EXTRACT(DOW FROM timestamp) as day_of_week,
+                AVG("waitTime") as avg_wait,
+                COUNT(*) as data_points
+            FROM queue_data
+            WHERE "attractionId"::text = ANY(:attraction_ids)
+                AND timestamp >= NOW() - INTERVAL :lookback_days DAY
+                AND "waitTime" IS NOT NULL
+                AND status = 'OPERATING'
+                AND "queueType" = 'STANDBY'
+            GROUP BY "attractionId", DATE(timestamp), EXTRACT(HOUR FROM timestamp), EXTRACT(DOW FROM timestamp)
+        )
         SELECT
-            "attractionId"::text as "attractionId",
-            DATE(timestamp) as date,
-            EXTRACT(HOUR FROM timestamp) as hour,
-            EXTRACT(DOW FROM timestamp) as day_of_week,
-            AVG("waitTime") as avg_wait,
-            COUNT(*) as data_points
-        FROM queue_data
-        WHERE "attractionId"::text = ANY(:attraction_ids)
-            AND timestamp >= NOW() - INTERVAL :lookback_days DAY
-            AND "waitTime" IS NOT NULL
-            AND status = 'OPERATING'
-            AND "queueType" = 'STANDBY'
-        GROUP BY "attractionId", DATE(timestamp), EXTRACT(HOUR FROM timestamp), EXTRACT(DOW FROM timestamp)
+            "attractionId",
+            date,
+            hour,
+            day_of_week,
+            avg_wait,
+            data_points,
+            -- Pre-compute 7-day rolling average in DB (window function)
+            AVG(avg_wait) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW  -- 7 days * 24 hours = 168 rows
+            ) as rolling_avg_7d,
+            -- Pre-compute standard deviation for volatility
+            STDDEV(avg_wait) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+            ) as rolling_std_7d
+        FROM hourly_agg
         ORDER BY "attractionId", date DESC, hour
     """
     )
@@ -94,8 +141,14 @@ def fetch_recent_wait_times(
             },
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        df = convert_df_types(df)
 
-    return convert_df_types(df)
+        # Update cache
+        import time
+
+        _recent_wait_times_cache[cache_key] = (df.copy(), time.time())
+
+        return df
 
 
 def generate_future_timestamps(
@@ -302,39 +355,61 @@ def create_prediction_features(
         else:
             prediction_month = datetime.now(timezone.utc).month
 
-        weather_query = text(
+        # OPTIMIZATION: Cache weather historical averages (1 hour TTL)
+        # Weather averages change rarely, so caching is safe and effective
+        cache_key = f"{','.join(sorted(set(park_ids)))}:{prediction_month}"
+        weather_df = None
+
+        if cache_key in _weather_historical_cache:
+            cached_data, cache_time = _weather_historical_cache[cache_key]
+            import time
+
+            if time.time() - cache_time < _weather_historical_cache_ttl:
+                weather_df = cached_data.copy()
+
+        if weather_df is None:
+            # Cache miss - load from DB
+            weather_query = text(
+                """
+                SELECT
+                    "parkId"::text as "parkId",
+                    AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
+                    AVG("precipitationSum") as precip_avg,
+                    AVG("windSpeedMax") as wind_avg,
+                    AVG("snowfallSum") as snow_avg,
+                    MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
+                FROM weather_data
+                WHERE "parkId"::text = ANY(:park_ids)
+                    AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
+                    AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 years of historical data
+                GROUP BY "parkId"
             """
-            SELECT
-                "parkId"::text as "parkId",
-                AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
-                AVG("precipitationSum") as precip_avg,
-                AVG("windSpeedMax") as wind_avg,
-                AVG("snowfallSum") as snow_avg,
-                MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
-            FROM weather_data
-            WHERE "parkId"::text = ANY(:park_ids)
-                AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
-                AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 years of historical data
-            GROUP BY "parkId"
-        """
-        )
-
-        try:
-            with get_db() as db:
-                result = db.execute(
-                    weather_query,
-                    {"park_ids": list(set(park_ids)), "month": prediction_month},
-                )
-                weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                weather_df = convert_df_types(weather_df)
-        except Exception as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Failed to fetch historical weather data: {e}. Using defaults."
             )
-            weather_df = pd.DataFrame()
+
+            try:
+                with get_db() as db:
+                    result = db.execute(
+                        weather_query,
+                        {"park_ids": list(set(park_ids)), "month": prediction_month},
+                    )
+                    weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                    weather_df = convert_df_types(weather_df)
+
+                    # Update cache
+                    import time
+
+                    _weather_historical_cache[cache_key] = (
+                        weather_df.copy(),
+                        time.time(),
+                    )
+            except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Failed to fetch historical weather data: {e}. Using defaults."
+                )
+                weather_df = pd.DataFrame()
 
         # Merge weather data
         if not weather_df.empty:
@@ -444,7 +519,66 @@ def create_prediction_features(
     else:
         holiday_lookup = {}
 
-    # Initialize holiday columns
+    # OPTIMIZATION: Vectorized holiday lookups (replaces slow loop)
+    # Pre-process parks metadata to create lookup structures
+    park_country_map = (
+        parks_metadata.set_index("park_id")[["country", "region_code"]]
+        .to_dict("index")
+    )
+
+    # Parse influencing regions once per park (not per row!)
+    park_influences_map = {}
+    for _, park_row in parks_metadata.iterrows():
+        park_id = park_row["park_id"]
+        raw_influences = park_row.get("influencingRegions")
+
+        influencing_regions = []
+        if isinstance(raw_influences, list):
+            influencing_regions = raw_influences
+        elif isinstance(raw_influences, str):
+            import json
+
+            try:
+                influencing_regions = json.loads(raw_influences)
+            except Exception:
+                influencing_regions = []
+
+        park_influences_map[park_id] = influencing_regions[:3]  # Max 3
+
+    # Add local date column for holiday matching
+    df["local_date"] = df["local_timestamp"].dt.date
+
+    # Convert holidays_df to easier lookup format
+    if not holidays_df.empty:
+        # Create separate DataFrames for regional and national holidays
+        holidays_df["date_only"] = pd.to_datetime(holidays_df["date"]).dt.date
+
+        # Regional holidays (with region)
+        holidays_regional = holidays_df[holidays_df["region"].notna()].copy()
+        holidays_regional["lookup_key"] = (
+            holidays_regional["country"]
+            + "|"
+            + holidays_regional["region"]
+            + "|"
+            + holidays_regional["date_only"].astype(str)
+        )
+
+        # National holidays (no region)
+        holidays_national = holidays_df[holidays_df["region"].isna()].copy()
+        holidays_national["lookup_key"] = (
+            holidays_national["country"]
+            + "||"
+            + holidays_national["date_only"].astype(str)
+        )
+
+        # Combine for fast lookup
+        holiday_type_lookup = {}
+        for _, row in holidays_regional.iterrows():
+            holiday_type_lookup[row["lookup_key"]] = row["holiday_type"]
+        for _, row in holidays_national.iterrows():
+            holiday_type_lookup[row["lookup_key"]] = row["holiday_type"]
+
+    # Initialize holiday columns (vectorized)
     df["is_holiday_primary"] = 0
     df["is_school_holiday_primary"] = 0
     df["is_holiday_neighbor_1"] = 0
@@ -452,96 +586,106 @@ def create_prediction_features(
     df["is_holiday_neighbor_3"] = 0
     df["holiday_count_total"] = 0
     df["school_holiday_count_total"] = 0
-    df["is_school_holiday_any"] = 0  # NEW: Consolidated signal
+    df["is_school_holiday_any"] = 0
 
-    # Check holidays for each row
-    for idx, row in df.iterrows():
-        # Use LOCAL date for holiday lookup (matches training pipeline)
-        date = row["local_timestamp"].date()
-        park_info = parks_metadata[parks_metadata["park_id"] == row["parkId"]]
+    if not holidays_df.empty:
+        # FULLY VECTORIZED: Build lookup keys without loops
+        # Map park metadata to DataFrame columns
+        df["park_country"] = df["parkId"].map(
+            lambda pid: park_country_map.get(pid, {}).get("country", "")
+        )
+        df["park_region"] = df["parkId"].map(
+            lambda pid: park_country_map.get(pid, {}).get("region_code", "")
+        )
+        df["date_str"] = df["local_date"].astype(str)
 
-        if not park_info.empty:
-            primary_country = park_info.iloc[0]["country"]
+        # Primary key: country|region|date or country||date (if no region)
+        df["primary_key"] = df.apply(
+            lambda row: f"{row['park_country']}|{row['park_region']}|{row['date_str']}"
+            if row["park_region"]
+            else f"{row['park_country']}||{row['date_str']}",
+            axis=1,
+        )
 
-            # Parse influencing regions (JSON) or fallback to countries list
-            influencing_regions = []
-            raw_influences = park_info.iloc[0].get("influencingRegions")
+        # Neighbor keys: Extract from park_influences_map
+        def get_neighbor_key(row, index):
+            influences = park_influences_map.get(row["parkId"], [])
+            if index < len(influences):
+                inf = influences[index]
+                country = inf.get("countryCode", "")
+                region = inf.get("regionCode", "")
+                if region:
+                    return f"{country}|{region}|{row['date_str']}"
+                else:
+                    return f"{country}||{row['date_str']}"
+            return ""
 
-            if isinstance(raw_influences, list):
-                influencing_regions = raw_influences
-            elif isinstance(raw_influences, str):
-                import json
+        df["neighbor_1_key"] = df.apply(lambda row: get_neighbor_key(row, 0), axis=1)
+        df["neighbor_2_key"] = df.apply(lambda row: get_neighbor_key(row, 1), axis=1)
+        df["neighbor_3_key"] = df.apply(lambda row: get_neighbor_key(row, 2), axis=1)
 
-                try:
-                    influencing_regions = json.loads(raw_influences)
-                except Exception:
-                    influencing_regions = []
+        # Map to holiday types
+        df["primary_type"] = df["primary_key"].map(holiday_type_lookup)
+        df["neighbor_1_type"] = df["neighbor_1_key"].map(holiday_type_lookup)
+        df["neighbor_2_type"] = df["neighbor_2_key"].map(holiday_type_lookup)
+        df["neighbor_3_type"] = df["neighbor_3_key"].map(holiday_type_lookup)
 
-            # Fallback for backward compatibility (older DB records)
+        # Fallback: If regional lookup failed, try national
+        mask_no_primary = df["primary_type"].isna()
+        if mask_no_primary.any():
+            # Extract country from primary_key and try national lookup
+            df.loc[mask_no_primary, "primary_fallback_key"] = df.loc[
+                mask_no_primary, "primary_key"
+            ].str.replace(r"\|.*?\|", "||", regex=True)
+            df.loc[mask_no_primary, "primary_type"] = df.loc[
+                mask_no_primary, "primary_fallback_key"
+            ].map(holiday_type_lookup)
 
-            # Primary country holiday
-            # Note: For prediction, we might not always have granular region for the park itself in metadata
-            # unless we fetched it. db.fetch_parks_metadata was updated to include region_code.
-            primary_region = park_info.iloc[0].get("region_code")
+        # Convert to binary flags (vectorized)
+        df["is_holiday_primary"] = (df["primary_type"] == "public").astype(int)
+        df["is_school_holiday_primary"] = (df["primary_type"] == "school").astype(int)
+        df["is_holiday_neighbor_1"] = (df["neighbor_1_type"] == "public").astype(int)
+        df["is_holiday_neighbor_2"] = (df["neighbor_2_type"] == "public").astype(int)
+        df["is_holiday_neighbor_3"] = (df["neighbor_3_type"] == "public").astype(int)
 
-            primary_type = None
-            # Check specific region match first
-            if primary_region:
-                primary_type = holiday_lookup.get(
-                    (primary_country, primary_region, date)
-                )  # Need to update lookup keys first!
+        # Calculate totals (vectorized)
+        df["holiday_count_total"] = (
+            df["is_holiday_primary"]
+            + df["is_holiday_neighbor_1"]
+            + df["is_holiday_neighbor_2"]
+            + df["is_holiday_neighbor_3"]
+        )
 
-            # If no regional match, check national (fallback/additive)
-            if not primary_type:
-                # Fallback to (country, None) or (country, date) depending on lookup structure
-                # The existing lookup in predict.py (lines 318-321) uses (country, date).
-                # We need to update that lookup construction too!
-                primary_type = holiday_lookup.get((primary_country, date))
+        df["school_holiday_count_total"] = (
+            (df["primary_type"] == "school").astype(int)
+            + (df["neighbor_1_type"] == "school").astype(int)
+            + (df["neighbor_2_type"] == "school").astype(int)
+            + (df["neighbor_3_type"] == "school").astype(int)
+        )
 
-            df.at[idx, "is_holiday_primary"] = int(primary_type == "public")
-            df.at[idx, "is_school_holiday_primary"] = int(primary_type == "school")
+        # "Any School Holiday" Logic (vectorized)
+        df["is_school_holiday_any"] = (df["school_holiday_count_total"] > 0).astype(
+            int
+        )
 
-            # Neighbor holidays
-            neighbor_public_flags = []
-            neighbor_school_flags = []
-
-            for region in influencing_regions[:3]:
-                r_country = region["countryCode"]
-                r_code = region["regionCode"]
-
-                # Check specific region
-                h_type = None
-                if r_code:
-                    h_type = holiday_lookup.get((r_country, r_code, date))
-
-                # Fallback to national
-                if not h_type:
-                    h_type = holiday_lookup.get((r_country, date))
-
-                neighbor_public_flags.append(int(h_type == "public"))
-                neighbor_school_flags.append(int(h_type == "school"))
-
-            # Fill neighbor columns (up to 3)
-            if len(neighbor_public_flags) > 0:
-                df.at[idx, "is_holiday_neighbor_1"] = neighbor_public_flags[0]
-            if len(neighbor_public_flags) > 1:
-                df.at[idx, "is_holiday_neighbor_2"] = neighbor_public_flags[1]
-            if len(neighbor_public_flags) > 2:
-                df.at[idx, "is_holiday_neighbor_3"] = neighbor_public_flags[2]
-
-            df.at[idx, "holiday_count_total"] = sum(
-                [df.at[idx, "is_holiday_primary"]] + neighbor_public_flags
-            )
-            df.at[idx, "school_holiday_count_total"] = sum(
-                [df.at[idx, "is_school_holiday_primary"]] + neighbor_school_flags
-            )
-
-            # "Any School Holiday" Logic (Critical for ML parity)
-            has_local_school = df.at[idx, "is_school_holiday_primary"] == 1
-            has_neighbor_school = sum(neighbor_school_flags) > 0
-            df.at[idx, "is_school_holiday_any"] = int(
-                has_local_school or has_neighbor_school
-            )
+        # Cleanup temporary columns
+        df = df.drop(
+            columns=[
+                "local_date",
+                "primary_key",
+                "neighbor_1_key",
+                "neighbor_2_key",
+                "neighbor_3_key",
+                "primary_type",
+                "neighbor_1_type",
+                "neighbor_2_type",
+                "neighbor_3_type",
+            ],
+            errors="ignore",
+        )
+    else:
+        # No holidays data - keep defaults (all zeros)
+        df = df.drop(columns=["local_date"], errors="ignore")
 
     # Park schedule features (check if park is open at predicted time)
     schedule_query = text(
@@ -729,7 +873,8 @@ def create_prediction_features(
                         # But we are overriding prediction anyway, so feature value matters less.
 
     # Historical features (most important!)
-    # Fetch up to 2 years of aggregated daily data (efficient for large datasets)
+    # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB
+    # This avoids expensive Python calculations for every attraction
     recent_data = fetch_recent_wait_times(attraction_ids, lookback_days=730)
 
     # Initialize with defaults
@@ -737,8 +882,9 @@ def create_prediction_features(
     df["avg_wait_last_1h"] = 30.0
     df["avg_wait_same_hour_last_week"] = 35.0
     df["avg_wait_same_hour_last_month"] = 35.0  # NEW: Monthly trend
-    df["rolling_avg_7d"] = 32.0
+    df["rolling_avg_7d"] = 32.0  # Will be overwritten with DB-computed values
     df["trend_7d"] = 0.0  # NEW: 7-day trend (0 = no trend)
+    df["volatility_7d"] = 0.0  # Will be overwritten with DB-computed values
 
     if not recent_data.empty:
         recent_data["date"] = pd.to_datetime(recent_data["date"])
@@ -789,16 +935,28 @@ def create_prediction_features(
                 else:
                     base_time_local = base_time_pd
 
-                # Last 7 days average (rolling_avg_7d) - use local date
+                # OPTIMIZATION: Use pre-computed rolling_avg_7d from DB (window function)
+                # This avoids expensive Python aggregation for every attraction
                 cutoff_7d_local = (base_time_local - timedelta(days=7)).date()
                 last_7_days = attraction_data[
                     pd.to_datetime(attraction_data["date"]).dt.date >= cutoff_7d_local
                 ]
-                rolling_7d = (
-                    last_7_days["avg_wait"].mean()
-                    if len(last_7_days) > 0
-                    else overall_avg
-                )
+
+                # Use DB-computed rolling average if available
+                if "rolling_avg_7d" in attraction_data.columns:
+                    rolling_7d = (
+                        attraction_data["rolling_avg_7d"].iloc[-1]
+                        if len(attraction_data) > 0
+                        and not pd.isna(attraction_data["rolling_avg_7d"].iloc[-1])
+                        else overall_avg
+                    )
+                else:
+                    # Fallback to Python calculation (backwards compatibility)
+                    rolling_7d = (
+                        last_7_days["avg_wait"].mean()
+                        if len(last_7_days) > 0
+                        else overall_avg
+                    )
 
                 # Last 24h average (approximation: today + yesterday average) - use local date
                 cutoff_24h_local = (base_time_local - timedelta(days=1)).date()
@@ -915,9 +1073,22 @@ def create_prediction_features(
                         # Trend = difference per day (approximation)
                         trend_7d = (recent_avg - previous_avg) / 7.0
 
+                # OPTIMIZATION: Use pre-computed rolling_std_7d from DB (window function)
                 # Volatility: std of last 7d, log1p-dampened and capped to match training
                 volatility_7d = 0.0
-                if len(last_7_days) > 1:
+                if "rolling_std_7d" in attraction_data.columns:
+                    # Use DB-computed standard deviation
+                    raw_std = (
+                        attraction_data["rolling_std_7d"].iloc[-1]
+                        if len(attraction_data) > 0
+                        and not pd.isna(attraction_data["rolling_std_7d"].iloc[-1])
+                        else 0.0
+                    )
+                    if raw_std > 0:
+                        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
+                        volatility_7d = min(np.log1p(raw_std), np.log1p(cap_std))
+                elif len(last_7_days) > 1:
+                    # Fallback to Python calculation (backwards compatibility)
                     raw_std = last_7_days["avg_wait"].std()
                     if not pd.isna(raw_std) and raw_std >= 0:
                         cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
