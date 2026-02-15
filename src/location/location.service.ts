@@ -362,10 +362,10 @@ export class LocationService {
 
     // Get statistics for each park (with timezone context) - Batch optimized
     const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
-      parks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
+      sortedParks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
     );
     const context = new Map<string, { timezone: string; startTime: Date }>();
-    for (const park of parks) {
+    for (const park of sortedParks) {
       const startTime = startTimeMap.get(park.id)!;
       context.set(park.id, {
         timezone: park.timezone || "UTC",

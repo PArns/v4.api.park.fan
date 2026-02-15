@@ -69,9 +69,24 @@ export class QueueTimesClient {
       const response = await this.client.get<QueueTimesParkQueueData>(url);
       return response.data;
     } catch (error) {
-      this.logger.error(
-        `Error fetching queue times for park ${parkId}: ${error}`,
-      );
+      // Extract useful error information
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      const isNetworkError =
+        errorMessage.includes("ENOTFOUND") ||
+        errorMessage.includes("ECONNREFUSED") ||
+        errorMessage.includes("ETIMEDOUT") ||
+        errorMessage.includes("AggregateError");
+
+      if (isNetworkError) {
+        this.logger.warn(
+          `Network error fetching queue times for park ${parkId}: ${errorMessage}`,
+        );
+      } else {
+        this.logger.error(
+          `Error fetching queue times for park ${parkId}: ${errorMessage}`,
+        );
+      }
 
       // Log to dedicated file for later analysis
       logExternalApiError("QueueTimesClient", "getParkQueueTimes", error, {
