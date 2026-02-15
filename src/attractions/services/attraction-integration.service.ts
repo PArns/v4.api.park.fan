@@ -906,11 +906,9 @@ export class AttractionIntegrationService {
 
             // Extract closing hour in park timezone.
             // closingTime may be on the schedule date or the next calendar day (e.g. close at 00:30 or 01:00).
-            // scheduleDateStr and closingDateStr are both in park timezone (formatInParkTimezone).
-            const scheduleDateStr = formatInParkTimezone(
-              schedule.date,
-              timezone,
-            );
+            // scheduleDateStr: Extract from schedule.date which is stored as noon UTC representing a calendar day
+            // DO NOT use formatInParkTimezone on schedule.date - it's already normalized and would shift for UTC+ timezones
+            const scheduleDateStr = schedule.date.toISOString().slice(0, 10); // Extract YYYY-MM-DD directly
             const closingDateStr = formatInParkTimezone(
               schedule.closingTime,
               timezone,
@@ -945,7 +943,9 @@ export class AttractionIntegrationService {
               }
             } else {
               this.logger.warn(
-                `Invalid closingTime for ${dateStr}: closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr}) or next day (${nextDayStr})`,
+                `[AttractionIntegrationService] Invalid closingTime for attraction ${attractionId} (Park: ${parkId}) on ${dateStr}: ` +
+                  `closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr}) or next day (${nextDayStr}). ` +
+                  `Timezone: ${timezone}, schedule.date=${schedule.date.toISOString()}, schedule.closingTime=${schedule.closingTime.toISOString()}`,
               );
             }
           }
