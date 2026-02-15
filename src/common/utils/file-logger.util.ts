@@ -138,13 +138,11 @@ export function logExternalApiError(
     errorDetails.stack = error.stack;
 
     // Also extract just the app-relevant stack (without node_modules)
-    const appStackLines = error.stack
-      .split("\n")
-      .filter((line: string) => {
-        const hasAppPath = line.includes("/app/dist/src/");
-        const hasNodeModules = line.includes("node_modules");
-        return hasAppPath && !hasNodeModules;
-      });
+    const appStackLines = error.stack.split("\n").filter((line: string) => {
+      const hasAppPath = line.includes("/app/dist/src/");
+      const hasNodeModules = line.includes("node_modules");
+      return hasAppPath && !hasNodeModules;
+    });
 
     if (appStackLines.length > 0) {
       errorDetails.appStack = appStackLines.join("\n");
@@ -177,13 +175,11 @@ export function logJobFailure(
     errorDetails.stack = error.stack;
 
     // Extract app-relevant stack (without node_modules)
-    const appStackLines = error.stack
-      .split("\n")
-      .filter((line: string) => {
-        const hasAppPath = line.includes("/app/dist/src/");
-        const hasNodeModules = line.includes("node_modules");
-        return hasAppPath && !hasNodeModules;
-      });
+    const appStackLines = error.stack.split("\n").filter((line: string) => {
+      const hasAppPath = line.includes("/app/dist/src/");
+      const hasNodeModules = line.includes("node_modules");
+      return hasAppPath && !hasNodeModules;
+    });
 
     if (appStackLines.length > 0) {
       errorDetails.appStack = appStackLines.join("\n");
@@ -230,13 +226,11 @@ export function logMLServiceError(
     errorDetails.stack = error.stack;
 
     // Extract app-relevant stack (without node_modules)
-    const appStackLines = error.stack
-      .split("\n")
-      .filter((line: string) => {
-        const hasAppPath = line.includes("/app/dist/src/");
-        const hasNodeModules = line.includes("node_modules");
-        return hasAppPath && !hasNodeModules;
-      });
+    const appStackLines = error.stack.split("\n").filter((line: string) => {
+      const hasAppPath = line.includes("/app/dist/src/");
+      const hasNodeModules = line.includes("node_modules");
+      return hasAppPath && !hasNodeModules;
+    });
 
     if (appStackLines.length > 0) {
       errorDetails.appStack = appStackLines.join("\n");

@@ -678,9 +678,7 @@ export class AnalyticsService {
    * Batch version of getAttractionPercentilesToday for multiple attractions
    * Groups by park timezone to minimize queries
    */
-  async getBatchAttractionPercentilesToday(
-    attractionIds: string[],
-  ): Promise<
+  async getBatchAttractionPercentilesToday(attractionIds: string[]): Promise<
     Map<
       string,
       {
