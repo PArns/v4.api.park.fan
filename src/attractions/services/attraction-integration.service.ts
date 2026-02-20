@@ -684,7 +684,13 @@ export class AttractionIntegrationService {
       const scheduleMap = new Map<string, ScheduleEntry>();
       for (const schedule of schedules) {
         if (schedule.scheduleType === ScheduleType.OPERATING) {
-          const dateStr = formatInParkTimezone(schedule.date, timezone);
+          // schedule.date is a PostgreSQL DATE column — TypeORM returns it as a
+          // "YYYY-MM-DD" string, not a Date object. Use it directly as the key
+          // to avoid UTC-midnight timezone shift for UTC+ parks.
+          const dateStr =
+            typeof schedule.date === "string"
+              ? schedule.date
+              : formatInParkTimezone(schedule.date, timezone);
           scheduleMap.set(dateStr, schedule);
         }
       }
@@ -906,9 +912,13 @@ export class AttractionIntegrationService {
 
             // Extract closing hour in park timezone.
             // closingTime may be on the schedule date or the next calendar day (e.g. close at 00:30 or 01:00).
-            // scheduleDateStr: Extract from schedule.date which is stored as noon UTC representing a calendar day
-            // DO NOT use formatInParkTimezone on schedule.date - it's already normalized and would shift for UTC+ timezones
-            const scheduleDateStr = schedule.date.toISOString().slice(0, 10); // Extract YYYY-MM-DD directly
+            // scheduleDateStr: TypeORM returns PostgreSQL DATE columns as "YYYY-MM-DD" strings,
+            // not Date objects. Use the string directly — do NOT call formatInParkTimezone on it,
+            // as that would parse it as UTC midnight and shift the date for UTC+ parks.
+            const scheduleDateStr =
+              typeof schedule.date === "string"
+                ? schedule.date
+                : (schedule.date as unknown as Date).toISOString().slice(0, 10);
             const closingDateStr = formatInParkTimezone(
               schedule.closingTime,
               timezone,
@@ -945,7 +955,7 @@ export class AttractionIntegrationService {
               this.logger.warn(
                 `[AttractionIntegrationService] Invalid closingTime for attraction ${attractionId} (Park: ${parkId}) on ${dateStr}: ` +
                   `closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr}) or next day (${nextDayStr}). ` +
-                  `Timezone: ${timezone}, schedule.date=${schedule.date.toISOString()}, schedule.closingTime=${schedule.closingTime.toISOString()}`,
+                  `Timezone: ${timezone}, schedule.date=${typeof schedule.date === "string" ? schedule.date : (schedule.date as unknown as Date).toISOString()}, schedule.closingTime=${schedule.closingTime.toISOString()}`,
               );
             }
           }
