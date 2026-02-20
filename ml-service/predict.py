@@ -12,6 +12,7 @@ from model import WaitTimeModel
 from percentile_features import add_percentile_features
 from db import fetch_parks_metadata, get_db, fetch_holidays, convert_df_types
 from config import get_settings
+from holiday_utils import normalize_region_code
 
 settings = get_settings()
 
@@ -420,10 +421,7 @@ def create_prediction_features(
             df["snowfallSum"] = df["snow_avg"].fillna(0.0)
             df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
 
-            # NEW: Temperature deviation (current vs. monthly average)
-            df["temperature_deviation"] = df["temperature_avg"] - df["temp_avg"].fillna(
-                20.0
-            )
+            # temperature_deviation is computed below after monthly avg is available
 
             # NEW: Precipitation last 3h (for historical data, approximate with daily average)
             df["precipitation_last_3h"] = (
@@ -454,7 +452,8 @@ def create_prediction_features(
         "temperature_deviation" not in df.columns
         or df["temperature_deviation"].isna().any()
     ):
-        # Get monthly average for each park
+        # Compute deviation as current temp minus per-park monthly mean.
+        # Covers both forecast path (no deviation set yet) and historical path.
         if "month" in df.columns:
             monthly_avg = df.groupby(["parkId", "month"])["temperature_avg"].transform(
                 "mean"
@@ -553,12 +552,15 @@ def create_prediction_features(
         # Create separate DataFrames for regional and national holidays
         holidays_df["date_only"] = pd.to_datetime(holidays_df["date"]).dt.date
 
-        # Regional holidays (with region)
+        # Regional holidays (with region) — normalize region codes to match training
         holidays_regional = holidays_df[holidays_df["region"].notna()].copy()
+        holidays_regional["region_normalized"] = holidays_regional["region"].apply(
+            normalize_region_code
+        )
         holidays_regional["lookup_key"] = (
             holidays_regional["country"]
             + "|"
-            + holidays_regional["region"]
+            + holidays_regional["region_normalized"].fillna("")
             + "|"
             + holidays_regional["date_only"].astype(str)
         )
@@ -594,8 +596,12 @@ def create_prediction_features(
         df["park_country"] = df["parkId"].map(
             lambda pid: park_country_map.get(pid, {}).get("country", "")
         )
+        # Normalize region codes (e.g. "DE-NW" -> "NW") to match training feature logic
         df["park_region"] = df["parkId"].map(
-            lambda pid: park_country_map.get(pid, {}).get("region_code", "")
+            lambda pid: normalize_region_code(
+                park_country_map.get(pid, {}).get("region_code", "") or None
+            )
+            or ""
         )
         df["date_str"] = df["local_date"].astype(str)
 
@@ -607,13 +613,13 @@ def create_prediction_features(
             axis=1,
         )
 
-        # Neighbor keys: Extract from park_influences_map
+        # Neighbor keys: Extract from park_influences_map (region codes normalized)
         def get_neighbor_key(row, index):
             influences = park_influences_map.get(row["parkId"], [])
             if index < len(influences):
                 inf = influences[index]
                 country = inf.get("countryCode", "")
-                region = inf.get("regionCode", "")
+                region = normalize_region_code(inf.get("regionCode", "") or None) or ""
                 if region:
                     return f"{country}|{region}|{row['date_str']}"
                 else:

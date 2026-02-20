@@ -786,8 +786,12 @@ def add_park_occupancy_feature(
 
     else:
         # Training Mode: Reconstruct historical occupancy to match inference scale
-        # Use P50 (median) so park_occupancy_pct aligns with API (P50 baseline)
-        park_baselines = df.groupby("parkId")["waitTime"].quantile(0.50)
+        # Use avg(per-ride P50) per park, mirroring the TypeScript calculateP50Baseline fix:
+        # avg of per-attraction medians instead of median of pooled data.
+        # Pooling all rides into one P50 is dominated by high-frequency low-P50 rides,
+        # underestimating the baseline and inflating occupancy vs. inference values.
+        per_ride_p50 = df.groupby(["parkId", "attractionId"])["waitTime"].quantile(0.50)
+        park_baselines = per_ride_p50.groupby(level="parkId").mean()
 
         # 2. Calculate Instantaneous Park Average (per timestamp)
         # Group by Park + Timestamp to get the average wait at that moment
@@ -808,9 +812,9 @@ def add_park_occupancy_feature(
 
             mask = df["parkId"] == park_id
             # Occupancy = (Current Avg / Baseline) * 100
-            # Clip to reasonable limits (0-150%)
+            # Clip to reasonable limits (0-200%, matches inference cap from TypeScript API)
             occupancy = (current_park_avg.loc[mask] / baseline) * 100
-            df.loc[mask, "park_occupancy_pct"] = occupancy.clip(0, 150)
+            df.loc[mask, "park_occupancy_pct"] = occupancy.clip(0, 200)
 
     return df
 

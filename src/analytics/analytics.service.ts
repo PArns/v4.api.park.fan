@@ -3855,45 +3855,31 @@ export class AnalyticsService {
       };
     }
 
-    const SLIDING_WINDOW_DAYS = 548;
-
-    // Get park timezone
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["timezone"],
-    });
-    const timezone = park?.timezone || "UTC";
-
-    // Calculate cutoff date
-    const now = new Date();
-    const todayStr = formatInTimeZone(now, timezone, "yyyy-MM-dd");
-    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
-    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
-
-    // Query P50 from headliners only
-    const result = await this.queueDataRepository.query(
-      `
-      SELECT
-        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
-        COUNT(*) as sample_count,
-        COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $1)) as distinct_days
-      FROM queue_data qd
-      WHERE qd."attractionId" = ANY($2::uuid[])
-        AND qd.timestamp >= $3
-        AND qd."queueType" = 'STANDBY'
-        AND qd.status = 'OPERATING'
-        AND qd."waitTime" > 0
-      `,
-      [timezone, headliners.map((h) => h.attractionId), cutoff], // Removed parkId, shifted indices
+    // Calculate P50 as average of per-attraction P50s (statistically consistent with
+    // getCurrentSpotWaitTime which computes avg-of-per-ride-averages).
+    // Pooling all headliner data into a single PERCENTILE_CONT would be dominated by
+    // high-frequency low-P50 rides, causing the park baseline to be underestimated
+    // and crowd levels to be artificially inflated.
+    const validHeadliners = headliners.filter((h) => Number(h.p50Wait548d) > 0);
+    const p50 =
+      validHeadliners.length > 0
+        ? Math.round(
+            (validHeadliners.reduce(
+              (sum, h) => sum + Number(h.p50Wait548d),
+              0,
+            ) /
+              validHeadliners.length) *
+              100,
+          ) / 100
+        : 0;
+    const sampleCount = validHeadliners.reduce(
+      (sum, h) => sum + (h.sampleCount || 0),
+      0,
     );
-
-    const p50 = result[0]?.p50 ? parseFloat(result[0].p50) : 0;
-    const sampleCount = result[0]?.sample_count
-      ? parseInt(result[0].sample_count, 10)
-      : 0;
-    const distinctDays = result[0]?.distinct_days
-      ? parseInt(result[0].distinct_days, 10)
-      : 0;
+    const distinctDays = Math.max(
+      ...validHeadliners.map((h) => h.operatingDays || 0),
+      0,
+    );
 
     // Determine confidence level
     let confidence: "high" | "medium" | "low" = "low";

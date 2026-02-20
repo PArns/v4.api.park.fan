@@ -250,9 +250,10 @@ def train_model(version: str = None) -> None:
                 weight_factor = settings.SAMPLE_WEIGHT_FACTOR
 
                 sample_weights = np.ones(len(df))
-                matched_errors = df.loc[error_mask, "absolute_error"]
-                weights = 1.0 + (matched_errors / max_error) * weight_factor
-                sample_weights[error_mask] = weights
+                if max_error > 0:
+                    matched_errors = df.loc[error_mask, "absolute_error"]
+                    weights = 1.0 + (matched_errors / max_error) * weight_factor
+                    sample_weights[error_mask] = weights
 
                 matched_percentage = (matched_count / len(df)) * 100
                 avg_weight = weights.mean()
@@ -308,6 +309,10 @@ def train_model(version: str = None) -> None:
 
     # Calculate actual data span
     data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
+
+    # Initialize train_mask to None — only set in the time-based split path.
+    # Percentage-split paths use slice indexing instead (handled at line ~427).
+    train_mask = None
 
     # Adaptive validation sizing
     if data_span_days < 14:
