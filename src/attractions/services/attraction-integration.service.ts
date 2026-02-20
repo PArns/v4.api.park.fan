@@ -911,7 +911,11 @@ export class AttractionIntegrationService {
             );
 
             // Extract closing hour in park timezone.
-            // closingTime may be on the schedule date or the next calendar day (e.g. close at 00:30 or 01:00).
+            // closingTime may be on the schedule date, the next calendar day (e.g. close at
+            // 00:30 or 01:00), or further out for multi-day schedule blocks from the API.
+            // We only care about the time component — the smart projection check below
+            // (latestDataHour within 2 hours of closingHour) prevents bad projections.
+            //
             // scheduleDateStr: TypeORM returns PostgreSQL DATE columns as "YYYY-MM-DD" strings,
             // not Date objects. Use the string directly — do NOT call formatInParkTimezone on it,
             // as that would parse it as UTC midnight and shift the date for UTC+ parks.
@@ -923,40 +927,38 @@ export class AttractionIntegrationService {
               schedule.closingTime,
               timezone,
             );
-            // Next calendar day (timezone-aware calculation using park timezone)
             const scheduleDate = fromZonedTime(
               `${scheduleDateStr}T00:00:00`,
               timezone,
             );
             const nextDay = addDays(scheduleDate, 1);
             const nextDayStr = formatInParkTimezone(nextDay, timezone);
-            const closingSameOrNextDay =
-              closingDateStr === scheduleDateStr ||
-              closingDateStr === nextDayStr;
 
-            if (closingSameOrNextDay) {
-              const closingTimeStr = formatInTimeZone(
-                schedule.closingTime,
-                timezone,
-                "HH:mm",
+            // Debug-log when closingTime is more than one day out (multi-day block)
+            if (
+              closingDateStr !== scheduleDateStr &&
+              closingDateStr !== nextDayStr
+            ) {
+              this.logger.debug(
+                `[AttractionIntegrationService] closingTime (${closingDateStr}) is more than 1 day after schedule date (${scheduleDateStr}) for attraction ${attractionId} on ${dateStr} — likely a multi-day schedule block. Using time component only.`,
               );
-              const [closingHourRaw, closingMinuteRaw] = closingTimeStr
-                .split(":")
-                .map(Number);
-              // Round minutes to nearest 5
-              const closingMinuteRounded = Math.round(closingMinuteRaw / 5) * 5;
-              // If rounded to 60, increment hour and set minute to 0
-              if (closingMinuteRounded === 60) {
-                closingHour = (closingHourRaw + 1) % 24;
-              } else {
-                closingHour = closingHourRaw;
-              }
+            }
+
+            const closingTimeStr = formatInTimeZone(
+              schedule.closingTime,
+              timezone,
+              "HH:mm",
+            );
+            const [closingHourRaw, closingMinuteRaw] = closingTimeStr
+              .split(":")
+              .map(Number);
+            // Round minutes to nearest 5
+            const closingMinuteRounded = Math.round(closingMinuteRaw / 5) * 5;
+            // If rounded to 60, increment hour and set minute to 0
+            if (closingMinuteRounded === 60) {
+              closingHour = (closingHourRaw + 1) % 24;
             } else {
-              this.logger.warn(
-                `[AttractionIntegrationService] Invalid closingTime for attraction ${attractionId} (Park: ${parkId}) on ${dateStr}: ` +
-                  `closingTime date (${closingDateStr}) doesn't match schedule date (${scheduleDateStr}) or next day (${nextDayStr}). ` +
-                  `Timezone: ${timezone}, schedule.date=${typeof schedule.date === "string" ? schedule.date : (schedule.date as unknown as Date).toISOString()}, schedule.closingTime=${schedule.closingTime.toISOString()}`,
-              );
+              closingHour = closingHourRaw;
             }
           }
 
