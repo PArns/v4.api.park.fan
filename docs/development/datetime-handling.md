@@ -115,3 +115,64 @@ const isMatch = dateStr === targetDateStr;
 const todayStr = getCurrentDateInTimezone(park.timezone);
 const schedule = await this.getScheduleForDate(parkId, todayStr); // DATE = :todayStr
 ```
+
+---
+
+## 7. Two Recurring Anti-Patterns That Break US Parks (Read Before Touching Date Code!)
+
+> **Context**: This has been attempted to fix multiple times. Each attempt broke either UTC parks or US parks. These two patterns are the root cause.
+
+### Anti-Pattern A — External API date-only string → `new Date()` → `formatInParkTimezone()`
+
+This is the core bug in `saveScheduleData`. External APIs (ThemeParks.wiki) return dates as date-only strings representing the **park's local calendar day**:
+```
+{ date: "2026-03-02", openingTime: "2026-03-02T10:00:00-05:00" }
+```
+
+**The trap**: `new Date("2026-03-02")` = `2026-03-02T00:00:00.000Z` (midnight UTC per ECMAScript spec). Then `formatInParkTimezone(midnight_UTC, "America/New_York")` = `"2026-03-01"` (7 PM EST = previous day). **The date shifts back 1 day for all parks west of UTC.**
+
+**Why it only affects US parks**: East-of-UTC parks (Europe/Berlin, Asia/Tokyo) are ahead of UTC, so midnight UTC is still the same calendar day in those timezones. UTC parks are unaffected. Only west-of-UTC parks (Americas) are shifted.
+
+**The fix**: detect date-only strings with regex and use them directly:
+```typescript
+const raw = typeof entry.date === "string" ? entry.date : String(entry.date);
+const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+const dateStr = isDateOnly
+  ? raw  // ← use as-is; it already represents the park's local calendar day
+  : formatInParkTimezone(new Date(raw), park.timezone); // full ISO → convert
+```
+
+**Also**: when you need to calculate a date range (min/max) from date-only strings, always use noon UTC to avoid the same shift in `formatInParkTimezone`:
+```typescript
+const ts = new Date(`${dateStr}T12:00:00Z`).getTime(); // noon UTC = safe for all timezones
+```
+
+---
+
+### Anti-Pattern B — TypeORM DATE column → `new Date(entity.date)` → `formatInParkTimezone()`
+
+PostgreSQL `DATE` columns are returned by TypeORM as JavaScript `Date` objects at **midnight UTC** (the pg driver gives "YYYY-MM-DD" string; TypeORM converts with `new Date("YYYY-MM-DD")`). Applying `formatInParkTimezone(midnight_UTC, "America/New_York")` shifts the date back one day for US parks.
+
+**Affected code**: Any place that does `formatInParkTimezone(new Date(entity.date), tz) === todayStr` on a DATE column will silently fail for US parks.
+
+**Example** (weather service):
+```typescript
+// ❌ BAD — shifts midnight UTC back 1 day for US parks
+const weatherDate = new Date(w.date);  // midnight UTC
+return formatInParkTimezone(weatherDate, park.timezone) === todayStr; // "2026-03-01" ≠ "2026-03-02"
+
+// ✅ CORRECT — midnight UTC → toISOString → YYYY-MM-DD is always the stored calendar date
+const dateStr = w.date instanceof Date ? w.date.toISOString().split("T")[0] : String(w.date);
+return dateStr === todayStr; // "2026-03-02" === "2026-03-02" ✓
+```
+
+**Why `.toISOString().split("T")[0]` is always correct here**: midnight UTC for `2026-03-02` produces `"2026-03-02T00:00:00.000Z"`. Splitting gives `"2026-03-02"` — exactly the calendar date stored in the DB. This is safe because the DB stores calendar dates *as* midnight UTC, and UTC midnight does not cross a day boundary in UTC.
+
+**Summary table — which approach to use:**
+
+| Source of date | Type at runtime | Correct approach |
+|---|---|---|
+| External API date-only string (`"2026-03-02"`) | `string` | Use directly (no `new Date()`!) |
+| External API ISO datetime (`"2026-03-02T10:00-05:00"`) | `string` | `formatInParkTimezone(new Date(raw), tz)` |
+| TypeORM `DATE` column | `Date` (midnight UTC) | `.toISOString().split("T")[0]` |
+| TypeORM `TIMESTAMPTZ` column | `Date` (real instant) | `formatInParkTimezone(date, tz)` ✓ |

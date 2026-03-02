@@ -442,19 +442,23 @@ export class WeatherService {
       .orderBy("weather.date", "ASC")
       .getMany();
 
-    // Separate current (today) from forecast (future)
-    // Ensure date is converted to Date object if it's a string
+    // Separate current (today) from forecast (future).
+    // WeatherData.date is a PostgreSQL DATE column; TypeORM maps it to a midnight-UTC Date
+    // object. Applying formatInParkTimezone(midnight_UTC, tz) shifts the date back by one
+    // calendar day for parks west of UTC (e.g. America/New_York), causing today's weather
+    // to disappear. The fix: extract the YYYY-MM-DD string directly from the Date via
+    // toISOString().split("T")[0], which is always correct because midnight UTC IS the
+    // calendar date stored in the database, regardless of the park's timezone.
+    const toWeatherDateStr = (d: Date | string): string =>
+      d instanceof Date ? d.toISOString().split("T")[0] : String(d);
+
     const current =
-      allWeather.find((w) => {
-        const weatherDate = new Date(w.date);
-        return formatInParkTimezone(weatherDate, park.timezone) === todayStr;
-      }) || null;
+      allWeather.find((w) => toWeatherDateStr(w.date) === todayStr) || null;
 
     // Filter forecast (future dates) - dates are already in correct timezone from query
-    const forecast = allWeather.filter((w) => {
-      const weatherDate = new Date(w.date);
-      return formatInParkTimezone(weatherDate, park.timezone) > todayStr;
-    });
+    const forecast = allWeather.filter(
+      (w) => toWeatherDateStr(w.date) > todayStr,
+    );
 
     const result = { current, forecast };
 

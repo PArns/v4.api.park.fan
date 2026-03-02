@@ -6,6 +6,15 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed
+
+- **Schedule date-shift bug** (`saveScheduleData`): ThemeParks.wiki returns dates as date-only strings (`"YYYY-MM-DD"`). These were passed to `new Date()`, producing midnight UTC, which `formatInParkTimezone` then shifted back by one day for parks west of UTC (e.g. a park with `date:"2026-03-02"` was stored as `2026-03-01` in America/New_York). Fix: detect date-only strings via regex and use them directly without timezone conversion. Full ISO timestamps (from wartezeiten/queue-times processors) still go through `formatInParkTimezone`. (Bug: today's schedule entry stored under yesterday's DB date; opening hours were 1–2 days off in live DB for US parks.)
+- **Holiday date range in `saveScheduleData`**: Date range for holiday pre-fetch was built from `new Date(e.date)` (midnight UTC), causing `formatInParkTimezone` to shift the range back 1 day for US parks. Fixed: use noon-UTC timestamps (`${dateStr}T12:00:00Z`) consistent with the rest of `saveScheduleData`.
+- **Weather service date filter** (`weather.service.ts`): `allWeather.find()` and `.filter()` used `formatInParkTimezone(new Date(w.date), tz)` on a TypeORM DATE column (midnight UTC). For US parks this shifts midnight UTC to the previous calendar day, causing today's weather entry to be lost (not matched as "current" and excluded from "forecast"). Fixed: extract date string via `w.date.toISOString().split("T")[0]`, which is always correct because midnight UTC IS the calendar date stored in the DB.
+- **Schedule response missing today's entry** (`buildIntegratedResponse`): Added filter `date >= todayInParkTz` to trim past entries (DB query fetches from -2 days), and a synthetic OPERATING entry for today if the park is operating but its schedule row is missing.
+- **`peakHour` timezone ambiguity** (`analytics.service.ts`): Changed from returning `"HH:mm"` (plain string, interpreted as UTC by frontend) to a full ISO-8601 datetime with timezone offset (`"2026-03-02T11:00:00-05:00"`), eliminating frontend UTC misinterpretation.
+- **Cache invalidation on INSERT** (`saveScheduleData`): `invalidateScheduleCache` was only called after UPDATE, not after INSERT. New entries would remain stale for up to 1 hour. Fixed: call `invalidateScheduleCache` after INSERT too.
+
 ### Changed
 
 - **Calendar API:** UNKNOWN→OPERATING upgrade only for parks **without** OPERATING entries in `schedule_entries`. Parks with schedule integration keep UNKNOWN for days without schedule (DB-check via `hasOperatingSchedule`). Fixes Phantasialand Jan 26–31 incorrectly showing OPERATING.

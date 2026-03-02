@@ -1290,12 +1290,29 @@ export class AnalyticsService {
       // Continue with empty history rather than failing the entire analytics fetch
     }
 
+    // Convert "HH:00" peak hour (park local time) to a full ISO-8601 datetime with timezone
+    // offset so clients don't misinterpret the value as UTC.
+    // e.g. "11:00" in America/New_York → "2026-03-02T11:00:00-05:00"
+    let peakHourIso: string | null = null;
+    if (displayPeakHour) {
+      const todayPeakDateStr = getCurrentDateInTimezone(resolvedTimezone);
+      const peakUtc = fromZonedTime(
+        `${todayPeakDateStr}T${displayPeakHour}:00`,
+        resolvedTimezone,
+      );
+      peakHourIso = formatInTimeZone(
+        peakUtc,
+        resolvedTimezone,
+        "yyyy-MM-dd'T'HH:mm:ssxxx",
+      );
+    }
+
     const statsDto: ParkStatisticsDto = {
       // Use UNIFIED Smart Logic from calculateParkOccupancy
       avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
       avgWaitToday,
       peakWaitToday,
-      peakHour: displayPeakHour,
+      peakHour: peakHourIso,
       // Use utility method for consistency
       crowdLevel: this.getParkCrowdLevel(occupancy.current),
       totalAttractions,

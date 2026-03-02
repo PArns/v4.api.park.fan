@@ -715,7 +715,17 @@ export class ParksService {
     const holidayMap = new Map<string, string | HolidayEntry>(); // Date -> Name or HolidayEntry
     if (park?.countryCode) {
       try {
-        const dates = scheduleData.map((e) => new Date(e.date).getTime());
+        // Use noon-UTC timestamps so formatInParkTimezone() stays on the same
+        // calendar day for parks in every timezone (west-of-UTC parks shift
+        // midnight-UTC to the previous day, which would narrow the holiday range).
+        const dates = scheduleData.map((e) => {
+          const raw = typeof e.date === "string" ? e.date : String(e.date);
+          const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+          const dStr = isDateOnly
+            ? raw
+            : formatInParkTimezone(new Date(raw), park!.timezone);
+          return new Date(`${dStr}T12:00:00Z`).getTime();
+        });
         const minDate = new Date(Math.min(...dates));
         const maxDate = new Date(Math.max(...dates));
 
@@ -784,7 +794,21 @@ export class ParksService {
     let savedCount = 0;
 
     for (const entry of scheduleData) {
-      const dateObj = new Date(entry.date);
+      // Derive the park-local calendar date (YYYY-MM-DD) safely.
+      // The API returns date-only strings ("YYYY-MM-DD") that represent the park's local
+      // calendar date. new Date("YYYY-MM-DD") produces midnight UTC, so applying
+      // formatInParkTimezone to it would shift the date back by one day for parks west
+      // of UTC (e.g. "2026-03-02" → "2026-03-01" in America/New_York). Instead we detect
+      // date-only strings and use them directly; full datetime strings are still converted.
+      const rawDateStr: string =
+        typeof entry.date === "string" ? entry.date : String(entry.date);
+      const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawDateStr);
+      const dateStr: string = isDateOnly
+        ? rawDateStr
+        : formatInParkTimezone(new Date(rawDateStr), park!.timezone);
+      // Use noon UTC so timezone conversions inside calculateHolidayInfo won't shift the date
+      const dateObj = new Date(`${dateStr}T12:00:00Z`);
+
       const holidayInfo = calculateHolidayInfo(
         dateObj,
         holidayMap,
@@ -798,8 +822,7 @@ export class ParksService {
           ? ScheduleType.CLOSED
           : (entry.type as ScheduleType);
 
-      // Normalize date to noon UTC for consistent storage (avoids TZ-dependent off-by-one)
-      const dateStr = formatInParkTimezone(dateObj, park!.timezone);
+      // dateStr is already the park-local calendar date (YYYY-MM-DD)
       const normalizedDate = new Date(`${dateStr}T12:00:00Z`);
 
       const scheduleEntry: Partial<ScheduleEntry> = {
@@ -829,6 +852,7 @@ export class ParksService {
       if (!existing) {
         await this.scheduleRepository.save(scheduleEntry);
         savedCount++;
+        await this.invalidateScheduleCache(parkId);
       } else {
         // Update if times, description, or holiday/bridge status changed
         const hasChanges =
@@ -856,11 +880,16 @@ export class ParksService {
     // Batch DELETE operations: Cleanup placeholders when we have real data from the API.
     // Use date strings for reliable deletion (avoids TZ-dependent off-by-one with Date objects).
 
-    // Normalize entries once (avoid 3x redundant normalization)
+    // Normalize entries once (avoid 3x redundant normalization).
+    // Use the same date-only detection as the main loop to avoid off-by-one TZ shifts.
     const normalizedEntries = scheduleData.map((e) => {
       const rawType = e.type?.toString().toUpperCase();
+      const raw: string = typeof e.date === "string" ? e.date : String(e.date);
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+        ? raw
+        : formatInParkTimezone(new Date(raw), park!.timezone);
       return {
-        date: formatInParkTimezone(new Date(e.date), park!.timezone),
+        date,
         scheduleType:
           rawType === "CLOSED" ? ScheduleType.CLOSED : (e.type as ScheduleType),
       };

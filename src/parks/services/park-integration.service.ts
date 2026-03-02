@@ -379,6 +379,32 @@ export class ParkIntegrationService {
       ? getTomorrowDateInTimezone(park.timezone)
       : new Date().toISOString().split("T")[0];
 
+    // Trim past entries from schedule response (keep only today onwards in park timezone).
+    // The DB query fetches from 2 days ago for late-night status detection, but the
+    // client only needs today + future. Also synthesize today's entry when the park is
+    // OPERATING but the schedule DB row is missing (e.g. ThemeParks.wiki only publishes
+    // future days for some parks like universals-epic-universe).
+    dto.schedule = dto.schedule.filter((s) => s.date >= todayInParkTz);
+    if (
+      dto.status === "OPERATING" &&
+      (dto.schedule.length === 0 || dto.schedule[0].date !== todayInParkTz)
+    ) {
+      const syntheticToday = new ScheduleItemDto();
+      syntheticToday.date = todayInParkTz;
+      syntheticToday.scheduleType = ScheduleType.OPERATING;
+      syntheticToday.openingTime = null;
+      syntheticToday.closingTime = null;
+      syntheticToday.purchases = null;
+      syntheticToday.isHoliday = false;
+      syntheticToday.holidayName = null;
+      syntheticToday.holidayType = null;
+      syntheticToday.isPublicHoliday = false;
+      syntheticToday.isSchoolHoliday = false;
+      syntheticToday.isBridgeDay = false;
+      syntheticToday.influencingHolidays = [];
+      dto.schedule.unshift(syntheticToday);
+    }
+
     const targetDateStr =
       dto.status === "OPERATING" ? todayInParkTz : tomorrowInParkTz;
 
