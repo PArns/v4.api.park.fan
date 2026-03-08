@@ -49,8 +49,7 @@ export class DiscoveryController {
   @ApiOperation({
     summary: "Get complete geo structure",
     description:
-      "Returns hierarchical structure of continents → countries → cities → parks. " +
-      "Each park includes attractionCount but not the full attractions array. " +
+      "Returns hierarchical structure of continents → countries → cities → parks → attractions. " +
       "Includes live statistics (crowd levels, wait times). Cached for 2 minutes.",
   })
   @ApiResponse({
@@ -83,6 +82,14 @@ export class DiscoveryController {
                       slug: "europa-park",
                       url: "/europe/germany/rust/europa-park",
                       attractionCount: 15,
+                      attractions: [
+                        {
+                          id: "xyz-789",
+                          name: "Blue Fire Megacoaster",
+                          slug: "blue-fire-megacoaster",
+                          url: "/europe/germany/rust/europa-park/blue-fire-megacoaster",
+                        },
+                      ],
                     },
                   ],
                 },
@@ -203,8 +210,8 @@ export class DiscoveryController {
   @ApiOperation({
     summary: "Get cities in country",
     description:
-      "Returns all cities in a specific country with parks. " +
-      "Each park includes attractionCount (not the full attractions array).",
+      "Returns all cities in a specific country with parks and attractions. " +
+      "Each park includes complete attraction listings with URLs for route generation.",
   })
   @ApiParam({
     name: "continentSlug",

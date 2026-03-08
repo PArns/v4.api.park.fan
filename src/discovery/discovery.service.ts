@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { Park } from "../parks/entities/park.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -11,6 +11,7 @@ import {
   CountryDto,
   CityDto,
   ParkReferenceDto,
+  AttractionReferenceDto,
 } from "./dto/geo-structure.dto";
 import { ParksService } from "../parks/parks.service";
 
@@ -23,7 +24,7 @@ import { ParksService } from "../parks/parks.service";
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
-  private readonly CACHE_KEY = "discovery:geo:structure:v3"; // v3: attractions[] removed, only attractionCount
+  private readonly CACHE_KEY = "discovery:geo:structure:v2"; // v2: includes attractions
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
   private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes
@@ -54,33 +55,36 @@ export class DiscoveryService {
 
     this.logger.log("Building geo structure from database");
 
-    // Fetch all parks with geographic data and attraction COUNT only (no full relation join)
-    const parks = await this.parkRepository
-      .createQueryBuilder("park")
-      .select([
-        "park.id",
-        "park.name",
-        "park.slug",
-        "park.continent",
-        "park.continentSlug",
-        "park.country",
-        "park.countrySlug",
-        "park.countryCode",
-        "park.city",
-        "park.citySlug",
-      ])
-      .where("park.continent IS NOT NULL")
-      .andWhere("park.country IS NOT NULL")
-      .andWhere("park.city IS NOT NULL")
-      .andWhere("park.continentSlug IS NOT NULL")
-      .andWhere("park.countrySlug IS NOT NULL")
-      .andWhere("park.citySlug IS NOT NULL")
-      .loadRelationCountAndMap("park.attractionCount", "park.attractions")
-      .orderBy("park.continent", "ASC")
-      .addOrderBy("park.country", "ASC")
-      .addOrderBy("park.city", "ASC")
-      .addOrderBy("park.name", "ASC")
-      .getMany();
+    // Fetch all parks with complete geographic data and attractions
+    const parks = await this.parkRepository.find({
+      where: {
+        continent: Not(IsNull()),
+        country: Not(IsNull()),
+        city: Not(IsNull()),
+        continentSlug: Not(IsNull()),
+        countrySlug: Not(IsNull()),
+        citySlug: Not(IsNull()),
+      },
+      relations: ["attractions"],
+      select: [
+        "id",
+        "name",
+        "slug",
+        "continent",
+        "continentSlug",
+        "country",
+        "countrySlug",
+        "countryCode",
+        "city",
+        "citySlug",
+      ],
+      order: {
+        continent: "ASC",
+        country: "ASC",
+        city: "ASC",
+        name: "ASC",
+      },
+    });
 
     // Build hierarchical structure
     const continentMap = new Map<string, ContinentDto>();
@@ -148,17 +152,25 @@ export class DiscoveryService {
         country.cities.push(city);
       }
 
-      // Add park reference – attractions[] omitted, only the count is included
+      // Add park reference with attractions
       const parkBaseUrl = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
-      // loadRelationCountAndMap maps the count to park.attractionCount at runtime
-      const attractionCount = (park as unknown as { attractionCount: number }).attractionCount ?? 0;
+
+      const attractions: AttractionReferenceDto[] = (park.attractions || [])
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((attraction) => ({
+          id: attraction.id,
+          name: attraction.name,
+          slug: attraction.slug,
+          url: `${parkBaseUrl}/${attraction.slug}`,
+        }));
 
       const parkRef: ParkReferenceDto = {
         id: park.id,
         name: park.name,
         slug: park.slug,
         url: parkBaseUrl,
-        attractionCount,
+        attractions,
+        attractionCount: attractions.length,
         status: "CLOSED", // Default, will be hydrated
       };
       city.parks.push(parkRef);
