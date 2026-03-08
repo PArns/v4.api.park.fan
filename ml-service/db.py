@@ -295,6 +295,7 @@ def fetch_holidays(
     - is_nationwide
     """
     # Create cache key from sorted countries and date range
+    country_codes = [c for c in country_codes if c is not None]
     cache_key = f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
 
     # Check cache
