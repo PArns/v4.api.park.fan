@@ -434,23 +434,34 @@ class WaitTimeModel:
         # Ensure columns are in correct order (CatBoost is sensitive to order)
         X_ordered = X[model_features].copy()
 
-        # Get virtual predictions (returns array of shape [n_samples, n_virtual_ensembles])
+        # Get virtual ensemble predictions.
+        # prediction_type="VirtEnsembles" returns actual wait-time predictions per ensemble,
+        # shape: (n_samples, n_ensembles, 1).
+        # NOTE: "TotalUncertainty" returns uncertainty scalars [knowledge, data], NOT predictions —
+        # using it as predictions caused all outputs to collapse to ~5 min.
         virtual_preds = self.model.virtual_ensembles_predict(
             X_ordered,
-            prediction_type="TotalUncertainty",
+            prediction_type="VirtEnsembles",
             virtual_ensembles_count=10,  # Use 10 virtual ensembles
         )
 
-        # Calculate statistics
-        predictions = np.mean(virtual_preds, axis=1)
-        lower_bound = np.percentile(virtual_preds, 5, axis=1)  # 5th percentile
-        upper_bound = np.percentile(virtual_preds, 95, axis=1)  # 95th percentile
-        uncertainty = upper_bound - lower_bound
+        # CatBoost VirtEnsembles returns (n_samples, n_ensembles, 1) for multi-output models
+        # but may return (n_samples, n_ensembles) directly for standard RMSE regression.
+        # squeeze(axis=2) would raise ValueError on a 2D array, so guard with ndim check.
+        if virtual_preds.ndim == 3:
+            virtual_preds = virtual_preds.squeeze(axis=2)
+
+        # Calculate statistics across ensemble dimension.
+        # With only 10 ensembles, p5/p95 ≈ min/max and are very noisy.
+        # Median is more robust than mean as point estimate; std is more stable than
+        # p95-p5 as uncertainty measure at this ensemble count.
+        predictions = np.median(virtual_preds, axis=1)
+        uncertainty = np.std(virtual_preds, axis=1)  # 1-sigma uncertainty
+        lower_bound = np.maximum(predictions - uncertainty, 0)
+        upper_bound = predictions + uncertainty
 
         # Ensure no negative predictions
         predictions = np.maximum(predictions, 0)
-        lower_bound = np.maximum(lower_bound, 0)
-        upper_bound = np.maximum(upper_bound, 0)
 
         return {
             "predictions": predictions,

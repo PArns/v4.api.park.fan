@@ -548,6 +548,31 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         .values
     )
 
+    # rolling_avg_weekday / rolling_avg_weekend: 7-day rolling mean split by day type.
+    # Helps the model distinguish a ride's typical weekday vs weekend load.
+    _df_indexed_dow = df_indexed.copy()
+    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
+        _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
+    )
+    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
+        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+    )
+    df["rolling_avg_weekday"] = (
+        _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
+        .rolling("7d", closed="left", min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+        .values
+    )
+    df["rolling_avg_weekend"] = (
+        _df_indexed_dow.groupby("attractionId")["_wait_weekend"]
+        .rolling("7d", closed="left", min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+        .values
+    )
+    del _df_indexed_dow
+
     # 2. Lag Features (Exact time lookups: T-24h, T-1w)
     # Use merge_asof to find the value closest to (timestamp - lag)
     # Group-wise merge_asof is not direct, so we loop or use exact match on shifted time?
@@ -584,6 +609,18 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Lag 1 month (30 days)
     df["wait_lag_1m"] = merge_lag(df, pd.Timedelta(days=30), "wait_lag_1m")
 
+    # Lag 2w / 3w / 4w (same day-of-week, further back)
+    df["wait_lag_2w"] = merge_lag(df, pd.Timedelta(days=14), "wait_lag_2w")
+    df["wait_lag_3w"] = merge_lag(df, pd.Timedelta(days=21), "wait_lag_3w")
+    df["wait_lag_4w"] = merge_lag(df, pd.Timedelta(days=28), "wait_lag_4w")
+
+    # avg_wait_same_dow_4w: mean of last 4 same-day-of-week observations.
+    # More stable than a single 1-week lag; gives a representative "normal" for this hour+dow.
+    df["avg_wait_same_dow_4w"] = (
+        df[["wait_lag_1w", "wait_lag_2w", "wait_lag_3w", "wait_lag_4w"]]
+        .mean(axis=1, skipna=True)
+    )
+
     # Map features to legacy names if needed or use new ones
     # We'll keep legacy column names where appropriate to minimize model drift if not retraining everything immediately,
     # but 'avg_wait_same_hour_last_week' essentially maps to 'wait_lag_1w'
@@ -604,8 +641,16 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         "avg_wait_same_hour_last_week",
         "avg_wait_same_hour_last_month",
         "rolling_avg_7d",
+        "rolling_avg_weekday",
+        "rolling_avg_weekend",
+        "wait_lag_2w",
+        "wait_lag_3w",
+        "wait_lag_4w",
+        "avg_wait_same_dow_4w",
         "trend_7d",
         "volatility_7d",
+        "volatility_weekday",
+        "volatility_weekend",
     ]
     for col in hist_cols:
         if col in df.columns:
@@ -626,30 +671,32 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Positive = increasing trend, negative = decreasing trend
     df["trend_7d"] = 0.0
     df["volatility_7d"] = 0.0
+    df["volatility_weekday"] = 0.0
+    df["volatility_weekend"] = 0.0
 
     # Use groupby().apply() for better performance
     # This is more efficient than iterating over unique attraction IDs
     def calculate_trend_volatility(group):
-        """Calculate trend and volatility for a single attraction's data"""
+        """Calculate trend and volatility for a single attraction's data.
+
+        Computes volatility_7d (combined), volatility_weekday, and volatility_weekend
+        separately so the model can distinguish stable-weekday / busy-weekend rides.
+        """
         group = group.sort_values("timestamp")
 
+        zeros = {"trend_7d": 0.0, "volatility_7d": 0.0,
+                 "volatility_weekday": 0.0, "volatility_weekend": 0.0}
+
         if len(group) < 2:
-            return pd.DataFrame(
-                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
-                index=group.index,
-            )
+            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
+                                 index=group.index)
 
         # Get last 7 days of data (168 hours = 7 days * 24 hours)
-        if len(group) > 168:
-            recent_data = group.tail(168)
-        else:
-            recent_data = group
+        recent_data = group.tail(168) if len(group) > 168 else group
 
         if len(recent_data) < 2:
-            return pd.DataFrame(
-                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
-                index=group.index,
-            )
+            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
+                                 index=group.index)
 
         # Calculate linear trend (slope) using vectorized operations
         x = np.arange(len(recent_data))
@@ -658,10 +705,8 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         # Remove NaN values
         mask = ~np.isnan(y)
         if mask.sum() < 2:
-            return pd.DataFrame(
-                {"trend_7d": [0.0] * len(group), "volatility_7d": [0.0] * len(group)},
-                index=group.index,
-            )
+            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
+                                 index=group.index)
 
         x_clean = x[mask]
         y_clean = y[mask]
@@ -672,20 +717,40 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
             slope = (
                 n * np.sum(x_clean * y_clean) - np.sum(x_clean) * np.sum(y_clean)
             ) / (n * np.sum(x_clean * x_clean) - np.sum(x_clean) ** 2)
-            volatility = np.std(y_clean)
         else:
             slope = 0.0
-            volatility = 0.0
 
-        # Dampen with log(1+x) and cap so extreme volatility doesn't dominate importance
         cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
-        volatility_dampened = min(np.log1p(max(0.0, volatility)), np.log1p(cap_std))
 
-        # Return DataFrame with same index as group
+        def _dampened_vol(values):
+            arr = values[~np.isnan(values)]
+            if len(arr) < 2:
+                return 0.0
+            return min(np.log1p(np.std(arr)), np.log1p(cap_std))
+
+        # Combined volatility (all 7-day data)
+        volatility_dampened = _dampened_vol(y_clean)
+
+        # Split by day type so the model can distinguish weekday vs weekend patterns.
+        # IMPORTANT: DOW convention depends on the source:
+        #   - day_of_week DB column: EXTRACT(DOW FROM timestamp) → PostgreSQL: 0=Sunday, 6=Saturday
+        #   - pd.Timestamp.dt.dayofweek → pandas: 0=Monday, 5=Saturday, 6=Sunday
+        # We must use the correct weekend set for each convention.
+        if "day_of_week" in recent_data.columns:
+            dow = recent_data["day_of_week"].values
+            weekend_mask = np.isin(dow, [0, 6])  # Postgres: Sunday=0, Saturday=6
+        else:
+            dow = pd.to_datetime(recent_data["timestamp"]).dt.dayofweek.values
+            weekend_mask = np.isin(dow, [5, 6])  # pandas: Saturday=5, Sunday=6
+        volatility_weekday = _dampened_vol(y_clean[~weekend_mask[mask]])
+        volatility_weekend = _dampened_vol(y_clean[weekend_mask[mask]])
+
         return pd.DataFrame(
             {
                 "trend_7d": [slope] * len(group),
                 "volatility_7d": [volatility_dampened] * len(group),
+                "volatility_weekday": [volatility_weekday] * len(group),
+                "volatility_weekend": [volatility_weekend] * len(group),
             },
             index=group.index,
         )
@@ -702,6 +767,8 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     ):
         df["trend_7d"] = trend_volatility_results["trend_7d"]
         df["volatility_7d"] = trend_volatility_results["volatility_7d"]
+        df["volatility_weekday"] = trend_volatility_results["volatility_weekday"]
+        df["volatility_weekend"] = trend_volatility_results["volatility_weekend"]
 
     # Clean up temp columns if any
     return df
@@ -1659,9 +1726,14 @@ def get_feature_columns() -> List[str]:
         "avg_wait_same_hour_last_week",
         "avg_wait_same_hour_last_month",
         "rolling_avg_7d",
+        "rolling_avg_weekday",   # 7d rolling mean – weekday only
+        "rolling_avg_weekend",   # 7d rolling mean – weekend only
+        "avg_wait_same_dow_4w",  # Average of last 4 same-day-of-week observations
         "wait_time_velocity",  # Rate of change (momentum)
         "trend_7d",
         "volatility_7d",
+        "volatility_weekday",  # Weekday-only volatility (7d window)
+        "volatility_weekend",  # Weekend-only volatility (7d window)
         # Percentile-based features
         "is_temp_extreme",
         "is_wind_extreme",  # Extreme wind → ride closures
