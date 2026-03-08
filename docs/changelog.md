@@ -8,6 +8,16 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ### Fixed
 
+- **ML: 5-minute prediction bug** (`model.py` `predict_with_uncertainty`): `virtual_ensembles_predict` was called with `prediction_type="TotalUncertainty"`, which returns uncertainty scalars `[knowledge_unc, data_unc]` (shape `(n, 2)`), not per-ensemble predictions. `np.mean(axis=1)` averaged the two ~2.77 values → `round_to_nearest_5` → **5 min** for all predictions. Fixed by switching to `prediction_type="VirtEnsembles"` (shape `(n, 10, 1)`), squeezing to `(n, 10)`, and taking `median ± std` instead of `p5/p95` (more stable at n=10).
+- **ML: NoneType crash in `fetch_holidays`** (`db.py`): `sorted(country_codes)` failed when the list contained `None` (parks with missing country metadata). Fixed by filtering: `country_codes = [c for c in country_codes if c is not None]`.
+- **ML: Weekend underprediction** (`features.py`, `predict.py`, `config.py`): `volatility_7d` dominated feature importance at 32.91% while `is_weekend` was 0.01% and `avg_wait_last_1h` was 0.00%. The model could not distinguish weekday vs weekend crowd levels. Fixed by:
+  - Splitting `volatility_7d` into `volatility_weekday` + `volatility_weekend` in training pipeline (`calculate_trend_volatility`)
+  - Adding `rolling_avg_weekday` + `rolling_avg_weekend` via SQL window functions in `fetch_recent_wait_times`
+  - Adding `avg_wait_same_dow_4w` (mean of last 4 same-day-of-week observations) for a stable historical reference
+  - Lowering `VOLATILITY_CAP_STD_MINUTES` from 40 → 15 to reduce volatility dominance
+  - All new features propagated to inference in `predict.py`
+  - Detailed analysis: [Prediction Quality Issues](ml/prediction-quality-issues.md)
+
 - **Schedule date-shift bug** (`saveScheduleData`): ThemeParks.wiki returns dates as date-only strings (`"YYYY-MM-DD"`). These were passed to `new Date()`, producing midnight UTC, which `formatInParkTimezone` then shifted back by one day for parks west of UTC (e.g. a park with `date:"2026-03-02"` was stored as `2026-03-01` in America/New_York). Fix: detect date-only strings via regex and use them directly without timezone conversion. Full ISO timestamps (from wartezeiten/queue-times processors) still go through `formatInParkTimezone`. (Bug: today's schedule entry stored under yesterday's DB date; opening hours were 1–2 days off in live DB for US parks.)
 - **Holiday date range in `saveScheduleData`**: Date range for holiday pre-fetch was built from `new Date(e.date)` (midnight UTC), causing `formatInParkTimezone` to shift the range back 1 day for US parks. Fixed: use noon-UTC timestamps (`${dateStr}T12:00:00Z`) consistent with the rest of `saveScheduleData`.
 - **Weather service date filter** (`weather.service.ts`): `allWeather.find()` and `.filter()` used `formatInParkTimezone(new Date(w.date), tz)` on a TypeORM DATE column (midnight UTC). For US parks this shifts midnight UTC to the previous calendar day, causing today's weather entry to be lost (not matched as "current" and excluded from "forecast"). Fixed: extract date string via `w.date.toISOString().split("T")[0]`, which is always correct because midnight UTC IS the calendar date stored in the DB.

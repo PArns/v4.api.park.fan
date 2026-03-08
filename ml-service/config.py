@@ -62,7 +62,9 @@ class Settings(BaseSettings):
 
     # Volatility feature cap (7d std in minutes). Values above this are capped so
     # volatility_7d doesn't dominate feature importance; occupancy/time stay primary.
-    VOLATILITY_CAP_STD_MINUTES: float = 40
+    # Lowered from 40 → 15 to reduce the dominance of volatility_7d (was 32.91% importance)
+    # and allow temporal/holiday features to contribute meaningfully.
+    VOLATILITY_CAP_STD_MINUTES: float = 15
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200

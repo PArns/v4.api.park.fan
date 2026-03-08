@@ -127,7 +127,30 @@ def fetch_recent_wait_times(
                 PARTITION BY "attractionId"
                 ORDER BY date, hour
                 ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_std_7d
+            ) as rolling_std_7d,
+            -- Weekday (Mon-Fri, DOW 1-5) rolling average: help model distinguish load patterns
+            AVG(CASE WHEN day_of_week BETWEEN 1 AND 5 THEN avg_wait END) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+            ) as rolling_avg_weekday,
+            -- Weekend (Sat-Sun, DOW 0 and 6 in Postgres) rolling average
+            AVG(CASE WHEN day_of_week IN (0, 6) THEN avg_wait END) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+            ) as rolling_avg_weekend,
+            -- Weekend/weekday standard deviation (for split volatility)
+            STDDEV(CASE WHEN day_of_week BETWEEN 1 AND 5 THEN avg_wait END) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+            ) as rolling_std_weekday,
+            STDDEV(CASE WHEN day_of_week IN (0, 6) THEN avg_wait END) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+            ) as rolling_std_weekend
         FROM hourly_agg
         ORDER BY "attractionId", date DESC, hour
     """
@@ -1081,6 +1104,7 @@ def create_prediction_features(
 
                 # OPTIMIZATION: Use pre-computed rolling_std_7d from DB (window function)
                 # Volatility: std of last 7d, log1p-dampened and capped to match training
+                cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
                 volatility_7d = 0.0
                 if "rolling_std_7d" in attraction_data.columns:
                     # Use DB-computed standard deviation
@@ -1091,24 +1115,101 @@ def create_prediction_features(
                         else 0.0
                     )
                     if raw_std > 0:
-                        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
                         volatility_7d = min(np.log1p(raw_std), np.log1p(cap_std))
                 elif len(last_7_days) > 1:
                     # Fallback to Python calculation (backwards compatibility)
                     raw_std = last_7_days["avg_wait"].std()
                     if not pd.isna(raw_std) and raw_std >= 0:
-                        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
                         volatility_7d = min(np.log1p(raw_std), np.log1p(cap_std))
 
-                # Apply to all rows for this attraction
+                # Split volatility: weekday vs weekend (matches training-side calculate_trend_volatility)
+                def _dampened_vol_pred(raw_std_val):
+                    if raw_std_val is None or pd.isna(raw_std_val) or raw_std_val <= 0:
+                        return 0.0
+                    return min(np.log1p(raw_std_val), np.log1p(cap_std))
+
+                volatility_weekday = _dampened_vol_pred(
+                    attraction_data["rolling_std_weekday"].iloc[-1]
+                    if "rolling_std_weekday" in attraction_data.columns and len(attraction_data) > 0
+                    else None
+                )
+                volatility_weekend = _dampened_vol_pred(
+                    attraction_data["rolling_std_weekend"].iloc[-1]
+                    if "rolling_std_weekend" in attraction_data.columns and len(attraction_data) > 0
+                    else None
+                )
+
+                # Weekday / weekend rolling averages (from DB window functions)
+                rolling_avg_weekday = (
+                    attraction_data["rolling_avg_weekday"].iloc[-1]
+                    if "rolling_avg_weekday" in attraction_data.columns
+                    and len(attraction_data) > 0
+                    and not pd.isna(attraction_data["rolling_avg_weekday"].iloc[-1])
+                    else rolling_7d
+                )
+                rolling_avg_weekend = (
+                    attraction_data["rolling_avg_weekend"].iloc[-1]
+                    if "rolling_avg_weekend" in attraction_data.columns
+                    and len(attraction_data) > 0
+                    and not pd.isna(attraction_data["rolling_avg_weekend"].iloc[-1])
+                    else rolling_7d
+                )
+
+                # Apply uniform features to all rows for this attraction
                 mask = df["attractionId"] == attraction_id
                 df.loc[mask, "avg_wait_last_24h"] = avg_24h
                 df.loc[mask, "avg_wait_last_1h"] = avg_1h
                 df.loc[mask, "avg_wait_same_hour_last_week"] = avg_same_hour
                 df.loc[mask, "avg_wait_same_hour_last_month"] = avg_same_hour_month
                 df.loc[mask, "rolling_avg_7d"] = rolling_7d
+                df.loc[mask, "rolling_avg_weekday"] = rolling_avg_weekday
+                df.loc[mask, "rolling_avg_weekend"] = rolling_avg_weekend
                 df.loc[mask, "trend_7d"] = trend_7d
                 df.loc[mask, "volatility_7d"] = volatility_7d
+                df.loc[mask, "volatility_weekday"] = volatility_weekday
+                df.loc[mask, "volatility_weekend"] = volatility_weekend
+
+                # avg_wait_same_dow_4w: mean of last 4 same-day-of-week lookups (1w/2w/3w/4w).
+                # Must be computed per prediction timestamp because future timestamps span
+                # multiple days (e.g. Sunday 19:00 → Monday 18:00), each needing its own
+                # same-DOW historical anchor.
+                #
+                # PERFORMANCE: Pre-build a (date, hour) → avg_wait dict once per attraction
+                # so each per-row lookup is O(1) instead of O(len(attraction_data)).
+                # This avoids saturating all uvicorn workers with DataFrame scans.
+                _attr_lookup: dict = (
+                    attraction_data.groupby(
+                        [pd.to_datetime(attraction_data["date"]).dt.date,
+                         attraction_data["hour"].astype(int)]
+                    )["avg_wait"]
+                    .mean()
+                    .to_dict()
+                )
+
+                def _same_dow_avg_fast(ts_local, weeks: list):
+                    vals = []
+                    for w in weeks:
+                        key = ((ts_local - timedelta(days=7 * w)).date(), int(ts_local.hour))
+                        if key in _attr_lookup:
+                            vals.append(_attr_lookup[key])
+                    return float(np.mean(vals)) if vals else rolling_7d
+
+                if park_tz:
+                    import pytz as _pytz
+                    _tz = _pytz.timezone(park_tz)
+                    same_dow_vals = []
+                    for idx in df.index[mask]:
+                        ts_utc = pd.Timestamp(df.at[idx, "timestamp"])
+                        if ts_utc.tzinfo is None:
+                            ts_utc = ts_utc.tz_localize("UTC")
+                        try:
+                            ts_local_row = ts_utc.tz_convert(_tz)
+                        except Exception:
+                            ts_local_row = ts_utc
+                        same_dow_vals.append(_same_dow_avg_fast(ts_local_row, [1, 2, 3, 4]))
+                    df.loc[mask, "avg_wait_same_dow_4w"] = same_dow_vals
+                else:
+                    df.loc[mask, "avg_wait_same_dow_4w"] = _same_dow_avg_fast(base_time_local, [1, 2, 3, 4])
 
     # Calculate wait time velocity (momentum) BEFORE overriding lags
     # Initialize with default (no change)
@@ -1119,6 +1220,16 @@ def create_prediction_features(
         df["trend_7d"] = 0.0
     if "volatility_7d" not in df.columns:
         df["volatility_7d"] = 0.0
+    if "volatility_weekday" not in df.columns:
+        df["volatility_weekday"] = 0.0
+    if "volatility_weekend" not in df.columns:
+        df["volatility_weekend"] = 0.0
+    if "rolling_avg_weekday" not in df.columns:
+        df["rolling_avg_weekday"] = df.get("rolling_avg_7d", 0.0)
+    if "rolling_avg_weekend" not in df.columns:
+        df["rolling_avg_weekend"] = df.get("rolling_avg_7d", 0.0)
+    if "avg_wait_same_dow_4w" not in df.columns:
+        df["avg_wait_same_dow_4w"] = df.get("avg_wait_same_hour_last_week", 0.0)
 
     # Override lags with current wait times if available (Autoregression)
     if current_wait_times:
