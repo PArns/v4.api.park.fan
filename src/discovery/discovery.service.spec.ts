@@ -3,32 +3,12 @@ import { DiscoveryService } from "./discovery.service";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { ParksService } from "../parks/parks.service";
 
 describe("DiscoveryService Deduplication", () => {
   let service: DiscoveryService;
 
-  // QueryBuilder mock that supports the chained API used in getGeoStructure()
-  const makeQbMock = (parks: object[]) => ({
-    select: jest.fn().mockReturnThis(),
-    where: jest.fn().mockReturnThis(),
-    andWhere: jest.fn().mockReturnThis(),
-    loadRelationCountAndMap: jest.fn().mockReturnThis(),
-    orderBy: jest.fn().mockReturnThis(),
-    addOrderBy: jest.fn().mockReturnThis(),
-    getMany: jest.fn().mockResolvedValue(parks),
-  });
-
   const mockParkRepository = {
-    createQueryBuilder: jest.fn(),
-    // Used by getLiveStats()
-    query: jest.fn().mockResolvedValue([]),
-  };
-
-  const mockParksService = {
-    getBatchSchedules: jest
-      .fn()
-      .mockResolvedValue({ today: new Map(), next: new Map() }),
+    find: jest.fn(),
   };
 
   const mockRedis = {
@@ -46,10 +26,6 @@ describe("DiscoveryService Deduplication", () => {
           useValue: mockParkRepository,
         },
         {
-          provide: ParksService,
-          useValue: mockParksService,
-        },
-        {
           provide: REDIS_CLIENT,
           useValue: mockRedis,
         },
@@ -60,7 +36,8 @@ describe("DiscoveryService Deduplication", () => {
   });
 
   it("should merge countries with same name but different slugs", async () => {
-    const parkData = [
+    mockRedis.get.mockResolvedValue(null);
+    mockParkRepository.find.mockResolvedValue([
       {
         id: "1",
         name: "Disneyland Paris",
@@ -72,7 +49,7 @@ describe("DiscoveryService Deduplication", () => {
         city: "Marne-la-Vallée",
         citySlug: "marne-la-vallee",
         countryCode: "FR",
-        attractionCount: 0,
+        attractions: [],
       },
       {
         id: "2",
@@ -85,12 +62,9 @@ describe("DiscoveryService Deduplication", () => {
         countryCode: "FR", // Common key
         city: "Plailly",
         citySlug: "plailly",
-        attractionCount: 0,
+        attractions: [],
       },
-    ];
-
-    mockRedis.get.mockResolvedValue(null);
-    mockParkRepository.createQueryBuilder.mockReturnValue(makeQbMock(parkData));
+    ]);
 
     const result = await service.getGeoStructure();
     const europe = result.continents.find((c) => c.slug === "europe");
@@ -99,6 +73,7 @@ describe("DiscoveryService Deduplication", () => {
     if (!europe) return;
 
     // Expect only one country entry for "France"
+    // This assertion will fail BEFORE the fix
     expect(europe.countries.length).toBe(1);
     expect(europe.countries[0].name).toBe("France");
 
