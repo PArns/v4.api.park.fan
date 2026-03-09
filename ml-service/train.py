@@ -341,8 +341,11 @@ def train_model(version: str = None) -> None:
                 f"📊 Using adaptive time-based split - {validation_days} days validation ({data_span_days} days total)"
             )
         else:
-            # Stable phase: use fixed 30 days
-            validation_days = settings.VALIDATION_DAYS
+            # Stable phase: fixed VALIDATION_DAYS, but never exceed 20% of data span.
+            # Without this cap, 30 days on 75 days of data = 40% validation (too little training).
+            # Target: ~4% validation (30d on 730d), capped at 20% for smaller datasets.
+            max_validation_days = max(7, int(data_span_days * 0.20))
+            validation_days = min(settings.VALIDATION_DAYS, max_validation_days)
             logger.info(
                 f"📊 Using time-based split - {validation_days} days validation ({data_span_days} days total)"
             )
