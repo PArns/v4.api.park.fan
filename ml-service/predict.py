@@ -264,6 +264,17 @@ def create_prediction_features(
     # OPTIMIZATION: Cache this to avoid multiple DB queries
     parks_metadata = fetch_parks_metadata()
 
+    # Fetch historical occupancy for future prediction rows (avoids using stale real-time value)
+    from db import fetch_historical_park_occupancy
+
+    unique_park_ids = list(set(park_ids))
+    hist_occ = fetch_historical_park_occupancy(unique_park_ids)
+    if feature_context is None:
+        feature_context = {}
+    feature_context = dict(feature_context)  # don't mutate caller's dict
+    feature_context["historicalOccupancy"] = hist_occ
+    feature_context["baseTime"] = base_time
+
     df = convert_to_local_time(df, parks_metadata)
 
     # Add time features from LOCAL timestamp (not UTC!)

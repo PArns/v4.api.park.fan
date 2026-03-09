@@ -825,12 +825,13 @@ def add_park_occupancy_feature(
     Add park-wide occupancy percentage feature
 
     Occupancy % = (current avg wait / baseline) * 100
-    - Inference: API passes occupancy from TypeScript (P50 baseline, headliner).
+    - Inference (near-term, within 2h of base_time): Use real-time parkOccupancy from API.
+    - Inference (future rows, > 2h from base_time): Use historical (DOW, hour) lookup.
     - Training: Reconstruct using P50 (median) so train/inference scale matches.
 
     Args:
-        df: DataFrame with parkId column
-        feature_context: Optional dict with parkOccupancy data from API
+        df: DataFrame with parkId and timestamp columns
+        feature_context: Optional dict with parkOccupancy, historicalOccupancy, baseTime
 
     Returns:
         DataFrame with park_occupancy_pct feature
@@ -841,15 +842,89 @@ def add_park_occupancy_feature(
     df["park_occupancy_pct"] = 100.0
 
     if feature_context and "parkOccupancy" in feature_context:
-        # Inference Mode: Use provided real-time context (P50-based from API)
+        # Inference Mode: Real-time occupancy is available from the API
         park_occupancy_map = feature_context["parkOccupancy"]
+        hist_occ = feature_context.get("historicalOccupancy", {})
+        base_time = feature_context.get("baseTime")
 
-        # Map occupancy to each row based on parkId
-        for park_id, occupancy_pct in park_occupancy_map.items():
-            if occupancy_pct is None:
-                continue
-            mask = df["parkId"] == park_id
-            df.loc[mask, "park_occupancy_pct"] = float(occupancy_pct)
+        if base_time is not None:
+            # Normalise base_time to a timezone-naive UTC timestamp for comparison
+            if hasattr(base_time, "tzinfo") and base_time.tzinfo is not None:
+                import pytz
+
+                base_time_naive = base_time.astimezone(pytz.utc).replace(tzinfo=None)
+            else:
+                base_time_naive = base_time
+
+            # Normalise df["timestamp"] to timezone-naive UTC for comparison
+            ts = df["timestamp"]
+            if hasattr(ts.dt, "tz") and ts.dt.tz is not None:
+                ts_naive = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+            else:
+                ts_naive = ts
+
+            near_term_mask = (ts_naive - base_time_naive).abs() <= pd.Timedelta(hours=2)
+
+            # Apply real-time occupancy for near-term rows (within 2 hours of base_time)
+            for park_id, occupancy_pct in park_occupancy_map.items():
+                if occupancy_pct is None:
+                    continue
+                park_mask = df["parkId"] == park_id
+                df.loc[park_mask & near_term_mask, "park_occupancy_pct"] = float(
+                    occupancy_pct
+                )
+
+            # Apply historical (DOW, hour) lookup for future rows (> 2 hours from base_time)
+            future_mask = ~near_term_mask
+            if future_mask.any() and hist_occ:
+                for park_id in df["parkId"].unique():
+                    park_hist = hist_occ.get(str(park_id), {})
+                    if not park_hist:
+                        continue
+                    park_future_mask = (df["parkId"] == park_id) & future_mask
+                    if not park_future_mask.any():
+                        continue
+                    # Compute Postgres DOW (0=Sun) from UTC timestamp
+                    # pandas dayofweek: Mon=0 … Sun=6 → Postgres DOW: Sun=0, Mon=1 … Sat=6
+                    pandas_dow = ts_naive[park_future_mask].dt.dayofweek
+                    pg_dow = ((pandas_dow + 1) % 7).astype(int)
+                    hour = ts_naive[park_future_mask].dt.hour.astype(int)
+                    hist_vals = [
+                        park_hist.get((d, h), 100.0)
+                        for d, h in zip(pg_dow, hour)
+                    ]
+                    df.loc[park_future_mask, "park_occupancy_pct"] = hist_vals
+        else:
+            # No base_time — fall back to applying real-time value to ALL rows
+            for park_id, occupancy_pct in park_occupancy_map.items():
+                if occupancy_pct is None:
+                    continue
+                mask = df["parkId"] == park_id
+                df.loc[mask, "park_occupancy_pct"] = float(occupancy_pct)
+
+    elif feature_context and "historicalOccupancy" in feature_context:
+        # No real-time occupancy (e.g. daily predictions 2 weeks out): use historical lookup for ALL rows
+        hist_occ = feature_context["historicalOccupancy"]
+        if hist_occ:
+            ts = df["timestamp"]
+            if hasattr(ts.dt, "tz") and ts.dt.tz is not None:
+                ts_naive = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+            else:
+                ts_naive = ts
+
+            for park_id in df["parkId"].unique():
+                park_hist = hist_occ.get(str(park_id), {})
+                if not park_hist:
+                    continue
+                park_mask = df["parkId"] == park_id
+                pandas_dow = ts_naive[park_mask].dt.dayofweek
+                pg_dow = ((pandas_dow + 1) % 7).astype(int)
+                hour = ts_naive[park_mask].dt.hour.astype(int)
+                hist_vals = [
+                    park_hist.get((d, h), 100.0)
+                    for d, h in zip(pg_dow, hour)
+                ]
+                df.loc[park_mask, "park_occupancy_pct"] = hist_vals
 
     else:
         # Training Mode: Reconstruct historical occupancy to match inference scale
