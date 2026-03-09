@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # and allow temporal/holiday features to contribute meaningfully.
     VOLATILITY_CAP_STD_MINUTES: float = 15
 
+    # Occupancy dropout rate for training (0.0 = disabled, 0.3 = 30% of rows).
+    # For dropout rows, real-time park_occupancy_pct is replaced with the DOW×hour
+    # historical mean. This teaches the model to rely on hour/day_of_week features
+    # when only an approximate occupancy is available — matching the inference scenario
+    # for future predictions (tomorrow, next week) where real-time occupancy is unknown.
+    OCCUPANCY_DROPOUT_RATE: float = 0.30
+
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
 
