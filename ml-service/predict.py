@@ -269,11 +269,12 @@ def create_prediction_features(
 
     unique_park_ids = list(set(park_ids))
     hist_occ = fetch_historical_park_occupancy(unique_park_ids)
-    if feature_context is None:
-        feature_context = {}
-    feature_context = dict(feature_context)  # don't mutate caller's dict
-    feature_context["historicalOccupancy"] = hist_occ
-    feature_context["baseTime"] = base_time
+    if feature_context is not None:
+        feature_context = dict(feature_context)  # don't mutate caller's dict
+        feature_context["historicalOccupancy"] = hist_occ
+        feature_context["baseTime"] = base_time
+    # When feature_context is None, hist_occ is used directly in the else branch
+    # so only park_occupancy_pct benefits (bridge day / other features keep their defaults)
 
     df = convert_to_local_time(df, parks_metadata)
 
@@ -1316,15 +1317,18 @@ def create_prediction_features(
         # Interaction features (must be after all base features are added)
         df = add_interaction_features(df)
     else:
-        # Defaults if no feature_context provided
-        df["park_occupancy_pct"] = 100.0
+        # Defaults if no feature_context provided — use historical occupancy profile instead of flat 100%
+        from features import add_park_occupancy_feature
+
+        occ_context = {"historicalOccupancy": hist_occ, "baseTime": base_time}
+        df = add_park_occupancy_feature(df, occ_context)
         df["time_since_park_open_mins"] = 0.0
         df["had_downtime_today"] = 0
         df["downtime_minutes_today"] = 0.0
         df["has_virtual_queue"] = 0
         df["is_bridge_day"] = 0
         df["park_has_schedule"] = (
-            1  # NEW: Default to 1 (assume schedule exists for better quality)
+            1  # Default to 1 (assume schedule exists for better quality)
         )
 
         # Interaction features with defaults
