@@ -958,6 +958,44 @@ def add_park_occupancy_feature(
             occupancy = (current_park_avg.loc[mask] / baseline) * 100
             df.loc[mask, "park_occupancy_pct"] = occupancy.clip(0, 200)
 
+        # Occupancy Dropout: replace actual occupancy with DOW×hour historical mean
+        # for a fraction of training rows. This teaches the model to fall back on
+        # hour/day_of_week features when only an approximate occupancy is available,
+        # which is exactly the inference scenario for future predictions.
+        settings = get_settings()
+        dropout_rate = settings.OCCUPANCY_DROPOUT_RATE
+        if dropout_rate > 0:
+            ts = pd.to_datetime(df["timestamp"])
+            dow = ts.dt.dayofweek  # Mon=0, Sun=6
+            hour = ts.dt.hour
+
+            for park_id in df["parkId"].unique():
+                mask = df["parkId"] == park_id
+                park_dow = dow[mask]
+                park_hour = hour[mask]
+
+                # Build DOW×hour profile from this park's own training data
+                profile = (
+                    df.loc[mask]
+                    .groupby([park_dow, park_hour])["park_occupancy_pct"]
+                    .mean()
+                )
+                profile.index.names = ["dow", "hour"]
+
+                # Look up profile value for every row
+                profile_vals = [
+                    profile.get((d, h), 100.0)
+                    for d, h in zip(park_dow, park_hour)
+                ]
+
+                # Random mask for dropout
+                rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
+                drop = rng.random(mask.sum()) < dropout_rate
+
+                actual = df.loc[mask, "park_occupancy_pct"].values.copy()
+                actual[drop] = np.array(profile_vals)[drop]
+                df.loc[mask, "park_occupancy_pct"] = actual
+
     return df
 
 
