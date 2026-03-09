@@ -530,16 +530,17 @@ def fetch_historical_park_occupancy(
         """
         WITH per_ride_p50 AS (
             SELECT
-                "parkId"::text as park_id,
-                "attractionId"::text as attraction_id,
-                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "waitTime") as p50
-            FROM queue_data
-            WHERE "parkId"::text = ANY(:park_ids)
-              AND timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
-              AND "waitTime" > 0
-              AND status = 'OPERATING'
-              AND "queueType" = 'STANDBY'
-            GROUP BY "parkId", "attractionId"
+                a."parkId"::text as park_id,
+                qd."attractionId"::text as attraction_id,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as p50
+            FROM queue_data qd
+            JOIN attractions a ON qd."attractionId" = a.id
+            WHERE a."parkId"::text = ANY(:park_ids)
+              AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
+              AND qd."waitTime" > 0
+              AND qd.status = 'OPERATING'
+              AND qd."queueType" = 'STANDBY'
+            GROUP BY a."parkId", qd."attractionId"
         ),
         park_p50_baseline AS (
             SELECT park_id, AVG(p50) as baseline
@@ -548,17 +549,18 @@ def fetch_historical_park_occupancy(
         ),
         park_hourly AS (
             SELECT
-                "parkId"::text as park_id,
-                EXTRACT(DOW FROM timestamp)::int as dow,
-                EXTRACT(HOUR FROM timestamp)::int as hour,
-                AVG("waitTime") as avg_wait
-            FROM queue_data
-            WHERE "parkId"::text = ANY(:park_ids)
-              AND timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
-              AND "waitTime" > 0
-              AND status = 'OPERATING'
-              AND "queueType" = 'STANDBY'
-            GROUP BY "parkId", EXTRACT(DOW FROM timestamp), EXTRACT(HOUR FROM timestamp)
+                a."parkId"::text as park_id,
+                EXTRACT(DOW FROM qd.timestamp)::int as dow,
+                EXTRACT(HOUR FROM qd.timestamp)::int as hour,
+                AVG(qd."waitTime") as avg_wait
+            FROM queue_data qd
+            JOIN attractions a ON qd."attractionId" = a.id
+            WHERE a."parkId"::text = ANY(:park_ids)
+              AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
+              AND qd."waitTime" > 0
+              AND qd.status = 'OPERATING'
+              AND qd."queueType" = 'STANDBY'
+            GROUP BY a."parkId", EXTRACT(DOW FROM qd.timestamp), EXTRACT(HOUR FROM qd.timestamp)
         )
         SELECT
             h.park_id,
