@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
+import os
 
 from model import WaitTimeModel
 from predict import predict_wait_times, predict_for_park
@@ -30,6 +31,48 @@ app = FastAPI(
 # Global model instance
 model: Optional[WaitTimeModel] = None
 
+# Sentinel file: written after training so all workers detect the new version.
+# Path is on the shared models volume so every worker process sees it.
+_SENTINEL_FILE = os.path.join(os.environ.get("MODEL_DIR", "/app/models"), "active_version.txt")
+
+
+def _read_sentinel() -> Optional[str]:
+    """Read the active version written by the training worker."""
+    try:
+        with open(_SENTINEL_FILE) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def _write_sentinel(version: str) -> None:
+    """Write the new active version so all workers pick it up."""
+    try:
+        with open(_SENTINEL_FILE, "w") as f:
+            f.write(version)
+    except Exception as e:
+        logger.warning(f"Could not write sentinel file: {e}")
+
+
+def _maybe_reload_model() -> None:
+    """
+    Check if the sentinel file signals a newer model version.
+    Called at the start of every prediction request — cheap (one file read)
+    and ensures all uvicorn workers eventually converge to the active model
+    without requiring inter-process communication.
+    """
+    global model
+    sentinel_version = _read_sentinel()
+    if sentinel_version and (model is None or model.version != sentinel_version):
+        logger.info(f"Sentinel detected new model version {sentinel_version}, reloading...")
+        try:
+            new_model = WaitTimeModel(sentinel_version)
+            new_model.load()
+            model = new_model
+            logger.info(f"✅ Model auto-reloaded to {sentinel_version}")
+        except Exception as e:
+            logger.error(f"Failed to auto-reload model {sentinel_version}: {e}")
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -41,6 +84,7 @@ async def startup_event():
         logger.info(f"Loading active model version {model_version} (from database)...")
         model = WaitTimeModel(model_version)
         model.load()
+        _write_sentinel(model_version)
         logger.info("✅ Model loaded successfully")
     except FileNotFoundError:
         logger.warning("⚠️  No trained model found. Train a model first using train.py")
@@ -154,7 +198,11 @@ async def get_model_info():
 
 @app.post("/model/reload")
 async def reload_model():
-    """Force reload of the active model from database"""
+    """
+    Force reload of the active model from database.
+    Writes the sentinel file so ALL worker processes pick up the new version,
+    not just the worker handling this request.
+    """
     global model
     try:
         model_version = fetch_active_model_version()
@@ -165,13 +213,14 @@ async def reload_model():
         new_model = WaitTimeModel(model_version)
         new_model.load()
 
-        # Atomically swap
+        # Update this worker and write sentinel for the others
         model = new_model
+        _write_sentinel(model_version)
         logger.info("✅ Model reloaded successfully")
 
         return {
             "status": "success",
-            "message": f"Model reloaded. Version: {model.version}",
+            "message": f"Model reloaded. Version: {model.version} (sentinel written for all workers)",
             "version": model.version,
         }
     except Exception as e:
@@ -238,15 +287,12 @@ async def train_model_endpoint(request: TrainRequest):
 
             logger.info(f"✅ Training completed for version {version}")
 
-            # Auto-reload the new model
-            try:
-                global model
-                new_model = WaitTimeModel(version)
-                new_model.load()
-                model = new_model
-                logger.info("✅ New model loaded automatically")
-            except Exception as e:
-                logger.error(f"Failed to auto-load new model: {e}")
+            # Write sentinel so ALL worker processes pick up the new model.
+            # Each worker calls _maybe_reload_model() on the next prediction request.
+            # This replaces the single-process `global model = new_model` pattern
+            # which only updated the worker that ran the training thread.
+            _write_sentinel(version)
+            logger.info(f"✅ Sentinel written for {version} — all workers will reload on next request")
 
         except Exception as e:
             import traceback
@@ -295,6 +341,9 @@ async def predict(request: PredictionRequest):
     Returns:
         Bulk prediction response
     """
+    # Check if training completed on another worker and wrote a new sentinel version
+    _maybe_reload_model()
+
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
@@ -364,6 +413,8 @@ async def predict_park(park_id: str, prediction_type: str = "hourly"):
     Returns:
         Bulk prediction response
     """
+    _maybe_reload_model()
+
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
