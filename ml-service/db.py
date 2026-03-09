@@ -492,6 +492,121 @@ def fetch_park_schedules(
         return df
 
 
+# Cache for historical park occupancy (1 hour TTL)
+_historical_occupancy_cache = {}
+_historical_occupancy_cache_ttl = 3600  # 1 hour in seconds
+
+
+def fetch_historical_park_occupancy(
+    park_ids: List[str], lookback_weeks: int = 8
+) -> Dict:
+    """
+    Fetch historical park occupancy by (day-of-week, hour) for future prediction rows.
+
+    OPTIMIZATION: Caches results for 1 hour to avoid repeated DB queries.
+
+    Returns:
+        {park_id: {(dow_int, hour_int): float_pct}}
+
+        where dow_int follows Postgres DOW convention (0=Sun, 1=Mon, ..., 6=Sat)
+        and float_pct is expected occupancy percentage on a 0–200 scale matching
+        the inference-time parkOccupancy values.
+    """
+    if not park_ids:
+        return {}
+
+    cache_key = f"hist_occ:{','.join(sorted(park_ids))}:{lookback_weeks}"
+
+    # Check cache
+    if cache_key in _historical_occupancy_cache:
+        cached_data, cache_time = _historical_occupancy_cache[cache_key]
+        import time
+
+        if time.time() - cache_time < _historical_occupancy_cache_ttl:
+            return cached_data
+
+    # Cache miss - load from DB
+    query = text(
+        """
+        WITH per_ride_p50 AS (
+            SELECT
+                "parkId"::text as park_id,
+                "attractionId"::text as attraction_id,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "waitTime") as p50
+            FROM queue_data
+            WHERE "parkId"::text = ANY(:park_ids)
+              AND timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
+              AND "waitTime" > 0
+              AND status = 'OPERATING'
+              AND "queueType" = 'STANDBY'
+            GROUP BY "parkId", "attractionId"
+        ),
+        park_p50_baseline AS (
+            SELECT park_id, AVG(p50) as baseline
+            FROM per_ride_p50
+            GROUP BY park_id
+        ),
+        park_hourly AS (
+            SELECT
+                "parkId"::text as park_id,
+                EXTRACT(DOW FROM timestamp)::int as dow,
+                EXTRACT(HOUR FROM timestamp)::int as hour,
+                AVG("waitTime") as avg_wait
+            FROM queue_data
+            WHERE "parkId"::text = ANY(:park_ids)
+              AND timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
+              AND "waitTime" > 0
+              AND status = 'OPERATING'
+              AND "queueType" = 'STANDBY'
+            GROUP BY "parkId", EXTRACT(DOW FROM timestamp), EXTRACT(HOUR FROM timestamp)
+        )
+        SELECT
+            h.park_id,
+            h.dow,
+            h.hour,
+            LEAST(200.0, GREATEST(0.0, (h.avg_wait / NULLIF(b.baseline, 0)) * 100)) as expected_occupancy_pct
+        FROM park_hourly h
+        JOIN park_p50_baseline b ON h.park_id = b.park_id
+        ORDER BY h.park_id, h.dow, h.hour
+    """
+    )
+
+    lookback_days = lookback_weeks * 7
+
+    try:
+        with get_db() as db:
+            result = db.execute(
+                query,
+                {
+                    "park_ids": park_ids,
+                    "lookback_days": lookback_days,
+                },
+            )
+            rows = result.fetchall()
+
+        # Build nested dict: {park_id: {(dow, hour): pct}}
+        occupancy_map: Dict = {}
+        for row in rows:
+            park_id = str(row.park_id)
+            dow = int(row.dow)
+            hour = int(row.hour)
+            pct = float(row.expected_occupancy_pct)
+            if park_id not in occupancy_map:
+                occupancy_map[park_id] = {}
+            occupancy_map[park_id][(dow, hour)] = pct
+
+        # Update cache
+        import time
+
+        _historical_occupancy_cache[cache_key] = (occupancy_map, time.time())
+
+        return occupancy_map
+
+    except Exception as e:
+        print(f"⚠️  Failed to fetch historical park occupancy: {e}")
+        return {}
+
+
 def fetch_active_model_version() -> str:
     """
     Fetch the active model version from the database
