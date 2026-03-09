@@ -44,9 +44,15 @@ async function generateSwaggerSpec(): Promise<void> {
 
     // If it's a connection error, we can still try to generate the spec
     // by catching the error at the module level
-    if (errorMessage.includes("connect") || errorMessage.includes("ECONNREFUSED") || errorMessage.includes("timeout")) {
+    if (
+      errorMessage.includes("connect") ||
+      errorMessage.includes("ECONNREFUSED") ||
+      errorMessage.includes("timeout")
+    ) {
       console.warn("⚠️  Database connection failed during build (expected)");
-      console.warn("⚠️  Attempting to generate Swagger spec without DB connection...");
+      console.warn(
+        "⚠️  Attempting to generate Swagger spec without DB connection...",
+      );
 
       // Try to create app with abortOnError: false to skip connection errors
       try {
@@ -62,7 +68,10 @@ async function generateSwaggerSpec(): Promise<void> {
       }
     } else {
       // Other errors - can't proceed
-      console.warn("⚠️  Failed to bootstrap app for spec generation:", errorMessage);
+      console.warn(
+        "⚠️  Failed to bootstrap app for spec generation:",
+        errorMessage,
+      );
       console.warn("⚠️  Swagger spec will be generated at runtime instead");
       if (originalNodeEnv) process.env.NODE_ENV = originalNodeEnv;
       process.exit(0);
@@ -82,8 +91,8 @@ async function generateSwaggerSpec(): Promise<void> {
     .setTitle("park.fan API v4")
     .setDescription(
       "Real-time theme park intelligence powered by machine learning. " +
-      "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-      "for optimal theme park experiences worldwide.",
+        "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
+        "for optimal theme park experiences worldwide.",
     )
     .setVersion(packageJson.version)
     .setContact("Patrick Arns", "https://arns.dev", "contact@arns.dev")
@@ -165,7 +174,9 @@ async function generateSwaggerSpec(): Promise<void> {
   fs.writeFileSync(specPath, JSON.stringify(document, null, 2));
 
   console.log(`✅ Swagger spec generated: ${specPath}`);
-  console.log(`   Spec size: ${(fs.statSync(specPath).size / 1024).toFixed(2)} KB`);
+  console.log(
+    `   Spec size: ${(fs.statSync(specPath).size / 1024).toFixed(2)} KB`,
+  );
 
   // Close the app
   await app.close();
@@ -178,7 +189,10 @@ generateSwaggerSpec()
   .catch((error) => {
     // Don't fail the build if spec generation fails
     // The app will generate it at runtime as a fallback
-    console.warn("⚠️  Failed to generate Swagger spec at build time:", error instanceof Error ? error.message : String(error));
+    console.warn(
+      "⚠️  Failed to generate Swagger spec at build time:",
+      error instanceof Error ? error.message : String(error),
+    );
     console.warn("⚠️  Swagger spec will be generated at runtime instead");
     process.exit(0); // Exit successfully - don't break the build
   });
