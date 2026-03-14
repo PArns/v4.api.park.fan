@@ -22,8 +22,6 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  */
 @Entity("attraction_p50_baselines")
 @Index("idx_attraction_p50_park", ["parkId"])
-@Index("idx_attraction_p50_confidence", ["confidence"])
-@Index("idx_attraction_p50_headliner", ["isHeadliner"])
 export class AttractionP50Baseline {
   @PrimaryColumn("uuid")
   attractionId: string;

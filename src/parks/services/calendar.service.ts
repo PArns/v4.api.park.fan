@@ -664,7 +664,7 @@ export class CalendarService {
             (q) =>
               formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
               q.waitTime !== null &&
-              q.waitTime > 0,
+              q.waitTime >= 5,
           );
           if (dayQueueData.length > 0) {
             const crowdData =
@@ -1087,7 +1087,7 @@ export class CalendarService {
     const waitTimes = queueData
       .filter(
         (q) =>
-          q.waitTime !== null && q.waitTime > 0 && q.queueType === "STANDBY",
+          q.waitTime !== null && q.waitTime >= 5 && q.queueType === "STANDBY",
       ) // Ensure STANDBY and valid
       .map((q) => q.waitTime!)
       .sort((a, b) => a - b);

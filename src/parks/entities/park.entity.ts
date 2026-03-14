@@ -40,8 +40,7 @@ export class Park {
   id: string;
 
   @Column({ unique: true })
-  @Index()
-  externalId: string; // ThemeParks.wiki ID
+  externalId: string; // ThemeParks.wiki ID — unique: true already creates an index
 
   @Column()
   @Index()

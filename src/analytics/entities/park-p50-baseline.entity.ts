@@ -6,7 +6,6 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
-  Index,
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
 
@@ -22,8 +21,6 @@ import { Park } from "../../parks/entities/park.entity";
  * Cached: Redis `park:p50:{parkId}` (24h TTL)
  */
 @Entity("park_p50_baselines")
-@Index("idx_park_p50_confidence", ["confidence"])
-@Index("idx_park_p50_calculated", ["calculatedAt"])
 export class ParkP50Baseline {
   @PrimaryColumn("uuid")
   parkId: string;

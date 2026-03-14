@@ -716,8 +716,8 @@ export class AttractionIntegrationService {
           AND qd.status = 'OPERATING'
           AND qd."queueType" = 'STANDBY'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" > 0
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $3), 
+          AND qd."waitTime" >= 5
+        GROUP BY DATE(qd.timestamp AT TIME ZONE $3),
                  EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)
         HAVING COUNT(*) >= 1
         ORDER BY date, hour

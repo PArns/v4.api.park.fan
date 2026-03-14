@@ -77,7 +77,7 @@ export class StatsService {
         .andWhere("q.timestamp < :queryEnd", { queryEnd })
         .andWhere("q.queueType = :qt", { qt: QueueType.STANDBY })
         .andWhere("q.waitTime IS NOT NULL")
-        .andWhere("q.waitTime > 0")
+        .andWhere("q.waitTime >= 5")
         .getMany();
 
       // Filter for the specific date in park timezone

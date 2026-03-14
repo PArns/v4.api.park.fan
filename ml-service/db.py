@@ -123,12 +123,18 @@ def fetch_training_data(
                 END as season
             FROM queue_data qd
             INNER JOIN attractions a ON a.id = qd."attractionId"
+            INNER JOIN parks p ON p.id = a."parkId"
+            LEFT JOIN schedule_entries se
+                ON se."parkId" = a."parkId"
+                AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
+                AND se."attractionId" IS NULL
             WHERE qd."queueType" = 'STANDBY'
                 AND qd.status = 'OPERATING'
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
-                AND qd."waitTime" >= 0
-            GROUP BY 
+                AND qd."waitTime" >= 5
+                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+            GROUP BY
                 qd."attractionId",
                 a."parkId",
                 a."attractionType",
@@ -537,7 +543,7 @@ def fetch_historical_park_occupancy(
             JOIN attractions a ON qd."attractionId" = a.id
             WHERE a."parkId"::text = ANY(:park_ids)
               AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
-              AND qd."waitTime" > 0
+              AND qd."waitTime" >= 5
               AND qd.status = 'OPERATING'
               AND qd."queueType" = 'STANDBY'
             GROUP BY a."parkId", qd."attractionId"
@@ -550,17 +556,20 @@ def fetch_historical_park_occupancy(
         park_hourly AS (
             SELECT
                 a."parkId"::text as park_id,
-                EXTRACT(DOW FROM qd.timestamp)::int as dow,
-                EXTRACT(HOUR FROM qd.timestamp)::int as hour,
+                EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)::int as dow,
+                EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)::int as hour,
                 AVG(qd."waitTime") as avg_wait
             FROM queue_data qd
             JOIN attractions a ON qd."attractionId" = a.id
+            JOIN parks p ON p.id = a."parkId"
             WHERE a."parkId"::text = ANY(:park_ids)
               AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
-              AND qd."waitTime" > 0
+              AND qd."waitTime" >= 5
               AND qd.status = 'OPERATING'
               AND qd."queueType" = 'STANDBY'
-            GROUP BY a."parkId", EXTRACT(DOW FROM qd.timestamp), EXTRACT(HOUR FROM qd.timestamp)
+            GROUP BY a."parkId", p.timezone,
+                     EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone),
+                     EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)
         )
         SELECT
             h.park_id,

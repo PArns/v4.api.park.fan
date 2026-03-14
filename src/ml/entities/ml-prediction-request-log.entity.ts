@@ -13,15 +13,12 @@ import {
  * Tracks request volume, latency, and usage patterns.
  */
 @Entity("ml_prediction_request_log")
-@Index(["createdAt", "predictionType"])
-@Index(["parkId", "createdAt"])
-@Index(["modelVersion", "createdAt"])
+@Index(["parkId", "createdAt"]) // Only composite index needed for park-scoped time queries
 export class MLPredictionRequestLog {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @Column({ type: "varchar", length: 255, nullable: true, name: "park_id" })
-  @Index()
   parkId: string | null;
 
   @Column({ type: "int", name: "attraction_count" })
@@ -35,11 +32,9 @@ export class MLPredictionRequestLog {
     enum: ["hourly", "daily"],
     name: "prediction_type",
   })
-  @Index()
   predictionType: "hourly" | "daily";
 
   @Column({ type: "varchar", length: 50, name: "model_version" })
-  @Index()
   modelVersion: string;
 
   // Performance metrics
@@ -54,6 +49,5 @@ export class MLPredictionRequestLog {
   requestMetadata: Record<string, unknown> | null; // Additional request info
 
   @CreateDateColumn({ type: "timestamptz", name: "created_at" })
-  @Index()
   createdAt: Date;
 }

@@ -35,6 +35,9 @@ export enum ScheduleType {
 @Index(["parkId", "date", "scheduleType"]) // Covers range queries getSchedule(parkId, from, to) via leftmost prefix
 @Index(["date"])
 @Index(["attractionId", "date"])
+@Index("idx_schedule_park_date_no_attraction", ["parkId", "date"], {
+  where: '"attractionId" IS NULL',
+}) // Partial index for park-level schedule JOINs in analytics/ML queries
 export class ScheduleEntry {
   @PrimaryGeneratedColumn("uuid")
   id: string;

@@ -95,19 +95,29 @@ def fetch_recent_wait_times(
         """
         WITH hourly_agg AS (
             SELECT
-                "attractionId"::text as "attractionId",
-                DATE(timestamp) as date,
-                EXTRACT(HOUR FROM timestamp) as hour,
-                EXTRACT(DOW FROM timestamp) as day_of_week,
-                AVG("waitTime") as avg_wait,
+                qd."attractionId"::text as "attractionId",
+                DATE(qd.timestamp AT TIME ZONE p.timezone) as date,
+                EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone) as hour,
+                EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone) as day_of_week,
+                AVG(qd."waitTime") as avg_wait,
                 COUNT(*) as data_points
-            FROM queue_data
-            WHERE "attractionId"::text = ANY(:attraction_ids)
-                AND timestamp >= NOW() - INTERVAL :lookback_days DAY
-                AND "waitTime" IS NOT NULL
-                AND status = 'OPERATING'
-                AND "queueType" = 'STANDBY'
-            GROUP BY "attractionId", DATE(timestamp), EXTRACT(HOUR FROM timestamp), EXTRACT(DOW FROM timestamp)
+            FROM queue_data qd
+            INNER JOIN attractions a ON a.id = qd."attractionId"
+            INNER JOIN parks p ON p.id = a."parkId"
+            LEFT JOIN schedule_entries se
+                ON se."parkId" = a."parkId"
+                AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
+                AND se."attractionId" IS NULL
+            WHERE qd."attractionId"::text = ANY(:attraction_ids)
+                AND qd.timestamp >= NOW() - INTERVAL :lookback_days DAY
+                AND qd."waitTime" IS NOT NULL
+                AND qd."waitTime" >= 5
+                AND qd.status = 'OPERATING'
+                AND qd."queueType" = 'STANDBY'
+                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+            GROUP BY qd."attractionId", DATE(qd.timestamp AT TIME ZONE p.timezone),
+                     EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone),
+                     EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)
         )
         SELECT
             "attractionId",
@@ -933,11 +943,9 @@ def create_prediction_features(
         if recent_data["date"].dt.tz is not None:
             recent_data["date"] = recent_data["date"].dt.tz_localize(None)
 
-        # OPTIMIZATION: Use local time for historical feature lookups
-        # The data in recent_data is aggregated by UTC hour (from fetch_recent_wait_times)
-        # We convert base_time to local time for each park to improve accuracy
-        # Note: For perfect accuracy, fetch_recent_wait_times() should aggregate by local hour,
-        # but this approximation works well for most use cases.
+        # Historical feature lookups use local park time.
+        # fetch_recent_wait_times() now aggregates by local park hour/DOW (via p.timezone JOIN),
+        # so lookups keyed by local hour/DOW are self-consistent with the stored data.
 
         # Convert base_time to pandas Timestamp (timezone-aware UTC)
         base_time_pd = pd.Timestamp(base_time)

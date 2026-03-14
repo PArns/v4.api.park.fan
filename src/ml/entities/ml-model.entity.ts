@@ -12,7 +12,6 @@ import {
  * Tracks ML model versions, performance metrics, and metadata
  */
 @Entity("ml_models")
-@Index(["version"], { unique: true })
 @Index(["isActive"])
 export class MLModel {
   @PrimaryGeneratedColumn("uuid")
