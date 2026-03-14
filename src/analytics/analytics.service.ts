@@ -900,7 +900,7 @@ export class AnalyticsService {
       .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime > 0")
+      .andWhere("qd.waitTime >= 5")
       .andWhere("qd.queueType = 'STANDBY'")
       .getRawMany();
 
@@ -1121,7 +1121,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 5
       ),
       attraction_counts AS (
         -- Total attraction count
@@ -1587,7 +1587,7 @@ export class AnalyticsService {
       .andWhere("qd.timestamp BETWEEN :start AND :end", { start, end })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime > 0")
+      .andWhere("qd.waitTime >= 5")
       .andWhere("qd.queueType = 'STANDBY'")
       .getRawOne();
 
@@ -2501,10 +2501,9 @@ export class AnalyticsService {
         .where("qd.attractionId = :entityId", { entityId })
         .andWhere("qd.timestamp >= :cutoff", { cutoff })
         .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere(
-          "((qd.waitTime > 0 AND qd.status = :status) OR qd.waitTime > 5)",
-          { status: "OPERATING" },
-        )
+        .andWhere("qd.waitTime >= 5 AND qd.status = :status", {
+          status: "OPERATING",
+        })
         .andWhere("qd.queueType = 'STANDBY'")
         .getRawMany();
     } else {
@@ -2520,10 +2519,9 @@ export class AnalyticsService {
         .where("attraction.parkId = :entityId", { entityId })
         .andWhere("qd.timestamp >= :cutoff", { cutoff })
         .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere(
-          "((qd.waitTime > 0 AND qd.status = :status) OR qd.waitTime > 5)",
-          { status: "OPERATING" },
-        )
+        .andWhere("qd.waitTime >= 5 AND qd.status = :status", {
+          status: "OPERATING",
+        })
         .andWhere("qd.queueType = 'STANDBY'")
         .getRawMany();
     }
@@ -2839,7 +2837,7 @@ export class AnalyticsService {
         JOIN parks p ON p.id = a."parkId"
         JOIN park_status ps ON ps."parkId" = p.id
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
-          AND qd."waitTime" >= 0
+          AND qd."waitTime" >= 5
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT *
@@ -3409,7 +3407,7 @@ export class AnalyticsService {
         .andWhere("qd.timestamp <= :endOfDay", { endOfDay })
         .andWhere("qd.status = :status", { status: "OPERATING" })
         .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime > 0")
+        .andWhere("qd.waitTime >= 5")
         .andWhere("qd.queueType = 'STANDBY'")
         .getRawOne();
 
@@ -3428,7 +3426,7 @@ export class AnalyticsService {
         .andWhere("qd.timestamp <= :endOfDay", { endOfDay })
         .andWhere("qd.status = :status", { status: "OPERATING" })
         .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime > 0")
+        .andWhere("qd.waitTime >= 5")
         .andWhere("qd.queueType = 'STANDBY'")
         .getRawOne();
 
@@ -3546,14 +3544,20 @@ export class AnalyticsService {
           AVG(qd."waitTime") as "avgWait",
           EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
         FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        LEFT JOIN schedule_entries se
+          ON se."parkId" = a."parkId"
+          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+          AND se."attractionId" IS NULL
         WHERE qd."attractionId" = $1
           AND qd.timestamp >= $3
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 5
           AND qd."queueType" = 'STANDBY'
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $2), 
+          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+        GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
                  EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
         ORDER BY date
       `,
@@ -3562,19 +3566,24 @@ export class AnalyticsService {
     } else {
       dailyData = await this.queueDataRepository.query(
         `
-        SELECT 
+        SELECT
           DATE(qd.timestamp AT TIME ZONE $2) as date,
           AVG(qd."waitTime") as "avgWait",
           EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
         FROM queue_data qd
         INNER JOIN attractions a ON qd."attractionId" = a.id
+        LEFT JOIN schedule_entries se
+          ON se."parkId" = a."parkId"
+          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+          AND se."attractionId" IS NULL
         WHERE a."parkId" = $1
           AND qd.timestamp >= $3
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 5
           AND qd."queueType" = 'STANDBY'
+          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
         GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
                  EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
         ORDER BY date
@@ -3676,6 +3685,11 @@ export class AnalyticsService {
     const result = await this.queueDataRepository.query(
       `
       -- Step 1: Calculate statistics for all attractions
+      -- waitTime >= 5 excludes the "1-minute walk-on placeholder" common in water park
+      -- APIs (where waitTime=1 means "open, no real queue"). This aligns with the
+      -- getCurrentSpotWaitTime minWaitTime=5 default so baseline and current use the same data.
+      -- Schedule JOIN: exclude days where the park is explicitly scheduled as non-OPERATING.
+      -- If no schedule entry exists for a day, the day is included (unknown = include by default).
       WITH attraction_stats AS (
         SELECT
           a.id as attraction_id,
@@ -3687,11 +3701,16 @@ export class AnalyticsService {
           COUNT(*) as sample_count
         FROM queue_data qd
         INNER JOIN attractions a ON qd."attractionId" = a.id
+        LEFT JOIN schedule_entries se
+          ON se."parkId" = a."parkId"
+          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+          AND se."attractionId" IS NULL
         WHERE a."parkId" = $1
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 5
+          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
         GROUP BY a.id, a."parkId"
       ),
       -- Step 2: Calculate park-wide stats for relative thresholds
@@ -3786,11 +3805,16 @@ export class AnalyticsService {
           COUNT(*) as sample_count
         FROM queue_data qd
         INNER JOIN attractions a ON qd."attractionId" = a.id
+        LEFT JOIN schedule_entries se
+          ON se."parkId" = a."parkId"
+          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+          AND se."attractionId" IS NULL
         WHERE a."parkId" = $1
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
-          AND qd."waitTime" > 0
+          AND qd."waitTime" >= 5
+          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
         GROUP BY a.id, a."parkId"
         ORDER BY p90_wait DESC
         LIMIT 5
@@ -4148,11 +4172,17 @@ export class AnalyticsService {
         COUNT(*) as sample_count,
         COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as distinct_days
       FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+      LEFT JOIN schedule_entries se
+        ON se."parkId" = a."parkId"
+        AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+        AND se."attractionId" IS NULL
       WHERE qd."attractionId" = $1
         AND qd.timestamp >= $3
         AND qd."queueType" = 'STANDBY'
         AND qd.status = 'OPERATING'
-        AND qd."waitTime" > 0
+        AND qd."waitTime" >= 5
+        AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
       `,
       [attractionId, timezone, cutoff],
     );

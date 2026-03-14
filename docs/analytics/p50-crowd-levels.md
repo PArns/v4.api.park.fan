@@ -41,7 +41,7 @@ We identify distinct "Headliner" attractions for each park using a **3-Tier Adap
 | **Tier 1** | Avg Wait > 15m AND P90 > 25m | Major Theme Parks (Disney, Universal) |
 | **Tier 2** | Top 40% wait times AND P90 > 1.5x P50 | Regional Parks (volatile) |
 | **Tier 3** | All attractions with avg wait > 3m | Small Parks (consistent low waits) |
-| **Fallback** | **NEW:** Top 5 Attractions by P90 (Avg > 0) | Parks with sparse data or <3m waits |
+| **Fallback** | Top 5 Attractions by P90 (Avg ≥ 5) | Parks with sparse data or <3m waits |
 
 **Logic:**
 1. Try to find at least 3 Tier 1 attractions.
@@ -49,11 +49,28 @@ We identify distinct "Headliner" attractions for each park using a **3-Tier Adap
 3. If still <3, add Tier 3 attractions.
 4. If **0 headliners found**, trigger **Fallback Strategy** (force select Top 5 by P90).
 
+#### Data Quality Filters (applied in all tiers)
+
+All historical wait-time queries used for headliner identification and baseline calculation apply two filters:
+
+1. **`waitTime >= 5`** — excludes walk-on placeholder values. Queue-Times API reports `waitTime=1` for water-park slides and other "open but no queue" attractions. Including these inflates sample counts and deflates the P50 (e.g., Rulantica P50 was 4.4 min with placeholders vs ~20 min without). The real-time path already uses `minWaitTime=5`; baselines must match.
+2. **Schedule JOIN** — excludes closed-day data. Historical samples are joined against `schedule_entries` (park-level, no attractionId). Days with no schedule entry are kept (unknown = include). Days with an explicit `CLOSED`, `TICKETED_EVENT`, or similar non-OPERATING type are excluded. This prevents off-season data (e.g., Kennywood Jan–Mar) from dragging baselines down.
+
+```sql
+LEFT JOIN schedule_entries se
+  ON se."parkId" = a."parkId"
+  AND se.date = DATE(qd.timestamp AT TIME ZONE <park_timezone>)
+  AND se."attractionId" IS NULL
+WHERE qd."waitTime" >= 5
+  AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+```
+
 ### Step 2: Calculate Park Baseline
 Using only the identified Headliners:
 1. Aggregate all wait times for these attractions over the last 548 days.
-2. Calculate the **Median (P50)** of all samples.
-3. Store this single number as the **Park Baseline** (e.g., `25.5` minutes).
+2. Apply data quality filters (`waitTime >= 5`, schedule JOIN — see above).
+3. Calculate the **Median (P50)** of all samples.
+4. Store this single number as the **Park Baseline** (e.g., `25.5` minutes).
 
 ---
 

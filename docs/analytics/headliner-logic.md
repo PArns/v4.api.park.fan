@@ -29,7 +29,37 @@ Parks vary wildly in size and ride composition. A "one-size-fits-all" rule for s
 ### Fallback Strategy (The "Nuclear Option")
 If even Tier 3 fails to find 3 attractions (e.g., extremely sparse data or tiny park):
 - **Force Select**: Top 5 attractions by historical P90 wait time.
-- **Constraint**: Must have avg wait > 0.
+- **Constraint**: Must have avg wait ≥ 5 (same data-quality filter as all other tiers).
+
+## Data Quality Filters
+
+All tiers and the fallback apply these filters to historical wait-time data:
+
+### `waitTime >= 5` filter
+Queue-Times API reports `waitTime=1` for water-park slides and other "open but no queue" attractions (walk-on placeholder, not a real measurement). Including these values:
+- Inflates sample counts with non-representative data.
+- Deflates P50 baselines (e.g., Rulantica P50 was 4.4 min with placeholders vs ~20 min without).
+- Causes a systematic mismatch: real-time crowd level uses `minWaitTime=5` but baselines did not → "Extreme" level when rides are actually normal.
+
+**Rule**: All historical aggregations use `waitTime >= 5`. The real-time path already uses the same threshold.
+
+### Schedule JOIN (closed-day exclusion)
+Seasonal parks accumulate queue data during off-season months (e.g., Kennywood Jan–Mar, Canada's Wonderland winter). Without filtering, this off-season data depresses P50 baselines. Each wait-time sample is joined against the park-level schedule for that day:
+
+- **No schedule entry** → include (unknown = open).
+- **`OPERATING`** → include.
+- **Any other type** (`CLOSED`, `TICKETED_EVENT`, `PRIVATE_EVENT`, etc.) → exclude.
+
+```sql
+LEFT JOIN schedule_entries se
+  ON se."parkId" = a."parkId"
+  AND se.date = DATE(qd.timestamp AT TIME ZONE <park_timezone>)
+  AND se."attractionId" IS NULL
+WHERE qd."waitTime" >= 5
+  AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+```
+
+The `attractionId IS NULL` condition selects park-level schedule rows only (not per-attraction entries).
 
 ## Validation Checklist
 
