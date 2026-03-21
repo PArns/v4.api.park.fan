@@ -2715,35 +2715,15 @@ export class AnalyticsService {
       totalShowsCount,
       totalRestaurantsCount,
       queueDataCount,
-      weatherDataCount,
-      scheduleEntriesCount,
-      restaurantLiveDataCount,
-      showLiveDataCount,
-      waitTimePredictionCount,
     ] = await Promise.all([
       this.getCachedCount(this.parkRepository, "count:parks"),
       this.getCachedCount(this.attractionRepository, "count:attractions"),
       this.getCachedCount(this.showRepository, "count:shows"),
       this.getCachedCount(this.restaurantRepository, "count:restaurants"),
       this.getCachedCount(this.queueDataRepository, "count:queue_data"),
-      this.getCachedCount(this.weatherDataRepository, "count:weather_data"),
-      this.getCachedCount(
-        this.scheduleEntryRepository,
-        "count:schedule_entries",
-      ),
-      this.getCachedCount(
-        this.restaurantLiveDataRepository,
-        "count:restaurant_live_data",
-      ),
-      this.getCachedCount(this.showLiveDataRepository, "count:show_live_data"),
-      this.getCachedCount(
-        this.waitTimePredictionRepository,
-        "count:wait_time_predictions",
-      ),
     ]);
 
     const openParksCount = openParks.length;
-    const closedParksCount = Math.max(0, totalParksCount - openParksCount);
 
     // 2. Find Most/Least Crowded Park (by Avg Wait)
     openParks.sort(
@@ -2767,9 +2747,6 @@ export class AnalyticsService {
               0,
               parseInt(openParks[0].total_attractions || "0") -
                 parseInt(openParks[0].explicitly_closed_attractions || "0"),
-            ),
-            closedAttractions: parseInt(
-              openParks[0].explicitly_closed_attractions || "0",
             ),
           }
         : null;
@@ -2799,10 +2776,6 @@ export class AnalyticsService {
                   openParks[openParks.length - 1]
                     .explicitly_closed_attractions || "0",
                 ),
-            ),
-            closedAttractions: parseInt(
-              openParks[openParks.length - 1].explicitly_closed_attractions ||
-                "0",
             ),
           }
         : null;
@@ -2900,41 +2873,25 @@ export class AnalyticsService {
         : Promise.resolve(null),
     ]);
 
-    const mostCrowdedParkDetails =
-      mostCrowdedPark && mostCrowdedOccupancy
-        ? {
-            ...mostCrowdedPark,
-            crowdLevel: this.determineCrowdLevel(mostCrowdedOccupancy.current),
-            occupancy: mostCrowdedOccupancy.current,
-            comparedToTypical: mostCrowdedOccupancy.comparisonStatus,
-          }
-        : mostCrowdedPark
-          ? {
-              ...mostCrowdedPark,
-              crowdLevel: null,
-              occupancy: null,
-              comparedToTypical: null,
-            }
-          : null;
+    const mostCrowdedParkDetails = mostCrowdedPark
+      ? {
+          ...mostCrowdedPark,
+          crowdLevel: mostCrowdedOccupancy
+            ? this.determineCrowdLevel(mostCrowdedOccupancy.current)
+            : null,
+        }
+      : null;
 
-    const leastCrowdedParkDetails =
-      leastCrowdedPark && leastCrowdedOccupancy
-        ? {
-            ...leastCrowdedPark,
-            crowdLevel: this.determineCrowdLevel(leastCrowdedOccupancy.current),
-            occupancy: leastCrowdedOccupancy.current,
-            comparedToTypical: leastCrowdedOccupancy.comparisonStatus,
-          }
-        : leastCrowdedPark
-          ? {
-              ...leastCrowdedPark,
-              crowdLevel: null,
-              occupancy: null,
-              comparedToTypical: null,
-            }
-          : null;
+    const leastCrowdedParkDetails = leastCrowdedPark
+      ? {
+          ...leastCrowdedPark,
+          crowdLevel: leastCrowdedOccupancy
+            ? this.determineCrowdLevel(leastCrowdedOccupancy.current)
+            : null,
+        }
+      : null;
 
-    // Calculate load ratings for both rides (P50 baseline when available)
+    // Calculate crowd levels for rides using P50 baseline
     const [longestRideRating, shortestRideRating] = await Promise.all([
       longestWaitRide
         ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
@@ -2948,39 +2905,13 @@ export class AnalyticsService {
         : Promise.resolve(null),
     ]);
 
-    const longestWaitRideDetails =
-      longestWaitRide && longestRideRating
-        ? {
-            ...longestWaitRide,
-            crowdLevel: longestRideRating.rating,
-            baseline: longestRideRating.baseline,
-            comparison: this.getComparisonText(longestRideRating.rating),
-          }
-        : longestWaitRide
-          ? {
-              ...longestWaitRide,
-              crowdLevel: null,
-              baseline: null,
-              comparison: null,
-            }
-          : null;
+    const longestWaitRideDetails = longestWaitRide
+      ? { ...longestWaitRide, crowdLevel: longestRideRating?.rating ?? null }
+      : null;
 
-    const shortestWaitRideDetails =
-      shortestWaitRide && shortestRideRating
-        ? {
-            ...shortestWaitRide,
-            crowdLevel: shortestRideRating.rating,
-            baseline: shortestRideRating.baseline,
-            comparison: this.getComparisonText(shortestRideRating.rating),
-          }
-        : shortestWaitRide
-          ? {
-              ...shortestWaitRide,
-              crowdLevel: null,
-              baseline: null,
-              comparison: null,
-            }
-          : null;
+    const shortestWaitRideDetails = shortestWaitRide
+      ? { ...shortestWaitRide, crowdLevel: shortestRideRating?.rating ?? null }
+      : null;
 
     // Count open vs closed attractions
     const openAttractionsCount = await this.attractionRepository.query(`
@@ -2998,39 +2929,16 @@ export class AnalyticsService {
     `);
 
     const openAttractions = parseInt(openAttractionsCount[0]?.count || "0");
-    const closedAttractions = Math.max(
-      0,
-      totalAttractionsCount - openAttractions,
-    );
-
-    // Calculate percentages
-    const parksOpenPercentage =
-      totalParksCount > 0
-        ? Math.round((openParksCount / totalParksCount) * 100)
-        : 0;
-    const attractionsOpenPercentage =
-      totalAttractionsCount > 0
-        ? Math.round((openAttractions / totalAttractionsCount) * 100)
-        : 0;
 
     const response: GlobalStatsDto = {
       counts: {
         openParks: openParksCount,
-        closedParks: closedParksCount,
         parks: totalParksCount,
-        parksOpenPercentage,
         openAttractions,
-        closedAttractions,
         attractions: totalAttractionsCount,
-        attractionsOpenPercentage,
         shows: totalShowsCount,
         restaurants: totalRestaurantsCount,
         queueDataRecords: queueDataCount,
-        weatherDataRecords: weatherDataCount,
-        scheduleEntries: scheduleEntriesCount,
-        restaurantLiveDataRecords: restaurantLiveDataCount,
-        showLiveDataRecords: showLiveDataCount,
-        waitTimePredictions: waitTimePredictionCount,
         totalWaitTime: rideStats.reduce(
           (sum: number, stat: { waitTime?: number }) =>
             sum + (stat.waitTime || 0),
@@ -3041,8 +2949,6 @@ export class AnalyticsService {
       leastCrowdedPark: leastCrowdedParkDetails,
       longestWaitRide: longestWaitRideDetails,
       shortestWaitRide: shortestWaitRideDetails,
-
-      lastUpdated: new Date().toISOString(),
     };
 
     // Cache the result ONLY if we have data (prevent caching zero states)
@@ -3063,7 +2969,7 @@ export class AnalyticsService {
    * Cached for 5 minutes
    */
   async getGeoLiveStats() {
-    const cacheKey = "analytics:geo_live_stats:v1";
+    const cacheKey = "analytics:geo_live_stats:v2"; // v2: removed cities and averageWaitTime
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -3189,50 +3095,20 @@ export class AnalyticsService {
     for (const [continentSlug, continentData] of continentMap) {
       const countries = [];
       for (const [countrySlug, countryData] of continentData.countries) {
-        const cities = [];
-        for (const [citySlug, cityData] of countryData.cities) {
-          cities.push({
-            slug: citySlug,
-            openParkCount: cityData.openParkCount,
-            averageWaitTime:
-              cityData.parkCount > 0
-                ? roundToNearest5Minutes(
-                    cityData.totalWaitTime / cityData.parkCount,
-                  )
-                : null,
-          });
-        }
-
         countries.push({
           slug: countrySlug,
           openParkCount: countryData.openParkCount,
-          averageWaitTime:
-            countryData.parkCount > 0
-              ? roundToNearest5Minutes(
-                  countryData.totalWaitTime / countryData.parkCount,
-                )
-              : null,
-          cities,
         });
       }
 
       continents.push({
         slug: continentSlug,
         openParkCount: continentData.openParkCount,
-        averageWaitTime:
-          continentData.parkCount > 0
-            ? roundToNearest5Minutes(
-                continentData.totalWaitTime / continentData.parkCount,
-              )
-            : null,
         countries,
       });
     }
 
-    const response = {
-      continents,
-      generatedAt: new Date().toISOString(),
-    };
+    const response = { continents };
 
     // Cache for 5 minutes
     await this.redis.set(
@@ -4077,6 +3953,17 @@ export class AnalyticsService {
       "UTC",
     );
     return fallback.p50 || fallback.p90;
+  }
+
+  /**
+   * Get headliner attraction IDs for a park as a Set (for O(1) lookup).
+   */
+  async getHeadlinerAttractionIds(parkId: string): Promise<Set<string>> {
+    const headliners = await this.headlinerAttractionRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    return new Set(headliners.map((h) => h.attractionId));
   }
 
   /**

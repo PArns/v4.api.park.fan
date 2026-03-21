@@ -9,7 +9,6 @@ import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
-import { ShowsService } from "../../shows/shows.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import {
   IntegratedCalendarResponse,
@@ -18,7 +17,6 @@ import {
   WeatherSummary,
   CalendarEvent,
   HourlyPrediction,
-  ShowTime,
 } from "../dto/integrated-calendar.dto";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
@@ -69,7 +67,6 @@ export class CalendarService {
     private readonly analyticsService: AnalyticsService,
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
-    private readonly showsService: ShowsService,
     private readonly queueDataService: QueueDataService,
     private readonly statsService: StatsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -123,11 +120,8 @@ export class CalendarService {
         .map((d) => ({ ...d, status: d.status ?? "UNKNOWN" }));
       const response: IntegratedCalendarResponse = {
         meta: {
-          parkId: park.id,
           slug: park.slug,
           timezone: park.timezone,
-          generatedAt: new Date().toISOString(),
-          requestRange: { from: fromStr, to: toStr },
         },
         days: daysInRange,
       };
@@ -146,7 +140,6 @@ export class CalendarService {
       weatherData,
       mlPredictions,
       holidays,
-      refurbishments,
       historicalQueueData,
       dailyStats,
       operatingDateRange,
@@ -201,12 +194,6 @@ export class CalendarService {
             return [];
           });
       })(),
-      this.getRefurbishmentsList(park.id).catch((err) => {
-        this.logger.warn(
-          `Refurbishments data unavailable for ${park.slug}: ${err.message}`,
-        );
-        return [];
-      }),
       (async () => {
         // Optimized: Only fetch queue data if range includes today or past
         // And use optimized date-range query instead of full park dump
@@ -314,7 +301,6 @@ export class CalendarService {
         weatherData,
         mlPredictions.predictions,
         holidays,
-        refurbishments,
         includeHourly,
         historicalQueueData,
         dailyStats as ParkDailyStats[], // Pass stats
@@ -331,14 +317,8 @@ export class CalendarService {
     // Build response
     const response: IntegratedCalendarResponse = {
       meta: {
-        parkId: park.id,
         slug: park.slug,
         timezone: park.timezone,
-        generatedAt: new Date().toISOString(),
-        requestRange: {
-          from: formatInParkTimezone(fromDate, park.timezone),
-          to: formatInParkTimezone(toDate, park.timezone),
-        },
       },
       days,
     };
@@ -478,7 +458,6 @@ export class CalendarService {
     weatherData: WeatherData[],
     mlPredictions: PredictionDto[],
     holidays: Holiday[],
-    refurbishments: string[],
     includeHourly: string,
     historicalQueueData: QueueData[],
     parkStats: ParkDailyStats[],
@@ -492,12 +471,6 @@ export class CalendarService {
     } = { minDate: null, maxDate: null },
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
-    // today is passed as argument
-    const tomorrow = formatInParkTimezone(
-      addDays(parseISO(today), 1),
-      park.timezone,
-    );
-
     // Find schedule for this day
     const schedule = schedules.find(
       (s) => formatInParkTimezone(s.date, park.timezone) === dateStr,
@@ -740,10 +713,8 @@ export class CalendarService {
       date: dateStr,
       status,
       isToday: dateStr === today,
-      isTomorrow: dateStr === tomorrow,
       hours: hours || undefined,
       crowdLevel,
-      crowdScore: undefined, // Deprecated: use crowdLevel instead
       weather: weatherSummary || undefined,
       events,
       isHoliday,
@@ -752,24 +723,6 @@ export class CalendarService {
       influencingHolidays:
         influencingHolidays.length > 0 ? influencingHolidays : undefined,
     };
-
-    // Add refurbishments if any
-    if (refurbishments.length > 0) {
-      day.refurbishments = refurbishments;
-    }
-
-    // Add ML-generated recommendation
-    if (status === "OPERATING") {
-      const advisoryKeys = this.generateAdvisoryKeys(
-        mlPrediction?.crowdLevel,
-        isHoliday,
-        isBridgeDay,
-        weatherSummary,
-      );
-      day.advisoryKeys = advisoryKeys;
-      day.recommendation = this.generateRecommendationString(advisoryKeys);
-      // Note: Show times are available via dedicated /parks/:id/shows endpoint
-    }
 
     // Add hourly data if requested (uses pre-fetched list to avoid N+1 ML calls)
     if (this.shouldIncludeHourly(date, includeHourly, park.timezone)) {
@@ -882,202 +835,6 @@ export class CalendarService {
     if (score <= 85) return "moderate";
     if (score <= 95) return "high";
     return "very_high";
-  }
-
-  /**
-   * Get list of attractions under refurbishment
-   * Note: Returns empty array for now - attraction status is derived from live queue data
-   */
-  private async getRefurbishmentsList(_parkId: string): Promise<string[]> {
-    // TODO: Implement refurbishment detection from queue data status
-    // Attractions don't have a persistent status field - it's determined by live data
-    return [];
-  }
-
-  /**
-   * Generate advisory keys for localization
-   */
-  private generateAdvisoryKeys(
-    crowdData?: number | string,
-    isHoliday?: boolean,
-    isBridgeDay?: boolean,
-    weather?: WeatherSummary | null,
-  ): string[] {
-    const keys: string[] = [];
-
-    // Convert crowd level to score if needed
-    let crowdScore: number | undefined;
-    if (typeof crowdData === "number") {
-      crowdScore = crowdData;
-    } else if (typeof crowdData === "string") {
-      const levelMap: Record<string, number> = {
-        very_low: 30,
-        low: 55,
-        moderate: 80,
-        high: 110,
-        very_high: 140,
-        extreme: 170,
-      };
-      crowdScore = levelMap[crowdData] || 80;
-    }
-
-    if (crowdScore !== undefined) {
-      if (crowdScore < 30) {
-        keys.push("lowCrowds");
-      } else if (crowdScore > 75) {
-        keys.push("highCrowds");
-        if (isHoliday || isBridgeDay) {
-          keys.push("visitWeekday");
-        }
-      } else if (crowdScore > 50 && crowdScore <= 75) {
-        keys.push("moderateCrowds");
-      } else if (crowdScore >= 30 && crowdScore <= 50) {
-        keys.push("goodCrowds");
-      }
-    }
-
-    // Weather-based recommendations
-    if (weather) {
-      if (weather.rainChance > 60) {
-        keys.push("rainLikely");
-      } else if (weather.tempMax > 30) {
-        keys.push("hotDay");
-      } else if (weather.tempMax < 5) {
-        keys.push("coldDay");
-      }
-    }
-
-    if (keys.length === 0) {
-      keys.push("goodDay");
-    }
-
-    return keys;
-  }
-
-  /**
-   * Generate legacy recommendation string from keys
-   */
-  private generateRecommendationString(keys: string[]): string {
-    const map: Record<string, string> = {
-      lowCrowds: "Low crowds expected - excellent day to visit",
-      highCrowds: "High crowds expected - arrive early",
-      visitWeekday: "Consider visiting on a weekday instead",
-      moderateCrowds: "Moderate crowds expected",
-      goodCrowds: "Good crowd levels for most attractions",
-      rainLikely: "Rain likely - indoor attractions recommended",
-      hotDay: "Hot day -stay hydrated",
-      coldDay: "Cold weather - dress warmly",
-      goodDay: "Good day for a park visit",
-    };
-
-    return keys.map((k) => map[k] || k).join(". ");
-  }
-
-  /**
-   * Get show times for a specific day
-   */
-  /**
-   * Get show times for a specific target date
-   * Projects current/stale data to the target date if the show is Operating
-   */
-  private async getShowTimes(
-    parkId: string,
-    targetDate: Date,
-  ): Promise<ShowTime[]> {
-    try {
-      // Get current show status for this park
-      const showStatusMap =
-        await this.showsService.findCurrentStatusByPark(parkId);
-
-      const showTimes: ShowTime[] = [];
-
-      // Extract showtimes from each show's live data
-      const now = new Date();
-      const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-      // We need to project times to the target date
-      // targetDate might be Today, Tomorrow, etc.
-      // We assume the daily schedule is consistent if status is OPERATING
-      // (Static Schedule Assumption)
-
-      // Fetch park to get timezone (needed for accurate date string construction)
-      // Optimization: Pass timezone in or fetch once preferably
-      // For now we get it from the show entity if relations are loaded
-
-      for (const [_showId, liveData] of showStatusMap.entries()) {
-        if (!liveData.showtimes || !Array.isArray(liveData.showtimes)) {
-          continue;
-        }
-
-        const isOperating = liveData.status === "OPERATING";
-
-        // Check for stale data
-        // If Operating, we are more lenient (allow stale data projection)
-        if (liveData.lastUpdated && !isOperating) {
-          const lastUpdated = new Date(liveData.lastUpdated);
-          const age = now.getTime() - lastUpdated.getTime();
-          if (age > STALE_THRESHOLD_MS) {
-            this.logger.debug(
-              `Skipping stale show data for ${liveData.show?.name} (Age: ${Math.round(age / 1000 / 60 / 60)}h) - Not Operating`,
-            );
-            continue;
-          }
-        }
-
-        // Find timezone from show relation (loaded in findCurrentStatusByPark)
-        const timezone = liveData.show?.park?.timezone || "UTC";
-        const targetDateStr = formatInParkTimezone(targetDate, timezone);
-
-        for (const showtime of liveData.showtimes) {
-          if (showtime.startTime) {
-            // Project to Target Date
-            // Extract Time Part from original ISO: T11:00:00+01:00
-            const iso = showtime.startTime;
-            const timePart = iso.substring(10); // Start at 'T' (index 10)
-
-            // Construct new ISO for Target Date
-            const newIso = targetDateStr + timePart;
-
-            // For EndTime
-            let newEndIso: string | undefined;
-            if (showtime.endTime) {
-              const endIso = showtime.endTime;
-              const endTimePart = endIso.substring(10);
-              newEndIso = targetDateStr + endTimePart;
-            }
-
-            // Determine best name to show
-            let showName = liveData.show?.name || "Show";
-            if (
-              showName === "Show" &&
-              showtime.type &&
-              showtime.type !== "Performance"
-            ) {
-              showName = showtime.type;
-            }
-
-            // Only add if we confirmed operating or data is fresh
-            // If stale but operating -> Project
-            // If fresh -> Project (to target date, because data might be for "Today")
-            showTimes.push({
-              name: showName,
-              time: newIso,
-              endTime: newEndIso,
-            });
-          }
-        }
-      }
-
-      // Sort by time
-      showTimes.sort((a, b) => a.time.localeCompare(b.time));
-
-      return showTimes;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to fetch show times for park ${parkId}: ${error}`,
-      );
-      return [];
-    }
   }
 
   /**

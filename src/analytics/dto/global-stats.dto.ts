@@ -16,6 +16,9 @@ export class ParkStatsItemDto {
   @ApiProperty({ description: "Country where the park is located" })
   country: string;
 
+  @ApiProperty({ description: "Country slug for translation" })
+  countrySlug: string;
+
   @ApiProperty({ description: "Average wait time in minutes", nullable: true })
   averageWaitTime: number;
 
@@ -32,28 +35,11 @@ export class ParkStatsItemDto {
   })
   crowdLevel: string | null;
 
-  @ApiProperty({
-    description: "Occupancy percentage (0-200+)",
-    example: 85,
-    nullable: true,
-  })
-  occupancy: number | null;
-
-  @ApiProperty({
-    description: "Comparison to typical levels",
-    enum: ["higher", "lower", "typical"],
-    nullable: true,
-  })
-  comparedToTypical: string | null;
-
   @ApiProperty({ description: "Total number of attractions in park" })
   totalAttractions: number;
 
   @ApiProperty({ description: "Number of currently operating attractions" })
   operatingAttractions: number;
-
-  @ApiProperty({ description: "Number of currently closed attractions" })
-  closedAttractions: number;
 }
 
 export class AttractionStatsItemDto {
@@ -78,6 +64,9 @@ export class AttractionStatsItemDto {
   @ApiProperty({ description: "Country where the park is located" })
   parkCountry: string;
 
+  @ApiProperty({ description: "Country slug for translation" })
+  parkCountrySlug: string;
+
   @ApiProperty()
   waitTime: number;
 
@@ -93,52 +82,20 @@ export class AttractionStatsItemDto {
     nullable: true,
   })
   crowdLevel: string | null;
-
-  @ApiProperty({
-    description: "90th percentile baseline for this hour/day",
-    nullable: true,
-  })
-  baseline: number | null;
-
-  @ApiProperty({
-    description:
-      "How current wait compares to baseline: much_lower, lower, typical, higher, much_higher",
-    nullable: true,
-    enum: ["much_lower", "lower", "typical", "higher", "much_higher"],
-  })
-  comparison:
-    | "much_lower"
-    | "lower"
-    | "typical"
-    | "higher"
-    | "much_higher"
-    | null;
 }
 
 export class GlobalCountsDto {
   @ApiProperty({ description: "Number of parks currently operating" })
   openParks: number;
 
-  @ApiProperty({ description: "Number of parks currently closed" })
-  closedParks: number;
-
   @ApiProperty({ description: "Total number of parks in the system" })
   parks: number;
-
-  @ApiProperty({ description: "Percentage of parks currently open" })
-  parksOpenPercentage: number;
 
   @ApiProperty({ description: "Number of attractions currently operating" })
   openAttractions: number;
 
-  @ApiProperty({ description: "Number of attractions currently closed" })
-  closedAttractions: number;
-
   @ApiProperty({ description: "Total number of attractions" })
   attractions: number;
-
-  @ApiProperty({ description: "Percentage of attractions currently open" })
-  attractionsOpenPercentage: number;
 
   @ApiProperty({ description: "Total number of shows" })
   shows: number;
@@ -148,25 +105,6 @@ export class GlobalCountsDto {
 
   @ApiProperty({ description: "Total historical queue data records" })
   queueDataRecords: number;
-
-  @ApiProperty({ description: "Total historical weather data records" })
-  weatherDataRecords: number;
-
-  @ApiProperty({ description: "Total park schedule entries" })
-  scheduleEntries: number;
-
-  @ApiProperty({
-    description: "Total restaurant live data records (including menus/hours)",
-  })
-  restaurantLiveDataRecords: number;
-
-  @ApiProperty({
-    description: "Total show live data records (including showtimes)",
-  })
-  showLiveDataRecords: number;
-
-  @ApiProperty({ description: "Total wait time prediction records" })
-  waitTimePredictions: number;
 
   @ApiProperty({
     description:
@@ -190,7 +128,4 @@ export class GlobalStatsDto {
 
   @ApiProperty({ type: AttractionStatsItemDto, nullable: true })
   shortestWaitRide: AttractionStatsItemDto | null;
-
-  @ApiProperty({ description: "Last updated timestamp" })
-  lastUpdated: string;
 }
