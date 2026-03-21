@@ -68,6 +68,7 @@ export class Park {
 
   // Geographic data (enriched via geocoding)
   @Column({ nullable: true })
+  @Index() // B-tree: GROUP BY / ORDER BY in geo queries
   continent: string;
 
   @Column({ nullable: true })
@@ -75,6 +76,7 @@ export class Park {
   continentSlug: string; // URL-safe: "north-america", "europe", "asia"
 
   @Column({ nullable: true })
+  @Index() // B-tree: equality + sort in search/geo queries
   country: string;
 
   @Column({ nullable: true, length: 2 })
@@ -96,6 +98,7 @@ export class Park {
   regionCode: string;
 
   @Column({ nullable: true })
+  @Index() // B-tree: equality + sort in search/geo queries
   city: string;
 
   @Column({ nullable: true })
