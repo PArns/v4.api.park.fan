@@ -8,22 +8,11 @@ import { InfluencingHoliday } from "./schedule-item.dto";
  * Calendar Metadata
  */
 export class CalendarMeta {
-  @ApiProperty({ description: "Park ID (UUID)" })
-  parkId: string;
-
   @ApiProperty({ description: "Park slug" })
   slug: string;
 
   @ApiProperty({ description: "Park timezone (IANA format)" })
   timezone: string;
-
-  @ApiProperty({
-    description: "Timestamp when response was generated (ISO 8601)",
-  })
-  generatedAt: string;
-
-  @ApiProperty({ description: "Requested date range" })
-  requestRange: { from: string; to: string };
 }
 
 /**
@@ -137,17 +126,11 @@ export class CalendarDay {
   @ApiProperty()
   isToday: boolean;
 
-  @ApiProperty()
-  isTomorrow: boolean;
-
   @ApiProperty({ type: () => OperatingHours, required: false })
   hours?: OperatingHours;
 
   @ApiProperty()
   crowdLevel: CrowdLevel | "closed";
-
-  @ApiProperty({ required: false })
-  crowdScore?: number;
 
   @ApiProperty({ type: () => WeatherSummary, required: false })
   weather?: WeatherSummary;
@@ -173,18 +156,6 @@ export class CalendarDay {
 
   @ApiProperty({ type: () => [HourlyPrediction], required: false })
   hourly?: HourlyPrediction[];
-
-  @ApiProperty({ type: [String], required: false })
-  refurbishments?: string[];
-
-  @ApiProperty({ required: false })
-  recommendation?: string;
-
-  @ApiProperty({ type: [String], required: false })
-  advisoryKeys?: string[];
-
-  @ApiProperty({ type: () => [ShowTime], required: false })
-  showTimes?: ShowTime[];
 }
 
 /**

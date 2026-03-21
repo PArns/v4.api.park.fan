@@ -4,52 +4,7 @@ import { WeatherItemDto } from "./weather-item.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
-import { ParkDailyPredictionDto } from "./park-daily-prediction.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
-
-export class ParkPredictioAccuracyDto {
-  @ApiProperty({
-    description: "Accuracy badge",
-    enum: ["excellent", "good", "fair", "poor", "insufficient_data"],
-  })
-  badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
-
-  @ApiProperty({ description: "Last 30 days statistics" })
-  last30Days: {
-    comparedPredictions: number;
-    totalPredictions: number;
-  };
-
-  @ApiProperty({ description: "Message" })
-  message?: string;
-}
-
-export class ParkAttractionPredictionDto {
-  @ApiProperty({ description: "Predicted time (ISO 8601)" })
-  predictedTime: string;
-
-  @ApiProperty({ description: "Predicted wait time in minutes" })
-  predictedWaitTime: number;
-
-  @ApiProperty({
-    description: "Confidence percentage",
-    required: false,
-    nullable: true,
-  })
-  confidencePercentage: number | null;
-
-  @ApiProperty({
-    description: "Current actual wait time (if deviation detected)",
-    required: false,
-  })
-  currentWaitTime?: number;
-
-  @ApiProperty({
-    description: "Whether a deviation from prediction was detected",
-    required: false,
-  })
-  deviationDetected?: boolean;
-}
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -89,21 +44,6 @@ export class ParkAttractionDto {
     required: false,
   })
   effectiveStatus?: string;
-
-  @ApiProperty({
-    description: "Hourly ML predictions",
-    type: [ParkAttractionPredictionDto],
-    required: false,
-  })
-  hourlyForecast?: ParkAttractionPredictionDto[];
-
-  @ApiProperty({
-    description: "Prediction accuracy",
-    type: ParkPredictioAccuracyDto,
-    required: false,
-    nullable: true,
-  })
-  predictionAccuracy?: ParkPredictioAccuracyDto | null;
 
   @ApiProperty({
     description: "Crowd level badge",
@@ -177,6 +117,13 @@ export class ParkAttractionDto {
     required: false,
   })
   url?: string | null;
+
+  @ApiProperty({
+    description:
+      "Whether this is a headliner (top) attraction for this park, based on historical wait-time data",
+    required: false,
+  })
+  isHeadliner?: boolean;
 }
 
 export class ParkShowDto {
@@ -200,20 +147,8 @@ export class ParkShowDto {
 
   @ApiProperty({ description: "Showtimes", required: false })
   showtimes?: {
-    type: string;
     startTime: string;
-    endTime?: string;
   }[];
-
-  @ApiProperty({ description: "Operating hours", required: false })
-  operatingHours?: {
-    type: string;
-    startTime: string;
-    endTime: string;
-  }[];
-
-  @ApiProperty({ description: "Last updated", required: false })
-  lastUpdated?: string;
 }
 
 export class ParkRestaurantDto {
@@ -407,7 +342,6 @@ export class ParkWithAttractionsDto {
   @ApiProperty({ description: "Weather information", required: false })
   weather?: {
     current: WeatherItemDto | null;
-    forecast: WeatherItemDto[];
   };
 
   // Content
@@ -447,13 +381,6 @@ export class ParkWithAttractionsDto {
     type: [ScheduleItemDto],
   })
   schedule?: ScheduleItemDto[];
-
-  @ApiProperty({
-    description: "Daily crowd forecast for the next days",
-    required: false,
-    type: [ParkDailyPredictionDto],
-  })
-  crowdForecast?: ParkDailyPredictionDto[];
 
   @ApiProperty({
     description: "Next scheduled opening day",
@@ -512,7 +439,7 @@ export class ParkWithAttractionsDto {
             id: restaurant.id,
             name: restaurant.name,
             slug: restaurant.slug,
-            status: "CLOSED", // Default to ensure order
+            status: "CLOSED" as const,
             latitude:
               restaurant.latitude !== undefined ? restaurant.latitude : null,
             longitude:

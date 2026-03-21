@@ -11,7 +11,6 @@ import {
   CountryDto,
   CityDto,
   ParkReferenceDto,
-  AttractionReferenceDto,
 } from "./dto/geo-structure.dto";
 import { ParksService } from "../parks/parks.service";
 
@@ -24,7 +23,7 @@ import { ParksService } from "../parks/parks.service";
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
-  private readonly CACHE_KEY = "discovery:geo:structure:v2"; // v2: includes attractions
+  private readonly CACHE_KEY = "discovery:geo:structure:v3"; // v3: removed attractions[]
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
   private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes
@@ -65,7 +64,6 @@ export class DiscoveryService {
         countrySlug: Not(IsNull()),
         citySlug: Not(IsNull()),
       },
-      relations: ["attractions"],
       select: [
         "id",
         "name",
@@ -152,25 +150,15 @@ export class DiscoveryService {
         country.cities.push(city);
       }
 
-      // Add park reference with attractions
+      // Add park reference
       const parkBaseUrl = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
-
-      const attractions: AttractionReferenceDto[] = (park.attractions || [])
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((attraction) => ({
-          id: attraction.id,
-          name: attraction.name,
-          slug: attraction.slug,
-          url: `${parkBaseUrl}/${attraction.slug}`,
-        }));
 
       const parkRef: ParkReferenceDto = {
         id: park.id,
         name: park.name,
         slug: park.slug,
         url: parkBaseUrl,
-        attractions,
-        attractionCount: attractions.length,
+        attractionCount: 0, // Will be hydrated with live stats
         status: "CLOSED", // Default, will be hydrated
       };
       city.parks.push(parkRef);
@@ -188,27 +176,6 @@ export class DiscoveryService {
       }
     }
 
-    // Build final response
-    const totalAttractions = continents.reduce(
-      (sum, continent) =>
-        sum +
-        continent.countries.reduce(
-          (countrySum, country) =>
-            countrySum +
-            country.cities.reduce(
-              (citySum, city) =>
-                citySum +
-                city.parks.reduce(
-                  (parkSum, park) => parkSum + park.attractionCount,
-                  0,
-                ),
-              0,
-            ),
-          0,
-        ),
-      0,
-    );
-
     const structure: GeoStructureDto = {
       continents,
       continentCount: continents.length,
@@ -219,7 +186,7 @@ export class DiscoveryService {
         0,
       ),
       parkCount: parks.length,
-      attractionCount: totalAttractions,
+      attractionCount: 0, // Hydrated after live stats are applied
       generatedAt: new Date().toISOString(),
     };
 
@@ -284,20 +251,21 @@ export class DiscoveryService {
               park.status = stats.isOpen ? "OPERATING" : "CLOSED";
 
               // Hydrate Analytics
+              park.attractionCount = stats.totalAttractions;
               park.analytics = {
                 statistics: {
                   avgWaitTime: stats.avgWait,
                   // Optimistic Calculation: Total - Explicitly Closed (if status is OPERATING)
                   operatingAttractions:
-                    stats.isOpen && stats.explicitlyClosedCount !== undefined // Safety check
+                    stats.isOpen && stats.explicitlyClosedCount !== undefined
                       ? Math.max(
                           0,
-                          park.attractionCount - stats.explicitlyClosedCount,
+                          stats.totalAttractions - stats.explicitlyClosedCount,
                         )
                       : 0,
                   closedAttractions:
-                    stats.explicitlyClosedCount ?? park.attractionCount,
-                  totalAttractions: park.attractionCount,
+                    stats.explicitlyClosedCount ?? stats.totalAttractions,
+                  totalAttractions: stats.totalAttractions,
                 },
               };
 
@@ -356,7 +324,7 @@ export class DiscoveryService {
             : undefined;
 
         continentOpenCount += countryOpenCount;
-        continentTotalWait += continentTotalWait;
+        continentTotalWait += countryTotalWait;
         continentWaitCount += countryWaitCount;
       }
 
@@ -431,6 +399,7 @@ export class DiscoveryService {
         avgWait: number;
         operatingAttractions: number;
         explicitlyClosedCount: number;
+        totalAttractions: number;
         crowdLevel: number | null;
       }
     >
@@ -493,20 +462,21 @@ export class DiscoveryService {
         FROM latest_attraction_data lad
         GROUP BY lad."parkId"
       )
-      SELECT 
+      SELECT
         p.id,
         p."current_crowd_level",
-        CASE 
+        CASE
           -- If park has schedule: Use schedule-based logic
-          WHEN pws."parkId" IS NOT NULL THEN 
+          WHEN pws."parkId" IS NOT NULL THEN
             CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END
           -- If park has NO schedule: Use ride-based fallback
-          ELSE 
+          ELSE
             CASE WHEN COALESCE(stats.active_rides, 0) > 0 THEN true ELSE false END
         END as is_open,
         COALESCE(stats.avg_wait, 0) as avg_wait,
         COALESCE(stats.operating_count, 0) as operating_conf_count,
-        COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count
+        COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
+        (SELECT COUNT(*)::int FROM attractions a WHERE a."parkId" = p.id) as total_attractions
       FROM parks p
       LEFT JOIN park_schedules ps ON ps."parkId" = p.id
       LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
@@ -518,8 +488,9 @@ export class DiscoveryService {
       {
         isOpen: boolean;
         avgWait: number;
-        operatingAttractions: number; // This will now be dynamic in hydration
+        operatingAttractions: number;
         explicitlyClosedCount: number;
+        totalAttractions: number;
         crowdLevel: number | null;
       }
     >();
@@ -527,8 +498,9 @@ export class DiscoveryService {
       stats.set(row.id, {
         isOpen: row.is_open,
         avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait || 0)),
-        operatingAttractions: parseInt(row.operating_conf_count || "0", 10), // Keep raw count for fallback
+        operatingAttractions: parseInt(row.operating_conf_count || "0", 10),
         explicitlyClosedCount: parseInt(row.explicitly_closed_count || "0", 10),
+        totalAttractions: parseInt(row.total_attractions || "0", 10),
         crowdLevel: row.current_crowd_level
           ? parseFloat(row.current_crowd_level)
           : null,

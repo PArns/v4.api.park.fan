@@ -462,9 +462,42 @@ export class FavoritesService {
       }
 
       // Create DTO from integrated response with distance
-      // Trend is already included in integrated response from AttractionIntegrationService
+      // Strip fields not needed in the favorites list to reduce response size
       const dto: AttractionWithDistanceDto = {
         ...integrated,
+        // Strip heavy/unused fields
+        hourlyForecast: undefined,
+        forecasts: undefined,
+        predictionAccuracy: undefined,
+        effectiveStatus: undefined,
+        latitude: null,
+        longitude: null,
+        park: integrated.park
+          ? {
+              id: integrated.park.id,
+              name: integrated.park.name,
+              slug: integrated.park.slug,
+              timezone: integrated.park.timezone,
+              continent: null,
+              country: null,
+              city: null,
+            }
+          : null,
+        statistics: integrated.statistics
+          ? {
+              avgWaitToday: null,
+              peakWaitToday: integrated.statistics.peakWaitToday,
+              peakWaitTimestamp: null,
+              minWaitToday: null,
+              typicalWaitThisHour: null,
+              percentile95ThisHour: null,
+              currentVsTypical: null,
+              dataPoints: 0,
+              history: [],
+              timestamp: integrated.statistics.timestamp,
+            }
+          : integrated.statistics,
+        baseline: null,
         distance:
           userLocation && attraction.latitude && attraction.longitude
             ? Math.round(
@@ -478,7 +511,6 @@ export class FavoritesService {
                 ),
               )
             : null,
-        // Set URL if not already set and park is available
         url:
           integrated.url ||
           (attraction.park

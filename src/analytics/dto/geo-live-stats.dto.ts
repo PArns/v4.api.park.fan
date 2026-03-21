@@ -1,30 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 
 /**
- * City-level live statistics
- */
-export class CityLiveStatsDto {
-  @ApiProperty({
-    description: "City slug",
-    example: "orlando",
-  })
-  slug: string;
-
-  @ApiProperty({
-    description: "Number of currently open parks",
-    example: 5,
-  })
-  openParkCount: number;
-
-  @ApiProperty({
-    description: "Average wait time across all attractions (minutes)",
-    example: 45,
-    nullable: true,
-  })
-  averageWaitTime: number | null;
-}
-
-/**
  * Country-level live statistics
  */
 export class CountryLiveStatsDto {
@@ -39,19 +15,6 @@ export class CountryLiveStatsDto {
     example: 15,
   })
   openParkCount: number;
-
-  @ApiProperty({
-    description: "Average wait time across all attractions (minutes)",
-    example: 42,
-    nullable: true,
-  })
-  averageWaitTime: number | null;
-
-  @ApiProperty({
-    description: "City-level statistics",
-    type: [CityLiveStatsDto],
-  })
-  cities: CityLiveStatsDto[];
 }
 
 /**
@@ -71,13 +34,6 @@ export class ContinentLiveStatsDto {
   openParkCount: number;
 
   @ApiProperty({
-    description: "Average wait time across all attractions (minutes)",
-    example: 38,
-    nullable: true,
-  })
-  averageWaitTime: number | null;
-
-  @ApiProperty({
     description: "Country-level statistics",
     type: [CountryLiveStatsDto],
   })
@@ -93,10 +49,4 @@ export class GeoLiveStatsDto {
     type: [ContinentLiveStatsDto],
   })
   continents: ContinentLiveStatsDto[];
-
-  @ApiProperty({
-    description: "Timestamp when statistics were calculated",
-    example: "2025-12-26T15:30:00.000Z",
-  })
-  generatedAt: string;
 }

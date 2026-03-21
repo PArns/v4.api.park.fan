@@ -1,6 +1,4 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
@@ -18,7 +16,6 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
-import { AttractionAccuracyStats } from "../../ml/entities/attraction-accuracy-stats.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
@@ -80,8 +77,6 @@ export class ParkIntegrationService {
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-    @InjectRepository(AttractionAccuracyStats)
-    private readonly accuracyStatsRepository: Repository<AttractionAccuracyStats>,
   ) {}
 
   /**
@@ -176,21 +171,15 @@ export class ParkIntegrationService {
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 7),
       this.queueDataService.findCurrentStatusByPark(park.id),
-      Promise.all([
-        this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
-        this.mlService
-          .getParkPredictions(park.id, "daily", 16)
-          .catch(() => null),
-      ]),
+      this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
       this.parksService.getNextSchedule(park.id).catch(() => null),
     ]);
-    const [hourlyRes, dailyRes] = mlPredictionsResult;
+    const hourlyRes = mlPredictionsResult;
 
     dto.weather = {
       current: weatherData.current
         ? WeatherItemDto.fromEntity(weatherData.current)
         : null,
-      forecast: weatherData.forecast.map((w) => WeatherItemDto.fromEntity(w)),
     };
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 
@@ -361,10 +350,7 @@ export class ParkIntegrationService {
     }
 
     // ML Predictions already fetched in parallel above - process results
-    // IMPORTANT: Daily predictions limited to 16 days (like weather forecast)
     const hourlyPredictions: Record<string, PredictionDto[]> = {};
-    let dailyPredictions: import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] =
-      [];
 
     // Filter hourly predictions:
     // - If park OPERATING: Show today's hourly predictions
@@ -419,12 +405,6 @@ export class ParkIntegrationService {
       }
     }
 
-    if (dailyRes && dailyRes.predictions) {
-      dailyPredictions = this.aggregateDailyPredictions(dailyRes.predictions);
-    }
-
-    dto.crowdForecast = dailyPredictions;
-
     // Attach next schedule
     if (nextSchedule) {
       dto.nextSchedule = {
@@ -453,21 +433,18 @@ export class ParkIntegrationService {
         park.timezone,
       );
 
-      // Batch fetch P50s (prefer) and P90s (fallback), then accuracy, deviation, stats, history, trends
+      // Batch fetch P50s (prefer) and P90s (fallback), then deviation, stats, history, trends, headliners
       const [
         attractionP50s,
         attractionP90s,
-        accuracyStats,
         deviationMap,
         attractionStatsMap,
         attractionHistoryMap,
         trendsMap,
+        headlinerIds,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP50s(attractionIds),
         this.analyticsService.getBatchAttractionP90s(attractionIds),
-        this.accuracyStatsRepository.find({
-          where: { attractionId: In(attractionIds) },
-        }),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(
           attractionIds,
@@ -478,26 +455,8 @@ export class ParkIntegrationService {
           startTime,
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
+        this.analyticsService.getHeadlinerAttractionIds(park.id),
       ]);
-
-      // Build accuracy map from pre-aggregated stats
-      const accuracyMap = new Map<
-        string,
-        {
-          badge: string;
-          comparedPredictions: number;
-          totalPredictions: number;
-          message: string | null;
-        }
-      >();
-      for (const stat of accuracyStats) {
-        accuracyMap.set(stat.attractionId, {
-          badge: stat.badge,
-          comparedPredictions: stat.comparedPredictions,
-          totalPredictions: stat.totalPredictions,
-          message: stat.message,
-        });
-      }
 
       for (const attraction of dto.attractions) {
         totalAttractionsCount++;
@@ -560,15 +519,6 @@ export class ParkIntegrationService {
           mlPreds,
           deviationFlag,
         );
-
-        attraction.hourlyForecast = enrichedPreds.map((p) => ({
-          predictedTime: p.predictedTime,
-          predictedWaitTime: p.predictedWaitTime,
-          confidencePercentage: p.confidenceAdjusted ?? p.confidence,
-          trend: p.trend,
-          currentWaitTime: p.currentWaitTime,
-          deviationDetected: p.deviationDetected,
-        }));
 
         // Determine crowd level for this attraction
         let crowdLevel: CrowdLevel | "closed" = "closed";
@@ -709,26 +659,6 @@ export class ParkIntegrationService {
           attraction.statistics = null;
         }
 
-        // Attach Prediction Accuracy (from pre-aggregated stats table)
-        const accuracy = accuracyMap.get(attraction.id);
-        if (accuracy) {
-          attraction.predictionAccuracy = {
-            badge: accuracy.badge as
-              | "excellent"
-              | "good"
-              | "fair"
-              | "poor"
-              | "insufficient_data",
-            last30Days: {
-              comparedPredictions: accuracy.comparedPredictions,
-              totalPredictions: accuracy.totalPredictions,
-            },
-            message: accuracy.message ?? undefined,
-          };
-        } else {
-          attraction.predictionAccuracy = null;
-        }
-
         // Set URL using geo route (if park has geo data)
         // The park entity should have geo data since it was loaded via findByGeographicPath
         if (park.continentSlug && park.countrySlug && park.citySlug) {
@@ -738,6 +668,9 @@ export class ParkIntegrationService {
           // This handles cases where park entity might not have geo data loaded
           attraction.url = null;
         }
+
+        // Mark headliner attractions
+        attraction.isHeadliner = headlinerIds.has(attraction.id);
       }
     }
 
@@ -764,49 +697,32 @@ export class ParkIntegrationService {
       for (const show of dto.shows || []) {
         const liveData = showLiveDataMap.get(show.id);
         if (liveData) {
-          // Keep operatingHours always (general schedule info)
-          show.operatingHours = liveData.operatingHours || [];
-          show.showtimes = liveData.showtimes || [];
-
           // If park is OPERATING, use live status. If CLOSED, force CLOSED but show times.
           show.status = dto.status === "OPERATING" ? liveData.status : "CLOSED";
-          show.lastUpdated = liveData.lastUpdated?.toISOString();
+
+          const rawShowtimes = liveData.showtimes || [];
 
           // FIX: Force project dates to Today if Operating (Fallback for ShowsService)
-          if (
-            show.status === "OPERATING" &&
-            show.showtimes &&
-            show.showtimes.length > 0
-          ) {
-            const now = new Date();
-            const todayStr = formatInParkTimezone(now, park.timezone);
+          const projectedShowtimes =
+            show.status === "OPERATING" && rawShowtimes.length > 0
+              ? rawShowtimes.map((st) => {
+                  if (!st.startTime) return st;
+                  const todayStr = formatInParkTimezone(
+                    new Date(),
+                    park.timezone,
+                  );
+                  const currentDatePart = st.startTime.substring(0, 10);
+                  return currentDatePart !== todayStr
+                    ? { startTime: todayStr + st.startTime.substring(10) }
+                    : { startTime: st.startTime };
+                })
+              : rawShowtimes.map((st) => ({ startTime: st.startTime }));
 
-            show.showtimes = show.showtimes.map((st) => {
-              if (!st.startTime) return st;
-
-              // Project to Today
-              const iso = st.startTime;
-              const currentDatePart = iso.substring(0, 10);
-
-              if (currentDatePart !== todayStr) {
-                const newIso = todayStr + iso.substring(10);
-                return {
-                  ...st,
-                  startTime: newIso,
-                  endTime: st.endTime
-                    ? todayStr + st.endTime.substring(10)
-                    : st.endTime,
-                };
-              }
-              return st;
-            });
-          }
+          show.showtimes = projectedShowtimes;
         } else {
           // No live data available
           show.showtimes = [];
-          show.operatingHours = [];
           show.status = "CLOSED";
-          show.lastUpdated = undefined;
         }
       }
 
