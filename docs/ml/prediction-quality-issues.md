@@ -103,6 +103,87 @@ The cap was too high (40 min), allowing `volatility_7d` to saturate and dominate
 
 ---
 
+## 4. groupby().rolling().values Row-Misalignment (2026-03-29)
+
+### Symptom
+Features `avg_wait_last_1h`, `avg_wait_last_24h`, `rolling_avg_7d`, `rolling_avg_weekday`, `rolling_avg_weekend`, `precipitation_last_3h` all showed ~0% feature importance despite being logically important. Measured correlation of `avg_wait_last_1h` with `waitTime` was **0.02** (should be ~0.86).
+
+### Root Cause
+
+```python
+# BUGGY — df sorted by timestamp, groupby result in (attractionId, timestamp) order
+df = df.sort_values("timestamp")
+df["avg_wait_last_1h"] = (
+    df.set_index("timestamp")
+    .groupby("attractionId")["waitTime"]
+    .rolling("1h", ...)
+    .mean()
+    .reset_index(level=0, drop=True)
+    .values  # positional assignment → wrong rows
+)
+```
+
+`groupby().rolling()` returns results ordered by `(groupKey, timestamp)`. But `df` was in `timestamp` order. `.values` strips the index → positional assignment → values mapped to completely wrong attraction-row combinations → pure noise for the model.
+
+### Fix
+Sort `df` by `(groupKey, timestamp)` **before** the rolling operation:
+
+```python
+# add_historical_features() — group key is attractionId
+df = df.sort_values(["attractionId", "timestamp"])   # was: sort_values("timestamp")
+
+# add_weather_features() — group key is parkId; restore order afterwards
+original_index = df.index
+df = df.sort_values(["parkId", "timestamp"])
+# ... rolling computation ...
+df = df.loc[original_index]
+```
+
+### Rule for Future Features
+Any `groupby(key).rolling().values` positional assignment requires `df` sorted by `[key, "timestamp"]` first. Patterns that are **safe without explicit sort**: `groupby().transform()`, `groupby().apply()` with `index=group.index`, `.loc[]`-based assignment.
+
+---
+
+## 5. BullMQ Stalled Repeat Jobs → Empty Baselines → Underprediction (2026-03-29)
+
+### Symptom
+Predictions for busy days were massively wrong (50 min actual → 25 min predicted). Frontend showed "Need at least 10 compared predictions (currently 0)" for all attractions.
+
+### Root Cause (cascading)
+1. BullMQ `generate-hourly`, `compare-accuracy`, `calculate-percentiles`, `p50-baseline` cron jobs stalled in early January 2026 and were never re-scheduled (exhausted retries, Bull removed them from repeat set)
+2. `attraction_p50_baselines` table → **empty for 83 days**
+3. NestJS could not compute `park_occupancy_pct` (= current_avg / p50_baseline × 100) → passed wrong/null value to ML service
+4. ML service fell back to historical DOW×hour mean for occupancy → lost "today is a busy day" signal
+5. Model predicted average-day wait times regardless of current crowd level
+
+`park_occupancy_pct` has **17% feature importance** — the second most important feature.
+
+### Fix
+**Operational:** Clear stale Redis keys + restart API container.
+**Code (`src/queues/services/queue-scheduler.service.ts`):** `hasRepeatableJob()` now auto-detects and removes overdue repeat entries (> 2 min past due) on every boot. Added `aggregate-stats` and `cleanup-old` as daily crons.
+
+---
+
+## 6. attraction_type Feature Always NULL (2026-03-29)
+
+`attractions.attractionType` is 100% NULL in the DB (all 5,568 attractions). Feature was filled with constant `"UNKNOWN"` → zero variance → 0% importance → dead weight. Removed from `get_feature_columns()` and `get_categorical_features()`. Model now has 63 features (was 64).
+
+**If `attractionType` is ever populated** (e.g., COASTER, DARK_RIDE, FLAT), add it back — it would provide strong cross-park generalization for new attractions.
+
+---
+
+## 7. avg_wait_last_1h Default Mismatch (2026-03-29)
+
+Training fallback chain: rolling 1h → wait_lag_24h → wait_lag_1w → **fill 0**.
+Inference default: **30.0** (hardcoded in `predict.py`).
+
+Mismatch meant the model never learned to use this feature meaningfully in inference context.
+**Fix:** Changed inference default from `30.0` → `0.0` in `predict.py` line ~933.
+
+Note: despite correlation fix (Bug #4) and default fix, `avg_wait_last_1h` remains ~0% importance in the 95-day training window because `wait_time_velocity`, `trend_7d`, and `volatility_*` already capture the same short-term signal more efficiently.
+
+---
+
 ## Impact Summary
 
 | Feature | Status |
@@ -113,6 +194,10 @@ The cap was too high (40 min), allowing `volatility_7d` to saturate and dominate
 | `rolling_avg_weekday` / `rolling_avg_weekend` | Active in training + inference; **effective from next training run** |
 | `avg_wait_same_dow_4w` | Active in training + inference; **effective from next training run** |
 | `VOLATILITY_CAP_STD_MINUTES` 40 → 15 | **Live** in inference; **effective in training from next run** |
+| `groupby().rolling().values` sort fix | **Live** (server patched 2026-03-29); **in repo, deploy pending** |
+| BullMQ stall-recovery guard | **In repo, deploy pending** |
+| `attraction_type` removed (100% NULL) | **Live** (server patched 2026-03-29); **in repo, deploy pending** |
+| `avg_wait_last_1h` default 30→0 | **Live** (server patched 2026-03-29); **in repo, deploy pending** |
 
 ---
 

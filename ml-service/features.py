@@ -11,7 +11,6 @@ from holiday_utils import normalize_region_code, calculate_holiday_info
 from config import get_settings
 from percentile_features import add_percentile_features
 from attraction_features import (
-    add_attraction_type_feature,
     add_park_attraction_count_feature,
 )
 
@@ -219,7 +218,11 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
         # For training: use rolling window on historical data
         # For inference: will be provided via feature_context
         if "timestamp" in df.columns:
-            df_sorted = df.sort_values("timestamp").set_index("timestamp")
+            # Sort by (parkId, timestamp) so that groupby().rolling().values aligns
+            # correctly with df rows — groupby produces (parkId, timestamp) order.
+            original_index = df.index
+            df = df.sort_values(["parkId", "timestamp"])
+            df_sorted = df.set_index("timestamp")
             df["precipitation_last_3h"] = (
                 df_sorted.groupby("parkId")["precipitation"]
                 .rolling("3h", closed="left", min_periods=1)
@@ -227,6 +230,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
                 .reset_index(level=0, drop=True)
                 .values
             )
+            df = df.loc[original_index]  # restore original row order
             df["precipitation_last_3h"] = df["precipitation_last_3h"].fillna(0)
         else:
             df["precipitation_last_3h"] = 0
@@ -513,8 +517,12 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in df.columns:
         return df
 
-    # distinct sort for merge_asof
-    df = df.sort_values("timestamp")
+    # Sort by (attractionId, timestamp) so that groupby().rolling().values assignments
+    # align correctly — groupby produces results in (attractionId, timestamp) order,
+    # so df must be in the same order for positional .values assignment.
+    # merge_asof calls below re-sort internally and use pandas index alignment, so they
+    # are unaffected by this order change.
+    df = df.sort_values(["attractionId", "timestamp"])
 
     # 1. Time-based Rolling Features
     # Must use index for time-based rolling
@@ -1712,7 +1720,6 @@ def engineer_features(
 
     # Attraction and Park features (using available data only)
     attraction_start = time_module.time()
-    df = add_attraction_type_feature(df)
     df = add_park_attraction_count_feature(df, parks_metadata)
     print(f"   Attraction features: {time_module.time() - attraction_start:.2f}s")
 
@@ -1830,8 +1837,7 @@ def get_feature_columns() -> List[str]:
         "is_park_open",
         "has_special_event",
         "has_extra_hours",
-        # Attraction features (NEW - using available data)
-        "attraction_type",  # From attractions.attractionType (nullable, defaults to 'UNKNOWN')
+        # Attraction features
         "park_attraction_count",  # Number of attractions in park (indicator of park size)
         # Historical features
         "avg_wait_last_24h",
@@ -1868,4 +1874,4 @@ def get_feature_columns() -> List[str]:
 
 def get_categorical_features() -> List[str]:
     """Return list of categorical feature names"""
-    return ["parkId", "attractionId", "weatherCode", "attraction_type"]
+    return ["parkId", "attractionId", "weatherCode"]

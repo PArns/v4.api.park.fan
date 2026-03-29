@@ -930,7 +930,7 @@ def create_prediction_features(
 
     # Initialize with defaults
     df["avg_wait_last_24h"] = 30.0
-    df["avg_wait_last_1h"] = 30.0
+    df["avg_wait_last_1h"] = 0.0
     df["avg_wait_same_hour_last_week"] = 35.0
     df["avg_wait_same_hour_last_month"] = 35.0  # NEW: Monthly trend
     df["rolling_avg_7d"] = 32.0  # Will be overwritten with DB-computed values
@@ -1284,11 +1284,9 @@ def create_prediction_features(
 
     # Add attraction and park features (using available data only)
     from attraction_features import (
-        add_attraction_type_feature,
         add_park_attraction_count_feature,
     )
 
-    df = add_attraction_type_feature(df)
     df = add_park_attraction_count_feature(df, parks_metadata)
 
     # Phase 2: Add real-time context features
