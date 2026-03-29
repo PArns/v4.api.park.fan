@@ -245,6 +245,11 @@ export class MLTrainingProcessor {
    * - Older inactive models (both files and DB entries)
    * - Orphaned model files without DB entries
    */
+  @Process("cleanup-models")
+  async handleCleanupModels(_job: Job): Promise<void> {
+    await this.cleanupOldModels();
+  }
+
   private async cleanupOldModels(): Promise<void> {
     try {
       this.logger.log("🧹 Cleaning up old models...");
@@ -254,19 +259,26 @@ export class MLTrainingProcessor {
         order: { trainedAt: "DESC" },
       });
 
-      if (allModels.length <= 3) {
+      // Keep models from the last 3 days; always keep the active model
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 3);
+
+      const modelsToKeep = allModels.filter(
+        (m) => m.isActive || new Date(m.trainedAt) >= cutoff,
+      );
+      const modelsToDelete = allModels.filter(
+        (m) => !m.isActive && new Date(m.trainedAt) < cutoff,
+      );
+
+      if (modelsToDelete.length === 0) {
         this.logger.log(
-          `   Skipping cleanup: Only ${allModels.length} model(s) exist`,
+          `   Skipping cleanup: All ${allModels.length} model(s) are within 3 days`,
         );
         return;
       }
 
-      // Keep: active model + last 2 inactive = top 3
-      const modelsToKeep = allModels.slice(0, 3);
-      const modelsToDelete = allModels.slice(3);
-
       this.logger.log(
-        `   Keeping ${modelsToKeep.length} models, deleting ${modelsToDelete.length}`,
+        `   Keeping ${modelsToKeep.length} models (last 3 days), deleting ${modelsToDelete.length}`,
       );
 
       let deletedFiles = 0;

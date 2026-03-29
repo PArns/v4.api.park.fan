@@ -239,6 +239,25 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Model Cleanup: Daily at 7am (delete models older than 3 days)
+    const hasModelCleanupCron = await this.hasRepeatableJob(
+      this.mlTrainingQueue,
+      "ml-model-cleanup-cron",
+    );
+
+    if (!hasModelCleanupCron) {
+      await this.mlTrainingQueue.add(
+        "cleanup-models",
+        {},
+        {
+          repeat: {
+            cron: "0 7 * * *", // Daily at 7am
+          },
+          jobId: "ml-model-cleanup-cron",
+        },
+      );
+    }
+
     // Prediction Accuracy: Every 5 minutes (Phase 5.6)
     const hasPredictionAccuracyCron = await this.hasRepeatableJob(
       this.predictionAccuracyQueue,
