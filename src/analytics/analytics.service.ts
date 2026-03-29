@@ -109,6 +109,10 @@ export class AnalyticsService {
    */
   async getEffectiveStartTime(parkId: string, timezone: string): Promise<Date> {
     const todayStr = getCurrentDateInTimezone(timezone);
+    const cacheKey = `analytics:effective_start:${parkId}:${todayStr}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return new Date(cached);
+
     const schedule = await this.scheduleEntryRepository.findOne({
       where: {
         parkId,
@@ -118,11 +122,12 @@ export class AnalyticsService {
       order: { openingTime: "ASC" },
     });
 
-    if (schedule?.openingTime) {
-      return schedule.openingTime;
-    }
-
-    return getStartOfDayInTimezone(timezone);
+    const result = schedule?.openingTime ?? getStartOfDayInTimezone(timezone);
+    // Use short TTL for the midnight fallback so a schedule sync within the hour is picked up quickly.
+    // Use full TTL_SCHEDULE once a real opening time is known (it won't change during the day).
+    const ttl = schedule?.openingTime ? this.TTL_SCHEDULE : this.TTL_REALTIME;
+    await this.redis.set(cacheKey, result.toISOString(), "EX", ttl);
+    return result;
   }
 
   /**
@@ -1943,45 +1948,65 @@ export class AnalyticsService {
     queueType: string = "STANDBY",
     currentSpotWait?: number | null,
   ): Promise<import("./types/analytics-response.type").WaitTimeTrend> {
-    const now = new Date();
-    const threeHoursAgo = new Date(now.getTime() - 180 * 60 * 1000);
-    const twoHoursAgo = new Date(now.getTime() - 120 * 60 * 1000);
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    // Cache only the historical bucket averages (slow-changing, shared across callers).
+    // computeTrend is always run live because it depends on currentSpotWait which
+    // varies per caller and must not bleed between cached results.
+    const bucketCacheKey = `analytics:trend:buckets:${attractionId}:${queueType}`;
+    const cachedBuckets = await this.redis.get(bucketCacheKey);
 
-    // Optimized: Single query using time buckets
-    const result = await this.queueDataRepository.query(
-      `
-      SELECT
-        CASE
-          WHEN qd.timestamp >= $4 THEN 1 -- Last 1h (Recent)
-          WHEN qd.timestamp >= $3 AND qd.timestamp < $4 THEN 2 -- 1h-2h ago (Previous)
-          WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 3 -- 2h-3h ago (Previous Previous)
-        END as bucket,
-        AVG(qd."waitTime") as avg_wait
-      FROM queue_data qd
-      WHERE qd."attractionId" = $1
-        AND qd.timestamp >= $2
-        AND qd.status = 'OPERATING'
-        AND qd."waitTime" IS NOT NULL
-        AND qd."queueType" = $5
-      GROUP BY bucket
-    `,
-      [attractionId, threeHoursAgo, twoHoursAgo, oneHourAgo, queueType],
-    );
+    let avgLastHour: number | null;
+    let avgTwoToOne: number | null;
+    let avgThreeToTwo: number | null;
 
-    const buckets: Record<number, number> = {};
-    for (const row of result) {
-      if (row.bucket && row.avg_wait) {
-        buckets[row.bucket] = parseFloat(row.avg_wait);
+    if (cachedBuckets) {
+      ({ avgLastHour, avgTwoToOne, avgThreeToTwo } = JSON.parse(cachedBuckets));
+    } else {
+      const now = new Date();
+      const threeHoursAgo = new Date(now.getTime() - 180 * 60 * 1000);
+      const twoHoursAgo = new Date(now.getTime() - 120 * 60 * 1000);
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+      // Optimized: Single query using time buckets
+      const result = await this.queueDataRepository.query(
+        `
+        SELECT
+          CASE
+            WHEN qd.timestamp >= $4 THEN 1 -- Last 1h (Recent)
+            WHEN qd.timestamp >= $3 AND qd.timestamp < $4 THEN 2 -- 1h-2h ago (Previous)
+            WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 3 -- 2h-3h ago (Previous Previous)
+          END as bucket,
+          AVG(qd."waitTime") as avg_wait
+        FROM queue_data qd
+        WHERE qd."attractionId" = $1
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."queueType" = $5
+        GROUP BY bucket
+      `,
+        [attractionId, threeHoursAgo, twoHoursAgo, oneHourAgo, queueType],
+      );
+
+      const buckets: Record<number, number> = {};
+      for (const row of result) {
+        if (row.bucket && row.avg_wait) {
+          buckets[row.bucket] = parseFloat(row.avg_wait);
+        }
       }
+
+      avgLastHour = buckets[1] || null;
+      avgTwoToOne = buckets[2] || null;
+      avgThreeToTwo = buckets[3] || null;
+
+      await this.redis.set(
+        bucketCacheKey,
+        JSON.stringify({ avgLastHour, avgTwoToOne, avgThreeToTwo }),
+        "EX",
+        this.TTL_REALTIME,
+      );
     }
 
-    const avgLastHour = buckets[1] || null;
-    const avgTwoToOne = buckets[2] || null;
-    const avgThreeToTwo = buckets[3] || null;
-
     // Not enough data
-    // If we have no recent history, and no spot wait, we can't determine trend
     if (
       avgLastHour === null ||
       (avgTwoToOne === null && currentSpotWait === undefined)
@@ -1994,7 +2019,7 @@ export class AnalyticsService {
       };
     }
 
-    // Calculate change rate (minutes per hour - MOMENTUM)
+    // Always compute trend live — depends on currentSpotWait which must not be cached
     const changeRate =
       avgTwoToOne !== null && avgLastHour !== null
         ? avgLastHour - avgTwoToOne
@@ -2016,7 +2041,7 @@ export class AnalyticsService {
 
     return {
       trend,
-      changeRate: Math.round(changeRate * 10) / 10, // Round to 1 decimal
+      changeRate: Math.round(changeRate * 10) / 10,
       recentAverage: avgLastHour ? roundToNearest5Minutes(avgLastHour) : null,
       previousAverage: avgTwoToOne ? roundToNearest5Minutes(avgTwoToOne) : null,
     };

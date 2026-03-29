@@ -159,34 +159,42 @@ export class LocationService {
     parkId: string,
     userLocation: GeoCoordinate,
   ): Promise<NearbyRidesDto> {
-    // Get park details
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-    });
+    // Fetch park and attractions in parallel
+    const [park, attractions] = await Promise.all([
+      this.parkRepository.findOne({ where: { id: parkId } }),
+      this.attractionRepository.find({ where: { parkId } }),
+    ]);
 
     if (!park) {
       throw new Error(`Park ${parkId} not found`);
     }
 
-    // Get all attractions in the park
-    const attractions = await this.attractionRepository.find({
-      where: { parkId },
-    });
+    const attractionIds = attractions.map((a) => a.id);
 
-    const startTime = await this.analyticsService.getEffectiveStartTime(
-      park.id,
-      park.timezone,
-    );
-    // Get park status, analytics, and schedules
-    const [statusMap, parkAnalytics, todaySchedule, nextSchedule] =
-      await Promise.all([
-        this.parksService.getBatchParkStatus([parkId]),
-        this.analyticsService
-          .getParkStatistics(parkId, park.timezone, startTime)
-          .catch(() => null),
-        this.parksService.getTodaySchedule(parkId).catch(() => []),
-        this.parksService.getNextSchedule(parkId).catch(() => null),
-      ]);
+    // Batch: fetch all independent data in parallel
+    const [
+      statusMap,
+      startTime,
+      todaySchedule,
+      nextSchedule,
+      latestQueueData,
+      p50Baselines,
+      p90Baselines,
+      analyticsMap,
+    ] = await Promise.all([
+      this.parksService.getBatchParkStatus([parkId]),
+      this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
+      this.parksService.getTodaySchedule(parkId).catch(() => []),
+      this.parksService.getNextSchedule(parkId).catch(() => null),
+      this.getLatestQueueData(attractionIds),
+      this.analyticsService.getBatchAttractionP50s(attractionIds),
+      this.analyticsService.getBatchAttractionP90s(attractionIds),
+      this.analyticsService.getBatchAttractionPercentilesToday(attractionIds),
+    ]);
+
+    const parkAnalytics = await this.analyticsService
+      .getParkStatistics(parkId, park.timezone, startTime)
+      .catch(() => null);
 
     const parkStatus = statusMap.get(parkId) || "CLOSED";
 
@@ -203,22 +211,6 @@ export class LocationService {
       })),
       userLocation,
     );
-
-    // Get latest queue data for all attractions (batch query)
-    const attractionIds = attractions.map((a) => a.id);
-    const latestQueueData = await this.getLatestQueueData(attractionIds);
-
-    // Batch-fetch P50 baselines for crowd level calculation
-    const p50Baselines =
-      await this.analyticsService.getBatchAttractionP50s(attractionIds);
-    const p90Baselines =
-      await this.analyticsService.getBatchAttractionP90s(attractionIds);
-
-    // Batch-fetch analytics for all attractions at once
-    const analyticsMap =
-      await this.analyticsService.getBatchAttractionPercentilesToday(
-        attractionIds,
-      );
 
     // Build ride DTOs (no async needed inside map)
     const rides: RideWithDistanceDto[] = attractionsWithDistance.map(
@@ -479,21 +471,6 @@ export class LocationService {
    * @private
    */
   private async batchFetchSchedules(parkIds: string[]) {
-    const [todayResults, nextResults] = await Promise.all([
-      Promise.all(
-        parkIds.map((id) =>
-          this.parksService.getTodaySchedule(id).catch(() => []),
-        ),
-      ),
-      Promise.all(
-        parkIds.map((id) =>
-          this.parksService.getNextSchedule(id).catch(() => null),
-        ),
-      ),
-    ]);
-    return {
-      today: new Map(parkIds.map((id, i) => [id, todayResults[i]])),
-      next: new Map(parkIds.map((id, i) => [id, nextResults[i]])),
-    };
+    return this.parksService.getBatchSchedules(parkIds);
   }
 }

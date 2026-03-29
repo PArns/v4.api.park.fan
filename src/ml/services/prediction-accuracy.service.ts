@@ -1,9 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThan } from "typeorm";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * PredictionAccuracyService
@@ -18,6 +20,8 @@ import { QueueData } from "../../queue-data/entities/queue-data.entity";
 export class PredictionAccuracyService {
   private readonly logger = new Logger(PredictionAccuracyService.name);
 
+  private readonly TTL_ACCURACY_BADGE = 60 * 60; // 1 hour - badge doesn't change frequently
+
   constructor(
     @InjectRepository(PredictionAccuracy)
     private accuracyRepository: Repository<PredictionAccuracy>,
@@ -25,6 +29,7 @@ export class PredictionAccuracyService {
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /**
@@ -586,13 +591,17 @@ export class PredictionAccuracyService {
     };
     message?: string;
   }> {
+    const cacheKey = `accuracy:badge:${attractionId}:${days}d`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const stats = await this.getAttractionAccuracyStats(attractionId, days);
     const badgeInfo = this.calculateAccuracyBadge(
       stats.averageAbsoluteError,
       stats.comparedPredictions,
     );
 
-    return {
+    const result = {
       badge: badgeInfo.badge,
       last30Days: {
         mae: stats.averageAbsoluteError,
@@ -603,6 +612,13 @@ export class PredictionAccuracyService {
       },
       message: badgeInfo.message,
     };
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(result),
+      "EX",
+      this.TTL_ACCURACY_BADGE,
+    );
+    return result;
   }
 
   /**
