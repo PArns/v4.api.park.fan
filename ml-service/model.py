@@ -304,7 +304,6 @@ class WaitTimeModel:
             "has_special_event": 0,
             "has_extra_hours": 0,
             # Attraction features
-            "attraction_type": "UNKNOWN",  # Categorical
             "park_attraction_count": 0,
             # Historical features
             "avg_wait_last_24h": 0.0,
