@@ -410,7 +410,13 @@ export class CalendarService {
     const maxScheduleDate =
       schedules.length > 0
         ? formatInParkTimezone(
-            new Date(Math.max(...schedules.map((s) => s.date.getTime()))),
+            new Date(
+              Math.max(
+                ...schedules.map((s) =>
+                  (typeof s.date === "string" ? parseISO(s.date) : s.date).getTime(),
+                ),
+              ),
+            ),
             park.timezone,
           )
         : null;

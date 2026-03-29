@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 @Entity("wait_time_predictions")
 @Index(["attractionId", "predictedTime"])
 @Index(["predictionType", "createdAt"])
+@Index(["attractionId", "predictionType", "createdAt"]) // getStoredPredictions: WHERE attractionId=X AND predictionType=Y AND createdAt>=Z
 @Index(["modelVersion"])
 export class WaitTimePrediction {
   // Composite Primary Key (required for TimescaleDB)

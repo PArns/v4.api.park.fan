@@ -107,15 +107,60 @@ export class AttractionIntegrationService {
     // Start with base DTO
     const dto = AttractionResponseDto.fromEntity(attraction);
 
-    // Fetch current queue data (all queue types)
-    // Uses park opening hours to determine valid data cutoff
-    // Falls back to 6 hours if no schedule available
-    const queueData = await this.queueDataService.findCurrentStatusByAttraction(
-      attraction.id,
-    );
+    // --- BATCH 1: Fire all independent async operations in parallel ---
+    const [
+      queueData,
+      forecasts,
+      park,
+      mlPredictionsRaw,
+      parkStatusMap,
+      predictionAccuracyResult,
+    ] = await Promise.all([
+      this.queueDataService.findCurrentStatusByAttraction(attraction.id),
+      this.queueDataService.findForecastsByAttraction(attraction.id, 24),
+      attraction.parkId
+        ? this.parkRepository.findOne({
+            where: { id: attraction.parkId },
+            select: [
+              "id",
+              "slug",
+              "continentSlug",
+              "countrySlug",
+              "citySlug",
+              "continent",
+              "country",
+              "city",
+              "timezone",
+              "countryCode",
+              "regionCode",
+              "influencingRegions",
+            ],
+          })
+        : Promise.resolve(null),
+      this.mlService
+        .getAttractionPredictionsWithFallback(attraction.id, "hourly")
+        .catch((err) => {
+          this.logger.warn(
+            "ML predictions unavailable:",
+            err instanceof Error ? err.message : "Unknown error",
+          );
+          return [];
+        }),
+      attraction.parkId
+        ? this.parksService
+            .getBatchParkStatus([attraction.parkId])
+            .catch(() => new Map<string, "OPERATING" | "CLOSED">())
+        : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">()),
+      this.predictionAccuracyService
+        .getAttractionAccuracyWithBadge(attraction.id, 30)
+        .catch((err) => {
+          this.logger.warn("Failed to fetch prediction accuracy:", err);
+          return null;
+        }),
+    ]);
 
+    // --- Process queue data (trend detection per queue, already parallelized) ---
     if (queueData.length > 0) {
-      // Convert to DTOs and add trend data
       dto.queues = await Promise.all(
         queueData.map(async (qd) => {
           const queueDto: QueueDataItemDto = {
@@ -153,7 +198,6 @@ export class AttractionIntegrationService {
                 previousAverage: trendData.previousAverage,
               };
             } catch (error) {
-              // If trend calculation fails, don't include it (optional field)
               this.logger.warn(
                 `Failed to calculate trend for ${qd.queueType}:`,
                 error,
@@ -165,14 +209,11 @@ export class AttractionIntegrationService {
         }),
       );
 
-      // Set overall status (use first queue's status as representative)
       dto.status = queueData[0].status;
 
-      // Extract trend from primary queue (STANDBY or first available)
       const primaryQueue =
         dto.queues?.find((q) => q.queueType === "STANDBY") || dto.queues?.[0];
       if (primaryQueue?.trend?.direction) {
-        // Map "increasing" -> "up", "decreasing" -> "down", "stable" -> "stable"
         dto.trend =
           primaryQueue.trend.direction === "increasing"
             ? "up"
@@ -184,35 +225,12 @@ export class AttractionIntegrationService {
       }
     }
 
-    // Check park status and calculate effectiveStatus
-    // Attractions inherit park's closed status to prevent showing operating rides when park is closed
-    let parkStatus: "OPERATING" | "CLOSED" = "CLOSED";
-    if (attraction.parkId) {
-      try {
-        const statusMap = await this.parksService.getBatchParkStatus([
-          attraction.parkId,
-        ]);
-        parkStatus = statusMap.get(attraction.parkId) || "CLOSED";
-      } catch (error) {
-        this.logger.warn(
-          `Failed to fetch park status for attraction ${attraction.id}:`,
-          error,
-        );
-        // Safe default: assume closed
-        parkStatus = "CLOSED";
-      }
-    }
-
-    // Calculate effective status
-    // If park is CLOSED, attraction is effectively CLOSED regardless of queue data
+    // --- Park status & effective status ---
+    const parkStatus: "OPERATING" | "CLOSED" =
+      parkStatusMap.get(attraction.parkId) || "CLOSED";
     dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
 
-    // Fetch forecasts (ThemeParks.wiki - next 24 hours)
-    const forecasts = await this.queueDataService.findForecastsByAttraction(
-      attraction.id,
-      24,
-    );
-
+    // --- Forecasts ---
     if (forecasts.length > 0) {
       dto.forecasts = forecasts.map((f) => ({
         predictedTime: f.predictedTime.toISOString(),
@@ -222,126 +240,62 @@ export class AttractionIntegrationService {
       }));
     }
 
-    // Fetch ML predictions (our model - daily, up to 1 year)
-    // Only if ML service is available
-    let enrichedPredictions: Array<{
-      predictedTime: string;
-      predictedWaitTime: number;
-      confidence: number;
-      crowdLevel?: string;
-      baseline?: number;
-      trend: string;
-    }> = [];
-    try {
-      const isHealthy = await this.mlService.isHealthy();
-      if (isHealthy) {
-        const predictions =
-          await this.mlService.getAttractionPredictionsWithFallback(
-            attraction.id,
-            "hourly",
-          );
+    // --- ML predictions (already fetched in batch, no extra health check needed) ---
+    const enrichedPredictions = mlPredictionsRaw.map((p) => ({
+      predictedTime: p.predictedTime,
+      predictedWaitTime: p.predictedWaitTime,
+      confidence: p.confidence,
+      crowdLevel: p.crowdLevel,
+      baseline: p.baseline,
+      trend: p.trend || "stable",
+    }));
+    dto.hourlyForecast =
+      mlPredictionsRaw.length > 0
+        ? enrichedPredictions.map((p) => ({
+            predictedTime: p.predictedTime,
+            predictedWaitTime: p.predictedWaitTime,
+            confidence: p.confidence,
+            trend: p.trend,
+          }))
+        : [];
 
-        enrichedPredictions = predictions.map((p) => ({
-          predictedTime: p.predictedTime,
-          predictedWaitTime: p.predictedWaitTime,
-          confidence: p.confidence,
-          crowdLevel: p.crowdLevel,
-          baseline: p.baseline,
-          trend: p.trend || "stable",
-        }));
-        dto.hourlyForecast = enrichedPredictions.map((p) => ({
-          predictedTime: p.predictedTime,
-          predictedWaitTime: p.predictedWaitTime,
-          confidence: p.confidence,
-          trend: p.trend,
-        }));
-      }
-    } catch (error) {
-      // ML service not available - log but don't fail
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      this.logger.warn("ML predictions unavailable:", errorMessage);
-      dto.hourlyForecast = [];
-    }
+    // --- Crowd level + baseline: fetch P50 once, reuse for both ---
+    const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
+    const currentPred = enrichedPredictions.find((p) =>
+      p.predictedTime.startsWith(nowStr),
+    );
 
-    // Calculate crowd level
-    // Strategy: Use real-time wait time with P90 baseline if available,
-    // otherwise fallback to ML prediction crowdLevel
     let crowdLevel: CrowdLevel | "closed" | null = null;
     if (dto.effectiveStatus === "CLOSED") {
       crowdLevel = "closed";
+      dto.baseline = null;
+      dto.comparison = null;
     } else {
-      // Find current hour prediction for fallback
-      const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
-      const currentPred = enrichedPredictions.find((p) =>
-        p.predictedTime.startsWith(nowStr),
-      );
-
-      // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          // Use P50 baseline when available (same as parks), else sliding-window P50/P90
-          let baseline =
+          let p50Baseline =
             await this.analyticsService.getAttractionP50BaselineFromCache(
               attraction.id,
             );
-          if (baseline === 0) {
+          if (p50Baseline === 0) {
             const percentiles =
               await this.analyticsService.get90thPercentileWithConfidence(
                 attraction.id,
                 "attraction",
+                park?.timezone,
               );
-            baseline = percentiles.p50 || percentiles.p90;
+            p50Baseline = percentiles.p50 || percentiles.p90;
           }
 
-          const calculatedLevel = this.analyticsService.getAttractionCrowdLevel(
-            wait,
-            baseline,
-          );
-          crowdLevel = calculatedLevel || "moderate";
-        } catch (error) {
-          // If percentile lookup fails, fallback to ML prediction
-          this.logger.warn(
-            `Failed to get percentiles for crowd level, using fallback:`,
-            error,
-          );
-          crowdLevel = currentPred?.crowdLevel
-            ? (currentPred.crowdLevel as CrowdLevel)
-            : "moderate";
-        }
-      } else {
-        // 2. Fallback to ML Prediction if no live data
-        crowdLevel = currentPred?.crowdLevel
-          ? (currentPred.crowdLevel as CrowdLevel)
-          : "very_low";
-      }
-    }
-    dto.crowdLevel = crowdLevel;
+          crowdLevel =
+            this.analyticsService.getAttractionCrowdLevel(wait, p50Baseline) ||
+            "moderate";
 
-    // Calculate baseline and comparison (P50 when available, else P90)
-    if (dto.effectiveStatus === "OPERATING") {
-      const wait = dto.queues?.[0]?.waitTime;
-      if (wait !== undefined && wait !== null) {
-        try {
-          let baseline =
-            await this.analyticsService.getAttractionP50BaselineFromCache(
-              attraction.id,
-            );
-          if (baseline === 0) {
-            const percentiles =
-              await this.analyticsService.get90thPercentileWithConfidence(
-                attraction.id,
-                "attraction",
-                attraction.park?.timezone,
-              );
-            baseline = percentiles.p50 || percentiles.p90;
-          }
-
-          if (baseline > 0) {
+          if (p50Baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
               wait,
-              baseline,
+              p50Baseline,
             );
             dto.baseline = loadRating.baseline;
             dto.comparison = this.analyticsService.getComparisonText(
@@ -352,209 +306,128 @@ export class AttractionIntegrationService {
             dto.comparison = null;
           }
         } catch (error) {
-          // If percentile lookup fails, set to null
           this.logger.warn(
-            `Failed to get percentiles for baseline/comparison:`,
+            `Failed to get percentiles for crowd level/baseline:`,
             error,
           );
+          crowdLevel = currentPred?.crowdLevel
+            ? (currentPred.crowdLevel as CrowdLevel)
+            : "moderate";
           dto.baseline = null;
           dto.comparison = null;
         }
       } else {
+        crowdLevel = currentPred?.crowdLevel
+          ? (currentPred.crowdLevel as CrowdLevel)
+          : "very_low";
         dto.baseline = null;
         dto.comparison = null;
       }
-    } else {
-      dto.baseline = null;
-      dto.comparison = null;
     }
+    dto.crowdLevel = crowdLevel;
 
-    // Fetch attraction statistics (requires park timezone for accurate daily filtering)
-    // Also fetch park for URL generation
-    let parkForUrl: Park | null = null;
-    try {
-      // Fetch park entity to get timezone, geo data, and holiday-related fields
-      const park = await this.parkRepository.findOne({
-        where: { id: attraction.parkId },
-        select: [
-          "id",
-          "slug",
-          "continentSlug",
-          "countrySlug",
-          "citySlug",
-          "continent",
-          "country",
-          "city",
-          "timezone",
-          "countryCode",
-          "regionCode",
-          "influencingRegions",
-        ],
-      });
-      if (!park) {
-        throw new Error(`Park not found for attraction ${attraction.id}`);
-      }
+    // --- Statistics, history, schedule: run in parallel (all need park timezone) ---
+    const parkForUrl = park;
+    if (park) {
+      try {
+        const startTime = await this.analyticsService.getEffectiveStartTime(
+          attraction.parkId,
+          park.timezone,
+        );
 
-      // Store park for URL generation later
-      parkForUrl = park;
+        // Run statistics, history, and schedule fetch in parallel
+        const today = getStartOfDayInTimezone(park.timezone);
+        const startDate = subDays(today, days);
+        const startDateStr = formatInParkTimezone(startDate, park.timezone);
+        const endDateStr = formatInParkTimezone(today, park.timezone);
 
-      const startTime = await this.analyticsService.getEffectiveStartTime(
-        attraction.parkId,
-        park.timezone,
-      );
-
-      const statistics = await this.analyticsService.getAttractionStatistics(
-        attraction.id,
-        startTime,
-        park.timezone,
-      );
-
-      dto.statistics = {
-        avgWaitToday: statistics.avgWaitToday,
-        peakWaitToday: statistics.peakWaitToday,
-        peakWaitTimestamp: statistics.peakWaitTimestamp
-          ? statistics.peakWaitTimestamp.toISOString()
-          : null,
-        minWaitToday: statistics.minWaitToday,
-        typicalWaitThisHour: statistics.typicalWaitThisHour,
-        percentile95ThisHour: statistics.percentile95ThisHour,
-        currentVsTypical: statistics.currentVsTypical,
-        dataPoints: statistics.dataPoints,
-        history: statistics.history || [],
-        timestamp: statistics.timestamp.toISOString(),
-      };
-
-      // Calculate historical data (utilization, hourly P90, down counts)
-      if (parkForUrl && parkForUrl.timezone) {
-        try {
-          dto.history = await this.calculateAttractionHistory(
+        const [statistics, history, scheduleEntries] = await Promise.all([
+          this.analyticsService.getAttractionStatistics(
+            attraction.id,
+            startTime,
+            park.timezone,
+          ),
+          this.calculateAttractionHistory(
             attraction.id,
             attraction.parkId,
-            parkForUrl.timezone,
+            park.timezone,
             days,
-          );
-        } catch (error) {
-          // Log but don't fail - history is optional
-          this.logger.warn(
-            `Failed to calculate history for attraction ${attraction.id}:`,
-            error,
-          );
-          dto.history = [];
-        }
-
-        // Fetch park schedule for the same date range (aligned with history)
-        // Schedule: from today back to (today - 30 days) = 31 days total
-        try {
-          // Calculate date range in park timezone: today back to (today - days)
-          // Example: days=30 means today + 30 past days = 31 days total
-          // Use getStartOfDayInTimezone to ensure "today" is correctly calculated in park timezone
-          const today = getStartOfDayInTimezone(parkForUrl.timezone);
-          const startDate = subDays(today, days); // today - 30 days for days=30
-          // End date: today (inclusive) - already calculated in park timezone
-
-          // IMPORTANT: Convert Date objects to date strings (YYYY-MM-DD) for TypeORM query
-          // The schedule.date column is of type DATE (not TIMESTAMP), so we need to compare dates, not timestamps
-          // This ensures correct timezone handling and prevents off-by-one errors
-          const startDateStr = formatInParkTimezone(
-            startDate,
-            parkForUrl.timezone,
-          );
-          const endDateStr = formatInParkTimezone(today, parkForUrl.timezone);
-
-          // Get schedule entries for the park (only park-level, not attraction-specific)
-          const scheduleEntries = await this.scheduleEntryRepository
+          ).catch((err) => {
+            this.logger.warn(
+              `Failed to calculate history for attraction ${attraction.id}:`,
+              err,
+            );
+            return [] as HistoryDayDto[];
+          }),
+          this.scheduleEntryRepository
             .createQueryBuilder("schedule")
             .where("schedule.parkId = :parkId", { parkId: attraction.parkId })
-            .andWhere("schedule.attractionId IS NULL") // Only park schedules
+            .andWhere("schedule.attractionId IS NULL")
             .andWhere("schedule.date >= :startDate", {
               startDate: startDateStr,
             })
             .andWhere("schedule.date <= :endDate", { endDate: endDateStr })
             .orderBy("schedule.date", "ASC")
             .addOrderBy("schedule.scheduleType", "ASC")
-            .getMany();
+            .getMany()
+            .catch((err) => {
+              this.logger.warn(
+                `Failed to fetch schedule for attraction ${attraction.id}:`,
+                err,
+              );
+              return [] as ScheduleEntry[];
+            }),
+        ]);
 
-          // Convert to DTOs
-          dto.schedule = scheduleEntries.map((entry) =>
-            ScheduleItemDto.fromEntity(entry),
-          );
+        dto.statistics = {
+          avgWaitToday: statistics.avgWaitToday,
+          peakWaitToday: statistics.peakWaitToday,
+          peakWaitTimestamp: statistics.peakWaitTimestamp
+            ? statistics.peakWaitTimestamp.toISOString()
+            : null,
+          minWaitToday: statistics.minWaitToday,
+          typicalWaitThisHour: statistics.typicalWaitThisHour,
+          percentile95ThisHour: statistics.percentile95ThisHour,
+          currentVsTypical: statistics.currentVsTypical,
+          dataPoints: statistics.dataPoints,
+          history: statistics.history || [],
+          timestamp: statistics.timestamp.toISOString(),
+        };
 
-          // Enrich schedule with holiday data (same logic as park endpoint, but different date range)
-          if (dto.schedule && dto.schedule.length > 0 && parkForUrl) {
-            await this.parkEnrichmentService.enrichScheduleWithHolidays(
-              dto.schedule,
-              parkForUrl,
-            );
-          }
-        } catch (error) {
-          // Log but don't fail - schedule is optional
-          this.logger.warn(
-            `Failed to fetch schedule for attraction ${attraction.id}:`,
-            error,
+        dto.history = history;
+
+        dto.schedule = scheduleEntries.map((entry) =>
+          ScheduleItemDto.fromEntity(entry),
+        );
+        if (dto.schedule.length > 0) {
+          await this.parkEnrichmentService.enrichScheduleWithHolidays(
+            dto.schedule,
+            park,
           );
-          dto.schedule = [];
         }
+      } catch (error) {
+        this.logger.error("Failed to fetch attraction statistics:", error);
+        dto.statistics = null;
       }
-    } catch (error) {
-      this.logger.error("Failed to fetch attraction statistics:", error);
-      dto.statistics = null;
     }
 
-    // Fetch prediction accuracy
-    try {
-      const accuracy =
-        await this.predictionAccuracyService.getAttractionAccuracyWithBadge(
-          attraction.id,
-          30, // Last 30 days
-        );
-
+    // --- Prediction accuracy (already fetched in batch) ---
+    if (predictionAccuracyResult) {
       dto.predictionAccuracy = {
-        badge: accuracy.badge,
+        badge: predictionAccuracyResult.badge,
         last30Days: {
-          // Only expose counts to public, not technical metrics
-          comparedPredictions: accuracy.last30Days.comparedPredictions,
-          totalPredictions: accuracy.last30Days.totalPredictions,
+          comparedPredictions:
+            predictionAccuracyResult.last30Days.comparedPredictions,
+          totalPredictions:
+            predictionAccuracyResult.last30Days.totalPredictions,
         },
-        message: accuracy.message,
+        message: predictionAccuracyResult.message,
       };
-    } catch (error) {
-      // Log error but don't fail - accuracy is optional
-      this.logger.warn("Failed to fetch prediction accuracy:", error);
+    } else {
       dto.predictionAccuracy = null;
     }
 
-    // Set URL using geo route (if park has geo data)
-    // Try to use park from attraction relation first, or reuse park fetched for statistics
-    if (!parkForUrl) {
-      parkForUrl = attraction.park || null;
-    }
-
-    // If park relation not loaded or missing geo data, fetch it
-    if (
-      !parkForUrl ||
-      !parkForUrl.continentSlug ||
-      !parkForUrl.countrySlug ||
-      !parkForUrl.citySlug
-    ) {
-      if (attraction.parkId) {
-        // Fetch park with all fields (including geo slugs)
-        parkForUrl = await this.parkRepository.findOne({
-          where: { id: attraction.parkId },
-          select: [
-            "id",
-            "slug",
-            "continentSlug",
-            "countrySlug",
-            "citySlug",
-            "continent",
-            "country",
-            "city",
-            "timezone",
-          ],
-        });
-      }
-    }
-
+    // --- URL ---
     if (
       parkForUrl &&
       parkForUrl.continentSlug &&

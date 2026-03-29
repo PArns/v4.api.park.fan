@@ -781,64 +781,60 @@ export class MLService {
       throw new HttpException("Attraction not found", 404);
     }
 
-    // 2. Fetch hourly weather forecast (if we have coordinates)
-    // 2. Fetch hourly weather forecast (cached by WeatherService)
-    let weatherForecast: WeatherForecastItemDto[] = [];
-    if (attraction.parkId) {
-      try {
-        weatherForecast = await this.weatherService.getHourlyForecast(
-          attraction.parkId,
-        );
-      } catch (error) {
-        this.logger.warn(`Failed to fetch weather for prediction: ${error} `);
-      }
-    }
+    // 2–3.5: Fetch weather forecast, current wait time, and recent wait time in parallel
+    const thirtyAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const windowMin = new Date(thirtyAgo.getTime() - 15 * 60 * 1000);
+    const windowMax = new Date(thirtyAgo.getTime() + 15 * 60 * 1000);
 
-    // 3. Fetch current wait times (for input optimization)
+    const [weatherForecastRaw, latestData, recentData] = await Promise.all([
+      attraction.parkId
+        ? this.weatherService
+            .getHourlyForecast(attraction.parkId)
+            .catch((err) => {
+              this.logger.warn(
+                `Failed to fetch weather for prediction: ${err}`,
+              );
+              return [] as WeatherForecastItemDto[];
+            })
+        : Promise.resolve([] as WeatherForecastItemDto[]),
+      predictionType === "hourly"
+        ? this.queueDataRepository
+            .findOne({
+              where: { attractionId, queueType: QueueType.STANDBY },
+              order: { timestamp: "DESC" },
+            })
+            .catch((err) => {
+              this.logger.warn(`Failed to fetch current wait time: ${err}`);
+              return null;
+            })
+        : Promise.resolve(null),
+      predictionType === "hourly"
+        ? this.queueDataRepository
+            .createQueryBuilder("q")
+            .where("q.attractionId = :attractionId", { attractionId })
+            .andWhere("q.timestamp >= :windowMin", { windowMin })
+            .andWhere("q.timestamp <= :windowMax", { windowMax })
+            .andWhere("q.queueType = :queueType", {
+              queueType: QueueType.STANDBY,
+            })
+            .orderBy("ABS(EXTRACT(EPOCH FROM (q.timestamp - :target)))", "ASC")
+            .setParameter("target", thirtyAgo)
+            .getOne()
+            .catch((err) => {
+              this.logger.warn(`Failed to fetch recent wait time: ${err}`);
+              return null;
+            })
+        : Promise.resolve(null),
+    ]);
+
+    const weatherForecast: WeatherForecastItemDto[] = weatherForecastRaw;
     const currentWaitTimes: Record<string, number> = {};
-    if (predictionType === "hourly") {
-      try {
-        const latestData = await this.queueDataRepository.findOne({
-          where: { attractionId, queueType: QueueType.STANDBY },
-          order: { timestamp: "DESC" },
-        });
-
-        if (latestData && latestData.waitTime !== null) {
-          currentWaitTimes[attractionId] = latestData.waitTime;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to fetch current wait time: ${error} `);
-      }
+    if (latestData && latestData.waitTime !== null) {
+      currentWaitTimes[attractionId] = latestData.waitTime;
     }
-
-    // 3.5 Fetch recent wait times (for lag features)
     const recentWaitTimes: Record<string, number> = {};
-    if (predictionType === "hourly") {
-      try {
-        const thirtyAgo = new Date(Date.now() - 30 * 60 * 1000);
-        // Window: +/- 15 minutes of 30 mins ago
-        const windowMin = new Date(thirtyAgo.getTime() - 15 * 60 * 1000);
-        const windowMax = new Date(thirtyAgo.getTime() + 15 * 60 * 1000);
-
-        // Find closest data point to 30 mins ago
-        const recentData = await this.queueDataRepository
-          .createQueryBuilder("q")
-          .where("q.attractionId = :attractionId", { attractionId })
-          .andWhere("q.timestamp >= :windowMin", { windowMin })
-          .andWhere("q.timestamp <= :windowMax", { windowMax })
-          .andWhere("q.queueType = :queueType", {
-            queueType: QueueType.STANDBY,
-          })
-          .orderBy("ABS(EXTRACT(EPOCH FROM (q.timestamp - :target)))", "ASC")
-          .setParameter("target", thirtyAgo)
-          .getOne();
-
-        if (recentData && recentData.waitTime !== null) {
-          recentWaitTimes[attractionId] = recentData.waitTime;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to fetch recent wait time: ${error} `);
-      }
+    if (recentData && recentData.waitTime !== null) {
+      recentWaitTimes[attractionId] = recentData.waitTime;
     }
 
     // 4. Request predictions
@@ -1030,9 +1026,16 @@ export class MLService {
       queryBuilder.andWhere("p.predictedTime <= :endTime", { endTime });
     }
 
-    // Only get recent predictions (created in last hour)
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    queryBuilder.andWhere("p.createdAt >= :oneHourAgo", { oneHourAgo });
+    // Require predictions to have been created recently.
+    // Hourly predictions are regenerated every hour — allow 2h window to survive a delayed cron run.
+    // Daily predictions are regenerated once per day — allow 26h window.
+    const createdAtCutoff =
+      predictionType === "hourly"
+        ? new Date(Date.now() - 2 * 60 * 60 * 1000)
+        : new Date(Date.now() - 26 * 60 * 60 * 1000);
+    queryBuilder.andWhere("p.createdAt >= :createdAtCutoff", {
+      createdAtCutoff,
+    });
 
     return queryBuilder.getMany();
   }
@@ -1044,32 +1047,32 @@ export class MLService {
     attractionId: string,
     predictionType: "hourly" | "daily" = "hourly",
   ): Promise<PredictionDto[]> {
-    // Try to get from database first (for daily predictions)
-    if (predictionType === "daily") {
-      const stored = await this.getStoredPredictions(
-        attractionId,
-        predictionType,
-      );
+    // Try stored predictions first for both hourly and daily.
+    // Pass startTime=now for hourly so we never serve already-elapsed time slots.
+    const stored = await this.getStoredPredictions(
+      attractionId,
+      predictionType,
+      predictionType === "hourly" ? new Date() : undefined,
+    );
 
-      if (stored.length > 0) {
-        this.logger.debug(
-          `Using ${stored.length} stored predictions for ${attractionId}`,
-        );
-        return stored.map((p) => ({
-          attractionId: p.attractionId,
-          predictedTime: p.predictedTime.toISOString(),
-          predictedWaitTime: p.predictedWaitTime,
-          predictionType: p.predictionType,
-          confidence: p.confidence,
-          crowdLevel: p.crowdLevel,
-          baseline: p.baseline,
-          modelVersion: p.modelVersion,
-          status: p.status || undefined,
-        }));
-      }
+    if (stored.length > 0) {
+      this.logger.debug(
+        `Using ${stored.length} stored ${predictionType} predictions for ${attractionId}`,
+      );
+      return stored.map((p) => ({
+        attractionId: p.attractionId,
+        predictedTime: p.predictedTime.toISOString(),
+        predictedWaitTime: p.predictedWaitTime,
+        predictionType: p.predictionType,
+        confidence: p.confidence,
+        crowdLevel: p.crowdLevel,
+        baseline: p.baseline,
+        modelVersion: p.modelVersion,
+        status: p.status || undefined,
+      }));
     }
 
-    // Fall back to ML service
+    // Fall back to ML service (new ride or predictions expired)
     return this.getAttractionPredictions(attractionId, predictionType);
   }
 
