@@ -239,7 +239,7 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Prediction Accuracy: Every hour (Phase 5.6)
+    // Prediction Accuracy: Every 5 minutes (Phase 5.6)
     const hasPredictionAccuracyCron = await this.hasRepeatableJob(
       this.predictionAccuracyQueue,
       "prediction-accuracy-cron",
@@ -254,6 +254,44 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "*/5 * * * *", // Every 5 minutes (faster processing to prevent backlog)
           },
           jobId: "prediction-accuracy-cron",
+        },
+      );
+    }
+
+    // Prediction Accuracy Stats: Daily at 3am (aggregate MAE per attraction)
+    const hasAggregateStatsCron = await this.hasRepeatableJob(
+      this.predictionAccuracyQueue,
+      "aggregate-stats-cron",
+    );
+
+    if (!hasAggregateStatsCron) {
+      await this.predictionAccuracyQueue.add(
+        "aggregate-stats",
+        {},
+        {
+          repeat: {
+            cron: "0 3 * * *", // Daily at 3am
+          },
+          jobId: "aggregate-stats-cron",
+        },
+      );
+    }
+
+    // Prediction Accuracy Cleanup: Daily at 4am (delete old MISSED/PENDING records)
+    const hasAccuracyCleanupCron = await this.hasRepeatableJob(
+      this.predictionAccuracyQueue,
+      "accuracy-cleanup-cron",
+    );
+
+    if (!hasAccuracyCleanupCron) {
+      await this.predictionAccuracyQueue.add(
+        "cleanup-old",
+        {},
+        {
+          repeat: {
+            cron: "0 4 * * *", // Daily at 4am
+          },
+          jobId: "accuracy-cleanup-cron",
         },
       );
     }
@@ -504,12 +542,29 @@ export class QueueSchedulerService implements OnModuleInit {
 
   /**
    * Check if a repeatable job with the given jobId already exists.
+   * If the job exists but its next scheduled run is in the past (stalled),
+   * it is removed so the caller re-registers it with a fresh schedule.
    */
   private async hasRepeatableJob(
     queue: Queue,
     jobId: string,
   ): Promise<boolean> {
     const repeatableJobs = await queue.getRepeatableJobs();
-    return repeatableJobs.some((job) => job.id === jobId);
+    const existing = repeatableJobs.find((job) => job.id === jobId);
+
+    if (!existing) return false;
+
+    // If the next run is more than 2 minutes in the past the job is stalled —
+    // remove it so it gets re-registered with the current cron schedule.
+    const STALL_THRESHOLD_MS = 2 * 60 * 1000;
+    if (existing.next && existing.next < Date.now() - STALL_THRESHOLD_MS) {
+      this.logger.warn(
+        `Repeatable job "${jobId}" is overdue (next: ${new Date(existing.next).toISOString()}), removing stale entry for re-registration`,
+      );
+      await queue.removeRepeatableByKey(existing.key);
+      return false;
+    }
+
+    return true;
   }
 }
