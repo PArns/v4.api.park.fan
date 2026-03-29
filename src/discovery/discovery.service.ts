@@ -23,7 +23,7 @@ import { ParksService } from "../parks/parks.service";
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
-  private readonly CACHE_KEY = "discovery:geo:structure:v3"; // v3: removed attractions[]
+  private readonly CACHE_KEY = "discovery:geo:structure:v4"; // v4: added timezone to ParkReference
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
   private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes
@@ -68,6 +68,7 @@ export class DiscoveryService {
         "id",
         "name",
         "slug",
+        "timezone",
         "continent",
         "continentSlug",
         "country",
@@ -158,6 +159,7 @@ export class DiscoveryService {
         name: park.name,
         slug: park.slug,
         url: parkBaseUrl,
+        timezone: park.timezone,
         attractionCount: 0, // Will be hydrated with live stats
         status: "CLOSED", // Default, will be hydrated
       };

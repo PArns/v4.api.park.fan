@@ -80,6 +80,13 @@ export class ParkReferenceDto {
   };
 
   @ApiProperty({
+    description: "Park IANA timezone",
+    example: "Europe/Berlin",
+    required: false,
+  })
+  timezone?: string;
+
+  @ApiProperty({
     description: "Next scheduled operating day",
     nullable: true,
     required: false,
