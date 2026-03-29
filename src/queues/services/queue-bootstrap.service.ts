@@ -218,16 +218,8 @@ export class QueueBootstrapService implements OnModuleInit {
     // NOTE: Holidays sync is now triggered AFTER park metadata completes
     // (from park-metadata.processor.ts) to ensure all parks have country data
 
-    // Trigger ML training check immediately
+    // Trigger ML-related bootstrap jobs
     try {
-      await this.mlTrainingQueue.add(
-        "check-training-needed",
-        {},
-        {
-          removeOnComplete: true,
-        },
-      );
-
       // Trigger prediction accuracy aggregation immediately (Phase 2 optimization)
       // This ensures the attraction_accuracy_stats table is populated on startup
       await this.predictionAccuracyQueue.add(
@@ -355,6 +347,7 @@ export class QueueBootstrapService implements OnModuleInit {
       { name: "occupancy-calculation", queue: this.occupancyQueue },
       { name: "weather", queue: this.weatherQueue },
       { name: "holidays", queue: this.holidaysQueue },
+      { name: "ml-training", queue: this.mlTrainingQueue },
     ];
 
     let totalCleaned = 0;
