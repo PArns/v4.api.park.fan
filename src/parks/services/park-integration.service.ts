@@ -50,7 +50,7 @@ export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
   // Multi-tier caching strategy aligned with actual update frequencies
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 15 * 60; // 15 minutes (Push-based caching: Updated by background job every 5m)
+  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (matches background job update frequency)
   private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
   private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
   private readonly TTL_ML_HOURLY = 60 * 60; // 1 hour (hourly predictions update at :15)

@@ -32,6 +32,8 @@ import {
   buildShowUrl,
   buildRestaurantUrl,
 } from "../common/utils/url.util";
+import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 
 /**
  * Favorites Service
@@ -313,7 +315,14 @@ export class FavoritesService {
   }
 
   /**
-   * Enrich parks with live data and calculate distances (similar to nearby endpoint)
+   * Enrich parks with live data and calculate distances.
+   *
+   * Fast path: reads from the prewarmed `park:integrated:{id}` Redis cache via MGET
+   * (single round-trip). All needed fields (status, analytics, schedule, nextSchedule)
+   * are already present in the integrated cache.
+   *
+   * Slow path (fallback): parks not found in cache are enriched via the original
+   * batch DB queries.
    */
   private async enrichParks(
     parks: Park[],
@@ -323,95 +332,201 @@ export class FavoritesService {
       return [];
     }
 
-    const parkIds = parks.map((p) => p.id);
+    // --- Fast path: read from prewarmed park:integrated cache (single MGET) ---
+    const cacheKeys = parks.map((p) => `park:integrated:${p.id}`);
+    const cachedRaw = await this.redis.mget(...cacheKeys);
 
-    // Pre-calculate context (timezone + startTime) for batch park statistics using batch method
-    const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
-      parks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
-    );
-    const context = new Map<string, { timezone: string; startTime: Date }>();
-    for (const park of parks) {
-      const startTime = startTimeMap.get(park.id)!;
-      context.set(park.id, {
-        timezone: park.timezone || "UTC",
-        startTime,
-      });
+    const integratedMap = new Map<string, ParkWithAttractionsDto>();
+    const missedParks: Park[] = [];
+
+    for (let i = 0; i < parks.length; i++) {
+      if (cachedRaw[i]) {
+        try {
+          integratedMap.set(
+            parks[i].id,
+            JSON.parse(cachedRaw[i]!) as ParkWithAttractionsDto,
+          );
+        } catch {
+          missedParks.push(parks[i]);
+        }
+      } else {
+        missedParks.push(parks[i]);
+      }
     }
 
-    // Batch fetch status, analytics, schedules, and statistics
-    const [statusMap, occupancyMap, schedules, statisticsMap] =
-      await Promise.all([
-        this.parksService.getBatchParkStatus(parkIds),
-        this.analyticsService["getBatchParkOccupancy"](parkIds),
-        this.parksService.getBatchSchedules(parkIds),
-        this.analyticsService.getBatchParkStatistics(parkIds, context),
-      ]);
+    // --- Slow path: batch DB fetch for cache misses ---
+    type FallbackData = {
+      status: string;
+      totalAttractions: number;
+      operatingAttractions: number;
+      analytics?: {
+        avgWaitTime: number;
+        crowdLevel: string;
+        occupancy: number;
+      };
+      todaySchedule?: {
+        openingTime: string;
+        closingTime: string;
+        scheduleType: string;
+      };
+      nextSchedule?: {
+        openingTime: string;
+        closingTime: string;
+        scheduleType: string;
+      };
+    };
+    const fallbackMap = new Map<string, FallbackData>();
 
-    // Build park DTOs (similar to nearby endpoint)
+    if (missedParks.length > 0) {
+      const missedIds = missedParks.map((p) => p.id);
+
+      const startTimeMap =
+        await this.analyticsService.getBatchEffectiveStartTime(
+          missedParks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
+        );
+      const context = new Map<string, { timezone: string; startTime: Date }>();
+      for (const park of missedParks) {
+        context.set(park.id, {
+          timezone: park.timezone || "UTC",
+          startTime: startTimeMap.get(park.id)!,
+        });
+      }
+
+      const [statusMap, occupancyMap, schedules, statisticsMap] =
+        await Promise.all([
+          this.parksService.getBatchParkStatus(missedIds),
+          this.analyticsService["getBatchParkOccupancy"](missedIds),
+          this.parksService.getBatchSchedules(missedIds),
+          this.analyticsService.getBatchParkStatistics(missedIds, context),
+        ]);
+
+      for (const park of missedParks) {
+        const occupancy = occupancyMap.get(park.id);
+        const stats = statisticsMap.get(park.id);
+        const todaySchedule = schedules.today.get(park.id);
+        const nextSchedule = schedules.next.get(park.id);
+
+        fallbackMap.set(park.id, {
+          status: statusMap.get(park.id) || "CLOSED",
+          totalAttractions: stats?.totalAttractions || 0,
+          operatingAttractions: stats?.operatingAttractions || 0,
+          analytics: occupancy
+            ? {
+                avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+                crowdLevel: this.analyticsService.determineCrowdLevel(
+                  occupancy.current,
+                ),
+                occupancy: occupancy.current,
+              }
+            : undefined,
+          todaySchedule:
+            todaySchedule && todaySchedule.length > 0
+              ? {
+                  openingTime:
+                    todaySchedule[0].openingTime?.toISOString() || "",
+                  closingTime:
+                    todaySchedule[0].closingTime?.toISOString() || "",
+                  scheduleType: todaySchedule[0].scheduleType,
+                }
+              : undefined,
+          nextSchedule: nextSchedule
+            ? {
+                openingTime: nextSchedule.openingTime?.toISOString() || "",
+                closingTime: nextSchedule.closingTime?.toISOString() || "",
+                scheduleType: nextSchedule.scheduleType,
+              }
+            : undefined,
+        });
+      }
+    }
+
+    // --- Build DTOs (preserve original order) ---
     return parks.map((park) => {
-      const status = statusMap.get(park.id) || "CLOSED";
-      const occupancy = occupancyMap.get(park.id);
-      const stats = statisticsMap.get(park.id);
-      const todaySchedule = schedules.today.get(park.id);
-      const nextSchedule = schedules.next.get(park.id);
+      const distance =
+        userLocation && park.latitude && park.longitude
+          ? Math.round(
+              calculateHaversineDistance(
+                userLocation,
+                {
+                  latitude: Number(park.latitude),
+                  longitude: Number(park.longitude),
+                },
+                "m",
+              ),
+            )
+          : null;
 
-      const dto: ParkWithDistanceDto = {
+      const integrated = integratedMap.get(park.id);
+      if (integrated) {
+        const today = getCurrentDateInTimezone(park.timezone || "UTC");
+        const todayEntry = integrated.schedule?.find((s) => s.date === today);
+
+        return {
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          distance,
+          city: park.city || null,
+          country: park.country || null,
+          status: integrated.status || "CLOSED",
+          totalAttractions:
+            integrated.analytics?.statistics?.totalAttractions || 0,
+          operatingAttractions:
+            integrated.analytics?.statistics?.operatingAttractions || 0,
+          analytics: integrated.analytics
+            ? {
+                avgWaitTime:
+                  integrated.analytics.occupancy?.breakdown?.currentAvgWait ||
+                  0,
+                crowdLevel: integrated.analytics.statistics?.crowdLevel,
+                occupancy: integrated.analytics.occupancy?.current,
+              }
+            : undefined,
+          url: integrated.url || null,
+          timezone: park.timezone,
+          todaySchedule: todayEntry
+            ? {
+                openingTime: todayEntry.openingTime || "",
+                closingTime: todayEntry.closingTime || "",
+                scheduleType: todayEntry.scheduleType,
+              }
+            : undefined,
+          nextSchedule: integrated.nextSchedule
+            ? {
+                openingTime: integrated.nextSchedule.openingTime,
+                closingTime: integrated.nextSchedule.closingTime,
+                scheduleType: integrated.nextSchedule.scheduleType,
+              }
+            : undefined,
+        } as ParkWithDistanceDto;
+      }
+
+      // Fallback data for cache misses
+      const fb = fallbackMap.get(park.id);
+      return {
         id: park.id,
         name: park.name,
         slug: park.slug,
-        distance:
-          userLocation && park.latitude && park.longitude
-            ? Math.round(
-                calculateHaversineDistance(
-                  userLocation,
-                  {
-                    latitude: Number(park.latitude),
-                    longitude: Number(park.longitude),
-                  },
-                  "m",
-                ),
-              )
-            : null,
+        distance,
         city: park.city || null,
         country: park.country || null,
-        status,
-        totalAttractions: stats?.totalAttractions || 0,
-        operatingAttractions: stats?.operatingAttractions || 0,
-        analytics: occupancy
-          ? {
-              avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-              crowdLevel: this.analyticsService.determineCrowdLevel(
-                occupancy.current,
-              ),
-              occupancy: occupancy.current,
-            }
-          : undefined,
+        status: fb?.status || "CLOSED",
+        totalAttractions: fb?.totalAttractions || 0,
+        operatingAttractions: fb?.operatingAttractions || 0,
+        analytics: fb?.analytics,
         url: buildParkUrl(park) || null,
         timezone: park.timezone,
-        todaySchedule:
-          todaySchedule && todaySchedule.length > 0
-            ? {
-                openingTime: todaySchedule[0].openingTime?.toISOString() || "",
-                closingTime: todaySchedule[0].closingTime?.toISOString() || "",
-                scheduleType: todaySchedule[0].scheduleType,
-              }
-            : undefined,
-        nextSchedule: nextSchedule
-          ? {
-              openingTime: nextSchedule.openingTime?.toISOString() || "",
-              closingTime: nextSchedule.closingTime?.toISOString() || "",
-              scheduleType: nextSchedule.scheduleType,
-            }
-          : undefined,
-      };
-
-      return dto;
+        todaySchedule: fb?.todaySchedule,
+        nextSchedule: fb?.nextSchedule,
+      } as ParkWithDistanceDto;
     });
   }
 
   /**
-   * Enrich attractions with live data and calculate distances
-   * Uses AttractionIntegrationService for complete data (queues, statistics, trends)
+   * Enrich attractions with live data and calculate distances.
+   *
+   * Fast path: MGET all `attraction:integrated:{id}` keys in one Redis round-trip.
+   * Slow path: call buildIntegratedResponse() for cache misses.
    */
   private async enrichAttractions(
     attractions: Attraction[],
@@ -421,13 +536,44 @@ export class FavoritesService {
       return [];
     }
 
-    // Build integrated responses for all attractions in parallel
-    const integratedResponses = await Promise.all(
-      attractions.map((attraction) =>
+    // --- Fast path: single MGET for all attraction integrated caches ---
+    const cacheKeys = attractions.map((a) => `attraction:integrated:${a.id}`);
+    const cachedRaw = await this.redis.mget(...cacheKeys);
+
+    const integratedMap = new Map<string, AttractionResponseDto>();
+    const missedAttractions: Attraction[] = [];
+
+    for (let i = 0; i < attractions.length; i++) {
+      if (cachedRaw[i]) {
+        try {
+          integratedMap.set(
+            attractions[i].id,
+            JSON.parse(cachedRaw[i]!) as AttractionResponseDto,
+          );
+        } catch {
+          missedAttractions.push(attractions[i]);
+        }
+      } else {
+        missedAttractions.push(attractions[i]);
+      }
+    }
+
+    // --- Slow path: full build for cache misses ---
+    const fallbackResponses = await Promise.all(
+      missedAttractions.map((attraction) =>
         this.attractionIntegrationService
           .buildIntegratedResponse(attraction)
           .catch(() => null),
       ),
+    );
+    for (let i = 0; i < missedAttractions.length; i++) {
+      if (fallbackResponses[i]) {
+        integratedMap.set(missedAttractions[i].id, fallbackResponses[i]!);
+      }
+    }
+
+    const integratedResponses = attractions.map(
+      (a) => integratedMap.get(a.id) ?? null,
     );
 
     // Build DTOs with distance and trend

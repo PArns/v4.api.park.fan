@@ -413,7 +413,10 @@ export class CalendarService {
             new Date(
               Math.max(
                 ...schedules.map((s) =>
-                  (typeof s.date === "string" ? parseISO(s.date) : s.date).getTime(),
+                  (typeof s.date === "string"
+                    ? parseISO(s.date)
+                    : s.date
+                  ).getTime(),
                 ),
               ),
             ),
