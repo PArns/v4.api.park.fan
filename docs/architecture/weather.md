@@ -104,6 +104,30 @@ Coordinates come from the ThemeParks.wiki API sync (park-metadata processor, Ste
 
 ---
 
+## Known Bug Patterns (Fixed)
+
+### DATE + AT TIME ZONE = off-by-one for non-UTC parks
+
+**Bug**: Queries using `DATE(weather.date AT TIME ZONE :tz) BETWEEN ...` on a PostgreSQL `DATE` column shift dates by ±1 day for non-UTC parks.
+
+**Why it happens**: PostgreSQL implicitly casts a `DATE` to `timestamp with time zone` (midnight UTC) before applying `AT TIME ZONE`. For parks west of UTC (e.g. `America/New_York` = UTC-4), midnight UTC becomes 8 PM the previous day in local time → the stored date shifts back by 1 day → today's record is excluded from the query → `current` is always `null`.
+
+For parks east of UTC (e.g. `Europe/Berlin` = UTC+2), the save bug and the query bug happen to cancel out — they appear to work but actually show the wrong day's data (April 1 data shown as "today" on March 31).
+
+**Fix**:
+- **Save**: Use noon-UTC instead of `fromZonedTime(midnight, tz)`. Noon UTC is never ambiguous for any timezone: `new Date(\`${day.date}T12:00:00Z\`)` → PostgreSQL DATE always truncates to the correct calendar date.
+- **Query**: Use direct date-string comparison (`weather.date >= :start`) instead of `DATE(weather.date AT TIME ZONE :tz)`. PostgreSQL auto-casts `'YYYY-MM-DD'` strings to DATE.
+
+**Affected**: All non-UTC parks. US parks showed `current: null`; European parks showed tomorrow's data as today.
+
+### save via `fromZonedTime(midnight, timezone)` stores wrong date for east-of-UTC parks
+
+**Bug**: `fromZonedTime("2026-03-31T00:00:00", "Europe/Berlin")` = `2026-03-30T22:00:00Z`. PostgreSQL DATE = `2026-03-30` (off by -1 day).
+
+**Fix**: Use `new Date(\`${day.date}T12:00:00Z\`)` — noon UTC is unambiguous for all timezones (±12h = always same calendar day).
+
+---
+
 ## Key Files
 
 | File | Purpose |

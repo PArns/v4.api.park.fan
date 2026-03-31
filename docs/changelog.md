@@ -8,8 +8,14 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ### Added
 
-- **Weather forecast in integrated park response** (`park-integration.service.ts`, `park-with-attractions.dto.ts`): The integrated park endpoint now returns `weather.forecast` (next 6 days) in addition to `weather.current`. Previously `getCurrentAndForecast()` fetched 16 days from DB but only `current` was mapped into the response. The API now exposes today + 6 forecast days (7 total).
-- **Weather architecture doc** (`docs/architecture/weather.md`): Documents Open-Meteo sync strategy, storage schema, BullMQ jobs, timezone handling, and why parks may have empty weather (missing lat/lng coordinates).
+- **Weather forecast in integrated park response**
+
+### Fixed (weather)
+
+- **Weather DATE timezone off-by-one** (`weather.service.ts`): Two bugs caused non-UTC parks to show wrong weather. (1) Save used `fromZonedTime(midnight, tz)` → east-of-UTC parks (e.g. `Europe/Berlin`) stored dates shifted -1 day (March 31 saved as March 30). (2) Query used `DATE(weather.date AT TIME ZONE :tz)` — PostgreSQL casts DATE to midnight-UTC timestamptz first, then shifts back to local time, which for west-of-UTC parks (e.g. `America/New_York`) moves today's date to yesterday → `current` always null. Fixed: save uses noon-UTC (`new Date(\`${date}T12:00:00Z\`)`), query uses direct date-string comparison (`weather.date >= :start`).
+- **Weather empty for US parks** (root cause above): Parks like "Universal's Epic Universe" returned `weather: { current: null, forecast: [] }`. The park has coordinates and Open-Meteo data; the off-by-one query excluded today's DB record. (`park-integration.service.ts`, `park-with-attractions.dto.ts`): The integrated park endpoint now returns `weather.forecast` (next 6 days) in addition to `weather.current`. Previously `getCurrentAndForecast()` fetched 16 days from DB but only `current` was mapped into the response. The API now exposes today + 6 forecast days (7 total).
+- **Weather architecture doc** (`docs/architecture/weather.md`): Documents Open-Meteo sync strategy, storage schema, BullMQ jobs, timezone handling, DATE timezone bug pattern, and why parks may have empty weather (missing lat/lng coordinates).
+- **Weather cache TTL extended** (`weather.service.ts`): Increased from 30 minutes to 2 hours. Weather data changes at most twice a day (sync at 00:00 and 12:00 UTC); frequent cache misses caused unnecessary DB load.
 
 ### Fixed
 

@@ -1189,6 +1189,31 @@ def create_prediction_features(
                 df.loc[mask, "volatility_weekday"] = volatility_weekday
                 df.loc[mask, "volatility_weekend"] = volatility_weekend
 
+                # avg_wait_same_dow_4w: mean of last 4 same-day-of-week lookups (1w/2w/3w/4w).
+                # Must be computed per prediction timestamp because future timestamps span
+                # multiple days (e.g. Sunday 19:00 → Monday 18:00), each needing its own
+                # same-DOW historical anchor.
+                #
+                # PERFORMANCE: Pre-build a (date, hour) → avg_wait dict once per attraction
+                # so each per-row lookup is O(1) instead of O(len(attraction_data)).
+                # This avoids saturating all uvicorn workers with DataFrame scans.
+                _attr_lookup: dict = (
+                    attraction_data.groupby(
+                        [pd.to_datetime(attraction_data["date"]).dt.date,
+                         attraction_data["hour"].astype(int)]
+                    )["avg_wait"]
+                    .mean()
+                    .to_dict()
+                )
+
+                def _same_dow_avg_fast(ts_local, weeks: list):
+                    vals = []
+                    for w in weeks:
+                        key = ((ts_local - timedelta(days=7 * w)).date(), int(ts_local.hour))
+                        if key in _attr_lookup:
+                            vals.append(_attr_lookup[key])
+                    return float(np.mean(vals)) if vals else rolling_7d
+
                 # For future prediction rows (> 24h ahead), avg_wait_last_24h and
                 # avg_wait_last_1h lose meaning — they just reflect current/recent
                 # conditions, not conditions at the predicted time. Replace them with
@@ -1225,31 +1250,6 @@ def create_prediction_features(
                         if hour_key in _attr_lookup:
                             hour_hist = _attr_lookup[hour_key]
                         df.at[idx, "avg_wait_last_1h"] = hour_hist
-
-                # avg_wait_same_dow_4w: mean of last 4 same-day-of-week lookups (1w/2w/3w/4w).
-                # Must be computed per prediction timestamp because future timestamps span
-                # multiple days (e.g. Sunday 19:00 → Monday 18:00), each needing its own
-                # same-DOW historical anchor.
-                #
-                # PERFORMANCE: Pre-build a (date, hour) → avg_wait dict once per attraction
-                # so each per-row lookup is O(1) instead of O(len(attraction_data)).
-                # This avoids saturating all uvicorn workers with DataFrame scans.
-                _attr_lookup: dict = (
-                    attraction_data.groupby(
-                        [pd.to_datetime(attraction_data["date"]).dt.date,
-                         attraction_data["hour"].astype(int)]
-                    )["avg_wait"]
-                    .mean()
-                    .to_dict()
-                )
-
-                def _same_dow_avg_fast(ts_local, weeks: list):
-                    vals = []
-                    for w in weeks:
-                        key = ((ts_local - timedelta(days=7 * w)).date(), int(ts_local.hour))
-                        if key in _attr_lookup:
-                            vals.append(_attr_lookup[key])
-                    return float(np.mean(vals)) if vals else rolling_7d
 
                 if park_tz:
                     import pytz as _pytz

@@ -301,15 +301,13 @@ export class WeatherService {
     const startStr = formatInParkTimezone(startDate, tz);
     const endStr = formatInParkTimezone(endDate, tz);
 
-    // Direct DATE string comparison — see getCurrentAndForecast for explanation of
+    // Direct DATE comparison — see getCurrentAndForecast for explanation of
     // why AT TIME ZONE must not be used on a DATE column.
     return this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
-      .andWhere("weather.date::text BETWEEN :start AND :end", {
-        start: startStr,
-        end: endStr,
-      })
+      .andWhere("weather.date >= :start", { start: startStr })
+      .andWhere("weather.date <= :end", { end: endStr })
       .orderBy("weather.date", "ASC")
       .getMany();
   }
@@ -424,18 +422,15 @@ export class WeatherService {
       .toISOString()
       .split("T")[0];
 
-    // Direct DATE string comparison — avoids the AT TIME ZONE trap on a DATE column.
-    // PostgreSQL implicitly casts DATE to midnight-UTC timestamptz before AT TIME ZONE,
-    // which shifts western parks (UTC-N) back by one calendar day, making today's
-    // record disappear. weather.date is stored as noon-UTC so date::text is always the
-    // correct YYYY-MM-DD calendar date.
+    // Direct DATE comparison using string params — PostgreSQL auto-casts 'YYYY-MM-DD'
+    // strings to DATE, so no ::text cast is needed. This avoids the AT TIME ZONE trap
+    // on a DATE column: PostgreSQL would cast DATE to midnight-UTC timestamptz first,
+    // shifting western parks (UTC-N) back one calendar day and making today disappear.
     const allWeather = await this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
-      .andWhere("weather.date::text BETWEEN :start AND :end", {
-        start: todayStr,
-        end: futureStr,
-      })
+      .andWhere("weather.date >= :start", { start: todayStr })
+      .andWhere("weather.date <= :end", { end: futureStr })
       .orderBy("weather.date", "ASC")
       .getMany();
 
