@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { ParksService } from "../../parks/parks.service";
+import { AttractionsService } from "../../attractions/attractions.service";
 
 /**
  * P50 Baseline Processor
@@ -29,6 +30,7 @@ export class P50BaselineProcessor {
   constructor(
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
+    private readonly attractionsService: AttractionsService,
   ) {}
 
   /**
@@ -132,8 +134,13 @@ export class P50BaselineProcessor {
       let failureCount = 0;
 
       for (const park of parks) {
-        // Get all attractions for this park
-        const attractions = park.attractions || [];
+        // Fetch attractions via service (findAll() does not eager-load attractions)
+        // Use large page size to get all attractions in one query
+        const { data: attractions } = await this.attractionsService.findByParkId(
+          park.id,
+          1,
+          10000,
+        );
 
         for (const attraction of attractions) {
           try {

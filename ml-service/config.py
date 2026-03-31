@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     # for future predictions (tomorrow, next week) where real-time occupancy is unknown.
     OCCUPANCY_DROPOUT_RATE: float = 0.30
 
+    # Rolling Average Dropout Rate
+    # For dropout rows, avg_wait_last_24h and avg_wait_last_1h are replaced with
+    # rolling_avg_7d and rolling_avg_weekday/weekend respectively. This teaches the
+    # model to predict from other signals (holidays, season, hour) when real-time
+    # rolling averages are unavailable — matching the inference scenario for future
+    # predictions (next week, next month) where we use historical DOW/hour profiles.
+    ROLLING_AVG_DROPOUT_RATE: float = 0.40
+
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
 

@@ -1004,6 +1004,50 @@ def add_park_occupancy_feature(
                 actual[drop] = np.array(profile_vals)[drop]
                 df.loc[mask, "park_occupancy_pct"] = actual
 
+        # Rolling Average Dropout: teach the model to predict when avg_wait_last_24h
+        # and avg_wait_last_1h are unavailable (i.e. future predictions where we use
+        # DOW/hour historical profiles instead of real rolling values).
+        # Without this, the model learns to rely on these features at >50% importance,
+        # making future predictions converge to a flat ~30 min regardless of holidays/season.
+        rolling_dropout_rate = settings.ROLLING_AVG_DROPOUT_RATE
+        if rolling_dropout_rate > 0 and "avg_wait_last_24h" in df.columns:
+            ts = pd.to_datetime(df["timestamp"])
+            dow = ts.dt.dayofweek  # Mon=0, Sun=6
+
+            for attraction_id in df["attractionId"].unique():
+                attr_mask = df["attractionId"] == attraction_id
+
+                rng = np.random.default_rng(
+                    settings.CATBOOST_RANDOM_SEED + hash(str(attraction_id)) % 10000
+                )
+                drop = rng.random(attr_mask.sum()) < rolling_dropout_rate
+
+                if not drop.any():
+                    continue
+
+                attr_dow = dow[attr_mask]
+                is_weekend = (attr_dow >= 5).values
+
+                # Fallback for avg_wait_last_24h: per-attraction rolling_avg_7d
+                # (same-week average, available for all rows)
+                fallback_24h = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
+
+                # Fallback for avg_wait_last_1h: weekday vs weekend split average
+                fallback_1h = np.where(
+                    is_weekend,
+                    df.loc[attr_mask, "rolling_avg_weekend"].values,
+                    df.loc[attr_mask, "rolling_avg_weekday"].values,
+                )
+
+                actual_24h = df.loc[attr_mask, "avg_wait_last_24h"].values.copy()
+                actual_1h = df.loc[attr_mask, "avg_wait_last_1h"].values.copy()
+
+                actual_24h[drop] = fallback_24h[drop]
+                actual_1h[drop] = fallback_1h[drop]
+
+                df.loc[attr_mask, "avg_wait_last_24h"] = actual_24h
+                df.loc[attr_mask, "avg_wait_last_1h"] = actual_1h
+
     return df
 
 

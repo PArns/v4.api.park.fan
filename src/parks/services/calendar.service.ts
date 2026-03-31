@@ -717,6 +717,17 @@ export class CalendarService {
         }
       : null;
 
+    // Compute visit recommendation using crowd level + contextual signals
+    const recommendation = this.computeRecommendation(
+      crowdLevel,
+      status,
+      isHoliday,
+      isSchoolVacation,
+      isBridgeDay,
+      influencingHolidays.length,
+      weatherSummary,
+    );
+
     // Build calendar day
     const day: CalendarDay = {
       date: dateStr,
@@ -724,6 +735,7 @@ export class CalendarService {
       isToday: dateStr === today,
       hours: hours || undefined,
       crowdLevel,
+      recommendation,
       weather: weatherSummary || undefined,
       events,
       isHoliday,
@@ -887,5 +899,64 @@ export class CalendarService {
     stats: ParkDailyStats[],
   ): ParkDailyStats | undefined {
     return stats.find((s) => s.date === dateStr);
+  }
+
+  /**
+   * Compute visit recommendation combining crowd level with contextual signals.
+   *
+   * Scoring (higher = worse):
+   *   crowd level base: very_low=0, low=1, moderate=2, high=3, very_high=4, extreme=5
+   *   +2  public holiday (crowds significantly higher than predicted)
+   *   +1  school vacation
+   *   +1  bridge day
+   *   +1  ≥2 influencing holidays from neighboring regions
+   *   +1  rain likely (rainChance > 60%) — poor visitor experience
+   *
+   * Final score → recommendation:
+   *   0-1 → highly_recommended
+   *   2   → recommended
+   *   3   → neutral
+   *   4   → avoid
+   *   ≥5  → strongly_avoid
+   */
+  private computeRecommendation(
+    crowdLevel: CrowdLevel | "closed",
+    status: string,
+    isHoliday: boolean,
+    isSchoolVacation: boolean,
+    isBridgeDay: boolean,
+    influencingHolidayCount: number,
+    weather: WeatherSummary | null,
+  ):
+    | "highly_recommended"
+    | "recommended"
+    | "neutral"
+    | "avoid"
+    | "strongly_avoid"
+    | "closed" {
+    if (crowdLevel === "closed" || status === "CLOSED") return "closed";
+
+    const crowdScore: Record<string, number> = {
+      very_low: 0,
+      low: 1,
+      moderate: 2,
+      high: 3,
+      very_high: 4,
+      extreme: 5,
+    };
+
+    let score = crowdScore[crowdLevel] ?? 2;
+
+    if (isHoliday) score += 2;
+    if (isSchoolVacation) score += 1;
+    if (isBridgeDay) score += 1;
+    if (influencingHolidayCount >= 2) score += 1;
+    if (weather && weather.rainChance > 60) score += 1;
+
+    if (score <= 1) return "highly_recommended";
+    if (score === 2) return "recommended";
+    if (score === 3) return "neutral";
+    if (score === 4) return "avoid";
+    return "strongly_avoid";
   }
 }

@@ -154,6 +154,27 @@ export class CalendarDay {
   })
   influencingHolidays?: InfluencingHoliday[];
 
+  @ApiProperty({
+    description:
+      "Visit recommendation based on crowd level, weather, and holiday context",
+    required: false,
+    enum: [
+      "highly_recommended",
+      "recommended",
+      "neutral",
+      "avoid",
+      "strongly_avoid",
+      "closed",
+    ],
+  })
+  recommendation?:
+    | "highly_recommended"
+    | "recommended"
+    | "neutral"
+    | "avoid"
+    | "strongly_avoid"
+    | "closed";
+
   @ApiProperty({ type: () => [HourlyPrediction], required: false })
   hourly?: HourlyPrediction[];
 }

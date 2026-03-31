@@ -1189,6 +1189,43 @@ def create_prediction_features(
                 df.loc[mask, "volatility_weekday"] = volatility_weekday
                 df.loc[mask, "volatility_weekend"] = volatility_weekend
 
+                # For future prediction rows (> 24h ahead), avg_wait_last_24h and
+                # avg_wait_last_1h lose meaning — they just reflect current/recent
+                # conditions, not conditions at the predicted time. Replace them with
+                # DOW/hour-based historical profiles so the model can differentiate
+                # weekdays from weekends and low-season from peak-season future dates.
+                if park_tz:
+                    import pytz as _pytz_future
+                    _tz_future = _pytz_future.timezone(park_tz)
+                    future_24h_cutoff = base_time_pd + timedelta(hours=24)
+                    for idx in df.index[mask]:
+                        ts_utc_row = pd.Timestamp(df.at[idx, "timestamp"])
+                        if ts_utc_row.tzinfo is None:
+                            ts_utc_row = ts_utc_row.tz_localize("UTC")
+                        if ts_utc_row <= future_24h_cutoff:
+                            continue  # within 24h: keep real recent values
+                        try:
+                            ts_local_row = ts_utc_row.tz_convert(_tz_future)
+                        except Exception:
+                            ts_local_row = ts_utc_row
+                        row_hour = int(ts_local_row.hour)
+                        row_is_weekend = ts_local_row.dayofweek >= 5
+                        # avg_wait_last_24h → same-DOW-4-week avg (captures weekly pattern)
+                        dow_avg = _same_dow_avg_fast(ts_local_row, [1, 2, 3, 4])
+                        df.at[idx, "avg_wait_last_24h"] = dow_avg
+                        # avg_wait_last_1h → same-hour historical avg split by weekday/weekend
+                        hour_hist = (
+                            rolling_avg_weekend if row_is_weekend else rolling_avg_weekday
+                        )
+                        # prefer same-hour same-DOW lookup for better hour granularity
+                        hour_key = (
+                            (ts_local_row - timedelta(days=7)).date(),
+                            row_hour,
+                        )
+                        if hour_key in _attr_lookup:
+                            hour_hist = _attr_lookup[hour_key]
+                        df.at[idx, "avg_wait_last_1h"] = hour_hist
+
                 # avg_wait_same_dow_4w: mean of last 4 same-day-of-week lookups (1w/2w/3w/4w).
                 # Must be computed per prediction timestamp because future timestamps span
                 # multiple days (e.g. Sunday 19:00 → Monday 18:00), each needing its own
