@@ -12,6 +12,36 @@ import * as packageJson from "../package.json";
 import * as fs from "fs";
 import * as path from "path";
 
+function writeCrashLog(type: string, message: string): void {
+  const logsDir = path.join(process.cwd(), "logs");
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  const entry =
+    JSON.stringify({ timestamp: new Date().toISOString(), type, message }) +
+    "\n";
+  try {
+    fs.appendFileSync(path.join(logsDir, "crash.log"), entry, "utf8");
+  } catch {
+    // ignore — we're already crashing
+  }
+}
+
+process.on("uncaughtException", (error: Error) => {
+  const message = error.stack ?? error.message;
+  console.error("[CRASH] uncaughtException", message);
+  writeCrashLog("uncaughtException", message);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  const message =
+    reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error("[CRASH] unhandledRejection", message);
+  writeCrashLog("unhandledRejection", message);
+  process.exit(1);
+});
+
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ["log", "error", "warn"],
