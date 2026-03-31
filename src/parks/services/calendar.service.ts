@@ -9,7 +9,6 @@ import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
-import { QueueDataService } from "../../queue-data/queue-data.service";
 import {
   IntegratedCalendarResponse,
   CalendarDay,
@@ -27,11 +26,10 @@ import { InfluencingHoliday } from "../dto/schedule-item.dto";
 import { WeatherData } from "../entities/weather-data.entity";
 import { Holiday } from "../../holidays/entities/holiday.entity";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
-import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
-  isSameDayInTimezone,
+  getTomorrowDateInTimezone,
 } from "../../common/utils/date.util";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import {
@@ -39,10 +37,7 @@ import {
   HolidayEntry,
 } from "../../common/utils/holiday.utils";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
-import { addDays, parseISO } from "date-fns";
 
-import { ParkDailyStats } from "../../stats/entities/park-daily-stats.entity";
-import { StatsService } from "../../stats/stats.service";
 
 /** TTL for "schedule refresh requested" rate-limit key (avoid hammering ThemeParks API). */
 const SCHEDULE_REFRESH_RATE_LIMIT_TTL_SEC = 12 * 60 * 60; // 12 hours (was 6h – less aggressive)
@@ -67,8 +62,6 @@ export class CalendarService {
     private readonly analyticsService: AnalyticsService,
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
-    private readonly queueDataService: QueueDataService,
-    private readonly statsService: StatsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("park-metadata") private readonly parkMetadataQueue: Queue,
   ) {}
@@ -134,15 +127,22 @@ export class CalendarService {
       `Building calendar for ${park.slug} from ${fromStr} to ${toStr}`,
     );
 
-    // Fetch all data in parallel
+    // Only fetch hourly ML predictions when the range actually contains today or tomorrow,
+    // or when includeHourly="all". Skipping this for pure future-month requests (e.g. July)
+    // eliminates an unnecessary sequential ML HTTP call that was causing slowness.
+    const tomorrow = getTomorrowDateInTimezone(park.timezone);
+    const needsHourly =
+      includeHourly === "all" ||
+      (includeHourly !== "none" && fromStr <= tomorrow && toStr >= today);
+
+    // Fetch all data in parallel (including hourly ML when needed)
     const [
       schedules,
       weatherData,
       mlPredictions,
       holidays,
-      historicalQueueData,
-      dailyStats,
       operatingDateRange,
+      hourlyPredictionsList,
     ] = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
         this.logger.warn(
@@ -194,44 +194,13 @@ export class CalendarService {
             return [];
           });
       })(),
-      (async () => {
-        // Optimized: Only fetch queue data if range includes today or past
-        // And use optimized date-range query instead of full park dump
-        const rangeStartStr = formatInParkTimezone(fromDate, park.timezone);
-        if (rangeStartStr > today) {
-          return []; // Future only request - no queue data needed
-        }
-
-        try {
-          // Add 1 day buffer to end date to ensure we cover full day in UTC
-          const queryEnd = new Date(toDate);
-          queryEnd.setDate(queryEnd.getDate() + 1);
-
-          return await this.queueDataService.findHistoricalDataForDateRange(
-            park.id,
-            fromDate,
-            queryEnd,
-          );
-        } catch (err: any) {
-          this.logger.debug(
-            `Historical queue data unavailable for ${park.slug}: ${err.message}`,
-          );
-          return [];
-        }
-      })(),
-      this.statsService
-        .getDailyStats(
-          park.id,
-          formatInParkTimezone(fromDate, park.timezone),
-          formatInParkTimezone(toDate, park.timezone),
-        )
-        .catch((err) => {
-          this.logger.warn(
-            `Stats unavailable for ${park.slug}: ${err.message}`,
-          );
-          return [];
-        }),
       this.parksService.getOperatingDateRange(park.id, park.timezone),
+      needsHourly
+        ? this.mlService
+            .getParkPredictions(park.id, "hourly")
+            .then((r) => r.predictions)
+            .catch(() => [] as PredictionDto[])
+        : Promise.resolve([] as PredictionDto[]),
     ]);
 
     // Derive booleans / range info from operatingDateRange
@@ -251,16 +220,6 @@ export class CalendarService {
         `Schedule refresh check failed for ${park.slug}: ${err.message}`,
       ),
     );
-
-    // Fetch hourly ML predictions once (used for today+tomorrow when includeHourly) to avoid N+1
-    const hourlyPredictionsList: PredictionDto[] =
-      includeHourly !== "none"
-        ? (
-            await this.mlService
-              .getParkPredictions(park.id, "hourly")
-              .catch(() => ({ predictions: [] }))
-          ).predictions
-        : [];
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
     const historicalDateStrs: string[] = [];
@@ -289,30 +248,33 @@ export class CalendarService {
       }
     });
 
-    // Build calendar days
-    const days: CalendarDay[] = [];
+    // Collect all dates in the range
+    const datesToBuild: Date[] = [];
     const currentDate = new Date(fromDate);
-
     while (currentDate <= toDate) {
-      const dayData = await this.buildCalendarDay(
-        park,
-        currentDate,
-        schedules,
-        weatherData,
-        mlPredictions.predictions,
-        holidays,
-        includeHourly,
-        historicalQueueData,
-        dailyStats as ParkDailyStats[], // Pass stats
-        today,
-        hourlyPredictionsList,
-        prefetchedCrowdLevels,
-        parkHasOperatingSchedule,
-        operatingDateRange,
-      );
-      days.push(dayData);
+      datesToBuild.push(new Date(currentDate));
       currentDate.setDate(currentDate.getDate() + 1);
     }
+
+    // Build all calendar days in parallel
+    const days = await Promise.all(
+      datesToBuild.map((date) =>
+        this.buildCalendarDay(
+          park,
+          date,
+          schedules,
+          weatherData,
+          mlPredictions.predictions,
+          holidays,
+          includeHourly,
+          today,
+          hourlyPredictionsList,
+          prefetchedCrowdLevels,
+          parkHasOperatingSchedule,
+          operatingDateRange,
+        ),
+      ),
+    );
 
     // Build response
     const response: IntegratedCalendarResponse = {
@@ -369,6 +331,7 @@ export class CalendarService {
       if (!byMonth.has(ym)) byMonth.set(ym, []);
       byMonth.get(ym)!.push(d);
     }
+    const writes: Promise<void>[] = [];
     for (const [ym, monthDays] of byMonth) {
       monthDays.sort((a, b) => a.date.localeCompare(b.date));
       const [y, m] = ym.split("-").map(Number);
@@ -382,9 +345,13 @@ export class CalendarService {
         continue;
       const key = `calendar:month:${parkId}:${ym}:${includeHourly}`;
       const ttl = today.startsWith(ym) ? 5 * 60 : this.CALENDAR_CACHE_TTL;
-      await this.redis.set(key, JSON.stringify(monthDays), "EX", ttl);
-      this.logger.debug(`Cached calendar month: ${key} (TTL: ${ttl}s)`);
+      writes.push(
+        this.redis.set(key, JSON.stringify(monthDays), "EX", ttl).then(() =>
+          this.logger.debug(`Cached calendar month: ${key} (TTL: ${ttl}s)`),
+        ),
+      );
     }
+    await Promise.all(writes);
   }
 
   /**
@@ -405,16 +372,20 @@ export class CalendarService {
     const toStr = formatInParkTimezone(toDate, park.timezone);
     if (toStr <= today) return; // No future dates in range
 
-    // Include all types (OPERATING, CLOSED, UNKNOWN): UNKNOWN placeholders from fillScheduleGaps
-    // mean we already have "something" for that date, so don't trigger refresh for that range.
+    // Only count OPERATING/CLOSED entries (real API data), not UNKNOWN placeholders from
+    // fillScheduleGaps. UNKNOWN means "no data from source yet" — if the requested range
+    // only has UNKNOWN entries, we still want to trigger a refresh to check for new data.
+    const realSchedules = schedules.filter(
+      (s) => s.scheduleType !== ScheduleType.UNKNOWN,
+    );
     const maxScheduleDate =
-      schedules.length > 0
+      realSchedules.length > 0
         ? formatInParkTimezone(
             new Date(
               Math.max(
-                ...schedules.map((s) =>
+                ...realSchedules.map((s) =>
                   (typeof s.date === "string"
-                    ? parseISO(s.date)
+                    ? new Date(`${s.date}T12:00:00Z`)
                     : s.date
                   ).getTime(),
                 ),
@@ -468,8 +439,6 @@ export class CalendarService {
     mlPredictions: PredictionDto[],
     holidays: Holiday[],
     includeHourly: string,
-    historicalQueueData: QueueData[],
-    parkStats: ParkDailyStats[],
     today: string,
     hourlyPredictionsPreFetched: PredictionDto[] = [],
     prefetchedCrowdLevels: Map<string, CrowdLevel | "closed"> = new Map(),
@@ -494,7 +463,9 @@ export class CalendarService {
     const weather = weatherData.find(
       (w) =>
         formatInParkTimezone(
-          typeof w.date === "string" ? parseISO(w.date) : w.date,
+          typeof w.date === "string"
+            ? new Date(`${w.date}T12:00:00Z`)
+            : w.date,
           park.timezone,
         ) === dateStr,
     );
@@ -631,36 +602,18 @@ export class CalendarService {
       if (prefetched !== undefined) {
         inferredCrowdLevel = prefetched;
       } else {
-        const cachedStat = this.findCachedStat(dateStr, parkStats);
-        if (cachedStat && cachedStat.p90WaitTime !== null) {
-          const crowdData =
-            await this.analyticsService.calculateCrowdLevelForDate(
-              park.id,
-              "park",
-              dateStr,
-              park.timezone,
-            );
-          inferredCrowdLevel = crowdData.crowdLevel;
-        } else {
-          const dayQueueData = historicalQueueData.filter(
-            (q) =>
-              formatInParkTimezone(q.timestamp, park.timezone) === dateStr &&
-              q.waitTime !== null &&
-              q.waitTime >= 5,
-          );
-          if (dayQueueData.length > 0) {
-            const crowdData =
-              await this.analyticsService.calculateCrowdLevelForDate(
-                park.id,
-                "park",
-                dateStr,
-                park.timezone,
-              );
-            inferredCrowdLevel = crowdData.crowdLevel;
-          } else {
-            inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
-          }
-        }
+        // Always query real usage data for today/past days (calculateCrowdLevelForDate
+        // has its own Redis cache: 30 min for today, 24h for historical).
+        // ML prediction is only the last resort when genuinely no data exists.
+        const crowdData = await this.analyticsService.calculateCrowdLevelForDate(
+          park.id,
+          "park",
+          dateStr,
+          park.timezone,
+        );
+        inferredCrowdLevel = crowdData.hasData
+          ? crowdData.crowdLevel
+          : mlPrediction?.crowdLevel || "moderate";
       }
     } else {
       inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
@@ -766,17 +719,15 @@ export class CalendarService {
     includeHourly: string,
     timezone: string,
   ): boolean {
-    const today = parseISO(getCurrentDateInTimezone(timezone));
-    const tomorrow = addDays(today, 1);
+    const todayStr = getCurrentDateInTimezone(timezone);
+    const tomorrowStr = getTomorrowDateInTimezone(timezone);
+    const dateStr = formatInParkTimezone(date, timezone);
 
     switch (includeHourly) {
       case "today+tomorrow":
-        return (
-          isSameDayInTimezone(date, today, timezone) ||
-          isSameDayInTimezone(date, tomorrow, timezone)
-        );
+        return dateStr === todayStr || dateStr === tomorrowStr;
       case "today":
-        return isSameDayInTimezone(date, today, timezone);
+        return dateStr === todayStr;
       case "all":
         return true;
       case "none":
@@ -859,24 +810,6 @@ export class CalendarService {
   }
 
   /**
-   * Calculate average wait time from queue data
-   */
-  private calculateP90WaitTime(queueData: QueueData[]): number {
-    const waitTimes = queueData
-      .filter(
-        (q) =>
-          q.waitTime !== null && q.waitTime >= 5 && q.queueType === "STANDBY",
-      ) // Ensure STANDBY and valid
-      .map((q) => q.waitTime!)
-      .sort((a, b) => a - b);
-
-    if (waitTimes.length === 0) return 0;
-
-    const percentileIndex = Math.ceil(waitTimes.length * 0.9) - 1;
-    return waitTimes[percentileIndex];
-  }
-
-  /**
    * Map average wait time to crowd level (DEPRECATED - kept for reference only)
    * DO NOT USE - Use AnalyticsService.calculateCrowdLevelForDate() instead
    *
@@ -890,16 +823,6 @@ export class CalendarService {
   //   if (avgWaitTime <= 60) return "high";
   //   return "very_high";
   // }
-
-  /**
-   * Helper to find cached stat for a specific date
-   */
-  private findCachedStat(
-    dateStr: string,
-    stats: ParkDailyStats[],
-  ): ParkDailyStats | undefined {
-    return stats.find((s) => s.date === dateStr);
-  }
 
   /**
    * Compute visit recommendation combining crowd level with contextual signals.

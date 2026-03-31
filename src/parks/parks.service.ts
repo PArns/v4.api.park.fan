@@ -2278,9 +2278,21 @@ export class ParksService {
     const keys = await this.redis.keys(`schedule:*:${parkId}:*`);
     if (keys.length > 0) {
       await this.redis.del(...keys);
-      // this.logger.debug(
-      //   `Cleared ${keys.length} schedule cache keys for park ${parkId}`,
-      // );
+    }
+  }
+
+  /**
+   * Invalidates calendar month cache for a park.
+   * Called after schedule sync so stale UNKNOWN months are not served from cache
+   * after ThemeParks Wiki publishes new opening hours.
+   */
+  async invalidateCalendarMonthCache(parkId: string): Promise<void> {
+    const keys = await this.redis.keys(`calendar:month:${parkId}:*`);
+    if (keys.length > 0) {
+      await this.redis.del(...keys);
+      this.logger.debug(
+        `Cleared ${keys.length} calendar month cache keys for park ${parkId}`,
+      );
     }
   }
 }

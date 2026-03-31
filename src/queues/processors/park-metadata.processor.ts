@@ -101,6 +101,7 @@ export class ParkMetadataProcessor {
         scheduleResponse.schedule,
       );
       await this.parksService.fillScheduleGaps(park.id);
+      await this.parksService.invalidateCalendarMonthCache(park.id);
       this.logger.log(
         `sync-park-schedule: ${park.name} saved ${savedEntries} schedule entries`,
       );
@@ -1065,6 +1066,7 @@ export class ParkMetadataProcessor {
 
         // Fill gaps for Holidays/Bridge Days
         await this.parksService.fillScheduleGaps(park.id);
+        await this.parksService.invalidateCalendarMonthCache(park.id);
       } catch (error) {
         this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
       }
