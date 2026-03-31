@@ -6,6 +6,11 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added
+
+- **Weather forecast in integrated park response** (`park-integration.service.ts`, `park-with-attractions.dto.ts`): The integrated park endpoint now returns `weather.forecast` (next 6 days) in addition to `weather.current`. Previously `getCurrentAndForecast()` fetched 16 days from DB but only `current` was mapped into the response. The API now exposes today + 6 forecast days (7 total).
+- **Weather architecture doc** (`docs/architecture/weather.md`): Documents Open-Meteo sync strategy, storage schema, BullMQ jobs, timezone handling, and why parks may have empty weather (missing lat/lng coordinates).
+
 ### Fixed
 
 - **P50/headliner: `waitTime >= 5` filter** (`analytics.service.ts`, `calendar.service.ts`, `stats.service.ts`, `attraction-integration.service.ts`): All historical wait-time aggregations (headliner identification, P50 baseline calculation, weekday averages, percentiles, longest waits) used `waitTime > 0`, while the real-time path used `minWaitTime=5`. Queue-Times API reports `waitTime=1` as a walk-on/no-queue placeholder (common for water parks, e.g. Rulantica slides). This caused ~40–65% of water-park samples to be 1-minute placeholders, depressing P50 baselines and causing "Extreme" crowd level while individual rides showed normal waits. Fixed by aligning all historical queries to `waitTime >= 5`. The existence check `hasQueueDataInWindow` is intentionally kept at `> 0`.

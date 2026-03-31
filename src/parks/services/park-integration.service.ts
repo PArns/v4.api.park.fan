@@ -180,6 +180,9 @@ export class ParkIntegrationService {
       current: weatherData.current
         ? WeatherItemDto.fromEntity(weatherData.current)
         : null,
+      forecast: weatherData.forecast
+        .slice(0, 6)
+        .map((w) => WeatherItemDto.fromEntity(w)),
     };
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 

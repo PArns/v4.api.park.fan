@@ -13,9 +13,7 @@ import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
-  getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
-import { parseDateInTimezone } from "../common/utils/timezone.util";
 import { addDays } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 
@@ -27,7 +25,7 @@ import { fromZonedTime } from "date-fns-tz";
 @Injectable()
 export class WeatherService {
   private readonly logger = new Logger(WeatherService.name);
-  private readonly CACHE_TTL_SECONDS = 30 * 60; // 30 minutes
+  private readonly CACHE_TTL_SECONDS = 2 * 60 * 60; // 2 hours (weather sync runs every 12h)
   private readonly HOURLY_CACHE_TTL = 60 * 60; // 1 hour
 
   constructor(
@@ -211,18 +209,17 @@ export class WeatherService {
 
     for (const day of weatherData) {
       try {
-        // Interpret date string in park timezone, not UTC
-        // day.date is "2024-01-15" - must be midnight in PARK time, not UTC
-        const dateInParkTz = fromZonedTime(
-          `${day.date}T00:00:00`,
-          park.timezone,
-        );
+        // day.date is "YYYY-MM-DD" in the park's local timezone (Open-Meteo uses
+        // timezone:"auto"). Store as noon UTC so the PostgreSQL DATE column always
+        // extracts the correct calendar day regardless of the session timezone.
+        // Midnight UTC would shift European parks (UTC+N) to the previous calendar day.
+        const dateObj = new Date(`${day.date}T12:00:00Z`);
 
         // Check if record exists
         const existing = await this.weatherDataRepository.findOne({
           where: {
             parkId,
-            date: dateInParkTz,
+            date: dateObj,
           },
         });
 
@@ -245,7 +242,7 @@ export class WeatherService {
           // Create new record
           await this.weatherDataRepository.save({
             parkId,
-            date: dateInParkTz,
+            date: dateObj,
             dataType,
             temperatureMax: day.temperatureMax,
             temperatureMin: day.temperatureMin,
@@ -304,11 +301,12 @@ export class WeatherService {
     const startStr = formatInParkTimezone(startDate, tz);
     const endStr = formatInParkTimezone(endDate, tz);
 
+    // Direct DATE string comparison — see getCurrentAndForecast for explanation of
+    // why AT TIME ZONE must not be used on a DATE column.
     return this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
-      .andWhere("DATE(weather.date AT TIME ZONE :tz) BETWEEN :start AND :end", {
-        tz,
+      .andWhere("weather.date::text BETWEEN :start AND :end", {
         start: startStr,
         end: endStr,
       })
@@ -416,39 +414,34 @@ export class WeatherService {
       return { current: null, forecast: [] };
     }
 
-    // Calculate date range using park's local timezone for query
-    // Weather data has `date` column (DATE type in PostgreSQL)
-    // We must use park's local timezone to determine "today" and future dates
-    // This ensures we fetch the correct calendar days, especially for parks
-    // in timezones ahead/behind UTC (e.g., JST, EST)
+    // "today" in park's local timezone (YYYY-MM-DD)
     const todayStr = getCurrentDateInTimezone(park.timezone);
 
-    // Calculate future date (16 days ahead) in park timezone
-    const futureDateStr = getTomorrowDateInTimezone(park.timezone);
-    // Parse and add 15 more days
-    const futureDateParsed = parseDateInTimezone(futureDateStr, park.timezone);
-    const futureDate = new Date(futureDateParsed);
-    futureDate.setDate(futureDate.getDate() + 15);
+    // +16 days as a date string — no timezone conversion needed since weather.date
+    // is a plain DATE column stored via noon-UTC (see saveWeatherData).
+    const todayNoon = new Date(`${todayStr}T12:00:00Z`);
+    const futureStr = new Date(todayNoon.getTime() + 16 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
 
-    // Use timezone-aware query similar to getWeatherData()
+    // Direct DATE string comparison — avoids the AT TIME ZONE trap on a DATE column.
+    // PostgreSQL implicitly casts DATE to midnight-UTC timestamptz before AT TIME ZONE,
+    // which shifts western parks (UTC-N) back by one calendar day, making today's
+    // record disappear. weather.date is stored as noon-UTC so date::text is always the
+    // correct YYYY-MM-DD calendar date.
     const allWeather = await this.weatherDataRepository
       .createQueryBuilder("weather")
       .where("weather.parkId = :parkId", { parkId })
-      .andWhere("DATE(weather.date AT TIME ZONE :tz) BETWEEN :start AND :end", {
-        tz: park.timezone,
+      .andWhere("weather.date::text BETWEEN :start AND :end", {
         start: todayStr,
-        end: formatInParkTimezone(futureDate, park.timezone),
+        end: futureStr,
       })
       .orderBy("weather.date", "ASC")
       .getMany();
 
-    // Separate current (today) from forecast (future).
-    // WeatherData.date is a PostgreSQL DATE column; TypeORM maps it to a midnight-UTC Date
-    // object. Applying formatInParkTimezone(midnight_UTC, tz) shifts the date back by one
-    // calendar day for parks west of UTC (e.g. America/New_York), causing today's weather
-    // to disappear. The fix: extract the YYYY-MM-DD string directly from the Date via
-    // toISOString().split("T")[0], which is always correct because midnight UTC IS the
-    // calendar date stored in the database, regardless of the park's timezone.
+    // weather.date is a DATE column; TypeORM maps it to a midnight-UTC Date object.
+    // toISOString().split("T")[0] reliably extracts YYYY-MM-DD regardless of the park
+    // timezone because DATE values are stored as noon-UTC (no tz ambiguity).
     const toWeatherDateStr = (d: Date | string): string =>
       d instanceof Date ? d.toISOString().split("T")[0] : String(d);
 

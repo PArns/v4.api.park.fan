@@ -342,6 +342,7 @@ export class ParkWithAttractionsDto {
   @ApiProperty({ description: "Weather information", required: false })
   weather?: {
     current: WeatherItemDto | null;
+    forecast: WeatherItemDto[];
   };
 
   // Content

@@ -25,6 +25,7 @@
 - [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md) - Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 - [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
+- [Weather](docs/architecture/weather.md) - Open-Meteo sync (16-day forecast), park timezone handling, why parks may have empty weather (missing coordinates).
 
 ### 📊 Analytics & Logic
 - [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
