@@ -600,9 +600,20 @@ export class ShowsService {
       .getMany();
 
     const now = new Date();
+    const maxShowAgeMs = 48 * 60 * 60 * 1000; // 48 hours
 
     // Process and project stale showtimes to today if needed
     for (const data of showData) {
+      // Skip stale data: if the source API lastUpdated is >48h old, showtimes are from a past day
+      if (
+        data.status === "OPERATING" &&
+        (!data.lastUpdated ||
+          now.getTime() - data.lastUpdated.getTime() > maxShowAgeMs)
+      ) {
+        resultMap.set(data.showId, null);
+        continue;
+      }
+
       // Fix: Project Stale Showtimes to Today on Read
       if (
         data.status === "OPERATING" &&
@@ -713,8 +724,18 @@ export class ShowsService {
 
     const result = new Map<string, ShowLiveData>();
     const now = new Date(); // Use server time for "Today"
+    const maxShowAgeMs = 48 * 60 * 60 * 1000; // 48 hours
 
     for (const data of showData) {
+      // Skip stale data: if the source API lastUpdated is >48h old, showtimes are from a past day
+      if (
+        data.status === "OPERATING" &&
+        (!data.lastUpdated ||
+          now.getTime() - data.lastUpdated.getTime() > maxShowAgeMs)
+      ) {
+        continue; // Don't include in result map → show will be treated as no live data
+      }
+
       // Fix: Project Stale Showtimes to Today on Read
       // This ensures that even if the DB has old dates (e.g. from yesterday or last month),
       // we show them as "Today" if the show is OPERATING.

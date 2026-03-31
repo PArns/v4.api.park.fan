@@ -694,9 +694,24 @@ export class ParkIntegrationService {
         );
       }
 
+      const now = new Date();
+      const maxShowAgeMs = 48 * 60 * 60 * 1000; // 48 hours
+
       for (const show of dto.shows || []) {
         const liveData = showLiveDataMap.get(show.id);
         if (liveData) {
+          // Reject stale show data: if the source API hasn't updated in >26h,
+          // the showtimes are from a previous day and must not be projected to today.
+          const isStaleData =
+            !liveData.lastUpdated ||
+            now.getTime() - liveData.lastUpdated.getTime() > maxShowAgeMs;
+
+          if (isStaleData) {
+            show.showtimes = [];
+            show.status = "CLOSED";
+            continue;
+          }
+
           // If park is OPERATING, use live status. If CLOSED, force CLOSED but show times.
           show.status = dto.status === "OPERATING" ? liveData.status : "CLOSED";
 
