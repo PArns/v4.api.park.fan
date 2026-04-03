@@ -342,6 +342,14 @@ export class ParkWithAttractionsDto {
   @ApiProperty({ description: "Weather information", required: false })
   weather?: {
     current: WeatherItemDto | null;
+    now: {
+      temperature: number;
+      apparentTemperature: number | null;
+      humidity: number | null;
+      weatherCode: number | null;
+      weatherDescription: string | null;
+      isDay: boolean | null;
+    } | null;
     forecast: WeatherItemDto[];
   };
 

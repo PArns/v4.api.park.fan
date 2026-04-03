@@ -14,18 +14,28 @@ Weather data is fetched from **Open-Meteo** (free, no API key, global coverage i
 Open-Meteo API (/forecast, /archive)
         ↓
 WeatherProcessor (BullMQ queue: "weather")
-  — every 12h (00:00 + 12:00 UTC)
+  — two jobs: "weather-full-cron" (12h) and "weather-current-cron" (1h)
   — filters parks where latitude IS NOT NULL AND longitude IS NOT NULL
-  — fetches 16 days (today + 15 forecast days)
+
+  Hourly (currentOnly=true):
+    — forecast_days=1, fetches current{} variables from Open-Meteo
+    — saves today's record + live fields (temperatureCurrent, apparentTemperature, humidity, isDay)
+    — 300ms delay between parks (~45s for 150 parks)
+
+  Every 12h (currentOnly=false):
+    — forecast_days=16, saves today + 15 forecast days
+    — 1000ms delay between parks
+
         ↓
 weather_data table  (composite PK: parkId + date)
   — dataType: "current" (today) | "forecast" (future) | "historical" (past)
+  — live columns (nullable): temperatureCurrent, apparentTemperature, humidity, isDay
         ↓
 WeatherService.getCurrentAndForecast(parkId)
   — returns: { current: today, forecast: next 15 days }
         ↓
 ParkIntegrationService.buildIntegratedResponse()
-  — dto.weather = { current, forecast: next 6 days }  ← API response
+  — dto.weather = { current, now, forecast: next 6 days }  ← API response
 ```
 
 ---
@@ -49,14 +59,26 @@ The integrated park endpoint (`GET /v1/parks/:continent/:country/:city/:slug`) r
       "weatherDescription": "Fog",
       "windSpeedMax": 8.3
     },
+    "now": {
+      "temperature": 9.4,
+      "apparentTemperature": 7.1,
+      "humidity": 82,
+      "weatherCode": 45,
+      "weatherDescription": "Fog",
+      "isDay": true
+    },
     "forecast": [
       { "date": "2026-04-01", "dataType": "forecast", ... },
       { "date": "2026-04-02", ... },
-      ...  // up to 6 days (today + 6 = 7 total)
+      ...  // up to 6 days
     ]
   }
 }
 ```
+
+`weather.now` is `null` until the first hourly sync has run for a park.
+`weather.current` remains the daily summary (max/min temp, precipitation totals).
+`weather.now` is the live snapshot updated every hour.
 
 ---
 
@@ -68,14 +90,18 @@ The integrated park endpoint (`GET /v1/parks/:continent/:country/:city/:slug`) r
 | Column | Type | Notes |
 |--------|------|-------|
 | parkId | UUID | FK → parks |
-| date | DATE (timestamptz) | Stored as midnight in park timezone |
+| date | DATE (timestamptz) | Stored as noon UTC (see timezone note) |
 | dataType | enum | `historical` \| `current` \| `forecast` |
-| temperatureMax / Min | decimal(5,2) | °C |
+| temperatureMax / Min | decimal(5,2) | °C — daily high/low |
 | precipitationSum | decimal(6,2) | mm |
 | rainSum | decimal(6,2) | mm |
 | snowfallSum | decimal(6,2) | cm |
-| weatherCode | int | WMO code |
+| weatherCode | int | WMO code (daily) |
 | windSpeedMax | decimal(5,2) | km/h |
+| temperatureCurrent | decimal(5,2) | °C — live, updated hourly (nullable) |
+| apparentTemperature | decimal(5,2) | °C — feels-like, updated hourly (nullable) |
+| humidity | int | % relative humidity, updated hourly (nullable) |
+| isDay | boolean | daytime at park location, updated hourly (nullable) |
 
 **Timezone note**: Dates are always interpreted in park local timezone. `saveWeatherData()` converts `"2026-03-31"` → `fromZonedTime("2026-03-31T00:00:00", park.timezone)` before storing.
 
@@ -83,12 +109,14 @@ The integrated park endpoint (`GET /v1/parks/:continent/:country/:city/:slug`) r
 
 ## Sync Jobs (BullMQ)
 
-| Queue | Job name | Schedule | Action |
-|-------|----------|----------|--------|
-| `weather` | `fetch-weather` | Every 12h (00:00 + 12:00 UTC) | Fetch 16-day forecast for all parks with coordinates |
-| `weather-historical` | `mark-historical` | Daily 05:00 UTC | Mark past records as `dataType = historical` |
+| Queue | Job ID | Schedule | Action |
+|-------|--------|----------|--------|
+| `weather` | `weather-current-cron` | Every hour | `forecast_days=1` — saves today + live fields; 300ms delay between parks |
+| `weather` | `weather-full-cron` | Every 12h (00:00 + 12:00 UTC) | `forecast_days=16` — saves today + 15 forecast days; 1s delay between parks |
+| `weather-historical` | `weather-historical-cron` | Daily 05:00 UTC | Mark past records as `dataType = historical` |
 
-**Rate limiting**: 1 second delay between parks (Open-Meteo is free, be polite).
+**Rate limiting**: 300ms (hourly/current) or 1s (full) delay between parks.
+**Cache invalidation**: `weather:forecast:{parkId}` Redis key is deleted after each park update so the next request sees fresh data.
 
 ---
 

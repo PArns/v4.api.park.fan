@@ -6,6 +6,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
 import {
+  CurrentConditions,
   DailyWeather,
   OpenMeteoClient,
 } from "../external-apis/weather/open-meteo.client";
@@ -191,6 +192,7 @@ export class WeatherService {
     parkId: string,
     weatherData: DailyWeather[],
     dataType: "historical" | "current" | "forecast",
+    currentConditions?: CurrentConditions | null,
   ): Promise<number> {
     let savedCount = 0;
 
@@ -223,6 +225,16 @@ export class WeatherService {
           },
         });
 
+        const liveFields =
+          dataType === "current" && currentConditions
+            ? {
+                temperatureCurrent: currentConditions.temperature,
+                apparentTemperature: currentConditions.apparentTemperature,
+                humidity: currentConditions.humidity,
+                isDay: currentConditions.isDay,
+              }
+            : {};
+
         if (existing) {
           // Update existing record using composite key
           await this.weatherDataRepository.update(
@@ -236,6 +248,7 @@ export class WeatherService {
               snowfallSum: day.snowfallSum,
               weatherCode: day.weatherCode,
               windSpeedMax: day.windSpeedMax,
+              ...liveFields,
             },
           );
         } else {
@@ -251,6 +264,7 @@ export class WeatherService {
             snowfallSum: day.snowfallSum,
             weatherCode: day.weatherCode,
             windSpeedMax: day.windSpeedMax,
+            ...liveFields,
           });
         }
 

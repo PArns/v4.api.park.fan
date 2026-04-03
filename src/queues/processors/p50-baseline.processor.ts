@@ -136,11 +136,8 @@ export class P50BaselineProcessor {
       for (const park of parks) {
         // Fetch attractions via service (findAll() does not eager-load attractions)
         // Use large page size to get all attractions in one query
-        const { data: attractions } = await this.attractionsService.findByParkId(
-          park.id,
-          1,
-          10000,
-        );
+        const { data: attractions } =
+          await this.attractionsService.findByParkId(park.id, 1, 10000);
 
         for (const attraction of attractions) {
           try {

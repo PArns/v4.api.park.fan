@@ -36,7 +36,7 @@ process.on("uncaughtException", (error: Error) => {
 
 process.on("unhandledRejection", (reason: unknown) => {
   const message =
-    reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
   console.error("[CRASH] unhandledRejection", message);
   writeCrashLog("unhandledRejection", message);
   process.exit(1);

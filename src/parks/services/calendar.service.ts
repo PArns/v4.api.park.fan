@@ -38,7 +38,6 @@ import {
 } from "../../common/utils/holiday.utils";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 
-
 /** TTL for "schedule refresh requested" rate-limit key (avoid hammering ThemeParks API). */
 const SCHEDULE_REFRESH_RATE_LIMIT_TTL_SEC = 12 * 60 * 60; // 12 hours (was 6h – less aggressive)
 /** Only trigger on-demand refresh when requested range ends this many days beyond our last schedule date. */
@@ -346,9 +345,11 @@ export class CalendarService {
       const key = `calendar:month:${parkId}:${ym}:${includeHourly}`;
       const ttl = today.startsWith(ym) ? 5 * 60 : this.CALENDAR_CACHE_TTL;
       writes.push(
-        this.redis.set(key, JSON.stringify(monthDays), "EX", ttl).then(() =>
-          this.logger.debug(`Cached calendar month: ${key} (TTL: ${ttl}s)`),
-        ),
+        this.redis
+          .set(key, JSON.stringify(monthDays), "EX", ttl)
+          .then(() =>
+            this.logger.debug(`Cached calendar month: ${key} (TTL: ${ttl}s)`),
+          ),
       );
     }
     await Promise.all(writes);
@@ -463,9 +464,7 @@ export class CalendarService {
     const weather = weatherData.find(
       (w) =>
         formatInParkTimezone(
-          typeof w.date === "string"
-            ? new Date(`${w.date}T12:00:00Z`)
-            : w.date,
+          typeof w.date === "string" ? new Date(`${w.date}T12:00:00Z`) : w.date,
           park.timezone,
         ) === dateStr,
     );
@@ -605,12 +604,13 @@ export class CalendarService {
         // Always query real usage data for today/past days (calculateCrowdLevelForDate
         // has its own Redis cache: 30 min for today, 24h for historical).
         // ML prediction is only the last resort when genuinely no data exists.
-        const crowdData = await this.analyticsService.calculateCrowdLevelForDate(
-          park.id,
-          "park",
-          dateStr,
-          park.timezone,
-        );
+        const crowdData =
+          await this.analyticsService.calculateCrowdLevelForDate(
+            park.id,
+            "park",
+            dateStr,
+            park.timezone,
+          );
         inferredCrowdLevel = crowdData.hasData
           ? crowdData.crowdLevel
           : mlPrediction?.crowdLevel || "moderate";

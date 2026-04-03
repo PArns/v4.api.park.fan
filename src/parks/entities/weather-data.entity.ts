@@ -86,6 +86,19 @@ export class WeatherData {
   @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
   windSpeedMax: number | null;
 
+  // Live current conditions (updated hourly)
+  @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
+  temperatureCurrent: number | null;
+
+  @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
+  apparentTemperature: number | null;
+
+  @Column({ type: "int", nullable: true })
+  humidity: number | null;
+
+  @Column({ type: "boolean", nullable: true })
+  isDay: boolean | null;
+
   @Column({ type: "timestamptz", default: () => "CURRENT_TIMESTAMP" })
   lastUpdated: Date; // When this data was fetched
 

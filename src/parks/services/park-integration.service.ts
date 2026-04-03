@@ -3,6 +3,7 @@ import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
 import { WeatherItemDto } from "../dto/weather-item.dto";
+import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import { ScheduleItemDto } from "../dto/schedule-item.dto";
 import { ParkWaitTimesResponse } from "../types/park-wait-times.type";
 import { ParksService } from "../parks.service";
@@ -176,10 +177,28 @@ export class ParkIntegrationService {
     ]);
     const hourlyRes = mlPredictionsResult;
 
+    const currentEntity = weatherData.current;
+    const weatherNow =
+      currentEntity?.temperatureCurrent != null
+        ? {
+            temperature: Number(currentEntity.temperatureCurrent),
+            apparentTemperature:
+              currentEntity.apparentTemperature != null
+                ? Number(currentEntity.apparentTemperature)
+                : null,
+            humidity: currentEntity.humidity,
+            weatherCode: currentEntity.weatherCode,
+            weatherDescription:
+              currentEntity.weatherCode != null
+                ? getWeatherDescription(currentEntity.weatherCode)
+                : null,
+            isDay: currentEntity.isDay,
+          }
+        : null;
+
     dto.weather = {
-      current: weatherData.current
-        ? WeatherItemDto.fromEntity(weatherData.current)
-        : null,
+      current: currentEntity ? WeatherItemDto.fromEntity(currentEntity) : null,
+      now: weatherNow,
       forecast: weatherData.forecast
         .slice(0, 6)
         .map((w) => WeatherItemDto.fromEntity(w)),

@@ -163,23 +163,48 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Weather: Every 12 hours (0:00 and 12:00)
-    const hasWeatherCron = await this.hasRepeatableJob(
+    // Weather full sync: Every 12 hours (forecast + current)
+    const hasWeatherFullCron = await this.hasRepeatableJob(
       this.weatherQueue,
-      "weather-cron",
+      "weather-full-cron",
+      "0 */12 * * *",
     );
 
-    if (!hasWeatherCron) {
+    if (!hasWeatherFullCron) {
       await this.weatherQueue.add(
         "fetch-weather",
-        {},
+        { currentOnly: false },
         {
-          repeat: {
-            cron: "0 */12 * * *", // Every 12 hours (0:00 and 12:00)
-          },
-          jobId: "weather-cron",
+          repeat: { cron: "0 */12 * * *" },
+          jobId: "weather-full-cron",
         },
       );
+    }
+
+    // Weather current-only sync: Every hour (live conditions for today)
+    const hasWeatherCurrentCron = await this.hasRepeatableJob(
+      this.weatherQueue,
+      "weather-current-cron",
+      "0 * * * *",
+    );
+
+    if (!hasWeatherCurrentCron) {
+      await this.weatherQueue.add(
+        "fetch-weather",
+        { currentOnly: true },
+        {
+          repeat: { cron: "0 * * * *" },
+          jobId: "weather-current-cron",
+        },
+      );
+    }
+
+    // Remove old combined weather cron if still registered
+    const oldWeatherJobs = await this.weatherQueue.getRepeatableJobs();
+    const oldWeatherCron = oldWeatherJobs.find((j) => j.id === "weather-cron");
+    if (oldWeatherCron) {
+      await this.weatherQueue.removeRepeatableByKey(oldWeatherCron.key);
+      this.logger.log('Removed legacy "weather-cron" job');
     }
 
     // Weather Historical: Daily at 5am
@@ -567,11 +592,21 @@ export class QueueSchedulerService implements OnModuleInit {
   private async hasRepeatableJob(
     queue: Queue,
     jobId: string,
+    expectedCron?: string,
   ): Promise<boolean> {
     const repeatableJobs = await queue.getRepeatableJobs();
     const existing = repeatableJobs.find((job) => job.id === jobId);
 
     if (!existing) return false;
+
+    // If the cron expression changed, remove and re-register with the new schedule.
+    if (expectedCron && existing.cron !== expectedCron) {
+      this.logger.warn(
+        `Repeatable job "${jobId}" has outdated cron "${existing.cron}" (expected "${expectedCron}"), re-registering`,
+      );
+      await queue.removeRepeatableByKey(existing.key);
+      return false;
+    }
 
     // If the next run is more than 2 minutes in the past the job is stalled —
     // remove it so it gets re-registered with the current cron schedule.

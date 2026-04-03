@@ -169,6 +169,14 @@ export class OpenMeteoClient {
             "weathercode",
             "windspeed_10m_max",
           ].join(","),
+          current: [
+            "temperature_2m",
+            "apparent_temperature",
+            "relative_humidity_2m",
+            "weather_code",
+            "wind_speed_10m",
+            "is_day",
+          ].join(","),
           timezone: "auto",
         },
       });
@@ -335,7 +343,7 @@ export class OpenMeteoClient {
    * Transform Open-Meteo API response to our format
    */
   private transformResponse(data: OpenMeteoResponse): DailyWeatherResponse {
-    const { daily } = data;
+    const { daily, current } = data;
 
     if (!daily || !daily.time) {
       throw new Error("Invalid Open-Meteo response: missing daily data");
@@ -352,7 +360,22 @@ export class OpenMeteoClient {
       windSpeedMax: daily.windspeed_10m_max?.[index] ?? null,
     }));
 
-    return { days };
+    const currentConditions: CurrentConditions | null = current
+      ? {
+          temperature: current.temperature_2m ?? null,
+          apparentTemperature: current.apparent_temperature ?? null,
+          humidity:
+            current.relative_humidity_2m != null
+              ? Math.round(current.relative_humidity_2m)
+              : null,
+          weatherCode: current.weather_code ?? null,
+          windSpeed: current.wind_speed_10m ?? null,
+          isDay: current.is_day != null ? current.is_day === 1 : null,
+          observedAt: current.time,
+        }
+      : null;
+
+    return { days, current: currentConditions };
   }
 
   private transformHourlyResponse(
@@ -385,6 +408,15 @@ interface OpenMeteoResponse {
   latitude: number;
   longitude: number;
   timezone: string;
+  current?: {
+    time: string;
+    temperature_2m?: number | null;
+    apparent_temperature?: number | null;
+    relative_humidity_2m?: number | null;
+    weather_code?: number | null;
+    wind_speed_10m?: number | null;
+    is_day?: number | null; // 0 or 1
+  };
   daily: {
     time: string[];
     temperature_2m_max?: (number | null)[];
@@ -420,8 +452,19 @@ export interface DailyWeather {
   windSpeedMax: number | null;
 }
 
+export interface CurrentConditions {
+  temperature: number | null;
+  apparentTemperature: number | null;
+  humidity: number | null;
+  weatherCode: number | null;
+  windSpeed: number | null;
+  isDay: boolean | null;
+  observedAt: string; // ISO datetime from Open-Meteo
+}
+
 export interface DailyWeatherResponse {
   days: DailyWeather[];
+  current: CurrentConditions | null;
 }
 
 export interface HourlyWeather {

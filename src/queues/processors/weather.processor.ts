@@ -1,6 +1,8 @@
 import { Processor, Process } from "@nestjs/bull";
-import { Logger } from "@nestjs/common";
+import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../../parks/parks.service";
 import { WeatherService } from "../../parks/weather.service";
 import { OpenMeteoClient } from "../../external-apis/weather/open-meteo.client";
@@ -11,11 +13,11 @@ import { OpenMeteoClient } from "../../external-apis/weather/open-meteo.client";
  * Fetches weather data from Open-Meteo API for all parks.
  *
  * Strategy:
- * - Fetch current day + 16-day forecast
- * - Update every 12 hours (0:00 and 12:00)
+ * - current-only (hourly): today's record + live conditions (temperature, humidity, isDay)
+ * - full (every 12h): today + 16-day forecast
  *
  * Data stored:
- * - Current: Today's weather (updated throughout day)
+ * - Current: Today's weather + live conditions (updated hourly)
  * - Forecast: Next 16 days (updated every 12 hours)
  */
 @Processor("weather")
@@ -26,11 +28,17 @@ export class WeatherProcessor {
     private parksService: ParksService,
     private weatherService: WeatherService,
     private openMeteoClient: OpenMeteoClient,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   @Process("fetch-weather")
-  async handleSyncWeather(_job: Job): Promise<void> {
-    this.logger.log("🌤️  Starting weather sync...");
+  async handleSyncWeather(job: Job<{ currentOnly?: boolean }>): Promise<void> {
+    const currentOnly = job.data?.currentOnly === true;
+    this.logger.log(
+      currentOnly
+        ? "🌤️  Starting weather sync (current + live conditions only)..."
+        : "🌤️  Starting weather sync (full: current + 16-day forecast)...",
+    );
 
     try {
       const parks = await this.parksService.findAll();
@@ -40,7 +48,6 @@ export class WeatherProcessor {
         return;
       }
 
-      // Filter parks with valid coordinates
       const parksWithCoords = parks.filter(
         (park) => park.latitude !== null && park.longitude !== null,
       );
@@ -57,29 +64,26 @@ export class WeatherProcessor {
         const park = parksWithCoords[idx];
 
         try {
-          // Fetch current day + 16-day forecast (total 17 days)
           const forecastData = await this.openMeteoClient.getDailyWeather(
             park.latitude!,
             park.longitude!,
-            16, // 16 forecast days (includes today)
+            currentOnly ? 1 : 16, // 1 = today only, 16 = full forecast
           );
 
-          // Split into current day and forecast
-          const currentDay = forecastData.days.slice(0, 1); // Today
-          const forecast = forecastData.days.slice(1); // Next 15 days
+          const currentDay = forecastData.days.slice(0, 1);
+          const forecast = forecastData.days.slice(1);
 
-          // Save current day
           if (currentDay.length > 0) {
             const savedCurrent = await this.weatherService.saveWeatherData(
               park.id,
               currentDay,
               "current",
+              forecastData.current,
             );
             totalCurrent += savedCurrent;
           }
 
-          // Save forecast
-          if (forecast.length > 0) {
+          if (!currentOnly && forecast.length > 0) {
             const savedForecast = await this.weatherService.saveWeatherData(
               park.id,
               forecast,
@@ -87,6 +91,8 @@ export class WeatherProcessor {
             );
             totalForecast += savedForecast;
           }
+
+          await this.redis.del(`weather:forecast:${park.id}`);
         } catch (error: unknown) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -97,10 +103,8 @@ export class WeatherProcessor {
           if (errorStack) {
             this.logger.error(`Stack trace: ${errorStack}`);
           }
-          // Continue with next park
         }
 
-        // Log progress every 10 parks or at the end
         if ((idx + 1) % 10 === 0 || idx + 1 === total) {
           const percent = Math.round(((idx + 1) / total) * 100);
           this.logger.log(
@@ -108,8 +112,9 @@ export class WeatherProcessor {
           );
         }
 
-        // Rate limiting: Wait 1 second between parks (Open-Meteo is free, be nice)
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Shorter delay for current-only runs (lighter API call, no DB forecast saves)
+        const delay = currentOnly ? 300 : 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
       this.logger.log(
@@ -117,7 +122,7 @@ export class WeatherProcessor {
       );
     } catch (error: unknown) {
       this.logger.error("❌ Weather sync failed", error);
-      throw error; // Bull will retry
+      throw error;
     }
   }
 }
