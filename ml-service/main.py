@@ -155,6 +155,7 @@ class ModelInfoResponse(BaseModel):
     features: Optional[List[str]]
     train_samples: Optional[int] = None
     val_samples: Optional[int] = None
+    file_size_mb: Optional[float] = None
 
 
 # Endpoints
@@ -186,13 +187,19 @@ async def get_model_info():
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    file_size_mb = None
+    model_path = model.get_model_path()
+    if os.path.exists(model_path):
+        file_size_mb = round(os.path.getsize(model_path) / (1024 * 1024), 2)
+
     return ModelInfoResponse(
         version=model.version,
         trainedAt=model.metadata.get("trained_at"),
         metrics=model.metadata.get("metrics"),
         features=model.metadata.get("features_used"),
-        train_samples=model.metadata.get("train_samples"),  # Add samples
-        val_samples=model.metadata.get("val_samples"),  # Add samples
+        train_samples=model.metadata.get("train_samples"),
+        val_samples=model.metadata.get("val_samples"),
+        file_size_mb=file_size_mb,
     )
 
 

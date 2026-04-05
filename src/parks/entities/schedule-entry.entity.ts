@@ -38,6 +38,9 @@ export enum ScheduleType {
 @Index("idx_schedule_park_date_no_attraction", ["parkId", "date"], {
   where: '"attractionId" IS NULL',
 }) // Partial index for park-level schedule JOINs in analytics/ML queries
+@Index("idx_schedule_operating_times", ["openingTime", "closingTime"], {
+  where: "\"scheduleType\" = 'OPERATING'",
+}) // Covers getLiveStats: WHERE scheduleType=OPERATING AND openingTime<=NOW() AND closingTime>NOW() (no parkId filter)
 export class ScheduleEntry {
   @PrimaryGeneratedColumn("uuid")
   id: string;

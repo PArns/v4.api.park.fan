@@ -37,6 +37,11 @@ export class ParksService {
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
   private readonly CACHE_TTL_SECONDS = 60 * 60; // 1 hour - legacy
 
+  /** In-memory cache for geographic path lookups that returned null (404).
+   *  Key: "continent:country:city:slug" → expiry timestamp (ms). */
+  private readonly notFoundCache = new Map<string, number>();
+  private readonly NOT_FOUND_TTL_MS = 60 * 60 * 1000; // 1 hour
+
   constructor(
     @InjectRepository(Park)
     private parkRepository: Repository<Park>,
@@ -2036,10 +2041,25 @@ export class ParksService {
     citySlug: string,
     parkSlug: string,
   ): Promise<Park | null> {
-    return this.parkRepository.findOne({
+    const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}`;
+    const expiry = this.notFoundCache.get(cacheKey);
+    if (expiry !== undefined) {
+      if (Date.now() < expiry) {
+        return null; // known 404 — skip DB query
+      }
+      this.notFoundCache.delete(cacheKey);
+    }
+
+    const park = await this.parkRepository.findOne({
       where: { continentSlug, countrySlug, citySlug, slug: parkSlug },
       relations: ["destination", "attractions", "shows", "restaurants"],
     });
+
+    if (!park) {
+      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
+    }
+
+    return park;
   }
 
   /**
@@ -2206,33 +2226,29 @@ export class ParksService {
     }
 
     // Heuristic Fallback: For parks not currently OPERATING per schedule, check ride data.
-    // Applies to parks with UNKNOWN or no schedule — NOT to parks with explicit CLOSED today.
-    // Uses RECENT data (last 30 minutes) with a meaningful threshold:
-    //   ≥3 attractions must have data AND ≥25% must have waitTime ≥ 5 min.
-    // This distinguishes truly open parks (Le Pal 95%, Blackpool 53%) from closed ones (0%).
+    // Applies ONLY to parks with NO schedule data at all (e.g. newly added parks without
+    // ThemeParks.wiki schedule coverage). Parks with ANY schedule entry trust the schedule
+    // entirely — this prevents falsely showing OPERATING for up to 2h after closing when
+    // rides still have recent data but the scheduled operating window has ended.
     const closedParkIds = parkIds.filter(
       (id) => statusMap.get(id) === "CLOSED",
     );
 
     if (closedParkIds.length > 0) {
-      // Exclude parks with an explicit CLOSED schedule for today — trust the schedule.
-      // Use park-local date (AT TIME ZONE p.timezone) to avoid UTC vs. local mismatch
-      // that would affect UTC+ parks near midnight.
-      const explicitlyClosedRows: { parkId: string }[] =
+      // Exclude any park that has schedule data in the DB — trust the schedule.
+      // Parks without any schedule entry at all are candidates for the ride-based fallback.
+      const parksWithScheduleRows: { parkId: string }[] =
         await this.parkRepository.manager.query(
           `SELECT DISTINCT se."parkId"
            FROM schedule_entries se
-           JOIN parks p ON p.id = se."parkId"
-           WHERE se."parkId" = ANY($1)
-             AND se.date = (CURRENT_TIMESTAMP AT TIME ZONE p.timezone)::date
-             AND se."scheduleType" = 'CLOSED'`,
+           WHERE se."parkId" = ANY($1)`,
           [closedParkIds],
         );
-      const explicitlyClosedIds = new Set(
-        explicitlyClosedRows.map((r) => r.parkId),
+      const parksWithSchedule = new Set(
+        parksWithScheduleRows.map((r) => r.parkId),
       );
       const parksNeedingFallback = closedParkIds.filter(
-        (id) => !explicitlyClosedIds.has(id),
+        (id) => !parksWithSchedule.has(id),
       );
 
       if (parksNeedingFallback.length > 0) {

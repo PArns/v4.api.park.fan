@@ -3,6 +3,7 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { Redis } from "ioredis";
 import { MLModelService } from "./ml-model.service";
+import { MLService } from "../ml.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
 import { PredictionDeviationService } from "./prediction-deviation.service";
 import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
@@ -18,6 +19,7 @@ export class MLDashboardService {
 
   constructor(
     private mlModelService: MLModelService,
+    private mlService: MLService,
     private accuracyService: PredictionAccuracyService,
     private deviationService: PredictionDeviationService,
     private driftService: MLDriftMonitoringService,
@@ -50,6 +52,8 @@ export class MLDashboardService {
       throw new Error("No active model found");
     }
 
+    const mlModelInfo = await this.mlService.getModelInfo().catch(() => null);
+
     return {
       model: {
         current: {
@@ -57,7 +61,7 @@ export class MLDashboardService {
           trainedAt: currentModelData.trainedAt.toISOString(),
           trainingDurationSeconds: currentModelData.trainingDurationSeconds,
           modelType: currentModelData.modelType,
-          fileSizeMB: await this.getModelFileSizeMB(currentModelData.filePath),
+          fileSizeMB: mlModelInfo?.file_size_mb ?? null,
         },
         previous: modelComparison.previous,
         configuration: {
@@ -167,16 +171,5 @@ export class MLDashboardService {
     if (mae < 12) return "good";
     if (mae < 18) return "fair";
     return "poor";
-  }
-
-  private async getModelFileSizeMB(filePath: string): Promise<number | null> {
-    try {
-      const fs = await import("fs/promises");
-      const stats = await fs.stat(filePath);
-      return parseFloat((stats.size / (1024 * 1024)).toFixed(2));
-    } catch (error) {
-      this.logger.warn(`Could not get model file size: ${error}`);
-      return null;
-    }
   }
 }

@@ -132,4 +132,7 @@ export class ModelInfoDto {
 
   @ApiProperty({ required: false, type: [String] })
   features?: string[];
+
+  @ApiProperty({ required: false })
+  file_size_mb?: number | null;
 }
