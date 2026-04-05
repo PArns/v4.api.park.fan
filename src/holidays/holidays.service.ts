@@ -54,7 +54,6 @@ export class HolidaysService {
       isNationwide: boolean;
     }> = [];
     for (const holiday of holidays) {
-      const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
       let holidayType = this.mapHolidayType(holiday.types);
 
       // Fallback: If API marks known public holidays as "observance", correct them
@@ -69,19 +68,35 @@ export class HolidaysService {
 
       const holidayDate = new Date(holiday.date + "T00:00:00.000Z");
 
-      holidaysToUpsert.push({
-        externalId,
-        date: holidayDate,
-        name: holiday.name,
-        localName: holiday.localName || undefined,
-        country: countryCode,
-        region:
-          holiday.counties && holiday.counties.length > 0
-            ? holiday.counties[0]
-            : undefined,
-        holidayType,
-        isNationwide: holiday.global,
-      });
+      if (holiday.counties && holiday.counties.length > 0) {
+        // Expand multi-county holidays: one row per county so every region gets the holiday.
+        // Previously only counties[0] was saved, causing other regions to miss the holiday.
+        for (const county of holiday.counties) {
+          const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}:${county}`;
+          holidaysToUpsert.push({
+            externalId,
+            date: holidayDate,
+            name: holiday.name,
+            localName: holiday.localName || undefined,
+            country: countryCode,
+            region: county,
+            holidayType,
+            isNationwide: holiday.global,
+          });
+        }
+      } else {
+        const externalId = `nager:${countryCode}:${holiday.date}:${holiday.name}`;
+        holidaysToUpsert.push({
+          externalId,
+          date: holidayDate,
+          name: holiday.name,
+          localName: holiday.localName || undefined,
+          country: countryCode,
+          region: undefined,
+          holidayType,
+          isNationwide: holiday.global,
+        });
+      }
     }
 
     // Deduplicate by externalId before batch upsert to avoid "ON CONFLICT" errors

@@ -9,8 +9,9 @@ Parks vary wildly in size and ride composition. A "one-size-fits-all" rule for s
 ### Tier 1: True E-Tickets (Major Parks)
 *Designed for Disney, Universal, Phantasialand.*
 
-- **Avg Wait**: > 15 minutes
-- **P90 Wait**: > 25 minutes
+- **Avg Wait**: > 20 minutes
+- **P90 Wait**: > 30 minutes
+- **Max Headliners**: 10 (top N by avg_wait if more qualify — prevents borderline rides diluting the baseline)
 - **Goal**: Select only the big mountains/coasters.
 
 ### Tier 2: Popular Rides (Regional Parks)

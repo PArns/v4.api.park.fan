@@ -1,6 +1,6 @@
 {
   "name": "park-fan-api",
-  "version": "4.8.0",
+  "version": "4.8.1",
   "description": "Real-time theme park data aggregation API providing wait times, occupancy insights, and ML-ready analytics",
   "author": "Patrick Arns",
   "private": true,
@@ -49,12 +49,12 @@
     "axios": "^1.14.0",
     "bull": "^4.16.5",
     "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.4",
+    "class-validator": "^0.15.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "ioredis": "^5.10.1",
     "luxon": "^3.7.2",
-    "marked": "^17.0.5",
+    "marked": "^17.0.6",
     "maxmind": "^5.0.6",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
@@ -76,11 +76,11 @@
     "@types/luxon": "^3.7.1",
     "@types/node": "^25.5.2",
     "@types/pg": "^8.20.0",
-    "@types/supertest": "^6.0.3",
+    "@types/supertest": "^7.2.0",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "dotenv": "^17.4.0",
-    "eslint": "^10.1.0",
+    "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "jest": "^30.3.0",
@@ -91,7 +91,7 @@
     "ts-loader": "^9.5.7",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.2"
   },
   "pnpm": {
     "overrides": {

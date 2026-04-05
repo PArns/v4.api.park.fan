@@ -3636,8 +3636,8 @@ export class AnalyticsService {
           sample_count
         FROM attraction_stats ast
         CROSS JOIN park_stats ps
-        WHERE ast.avg_wait > 15
-          AND ast.p90_wait > 25
+        WHERE ast.avg_wait > 20
+          AND ast.p90_wait > 30
           AND ast.operating_days > (ps.max_operating_days * 0.6) -- Relaxed from 0.8
       ),
       -- Tier 2: Relative thresholds (medium parks) - only if Tier 1 < 3
@@ -3747,7 +3747,25 @@ export class AnalyticsService {
         byAttraction.set(id, { row, tierRank: rank });
       }
     }
-    const deduped = Array.from(byAttraction.values()).map(({ row }) => row);
+    let deduped = Array.from(byAttraction.values()).map(({ row }) => row);
+
+    // Cap tier1 results: if a major park yields many tier1 headliners, keep only
+    // the top 10 by avg_wait. Borderline rides (avg ~20-22 min) otherwise dilute
+    // the P50 baseline and distort crowd level / ML occupancy features.
+    const MAX_TIER1_HEADLINERS = 10;
+    const tier1Count = deduped.filter((r: any) => r.tier === "tier1").length;
+    if (tier1Count > MAX_TIER1_HEADLINERS) {
+      const tier1 = deduped
+        .filter((r: any) => r.tier === "tier1")
+        .sort(
+          (a: any, b: any) => parseFloat(b.avg_wait) - parseFloat(a.avg_wait),
+        )
+        .slice(0, MAX_TIER1_HEADLINERS);
+      deduped = tier1;
+      this.logger.log(
+        `Capped tier1 headliners for park ${parkId}: ${tier1Count} → ${MAX_TIER1_HEADLINERS}`,
+      );
+    }
 
     this.logger.log(
       `Identified ${deduped.length} headliners for park ${parkId} (Tiers: T1=${deduped.filter((r: any) => r.tier === "tier1").length}, T2=${deduped.filter((r: any) => r.tier === "tier2").length}, T3=${deduped.filter((r: any) => r.tier === "tier3").length})`,

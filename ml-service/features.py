@@ -388,6 +388,38 @@ def add_holiday_features(
         int
     )
 
+    # Easter Sunday fallback: Nager.Date only returns Easter Sunday as a public holiday
+    # for Brandenburg (DE-BB) — all other German (and European) states don't have it in
+    # the DB. Legally it's not mandated there, but for theme parks it's one of the
+    # highest-traffic days of the year.  Compute Easter Sunday programmatically and
+    # override is_holiday_primary = 1 for parks in Christian-holiday-observing countries.
+    _easter_countries = {"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"}
+    if "date_local" in df.columns and "country" in df.columns:
+        def _easter_sunday_date(year: int):
+            """Anonymous Gregorian algorithm."""
+            a, b, c = year % 19, year // 100, year % 100
+            d, e = b // 4, b % 4
+            f = (b + 8) // 25
+            g = (b - f + 1) // 3
+            h = (19 * a + b - d - g + 15) % 30
+            i, k = c // 4, c % 4
+            ll = (32 + 2 * e + 2 * i - h - k) % 7
+            m = (a + 11 * h + 22 * ll) // 451
+            month = (h + ll - 7 * m + 114) // 31
+            day = ((h + ll - 7 * m + 114) % 31) + 1
+            import datetime as _dt
+            return _dt.date(year, month, day)
+
+        easter_dates = set()
+        for year in df["date_local"].dt.year.dropna().unique():
+            easter_dates.add(_easter_sunday_date(int(year)))
+
+        easter_mask = (
+            df["date_local"].dt.date.isin(easter_dates)
+            & df["country"].isin(_easter_countries)
+        )
+        df.loc[easter_mask, "is_holiday_primary"] = 1
+
     # 2. Influencing Regions Check (still needs some iteration due to JSON structure)
     # Create lookup maps for faster access
     # Import region normalization utility
