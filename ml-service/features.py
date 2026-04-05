@@ -410,12 +410,14 @@ def add_holiday_features(
             import datetime as _dt
             return _dt.date(year, month, day)
 
+        # Ensure date_local is datetimelike for .dt accessor
+        _date_local_dt = pd.to_datetime(df["date_local"], errors="coerce")
         easter_dates = set()
-        for year in df["date_local"].dt.year.dropna().unique():
+        for year in _date_local_dt.dt.year.dropna().unique():
             easter_dates.add(_easter_sunday_date(int(year)))
 
         easter_mask = (
-            df["date_local"].dt.date.isin(easter_dates)
+            _date_local_dt.dt.date.isin(easter_dates)
             & df["country"].isin(_easter_countries)
         )
         df.loc[easter_mask, "is_holiday_primary"] = 1
