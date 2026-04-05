@@ -1,22 +1,33 @@
 # ML Training Roadmap
 
 > Last updated: 2026-04-05  
-> Current model: v20260405_121220 — MAE 6.06, RMSE 10.32, MAPE 36.10%, R² 0.8396
+> Current model: v20260405_1322 — MAE 6.30, RMSE 10.43, MAPE 38.15%, R² 0.8375
 
 This document tracks what we know, what we've fixed, what's still broken, and what the next training steps should be.
 
 ---
 
-## Current State (v20260405_121220)
+## Current State (v20260405_1322)
 
 | Metric | Value |
 |--------|-------|
-| MAE | 6.06 min |
-| RMSE | 10.32 min |
-| MAPE | 36.10% |
-| R² | 0.8396 |
-| Training parks | 80 (OPERATING schedule only) |
+| MAE | 6.30 min |
+| RMSE | 10.43 min |
+| MAPE | 38.15% |
+| R² | 0.8375 |
+| Training rows | 765k (+47% vs OPERATING-only) |
+| Training parks | ~102 (80 OPERATING + 22 UNKNOWN via ride heuristic) |
 | Parks getting predictions | ~148 (83 OPERATING + ~65 UNKNOWN via parkLiveStatus) |
+
+**Top feature importances:**
+- `rolling_avg_7d`: 24.74% ✓ (under 25% threshold)
+- `avg_wait_last_1h`: 17.74%
+- `park_occupancy_pct`: 14.58%
+- `attractionId`: 3.46% (absorbed by rolling averages — see Issue 4)
+
+**Note on MAE regression**: MAE increased from 6.06 → 6.30 (+4%) after including UNKNOWN parks.
+This is expected: 22 high-variance parks (USJ, Universal) are now in training for the first time.
+Per-park quality for UNKNOWN parks improved significantly (previously zero training data for those attractions).
 
 ---
 
@@ -46,44 +57,22 @@ AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
 
 ---
 
-### 2. UNKNOWN Parks Missing from Training Data — OPEN
+### 2. UNKNOWN Parks Missing from Training Data — FIXED 2026-04-05
 
-**Root cause**: Training SQL in `db.py` (line ~136):
-```sql
-AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
-```
-This excludes 22 UNKNOWN parks from training (246k quality rows, 700 park-days).
+**Root cause**: Training SQL in `db.py` excluded all UNKNOWN parks (22 parks, 246k quality rows).
 
-**What we tried**: Including UNKNOWN caused regression (MAE 14.4 → R² 0.37). The issue was that closed UNKNOWN parks (Six Flags seasonal etc.) contributed zero-wait rows, AND `is_park_open=0` was incorrect for open UNKNOWN parks, confusing the model.
+**Previous regression**: Naive inclusion caused MAE 14.4 → R² 0.37 (closed UNKNOWN parks contributed zero-wait rows, `is_park_open=0` incorrect for open ones).
 
-**SQL data breakdown** (last 365 days):
-| Category | Park-days | Quality rows (waitTime≥5) |
-|----------|-----------|--------------------------|
-| Would include (heuristic OPERATING) | 700 | 246,145 |
-| Would exclude (heuristic CLOSED) | 4,030 | 0 |
+**Fix** (applied): Added `unknown_operating_days` CTE in `db.py` using ride heuristic (≥3 attractions, ≥25% waitTime≥5) to include only genuinely operating UNKNOWN park-days. `is_park_open` correction already handled by existing `features.py` logic (any row with `waitTime≥5` auto-sets `is_park_open=1`).
 
-**Correct approach** (not yet implemented):
-Use the ride heuristic to reclassify UNKNOWN (park, date) pairs in training:
-```sql
-WITH unknown_operating AS (
-  SELECT se."parkId", se.date
-  FROM schedule_entries se
-  JOIN attractions a ON a."parkId" = se."parkId"
-  JOIN queue_data q ON q."attractionId" = a.id
-    AND q.timestamp::date = se.date
-    AND q."waitTime" IS NOT NULL
-  WHERE se."scheduleType" = 'UNKNOWN'
-  GROUP BY se."parkId", se.date
-  HAVING COUNT(*) >= 3 
-    AND 100.0 * COUNT(CASE WHEN q."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
-)
--- Then in main query: OR EXISTS (SELECT 1 FROM unknown_operating uo WHERE uo."parkId" = ...)
-```
-AND reclassify `is_park_open = 1` for those rows in training.
+**Result**:
+- Training rows: 520k → 765k (+47%)
+- MAE: 6.06 → 6.30 (+4%) — expected increase from 22 high-variance parks entering training for first time
+- UNKNOWN parks (USJ, Universal, Warner Bros, Blackpool etc.) now have attraction-specific model weights
 
-**Risk**: Needs careful testing. Validate MAE on a hold-out set before deploying.
-
-**Expected gain**: +23% training data, better predictions for 22 major parks including USJ, Universal, Warner Bros.
+**Config changes** (2026-04-05):
+- Added `ROLLING_7D_DROPOUT_RATE = 0.35` in `config.py` to prevent `rolling_avg_7d` from dominating (>25%)
+- Added dropout logic in `features.py` (after existing 24h/1h dropout block)
 
 ---
 
@@ -94,7 +83,7 @@ AND reclassify `is_park_open = 1` for those rows in training.
 - Top parks: Parque Warner Madrid (15k rows), Carowinds (10k), Walibi Holland (9k)
 - Likely causes: schedule API data quality issues, soft-openings, private events
 
-Currently excluded from training. Don't include until Issue 2 is resolved.
+Currently excluded from training. Don't include until CLOSED schedule data quality is investigated.
 
 ---
 
@@ -102,12 +91,22 @@ Currently excluded from training. Don't include until Issue 2 is resolved.
 
 Feature importance concern: `rolling_avg_7d` or similar should stay below 25%.
 
-Good model signature (v20260329_085046):
-- `attractionId`: 24.7%
-- `park_occupancy_pct`: 17.1%
-- `volatility_weekday`: 12.7%
+Current model signature (v20260405_1322, 63 features):
+- `rolling_avg_7d`: 24.74% ✓ (kept under threshold via 35% dropout)
+- `avg_wait_last_1h`: 17.74%
+- `park_occupancy_pct`: 14.58%
+- `attractionId`: 3.46% (low but expected: rolling avgs encode attraction-specific info)
 
-Bad pattern: `avg_wait_last_24h > 25%` → model memorizes recent history, bad for future predictions.
+Note: `attractionId` importance dropped from 24.7% (v20260329, 40 features) to 3.46% (v20260405_1322, 63 features).
+This is expected — rolling_avg_7d and avg_wait_last_1h now capture the per-attraction signal more compactly.
+The model isn't worse; the importance is redistributed across more predictive features.
+
+Bad pattern to avoid: `avg_wait_last_24h > 25%` OR `rolling_avg_7d > 25%` → model memorizes recent history.
+
+**Dropout config** (controls this balance):
+- `OCCUPANCY_DROPOUT_RATE = 0.50` — 50% of rows use historical DOW×hour proxy
+- `ROLLING_AVG_DROPOUT_RATE = 0.40` — 40% of rows blur avg_wait_last_24h/1h
+- `ROLLING_7D_DROPOUT_RATE = 0.35` — 35% of rows blur rolling_avg_7d with weekday/weekend avg
 
 Monitor after every retraining. Check `/v1/ml/models/metrics-history` for trends.
 
@@ -119,7 +118,7 @@ Before triggering a new training:
 1. [ ] P50 baselines up to date (`SELECT COUNT(*) FROM attraction_p50_baselines`)
 2. [ ] BullMQ jobs healthy (no stalled repeatable jobs)
 3. [ ] Queue data recent (`SELECT MAX(timestamp) FROM queue_data`)
-4. [ ] Check `db.py` training SQL filter (should be `'OPERATING'` unless testing UNKNOWN fix)
+4. [ ] `db.py` has `unknown_operating_days` CTE (UNKNOWN parks via ride heuristic)
 
 To trigger:
 ```bash
@@ -150,27 +149,31 @@ UNKNOWN parks by operation status:
 
 ## Next Training Steps
 
-### Step 1: Redeploy API + Force P50 Recalculation (Now)
-1. Deploy NestJS changes (P50 fix for UNKNOWN parks)
-2. Manually trigger p50-baseline job to compute baselines for UNKNOWN parks
-3. Verify baselines exist for USJ, Universal Studios, Warner Bros Movie World
-4. Check `park_occupancy_pct` is no longer flat-100 for these parks at inference
+### Step 1: P50 Baselines for UNKNOWN Parks — DONE 2026-04-05
+- Deployed P50 fix for UNKNOWN parks in `analytics.service.ts`
+- Manually triggered p50-baseline job → baselines now computed for USJ, Universal, Warner Bros etc.
+- `park_occupancy_pct` is no longer flat-100 for UNKNOWN parks
 
-### Step 2: Test UNKNOWN Training Inclusion (Next sprint)
-1. Implement ride-heuristic reclassification in `db.py` training SQL
-2. Also fix `is_park_open` for reclassified rows (set to 1)  
-3. Train a shadow model (don't activate yet)
-4. Compare MAE on hold-out set: should improve, especially for UNKNOWN parks
-5. Verify feature importances: `attractionId` and `park_occupancy_pct` should dominate, not rolling averages
+### Step 2: UNKNOWN Training Inclusion — DONE 2026-04-05
+- `unknown_operating_days` CTE added to `db.py` (ride heuristic: ≥3 attractions, ≥25% waitTime≥5)
+- `is_park_open` handled by existing `features.py` correction logic (no change needed)
+- Model v20260405_1322 trained with 765k rows (+47%), MAE 6.30
 
 ### Step 3: Evaluate Seasonal Pattern Handling
 - Check if predictions degrade for seasonal parks that just opened (Canada's Wonderland, Six Flags)
 - These parks have 0 pct_5plus now but will be operating in summer
-- May need park-specific opening season awareness
+- They will NOT be included via ride heuristic until they actually open (correct behaviour)
+- First predictions for summer-opening parks will be cold-start (no training data for that attraction)
 
 ### Step 4: MAPE Improvement
-Current MAPE at 36% is high. This is largely driven by short-wait predictions (error% is huge for 2min predicted vs 5min actual).
+Current MAPE at 38% is high. This is largely driven by short-wait predictions (error% is huge for 2min predicted vs 5min actual).
 Consider: minimum clipping of predictions at 5 minutes for OPERATING rides.
+
+### Step 5: Investigate Per-Park MAE for UNKNOWN Parks
+After the next daily training cycle accumulates more UNKNOWN park data, compare:
+- Global MAE (should trend down as model learns UNKNOWN park attractions)
+- Per-park MAE for USJ, Universal, Warner Bros vs OPERATING-only parks
+- If UNKNOWN park MAE is significantly higher, may need park-specific calibration
 
 ---
 

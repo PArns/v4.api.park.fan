@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # predictions (next week, next month) where we use historical DOW/hour profiles.
     ROLLING_AVG_DROPOUT_RATE: float = 0.40
 
+    # rolling_avg_7d Dropout Rate
+    # For dropout rows, rolling_avg_7d is replaced with rolling_avg_weekday or
+    # rolling_avg_weekend. Without this, rolling_avg_7d is never blurred in training
+    # (it is used as the fallback for avg_wait_last_24h dropout) and the model
+    # over-relies on it (26%+ importance), suppressing attractionId and structural
+    # features. A 20% dropout forces the model to learn from other signals when the
+    # 7-day average is unavailable (e.g. attraction just opened, park re-opened after
+    # seasonal closure).
+    ROLLING_7D_DROPOUT_RATE: float = 0.35
+
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
 

@@ -1082,6 +1082,40 @@ def add_park_occupancy_feature(
                 df.loc[attr_mask, "avg_wait_last_24h"] = actual_24h
                 df.loc[attr_mask, "avg_wait_last_1h"] = actual_1h
 
+        # Also dropout rolling_avg_7d → replace with weekday/weekend historical mean.
+        # rolling_avg_7d is used as the fallback for avg_wait_last_24h dropout above,
+        # so without this it is always reliable in training and the model over-relies on
+        # it (26%+ importance) at the expense of attractionId and other structural features.
+        rolling_7d_dropout_rate = settings.ROLLING_7D_DROPOUT_RATE
+        if rolling_7d_dropout_rate > 0 and "rolling_avg_7d" in df.columns:
+            ts = pd.to_datetime(df["timestamp"])
+            dow = ts.dt.dayofweek  # Mon=0, Sun=6
+
+            for attraction_id in df["attractionId"].unique():
+                attr_mask = df["attractionId"] == attraction_id
+
+                rng = np.random.default_rng(
+                    settings.CATBOOST_RANDOM_SEED
+                    + hash(str(attraction_id) + "_7d") % 10000
+                )
+                drop = rng.random(attr_mask.sum()) < rolling_7d_dropout_rate
+
+                if not drop.any():
+                    continue
+
+                attr_dow = dow[attr_mask]
+                is_weekend = (attr_dow >= 5).values
+
+                fallback_7d = np.where(
+                    is_weekend,
+                    df.loc[attr_mask, "rolling_avg_weekend"].values,
+                    df.loc[attr_mask, "rolling_avg_weekday"].values,
+                )
+
+                actual_7d = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
+                actual_7d[drop] = fallback_7d[drop]
+                df.loc[attr_mask, "rolling_avg_7d"] = actual_7d
+
     return df
 
 

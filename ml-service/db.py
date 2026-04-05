@@ -103,7 +103,31 @@ def fetch_training_data(
 
     query = text(
         """
-        WITH hourly_queue AS (
+        WITH unknown_operating_days AS (
+            -- Identify UNKNOWN-schedule (park, date) pairs where the park was
+            -- genuinely operating via ride heuristic:
+            --   >= 3 attractions with any data AND >= 25% with waitTime >= 5.
+            -- This separates open UNKNOWN parks (USJ, Universal, Warner Bros etc.)
+            -- from seasonally-closed ones (Six Flags off-season, Canada's Wonderland etc.).
+            -- Only covers the training window to keep the CTE small.
+            SELECT
+                a."parkId",
+                DATE(q.timestamp AT TIME ZONE p.timezone) AS day
+            FROM queue_data q
+            INNER JOIN attractions a ON a.id = q."attractionId"
+            INNER JOIN parks p ON p.id = a."parkId"
+            INNER JOIN schedule_entries se
+                ON se."parkId" = a."parkId"
+                AND se.date = DATE(q.timestamp AT TIME ZONE p.timezone)
+                AND se."attractionId" IS NULL
+                AND se."scheduleType" = 'UNKNOWN'
+            WHERE q."waitTime" IS NOT NULL
+                AND q.timestamp BETWEEN :start_date AND :end_date
+            GROUP BY a."parkId", DATE(q.timestamp AT TIME ZONE p.timezone)
+            HAVING COUNT(*) >= 3
+                AND 100.0 * COUNT(CASE WHEN q."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+        ),
+        hourly_queue AS (
             -- Aggregate 5-min data to hourly buckets (reduces ~12x data volume)
             SELECT
                 qd."attractionId",
@@ -128,12 +152,21 @@ def fetch_training_data(
                 ON se."parkId" = a."parkId"
                 AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
+            -- Join heuristic lookup to allow UNKNOWN parks that were genuinely open
+            LEFT JOIN unknown_operating_days uod
+                ON uod."parkId" = a."parkId"
+                AND uod.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
             WHERE qd."queueType" = 'STANDBY'
                 AND qd.status = 'OPERATING'
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
-                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+                AND (
+                    se.id IS NULL                          -- no schedule entry at all
+                    OR se."scheduleType" = 'OPERATING'     -- confirmed operating
+                    OR (se."scheduleType" = 'UNKNOWN' AND uod.day IS NOT NULL)
+                    -- UNKNOWN but ride heuristic confirms park was operating that day
+                )
             GROUP BY
                 qd."attractionId",
                 a."parkId",
