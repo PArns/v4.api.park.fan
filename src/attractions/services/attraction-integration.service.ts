@@ -416,6 +416,7 @@ export class AttractionIntegrationService {
       dto.predictionAccuracy = {
         badge: predictionAccuracyResult.badge,
         last30Days: {
+          mae: predictionAccuracyResult.last30Days.mae,
           comparedPredictions:
             predictionAccuracyResult.last30Days.comparedPredictions,
           totalPredictions:

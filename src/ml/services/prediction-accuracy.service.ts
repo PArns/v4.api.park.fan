@@ -638,6 +638,7 @@ export class PredictionAccuracyService {
       {
         badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
         last30Days: {
+          mae: number;
           comparedPredictions: number;
           totalPredictions: number;
         };
@@ -650,6 +651,7 @@ export class PredictionAccuracyService {
       {
         badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
         last30Days: {
+          mae: number;
           comparedPredictions: number;
           totalPredictions: number;
         };
@@ -691,6 +693,7 @@ export class PredictionAccuracyService {
         resultMap.set(row.attractionId, {
           badge: badgeInfo.badge,
           last30Days: {
+            mae,
             comparedPredictions,
             totalPredictions,
           },
@@ -704,6 +707,7 @@ export class PredictionAccuracyService {
           resultMap.set(id, {
             badge: "insufficient_data",
             last30Days: {
+              mae: 0,
               comparedPredictions: 0,
               totalPredictions: 0,
             },
@@ -718,6 +722,7 @@ export class PredictionAccuracyService {
         resultMap.set(id, {
           badge: "insufficient_data",
           last30Days: {
+            mae: 0,
             comparedPredictions: 0,
             totalPredictions: 0,
           },

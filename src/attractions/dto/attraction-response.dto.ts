@@ -177,6 +177,7 @@ export class AttractionResponseDto {
   predictionAccuracy?: {
     badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
     last30Days: {
+      mae: number;
       comparedPredictions: number;
       totalPredictions: number;
     };
