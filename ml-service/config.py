@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     MODEL_VERSION: str = "v1.1.0"
 
     # CatBoost Hyperparameters
-    CATBOOST_ITERATIONS: int = 1000
-    CATBOOST_LEARNING_RATE: float = 0.03
-    CATBOOST_DEPTH: int = 6
+    CATBOOST_ITERATIONS: int = 2000  # Raised from 1000: best_iteration was 998/1000 → model was still learning
+    CATBOOST_LEARNING_RATE: float = 0.03  # 0.03 works well with 2000 iterations
+    CATBOOST_DEPTH: int = 7  # Raised from 6: more depth for complex holiday×season interactions
     CATBOOST_L2_LEAF_REG: float = 3.0
     CATBOOST_RANDOM_SEED: int = 42
     CATBOOST_THREAD_COUNT: int = (

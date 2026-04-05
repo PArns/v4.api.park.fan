@@ -90,6 +90,31 @@ export class MLTrainingProcessor {
           this.logger.log("✅ Training completed successfully");
         } else if (status.status === "failed") {
           throw new Error(`Training failed: ${status.error}`);
+        } else if (status.status === "idle" && attempts >= 2) {
+          // "idle" can mean training already finished before our first poll.
+          // Check if the model/info endpoint reports a version matching ours.
+          try {
+            const infoRes = await axios.get(`${mlServiceUrl}/model/info`);
+            const activeVersion = infoRes.data?.version;
+            if (activeVersion === version) {
+              isTraining = false;
+              this.logger.log(
+                `✅ Training already completed (detected via model/info: ${activeVersion})`,
+              );
+            } else if (
+              activeVersion &&
+              activeVersion > version &&
+              attempts >= 5
+            ) {
+              // A newer version is active — our training superseded by another run
+              isTraining = false;
+              this.logger.log(
+                `ℹ️  Newer model active (${activeVersion}), stopping poll`,
+              );
+            }
+          } catch {
+            // model/info not reachable, keep polling
+          }
         }
       }
 
