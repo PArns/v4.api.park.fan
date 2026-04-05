@@ -71,6 +71,90 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     return df_clean
 
 
+def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
+    """
+    Simulate the inference scenario for future predictions by randomly replacing
+    real-time features with historical proxies on a fraction of training rows.
+
+    Without dropout the model sees perfect real-time signals on every row and
+    learns to rely on them (avg_wait_last_24h dominates at ~30%, holiday features
+    near 0%). With dropout it must also learn from calendar/holiday/seasonal signals.
+
+    Two independent dropout passes:
+    1. Occupancy dropout (cfg.OCCUPANCY_DROPOUT_RATE):
+       park_occupancy_pct → park's own rolling_avg_weekday or rolling_avg_weekend
+       converted to an approximate occupancy ratio.  Simulates future predictions
+       where only a historical DOW×hour profile is available.
+
+    2. Rolling-avg dropout (cfg.ROLLING_AVG_DROPOUT_RATE):
+       avg_wait_last_24h → avg_wait_same_dow_4w  (same-DOW 4-week average)
+       avg_wait_last_1h  → rolling_avg_weekday / rolling_avg_weekend
+       Simulates next-week / next-month predictions where yesterday's wait is
+       irrelevant.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(cfg.CATBOOST_RANDOM_SEED)
+
+    n = len(df)
+    log.info("🎲 Applying training dropout...")
+
+    # --- 1. Occupancy dropout ---
+    occ_rate = cfg.OCCUPANCY_DROPOUT_RATE
+    if occ_rate > 0 and "park_occupancy_pct" in df.columns:
+        occ_mask = rng.random(n) < occ_rate
+        occ_count = int(occ_mask.sum())
+
+        if occ_count > 0 and "rolling_avg_7d" in df.columns:
+            # Use weekday/weekend rolling avg as a proxy for "expected" occupancy.
+            # Approximate the ratio: if today the park is at rolling_avg_7d level
+            # then occupancy would be ~100 (normalised). Scale accordingly.
+            is_weekend = df["is_weekend"].values == 1
+            proxy = np.where(
+                is_weekend,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
+            # Avoid div-by-zero: use rolling_avg_7d as the denominator
+            r7d = df["rolling_avg_7d"].values.clip(1)
+            # historical_occ = (proxy / r7d) * current_occ  →  smoother version of
+            # actual occ that strips out today's spike/dip
+            hist_occ = (proxy / r7d) * df["park_occupancy_pct"].values
+            hist_occ = hist_occ.clip(0, 400)  # cap at 400% to avoid outliers
+            df.loc[occ_mask, "park_occupancy_pct"] = hist_occ[occ_mask]
+
+            log.info(
+                f"   Occupancy dropout: {occ_count:,} rows ({occ_rate*100:.0f}%) → historical proxy"
+            )
+
+    # --- 2. Rolling-avg dropout ---
+    ravg_rate = cfg.ROLLING_AVG_DROPOUT_RATE
+    if ravg_rate > 0:
+        ravg_mask = rng.random(n) < ravg_rate
+        ravg_count = int(ravg_mask.sum())
+
+        if ravg_count > 0:
+            if "avg_wait_last_24h" in df.columns and "avg_wait_same_dow_4w" in df.columns:
+                df.loc[ravg_mask, "avg_wait_last_24h"] = df.loc[
+                    ravg_mask, "avg_wait_same_dow_4w"
+                ]
+
+            if "avg_wait_last_1h" in df.columns:
+                is_weekend_mask = df["is_weekend"].values == 1
+                fallback_1h = np.where(
+                    is_weekend_mask,
+                    df["rolling_avg_weekend"].values,
+                    df["rolling_avg_weekday"].values,
+                )
+                df.loc[ravg_mask, "avg_wait_last_1h"] = fallback_1h[ravg_mask]
+
+            log.info(
+                f"   Rolling-avg dropout: {ravg_count:,} rows ({ravg_rate*100:.0f}%) → DOW/weekend historical"
+            )
+
+    return df
+
+
 def train_model(version: str = None) -> None:
     """
     Train a new model
@@ -181,6 +265,17 @@ def train_model(version: str = None) -> None:
     df = df.dropna(subset=["waitTime"])
     logger.info(f"   Rows after cleaning: {len(df):,}")
     logger.info("")
+
+    # 4.5 Training Dropout — simulate the inference scenario for future predictions.
+    #
+    # Problem: during inference for tomorrow/next week, real-time signals
+    # (park_occupancy_pct, avg_wait_last_24h, avg_wait_last_1h) are unavailable
+    # or misleading. Without dropout these features dominate (combined ~50%) and
+    # the model learns to ignore calendar/holiday signals.
+    #
+    # Fix: randomly replace real-time features with historical proxies on a fraction
+    # of training rows, forcing the model to also learn from time/holiday features.
+    df = apply_training_dropout(df, settings, logger)
 
     # Data sufficiency check
     if len(df) == 0:

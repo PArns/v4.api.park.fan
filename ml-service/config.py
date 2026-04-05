@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     # historical mean. This teaches the model to rely on hour/day_of_week features
     # when only an approximate occupancy is available — matching the inference scenario
     # for future predictions (tomorrow, next week) where real-time occupancy is unknown.
-    OCCUPANCY_DROPOUT_RATE: float = 0.30
+    OCCUPANCY_DROPOUT_RATE: float = 0.50
 
     # Rolling Average Dropout Rate
     # For dropout rows, avg_wait_last_24h and avg_wait_last_1h are replaced with

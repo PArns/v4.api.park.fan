@@ -155,7 +155,23 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     );
 
     try {
-      const parks = await this.parksService.findAll();
+      const allParks = await this.parksService.findAll();
+
+      // Skip parks that are seasonally closed — generating daily predictions for
+      // closed parks (e.g. Hansa-Park in winter) produces actual=0 vs predicted=15+
+      // which inflates MAE and wastes ML compute. Same filter as hourly generator.
+      const parks: typeof allParks = [];
+      for (const park of allParks) {
+        const shouldInclude = await this.parksService.isParkOperatingToday(
+          park.id,
+        );
+        if (shouldInclude) {
+          parks.push(park);
+        }
+      }
+      this.logger.log(
+        `Filtered to ${parks.length}/${allParks.length} parks for daily predictions`,
+      );
       let totalPredictions = 0;
       let successParks = 0;
       let failedParks = 0;
