@@ -90,6 +90,7 @@ export class PredictionRequestDto {
     isBridgeDay?: Record<string, boolean>; // parkId -> is bridge day?
     isSchoolHoliday?: Record<string, boolean>; // parkId -> is school holiday?
     parkHasSchedule?: Record<string, boolean>; // parkId -> has schedule?
+    parkLiveStatus?: Record<string, string>; // parkId -> "OPERATING"|"CLOSED" (from getBatchParkStatus)
   };
 
   @ApiProperty({

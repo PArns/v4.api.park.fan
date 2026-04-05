@@ -8,6 +8,7 @@ import {
   CurrentModelDto,
   ModelComparisonDto,
   ModelVersionInfoDto,
+  ModelMetricsHistoryDto,
 } from "../dto/ml-dashboard.dto";
 
 /**
@@ -139,6 +140,46 @@ export class MLModelService {
 
     this.logger.debug(`Retrieved ${models.length} model(s) from history`);
     return models;
+  }
+
+  /**
+   * Get model metrics history for sparklines
+   *
+   * Returns all models ordered by trainedAt ASC (oldest first) so the
+   * frontend can render sparklines directly without reversing the array.
+   * Only returns columns needed for charts — not file paths or feature lists.
+   *
+   * @param limit Max number of models to include (default: 50, covers ~50 auto-trainings)
+   */
+  async getMetricsHistory(limit: number = 50): Promise<ModelMetricsHistoryDto> {
+    const [models, total] = await this.mlModelRepository.findAndCount({
+      select: [
+        "version",
+        "trainedAt",
+        "mae",
+        "rmse",
+        "mape",
+        "r2Score",
+        "trainSamples",
+        "isActive",
+      ],
+      order: { trainedAt: "ASC" },
+      take: limit,
+    });
+
+    return {
+      history: models.map((m) => ({
+        version: m.version,
+        trainedAt: m.trainedAt.toISOString(),
+        mae: m.mae ?? null,
+        rmse: m.rmse ?? null,
+        mape: m.mape ?? null,
+        r2Score: m.r2Score ?? null,
+        trainSamples: m.trainSamples,
+        isActive: m.isActive,
+      })),
+      total,
+    };
   }
 
   /**

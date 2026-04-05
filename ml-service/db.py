@@ -133,7 +133,7 @@ def fetch_training_data(
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
-                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+                AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
             GROUP BY
                 qd."attractionId",
                 a."parkId",

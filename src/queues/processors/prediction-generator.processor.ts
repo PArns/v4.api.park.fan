@@ -85,10 +85,14 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         await Promise.all(
           batch.map(async (park) => {
             try {
+              // Pass pre-computed live status to avoid redundant getBatchParkStatus call
+              const liveStatus = statusMap.get(park.id);
               // Get hourly predictions for next 24h
               const response = await this.mlService.getParkPredictions(
                 park.id,
                 "hourly",
+                undefined,
+                liveStatus,
               );
 
               if (response.predictions.length > 0) {
@@ -188,10 +192,15 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         await Promise.all(
           batch.map(async (park) => {
             try {
-              // Get daily predictions for next 30 days
+              // Pass "OPERATING" explicitly — park already passed isParkOperatingToday,
+              // so we know it operates today. Avoids getBatchParkStatus returning "CLOSED"
+              // at night (outside operating hours) which would suppress is_park_open for
+              // UNKNOWN-schedule future dates in the ML feature pipeline.
               const response = await this.mlService.getParkPredictions(
                 park.id,
                 "daily",
+                undefined,
+                "OPERATING",
               );
 
               if (response.predictions.length > 0) {

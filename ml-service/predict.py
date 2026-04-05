@@ -812,14 +812,15 @@ def create_prediction_features(
             (schedules_df["attractionId"].isin(["nan", "None"]))
             | (schedules_df["attractionId"].isna())
         ]
+        # Cast parkId to str to avoid UUID-object vs string key mismatches
         park_has_operating = (
-            park_level.groupby("parkId")["scheduleType"]
+            park_level.groupby(park_level["parkId"].astype(str))["scheduleType"]
             .apply(lambda x: (x == "OPERATING").any())
             .to_dict()
         )
 
         for idx, row in df.iterrows():
-            park_id = row["parkId"]
+            park_id = str(row["parkId"])  # str() ensures dict lookup matches
             attraction_id = str(row["attractionId"])
             timestamp = row["timestamp"]
 
@@ -922,6 +923,18 @@ def create_prediction_features(
                         # If attraction is closed, is_park_open feature for the model implies "can guests ride?"
                         # technically park is open but this ride isn't.
                         # But we are overriding prediction anyway, so feature value matters less.
+
+    # Live park status override: if NestJS determined a park is OPERATING via ride data,
+    # correct is_park_open for rows with UNKNOWN schedule (no data from wiki).
+    # Only overrides UNKNOWN — never CLOSED, which reflects an explicit schedule entry.
+    # This fixes future prediction timestamps (hourly: next 24h) where currentWaitTimes won't help.
+    if feature_context and "parkLiveStatus" in feature_context:
+        for park_id, live_status in feature_context["parkLiveStatus"].items():
+            if live_status == "OPERATING":
+                mask = (df["parkId"] == park_id) & (df["status"] == "UNKNOWN") & (df["is_park_open"] == 0)
+                if mask.any():
+                    df.loc[mask, "is_park_open"] = 1
+                    df.loc[mask, "status"] = "OPERATING"
 
     # Historical features (most important!)
     # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB

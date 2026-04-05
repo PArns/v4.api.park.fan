@@ -1377,10 +1377,11 @@ def add_park_schedule_features(
     df = df.drop(columns=["schedule_date"], errors="ignore")
 
     # Correction Logic: Override "Closed" if we have evidence of "Open" (vectorized)
+    # Threshold ≥5 min: closed parks report 0, walk-ons and open parks report ≥5.
     # 1. Training Override: Target data (waitTime) indicates open
     if "waitTime" in df.columns:
         mask_wait_time = (
-            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] > 0)
+            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] >= 5)
         )
         df.loc[mask_wait_time, "is_park_open"] = 1
 
@@ -1392,10 +1393,13 @@ def add_park_schedule_features(
                 (df["is_park_open"] == 0)
                 & df["attractionId"].isin(cw.keys())
                 & df["attractionId"].apply(
-                    lambda x: cw.get(x, 0) > 0 if x in cw else False
+                    lambda x: cw.get(x, 0) >= 5 if x in cw else False
                 )
             )
             df.loc[mask_context, "is_park_open"] = 1
+
+    # Note: parkLiveStatus override (ride-based detection) is handled in predict.py inference path only.
+    # features.py is called during training where feature_context is None — no override needed here.
 
     return df
 

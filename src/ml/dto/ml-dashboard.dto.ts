@@ -518,3 +518,46 @@ export class MLDashboardDto {
   @ApiProperty({ description: "System operational info" })
   system: SystemSectionDto;
 }
+
+// ==================== METRICS HISTORY (SPARKLINES) ====================
+
+export class ModelMetricsSnapshotDto {
+  @ApiProperty({ example: "v20260405_083012", description: "Model version" })
+  version: string;
+
+  @ApiProperty({ description: "When the model was trained (ISO)" })
+  trainedAt: string;
+
+  @ApiProperty({ example: 14.4, description: "MAE in minutes", nullable: true })
+  mae: number | null;
+
+  @ApiProperty({
+    example: 19.1,
+    description: "RMSE in minutes",
+    nullable: true,
+  })
+  rmse: number | null;
+
+  @ApiProperty({ example: 21.3, description: "MAPE in %", nullable: true })
+  mape: number | null;
+
+  @ApiProperty({ example: 0.82, description: "R² (0–1)", nullable: true })
+  r2Score: number | null;
+
+  @ApiProperty({ example: 45000, description: "Training samples" })
+  trainSamples: number;
+
+  @ApiProperty({
+    example: true,
+    description: "Whether this is the active model",
+  })
+  isActive: boolean;
+}
+
+export class ModelMetricsHistoryDto {
+  @ApiProperty({ type: [ModelMetricsSnapshotDto] })
+  history: ModelMetricsSnapshotDto[];
+
+  @ApiProperty({ example: 20, description: "Total number of models in DB" })
+  total: number;
+}

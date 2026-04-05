@@ -17,4 +17,5 @@ export interface FeatureContext {
   isBridgeDay?: Record<string, boolean>;
   parkHasSchedule?: Record<string, boolean>;
   isSchoolHoliday?: Record<string, boolean>;
+  parkLiveStatus?: Record<string, string>;
 }

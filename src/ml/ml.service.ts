@@ -269,6 +269,7 @@ export class MLService {
     parkId: string,
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
+    liveStatus?: "OPERATING" | "CLOSED",
   ): Promise<BulkPredictionResponseDto> {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
@@ -443,6 +444,7 @@ export class MLService {
       const featureContext = await this.buildFeatureContext(
         parkId,
         activeAttractionIds,
+        liveStatus,
       );
 
       // 4b. Fetch P50 baseline for crowd level calculation
@@ -523,6 +525,7 @@ export class MLService {
   private async buildFeatureContext(
     parkId: string,
     attractionIds: string[],
+    precomputedLiveStatus?: "OPERATING" | "CLOSED",
   ): Promise<FeatureContext> {
     try {
       // 1. Get park occupancy percentage
@@ -690,6 +693,23 @@ export class MLService {
         this.logger.warn(`Failed to check school holiday status: ${error}`);
       }
 
+      // 8. Get current live park status (used by ML to fix is_park_open for UNKNOWN parks).
+      // If pre-computed by the caller (prediction generator batch), use that directly.
+      // Otherwise fetch it now (e.g. for on-demand single-park prediction calls).
+      let parkLiveStatus: Record<string, string> = {};
+      try {
+        if (precomputedLiveStatus !== undefined) {
+          parkLiveStatus[parkId] = precomputedLiveStatus;
+        } else {
+          const liveStatusMap = await this.parksService.getBatchParkStatus([
+            parkId,
+          ]);
+          parkLiveStatus[parkId] = liveStatusMap.get(parkId) ?? "UNKNOWN";
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get live park status: ${error}`);
+      }
+
       return {
         parkOccupancy,
         parkOpeningTimes,
@@ -698,6 +718,7 @@ export class MLService {
         isBridgeDay,
         parkHasSchedule,
         isSchoolHoliday,
+        parkLiveStatus,
       };
     } catch (error) {
       this.logger.warn(`Failed to build feature context: ${error}`);

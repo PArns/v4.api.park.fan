@@ -10,7 +10,10 @@ import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
 import { MLDashboardService } from "../services/ml-dashboard.service";
 import { MLModelService } from "../services/ml-model.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
-import { MLDashboardDto } from "../dto/ml-dashboard.dto";
+import {
+  MLDashboardDto,
+  ModelMetricsHistoryDto,
+} from "../dto/ml-dashboard.dto";
 
 /**
  * MLController
@@ -52,7 +55,7 @@ export class MLController {
   }
 
   /**
-   * Get Model Version History
+   * Get Model Version History (full model objects)
    */
   @Get("models/history")
   @ApiOperation({
@@ -63,6 +66,30 @@ export class MLController {
     @Query("limit", new DefaultValuePipe(10), ParseIntPipe) limit: number,
   ) {
     return this.modelService.getModelHistory(limit);
+  }
+
+  /**
+   * Get model metrics history for sparklines
+   * Returns MAE, RMSE, MAPE, R² over time ordered oldest→newest.
+   */
+  @Get("models/metrics-history")
+  @ApiOperation({
+    summary: "Get model metrics history for sparklines",
+    description:
+      "Returns key accuracy metrics (MAE, RMSE, MAPE, R²) for each trained model, " +
+      "ordered oldest to newest. Designed for sparkline charts in the ML dashboard.",
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Max models to return (default 50)",
+  })
+  @ApiResponse({ status: 200, type: ModelMetricsHistoryDto })
+  async getMetricsHistory(
+    @Query("limit", new DefaultValuePipe(50), ParseIntPipe) limit: number,
+  ): Promise<ModelMetricsHistoryDto> {
+    return this.modelService.getMetricsHistory(limit);
   }
 
   /**

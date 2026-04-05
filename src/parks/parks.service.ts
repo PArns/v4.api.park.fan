@@ -2121,13 +2121,49 @@ export class ParksService {
       },
     });
 
-    // If we have a schedule entry, trust it:
+    // If we have a schedule entry, trust OPERATING/CLOSED explicitly.
+    // UNKNOWN means the source has no data for today — treat like "no schedule":
+    // default to true so we still generate predictions for potentially-open parks.
     if (todaySchedule) {
-      return todaySchedule.scheduleType === "OPERATING";
+      if (todaySchedule.scheduleType === "OPERATING") return true;
+      if (todaySchedule.scheduleType === "CLOSED") return false;
+      // UNKNOWN → fall through to default below
     }
 
-    // If NO schedule exists (e.g. Toverland), default to TRUE to ensure we check live sources.
-    // This allows us to "discover" open parks even if we lack schedule data.
+    // No schedule or UNKNOWN: check today's ride data to decide.
+    // Uses park-local midnight as the start (not a rolling 24h) to avoid
+    // yesterday's operating data leaking into today's closed determination.
+    // ≥3 rides with data AND ≥25% with waitTime ≥ 5 → likely open.
+    // ≥3 rides with data AND 0% with waitTime ≥ 5 → likely closed.
+    // Too little data → default true (conservative, we don't know).
+    const todayStart = getStartOfDayInTimezone(park.timezone);
+    const rideStats: { withData: string; operating5min: string }[] =
+      await this.parkRepository.manager.query(
+        `
+        SELECT
+          COUNT(*) as "withData",
+          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min"
+        FROM attractions a
+        JOIN LATERAL (
+          SELECT status, "waitTime"
+          FROM queue_data qd
+          WHERE qd."attractionId" = a.id
+            AND qd.timestamp >= $2
+          ORDER BY timestamp DESC
+          LIMIT 1
+        ) q ON true
+        WHERE a."parkId" = $1
+      `,
+        [parkId, todayStart],
+      );
+
+    if (rideStats.length > 0) {
+      const withData = parseInt(rideStats[0].withData, 10);
+      const operating5min = parseInt(rideStats[0].operating5min, 10);
+      if (withData >= 3) {
+        return operating5min / withData >= 0.25;
+      }
+    }
     return true;
   }
 
@@ -2169,56 +2205,54 @@ export class ParksService {
       statusMap.set(schedule.parkId, "OPERATING");
     }
 
-    // Heuristic Fallback: For parks WITHOUT schedules, check if rides are actively operating
-    // ONLY applies to parks that have NO schedule (to avoid overriding schedule-based logic)
-    // Uses RECENT data (last 30 minutes) and checks for meaningful wait times
+    // Heuristic Fallback: For parks not currently OPERATING per schedule, check ride data.
+    // Applies to parks with UNKNOWN or no schedule — NOT to parks with explicit CLOSED today.
+    // Uses RECENT data (last 30 minutes) with a meaningful threshold:
+    //   ≥3 attractions must have data AND ≥25% must have waitTime ≥ 5 min.
+    // This distinguishes truly open parks (Le Pal 95%, Blackpool 53%) from closed ones (0%).
     const closedParkIds = parkIds.filter(
       (id) => statusMap.get(id) === "CLOSED",
     );
 
     if (closedParkIds.length > 0) {
-      // Check if these parks have schedules
-      // Only apply ride-based logic for parks WITHOUT schedules
-      const parksWithoutSchedules = await this.scheduleRepository
-        .createQueryBuilder("schedule")
-        .select("DISTINCT schedule.parkId", "parkId")
-        .where("schedule.parkId = ANY(:parkIds)", { parkIds: closedParkIds })
-        .andWhere("schedule.scheduleType = 'OPERATING'")
-        .getRawMany();
-
-      const parkIdsWithSchedule = new Set(
-        parksWithoutSchedules.map((p) => p.parkId),
+      // Exclude parks with an explicit CLOSED schedule for today — trust the schedule.
+      // Use park-local date (AT TIME ZONE p.timezone) to avoid UTC vs. local mismatch
+      // that would affect UTC+ parks near midnight.
+      const explicitlyClosedRows: { parkId: string }[] =
+        await this.parkRepository.manager.query(
+          `SELECT DISTINCT se."parkId"
+           FROM schedule_entries se
+           JOIN parks p ON p.id = se."parkId"
+           WHERE se."parkId" = ANY($1)
+             AND se.date = (CURRENT_TIMESTAMP AT TIME ZONE p.timezone)::date
+             AND se."scheduleType" = 'CLOSED'`,
+          [closedParkIds],
+        );
+      const explicitlyClosedIds = new Set(
+        explicitlyClosedRows.map((r) => r.parkId),
       );
-
-      // Filter to only parks WITHOUT schedules
       const parksNeedingFallback = closedParkIds.filter(
-        (id) => !parkIdsWithSchedule.has(id),
+        (id) => !explicitlyClosedIds.has(id),
       );
 
       if (parksNeedingFallback.length > 0) {
-        // For parks without schedules: Check if rides are actively operating
-        // Criteria: Recent data (last 30 min) + OPERATING + waitTime > 0 (closed parks often show 0/5)
-        const stats = await this.parkRepository.manager.query(
+        const stats: {
+          parkId: string;
+          withData: string;
+          operating5min: string;
+        }[] = await this.parkRepository.manager.query(
           `
           SELECT
             p.id as "parkId",
-            COUNT(a.id) as "total",
-            SUM(
-              CASE 
-                WHEN q.status = 'OPERATING' 
-                  AND q."waitTime" > 0 
-                  AND q.timestamp > NOW() - INTERVAL '30 minutes'
-                THEN 1 
-                ELSE 0 
-              END
-            ) as "operating"
+            COUNT(*) as "withData",
+            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min"
           FROM parks p
           JOIN attractions a ON a."parkId" = p.id
           JOIN LATERAL (
-            SELECT status, "waitTime", timestamp
+            SELECT status, "waitTime"
             FROM queue_data qd
             WHERE qd."attractionId" = a.id
-              AND qd.timestamp > NOW() - INTERVAL '30 minutes'
+              AND qd.timestamp > NOW() - INTERVAL '2 hours'
             ORDER BY timestamp DESC
             LIMIT 1
           ) q ON true
@@ -2229,10 +2263,10 @@ export class ParksService {
         );
 
         for (const stat of stats) {
-          const operating = parseInt(stat.operating, 10);
-
-          // If at least one ride is OPERATING with waitTime > 0, mark park as open
-          if (operating > 0) {
+          const withData = parseInt(stat.withData, 10);
+          const operating5min = parseInt(stat.operating5min, 10);
+          // Require ≥3 rides with recent data and ≥25% reporting ≥5 min wait
+          if (withData >= 3 && operating5min / withData >= 0.25) {
             statusMap.set(stat.parkId, "OPERATING");
           }
         }
