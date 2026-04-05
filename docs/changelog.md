@@ -8,7 +8,21 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ### Added
 
-- **Weather forecast in integrated park response**
+- **ML: ride-based park open/closed detection** (`parks.service.ts`): `getBatchParkStatus` and `isParkOperatingToday` now derive open/closed status from live ride data when no confirmed schedule exists. Threshold: ≥3 attractions with recent data AND ≥25% reporting `waitTime ≥ 5 min`. Window: 2h for real-time status, park-local today for daily planning. Parks with explicit `CLOSED` schedule today are excluded from the heuristic.
+- **ML: `parkLiveStatus` feature context** (`ml.service.ts`, `predict.py`, `feature-context.type.ts`): NestJS now passes `featureContext.parkLiveStatus` to the Python ML service. In `predict.py`, UNKNOWN-schedule rows are corrected to `is_park_open=1` when the park is confirmed OPERATING via ride data. Explicit CLOSED entries are never overridden. Fixes predictions for parks like Six Flags, Universal, and other parks that report UNKNOWN schedule but are genuinely open.
+- **ML dashboard: model metrics history endpoint** (`GET /v1/ml/models/metrics-history?limit=50`): Returns MAE, RMSE, MAPE, R² per trained model ordered oldest→newest for sparkline charts. See integration guide for frontend.
+
+### Fixed
+
+- **UNKNOWN schedule parks excluded from prediction generation** (`parks.service.ts` `isParkOperatingToday`): Parks with `scheduleType=UNKNOWN` (e.g. Six Flags, Universal Hollywood, 66 parks affected) were treated the same as CLOSED — no predictions generated. Fixed: UNKNOWN falls through to ride-data check; if no data, defaults to `true` (conservative).
+- **`getBatchParkStatus` heuristic over-filtered** (`parks.service.ts`): Previous filter excluded parks that ever had any OPERATING schedule entry, making the heuristic dead code for most UNKNOWN parks. New filter: only exclude parks with explicit CLOSED schedule today (park-local timezone via `AT TIME ZONE` join). Threshold raised from `waitTime > 0` (any single ride) to ≥25% with `waitTime ≥ 5`.
+- **`CURRENT_DATE` UTC vs. park-local** (`parks.service.ts`): CLOSED-schedule exclusion query used `date = CURRENT_DATE` (UTC), which could match wrong date for UTC+ parks at night. Fixed with `(CURRENT_TIMESTAMP AT TIME ZONE p.timezone)::date` via JOIN on parks.
+- **Daily predictions: `parkLiveStatus` always "CLOSED" at night** (`prediction-generator.processor.ts`): Daily prediction generator called `getBatchParkStatus` at runtime (e.g. 02:00 UTC), getting `"CLOSED"` for parks outside operating hours → UNKNOWN override never fired. Fixed: parks that pass `isParkOperatingToday` now receive `liveStatus="OPERATING"` explicitly.
+- **ML training excluded UNKNOWN-schedule parks** (`ml-service/db.py`): Training SQL filtered `scheduleType = 'OPERATING'` only, excluding 66+ parks with UNKNOWN schedule. Model never learned patterns for these parks, creating training/inference asymmetry. Fixed: `IN ('OPERATING', 'UNKNOWN')`. **Retraining required.**
+- **`park_has_operating` UUID type mismatch** (`ml-service/predict.py`): Dict key built from `schedules_df["parkId"]` could be a UUID object while `row["parkId"]` was a string → silent dict miss → UNKNOWN override never fired. Fixed: `astype(str)` on groupby key + `str(row["parkId"])` at lookup.
+- **Dead code in `features.py`** (`ml-service/features.py`): `parkLiveStatus` override block in `add_park_schedule_features` was unreachable (only called during training where `feature_context=None`). Removed; the authoritative override is in `predict.py`.
+
+### Weather forecast in integrated park response
 
 ### Fixed (weather)
 

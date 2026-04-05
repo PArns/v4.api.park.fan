@@ -35,8 +35,9 @@ The ML Service is a standalone Python application responsible for predicting wai
      AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
      AND se."attractionId" IS NULL
    WHERE qd."waitTime" >= 5
-     AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+     AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
    ```
+   UNKNOWN days are included so the model learns to predict for parks that have schedule integration but no confirmed hours for a given day (e.g. Six Flags, parks with delayed schedule publication). The `waitTime >= 5` filter already ensures only real operating data enters training. Without this, the model never saw training examples for UNKNOWN-schedule parks — creating a training/inference asymmetry when `parkLiveStatus` corrects those rows to `is_park_open=1` at inference.
 2. **Preprocessing**:
    - Outlier removal (e.g., wait times > 300 min).
    - Feature engineering (Holiday lookup via `holiday_utils.py`).
@@ -100,9 +101,18 @@ Predictions are aligned with park schedule from `schedule_entries` **only when t
 - **Park has no schedule** (no rows, or only UNKNOWN/CLOSED and never OPERATING): Treated as “no schedule” → predictions are **kept** (assume open). No filtering.
 - **Park has schedule integration** (at least one OPERATING row):
   - **OPERATING**: Predict wait times; filter by operating hours.
-  - **CLOSED**: `predictedWaitTime = 0`, `crowdLevel = "closed"`; daily predictions for that date excluded.
-  - **UNKNOWN**: No schedule from source yet (placeholder) → same as CLOSED for that date; excluded from daily.
+  - **CLOSED**: `predictedWaitTime = 0`, `crowdLevel = “closed”`; daily predictions for that date excluded.
+  - **UNKNOWN**: No confirmed hours from source yet → inference sets `is_park_open=0` by default, BUT if `parkLiveStatus=”OPERATING”` (park confirmed open via ride-data heuristic in NestJS), the override flips `is_park_open=1` and predictions are kept.
 
 In **predict.py**, UNKNOWN/CLOSED-only for a date is only applied when `park_has_operating` (park has at least one OPERATING row); otherwise the row is left open. In **schedule_filter.py**, if the query returns only UNKNOWN/CLOSED (no OPERATING dates), we keep all predictions for that park instead of filtering everything out.
+
+### `parkLiveStatus` — ride-based open/closed signal
+
+NestJS passes `featureContext.parkLiveStatus: Record<parkId, “OPERATING”|”CLOSED”>` in every prediction request. This is determined by `getBatchParkStatus` in `parks.service.ts`, which uses:
+
+1. **Primary**: `schedule_entries` — OPERATING entry with `openingTime ≤ now < closingTime`.
+2. **Heuristic fallback** (parks not covered by primary): Ride data from the last 2 hours. A park is considered OPERATING if ≥ 3 attractions have recent data AND ≥ 25% report `waitTime ≥ 5 min`. Parks with an explicit `CLOSED` schedule today are excluded from the heuristic.
+
+In `predict.py`, after the schedule loop, any row with `status=”UNKNOWN”` and `is_park_open=0` is corrected to `is_park_open=1` when `parkLiveStatus=”OPERATING”`. This never overrides explicit `CLOSED` entries.
 
 **Full rules (Calendar API + Schedule Sync + ML):** [Calendar, Schedule & ML Rules](../architecture/calendar-schedule-and-ml-rules.md).

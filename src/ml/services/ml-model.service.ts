@@ -151,7 +151,7 @@ export class MLModelService {
    *
    * @param limit Max number of models to include (default: 50, covers ~50 auto-trainings)
    */
-  async getMetricsHistory(limit: number = 50): Promise<ModelMetricsHistoryDto> {
+  async getMetricsHistory(limit: number = 30): Promise<ModelMetricsHistoryDto> {
     const [models, total] = await this.mlModelRepository.findAndCount({
       select: [
         "version",

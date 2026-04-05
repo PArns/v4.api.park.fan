@@ -263,17 +263,19 @@ export class MLTrainingProcessor {
    * Cleanup old ML models
    *
    * Keeps:
-   * - Active model
-   * - Last 2 inactive models (as backup)
+   * - The last 30 models by training date (for sparkline history)
+   * - Always keeps the active model regardless of position
    *
    * Deletes:
-   * - Older inactive models (both files and DB entries)
+   * - Models beyond the 30-model window (both files and DB entries)
    * - Orphaned model files without DB entries
    */
   @Process("cleanup-models")
   async handleCleanupModels(_job: Job): Promise<void> {
     await this.cleanupOldModels();
   }
+
+  private readonly MODELS_TO_KEEP = 30;
 
   private async cleanupOldModels(): Promise<void> {
     try {
@@ -284,26 +286,25 @@ export class MLTrainingProcessor {
         order: { trainedAt: "DESC" },
       });
 
-      // Keep models from the last 3 days; always keep the active model
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 3);
+      // Keep the last 30 models; always keep the active model even if outside that window
+      const keepSet = new Set(
+        allModels.slice(0, this.MODELS_TO_KEEP).map((m) => m.id),
+      );
+      // Ensure the active model is always kept
+      allModels.filter((m) => m.isActive).forEach((m) => keepSet.add(m.id));
 
-      const modelsToKeep = allModels.filter(
-        (m) => m.isActive || new Date(m.trainedAt) >= cutoff,
-      );
-      const modelsToDelete = allModels.filter(
-        (m) => !m.isActive && new Date(m.trainedAt) < cutoff,
-      );
+      const modelsToKeep = allModels.filter((m) => keepSet.has(m.id));
+      const modelsToDelete = allModels.filter((m) => !keepSet.has(m.id));
 
       if (modelsToDelete.length === 0) {
         this.logger.log(
-          `   Skipping cleanup: All ${allModels.length} model(s) are within 3 days`,
+          `   Skipping cleanup: All ${allModels.length} model(s) within retention limit (${this.MODELS_TO_KEEP})`,
         );
         return;
       }
 
       this.logger.log(
-        `   Keeping ${modelsToKeep.length} models (last 3 days), deleting ${modelsToDelete.length}`,
+        `   Keeping ${modelsToKeep.length} models (last ${this.MODELS_TO_KEEP}), deleting ${modelsToDelete.length}`,
       );
 
       let deletedFiles = 0;

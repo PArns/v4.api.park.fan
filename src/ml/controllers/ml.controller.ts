@@ -83,11 +83,11 @@ export class MLController {
     name: "limit",
     required: false,
     type: Number,
-    description: "Max models to return (default 50)",
+    description: "Max models to return (default 30)",
   })
   @ApiResponse({ status: 200, type: ModelMetricsHistoryDto })
   async getMetricsHistory(
-    @Query("limit", new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query("limit", new DefaultValuePipe(30), ParseIntPipe) limit: number,
   ): Promise<ModelMetricsHistoryDto> {
     return this.modelService.getMetricsHistory(limit);
   }

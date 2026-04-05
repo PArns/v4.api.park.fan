@@ -79,15 +79,17 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 ### 4.3 predict.py (Inference)
 
 - **Schedule features:** From `schedule_entries`, OPERATING/CLOSED/UNKNOWN are evaluated per park/date. A park with no OPERATING entry at all is treated as “no schedule” → predictions are kept.
-- **Inference skip for CLOSED/UNKNOWN:** Rows with `status === "CLOSED"` or `"UNKNOWN"` are **excluded before** model.predict. No inference is run for definitively closed days (reduces system load; those predictions would be filtered out anyway).
+- **Inference skip for CLOSED/UNKNOWN:** Rows with `status === “CLOSED”` or `”UNKNOWN”` are **excluded before** model.predict by default. However, if `featureContext.parkLiveStatus[parkId] === “OPERATING”` (ride-based detection), UNKNOWN rows are overridden to `is_park_open=1` and inference IS run for those rows. Explicit CLOSED entries are always respected.
+- **`parkLiveStatus` context:** NestJS sends `featureContext.parkLiveStatus` with every prediction request. Derived from `getBatchParkStatus`: schedule-based first, then ride-heuristic fallback (≥3 attractions with data, ≥25% with `waitTime ≥ 5` in last 2h). Parks with explicit CLOSED schedule today are excluded from the heuristic.
 
 ### 4.4 Summary: ML ↔ Calendar
 
 | Aspect | Calendar (API) | ML Service |
 |--------|----------------|------------|
-| CLOSED day | `status: "CLOSED"`, `crowdLevel: "closed"` | No inference run (predict.py skips CLOSED rows); filter_predictions_by_schedule would remove anyway. |
-| UNKNOWN day (future) | `status: "UNKNOWN"`, `crowdLevel` = ML or fallback “moderate” | Daily prediction is **not** returned (only OPERATING days); calendar uses fallback “moderate”. |
-| Past/today without schedule | With crowd level → `status: "OPERATING"` | Independent; calendar derives status from crowd data. |
+| CLOSED day | `status: “CLOSED”`, `crowdLevel: “closed”` | No inference run; filter_predictions_by_schedule removes anyway. |
+| UNKNOWN day (future) — park confirmed open via rides | `status: “UNKNOWN”`, `crowdLevel` = ML or fallback “moderate” | `parkLiveStatus=”OPERATING”` overrides `is_park_open=1` → real ML prediction returned. |
+| UNKNOWN day (future) — park not confirmed open | `status: “UNKNOWN”`, `crowdLevel` = fallback “moderate” | Inference skipped; calendar uses fallback. |
+| Past/today without schedule | With crowd level → `status: “OPERATING”` | Independent; calendar derives status from crowd data. |
 
 ---
 
