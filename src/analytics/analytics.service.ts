@@ -2675,12 +2675,34 @@ export class AnalyticsService {
     // IMPORTANT: Only consider parks that are currently OPERATING
     // to avoid showing closed parks with 0 wait times
     const activeParksResult = await this.queueDataRepository.query(`
-      WITH park_status AS (
+      WITH schedule_open_parks AS (
         SELECT DISTINCT s."parkId"
         FROM schedule_entries s
         WHERE s."scheduleType" = 'OPERATING'
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
+      ),
+      ride_open_parks AS (
+        -- UNKNOWN-schedule parks detected as open via live ride data (no OPERATING entries ever)
+        SELECT a."parkId"
+        FROM attractions a
+        JOIN queue_data qd ON qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '2 hours'
+          AND qd."waitTime" IS NOT NULL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
+        )
+        GROUP BY a."parkId"
+        HAVING COUNT(*) >= 3
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+      ),
+      park_status AS (
+        SELECT "parkId" FROM schedule_open_parks
+        UNION
+        SELECT "parkId" FROM ride_open_parks
       ),
       latest_updates AS (
         SELECT DISTINCT ON (qd."attractionId")
@@ -2809,12 +2831,33 @@ export class AnalyticsService {
     // IMPORTANT: Only consider rides from parks that are currently OPERATING
     // to avoid showing rides from closed parks (e.g., stale data)
     const rideStats = await this.queueDataRepository.query(`
-      WITH park_status AS (
+      WITH schedule_open_parks AS (
         SELECT DISTINCT s."parkId"
         FROM schedule_entries s
         WHERE s."scheduleType" = 'OPERATING'
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
+      ),
+      ride_open_parks AS (
+        SELECT a."parkId"
+        FROM attractions a
+        JOIN queue_data qd ON qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '2 hours'
+          AND qd."waitTime" IS NOT NULL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
+        )
+        GROUP BY a."parkId"
+        HAVING COUNT(*) >= 3
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+      ),
+      park_status AS (
+        SELECT "parkId" FROM schedule_open_parks
+        UNION
+        SELECT "parkId" FROM ride_open_parks
       ),
       latest_rides AS (
         SELECT DISTINCT ON (qd."attractionId")
@@ -3003,12 +3046,33 @@ export class AnalyticsService {
 
     // Get all parks with their current status and wait times
     const parksData = await this.queueDataRepository.query(`
-      WITH park_status AS (
+      WITH schedule_open_parks AS (
         SELECT DISTINCT s."parkId"
         FROM schedule_entries s
         WHERE s."scheduleType" = 'OPERATING'
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
+      ),
+      ride_open_parks AS (
+        SELECT a."parkId"
+        FROM attractions a
+        JOIN queue_data qd ON qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '2 hours'
+          AND qd."waitTime" IS NOT NULL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
+        )
+        GROUP BY a."parkId"
+        HAVING COUNT(*) >= 3
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+      ),
+      park_status AS (
+        SELECT "parkId" FROM schedule_open_parks
+        UNION
+        SELECT "parkId" FROM ride_open_parks
       ),
       latest_updates AS (
         SELECT DISTINCT ON (qd."attractionId")
@@ -3457,7 +3521,7 @@ export class AnalyticsService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= 5
           AND qd."queueType" = 'STANDBY'
-          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
                  EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
         ORDER BY date
@@ -3484,7 +3548,7 @@ export class AnalyticsService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= 5
           AND qd."queueType" = 'STANDBY'
-          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
                  EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
         ORDER BY date
@@ -3611,7 +3675,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" >= 5
-          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
       ),
       -- Step 2: Calculate park-wide stats for relative thresholds
@@ -3715,7 +3779,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" >= 5
-          AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
         ORDER BY p90_wait DESC
         LIMIT 5
@@ -4112,7 +4176,7 @@ export class AnalyticsService {
         AND qd."queueType" = 'STANDBY'
         AND qd.status = 'OPERATING'
         AND qd."waitTime" >= 5
-        AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+        AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
       `,
       [attractionId, timezone, cutoff],
     );
