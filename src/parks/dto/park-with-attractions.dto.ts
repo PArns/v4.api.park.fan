@@ -124,6 +124,29 @@ export class ParkAttractionDto {
     required: false,
   })
   isHeadliner?: boolean;
+
+  @ApiProperty({
+    description: "Whether this attraction only operates during certain seasons",
+    required: false,
+  })
+  isSeasonal?: boolean;
+
+  @ApiProperty({
+    description:
+      "Months (1–12) when this attraction typically operates. Null if not seasonal.",
+    required: false,
+    nullable: true,
+    type: [Number],
+  })
+  seasonMonths?: number[] | null;
+
+  @ApiProperty({
+    description:
+      "Whether the attraction is currently in its operating season. Null for non-seasonal attractions.",
+    required: false,
+    nullable: true,
+  })
+  isCurrentlyInSeason?: boolean | null;
 }
 
 export class ParkShowDto {
@@ -149,6 +172,29 @@ export class ParkShowDto {
   showtimes?: {
     startTime: string;
   }[];
+
+  @ApiProperty({
+    description: "Whether this show only operates during certain seasons",
+    required: false,
+  })
+  isSeasonal?: boolean;
+
+  @ApiProperty({
+    description:
+      "Months (1–12) when this show typically runs. Null if not seasonal.",
+    required: false,
+    nullable: true,
+    type: [Number],
+  })
+  seasonMonths?: number[] | null;
+
+  @ApiProperty({
+    description:
+      "Whether the show is currently in its operating season. Null for non-seasonal shows.",
+    required: false,
+    nullable: true,
+  })
+  isCurrentlyInSeason?: boolean | null;
 }
 
 export class ParkRestaurantDto {
@@ -420,28 +466,60 @@ export class ParkWithAttractionsDto {
       longitude: park.longitude !== undefined ? park.longitude : null,
 
       attractions: park.attractions
-        ? park.attractions.map((attraction) => ({
-            id: attraction.id,
-            name: attraction.name,
-            slug: attraction.slug,
-            latitude:
-              attraction.latitude !== undefined ? attraction.latitude : null,
-            longitude:
-              attraction.longitude !== undefined ? attraction.longitude : null,
-            land: attraction.landName || null,
-            url: buildAttractionUrl(park, attraction) || null,
-            // queue data, forecasts etc will be attached by service
-          }))
+        ? park.attractions.map((attraction) => {
+            const isSeasonal = attraction.isSeasonal || false;
+            const seasonMonths = attraction.seasonMonths || null;
+            let isCurrentlyInSeason: boolean | null = null;
+            if (isSeasonal) {
+              const currentMonth = new Date().getMonth() + 1; // 1-based
+              isCurrentlyInSeason =
+                seasonMonths !== null && seasonMonths.length > 0
+                  ? seasonMonths.includes(currentMonth)
+                  : null; // seasonal but unknown when → null (don't hide)
+            }
+            return {
+              id: attraction.id,
+              name: attraction.name,
+              slug: attraction.slug,
+              latitude:
+                attraction.latitude !== undefined ? attraction.latitude : null,
+              longitude:
+                attraction.longitude !== undefined
+                  ? attraction.longitude
+                  : null,
+              land: attraction.landName || null,
+              url: buildAttractionUrl(park, attraction) || null,
+              isSeasonal,
+              seasonMonths,
+              isCurrentlyInSeason,
+              // queue data, forecasts etc will be attached by service
+            };
+          })
         : [],
       shows: park.shows
-        ? park.shows.map((show) => ({
-            id: show.id,
-            name: show.name,
-            slug: show.slug,
-            status: "CLOSED", // Default to ensure order
-            latitude: show.latitude !== undefined ? show.latitude : null,
-            longitude: show.longitude !== undefined ? show.longitude : null,
-          }))
+        ? park.shows.map((show) => {
+            const isSeasonal = show.isSeasonal || false;
+            const seasonMonths = show.seasonMonths || null;
+            let isCurrentlyInSeason: boolean | null = null;
+            if (isSeasonal) {
+              const currentMonth = new Date().getMonth() + 1;
+              isCurrentlyInSeason =
+                seasonMonths !== null && seasonMonths.length > 0
+                  ? seasonMonths.includes(currentMonth)
+                  : null;
+            }
+            return {
+              id: show.id,
+              name: show.name,
+              slug: show.slug,
+              status: "CLOSED", // Default to ensure order
+              latitude: show.latitude !== undefined ? show.latitude : null,
+              longitude: show.longitude !== undefined ? show.longitude : null,
+              isSeasonal,
+              seasonMonths,
+              isCurrentlyInSeason,
+            };
+          })
         : [],
       restaurants: park.restaurants
         ? park.restaurants.map((restaurant) => ({

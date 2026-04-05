@@ -68,6 +68,12 @@ export class Show {
   @Column({ name: "land_external_id", nullable: true })
   landExternalId: string;
 
+  @Column({ name: "is_seasonal", default: false })
+  isSeasonal: boolean;
+
+  @Column({ name: "season_months", type: "jsonb", nullable: true })
+  seasonMonths: number[] | null;
+
   @OneToMany(() => ShowLiveData, (liveData) => liveData.show)
   liveData: ShowLiveData[];
 

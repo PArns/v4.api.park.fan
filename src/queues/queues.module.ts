@@ -48,6 +48,7 @@ import { RedisModule } from "../common/redis/redis.module";
 import { StatsModule } from "../stats/stats.module";
 import { StatsProcessor } from "./processors/stats.processor";
 import { Attraction } from "../attractions/entities/attraction.entity";
+import { Show } from "../shows/entities/show.entity";
 import { Park } from "../parks/entities/park.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
 import { ExternalEntityMapping } from "../database/entities/external-entity-mapping.entity";
@@ -62,6 +63,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     TypeOrmModule.forFeature([
       Park,
       Attraction,
+      Show,
       MLModel,
       ExternalEntityMapping,
       QueueData,

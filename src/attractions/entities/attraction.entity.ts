@@ -75,6 +75,12 @@ export class Attraction {
   @Column({ nullable: true })
   attractionType: string;
 
+  @Column({ name: "is_seasonal", default: false })
+  isSeasonal: boolean;
+
+  @Column({ name: "season_months", type: "jsonb", nullable: true })
+  seasonMonths: number[] | null;
+
   @OneToMany(() => QueueData, (queueData) => queueData.attraction)
   queueData: QueueData[];
 

@@ -397,6 +397,22 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Seasonal Detection: Daily at 2:30am (after percentiles)
+    const hasSeasonalCron = await this.hasRepeatableJob(
+      this.analyticsQueue,
+      "seasonal-detection-cron",
+    );
+    if (!hasSeasonalCron) {
+      await this.analyticsQueue.add(
+        "detect-seasonal",
+        {},
+        {
+          repeat: { cron: "30 2 * * *" },
+          jobId: "seasonal-detection-cron",
+        },
+      );
+    }
+
     // Wartezeiten Opening Times: Daily at 6am
     const hasWartezeitenScheduleCron = await this.hasRepeatableJob(
       this.wartezeitenScheduleQueue,
