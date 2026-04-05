@@ -94,6 +94,15 @@ export class AttractionResponseDto {
     city: string | null;
   } | null;
 
+  @ApiProperty({ description: "Whether this attraction only operates during certain seasons", required: false })
+  isSeasonal?: boolean;
+
+  @ApiProperty({ description: "Months (1–12) when this attraction typically operates. Null if not seasonal.", required: false, nullable: true, type: [Number] })
+  seasonMonths?: number[] | null;
+
+  @ApiProperty({ description: "Whether the attraction is currently in its operating season. Null for non-seasonal attractions.", required: false, nullable: true })
+  isCurrentlyInSeason?: boolean | null;
+
   @ApiProperty({
     description: "Frontend URL to attraction",
     nullable: true,
@@ -226,6 +235,15 @@ export class AttractionResponseDto {
         : null,
 
       land: attraction.landName || null,
+
+      isSeasonal: attraction.isSeasonal || false,
+      seasonMonths: attraction.seasonMonths || null,
+      isCurrentlyInSeason: (() => {
+        if (!attraction.isSeasonal) return null;
+        if (!attraction.seasonMonths || attraction.seasonMonths.length === 0) return null;
+        const currentMonth = new Date().getMonth() + 1;
+        return attraction.seasonMonths.includes(currentMonth);
+      })(),
 
       hourlyForecast: [],
       forecasts: [],

@@ -39,6 +39,7 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("prediction-accuracy") private predictionAccuracyQueue: Queue,
+    @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(QueueData)
@@ -312,6 +313,34 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     } catch (e) {
       this.logger.warn(`Failed to trigger P50 baseline jobs: ${e}`);
+    }
+
+    // 6. Trigger seasonal detection on startup so isSeasonal is populated immediately
+    try {
+      const seasonalJobActive = await this.isJobActiveOrWaiting(
+        this.analyticsQueue,
+        "detect-seasonal",
+      );
+
+      if (!seasonalJobActive) {
+        await this.analyticsQueue.add(
+          "detect-seasonal",
+          {},
+          {
+            priority: 6,
+            jobId: "bootstrap-seasonal-detection",
+            removeOnComplete: true,
+            delay: 90000, // 90s delay — let P50 baselines run first
+          },
+        );
+        this.logger.log("✅ Boot: Seasonal detection queued (delayed 90s)");
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: Seasonal detection already running, skipping",
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`Failed to trigger seasonal detection: ${e}`);
     }
   }
 
