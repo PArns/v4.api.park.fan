@@ -102,6 +102,13 @@ export class ParkIntegrationService {
     park: Park,
     skipCache: boolean = false,
   ): Promise<ParkWithAttractionsDto> {
+    // Guard: relations must be loaded by the caller (use findByGeographicPathWithRelations)
+    if (!Array.isArray(park.attractions) || !Array.isArray(park.shows) || !Array.isArray(park.restaurants)) {
+      throw new Error(
+        `buildIntegratedResponse called for park "${park.slug}" without loaded relations. Use findByGeographicPathWithRelations.`,
+      );
+    }
+
     // Try cache first (unless skipped)
     const cacheKey = `park:integrated:${park.id}`;
 
