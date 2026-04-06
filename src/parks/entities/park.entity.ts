@@ -35,6 +35,11 @@ import { generateSlug } from "../../common/utils/slug.util";
 @Entity("parks")
 @Index(["destinationId", "slug"], { unique: true }) // Slug unique per destination
 @Index(["continentSlug", "countrySlug", "citySlug", "slug"]) // Optimize findByGeographicPath queries
+// GIN trigram indexes for fuzzy search — managed by SearchService.onModuleInit(), not TypeORM sync
+@Index("idx_park_name_trgm", { synchronize: false })
+@Index("idx_park_city_trgm", { synchronize: false })
+@Index("idx_park_country_trgm", { synchronize: false })
+@Index("idx_park_continent_trgm", { synchronize: false })
 export class Park {
   @PrimaryGeneratedColumn("uuid")
   id: string;

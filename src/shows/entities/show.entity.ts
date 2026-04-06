@@ -31,6 +31,8 @@ import { generateSlug } from "../../common/utils/slug.util";
  */
 @Entity("shows")
 @Index(["parkId", "slug"], { unique: true }) // Slug unique per park
+// GIN trigram index for fuzzy search — managed by SearchService.onModuleInit(), not TypeORM sync
+@Index("idx_show_name_trgm", { synchronize: false })
 export class Show {
   @PrimaryGeneratedColumn("uuid")
   id: string;
