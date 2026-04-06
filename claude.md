@@ -51,6 +51,7 @@
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
+- [DB Health Runbook](docs/troubleshooting/db-health-runbook.md) - Copy-paste SQL for table sizes, unused indexes, dead tuples, slow queries, OOM checks.
 
 ### 🚀 Deployment
 - [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.

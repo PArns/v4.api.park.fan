@@ -4,7 +4,6 @@ import { Logger, Injectable } from "@nestjs/common";
 import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
 import { MLAlertService } from "../../ml/services/ml-alert.service";
 import { MLAnomalyDetectionService } from "../../ml/services/ml-anomaly-detection.service";
-import { MLRequestLoggingService } from "../../ml/services/ml-request-logging.service";
 
 /**
  * ML Monitoring Processor
@@ -24,7 +23,6 @@ export class MLMonitoringProcessor {
     private featureDriftService: MLFeatureDriftService,
     private alertService: MLAlertService,
     private anomalyDetectionService: MLAnomalyDetectionService,
-    private requestLoggingService: MLRequestLoggingService,
   ) {}
 
   /**
@@ -95,14 +93,13 @@ export class MLMonitoringProcessor {
   async handleCleanup(_job: Job): Promise<void> {
     this.logger.log("🧹 Starting cleanup of old monitoring records...");
     try {
-      const [alertsDeleted, anomaliesDeleted, logsDeleted] = await Promise.all([
+      const [alertsDeleted, anomaliesDeleted] = await Promise.all([
         this.alertService.cleanupOldAlerts(),
         this.anomalyDetectionService.cleanupOldAnomalies(),
-        this.requestLoggingService.cleanupOldLogs(),
       ]);
 
       this.logger.log(
-        `✅ Cleanup complete: ${alertsDeleted} alerts, ${anomaliesDeleted} anomalies, ${logsDeleted} request logs deleted`,
+        `✅ Cleanup complete: ${alertsDeleted} alerts, ${anomaliesDeleted} anomalies deleted`,
       );
     } catch (error) {
       const errorMessage =

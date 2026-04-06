@@ -26,7 +26,6 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
-import { MLRequestLoggingService } from "./services/ml-request-logging.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
@@ -67,7 +66,6 @@ export class MLService {
     @Inject(forwardRef(() => ParksService))
     private parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-    private requestLoggingService: MLRequestLoggingService,
   ) {
     // ML service URL from environment or default
     this.ML_SERVICE_URL =
@@ -187,16 +185,9 @@ export class MLService {
       );
       const duration = Date.now() - startTime;
       modelVersion = response.data.modelVersion || "unknown";
-
-      // Log request (async, don't block)
-      this.logRequest(
-        request,
-        duration,
-        response.data.count,
-        modelVersion,
-      ).catch((err) => {
-        this.logger.warn(`Failed to log prediction request: ${err}`);
-      });
+      this.logger.debug(
+        `Prediction request completed in ${duration}ms (${response.data.count} predictions, model ${modelVersion})`,
+      );
 
       return response.data;
     } catch (error) {
@@ -214,43 +205,8 @@ export class MLService {
         durationMs: duration,
       });
 
-      // Log failed request
-      this.logRequest(request, duration, 0, modelVersion).catch((err) => {
-        this.logger.warn(`Failed to log failed prediction request: ${err}`);
-      });
-
       throw new HttpException("Failed to get predictions from ML service", 503);
     }
-  }
-
-  /**
-   * Log prediction request for analytics
-   */
-  private async logRequest(
-    request: PredictionRequestDto,
-    durationMs: number,
-    predictionCount: number,
-    modelVersion: string,
-  ): Promise<void> {
-    // Get request logging service (inject if not available)
-    // For now, we'll inject it in constructor
-    const parkId =
-      request.parkIds && request.parkIds.length > 0 ? request.parkIds[0] : null;
-
-    await this.requestLoggingService.logRequest({
-      parkId,
-      attractionCount: request.attractionIds?.length || 0,
-      parkCount: request.parkIds?.length || 0,
-      predictionType: request.predictionType || "hourly",
-      modelVersion,
-      durationMs,
-      predictionCount,
-      requestMetadata: {
-        hasWeatherForecast: !!request.weatherForecast,
-        hasCurrentWaitTimes: !!request.currentWaitTimes,
-        hasFeatureContext: !!request.featureContext,
-      },
-    });
   }
 
   /**
@@ -1178,38 +1134,34 @@ export class MLService {
       return forecast;
     }
 
-    // Process forecast items and add holiday flags
-    return await Promise.all(
-      forecast.map(async (item) => {
-        const date = new Date(item.time);
-        const [isHoliday, isSchoolHoliday, isBridgeDay] = await Promise.all([
-          this.holidaysService.isHoliday(
-            date,
-            park.countryCode,
-            park.regionCode || undefined,
-            park.timezone,
-          ),
-          this.holidaysService.isEffectiveSchoolHoliday(
-            date,
-            park.countryCode,
-            park.regionCode || undefined,
-            park.timezone,
-          ),
-          this.holidaysService.isBridgeDay(
-            date,
-            park.countryCode,
-            park.regionCode || undefined,
-            park.timezone,
-          ),
-        ]);
-
-        return {
-          ...item,
-          isHoliday,
-          isSchoolHoliday,
-          isBridgeDay,
-        };
-      }),
-    );
+    // Process forecast items sequentially — 3 holiday checks per day are
+    // kept concurrent (they're independent), but days are processed one at a
+    // time to avoid 16 × 3 = 48 concurrent promises per park during batch runs.
+    const enriched: WeatherForecastItemDto[] = [];
+    for (const item of forecast) {
+      const date = new Date(item.time);
+      const [isHoliday, isSchoolHoliday, isBridgeDay] = await Promise.all([
+        this.holidaysService.isHoliday(
+          date,
+          park.countryCode,
+          park.regionCode || undefined,
+          park.timezone,
+        ),
+        this.holidaysService.isEffectiveSchoolHoliday(
+          date,
+          park.countryCode,
+          park.regionCode || undefined,
+          park.timezone,
+        ),
+        this.holidaysService.isBridgeDay(
+          date,
+          park.countryCode,
+          park.regionCode || undefined,
+          park.timezone,
+        ),
+      ]);
+      enriched.push({ ...item, isHoliday, isSchoolHoliday, isBridgeDay });
+    }
+    return enriched;
   }
 }

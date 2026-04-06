@@ -1,6 +1,7 @@
 import { TypeOrmModuleAsyncOptions } from "@nestjs/typeorm";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { getDatabaseConfig } from "./database.config";
+import { SlowQueryFileLogger } from "../common/utils/typeorm-slow-query-logger";
 
 export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
   imports: [ConfigModule],
@@ -19,6 +20,8 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       entities: [__dirname + "/../**/*.entity{.ts,.js}"],
       synchronize: dbConfig.synchronize, // Auto-sync schema (dev only!)
       logging: dbConfig.logging,
+      logger: new SlowQueryFileLogger(),
+      maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log
       timezone: "UTC", // Always use UTC
       extra: {
         max: 20, // Connection pool size

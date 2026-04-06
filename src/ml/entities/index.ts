@@ -7,5 +7,4 @@ export * from "./ml-accuracy-comparison.entity";
 export * from "./ml-feature-stats.entity";
 export * from "./ml-feature-drift.entity";
 export * from "./ml-alert.entity";
-export * from "./ml-prediction-request-log.entity";
 export * from "./ml-prediction-anomaly.entity";

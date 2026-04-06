@@ -17,7 +17,6 @@ import {
 } from "@nestjs/swagger";
 import { MLFeatureDriftService } from "../services/ml-feature-drift.service";
 import { MLAlertService } from "../services/ml-alert.service";
-import { MLRequestLoggingService } from "../services/ml-request-logging.service";
 import { MLAnomalyDetectionService } from "../services/ml-anomaly-detection.service";
 import { MLDriftMonitoringService } from "../services/ml-drift-monitoring.service";
 import { MLDriftDto } from "../dto/ml-drift.dto";
@@ -28,7 +27,6 @@ import { MLDriftDto } from "../dto/ml-drift.dto";
  * Endpoints for ML monitoring and observability:
  * - Feature Drift Detection
  * - Alerts Management
- * - Request Logging & Analytics
  * - Anomaly Detection
  */
 @ApiTags("ML Monitoring")
@@ -37,7 +35,6 @@ export class MLMonitoringController {
   constructor(
     private featureDriftService: MLFeatureDriftService,
     private alertService: MLAlertService,
-    private requestLoggingService: MLRequestLoggingService,
     private anomalyDetectionService: MLAnomalyDetectionService,
     private driftService: MLDriftMonitoringService,
   ) {}
@@ -175,48 +172,6 @@ export class MLMonitoringController {
   })
   async checkAndCreateAlerts() {
     return await this.alertService.checkAndCreateAlerts();
-  }
-
-  // ==================== Request Logging ====================
-
-  /**
-   * Get request statistics
-   */
-  @Get("requests/stats")
-  @ApiOperation({
-    summary: "Get prediction request statistics",
-    description: "Returns aggregated statistics about prediction requests",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 7)",
-  })
-  async getRequestStats(
-    @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
-  ) {
-    return await this.requestLoggingService.getRequestStats(days);
-  }
-
-  /**
-   * Get request trends
-   */
-  @Get("requests/trends")
-  @ApiOperation({
-    summary: "Get prediction request trends",
-    description: "Returns daily trends of prediction requests",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 30)",
-  })
-  async getRequestTrends(
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
-  ) {
-    return await this.requestLoggingService.getRequestTrends(days);
   }
 
   // ==================== Anomaly Detection ====================

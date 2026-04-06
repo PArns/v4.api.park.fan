@@ -28,6 +28,7 @@ import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 export class CacheWarmupService {
   private readonly logger = new Logger(CacheWarmupService.name);
   private readonly CACHE_FRESHNESS_THRESHOLD = 2 * 60; // 2 minutes in seconds
+  private statsWarmupRunning = false;
 
   constructor(
     @InjectRepository(Park)
@@ -142,19 +143,28 @@ export class CacheWarmupService {
     );
 
     try {
-      const parks = await this.parkRepository.find({
-        relations: ["influencingRegions"],
-      });
-      if (parks.length === 0) {
+      // Load only IDs upfront — fetch each park with its relations inside the
+      // batch callback so only 2 parks are fully loaded in memory at a time
+      const parkIds = await this.parkRepository
+        .createQueryBuilder("park")
+        .select("park.id", "id")
+        .getRawMany<{ id: string }>();
+
+      if (parkIds.length === 0) {
         this.logger.warn("No parks found, skipping calendar warmup");
         return 0;
       }
 
       const warmedCount = await this.processBatch(
-        parks,
+        parkIds,
         2,
         "CalendarWarmup",
-        async (park) => {
+        async ({ id }) => {
+          const park = await this.parkRepository.findOne({
+            where: { id },
+            relations: ["influencingRegions"],
+          });
+          if (!park) return false;
           await this.warmupCalendarForPark(park);
           return true;
         },
@@ -162,7 +172,7 @@ export class CacheWarmupService {
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Calendar warmup complete: ${warmedCount}/${parks.length} parks in ${duration}s`,
+        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s`,
       );
       return warmedCount;
     } catch (error: unknown) {
@@ -244,14 +254,6 @@ export class CacheWarmupService {
   }
 
   /**
-   * Warm up cache for currently OPERATING parks
-   *
-   * Used after wait-times sync (every 5 minutes).
-   * Typically affects 10-20 parks.
-   *
-   * @returns Number of parks warmed
-   */
-  /**
    * Warm up cache for ALL parks (Operating + Closed)
    *
    * - OPERATING: Force refresh to get latest wait times
@@ -307,15 +309,20 @@ export class CacheWarmupService {
         this.logger.error("Failed to trigger discovery warmup", err),
       );
 
-      // Warm up park statistics (async)
+      // Warm up park statistics (async) — guarded to prevent concurrent accumulation
       const operatingParkIds = Array.from(statusMap.entries())
         .filter(([_, status]) => status === "OPERATING")
         .map(([id]) => id);
 
-      if (operatingParkIds.length > 0) {
-        this.warmupParkStatistics(operatingParkIds).catch((err) =>
-          this.logger.error("Failed to trigger statistics warmup", err),
-        );
+      if (operatingParkIds.length > 0 && !this.statsWarmupRunning) {
+        this.statsWarmupRunning = true;
+        this.warmupParkStatistics(operatingParkIds)
+          .catch((err) =>
+            this.logger.error("Failed to trigger statistics warmup", err),
+          )
+          .finally(() => {
+            this.statsWarmupRunning = false;
+          });
       }
 
       return warmedCount;
@@ -346,32 +353,30 @@ export class CacheWarmupService {
       const now = new Date();
       const next12h = new Date(now.getTime() + 12 * 60 * 60 * 1000);
 
-      // Find parks with opening time in next 12h
-      const upcomingParks = await this.parkRepository
+      // Find parks with opening time in next 12h — select only IDs to avoid
+      // loading thousands of attraction/show/restaurant entities into memory
+      const upcomingParkIds = await this.parkRepository
         .createQueryBuilder("park")
+        .select("park.id", "id")
         .innerJoin("schedule_entries", "schedule", "schedule.parkId = park.id")
         .where("schedule.scheduleType = :type", { type: "OPERATING" })
         .andWhere("schedule.openingTime >= :now", { now })
         .andWhere("schedule.openingTime <= :next12h", { next12h })
-        .leftJoinAndSelect("park.attractions", "attractions")
-        .leftJoinAndSelect("park.shows", "shows")
-        .leftJoinAndSelect("park.restaurants", "restaurants")
-        .getMany();
+        .distinct(true)
+        .getRawMany<{ id: string }>();
 
-      this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
-
-      this.logger.verbose(`Found ${upcomingParks.length} parks opening soon`);
+      this.logger.verbose(`Found ${upcomingParkIds.length} parks opening soon`);
 
       const warmedCount = await this.processBatch(
-        upcomingParks,
+        upcomingParkIds,
         3,
         "UpcomingParks",
-        async (park) => this.warmupParkCache(park.id),
+        async ({ id }) => this.warmupParkCache(id),
       );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Cache warmup complete: ${warmedCount}/${upcomingParks.length} parks in ${duration}s`,
+        `✅ Cache warmup complete: ${warmedCount}/${upcomingParkIds.length} parks in ${duration}s`,
       );
 
       return warmedCount;

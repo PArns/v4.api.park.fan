@@ -8,7 +8,6 @@ import { PredictionDeviationService } from "./services/prediction-deviation.serv
 import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service";
 import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
 import { MLAlertService } from "./services/ml-alert.service";
-import { MLRequestLoggingService } from "./services/ml-request-logging.service";
 import { MLAnomalyDetectionService } from "./services/ml-anomaly-detection.service";
 import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
@@ -24,7 +23,6 @@ import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.en
 import { MLFeatureStats } from "./entities/ml-feature-stats.entity";
 import { MLFeatureDrift } from "./entities/ml-feature-drift.entity";
 import { MLAlert } from "./entities/ml-alert.entity";
-import { MLPredictionRequestLog } from "./entities/ml-prediction-request-log.entity";
 import { MLPredictionAnomaly } from "./entities/ml-prediction-anomaly.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -56,7 +54,6 @@ import { BullModule } from "@nestjs/bull";
       MLFeatureStats,
       MLFeatureDrift,
       MLAlert,
-      MLPredictionRequestLog,
       MLPredictionAnomaly,
       Attraction,
       QueueData,
@@ -74,7 +71,6 @@ import { BullModule } from "@nestjs/bull";
     MLDriftMonitoringService,
     MLFeatureDriftService,
     MLAlertService,
-    MLRequestLoggingService,
     MLAnomalyDetectionService,
   ],
   controllers: [MLController, MLHealthController, MLMonitoringController],
@@ -86,7 +82,6 @@ import { BullModule } from "@nestjs/bull";
     PredictionDeviationService,
     MLFeatureDriftService,
     MLAlertService,
-    MLRequestLoggingService,
     MLAnomalyDetectionService,
   ],
 })

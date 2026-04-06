@@ -266,4 +266,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Entrypoint handles permissions, then switches to nestjs user
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "dist/src/main.js"]
+CMD ["node", "--max-old-space-size=6144", "dist/src/main.js"]
