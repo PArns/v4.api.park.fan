@@ -168,7 +168,7 @@ Two independent slow query logs are active. Both use a **500ms threshold**.
 
 Catches all queries from the NestJS API. Written to a mounted volume as JSON, one entry per line.
 
-**Files:** `/data/parkfan/logs/slow-queries.YYYY-MM-DD.log` on dockerhost (daily, 7-day retention)
+**Files:** `/data/parkfan/logs/slow-queries.YYYY-MM-DD.log` on <dockerhost> (daily, 7-day retention)
 
 ```bash
 # Live tail (today)

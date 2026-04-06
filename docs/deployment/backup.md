@@ -7,7 +7,7 @@ Daily automated backups to a UniFi NAS via Samba (CIFS).
 - **Database**: Daily `pg_dump` snapshots, 7-day rolling retention
 - **ML Models**: Last 7 versions (`catboost_*.cbm` + `metadata_*.pkl`)
 - **Schedule**: Daily at 03:00 (server local time)
-- **Target**: `//192.168.100.100/Backups`
+- **Target**: `//<NAS_IP>/Backups`
 
 ---
 
@@ -93,7 +93,7 @@ chmod 600 /opt/parkfan/backup.env
 Required variables (values from `.env.live_debug`):
 
 ```bash
-BACKUP_NAS_HOST=192.168.100.100
+BACKUP_NAS_HOST=<NAS_IP>
 BACKUP_NAS_SHARE=Backups
 BACKUP_NAS_USER=...
 BACKUP_NAS_PASSWORD=...
@@ -136,7 +136,7 @@ Expected warnings (harmless):
 
 ```bash
 # Mount NAS
-sudo mount -t cifs //192.168.100.100/Backups /mnt/nas \
+sudo mount -t cifs //<NAS_IP>/Backups /mnt/nas \
   -o username=backup-user,password=...,vers=3.0
 
 # Restore dump
