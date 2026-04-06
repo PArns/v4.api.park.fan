@@ -93,7 +93,8 @@ export function logToFile(filename: string, data: Record<string, any>): void {
   rotateIfNeeded(filepath);
   purgeOldLogs(logsDir, filename);
 
-  const logLine = JSON.stringify({ timestamp: new Date().toISOString(), ...data }) + "\n";
+  const logLine =
+    JSON.stringify({ timestamp: new Date().toISOString(), ...data }) + "\n";
 
   try {
     appendFileSync(filepath, logLine, "utf8");

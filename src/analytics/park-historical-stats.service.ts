@@ -124,7 +124,7 @@ export class ParkHistoricalStatsService {
          AVG("p90WaitTime")                    AS avg_wait_p90,
          COUNT(*)::int                          AS sample_days
        FROM park_daily_stats
-       WHERE "parkId" = $1
+       WHERE "parkId" = $1::uuid
          AND date BETWEEN $2 AND $3
          AND "p50WaitTime" IS NOT NULL
          AND "p90WaitTime" IS NOT NULL
@@ -146,7 +146,7 @@ export class ParkHistoricalStatsService {
          AVG("p90WaitTime")                    AS avg_wait_p90,
          COUNT(*)::int                          AS sample_days
        FROM park_daily_stats
-       WHERE "parkId" = $1
+       WHERE "parkId" = $1::uuid
          AND date BETWEEN $2 AND $3
          AND "p50WaitTime" IS NOT NULL
          AND "p90WaitTime" IS NOT NULL
@@ -171,8 +171,8 @@ export class ParkHistoricalStatsService {
          AVG(qda.p90)                               AS avg_p90,
          COUNT(DISTINCT DATE(qda.hour))::int         AS sample_days
        FROM queue_data_aggregates qda
-       JOIN attractions a ON a.id = qda."attractionId"
-       WHERE qda."parkId" = $1::uuid
+       JOIN attractions a ON a.id::text = qda."attractionId"
+       WHERE qda."parkId" = $1
          AND qda.hour >= $2::date
          AND qda.hour <  ($3::date + INTERVAL '1 day')
        GROUP BY a.id, a.slug, a.name

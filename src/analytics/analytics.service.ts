@@ -448,7 +448,7 @@ export class AnalyticsService {
           AVG(qd."waitTime") as avg_wait
         FROM queue_data qd
         JOIN attractions a ON qd."attractionId" = a.id
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
@@ -856,7 +856,7 @@ export class AnalyticsService {
           qd."waitTime"
         FROM queue_data qd
         JOIN attractions a ON qd."attractionId" = a.id
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
@@ -1023,7 +1023,7 @@ export class AnalyticsService {
           qd.timestamp
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $2  -- Last 2 hours window
         ORDER BY qd."attractionId", 
           CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
@@ -1036,7 +1036,7 @@ export class AnalyticsService {
           AVG(qd."waitTime") as hour_avg
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $3  -- Start of today (Effective)
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -1049,7 +1049,7 @@ export class AnalyticsService {
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
         FROM attractions
-        WHERE "parkId" = $1
+        WHERE "parkId" = $1::uuid
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $5 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1061,7 +1061,7 @@ export class AnalyticsService {
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
       `;
       queryParams = [
         parkId, // $1
@@ -1084,7 +1084,7 @@ export class AnalyticsService {
           qd.timestamp
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $2  -- Last 2 hours window
         ORDER BY qd."attractionId", 
           CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
@@ -1097,7 +1097,7 @@ export class AnalyticsService {
           AVG(qd."waitTime") as hour_avg
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $3  -- Start of today (Effective)
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -1111,7 +1111,7 @@ export class AnalyticsService {
         SELECT MAX(qd."waitTime") as max_wait_today
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp BETWEEN $3 AND $4
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -1121,7 +1121,7 @@ export class AnalyticsService {
         SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as avg_wait_today
         FROM queue_data qd
         INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp BETWEEN $3 AND $4
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -1132,7 +1132,7 @@ export class AnalyticsService {
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
         FROM attractions
-        WHERE "parkId" = $1
+        WHERE "parkId" = $1::uuid
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1144,7 +1144,7 @@ export class AnalyticsService {
         (SELECT hour FROM today_hourly) as peak_hour
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
       `;
       queryParams = [
         parkId,
@@ -1497,7 +1497,7 @@ export class AnalyticsService {
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric) as avg_wait
       FROM queue_data qd
       INNER JOIN attractions a ON a.id = qd."attractionId"
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
         AND qd.timestamp >= $2
         AND qd.status = 'OPERATING'
         AND qd."waitTime" IS NOT NULL
@@ -1695,7 +1695,7 @@ export class AnalyticsService {
       SELECT COUNT(*) as operating_count
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
       AND lq.status = 'OPERATING'
       `,
       [parkId],
@@ -1859,80 +1859,85 @@ export class AnalyticsService {
   }
 
   /**
-   * Get typical wait time for specific hour/weekday (2-year average)
+   * Get typical wait (AVG) and P95 for a specific attraction/hour/weekday.
+   * Both values are computed in a single DB aggregation and cached for 24 h —
+   * they are 2-year historical averages that barely change day to day.
    */
+  private async getTypicalStatsForHour(
+    attractionId: string,
+    hour: number,
+    dayOfWeek: number,
+    timezone: string,
+  ): Promise<{ avg: number | null; p95: number | null }> {
+    const cacheKey = `analytics:typical:${attractionId}:${hour}:${dayOfWeek}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // fall through
+      }
+    }
+
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+
+    const rows = await this.queueDataRepository.query(
+      `SELECT
+         AVG("waitTime")                                          AS avg_wait,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "waitTime") AS p95_wait
+       FROM queue_data
+       WHERE "attractionId" = $1::uuid
+         AND timestamp      >= $2
+         AND EXTRACT(HOUR FROM timestamp AT TIME ZONE $3) = $4
+         AND EXTRACT(DOW  FROM timestamp AT TIME ZONE $3) = $5
+         AND status         = 'OPERATING'
+         AND "waitTime"     IS NOT NULL
+         AND "queueType"    = 'STANDBY'`,
+      [attractionId, twoYearsAgo, timezone, hour, dayOfWeek],
+    );
+
+    const row = rows[0];
+    const result = {
+      avg:
+        row?.avg_wait != null
+          ? roundToNearest5Minutes(parseFloat(row.avg_wait))
+          : null,
+      p95:
+        row?.p95_wait != null
+          ? roundToNearest5Minutes(parseFloat(row.p95_wait))
+          : null,
+    };
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60)
+      .catch(() => {});
+
+    return result;
+  }
+
+  /** @deprecated Use getTypicalStatsForHour */
   private async getTypicalWaitForHour(
     attractionId: string,
     hour: number,
     dayOfWeek: number,
     timezone: string,
   ): Promise<number | null> {
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-
-    const result = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("AVG(qd.waitTime)", "avgWait")
-      .where("qd.attractionId = :attractionId", { attractionId })
-      .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
-      .andWhere(
-        "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
-        { hour },
-      )
-      .andWhere(
-        "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
-        { dayOfWeek },
-      )
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.queueType = 'STANDBY'")
-      .setParameter("timezone", timezone)
-      .getRawOne();
-
-    return result?.avgWait
-      ? roundToNearest5Minutes(parseFloat(result.avgWait))
-      : null;
+    return (
+      await this.getTypicalStatsForHour(attractionId, hour, dayOfWeek, timezone)
+    ).avg;
   }
 
-  /**
-   * Get 95th percentile for specific attraction/hour/weekday
-   */
+  /** @deprecated Use getTypicalStatsForHour */
   private async get95thPercentileForAttraction(
     attractionId: string,
     hour: number,
     dayOfWeek: number,
     timezone: string,
   ): Promise<number | null> {
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-
-    const waitTimes = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("qd.waitTime", "waitTime")
-      .where("qd.attractionId = :attractionId", { attractionId })
-      .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
-      .andWhere(
-        "EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE :timezone) = :hour",
-        { hour },
-      )
-      .andWhere(
-        "EXTRACT(DOW FROM qd.timestamp AT TIME ZONE :timezone) = :dayOfWeek",
-        { dayOfWeek },
-      )
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.queueType = 'STANDBY'")
-      .setParameter("timezone", timezone)
-      .getRawMany();
-
-    if (waitTimes.length === 0) return null;
-
-    const sortedWaitTimes = waitTimes
-      .map((wt) => parseFloat(wt.waitTime))
-      .sort((a, b) => a - b);
-
-    const percentileIndex = Math.ceil(sortedWaitTimes.length * 0.95) - 1;
-    return roundToNearest5Minutes(sortedWaitTimes[percentileIndex]);
+    return (
+      await this.getTypicalStatsForHour(attractionId, hour, dayOfWeek, timezone)
+    ).p95;
   }
 
   /**
@@ -1977,7 +1982,7 @@ export class AnalyticsService {
           END as bucket,
           AVG(qd."waitTime") as avg_wait
         FROM queue_data qd
-        WHERE qd."attractionId" = $1
+        WHERE qd."attractionId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
@@ -2512,43 +2517,49 @@ export class AnalyticsService {
     const today = fromZonedTime(`${todayStr}T00:00:00`, resolvedTimezone);
     const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
 
-    let queryResult: Array<{ waitTime: number; date: string }> = [];
+    // Compute P50/P90 and distinct-day count in a single DB aggregation.
+    // Previously this fetched all raw rows (~50 K+) and sorted them in JS —
+    // now Postgres does the work and returns exactly one row.
+    let aggRow: {
+      p50: string | null;
+      p90: string | null;
+      sample_count: string;
+      distinct_days: string;
+    };
 
     if (type === "attraction") {
-      // Query all queue_data for this attraction from last 548 days
-      queryResult = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("qd.waitTime", "waitTime")
-        .addSelect(
-          `DATE(qd.timestamp AT TIME ZONE '${resolvedTimezone}')`,
-          "date",
-        )
-        .where("qd.attractionId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :cutoff", { cutoff })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime >= 5 AND qd.status = :status", {
-          status: "OPERATING",
-        })
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawMany();
+      const rows = await this.queueDataRepository.query(
+        `SELECT
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
+           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
+           COUNT(*)::int                                               AS sample_count,
+           COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
+         FROM queue_data qd
+         WHERE qd."attractionId" = $1::uuid
+           AND qd.timestamp       >= $2
+           AND qd."waitTime"      >= 5
+           AND qd.status          = 'OPERATING'
+           AND qd."queueType"     = 'STANDBY'`,
+        [entityId, cutoff, resolvedTimezone],
+      );
+      aggRow = rows[0];
     } else {
-      // Park: query all queue_data for all attractions in this park
-      queryResult = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("qd.waitTime", "waitTime")
-        .addSelect(
-          `DATE(qd.timestamp AT TIME ZONE '${resolvedTimezone}')`,
-          "date",
-        )
-        .innerJoin("qd.attraction", "attraction")
-        .where("attraction.parkId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :cutoff", { cutoff })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime >= 5 AND qd.status = :status", {
-          status: "OPERATING",
-        })
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawMany();
+      const rows = await this.queueDataRepository.query(
+        `SELECT
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
+           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
+           COUNT(*)::int                                               AS sample_count,
+           COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
+         FROM queue_data qd
+         INNER JOIN attractions a ON a.id = qd."attractionId"
+         WHERE a."parkId"      = $1::uuid
+           AND qd.timestamp   >= $2
+           AND qd."waitTime"  >= 5
+           AND qd.status      = 'OPERATING'
+           AND qd."queueType" = 'STANDBY'`,
+        [entityId, cutoff, resolvedTimezone],
+      );
+      aggRow = rows[0];
     }
 
     let result: {
@@ -2559,20 +2570,13 @@ export class AnalyticsService {
       confidence: "high" | "medium" | "low";
     } = { p90: 0, p50: 0, sampleCount: 0, distinctDays: 0, confidence: "low" };
 
-    if (queryResult.length > 0) {
-      // Calculate 90th percentile & 50th percentile (Median)
-      const sorted = queryResult.map((w) => w.waitTime).sort((a, b) => a - b);
+    const sampleCount = parseInt(aggRow.sample_count, 10) || 0;
 
-      const idx90 = Math.ceil(sorted.length * 0.9) - 1;
-      const p90 = Math.round(sorted[idx90]);
+    if (sampleCount > 0 && aggRow.p50 !== null && aggRow.p90 !== null) {
+      const p50 = Math.round(parseFloat(aggRow.p50));
+      const p90 = Math.round(parseFloat(aggRow.p90));
+      const uniqueDays = parseInt(aggRow.distinct_days, 10) || 0;
 
-      const idx50 = Math.ceil(sorted.length * 0.5) - 1;
-      const p50 = Math.round(sorted[idx50]);
-
-      // Count distinct days
-      const uniqueDays = new Set(queryResult.map((r) => r.date)).size;
-
-      // Determine confidence level
       let confidence: "high" | "medium" | "low" = "low";
       if (uniqueDays >= 90) {
         confidence = "high";
@@ -2580,16 +2584,10 @@ export class AnalyticsService {
         confidence = "medium";
       }
 
-      result = {
-        p90,
-        p50,
-        sampleCount: queryResult.length,
-        distinctDays: uniqueDays,
-        confidence,
-      };
+      result = { p90, p50, sampleCount, distinctDays: uniqueDays, confidence };
 
       this.logger.debug(
-        `P90 sliding window for ${type} ${entityId}: ${p90}min from ${queryResult.length} samples, ${uniqueDays} days (${SLIDING_WINDOW_DAYS}-day window, confidence: ${confidence})`,
+        `P90 sliding window for ${type} ${entityId}: ${p90}min from ${sampleCount} samples, ${uniqueDays} days (${SLIDING_WINDOW_DAYS}-day window, confidence: ${confidence})`,
       );
     } else {
       this.logger.debug(
@@ -3514,7 +3512,7 @@ export class AnalyticsService {
           ON se."parkId" = a."parkId"
           AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
           AND se."attractionId" IS NULL
-        WHERE qd."attractionId" = $1
+        WHERE qd."attractionId" = $1::uuid
           AND qd.timestamp >= $3
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
@@ -3541,7 +3539,7 @@ export class AnalyticsService {
           ON se."parkId" = a."parkId"
           AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
           AND se."attractionId" IS NULL
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $3
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
@@ -3608,7 +3606,7 @@ export class AnalyticsService {
       SELECT 1
       FROM queue_data qd
       INNER JOIN attractions a ON qd."attractionId" = a.id
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
         AND qd.timestamp >= $2
         AND qd."queueType" = 'STANDBY'
         AND qd.status = 'OPERATING'
@@ -3670,7 +3668,7 @@ export class AnalyticsService {
           ON se."parkId" = a."parkId"
           AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
           AND se."attractionId" IS NULL
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -3774,7 +3772,7 @@ export class AnalyticsService {
           ON se."parkId" = a."parkId"
           AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
           AND se."attractionId" IS NULL
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
@@ -4171,7 +4169,7 @@ export class AnalyticsService {
         ON se."parkId" = a."parkId"
         AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
         AND se."attractionId" IS NULL
-      WHERE qd."attractionId" = $1
+      WHERE qd."attractionId" = $1::uuid
         AND qd.timestamp >= $3
         AND qd."queueType" = 'STANDBY'
         AND qd.status = 'OPERATING'

@@ -3,6 +3,9 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
+import { Show } from "../shows/entities/show.entity";
+import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { DestinationsService } from "../destinations/destinations.service";
@@ -195,21 +198,21 @@ export class ParksService {
 
                 // Migrate Shows
                 const showCount = await this.parkRepository.manager.query(
-                  `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+                  `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
                   [duplicate.id, losingPark.id],
                 );
                 totalMigrated += showCount[1] || 0;
 
                 // Migrate Restaurants
                 const restaurantCount = await this.parkRepository.manager.query(
-                  `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+                  `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
                   [duplicate.id, losingPark.id],
                 );
                 totalMigrated += restaurantCount[1] || 0;
 
                 // Migrate Attractions
                 const attractionCount = await this.parkRepository.manager.query(
-                  `UPDATE attractions SET "parkId" = $1 WHERE "parkId" = $2`,
+                  `UPDATE attractions SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
                   [duplicate.id, losingPark.id],
                 );
                 totalMigrated += attractionCount[1] || 0;
@@ -217,9 +220,9 @@ export class ParksService {
                 // Check if losing park is now empty
                 const remaining = await this.parkRepository.manager.query(
                   `SELECT 
-                    (SELECT COUNT(*) FROM shows WHERE "parkId" = $1) as shows,
-                    (SELECT COUNT(*) FROM restaurants WHERE "parkId" = $1) as restaurants,
-                    (SELECT COUNT(*) FROM attractions WHERE "parkId" = $1) as attractions
+                    (SELECT COUNT(*) FROM shows WHERE "parkId" = $1::uuid) as shows,
+                    (SELECT COUNT(*) FROM restaurants WHERE "parkId" = $1::uuid) as restaurants,
+                    (SELECT COUNT(*) FROM attractions WHERE "parkId" = $1::uuid) as attractions
                   `,
                   [losingPark.id],
                 );
@@ -308,12 +311,12 @@ export class ParksService {
                   // Fetch attractions from both parks to compare
                   const existingAttractions =
                     await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
                       [existing.id],
                     );
                   const ghostAttractions =
                     await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
                       [ghostPark.id],
                     );
 
@@ -357,13 +360,13 @@ export class ParksService {
 
                   // 2. Migrate Shows (Blind update OK if slugs distinctive, else duplicate logic needed? mostly safe for now)
                   await transactionalEntityManager.query(
-                    `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+                    `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
                     [existing.id, ghostPark.id],
                   );
 
                   // 3. Migrate Restaurants
                   await transactionalEntityManager.query(
-                    `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+                    `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
                     [existing.id, ghostPark.id],
                   );
 
@@ -482,11 +485,11 @@ export class ParksService {
           async (transactionalEntityManager) => {
             // 1. Handle Attraction Collisions
             const existingAttractions = await transactionalEntityManager.query(
-              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
               [primary!.id],
             );
             const ghostAttractions = await transactionalEntityManager.query(
-              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1`,
+              `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
               [ghostPark.id],
             );
 
@@ -519,7 +522,7 @@ export class ParksService {
                 await transactionalEntityManager.query(
                   `UPDATE queue_data 
                    SET "attractionId" = $1 
-                   WHERE "attractionId" = $2`,
+                   WHERE "attractionId" = $2::uuid`,
                   [match.id, ghostAttr.id],
                 );
 
@@ -527,7 +530,7 @@ export class ParksService {
                 await transactionalEntityManager.query(
                   `UPDATE wait_time_predictions 
                    SET "attractionId" = $1 
-                   WHERE "attractionId" = $2`,
+                   WHERE "attractionId" = $2::uuid`,
                   [match.id, ghostAttr.id],
                 );
 
@@ -535,7 +538,7 @@ export class ParksService {
                 await transactionalEntityManager.query(
                   `UPDATE prediction_accuracy 
                    SET "attractionId" = $1 
-                   WHERE "attractionId" = $2`,
+                   WHERE "attractionId" = $2::uuid`,
                   [match.id, ghostAttr.id],
                 );
 
@@ -558,13 +561,13 @@ export class ParksService {
 
             // 2. Migrate Shows
             await transactionalEntityManager.query(
-              `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+              `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
               [primary!.id, ghostPark.id],
             );
 
             // 3. Migrate Restaurants
             await transactionalEntityManager.query(
-              `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+              `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
               [primary!.id, ghostPark.id],
             );
 
@@ -688,10 +691,12 @@ export class ParksService {
    * Finds park by slug
    */
   async findBySlug(slug: string): Promise<Park | null> {
-    return this.parkRepository.findOne({
+    const park = await this.parkRepository.findOne({
       where: { slug },
-      relations: ["destination", "attractions", "shows", "restaurants"],
+      relations: ["destination"],
     });
+    if (!park) return null;
+    return this.loadParkRelations(park);
   }
 
   /**
@@ -1401,7 +1406,7 @@ export class ParksService {
                    ORDER BY "updatedAt" DESC
                  ) as rn
           FROM schedule_entries
-          WHERE "parkId" = $1
+          WHERE "parkId" = $1::uuid
         ) sub
         WHERE rn > 1
       )
@@ -1428,11 +1433,11 @@ export class ParksService {
                    "updatedAt" DESC
                ) as rn
         FROM schedule_entries
-        WHERE "parkId" = $1
+        WHERE "parkId" = $1::uuid
           AND ("parkId", date) IN (
             SELECT "parkId", date
             FROM schedule_entries
-            WHERE "parkId" = $1
+            WHERE "parkId" = $1::uuid
             GROUP BY "parkId", date
             HAVING COUNT(DISTINCT "scheduleType") > 1
           )
@@ -2063,6 +2068,27 @@ export class ParksService {
   }
 
   /**
+   * Loads attractions, shows, and restaurants onto an already-fetched park entity
+   * using 3 parallel queries instead of a single JOIN.
+   *
+   * TypeORM's `relations` option produces a Cartesian product JOIN — for a park
+   * with 200 attractions × 20 shows × 10 restaurants that means 40 000 intermediate
+   * rows. This helper avoids that by issuing separate queries in parallel.
+   */
+  async loadParkRelations(park: Park): Promise<Park> {
+    const em = this.parkRepository.manager;
+    const [attractions, shows, restaurants] = await Promise.all([
+      em.find(Attraction, { where: { parkId: park.id } }),
+      em.find(Show, { where: { parkId: park.id } }),
+      em.find(Restaurant, { where: { parkId: park.id } }),
+    ]);
+    park.attractions = attractions;
+    park.shows = shows;
+    park.restaurants = restaurants;
+    return park;
+  }
+
+  /**
    * Finds a park by geographic path with all relations (attractions, shows, restaurants).
    * Use only for the main park endpoint that needs full relation data.
    */
@@ -2072,25 +2098,14 @@ export class ParksService {
     citySlug: string,
     parkSlug: string,
   ): Promise<Park | null> {
-    const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}`;
-    const expiry = this.notFoundCache.get(cacheKey);
-    if (expiry !== undefined) {
-      if (Date.now() < expiry) {
-        return null;
-      }
-      this.notFoundCache.delete(cacheKey);
-    }
-
-    const park = await this.parkRepository.findOne({
-      where: { continentSlug, countrySlug, citySlug, slug: parkSlug },
-      relations: ["destination", "attractions", "shows", "restaurants"],
-    });
-
-    if (!park) {
-      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
-    }
-
-    return park;
+    const park = await this.findByGeographicPath(
+      continentSlug,
+      countrySlug,
+      citySlug,
+      parkSlug,
+    );
+    if (!park) return null;
+    return this.loadParkRelations(park);
   }
 
   /**
@@ -2203,7 +2218,7 @@ export class ParksService {
           ORDER BY timestamp DESC
           LIMIT 1
         ) q ON true
-        WHERE a."parkId" = $1
+        WHERE a."parkId" = $1::uuid
       `,
         [parkId, todayStart],
       );

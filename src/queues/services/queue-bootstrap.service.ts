@@ -155,39 +155,6 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     }
 
-    // ALWAYS trigger park metadata sync on boot (non-blocking)
-    // This ensures code updates (e.g. slug changes, new matching logic) are applied immediately
-    // without waiting for the nightly 3AM job.
-    const parkJobActive = await this.isJobActiveOrWaiting(
-      this.parkMetadataQueue,
-      "sync-all-parks",
-    );
-
-    if (!parkJobActive) {
-      // Remove stale job first (to ensure ID is available)
-      const existingJob = await this.parkMetadataQueue.getJob(
-        "bootstrap-parks-sync",
-      );
-      if (existingJob) {
-        await existingJob.remove().catch(() => {});
-      }
-
-      await this.parkMetadataQueue.add(
-        "sync-all-parks",
-        {},
-        {
-          priority: 10, // Highest - runs first
-          jobId: "bootstrap-parks-sync", // Unique ID for boot run
-          removeOnComplete: true,
-        },
-      );
-      this.logger.log("✅ Boot: Park metadata sync job queued (Force Sync)");
-    } else {
-      this.logger.debug(
-        "⏭️  Boot: Park metadata sync job already running, skipping",
-      );
-    }
-
     // 4. Trigger Holiday Sync (Holidays change infrequently, but we need initial data)
     // This fetches both Public (Nager) and School (OpenHolidays) data
     const holidayJobActive = await this.isJobActiveOrWaiting(

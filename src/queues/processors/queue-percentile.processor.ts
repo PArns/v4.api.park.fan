@@ -202,6 +202,7 @@ export class QueuePercentileProcessor {
         SELECT "attractionId", COUNT(*) as op_count
         FROM queue_data
         WHERE status = 'OPERATING'
+          AND timestamp >= NOW() - INTERVAL '365 days'
         GROUP BY "attractionId"
         HAVING COUNT(*) >= ${MIN_EVER_OPERATING}
       ),
@@ -209,6 +210,7 @@ export class QueuePercentileProcessor {
         SELECT DISTINCT ON ("attractionId")
           "attractionId", status
         FROM queue_data
+        WHERE timestamp >= NOW() - INTERVAL '7 days'
         ORDER BY "attractionId", timestamp DESC
       ),
       days_fully_closed AS (
@@ -248,8 +250,9 @@ export class QueuePercentileProcessor {
         FROM queue_data q
         JOIN attractions a ON a.id = q."attractionId"
         JOIN parks p ON p.id = a."parkId"
-        WHERE a.id = $1
+        WHERE a.id = $1::uuid
           AND q.status = 'OPERATING'
+          AND q.timestamp >= NOW() - INTERVAL '730 days'
         ORDER BY month`,
         [attractionId],
       );

@@ -1,5 +1,7 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
 import { QueueData } from "./entities/queue-data.entity";
 import { ForecastData } from "./entities/forecast-data.entity";
@@ -24,6 +26,7 @@ import { ParksService } from "../parks/parks.service";
 @Injectable()
 export class QueueDataService {
   private readonly logger = new Logger(QueueDataService.name);
+  private readonly LATEST_CACHE_TTL = 10 * 60; // 10 min — covers 2 sync cycles
 
   constructor(
     @InjectRepository(QueueData)
@@ -33,7 +36,12 @@ export class QueueDataService {
     @InjectRepository(Attraction)
     private attractionRepository: Repository<Attraction>,
     private parksService: ParksService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  private latestCacheKey(attractionId: string, queueType: QueueType): string {
+    return `parkfan:queue:latest:${attractionId}:${queueType}`;
+  }
 
   /**
    * Fetch historical queue data for a specific park and date range.
@@ -96,6 +104,14 @@ export class QueueDataService {
         if (shouldSave) {
           const queueEntry = this.queueDataRepository.create(queueData);
           await this.queueDataRepository.save(queueEntry);
+          await this.redis
+            .set(
+              this.latestCacheKey(attractionId, QueueType.STANDBY),
+              JSON.stringify(queueEntry),
+              "EX",
+              this.LATEST_CACHE_TTL,
+            )
+            .catch(() => {});
           return 1;
         }
       }
@@ -174,6 +190,15 @@ export class QueueDataService {
           const queueEntry = this.queueDataRepository.create(queueData);
           await this.queueDataRepository.save(queueEntry);
           savedCount++;
+          // Update cache so the next shouldSaveQueueData call hits Redis, not DB
+          await this.redis
+            .set(
+              this.latestCacheKey(attractionId, queueType),
+              JSON.stringify(queueEntry),
+              "EX",
+              this.LATEST_CACHE_TTL,
+            )
+            .catch(() => {}); // non-critical
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -296,11 +321,52 @@ export class QueueDataService {
     queueType: QueueType,
     newData: Partial<QueueData>,
   ): Promise<boolean> {
-    // Get latest entry for this attraction + queue type
-    const latest = await this.queueDataRepository.findOne({
-      where: { attractionId, queueType },
-      order: { timestamp: "DESC" },
-    });
+    // Try Redis cache first — avoids a DB query on every sync cycle per attraction
+    const cacheKey = this.latestCacheKey(attractionId, queueType);
+    let latest: Partial<QueueData> | null = null;
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try {
+        const p = JSON.parse(cached);
+        latest = {
+          ...p,
+          returnStart: p.returnStart ? new Date(p.returnStart) : null,
+          returnEnd: p.returnEnd ? new Date(p.returnEnd) : null,
+          timestamp: p.timestamp ? new Date(p.timestamp) : null,
+        };
+      } catch {
+        // Corrupted entry — fall through to DB
+      }
+    }
+
+    if (!latest) {
+      // Cache miss — query DB and warm the cache
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      latest = await this.queueDataRepository.findOne({
+        where: {
+          attractionId,
+          queueType,
+          timestamp: MoreThanOrEqual(oneDayAgo),
+        },
+        order: { timestamp: "DESC" },
+        select: [
+          "status",
+          "waitTime",
+          "returnStart",
+          "returnEnd",
+          "timestamp",
+          "allocationStatus",
+          "currentGroupStart",
+          "currentGroupEnd",
+        ],
+      });
+      if (latest) {
+        await this.redis
+          .set(cacheKey, JSON.stringify(latest), "EX", this.LATEST_CACHE_TTL)
+          .catch(() => {}); // non-critical
+      }
+    }
 
     // No previous data → save
     if (!latest) {

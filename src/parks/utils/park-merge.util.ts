@@ -131,7 +131,7 @@ export async function hasRecentQueueData(
       SELECT 1
       FROM attractions a
       JOIN queue_data qd ON qd."attractionId" = a.id
-      WHERE a."parkId" = $1
+      WHERE a."parkId" = $1::uuid
       AND qd.timestamp > NOW() - INTERVAL '24 hours'
       LIMIT 1
     ) as has_data

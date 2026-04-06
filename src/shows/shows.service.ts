@@ -588,12 +588,15 @@ export class ShowsService {
       resultMap.set(showId, null);
     }
 
-    // Use DISTINCT ON to get latest record per showId
+    // Use DISTINCT ON to get latest record per showId.
+    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
       .innerJoinAndSelect("sld.show", "linked_show")
       .leftJoinAndSelect("linked_show.park", "linked_park")
       .where("sld.showId IN (:...showIds)", { showIds })
+      .andWhere("sld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
       .distinctOn(["sld.showId"])
       .orderBy("sld.showId", "ASC")
       .addOrderBy("sld.timestamp", "DESC")
@@ -708,11 +711,14 @@ export class ShowsService {
   async findCurrentStatusByPark(
     parkId: string,
   ): Promise<Map<string, ShowLiveData>> {
+    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
       .innerJoinAndSelect("sld.show", "linked_show")
       .leftJoinAndSelect("linked_show.park", "linked_park")
       .where("linked_show.parkId = :parkId", { parkId })
+      .andWhere("sld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
       .distinctOn(["sld.showId"])
       .orderBy("sld.showId", "ASC")
       .addOrderBy("sld.timestamp", "DESC")

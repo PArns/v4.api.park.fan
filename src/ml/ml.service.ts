@@ -280,18 +280,35 @@ export class MLService {
       const attractionIds = attractions.map((a) => a.id);
 
       // 2a. Filter: Only predict for attractions with data in last 90 days
-      // This prevents generating predictions for attractions that are closed for season or invalid
-      const activeAttractions = await this.queueDataRepository
-        .createQueryBuilder("q")
-        .select("DISTINCT q.attractionId", "id")
-        .where("q.attractionId IN (:...ids)", { ids: attractionIds })
-        .andWhere("q.timestamp > :cutoff", {
-          cutoff: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
-        })
-        .andWhere("q.queueType = :queueType", { queueType: QueueType.STANDBY })
-        .getRawMany();
-
-      const activeIdSet = new Set(activeAttractions.map((a) => a.id));
+      // This prevents generating predictions for attractions that are closed for season or invalid.
+      // Cached 6h: active attraction set changes rarely (only on seasonal open/close).
+      const activeCacheKey = `ml:active-attractions:${parkId}:90d`;
+      let activeIdSet: Set<string>;
+      const cachedActiveIds = await this.redis.get(activeCacheKey);
+      if (cachedActiveIds) {
+        activeIdSet = new Set(JSON.parse(cachedActiveIds) as string[]);
+      } else {
+        const activeAttractions = await this.queueDataRepository
+          .createQueryBuilder("q")
+          .select("DISTINCT q.attractionId", "id")
+          .where("q.attractionId IN (:...ids)", { ids: attractionIds })
+          .andWhere("q.timestamp > :cutoff", {
+            cutoff: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          })
+          .andWhere("q.queueType = :queueType", {
+            queueType: QueueType.STANDBY,
+          })
+          .getRawMany();
+        activeIdSet = new Set(activeAttractions.map((a) => a.id as string));
+        await this.redis
+          .set(
+            activeCacheKey,
+            JSON.stringify(Array.from(activeIdSet)),
+            "EX",
+            60 * 60, // 1h: responsive to seasonal open/close, still eliminates per-prediction DB scan
+          )
+          .catch(() => {});
+      }
       const activeAttractionIds = attractionIds.filter((id) =>
         activeIdSet.has(id),
       );
@@ -780,7 +797,9 @@ export class MLService {
               where: {
                 attractionId,
                 queueType: QueueType.STANDBY,
-                timestamp: MoreThan(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
+                timestamp: MoreThan(
+                  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+                ),
               },
               order: { timestamp: "DESC" },
             })

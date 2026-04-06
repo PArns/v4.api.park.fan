@@ -448,12 +448,15 @@ export class RestaurantsService {
       resultMap.set(restaurantId, null);
     }
 
-    // Use DISTINCT ON to get latest record per restaurantId
+    // Use DISTINCT ON to get latest record per restaurantId.
+    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const restaurantData = await this.restaurantLiveDataRepository
       .createQueryBuilder("rld")
       .innerJoinAndSelect("rld.restaurant", "restaurant")
       .leftJoinAndSelect("restaurant.park", "park")
       .where("rld.restaurantId IN (:...restaurantIds)", { restaurantIds })
+      .andWhere("rld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
       .distinctOn(["rld.restaurantId"])
       .orderBy("rld.restaurantId", "ASC")
       .addOrderBy("rld.timestamp", "DESC")
@@ -508,17 +511,17 @@ export class RestaurantsService {
   async findCurrentStatusByPark(
     parkId: string,
   ): Promise<Map<string, RestaurantLiveData>> {
+    // DISTINCT ON replaces the correlated MAX subquery — much faster on TimescaleDB.
+    // 7-day cutoff enables chunk exclusion (live data is only useful for today).
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const data = await this.restaurantLiveDataRepository
       .createQueryBuilder("rld")
       .innerJoin("rld.restaurant", "restaurant")
       .where("restaurant.parkId = :parkId", { parkId })
-      .andWhere(
-        `rld.timestamp = (
-          SELECT MAX(rld2.timestamp)
-          FROM restaurant_live_data rld2
-          WHERE rld2."restaurantId" = rld."restaurantId"
-        )`,
-      )
+      .andWhere("rld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
+      .distinctOn(["rld.restaurantId"])
+      .orderBy("rld.restaurantId", "ASC")
+      .addOrderBy("rld.timestamp", "DESC")
       .getMany();
 
     const result = new Map<string, RestaurantLiveData>();

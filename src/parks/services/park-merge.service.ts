@@ -228,14 +228,14 @@ export class ParkMergeService {
     const existingAttractions = await manager.query(
       `SELECT id, slug, "land_name", "land_external_id", "queue_times_entity_id" 
        FROM attractions 
-       WHERE "parkId" = $1`,
+       WHERE "parkId" = $1::uuid`,
       [winnerId],
     );
 
     const loserAttractions = await manager.query(
       `SELECT id, slug, "land_name", "land_external_id", "queue_times_entity_id" 
        FROM attractions 
-       WHERE "parkId" = $1`,
+       WHERE "parkId" = $1::uuid`,
       [loserId],
     );
 
@@ -288,7 +288,7 @@ export class ParkMergeService {
         const queueDataUpdate = await manager.query(
           `UPDATE queue_data 
            SET "attractionId" = $1 
-           WHERE "attractionId" = $2`,
+           WHERE "attractionId" = $2::uuid`,
           [match.id, loserAttr.id],
         );
         if (queueDataUpdate[1] > 0) {
@@ -299,7 +299,7 @@ export class ParkMergeService {
         const predictionsUpdate = await manager.query(
           `UPDATE wait_time_predictions 
            SET "attractionId" = $1 
-           WHERE "attractionId" = $2`,
+           WHERE "attractionId" = $2::uuid`,
           [match.id, loserAttr.id],
         );
         if (predictionsUpdate[1] > 0) {
@@ -348,7 +348,7 @@ export class ParkMergeService {
     loserId: string,
   ): Promise<number> {
     const result = await manager.query(
-      `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`,
+      `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
       [winnerId, loserId],
     );
     return result[1] || 0;
@@ -363,7 +363,7 @@ export class ParkMergeService {
     loserId: string,
   ): Promise<number> {
     const result = await manager.query(
-      `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2`,
+      `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
       [winnerId, loserId],
     );
     return result[1] || 0;
@@ -378,7 +378,7 @@ export class ParkMergeService {
     loserId: string,
   ): Promise<number> {
     const result = await manager.query(
-      `UPDATE schedule_entries SET "parkId" = $1 WHERE "parkId" = $2`,
+      `UPDATE schedule_entries SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
       [winnerId, loserId],
     );
     return result[1] || 0;

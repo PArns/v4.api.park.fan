@@ -103,7 +103,11 @@ export class ParkIntegrationService {
     skipCache: boolean = false,
   ): Promise<ParkWithAttractionsDto> {
     // Guard: relations must be loaded by the caller (use findByGeographicPathWithRelations)
-    if (!Array.isArray(park.attractions) || !Array.isArray(park.shows) || !Array.isArray(park.restaurants)) {
+    if (
+      !Array.isArray(park.attractions) ||
+      !Array.isArray(park.shows) ||
+      !Array.isArray(park.restaurants)
+    ) {
       throw new Error(
         `buildIntegratedResponse called for park "${park.slug}" without loaded relations. Use findByGeographicPathWithRelations.`,
       );
@@ -1019,8 +1023,11 @@ export class ParkIntegrationService {
     _timezone: string, // Unused but kept for backwards compatibility
   ): number {
     if (status === "OPERATING") {
-      // Park is open -> use short TTL for fresh live data
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 15 minutes
+      // Park is open -> use short TTL for fresh live data.
+      // Jitter ±30s spreads cache expiry across parks to avoid thundering herd
+      // (all parks recomputing simultaneously every 5 min).
+      const jitter = Math.floor(Math.random() * 61) - 30; // -30 to +30 seconds
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING + jitter;
     }
 
     // Park is CLOSED - check if we *should* be open (Unexpected Closure)
@@ -1040,7 +1047,8 @@ export class ParkIntegrationService {
       this.logger.debug(
         "Park is CLOSED but within operating hours. Using short TTL.",
       );
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING; // 15 minutes
+      const jitter = Math.floor(Math.random() * 61) - 30;
+      return this.TTL_INTEGRATED_RESPONSE_OPERATING + jitter;
     }
 
     // Find next OPERATING schedule entry
@@ -1064,22 +1072,26 @@ export class ParkIntegrationService {
       const bufferSeconds = 5 * 60; // 5 minutes
       const ttl = Math.max(60, secondsUntilOpening - bufferSeconds);
 
-      // Cap at 6 hours to avoid extremely long TTLs for off-season parks
-      const cappedTTL = Math.min(ttl, this.TTL_INTEGRATED_RESPONSE_CLOSED);
+      // Cap at 6 hours to avoid extremely long TTLs for off-season parks.
+      // Jitter ±5 min prevents parks with identical opening times from expiring together.
+      const jitter = Math.floor(Math.random() * 601) - 300; // -5 to +5 minutes
+      const cappedTTL =
+        Math.min(ttl, this.TTL_INTEGRATED_RESPONSE_CLOSED) + jitter;
 
       this.logger.debug(
         `Dynamic TTL for CLOSED park: ${Math.floor(cappedTTL / 60)} minutes ` +
           `(opens in ${Math.floor(secondsUntilOpening / 60)} minutes)`,
       );
 
-      return cappedTTL;
+      return Math.max(60, cappedTTL);
     }
 
     // No next opening found (off-season or no schedule data)
     // Fall back to default CLOSED TTL
     // OPTIMIZED: Use shorter TTL (30 mins instead of 6 hours) to re-check status more frequently
     // This allows fast recovery if we missed an opening due to missing/late schedule
-    const fallbackTTL = 30 * 60; // 30 minutes
+    const jitter = Math.floor(Math.random() * 301) - 150; // -2.5 to +2.5 minutes
+    const fallbackTTL = 30 * 60 + jitter;
     this.logger.debug(
       `No next opening time found, using fallback TTL (30 mins)`,
     );

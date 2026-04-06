@@ -227,11 +227,13 @@ export class CacheWarmupService {
         }
       }
 
-      // Fetch park
-      const park = await this.parkRepository.findOne({
+      // Fetch park + relations via parallel queries (avoids Cartesian product JOIN)
+      const parkBase = await this.parkRepository.findOne({
         where: { id: parkId },
-        relations: ["attractions", "shows", "restaurants"],
       });
+      const park = parkBase
+        ? await this.parksService.loadParkRelations(parkBase)
+        : null;
 
       if (!park) {
         this.logger.warn(`Park ${parkId} not found, skipping warmup`);

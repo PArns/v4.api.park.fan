@@ -584,7 +584,7 @@ export class AttractionIntegrationService {
           AVG(qd."waitTime") as avg_wait,
           COUNT(*) as sample_count
         FROM queue_data qd
-        WHERE qd."attractionId" = $1
+        WHERE qd."attractionId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.timestamp < $4
           AND qd.status = 'OPERATING'
@@ -617,7 +617,7 @@ export class AttractionIntegrationService {
             END
           ) as down_count
         FROM queue_data qd
-        WHERE qd."attractionId" = $1
+        WHERE qd."attractionId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.timestamp < $4
           AND qd.status = 'DOWN'
