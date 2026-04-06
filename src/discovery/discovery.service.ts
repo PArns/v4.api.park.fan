@@ -3,7 +3,12 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { Park } from "../parks/entities/park.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import {
+  CountrySummaryDto,
+  TopParkSummaryDto,
+} from "./dto/country-summary.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import {
   GeoStructureDto,
@@ -31,6 +36,8 @@ export class DiscoveryService {
   constructor(
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
+    @InjectRepository(ParkDailyStats)
+    private readonly dailyStatsRepo: Repository<ParkDailyStats>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
     private readonly parksService: ParksService,
@@ -529,5 +536,139 @@ export class DiscoveryService {
   async invalidateCache(): Promise<void> {
     await this.redis.del(this.CACHE_KEY);
     this.logger.log("Geo structure cache invalidated");
+  }
+
+  /**
+   * GET /v1/discovery/continents/:continent/:country/summary
+   *
+   * Returns enriched country metadata for landing pages.
+   * Aggregates ParkDailyStats (last 12 months) to produce avgCrowdScore per park,
+   * top-5 parks, and peak/quiet month arrays.
+   * Cached for 24 hours.
+   */
+  async getCountrySummary(
+    continentSlug: string,
+    countrySlug: string,
+  ): Promise<CountrySummaryDto | null> {
+    const cacheKey = `discovery:country-summary:v1:${continentSlug}:${countrySlug}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as CountrySummaryDto;
+
+    const parks = await this.parkRepository.find({
+      where: { continentSlug, countrySlug },
+      select: [
+        "id",
+        "name",
+        "slug",
+        "city",
+        "citySlug",
+        "continentSlug",
+        "countrySlug",
+      ],
+    });
+
+    if (parks.length === 0) return null;
+
+    const parkIds = parks.map((p) => p.id);
+    const cityCount = new Set(parks.map((p) => p.citySlug)).size;
+
+    // Aggregate monthly averages per park for last 12 months.
+    // Use noon UTC as cutoff (see datetime-handling.md: T12:00:00Z for date-only conversions).
+    // For a country-level summary spanning many parks with different timezones,
+    // a single UTC-noon anchor is an acceptable approximation for the 1-year boundary.
+    const cutoffDate = new Date();
+    cutoffDate.setUTCFullYear(cutoffDate.getUTCFullYear() - 1);
+    const cutoffStr = cutoffDate.toISOString().slice(0, 10);
+
+    // Column names are camelCase (TypeORM default, no naming strategy) — must be quoted.
+    const rows: Array<{
+      parkId: string;
+      month: string;
+      avg_p50: string;
+    }> = await this.dailyStatsRepo.manager.query(
+      `SELECT
+         "parkId",
+         EXTRACT(MONTH FROM date::date)::int AS month,
+         AVG("p50WaitTime")                  AS avg_p50
+       FROM park_daily_stats
+       WHERE "parkId" = ANY($1)
+         AND date >= $2
+         AND "p50WaitTime" IS NOT NULL
+       GROUP BY "parkId", month`,
+      [parkIds, cutoffStr],
+    );
+
+    // Build per-park annual avg crowd score
+    const parkScoreMap = new Map<string, number[]>();
+    const monthlyTotals = new Map<number, number[]>(); // month → avg_p50 values across parks
+
+    for (const row of rows) {
+      const p50 = Number(row.avg_p50);
+      const month = Number(row.month);
+
+      if (!parkScoreMap.has(row.parkId)) parkScoreMap.set(row.parkId, []);
+      parkScoreMap.get(row.parkId)!.push(p50);
+
+      if (!monthlyTotals.has(month)) monthlyTotals.set(month, []);
+      monthlyTotals.get(month)!.push(p50);
+    }
+
+    const avg = (nums: number[]) =>
+      nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : 0;
+
+    const toCrowdScore = (p50: number) =>
+      Math.round(Math.min(Math.max(p50 / 10, 1.0), 5.0) * 10) / 10;
+
+    // Top-5 parks by annual avg crowd score
+    const scoredParks: Array<TopParkSummaryDto> = parks.map((park) => {
+      const vals = parkScoreMap.get(park.id) ?? [];
+      const avgP50 = avg(vals);
+      return {
+        name: park.name,
+        slug: park.slug,
+        city: park.city,
+        path: `/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`,
+        avgAnnualCrowdScore: toCrowdScore(avgP50),
+      };
+    });
+
+    scoredParks.sort((a, b) => b.avgAnnualCrowdScore - a.avgAnnualCrowdScore);
+    const topParks = scoredParks.slice(0, 5);
+
+    // Peak / quiet months across all parks.
+    // Guard against overlap: only emit peak/quiet arrays when enough distinct
+    // months exist (≥6); otherwise return empty arrays rather than overlapping ones.
+    const monthScores: Array<{ month: number; score: number }> = [];
+    for (const [month, vals] of monthlyTotals.entries()) {
+      monthScores.push({ month, score: avg(vals) });
+    }
+    monthScores.sort((a, b) => b.score - a.score);
+
+    const avgPeakMonths =
+      monthScores.length >= 6
+        ? monthScores
+            .slice(0, 3)
+            .map((m) => m.month)
+            .sort((a, b) => a - b)
+        : [];
+    const avgQuietMonths =
+      monthScores.length >= 6
+        ? monthScores
+            .slice(-3)
+            .map((m) => m.month)
+            .sort((a, b) => a - b)
+        : [];
+
+    const result: CountrySummaryDto = {
+      countrySlug,
+      parkCount: parks.length,
+      cityCount,
+      topParks,
+      avgPeakMonths,
+      avgQuietMonths,
+    };
+
+    await this.redis.set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60);
+    return result;
   }
 }

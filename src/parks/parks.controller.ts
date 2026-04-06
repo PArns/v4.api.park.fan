@@ -28,6 +28,7 @@ import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { ParkHistoricalStatsService } from "../analytics/park-historical-stats.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionAccuracyService } from "../ml/services/prediction-accuracy.service";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
@@ -44,6 +45,7 @@ import { AttractionResponseDto } from "../attractions/dto/attraction-response.dt
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
+import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { Park } from "./entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -72,6 +74,7 @@ export class ParksController {
     private readonly restaurantsService: RestaurantsService,
     private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
+    private readonly parkHistoricalStatsService: ParkHistoricalStatsService,
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
     private readonly parkIntegrationService: ParkIntegrationService,
@@ -815,6 +818,58 @@ export class ParksController {
       park,
       queueType,
     );
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/stats
+   *
+   * Returns historical aggregate statistics for a park.
+   * Includes by-month, by-day-of-week breakdowns and top attractions.
+   * Cached 24 hours — data changes only as new days are added.
+   */
+  @Get(":continent/:country/:city/:parkSlug/stats")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
+  @ApiOperation({
+    summary: "Get historical park statistics",
+    description:
+      "Returns historical aggregate wait time statistics for a park, " +
+      "grouped by month and day-of-week, plus a top-10 attraction ranking. " +
+      "Useful for identifying busy seasons and peak days. Cached for 24 hours.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "rust" })
+  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiQuery({
+    name: "years",
+    required: false,
+    description: "Number of years to look back (default: 2, max: 5)",
+    example: 2,
+  })
+  @ApiResponse({ status: 200, type: ParkHistoricalStatsDto })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getParkHistoricalStats(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("years") yearsStr?: string,
+  ): Promise<ParkHistoricalStatsDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const years = Math.min(Math.max(Number(yearsStr) || 2, 1), 5);
+    return this.parkHistoricalStatsService.getParkHistoricalStats(park, years);
   }
 
   /**

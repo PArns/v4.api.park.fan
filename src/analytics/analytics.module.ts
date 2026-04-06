@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AnalyticsService } from "./analytics.service";
+import { ParkHistoricalStatsService } from "./park-historical-stats.service";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 
@@ -43,8 +44,8 @@ import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity
       AttractionP50Baseline,
     ]),
   ],
-  providers: [AnalyticsService],
+  providers: [AnalyticsService, ParkHistoricalStatsService],
   controllers: [AnalyticsController],
-  exports: [AnalyticsService],
+  exports: [AnalyticsService, ParkHistoricalStatsService],
 })
 export class AnalyticsModule {}

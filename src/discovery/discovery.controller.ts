@@ -20,6 +20,7 @@ import { ParkResponseDto } from "../parks/dto/park-response.dto";
 import { BreadcrumbDto } from "../common/dto/breadcrumb.dto";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParkEnrichmentService } from "../parks/services/park-enrichment.service";
+import { CountrySummaryDto } from "./dto/country-summary.dto";
 
 /**
  * Discovery Controller
@@ -274,6 +275,44 @@ export class DiscoveryController {
     ];
 
     return { data: cities, breadcrumbs };
+  }
+
+  /**
+   * GET /v1/discovery/continents/:continent/:country/summary
+   *
+   * Returns enriched country metadata for landing pages.
+   * Top parks by crowd score, peak/quiet months, park & city counts.
+   * Cached for 24 hours.
+   */
+  @Get("continents/:continent/:country/summary")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
+  @ApiOperation({
+    summary: "Get country summary for landing page",
+    description:
+      "Returns enriched metadata for a country landing page: top parks by crowd score, " +
+      "peak and quiet months, park count and city count. " +
+      "Aggregated from last 12 months of ParkDailyStats. Cached 24 hours.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiResponse({ status: 200, type: CountrySummaryDto })
+  @ApiResponse({ status: 404, description: "Country not found" })
+  async getCountrySummary(
+    @Param("continent") continentSlug: string,
+    @Param("country") countrySlug: string,
+  ): Promise<CountrySummaryDto> {
+    const summary = await this.discoveryService.getCountrySummary(
+      continentSlug,
+      countrySlug,
+    );
+
+    if (!summary) {
+      throw new NotFoundException(
+        `No parks found for country "${countrySlug}" in "${continentSlug}"`,
+      );
+    }
+
+    return summary;
   }
 
   /**
