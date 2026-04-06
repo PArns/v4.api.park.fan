@@ -55,6 +55,7 @@
 
 ### 🚀 Deployment
 - [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.
+- [Backup Strategy](docs/deployment/backup.md) - Daily DB + ML model backups to Samba NAS, retention, and restore steps.
 
 ---
 
