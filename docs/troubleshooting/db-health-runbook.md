@@ -168,14 +168,17 @@ Two independent slow query logs are active. Both use a **500ms threshold**.
 
 Catches all queries from the NestJS API. Written to a mounted volume as JSON, one entry per line.
 
-**File:** `/data/parkfan/logs/slow-queries.log` on dockerhost
+**Files:** `/data/parkfan/logs/slow-queries.YYYY-MM-DD.log` on dockerhost (daily, 7-day retention)
 
 ```bash
-# Live tail
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -f /data/parkfan/logs/slow-queries.log'
+# Live tail (today)
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -f /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log'
 
-# Top 20 slowest query patterns (last 1000 entries, ranked by max duration)
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -1000 /data/parkfan/logs/slow-queries.log | python3 -c "
+# List available days
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'ls /data/parkfan/logs/slow-queries.*.log 2>/dev/null'
+
+# Top 20 slowest query patterns (last 1000 entries from today, ranked by total time)
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -1000 /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log | python3 -c "
 import json, sys
 from collections import defaultdict
 queries = []

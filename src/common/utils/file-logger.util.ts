@@ -1,49 +1,84 @@
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from "fs";
 import { join } from "path";
 
-const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_ROTATED_FILES = 3;
+const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB per daily file
+const MAX_ROTATED_FILES = 3; // .log.1/.log.2/.log.3 within a single day
+const RETENTION_DAYS = 7;
+
+/** Returns today's date string in UTC: "2026-04-06" */
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 /**
- * Rotates a log file if it exceeds MAX_LOG_SIZE_BYTES.
- * Keeps up to MAX_ROTATED_FILES rotated copies: .log.1, .log.2, .log.3
+ * Deletes daily log files older than RETENTION_DAYS.
+ * Matches files like: <filename>.2026-04-01.log and <filename>.2026-04-01.log.1
+ */
+function purgeOldLogs(logsDir: string, filename: string): void {
+  try {
+    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const prefix = `${filename}.`;
+    readdirSync(logsDir)
+      .filter((f) => f.startsWith(prefix))
+      .forEach((f) => {
+        const full = join(logsDir, f);
+        try {
+          if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
+        } catch {
+          // ignore individual file errors
+        }
+      });
+  } catch {
+    // non-fatal
+  }
+}
+
+/**
+ * Rotates today's log file if it exceeds MAX_LOG_SIZE_BYTES.
+ * Keeps up to MAX_ROTATED_FILES copies within the same day: .log.1, .log.2, .log.3
  */
 function rotateIfNeeded(filepath: string): void {
   try {
     if (!existsSync(filepath)) return;
-    const { size } = statSync(filepath);
-    if (size < MAX_LOG_SIZE_BYTES) return;
+    if (statSync(filepath).size < MAX_LOG_SIZE_BYTES) return;
 
-    // Shift existing rotated files: .log.2 → .log.3, .log.1 → .log.2
     for (let i = MAX_ROTATED_FILES - 1; i >= 1; i--) {
       const src = `${filepath}.${i}`;
       const dst = `${filepath}.${i + 1}`;
       if (existsSync(src)) {
-        if (i === MAX_ROTATED_FILES - 1 && existsSync(dst)) {
-          unlinkSync(dst);
-        }
+        if (i === MAX_ROTATED_FILES - 1 && existsSync(dst)) unlinkSync(dst);
         renameSync(src, dst);
       }
     }
-
-    // Rotate current log: .log → .log.1
     renameSync(filepath, `${filepath}.1`);
   } catch {
-    // Rotation failure is non-fatal — keep writing to current file
+    // non-fatal
   }
 }
 
 /**
  * Simple file logger for critical errors that should not be missed in console logs.
- * Automatically rotates files at 10 MB, keeping 3 rotated copies.
+ *
+ * Writes to date-stamped daily files: <filename>.2026-04-06.log
+ * - Files rotate at 10 MB within a day (up to 3 size-rotated copies)
+ * - Files older than 7 days are automatically deleted
  *
  * Usage:
  * ```ts
- * logToFile('external-api-errors', {
- *   source: 'QueueTimesClient',
- *   error: 'fetch failed',
- *   details: { parkId: 275, url: '...' }
- * });
+ * logToFile('external-api-errors', { source: 'QueueTimesClient', error: 'fetch failed' });
+ * ```
+ *
+ * Read today's log:
+ * ```bash
+ * tail -f /data/parkfan/logs/slow-queries.$(date +%Y-%m-%d).log
  * ```
  */
 export function logToFile(filename: string, data: Record<string, any>): void {
@@ -53,23 +88,18 @@ export function logToFile(filename: string, data: Record<string, any>): void {
     mkdirSync(logsDir, { recursive: true });
   }
 
-  const filepath = join(logsDir, `${filename}.log`);
+  const filepath = join(logsDir, `${filename}.${todayUtc()}.log`);
 
   rotateIfNeeded(filepath);
+  purgeOldLogs(logsDir, filename);
 
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    ...data,
-  };
-
-  const logLine = JSON.stringify(logEntry) + "\n";
+  const logLine = JSON.stringify({ timestamp: new Date().toISOString(), ...data }) + "\n";
 
   try {
     appendFileSync(filepath, logLine, "utf8");
   } catch (error) {
-    // Fallback to console if file write fails
     console.error(`Failed to write to ${filepath}:`, error);
-    console.error("Original log entry:", logEntry);
+    console.error("Original log entry:", { ...data });
   }
 }
 
