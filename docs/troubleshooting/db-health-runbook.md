@@ -4,14 +4,14 @@ Quick reference for checking DB performance, bloat, and index health.
 
 **Connect:**
 ```bash
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> \
+ssh <user>@<dockerhost> \
   "docker exec postgres-\$(docker ps --format '{{.Names}}' | grep postgres) \
    psql -U parkfan -d parkfan -c \"<QUERY>\""
 ```
 
 Or interactively:
 ```bash
-sshpass -p 'REDACTED' ssh <user>@<dockerhost>
+ssh <user>@<dockerhost>
 docker exec -it $(docker ps --format '{{.Names}}' | grep postgres) psql -U parkfan -d parkfan
 ```
 
@@ -172,13 +172,13 @@ Catches all queries from the NestJS API. Written to a mounted volume as JSON, on
 
 ```bash
 # Live tail (today)
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -f /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log'
+ssh <user>@<dockerhost> 'tail -f /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log'
 
 # List available days
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'ls /data/parkfan/logs/slow-queries.*.log 2>/dev/null'
+ssh <user>@<dockerhost> 'ls /data/parkfan/logs/slow-queries.*.log 2>/dev/null'
 
 # Top 20 slowest query patterns (last 1000 entries from today, ranked by total time)
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -1000 /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log | python3 -c "
+ssh <user>@<dockerhost> 'tail -1000 /data/parkfan/logs/slow-queries.$(date -u +%Y-%m-%d).log | python3 -c "
 import json, sys
 from collections import defaultdict
 queries = []
@@ -216,12 +216,12 @@ SHOW log_min_duration_statement;  -- 500ms
 **Read the log:**
 ```bash
 # All PG slow queries (last 200 lines)
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> '
+ssh <user>@<dockerhost> '
 PG=$(docker ps --format "{{.Names}}" | grep postgres)
 docker logs "$PG" 2>&1 | grep "duration:" | tail -50'
 
 # Only show duration + query (strip noise)
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> '
+ssh <user>@<dockerhost> '
 PG=$(docker ps --format "{{.Names}}" | grep postgres)
 docker logs "$PG" 2>&1 | grep -A1 "duration:" | grep -v "^--$" | tail -100'
 ```
@@ -291,7 +291,7 @@ docker logs <api-container> 2>&1 | grep -B 20 'FATAL ERROR' | grep -E '(LOG|WARN
 ## 9. Container Overview
 
 ```bash
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> \
+ssh <user>@<dockerhost> \
   "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'"
 ```
 
