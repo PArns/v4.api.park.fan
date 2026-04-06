@@ -1,8 +1,41 @@
-import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "fs";
 import { join } from "path";
 
+const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_ROTATED_FILES = 3;
+
 /**
- * Simple file logger for critical errors that should not be missed in console logs
+ * Rotates a log file if it exceeds MAX_LOG_SIZE_BYTES.
+ * Keeps up to MAX_ROTATED_FILES rotated copies: .log.1, .log.2, .log.3
+ */
+function rotateIfNeeded(filepath: string): void {
+  try {
+    if (!existsSync(filepath)) return;
+    const { size } = statSync(filepath);
+    if (size < MAX_LOG_SIZE_BYTES) return;
+
+    // Shift existing rotated files: .log.2 → .log.3, .log.1 → .log.2
+    for (let i = MAX_ROTATED_FILES - 1; i >= 1; i--) {
+      const src = `${filepath}.${i}`;
+      const dst = `${filepath}.${i + 1}`;
+      if (existsSync(src)) {
+        if (i === MAX_ROTATED_FILES - 1 && existsSync(dst)) {
+          unlinkSync(dst);
+        }
+        renameSync(src, dst);
+      }
+    }
+
+    // Rotate current log: .log → .log.1
+    renameSync(filepath, `${filepath}.1`);
+  } catch {
+    // Rotation failure is non-fatal — keep writing to current file
+  }
+}
+
+/**
+ * Simple file logger for critical errors that should not be missed in console logs.
+ * Automatically rotates files at 10 MB, keeping 3 rotated copies.
  *
  * Usage:
  * ```ts
@@ -16,12 +49,13 @@ import { join } from "path";
 export function logToFile(filename: string, data: Record<string, any>): void {
   const logsDir = join(process.cwd(), "logs");
 
-  // Ensure logs directory exists
   if (!existsSync(logsDir)) {
     mkdirSync(logsDir, { recursive: true });
   }
 
   const filepath = join(logsDir, `${filename}.log`);
+
+  rotateIfNeeded(filepath);
 
   const logEntry = {
     timestamp: new Date().toISOString(),
