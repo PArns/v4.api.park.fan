@@ -1,6 +1,6 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In } from "typeorm";
+import { Repository, In, MoreThan } from "typeorm";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
@@ -777,7 +777,11 @@ export class MLService {
       predictionType === "hourly"
         ? this.queueDataRepository
             .findOne({
-              where: { attractionId, queueType: QueueType.STANDBY },
+              where: {
+                attractionId,
+                queueType: QueueType.STANDBY,
+                timestamp: MoreThan(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
+              },
               order: { timestamp: "DESC" },
             })
             .catch((err) => {

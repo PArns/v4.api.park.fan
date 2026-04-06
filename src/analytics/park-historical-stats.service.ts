@@ -172,7 +172,7 @@ export class ParkHistoricalStatsService {
          COUNT(DISTINCT DATE(qda.hour))::int         AS sample_days
        FROM queue_data_aggregates qda
        JOIN attractions a ON a.id = qda."attractionId"
-       WHERE qda."parkId" = $1
+       WHERE qda."parkId" = $1::uuid
          AND qda.hour >= $2::date
          AND qda.hour <  ($3::date + INTERVAL '1 day')
        GROUP BY a.id, a.slug, a.name

@@ -1983,7 +1983,7 @@ export class ParksService {
   async findByContinent(continentSlug: string): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug },
-      relations: ["destination", "attractions", "shows", "restaurants"],
+      relations: ["destination"],
       order: { name: "ASC" },
     });
   }
@@ -2001,7 +2001,7 @@ export class ParksService {
   ): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug, countrySlug },
-      relations: ["destination", "attractions", "shows", "restaurants"],
+      relations: ["destination"],
       order: { name: "ASC" },
     });
   }
@@ -2021,7 +2021,7 @@ export class ParksService {
   ): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug, countrySlug, citySlug },
-      relations: ["destination", "attractions", "shows", "restaurants"],
+      relations: ["destination"],
       order: { name: "ASC" },
     });
   }
@@ -2046,6 +2046,37 @@ export class ParksService {
     if (expiry !== undefined) {
       if (Date.now() < expiry) {
         return null; // known 404 — skip DB query
+      }
+      this.notFoundCache.delete(cacheKey);
+    }
+
+    const park = await this.parkRepository.findOne({
+      where: { continentSlug, countrySlug, citySlug, slug: parkSlug },
+      relations: ["destination"],
+    });
+
+    if (!park) {
+      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
+    }
+
+    return park;
+  }
+
+  /**
+   * Finds a park by geographic path with all relations (attractions, shows, restaurants).
+   * Use only for the main park endpoint that needs full relation data.
+   */
+  async findByGeographicPathWithRelations(
+    continentSlug: string,
+    countrySlug: string,
+    citySlug: string,
+    parkSlug: string,
+  ): Promise<Park | null> {
+    const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}`;
+    const expiry = this.notFoundCache.get(cacheKey);
+    if (expiry !== undefined) {
+      if (Date.now() < expiry) {
+        return null;
       }
       this.notFoundCache.delete(cacheKey);
     }

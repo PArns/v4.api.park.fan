@@ -1218,7 +1218,7 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
   ): Promise<ParkWithAttractionsDto> {
-    const park = await this.parksService.findByGeographicPath(
+    const park = await this.parksService.findByGeographicPathWithRelations(
       continent,
       country,
       city,

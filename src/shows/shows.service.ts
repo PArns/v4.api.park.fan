@@ -713,13 +713,9 @@ export class ShowsService {
       .innerJoinAndSelect("sld.show", "linked_show")
       .leftJoinAndSelect("linked_show.park", "linked_park")
       .where("linked_show.parkId = :parkId", { parkId })
-      .andWhere(
-        `sld.timestamp = (
-          SELECT MAX(sld2.timestamp)
-          FROM show_live_data sld2
-          WHERE sld2."showId" = sld."showId"
-        )`,
-      )
+      .distinctOn(["sld.showId"])
+      .orderBy("sld.showId", "ASC")
+      .addOrderBy("sld.timestamp", "DESC")
       .getMany();
 
     const result = new Map<string, ShowLiveData>();

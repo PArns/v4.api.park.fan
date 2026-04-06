@@ -201,9 +201,11 @@ export class HealthController {
 
   private async getLatestWaitTime(): Promise<Date | null> {
     try {
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const latest = await this.queueDataRepository
         .createQueryBuilder("qd")
         .select("qd.timestamp")
+        .where("qd.timestamp >= :since", { since })
         .orderBy("qd.timestamp", "DESC")
         .limit(1)
         .getOne();
