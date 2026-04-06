@@ -160,25 +160,83 @@ VACUUM ANALYZE prediction_accuracy;
 
 ## 6. Slow Query Logging
 
-TypeORM logs queries taking **>500ms** automatically (configured in `typeorm.config.ts`).
-Look for them in API container logs:
+Two independent slow query logs are active. Both use a **500ms threshold**.
+
+---
+
+### 6a. Application-level log (NestJS → JSON file)
+
+Catches all queries from the NestJS API. Written to a mounted volume as JSON, one entry per line.
+
+**File:** `/data/parkfan/logs/slow-queries.log` on dockerhost
 
 ```bash
-sshpass -p 'REDACTED' ssh <user>@<dockerhost> \
-  "docker logs <api-container> 2>&1 | grep 'query.*[0-9]\{4,\}ms'"
+# Live tail
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -f /data/parkfan/logs/slow-queries.log'
+
+# Top 20 slowest query patterns (last 1000 entries, ranked by max duration)
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> 'tail -1000 /data/parkfan/logs/slow-queries.log | python3 -c "
+import json, sys
+from collections import defaultdict
+queries = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try: queries.append(json.loads(line))
+    except: pass
+groups = defaultdict(list)
+for q in queries:
+    groups[q[\"query\"][:120]].append(q[\"durationMs\"])
+results = [(k, max(v), len(v), int(sum(v)/len(v)), int(sum(v)/1000)) for k, v in groups.items()]
+results.sort(key=lambda x: -x[4])
+for key, mx, cnt, avg, total_s in results[:20]:
+    print(str(total_s)+\"s total | \"+str(cnt)+\"x | \"+str(avg)+\"ms avg | \"+str(mx)+\"ms max\")
+    print(\"  \"+key[:110])
+    print()
+"'
 ```
 
-To enable PostgreSQL-side slow query logging (requires PG restart — avoid in prod):
+**JSON fields:** `timestamp`, `durationMs`, `query`, `parameters`
+
+---
+
+### 6b. PostgreSQL-level log (catches ML service + direct connections)
+
+Catches queries from all clients: NestJS, Python ML service, psql, etc.
+Enabled 2026-04-06 via `ALTER SYSTEM` (survives container restarts, stored in `postgresql.auto.conf`).
+
+**Current setting:**
 ```sql
--- Check current setting
-SHOW log_min_duration_statement;
--- Enable (500ms threshold):
-ALTER SYSTEM SET log_min_duration_statement = 500;
+SHOW log_min_duration_statement;  -- 500ms
+```
+
+**Read the log:**
+```bash
+# All PG slow queries (last 200 lines)
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> '
+PG=$(docker ps --format "{{.Names}}" | grep postgres)
+docker logs "$PG" 2>&1 | grep "duration:" | tail -50'
+
+# Only show duration + query (strip noise)
+sshpass -p 'REDACTED' ssh <user>@<dockerhost> '
+PG=$(docker ps --format "{{.Names}}" | grep postgres)
+docker logs "$PG" 2>&1 | grep -A1 "duration:" | grep -v "^--$" | tail -100'
+```
+
+**PG log format:**
+```
+2026-04-06 08:00:38.251 UTC [4145] parkfan@parkfan LOG:  duration: 1234.567 ms  statement: SELECT ...
+```
+
+**Change threshold without restart:**
+```sql
+ALTER SYSTEM SET log_min_duration_statement = 1000;  -- raise to 1s to reduce noise
+SELECT pg_reload_conf();
+
+-- Disable entirely:
+ALTER SYSTEM SET log_min_duration_statement = -1;
 SELECT pg_reload_conf();
 ```
-
-**`pg_stat_statements`** is NOT enabled (requires restart + `shared_preload_libraries` change).
-TypeORM's `maxQueryExecutionTime: 500` in `typeorm.config.ts` covers the same use case without DB changes.
 
 ---
 
