@@ -264,9 +264,48 @@ export class PredictionAccuracyService {
       }
     }
 
-    // 5. Save Updates in Bulk
+    // 5. Save Updates in Bulk — two SQL statements instead of N individual UPDATEs
     if (updates.length > 0) {
-      await this.accuracyRepository.save(updates, { chunk: 200 });
+      const missed = updates.filter((u) => u.comparisonStatus === "MISSED");
+      const completed = updates.filter(
+        (u) => u.comparisonStatus === "COMPLETED",
+      );
+
+      // MISSED: only status changes — single UPDATE ... WHERE id = ANY(...)
+      if (missed.length > 0) {
+        await this.accuracyRepository.query(
+          `UPDATE prediction_accuracy SET comparison_status = 'MISSED' WHERE id = ANY($1)`,
+          [missed.map((u) => u.id)],
+        );
+      }
+
+      // COMPLETED: bulk UPDATE via unnest (1 round-trip for all rows)
+      if (completed.length > 0) {
+        await this.accuracyRepository.query(
+          `UPDATE prediction_accuracy AS pa
+           SET
+             comparison_status    = 'COMPLETED',
+             actual_wait_time     = u.actual_wait_time::int,
+             absolute_error       = u.absolute_error::int,
+             percentage_error     = u.percentage_error::float,
+             "wasUnplannedClosure" = u.was_unplanned_closure::boolean
+           FROM unnest(
+             $1::uuid[],
+             $2::int[],
+             $3::int[],
+             $4::float[],
+             $5::boolean[]
+           ) AS u(id, actual_wait_time, absolute_error, percentage_error, was_unplanned_closure)
+           WHERE pa.id = u.id`,
+          [
+            completed.map((u) => u.id),
+            completed.map((u) => u.actualWaitTime ?? 0),
+            completed.map((u) => u.absoluteError ?? 0),
+            completed.map((u) => u.percentageError ?? null),
+            completed.map((u) => u.wasUnplannedClosure ?? false),
+          ],
+        );
+      }
     }
 
     const duration = Date.now() - startTime;

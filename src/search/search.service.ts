@@ -136,71 +136,63 @@ export class SearchService implements OnModuleInit {
         ? type
         : ["park", "attraction", "show", "restaurant", "location"];
 
-    const results: SearchResultItemDto[] = [];
+    // Step 1: Run all search queries in parallel
+    const [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
+      await Promise.all([
+        searchTypes.includes("park")
+          ? this.searchParks(q, limit)
+          : Promise.resolve([] as Awaited<ReturnType<typeof this.searchParks>>),
+        searchTypes.includes("attraction")
+          ? this.searchAttractions(q, limit)
+          : Promise.resolve(
+              [] as Awaited<ReturnType<typeof this.searchAttractions>>,
+            ),
+        searchTypes.includes("show")
+          ? this.searchShows(q, limit)
+          : Promise.resolve([] as Awaited<ReturnType<typeof this.searchShows>>),
+        searchTypes.includes("restaurant")
+          ? this.searchRestaurants(q, limit)
+          : Promise.resolve(
+              [] as Awaited<ReturnType<typeof this.searchRestaurants>>,
+            ),
+        searchTypes.includes("location")
+          ? this.searchLocations(q, limit)
+          : Promise.resolve([] as SearchResultItemDto[]),
+      ]);
+
+    // Step 2: Enrich all result sets in parallel
+    const [
+      enrichedParks,
+      enrichedAttractions,
+      enrichedShows,
+      enrichedRestaurants,
+    ] = await Promise.all([
+      this.enrichParkResults(rawParks as unknown as Park[]),
+      this.enrichAttractionResults(rawAttractions),
+      this.enrichShowResults(rawShows),
+      this.enrichRestaurantResults(rawRestaurants),
+    ]);
+
+    const results: SearchResultItemDto[] = [
+      ...enrichedParks,
+      ...enrichedAttractions,
+      ...enrichedShows,
+      ...enrichedRestaurants,
+      ...locations,
+    ];
     const counts: SearchCounts = {
-      park: { returned: 0, total: 0 },
-      attraction: { returned: 0, total: 0 },
-      show: { returned: 0, total: 0 },
-      restaurant: { returned: 0, total: 0 },
-      location: { returned: 0, total: 0 },
-    };
-
-    // Search parks
-    if (searchTypes.includes("park")) {
-      const parks = await this.searchParks(q, limit);
-      // We do a separate count query or just use the length if we didn't hit limit?
-      // For accurate "total" with fuzzy search, it's expensive.
-      // Let's approximate total as length for now or do a count query if needed.
-      // Given fuzzy nature, "total matches" is ambiguous (depends on threshold).
-      // We'll use the returned length as total for now to save perf, or run a count if strictly needed.
-      const enrichedParks = await this.enrichParkResults(
-        parks as unknown as Park[],
-      );
-      results.push(...enrichedParks);
-      counts.park = { returned: enrichedParks.length, total: parks.length };
-    }
-
-    // Search attractions
-    if (searchTypes.includes("attraction")) {
-      const attractions = await this.searchAttractions(q, limit);
-      const enrichedAttractions =
-        await this.enrichAttractionResults(attractions);
-      results.push(...enrichedAttractions);
-      counts.attraction = {
+      park: { returned: enrichedParks.length, total: rawParks.length },
+      attraction: {
         returned: enrichedAttractions.length,
-        total: attractions.length,
-      };
-    }
-
-    // Search shows
-    if (searchTypes.includes("show")) {
-      const shows = await this.searchShows(q, limit);
-      const enrichedShows = await this.enrichShowResults(shows);
-      results.push(...enrichedShows);
-      counts.show = { returned: enrichedShows.length, total: shows.length };
-    }
-
-    // Search restaurants
-    if (searchTypes.includes("restaurant")) {
-      const restaurants = await this.searchRestaurants(q, limit);
-      const enrichedRestaurants =
-        await this.enrichRestaurantResults(restaurants);
-      results.push(...enrichedRestaurants);
-      counts.restaurant = {
+        total: rawAttractions.length,
+      },
+      show: { returned: enrichedShows.length, total: rawShows.length },
+      restaurant: {
         returned: enrichedRestaurants.length,
-        total: restaurants.length,
-      };
-    }
-
-    // Search locations
-    if (searchTypes.includes("location")) {
-      const locations = await this.searchLocations(q, limit);
-      results.push(...locations);
-      counts.location = {
-        returned: locations.length,
-        total: locations.length,
-      };
-    }
+        total: rawRestaurants.length,
+      },
+      location: { returned: locations.length, total: locations.length },
+    };
 
     const response: SearchResultDto = {
       query: q,
@@ -1075,28 +1067,28 @@ export class SearchService implements OnModuleInit {
 
   /**
    * Batch fetch attraction status from queue data
+   * Uses a single batch query instead of N individual queries.
    */
   private async getBatchAttractionStatus(
     attractionIds: string[],
   ): Promise<Map<string, { status: string }>> {
     const statusMap = new Map<string, { status: string }>();
 
-    await Promise.all(
-      attractionIds.map(async (attractionId) => {
-        try {
-          const queueData =
-            await this.queueDataService.findCurrentStatusByAttraction(
-              attractionId,
-            );
-          // Use first queue data status (usually STANDBY)
-          if (queueData && queueData.length > 0 && queueData[0].status) {
-            statusMap.set(attractionId, { status: queueData[0].status });
-          }
-        } catch {
-          // Skip attractions without status data
+    if (attractionIds.length === 0) return statusMap;
+
+    try {
+      const queueDataMap =
+        await this.queueDataService.findCurrentStatusByAttractionIds(
+          attractionIds,
+        );
+      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
+        if (queueDataList.length > 0 && queueDataList[0].status) {
+          statusMap.set(attractionId, { status: queueDataList[0].status });
         }
-      }),
-    );
+      }
+    } catch {
+      // Skip attractions without status data
+    }
 
     return statusMap;
   }
@@ -1127,6 +1119,7 @@ export class SearchService implements OnModuleInit {
   /**
    * Batch fetch today's operating hours for parks.
    * Uses each park's timezone for "today" (never server date).
+   * Single bulk query instead of N individual queries.
    */
   private async getBatchParkHours(
     parkIds: string[],
@@ -1136,30 +1129,56 @@ export class SearchService implements OnModuleInit {
       { open: string; close: string; type: string }
     >();
 
+    if (parkIds.length === 0) return hoursMap;
+
     const parks = await this.parkRepository.find({
       where: parkIds.map((id) => ({ id })),
       select: ["id", "timezone"],
     });
 
-    await Promise.all(
-      parks.map(async (park) => {
-        try {
-          const todayStr = getCurrentDateInTimezone(park.timezone || "UTC");
-          const schedule = await this.scheduleRepository.findOne({
-            where: {
-              parkId: park.id,
-              date: todayStr as any,
-              scheduleType: ScheduleType.OPERATING,
-            },
-            order: { date: "ASC" },
-          });
+    // Build a set of (parkId, todayStr) pairs grouped by date so we can do one bulk query per unique date
+    const parkDateMap = new Map<string, string>(); // parkId -> todayStr
+    for (const park of parks) {
+      parkDateMap.set(
+        park.id,
+        getCurrentDateInTimezone(park.timezone || "UTC"),
+      );
+    }
 
-          if (schedule && schedule.openingTime && schedule.closingTime) {
-            hoursMap.set(park.id, {
-              open: schedule.openingTime.toISOString(),
-              close: schedule.closingTime.toISOString(),
-              type: schedule.scheduleType,
-            });
+    // Group parks by their local "today" date to minimize queries
+    const byDate = new Map<string, string[]>(); // todayStr -> parkIds
+    for (const [parkId, todayStr] of parkDateMap.entries()) {
+      if (!byDate.has(todayStr)) byDate.set(todayStr, []);
+      byDate.get(todayStr)!.push(parkId);
+    }
+
+    // One query per unique date (usually just 1-2 dates globally)
+    await Promise.all(
+      Array.from(byDate.entries()).map(async ([todayStr, ids]) => {
+        try {
+          const schedules = await this.scheduleRepository
+            .createQueryBuilder("s")
+            .select([
+              "s.parkId",
+              "s.openingTime",
+              "s.closingTime",
+              "s.scheduleType",
+            ])
+            .where("s.parkId IN (:...ids)", { ids })
+            .andWhere("s.date = :date", { date: todayStr })
+            .andWhere("s.scheduleType = :type", {
+              type: ScheduleType.OPERATING,
+            })
+            .getMany();
+
+          for (const schedule of schedules) {
+            if (schedule.openingTime && schedule.closingTime) {
+              hoursMap.set(schedule.parkId, {
+                open: schedule.openingTime.toISOString(),
+                close: schedule.closingTime.toISOString(),
+                type: schedule.scheduleType,
+              });
+            }
           }
         } catch {
           // Ignore missing schedule
@@ -1198,33 +1217,34 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Batch fetch show times for operating shows
+   * Batch fetch show times for operating shows.
+   * Uses findBatchCurrentStatusByShows (single DISTINCT ON query) instead of N individual queries.
    */
   private async getBatchShowTimes(
     showIds: string[],
   ): Promise<Map<string, string[]>> {
     const showTimesMap = new Map<string, string[]>();
 
-    await Promise.all(
-      showIds.map(async (showId) => {
-        try {
-          const liveData =
-            await this.showsService.findCurrentStatusByShow(showId);
+    if (showIds.length === 0) return showTimesMap;
 
-          if (liveData && liveData.showtimes) {
-            const times = liveData.showtimes
-              .map((st) => st.startTime)
-              .filter((t) => !!t) as string[];
+    try {
+      const liveDataMap =
+        await this.showsService.findBatchCurrentStatusByShows(showIds);
 
-            if (times.length > 0) {
-              showTimesMap.set(showId, times);
-            }
+      for (const [showId, liveData] of liveDataMap.entries()) {
+        if (liveData && liveData.showtimes) {
+          const times = liveData.showtimes
+            .map((st) => st.startTime)
+            .filter((t) => !!t) as string[];
+
+          if (times.length > 0) {
+            showTimesMap.set(showId, times);
           }
-        } catch {
-          // Ignore errors
         }
-      }),
-    );
+      }
+    } catch {
+      // Ignore errors
+    }
 
     return showTimesMap;
   }
@@ -1247,5 +1267,50 @@ export class SearchService implements OnModuleInit {
     }
 
     return this.parksService.getBatchParkStatus(Array.from(parkIds));
+  }
+
+  /**
+   * Pre-warm search cache using actual park names from the DB.
+   * Called from CacheWarmupService after wait-times sync.
+   * Extracts unique first words from all park names so the most common
+   * user queries (typing "disney", "universal", etc.) hit cache.
+   */
+  async warmupSearch(): Promise<void> {
+    try {
+      const parks = await this.parkRepository
+        .createQueryBuilder("park")
+        .select(["park.name", "park.city", "park.country"])
+        .getMany();
+
+      // Extract unique first words from park names (lowercase, alpha only, min 3 chars)
+      const termSet = new Set<string>();
+      for (const park of parks) {
+        for (const field of [park.name, park.city, park.country]) {
+          if (!field) continue;
+          const firstWord = field
+            .split(/\s+/)[0]
+            .replace(/[^a-zA-Z]/g, "")
+            .toLowerCase();
+          if (firstWord.length >= 3) termSet.add(firstWord);
+        }
+      }
+
+      const terms = Array.from(termSet);
+      this.logger.verbose(
+        `🔥 Warming search cache for ${terms.length} terms...`,
+      );
+
+      for (const term of terms) {
+        try {
+          await this.search({ q: term, limit: 5 } as any);
+        } catch {
+          // Ignore individual term failures
+        }
+      }
+
+      this.logger.log(`✅ Search cache warmed for ${terms.length} terms`);
+    } catch (error) {
+      this.logger.warn("Search warmup failed", error);
+    }
   }
 }

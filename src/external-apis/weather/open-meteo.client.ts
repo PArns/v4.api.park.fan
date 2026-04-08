@@ -142,7 +142,9 @@ export class OpenMeteoClient {
   }
 
   /**
-   * Fetch daily weather forecast for a location
+   * Fetch daily weather forecast for a location.
+   * Results are cached by lat/lng/forecastDays for 2 hours to avoid redundant
+   * API calls for parks that share coordinates (e.g. multiple parks in one resort).
    *
    * @param latitude - Location latitude
    * @param longitude - Location longitude
@@ -154,6 +156,18 @@ export class OpenMeteoClient {
     longitude: number,
     forecastDays: number = 16,
   ): Promise<DailyWeatherResponse> {
+    // Round to 2 decimal places (~1km precision) for cache key deduplication
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    const cacheKey = `weather:daily:${latR}:${lonR}:${forecastDays}`;
+
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {
+      // Cache miss is fine
+    }
+
     try {
       const data = await this.requestWithRetry<OpenMeteoResponse>("/forecast", {
         params: {
@@ -181,7 +195,15 @@ export class OpenMeteoClient {
         },
       });
 
-      return this.transformResponse(data);
+      const result = this.transformResponse(data);
+
+      try {
+        await this.redis.set(cacheKey, JSON.stringify(result), "EX", 7200); // 2h TTL
+      } catch {
+        // Cache write failure is non-critical
+      }
+
+      return result;
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

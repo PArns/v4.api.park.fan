@@ -10,6 +10,7 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
+import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 
 /**
@@ -42,6 +43,7 @@ export class CacheWarmupService {
     private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly calendarService: CalendarService,
     private readonly discoveryService: DiscoveryService,
+    private readonly searchService: SearchService,
   ) {}
 
   // ... existing methods
@@ -310,6 +312,13 @@ export class CacheWarmupService {
       this.warmupDiscovery().catch((err) =>
         this.logger.error("Failed to trigger discovery warmup", err),
       );
+
+      // Warm up search cache (async)
+      this.searchService
+        .warmupSearch()
+        .catch((err) =>
+          this.logger.error("Failed to trigger search warmup", err),
+        );
 
       // Warm up park statistics (async) — guarded to prevent concurrent accumulation
       const operatingParkIds = Array.from(statusMap.entries())

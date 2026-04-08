@@ -44,6 +44,7 @@ import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.modu
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays.module";
 import { DiscoveryModule } from "../discovery/discovery.module";
+import { SearchModule } from "../search/search.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { StatsModule } from "../stats/stats.module";
 import { StatsProcessor } from "./processors/stats.processor";
@@ -139,6 +140,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     AnalyticsModule,
     DiscoveryModule,
     StatsModule,
+    SearchModule,
     RedisModule, // For cache warmup service
     GeoipModule,
   ],

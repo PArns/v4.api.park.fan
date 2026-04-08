@@ -58,16 +58,60 @@ export class WeatherProcessor {
 
       let totalCurrent = 0;
       let totalForecast = 0;
+
+      // Deduplicate by rounded coordinates (~1km precision) so parks sharing a
+      // resort location (e.g. all WDW parks) share one API call via the client cache.
+      // We still save weather for every park individually (same data, fast DB writes).
+      const coordKey = (p: {
+        latitude: number | null;
+        longitude: number | null;
+      }) =>
+        `${Math.round(p.latitude! * 100) / 100},${Math.round(p.longitude! * 100) / 100}`;
+
+      const uniqueCoordParks = new Map<string, (typeof parksWithCoords)[0]>();
+      for (const park of parksWithCoords) {
+        const key = coordKey(park);
+        if (!uniqueCoordParks.has(key)) uniqueCoordParks.set(key, park);
+      }
+
+      const uniqueCount = uniqueCoordParks.size;
       const total = parksWithCoords.length;
+      this.logger.log(
+        `Deduped ${total} parks to ${uniqueCount} unique locations for API calls`,
+      );
 
-      for (let idx = 0; idx < parksWithCoords.length; idx++) {
-        const park = parksWithCoords[idx];
+      // Fetch weather for unique locations first (populates client-side cache)
+      let apiIdx = 0;
+      for (const [, repPark] of uniqueCoordParks) {
+        try {
+          await this.openMeteoClient.getDailyWeather(
+            repPark.latitude!,
+            repPark.longitude!,
+            currentOnly ? 1 : 16,
+          );
+        } catch {
+          // Errors will surface again per-park below; ignore here
+        }
 
+        apiIdx++;
+        if (apiIdx % 10 === 0 || apiIdx === uniqueCount) {
+          this.logger.log(
+            `API fetch progress: ${apiIdx}/${uniqueCount} unique locations`,
+          );
+        }
+
+        // Delay between unique API calls (cache hits for same-coord parks skip this)
+        const delay = currentOnly ? 500 : 1500;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      // Now save weather for every park (cache hit for shared-coord parks = no extra API call)
+      for (const park of parksWithCoords) {
         try {
           const forecastData = await this.openMeteoClient.getDailyWeather(
             park.latitude!,
             park.longitude!,
-            currentOnly ? 1 : 16, // 1 = today only, 16 = full forecast
+            currentOnly ? 1 : 16,
           );
 
           const currentDay = forecastData.days.slice(0, 1);
@@ -96,25 +140,10 @@ export class WeatherProcessor {
         } catch (error: unknown) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          const errorStack = error instanceof Error ? error.stack : undefined;
           this.logger.error(
             `❌ Failed to process weather for ${park.name}: ${errorMessage}`,
           );
-          if (errorStack) {
-            this.logger.error(`Stack trace: ${errorStack}`);
-          }
         }
-
-        if ((idx + 1) % 10 === 0 || idx + 1 === total) {
-          const percent = Math.round(((idx + 1) / total) * 100);
-          this.logger.log(
-            `Weather sync progress: ${idx + 1}/${total} (${percent}%) - Last: ${park.name}`,
-          );
-        }
-
-        // Shorter delay for current-only runs (lighter API call, no DB forecast saves)
-        const delay = currentOnly ? 300 : 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
       this.logger.log(
