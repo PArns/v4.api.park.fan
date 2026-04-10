@@ -1102,13 +1102,26 @@ export class ParkIntegrationService {
    * Helper: Aggregate attraction daily predictions into park-level daily predictions
    * Public so it can be used by yearly predictions route
    */
-  public aggregateDailyPredictions(
+  public async aggregateDailyPredictions(
     predictions: PredictionDto[],
-  ): import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] {
+    parkId: string,
+  ): Promise<
+    import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
+  > {
+    const [headlinerIds, p50Baseline] = await Promise.all([
+      this.analyticsService.getHeadlinerAttractionIds(parkId),
+      this.analyticsService.getP50BaselineFromCache(parkId),
+    ]);
+
     const datesMap = new Map<string, PredictionDto[]>();
 
-    // Group by date
-    for (const p of predictions) {
+    // Group by date, filtering to headliners only (fall back to all if none defined)
+    const filtered =
+      headlinerIds.size > 0
+        ? predictions.filter((p) => headlinerIds.has(p.attractionId))
+        : predictions;
+
+    for (const p of filtered) {
       // predictedTime is ISO string, take YYYY-MM-DD
       const date = p.predictedTime.split("T")[0];
       if (!datesMap.has(date)) {
@@ -1120,66 +1133,39 @@ export class ParkIntegrationService {
     const result: import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[] =
       [];
 
-    const crowdLevelMap = {
-      closed: 0,
-      very_low: 1,
-      low: 2,
-      moderate: 3,
-      high: 4,
-      very_high: 5,
-      extreme: 6,
-    };
-    const reverseCrowdMap = [
-      "closed",
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-    ];
-
     for (const [date, dailyPreds] of datesMap) {
       if (dailyPreds.length === 0) continue;
 
-      // Filter for significant attractions (predicted wait > 10 min)
-      // This ensures we don't dilute the rating with rides that have no wait
-      const significantPreds = dailyPreds.filter(
-        (p) => p.predictedWaitTime > 10,
-      );
+      // Compute median of headliner predicted wait times
+      const waits = dailyPreds
+        .map((p) => p.predictedWaitTime)
+        .filter((w) => w != null) as number[];
 
-      // Use significant predictions if we have any, otherwise fall back to all
-      // (e.g., if everything is < 10 min, the park is likely empty/very low crowds)
-      const predsToUse =
-        significantPreds.length > 0 ? significantPreds : dailyPreds;
+      let crowdLevel: string;
+      let avgWaitTime: number | undefined;
 
-      let totalScore = 0;
-      let totalConfidence = 0;
+      if (waits.length > 0) {
+        const sorted = [...waits].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        const median =
+          sorted.length % 2 === 0
+            ? (sorted[mid - 1] + sorted[mid]) / 2
+            : sorted[mid];
 
-      for (const p of predsToUse) {
-        const level = p.crowdLevel as keyof typeof crowdLevelMap;
-        totalScore += crowdLevelMap[level] || 0;
-        totalConfidence += p.confidence || 0;
+        avgWaitTime = Math.round(
+          waits.reduce((s, w) => s + w, 0) / waits.length,
+        );
+
+        const pct =
+          p50Baseline > 0 ? Math.round((median / p50Baseline) * 100) : 100;
+        crowdLevel = this.analyticsService.determineCrowdLevel(pct);
+      } else {
+        crowdLevel = "moderate";
       }
 
-      const avgScore = Math.round(totalScore / predsToUse.length);
-      const avgConfidence = totalConfidence / predsToUse.length;
-
-      const predsWithWait = predsToUse.filter(
-        (p) =>
-          p.predictedWaitTime !== undefined && p.predictedWaitTime !== null,
-      );
-      const avgWaitTime =
-        predsWithWait.length > 0
-          ? Math.round(
-              predsWithWait.reduce(
-                (sum, p) => sum + (p.predictedWaitTime || 0),
-                0,
-              ) / predsWithWait.length,
-            )
-          : undefined;
-
-      const crowdLevel = reverseCrowdMap[avgScore] as any;
+      const avgConfidence =
+        dailyPreds.reduce((s, p) => s + (p.confidence || 0), 0) /
+        dailyPreds.length;
 
       // Recommendation score: crowd level base + contextual penalties
       // Uses holiday flags from ML prediction features when available
@@ -1210,7 +1196,8 @@ export class ParkIntegrationService {
 
       result.push({
         date,
-        crowdLevel,
+        crowdLevel:
+          crowdLevel as import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto["crowdLevel"],
         confidencePercentage: avgConfidence,
         recommendation,
         source: "ml", // Predictions come from our ML service

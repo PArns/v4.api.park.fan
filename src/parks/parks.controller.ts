@@ -948,6 +948,7 @@ export class ParksController {
     const dailyPredictions =
       await this.parkIntegrationService.aggregateDailyPredictions(
         predictions.predictions,
+        park.id,
       );
 
     return {

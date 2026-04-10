@@ -581,10 +581,17 @@ def fetch_historical_park_occupancy(
               AND qd."queueType" = 'STANDBY'
             GROUP BY a."parkId", qd."attractionId"
         ),
+        headliners AS (
+            SELECT ha."attractionId"::text as attraction_id
+            FROM headliner_attractions ha
+            WHERE ha."parkId"::text = ANY(:park_ids)
+        ),
         park_p50_baseline AS (
-            SELECT park_id, AVG(p50) as baseline
-            FROM per_ride_p50
-            GROUP BY park_id
+            -- Use headliner attractions only to match TypeScript calculateCrowdLevelForDate
+            SELECT r.park_id, AVG(r.p50) as baseline
+            FROM per_ride_p50 r
+            JOIN headliners h ON h.attraction_id = r.attraction_id
+            GROUP BY r.park_id
         ),
         park_hourly AS (
             SELECT

@@ -220,6 +220,18 @@ export class CalendarService {
       ),
     );
 
+    // Pre-compute predicted crowd levels for future days using headliner median / P50 baseline
+    // (mirrors calculateCrowdLevelForDate logic for historical days)
+    const [headlinerIdSet, p50Baseline] = await Promise.all([
+      this.analyticsService.getHeadlinerAttractionIds(park.id),
+      this.analyticsService.getP50BaselineFromCache(park.id),
+    ]);
+    const predictedCrowdLevels = this.buildPredictedCrowdLevels(
+      mlPredictions.predictions,
+      headlinerIdSet,
+      p50Baseline,
+    );
+
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
     const historicalDateStrs: string[] = [];
     const walk = new Date(fromDate);
@@ -271,6 +283,7 @@ export class CalendarService {
           prefetchedCrowdLevels,
           parkHasOperatingSchedule,
           operatingDateRange,
+          predictedCrowdLevels,
         ),
       ),
     );
@@ -448,6 +461,7 @@ export class CalendarService {
       minDate: string | null;
       maxDate: string | null;
     } = { minDate: null, maxDate: null },
+    predictedCrowdLevels: Map<string, CrowdLevel> = new Map(),
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -613,10 +627,15 @@ export class CalendarService {
           );
         inferredCrowdLevel = crowdData.hasData
           ? crowdData.crowdLevel
-          : mlPrediction?.crowdLevel || "moderate";
+          : predictedCrowdLevels.get(dateStr) ||
+            mlPrediction?.crowdLevel ||
+            "moderate";
       }
     } else {
-      inferredCrowdLevel = mlPrediction?.crowdLevel || "moderate";
+      inferredCrowdLevel =
+        predictedCrowdLevels.get(dateStr) ||
+        mlPrediction?.crowdLevel ||
+        "moderate";
     }
 
     // Past + Today: only infer OPERATING from crowd level when park has NO OPERATING schedule at all.
@@ -797,16 +816,51 @@ export class CalendarService {
   }
 
   /**
-   * Map ML crowd score to CrowdLevel enum
-   * Note: This is a legacy method for score-based systems
-   * New code should use determineCrowdLevel with P90-relative percentages
+   * Aggregate per-attraction ML predictions into a date → CrowdLevel map for future days.
+   *
+   * Mirrors calculateCrowdLevelForDate: median of headliner wait times / park P50 baseline.
+   * Falls back to all attractions if no headliners are defined.
    */
-  private mapCrowdLevel(score: number): CrowdLevel {
-    if (score <= 40) return "very_low";
-    if (score <= 70) return "low";
-    if (score <= 85) return "moderate";
-    if (score <= 95) return "high";
-    return "very_high";
+  private buildPredictedCrowdLevels(
+    predictions: PredictionDto[],
+    headlinerIds: Set<string>,
+    p50Baseline: number,
+  ): Map<string, CrowdLevel> {
+    const map = new Map<string, CrowdLevel>();
+    if (predictions.length === 0) return map;
+
+    // Use headliners only; fall back to all attractions if none defined
+    const filtered =
+      headlinerIds.size > 0
+        ? predictions.filter((p) => headlinerIds.has(p.attractionId))
+        : predictions;
+
+    // Group predicted wait times by date
+    const byDate = new Map<string, number[]>();
+    for (const p of filtered) {
+      const date = p.predictedTime?.split("T")[0];
+      if (!date || p.predictedWaitTime == null) continue;
+      if (!byDate.has(date)) byDate.set(date, []);
+      byDate.get(date)!.push(p.predictedWaitTime);
+    }
+
+    for (const [date, waits] of byDate) {
+      if (waits.length === 0) continue;
+
+      // Median of headliner predicted waits
+      const sorted = [...waits].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median =
+        sorted.length % 2 === 0
+          ? (sorted[mid - 1] + sorted[mid]) / 2
+          : sorted[mid];
+
+      const pct =
+        p50Baseline > 0 ? Math.round((median / p50Baseline) * 100) : 100;
+      map.set(date, this.analyticsService.determineCrowdLevel(pct));
+    }
+
+    return map;
   }
 
   /**
