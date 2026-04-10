@@ -1,6 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
+import {
+  Repository,
+  Between,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  In,
+} from "typeorm";
 import { Restaurant } from "./entities/restaurant.entity";
 import { RestaurantLiveData } from "./entities/restaurant-live-data.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -78,6 +84,28 @@ export class RestaurantsService {
         (child) => child.entityType === "RESTAURANT",
       );
 
+      if (restaurants.length === 0) {
+        continue;
+      }
+
+      // Pre-fetch existing data for this park to avoid N+1 queries
+      const apiExternalIds = restaurants.map((r) => r.id);
+      const [existingByExternalId, existingSlugsInPark] = await Promise.all([
+        this.restaurantRepository.find({
+          where: { externalId: In(apiExternalIds) },
+        }),
+        this.restaurantRepository.find({
+          where: { parkId: park.id },
+          select: ["slug"],
+        }),
+      ]);
+
+      const externalIdMap = new Map(
+        existingByExternalId.map((r) => [r.externalId, r]),
+      );
+      const usedSlugs = new Set(existingSlugsInPark.map((r) => r.slug));
+      const toSave: Restaurant[] = [];
+
       for (const restaurantEntity of restaurants) {
         let entityData = restaurantEntity;
 
@@ -100,40 +128,39 @@ export class RestaurantsService {
           park.id,
         );
 
-        // Check if restaurant exists (by externalId)
-        const existing = await this.restaurantRepository.findOne({
-          where: { externalId: mappedData.externalId },
-        });
+        // Check if restaurant exists in our pre-fetched map
+        const existing = externalIdMap.get(mappedData.externalId!);
 
         if (existing) {
           // Update existing restaurant (keep existing slug)
-          await this.restaurantRepository.update(existing.id, {
+          Object.assign(existing, {
             name: mappedData.name,
             latitude: mappedData.latitude,
             longitude: mappedData.longitude,
             cuisineType: mappedData.cuisineType,
             requiresReservation: mappedData.requiresReservation,
           });
+          toSave.push(existing);
         } else {
           // Generate unique slug for this park
           const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
 
-          // Get all existing slugs for this park
-          const existingRestaurants = await this.restaurantRepository.find({
-            where: { parkId: park.id },
-            select: ["slug"],
-          });
-          const existingSlugs = existingRestaurants.map((r) => r.slug);
-
-          // Generate unique slug
-          const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+          // Generate unique slug using the current set of used slugs
+          const uniqueSlug = generateUniqueSlug(baseSlug, Array.from(usedSlugs));
           mappedData.slug = uniqueSlug;
+          usedSlugs.add(uniqueSlug);
 
-          // Insert new restaurant
-          await this.restaurantRepository.save(mappedData);
+          // Create new restaurant entity
+          const newRestaurant = this.restaurantRepository.create(mappedData);
+          toSave.push(newRestaurant);
         }
 
         syncedCount++;
+      }
+
+      // Batch save all new/updated restaurants for this park
+      if (toSave.length > 0) {
+        await this.restaurantRepository.save(toSave);
       }
     }
 
