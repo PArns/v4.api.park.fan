@@ -1482,6 +1482,11 @@ def predict_wait_times(
     for i, (idx, row) in enumerate(df_inference.iterrows()):
         pred_wait = round_to_nearest_5(predictions[i])
 
+        # If schedule is UNKNOWN, park might be closed. Enforce a minimum 5 min wait if it's considered operating by the model
+        # or zero if the model thinks it's closed anyway.
+        if row["status"] == "UNKNOWN" and pred_wait > 0:
+            pred_wait = max(5, pred_wait)
+
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600
 
