@@ -157,8 +157,8 @@ export class TimescaleInitService implements OnModuleInit {
       // Convert to hypertable
       // SECURITY: All parameters are validated against whitelist, but use identifier quoting
       await this.dataSource.query(
-        `SELECT create_hypertable($1, $2, chunk_time_interval => INTERVAL $3, if_not_exists => TRUE);`,
-        [tableName, timeColumn, `'${chunkInterval}'`],
+        `SELECT create_hypertable($1, $2, chunk_time_interval => $3::interval, if_not_exists => TRUE);`,
+        [tableName, timeColumn, chunkInterval],
       );
 
       this.logger.debug(
@@ -328,7 +328,7 @@ export class TimescaleInitService implements OnModuleInit {
       if (policyCheck.length === 0) {
         // SECURITY: Use parameterized query for table name
         await this.dataSource.query(
-          `SELECT add_compression_policy($1, INTERVAL $2);`,
+          `SELECT add_compression_policy($1, $2::interval);`,
           [tableName, `${compressAfterDays} days`],
         );
         this.logger.debug(

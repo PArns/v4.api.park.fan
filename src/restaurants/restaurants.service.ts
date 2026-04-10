@@ -146,7 +146,10 @@ export class RestaurantsService {
           const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
 
           // Generate unique slug using the current set of used slugs
-          const uniqueSlug = generateUniqueSlug(baseSlug, Array.from(usedSlugs));
+          const uniqueSlug = generateUniqueSlug(
+            baseSlug,
+            Array.from(usedSlugs),
+          );
           mappedData.slug = uniqueSlug;
           usedSlugs.add(uniqueSlug);
 
