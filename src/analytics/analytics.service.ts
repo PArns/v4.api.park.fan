@@ -3361,42 +3361,69 @@ export class AnalyticsService {
     let avgWaitResult: { avgWait: number | null; count: number };
 
     if (type === "attraction") {
-      const result = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("AVG(qd.waitTime)", "avgWait")
-        .addSelect("COUNT(*)", "count")
-        .where("qd.attractionId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :startOfDay", { startOfDay })
-        .andWhere("qd.timestamp <= :endOfDay", { endOfDay })
-        .andWhere("qd.status = :status", { status: "OPERATING" })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime >= 5")
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawOne();
+      const result = await this.queueDataRepository.query(
+        `
+        SELECT
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as "avgWait",
+          COUNT(*) as count
+        FROM queue_data qd
+        WHERE qd."attractionId" = $1::uuid
+          AND qd.timestamp >= $2
+          AND qd.timestamp <= $3
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" >= 5
+          AND qd."queueType" = 'STANDBY'
+        `,
+        [entityId, startOfDay, endOfDay],
+      );
 
       avgWaitResult = {
-        avgWait: result?.avgWait ? parseFloat(result.avgWait) : null,
-        count: parseInt(result?.count || "0", 10),
+        avgWait: result[0]?.avgWait ? parseFloat(result[0].avgWait) : null,
+        count: parseInt(result[0]?.count || "0", 10),
       };
     } else {
-      const result = await this.queueDataRepository
-        .createQueryBuilder("qd")
-        .select("AVG(qd.waitTime)", "avgWait")
-        .addSelect("COUNT(*)", "count")
-        .innerJoin("qd.attraction", "attraction")
-        .where("attraction.parkId = :entityId", { entityId })
-        .andWhere("qd.timestamp >= :startOfDay", { startOfDay })
-        .andWhere("qd.timestamp <= :endOfDay", { endOfDay })
-        .andWhere("qd.status = :status", { status: "OPERATING" })
-        .andWhere("qd.waitTime IS NOT NULL")
-        .andWhere("qd.waitTime >= 5")
-        .andWhere("qd.queueType = 'STANDBY'")
-        .getRawOne();
+      // For parks, use headliner attractions to match live crowd level and baseline calculations
+      const headliners = await this.headlinerAttractionRepository.find({
+        where: { parkId: entityId },
+        select: ["attractionId"],
+      });
+      let targetAttractionIds = headliners.map((h) => h.attractionId);
 
-      avgWaitResult = {
-        avgWait: result?.avgWait ? parseFloat(result.avgWait) : null,
-        count: parseInt(result?.count || "0", 10),
-      };
+      // Fallback: if no headliners defined, use all attractions for the park
+      if (targetAttractionIds.length === 0) {
+        const allAttractions = await this.attractionRepository.find({
+          where: { parkId: entityId },
+          select: ["id"],
+        });
+        targetAttractionIds = allAttractions.map((a) => a.id);
+      }
+
+      if (targetAttractionIds.length > 0) {
+        const result = await this.queueDataRepository.query(
+          `
+          SELECT
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as "avgWait",
+            COUNT(*) as count
+          FROM queue_data qd
+          WHERE qd."attractionId" = ANY($1::uuid[])
+            AND qd.timestamp >= $2
+            AND qd.timestamp <= $3
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."waitTime" >= 5
+            AND qd."queueType" = 'STANDBY'
+          `,
+          [targetAttractionIds, startOfDay, endOfDay],
+        );
+
+        avgWaitResult = {
+          avgWait: result[0]?.avgWait ? parseFloat(result[0].avgWait) : null,
+          count: parseInt(result[0]?.count || "0", 10),
+        };
+      } else {
+        avgWaitResult = { avgWait: null, count: 0 };
+      }
     }
 
     // Calculate result
