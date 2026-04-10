@@ -1,12 +1,15 @@
 import { Logger as TypeOrmLogger, QueryRunner } from "typeorm";
+import { Logger } from "@nestjs/common";
 import { logToFile } from "./file-logger.util";
 
 /**
  * Custom TypeORM logger that writes slow queries to logs/slow-queries.log.
  * All other query events (errors, schema builds) are forwarded to the NestJS
- * default console output so they still appear in docker logs.
+ * Logger so they still appear in docker logs and follow the standard format.
  */
 export class SlowQueryFileLogger implements TypeOrmLogger {
+  private readonly logger = new Logger("TypeORM");
+
   logQuerySlow(
     time: number,
     query: string,
@@ -27,15 +30,20 @@ export class SlowQueryFileLogger implements TypeOrmLogger {
     parameters?: unknown[],
   ): void {
     // Keep query errors visible in the main log
-    console.error("[TypeORM] Query failed:", { error, query, parameters });
+    this.logger.error(`Query failed: ${query}`, {
+      error,
+      parameters,
+    });
   }
   logSchemaBuild(message: string): void {
-    console.log("[TypeORM] Schema:", message);
+    this.logger.log(`Schema: ${message}`);
   }
   logMigration(message: string): void {
-    console.log("[TypeORM] Migration:", message);
+    this.logger.log(`Migration: ${message}`);
   }
   log(level: "log" | "info" | "warn", message: unknown): void {
-    if (level === "warn") console.warn("[TypeORM]", message);
+    if (level === "warn") {
+      this.logger.warn(String(message));
+    }
   }
 }
