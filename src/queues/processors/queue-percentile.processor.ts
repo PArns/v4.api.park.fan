@@ -141,13 +141,16 @@ export class QueuePercentileProcessor {
     const RESET_DAYS = 14;
 
     // Step 1: Find attractions that were recently OPERATING (reset candidates)
-    const recentlyOperating: { attractionId: string }[] = await this.dataSource
-      .query(`
+    const recentlyOperating: { attractionId: string }[] =
+      await this.dataSource.query(
+        `
       SELECT DISTINCT q."attractionId"
       FROM queue_data q
       WHERE q.status = 'OPERATING'
-        AND q.timestamp >= NOW() - INTERVAL '${RESET_DAYS} days'
-    `);
+        AND q.timestamp >= NOW() - $1 * INTERVAL '1 day'
+    `,
+        [RESET_DAYS],
+      );
     const recentlyOperatingIds = new Set(
       recentlyOperating.map((r) => r.attractionId),
     );
@@ -188,7 +191,7 @@ export class QueuePercentileProcessor {
         JOIN attractions a ON a.id = q."attractionId"
         JOIN parks p ON p.id = a."parkId"
         WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - INTERVAL '${LOOKBACK_DAYS} days'
+          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
       ),
       attraction_operating_days AS (
         SELECT DISTINCT
@@ -198,7 +201,7 @@ export class QueuePercentileProcessor {
         JOIN attractions a ON a.id = q."attractionId"
         JOIN parks p ON p.id = a."parkId"
         WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - INTERVAL '${LOOKBACK_DAYS} days'
+          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
       ),
       ever_operating AS (
         SELECT "attractionId", COUNT(*) as op_count
@@ -206,7 +209,7 @@ export class QueuePercentileProcessor {
         WHERE status = 'OPERATING'
           AND timestamp >= NOW() - INTERVAL '365 days'
         GROUP BY "attractionId"
-        HAVING COUNT(*) >= ${MIN_EVER_OPERATING}
+        HAVING COUNT(*) >= $3
       ),
       current_status AS (
         SELECT DISTINCT ON ("attractionId")
@@ -232,11 +235,16 @@ export class QueuePercentileProcessor {
       FROM days_fully_closed d
       JOIN ever_operating eo ON eo."attractionId" = d."attractionId"
       JOIN current_status cs ON cs."attractionId" = d."attractionId"
-      WHERE d.fully_closed_days >= ${MIN_PARK_OPEN_DAYS_CLOSED}
+      WHERE d.fully_closed_days >= $4
         AND cs.status = 'CLOSED'
         AND NOT (d."attractionId" = ANY($1))
     `,
-        [Array.from(recentlyOperatingIds)],
+        [
+          Array.from(recentlyOperatingIds),
+          LOOKBACK_DAYS,
+          MIN_EVER_OPERATING,
+          MIN_PARK_OPEN_DAYS_CLOSED,
+        ],
       );
 
     this.logger.log(`   🔍 Found ${candidates.length} seasonal candidates`);
@@ -277,12 +285,15 @@ export class QueuePercentileProcessor {
     //               (timestamp − lastUpdated < 24h → show was actively running).
 
     // Step S1: Reset shows that are running again (fresh lastUpdated)
-    const recentlyUpdatedShows: { showId: string }[] = await this.dataSource
-      .query(`
+    const recentlyUpdatedShows: { showId: string }[] =
+      await this.dataSource.query(
+        `
       SELECT DISTINCT "showId"
       FROM show_live_data
-      WHERE "lastUpdated" >= NOW() - INTERVAL '${RESET_DAYS} days'
-    `);
+      WHERE "lastUpdated" >= NOW() - $1 * INTERVAL '1 day'
+    `,
+        [RESET_DAYS],
+      );
     const recentShowIds = new Set(recentlyUpdatedShows.map((r) => r.showId));
 
     if (recentShowIds.size > 0) {
@@ -311,7 +322,7 @@ export class QueuePercentileProcessor {
         JOIN attractions a ON a.id = q."attractionId"
         JOIN parks p ON p.id = a."parkId"
         WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - INTERVAL '${LOOKBACK_DAYS} days'
+          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
       ),
       show_last_updated AS (
         SELECT DISTINCT ON ("showId")
@@ -335,10 +346,10 @@ export class QueuePercentileProcessor {
       )
       SELECT "showId"
       FROM stale_days
-      WHERE stale_open_days >= ${MIN_PARK_OPEN_DAYS_CLOSED}
+      WHERE stale_open_days >= $3
         AND NOT ("showId" = ANY($1))
     `,
-      [Array.from(recentShowIds)],
+      [Array.from(recentShowIds), LOOKBACK_DAYS, MIN_PARK_OPEN_DAYS_CLOSED],
     );
 
     this.logger.log(
