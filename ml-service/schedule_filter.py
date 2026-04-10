@@ -149,10 +149,10 @@ def filter_predictions_by_schedule(
                     pass
 
         if schedules:
-            # Build set of dates when park is OPERATING (exclude CLOSED/UNKNOWN-only days)
+            # Build set of dates when park is OPERATING or UNKNOWN (exclude CLOSED days)
             operating_dates_from_query = set()
             for s in schedules:
-                if s[1] == "OPERATING":  # scheduleType
+                if s[1] in ("OPERATING", "UNKNOWN"):  # keep UNKNOWN dates so they can be predicted
                     d = s[0]  # date
                     if isinstance(d, datetime):
                         d = d.date()
@@ -229,7 +229,7 @@ def filter_predictions_by_schedule(
                         continue
 
             elif prediction_type == "daily":
-                # DAILY: Only keep predictions for dates when park is OPERATING (exclude CLOSED/UNKNOWN-only)
+                # DAILY: Only keep predictions for dates when park is OPERATING or UNKNOWN (exclude CLOSED)
                 operating_dates = operating_dates_from_query
 
                 # print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
