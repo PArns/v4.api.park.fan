@@ -2,7 +2,7 @@
 
 ## Overview
 
-Redis is used aggressively to cache expensive computations and ensure low-latency API responses.
+Redis is used aggressively to cache expensive computations and ensure low-latency API responses. The strategy combines time-based expiration with an intelligent, popularity-aware background warmup system.
 
 ## Key Patterns
 
@@ -20,76 +20,54 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
 - **Keys**:
   - `park:statistics:{parkId}` (TTL: 5 min) - Aggregated wait times, active attraction counts.
   - `park:occupancy:{parkId}` (TTL: 5 min) - Current crowd level % calculation.
+  - `analytics:crowdlevel:park:{parkId}:{date}` (TTL: 30m for today, 6h for past) - Daily crowd level and peak load.
   - `park:p50:{parkId}` (TTL: 24h) - Park P50 baseline from headliners (table: `park_p50_baselines`).
   - `attraction:p50:{attractionId}` (TTL: 24h) - Attraction P50 baseline (table: `attraction_p50_baselines`).
   - `analytics:percentile:sliding:park:{parkId}` (TTL: 24h) - 548-day sliding P90/P50 for park (fallback).
-  - `analytics:percentile:sliding:attraction:{attractionId}` (TTL: 24h) - 548-day sliding P90/P50 for attraction; shared by `get90thPercentileWithConfidence` and `getBatchAttractionP90s`.
+  - `analytics:percentile:sliding:attraction:{attractionId}` (TTL: 24h) - 548-day sliding P90/P50 for attraction.
 
-### 3. Background Job Data
-Shared state for background processors.
+### 3. Calendar Monthly Cache
+The calendar endpoint uses a per-month cache to handle various date ranges efficiently.
+- **Keys**: `calendar:month:{parkId}:YYYY-MM:{includeHourly}`
+- **TTL**: 5 min for the current month, 30 min for future months (allows for updated weather and ML predictions).
+
+### 4. Popularity Tracking
+Real-time user traffic is tracked using Redis Sorted Sets (`ZINCRBY`).
 - **Keys**:
-  - `downtime:current:{attractionId}` - Timestamp when an attraction went down (used to calc downtime duration).
-  - `park:operating_hours:{parkId}` - Cached schedule for quick lookup.
-
-## Caching Service (`src/common/cache/cache.service.ts`)
-
-We use a standard NestJS service wrapping `ioredis`.
-- **Method**: `getOrSet(key, ttl, fetcher)`
-- **Pattern**: "Stale-While-Revalidate" is NOT currently implemented; we use hard expiration.
-
-## DB Cache Tables (persistent pre-computed data)
-
-Pre-computed values are stored in DB and optionally mirrored in Redis for fast reads.
-
-| Table | Written by | Used for |
-|-------|------------|----------|
-| `park_p50_baselines` | P50 baseline job (daily) | Park occupancy/crowd level baseline (headliner P50). Redis: `park:p50:{parkId}`. |
-| `attraction_p50_baselines` | P50 baseline job (daily) | Attraction crowd level baseline. Redis: `attraction:p50:{attractionId}`. |
-| `park_daily_stats` | Stats job (hourly today, daily yesterday) | Park statistics (p90/max today), calendar P90. |
-| `queue_data_aggregates` | Queue-percentile job (daily) | Hourly P25/P50/P75/P90 per attraction; used by `getParkPercentilesToday`, `getAttractionPercentilesToday`. |
-
-Sliding-window percentiles (548-day) are not stored in DB; they are computed and cached in Redis only (`analytics:percentile:sliding:*`).
+  - `popularity:parks`: Park hit counts (UUID).
+  - `popularity:attractions`: Attraction hit counts (UUID).
+- **Update**: Triggered by `PopularityInterceptor` on successful GET requests.
 
 ## Cache Warmup
 
 **Service**: `CacheWarmupService` (`src/queues/services/cache-warmup.service.ts`).  
-Warmup is **not** a separate BullMQ processor; it is invoked **after** data-sync jobs (e.g. wait-times, predictions) from the respective processors.
+Warmup is invoked **after** data-sync jobs (e.g. wait-times, predictions).
+
+### Priority Warmup Logic
+
+Warmup tasks are executed **sequentially** to prevent database connection contention. Parks are sorted by priority:
+1.  **Priority 1: OPERATING** parks (forced refresh).
+2.  **Priority 2: HOT** parks (top 50 by user traffic).
+3.  **Priority 3: All others** (warmed only if expired).
 
 ### When Warmup Runs
 
 | Trigger | When | What gets warmed |
 | --- | --- | --- |
-| **Wait-times sync** (every 5 min) | After `WaitTimesProcessor` finishes | All parks (park integrated only), top 100 attractions, park occupancy; then async: discovery geo, global stats, park statistics (OPERATING parks). **Calendar** is **not** warmed here. |
-| **Hourly predictions** | After `PredictionGeneratorProcessor` | Parks opening in next 12h (park integrated only). |
-| **warmup-calendar-daily** (once per day, 5am) | Cron on `park-metadata` queue | **Calendar** for **all parks** (current month + next month, park timezone). |
+| **Wait-times sync** (every 5 min) | After `WaitTimesProcessor` | Parks (Operating + Popular), top 200 attractions (User hits + Data density), occupancy, geo discovery, global stats, park statistics. |
+| **Hourly predictions** | After `PredictionGeneratorProcessor` | Parks opening in next 12h. |
+| **warmup-calendar-daily** (daily, 5am) | Cron on `park-metadata` | **Calendar** for **all parks** (-1 month to +3 months). |
 
-### What Gets Warmed (per park, every 5 min)
+### Attraction Warmup Strategy
+The `warmupTopAttractions(limit=200)` method combines two signals:
+*   **User Traffic**: Top attractions currently being visited by users (from `PopularityService`).
+*   **Data Density**: Attractions with the most frequent queue data updates in the last 7 days (Database proxy for activity).
 
-When a park is warmed via `warmupParkCache(parkId, force)`:
+## DB Cache Tables (persistent pre-computed data)
 
-1. **Park integrated response** — `park:integrated:{parkId}` (weather, schedule, attractions, live data). **Calendar is not warmed** in this flow.
-
-**Skip logic**: If park integrated cache is already fresh (TTL > 2 min), the whole park warmup is skipped unless `force === true`. OPERATING parks are warmed with `force = true`; CLOSED parks with `force = false`.
-
-### Calendar warmup (once per day)
-
-Job **`warmup-calendar-daily`** runs daily at **5:00** (cron on `park-metadata` queue). It calls `warmupCalendarForAllParks()` and warms **per-month** keys `calendar:month:{parkId}:YYYY-MM:today+tomorrow` for **current month + next month** (park timezone) for **all parks**. So the calendar endpoint is fast after the first request of the day without warming every 5 min.
-
-### Other Warmup Methods
-
-- **Discovery**: `warmupDiscovery()` — geo structure and live stats (`/discovery/geo`).
-- **Attractions**: `warmupTopAttractions(limit)` — top N attractions by queue-data frequency.
-- **Occupancy**: `warmupParkOccupancy(parkIds)` — `park:occupancy:{parkId}` for given parks.
-- **Statistics**: `warmupParkStatistics(parkIds)` — `park:statistics:{parkId}` for OPERATING parks.
-- **Global stats**: `warmupGlobalStats()` — expensive global analytics query.
-
-### Redis Keys Touched by Warmup
-
-- `park:integrated:{parkId}`
-- `calendar:month:{parkId}:YYYY-MM:today+tomorrow` (current + next month, per-month cache)
-- `attraction:integrated:{attractionId}`
-- `park:occupancy:{parkId}`
-- `park:statistics:{parkId}`
-- Discovery/structure caches (see DiscoveryService)
-
-This keeps the first user request for parks and calendar fast (cache hit).
+| Table | Written by | Used for |
+|-------|------------|----------|
+| `park_p50_baselines` | P50 baseline job (daily) | Park occupancy/crowd level baseline (headliner P50). |
+| `attraction_p50_baselines` | P50 baseline job (daily) | Attraction crowd level baseline. |
+| `park_daily_stats` | Stats job | Park statistics (p50/p90/max today/yesterday). |
+| `queue_data_aggregates` | Queue-percentile job | Hourly wait-time aggregates. |

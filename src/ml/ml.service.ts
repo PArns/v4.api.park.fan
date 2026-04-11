@@ -273,7 +273,7 @@ export class MLService {
       });
 
       if (attractions.length === 0) {
-        this.logger.warn(`No attractions found for park ${parkId}`);
+        this.logger.debug(`No attractions found for park ${parkId}`);
         return { predictions: [], count: 0, modelVersion: "none" };
       }
 

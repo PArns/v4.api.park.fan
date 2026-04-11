@@ -31,6 +31,7 @@ import { addDays, subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
+import { PopularityService } from "../../popularity/popularity.service";
 
 /**
  * Attraction Integration Service
@@ -61,6 +62,7 @@ export class AttractionIntegrationService {
     private readonly queueDataRepository: Repository<QueueData>,
     @InjectRepository(ScheduleEntry)
     private readonly scheduleEntryRepository: Repository<ScheduleEntry>,
+    private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
   ) {}
@@ -89,6 +91,10 @@ export class AttractionIntegrationService {
   ): Promise<AttractionResponseDto> {
     // Try cache first
     const cacheKey = `attraction:integrated:${attraction.id}`;
+
+    // Track popularity hit (background)
+    this.popularityService.recordAttractionHit(attraction.id).catch(() => {});
+
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {

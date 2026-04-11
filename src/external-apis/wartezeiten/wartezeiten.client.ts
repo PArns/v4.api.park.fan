@@ -34,11 +34,10 @@ export class WartezeitenClient {
 
   // Redis keys
   private readonly BLOCKED_KEY = "ratelimit:wartezeiten:blocked";
+  private readonly COUNTER_KEY = "ratelimit:wartezeiten:counter";
 
   // Rate limiting state
-  private requestCount = 0;
-  private requestWindow = Date.now();
-  private readonly maxRequestsPerMinute = 90; // Set to 90 to stay under 100 limit
+  private readonly maxRequestsPerMinute = 85; // Conservative limit (100 is absolute max)
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {
     this.client = axios.create({
@@ -54,50 +53,44 @@ export class WartezeitenClient {
   }
 
   /**
-   * Enforce rate limiting (90 req/min local + global Redis check)
+   * Enforce rate limiting (Distributed Redis check)
    *
    * IMPORTANT: This method MUST be called before any API request to prevent
    * calls during a block, which would extend the lock duration.
    */
   private async enforceRateLimit(): Promise<void> {
-    // 1. Check Global Redis Block
+    // 1. Check Global Redis Block (Penalty from 429)
     const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
     if (blockedUntil) {
-      // Get TTL to determine when block expires
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
       const nextRetrySeconds = ttl > 0 ? ttl : 0;
-      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
-
-      this.logger.warn(
-        `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
+      throw new Error(
+        `Wartezeiten API: Global Rate Limit (blocked for ${nextRetrySeconds}s)`,
       );
-      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
-      throw new Error(`Wartezeiten API: Global Rate Limit (blocked)`);
     }
 
-    const now = Date.now();
-    const windowDuration = 60 * 1000; // 1 minute
-
-    // Reset window if more than 1 minute has passed
-    if (now - this.requestWindow > windowDuration) {
-      this.requestCount = 0;
-      this.requestWindow = now;
+    // 2. Distributed Counter (INCR pattern)
+    // Atomic increment and set TTL if new key
+    const currentCount = await this.redis.incr(this.COUNTER_KEY);
+    if (currentCount === 1) {
+      await this.redis.expire(this.COUNTER_KEY, 60);
     }
 
     // Check if we've hit the limit
-    if (this.requestCount >= this.maxRequestsPerMinute) {
-      const waitTime = windowDuration - (now - this.requestWindow);
+    if (currentCount > this.maxRequestsPerMinute) {
+      const ttl = await this.redis.ttl(this.COUNTER_KEY);
+      const waitTimeMs = ttl > 0 ? ttl * 1000 : 1000;
+
       this.logger.warn(
-        `⏳ Local Rate limit reached (${this.requestCount}/${this.maxRequestsPerMinute}). Waiting ${Math.ceil(waitTime / 1000)}s...`,
+        `⏳ Wartezeiten Rate limit reached (${currentCount}/${this.maxRequestsPerMinute}). Waiting ${Math.ceil(waitTimeMs / 1000)}s...`,
       );
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
 
-      // Reset after waiting
-      this.requestCount = 0;
-      this.requestWindow = Date.now();
+      // Wait for the window to reset
+      await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
+
+      // After waiting, we must increment again in the new window
+      return this.enforceRateLimit();
     }
-
-    this.requestCount++;
   }
 
   /**
@@ -126,13 +119,15 @@ export class WartezeitenClient {
           // Set global block in Redis for 15 minutes
           await this.redis.set(this.BLOCKED_KEY, "true", "EX", 15 * 60);
 
+          const currentCount = await this.redis.get(this.COUNTER_KEY);
+
           // Log to dedicated file
           logRateLimitBlock(
             "wartezeiten.app",
             15,
             "429 Too Many Requests - API rate limit exceeded",
             {
-              requestsThisWindow: this.requestCount,
+              requestsThisWindow: currentCount ? parseInt(currentCount, 10) : 0,
               maxRequestsPerMinute: this.maxRequestsPerMinute,
             },
           );

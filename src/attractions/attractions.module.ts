@@ -14,6 +14,7 @@ import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.modu
 import { HolidaysModule } from "../holidays/holidays.module";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
+import { PopularityModule } from "../popularity/popularity.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
     AnalyticsModule,
     MLModule,
     RedisModule,
+    PopularityModule,
     QueueTimesModule,
     WartezeitenModule,
     HolidaysModule,

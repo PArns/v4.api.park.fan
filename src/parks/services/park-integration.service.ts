@@ -34,6 +34,7 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { PopularityService } from "../../popularity/popularity.service";
 
 /**
  * Park Integration Service
@@ -77,6 +78,7 @@ export class ParkIntegrationService {
     private readonly themeParksClient: ThemeParksClient,
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
+    private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -115,6 +117,9 @@ export class ParkIntegrationService {
 
     // Try cache first (unless skipped)
     const cacheKey = `park:integrated:${park.id}`;
+
+    // Track popularity hit (background)
+    this.popularityService.recordParkHit(park.id).catch(() => {});
 
     if (!skipCache) {
       const cached = await this.redis.get(cacheKey);

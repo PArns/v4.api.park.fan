@@ -1,6 +1,7 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { fetchWithRetry } from "../../common/utils/fetch.util";
 
 import {
   DestinationsApiResponse,
@@ -29,75 +30,54 @@ export class ThemeParksClient {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
   /**
-   * Helper to fetch with retry on 429
+   * Helper to fetch with retry on 429 and network errors
    *
    * IMPORTANT: This method checks for blocks before making requests to prevent
    * calls during a block, which would extend the lock duration.
    */
-  private async fetchWithRetry(url: string, attempt = 0): Promise<Response> {
+  private async executeFetch(url: string): Promise<Response> {
     // 1. Check Distributed Rate Limit
-    // Only check on first attempt to avoid redundant checks during retry loop
-    // But also check during retries if a block becomes active
     const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
     if (blockedUntil) {
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
       const nextRetrySeconds = ttl > 0 ? ttl : 0;
-      const nextRetryDate = new Date(Date.now() + nextRetrySeconds * 1000);
-
-      // Only log on first attempt to avoid duplicate logs
-      if (attempt === 0) {
-        this.logger.warn(
-          `⏳ Global Rate Limit active. Blocked for ${nextRetrySeconds}s. Next retry at ${nextRetryDate.toISOString()}`,
-        );
-      }
-      // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
-      throw new Error(`ThemeParks API: Global Rate Limit (blocked)`);
+      throw new Error(
+        `ThemeParks API: Global Rate Limit (blocked for ${nextRetrySeconds}s)`,
+      );
     }
 
-    const response = await fetch(url);
+    try {
+      const response = await fetchWithRetry(
+        url,
+        {},
+        {
+          retries: 3,
+          backoff: 1000,
+          timeout: 20000,
+        },
+      );
 
-    // Check for 429 (Too Many Requests) OR 5xx (Server Errors)
-    if (
-      response.status === 429 ||
-      (response.status >= 500 && response.status < 600)
-    ) {
-      // If 429, Set Distributed Lock
+      // Handle 429 specifically to set the global block
       if (response.status === 429) {
         const retryAfter = response.headers.get("Retry-After");
-        let unlockTime = 5; // Default 5s if unknown
+        let unlockTime = 10; // Default 10s if unknown
         if (retryAfter) {
           const seconds = parseInt(retryAfter, 10);
-          if (!isNaN(seconds)) {
-            unlockTime = seconds;
-          }
+          if (!isNaN(seconds)) unlockTime = seconds;
         }
         await this.redis.set(this.BLOCKED_KEY, "true", "EX", unlockTime);
-      }
-
-      if (attempt >= 5) {
         throw new Error(
-          `Request failed after 5 attempts for ${url} (Status: ${response.status})`,
+          `ThemeParks API: Rate limit exceeded (blocked for ${unlockTime}s)`,
         );
       }
 
-      const retryAfter = response.headers.get("Retry-After");
-      let delay = 1000 * Math.pow(2, attempt); // Default exponential backoff
-
-      if (retryAfter) {
-        const seconds = parseInt(retryAfter, 10);
-        if (!isNaN(seconds)) {
-          delay = seconds * 1000;
-        }
-      }
-
+      return response;
+    } catch (err: any) {
       this.logger.warn(
-        `Rate limit or Server Error (${response.status}) for ${url}. Retrying in ${delay}ms (Attempt ${attempt + 1}/5)`,
+        `ThemeParks API fetch failed for ${url}: ${err.message}`,
       );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return this.fetchWithRetry(url, attempt + 1);
+      throw err;
     }
-
-    return response;
   }
 
   /**
@@ -106,7 +86,7 @@ export class ThemeParksClient {
    * Fetches all destinations with their parks.
    */
   async getDestinations(): Promise<DestinationsApiResponse> {
-    const response = await this.fetchWithRetry(`${this.baseUrl}/destinations`);
+    const response = await this.executeFetch(`${this.baseUrl}/destinations`);
 
     if (!response.ok) {
       throw new Error(
@@ -123,7 +103,7 @@ export class ThemeParksClient {
    * Fetches full entity data (park, attraction, etc.)
    */
   async getEntity(entityId: string): Promise<EntityResponse> {
-    const response = await this.fetchWithRetry(
+    const response = await this.executeFetch(
       `${this.baseUrl}/entity/${entityId}`,
     );
 
@@ -142,7 +122,7 @@ export class ThemeParksClient {
    * Fetches child entities (e.g., attractions for a park)
    */
   async getEntityChildren(entityId: string): Promise<EntityChildrenResponse> {
-    const response = await this.fetchWithRetry(
+    const response = await this.executeFetch(
       `${this.baseUrl}/entity/${entityId}/children`,
     );
 
@@ -162,18 +142,9 @@ export class ThemeParksClient {
    */
   async getLiveData(entityId: string): Promise<EntityLiveResponse> {
     const url = `${this.baseUrl}/entity/${entityId}/live`;
-    const startTime = Date.now();
-    const response = await this.fetchWithRetry(url);
-    const duration = Date.now() - startTime;
+    const response = await this.executeFetch(url);
 
     if (!response.ok) {
-      this.logger.error(
-        `❌ API Error: ${response.status} ${response.statusText} for ${entityId} (took ${duration}ms)`,
-      );
-      const errorBody = await response
-        .text()
-        .catch(() => "Unable to read error body");
-      this.logger.error(`Error details: ${errorBody}`);
       throw new Error(
         `Failed to fetch live data for ${entityId}: ${response.status} ${response.statusText}`,
       );
@@ -201,18 +172,9 @@ export class ThemeParksClient {
    */
   async getParkLiveData(parkId: string): Promise<EntityLiveResponse[]> {
     const url = `${this.baseUrl}/entity/${parkId}/live`;
-    const startTime = Date.now();
-    const response = await this.fetchWithRetry(url);
-    const duration = Date.now() - startTime;
+    const response = await this.executeFetch(url);
 
     if (!response.ok) {
-      this.logger.error(
-        `❌ API Error: ${response.status} ${response.statusText} for ${parkId} (took ${duration}ms)`,
-      );
-      const errorBody = await response
-        .text()
-        .catch(() => "Unable to read error body");
-      this.logger.error(`Error details: ${errorBody}`);
       throw new Error(
         `Failed to fetch park live data for ${parkId}: ${response.status} ${response.statusText}`,
       );
@@ -232,7 +194,7 @@ export class ThemeParksClient {
    * Returns schedule for the next 30 days by default.
    */
   async getSchedule(entityId: string): Promise<{ schedule: any[] }> {
-    const response = await this.fetchWithRetry(
+    const response = await this.executeFetch(
       `${this.baseUrl}/entity/${entityId}/schedule`,
     );
 
@@ -257,7 +219,7 @@ export class ThemeParksClient {
     month: number,
   ): Promise<{ schedule: any[] }> {
     const monthStr = month.toString().padStart(2, "0");
-    const response = await this.fetchWithRetry(
+    const response = await this.executeFetch(
       `${this.baseUrl}/entity/${entityId}/schedule/${year}/${monthStr}`,
     );
 

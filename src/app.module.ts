@@ -24,8 +24,11 @@ import { GeoipModule } from "./geoip/geoip.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { AdminModule } from "./admin/admin.module";
 import { StatsModule } from "./stats/stats.module";
+import { PopularityModule } from "./popularity/popularity.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
+import { APP_INTERCEPTOR } from "@nestjs/core";
+import { PopularityInterceptor } from "./popularity/interceptors/popularity.interceptor";
 
 @Module({
   imports: [
@@ -63,6 +66,7 @@ import { AppService } from "./app.service";
     AnalyticsModule,
     MLModule,
     StatsModule,
+    PopularityModule,
     // Phase 6.3: Search & Filtering
     SearchModule,
 
@@ -79,6 +83,12 @@ import { AppService } from "./app.service";
     AdminModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PopularityInterceptor,
+    },
+  ],
 })
 export class AppModule {}

@@ -1551,18 +1551,28 @@ export class AnalyticsService {
       }
     }
 
-    // Execute all statistics queries in parallel
-    const results = await Promise.all(
-      parkIds.map((id) => {
-        const ctx = resolvedContext!.get(id);
-        return this.getParkStatistics(id, ctx?.timezone, ctx?.startTime).catch(
-          (err) => {
+    // Execute statistics queries in sequential batches to avoid connection pool contention
+    // and "client.query() already executing" deprecation warnings.
+    const results: (ParkStatisticsDto | null)[] = [];
+    const batchSize = 5; // Process 5 parks at a time
+
+    for (let i = 0; i < parkIds.length; i += batchSize) {
+      const batchIds = parkIds.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batchIds.map((id) => {
+          const ctx = resolvedContext!.get(id);
+          return this.getParkStatistics(
+            id,
+            ctx?.timezone,
+            ctx?.startTime,
+          ).catch((err) => {
             this.logger.warn(`Failed to get statistics for park ${id}:`, err);
             return null;
-          },
-        );
-      }),
-    );
+          });
+        }),
+      );
+      results.push(...batchResults);
+    }
 
     // Map results
     parkIds.forEach((id, index) => {

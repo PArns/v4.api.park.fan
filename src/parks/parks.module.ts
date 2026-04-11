@@ -30,6 +30,7 @@ import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.modu
 import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stats.entity";
 import { ExternalEntityMapping } from "../database/entities/external-entity-mapping.entity";
 import { StatsModule } from "../stats/stats.module";
+import { PopularityModule } from "../popularity/popularity.module";
 
 @Module({
   imports: [
@@ -52,7 +53,8 @@ import { StatsModule } from "../stats/stats.module";
     GeocodingModule,
     RedisModule,
     WeatherModule,
-    StatsModule, // Added StatsModule here
+    StatsModule,
+    PopularityModule,
     forwardRef(() => HolidaysModule),
     QueueTimesModule,
     WartezeitenModule,

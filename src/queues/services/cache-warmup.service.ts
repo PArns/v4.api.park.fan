@@ -12,6 +12,7 @@ import { CalendarService } from "../../parks/services/calendar.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { PopularityService } from "../../popularity/popularity.service";
 
 /**
  * Cache Warmup Service
@@ -44,9 +45,8 @@ export class CacheWarmupService {
     private readonly calendarService: CalendarService,
     private readonly discoveryService: DiscoveryService,
     private readonly searchService: SearchService,
+    private readonly popularityService: PopularityService,
   ) {}
-
-  // ... existing methods
 
   /**
    * Generic batch processor for warmup tasks
@@ -230,15 +230,29 @@ export class CacheWarmupService {
       }
 
       // Fetch park + relations via parallel queries (avoids Cartesian product JOIN)
+      // Use findBySlug which already includes all necessary relations for integrated response
       const parkBase = await this.parkRepository.findOne({
         where: { id: parkId },
+        select: ["id", "slug", "continent", "country", "city"],
       });
-      const park = parkBase
-        ? await this.parksService.loadParkRelations(parkBase)
-        : null;
+
+      if (!parkBase) {
+        this.logger.warn(`Park ${parkId} not found, skipping warmup`);
+        return false;
+      }
+
+      // Load with full relations (shows, restaurants, attractions)
+      const park = await this.parksService.findByGeographicPathWithRelations(
+        parkBase.continent,
+        parkBase.country,
+        parkBase.city,
+        parkBase.slug,
+      );
 
       if (!park) {
-        this.logger.warn(`Park ${parkId} not found, skipping warmup`);
+        this.logger.warn(
+          `Park ${parkBase.slug} could not be fully loaded, skipping warmup`,
+        );
         return false;
       }
 
@@ -270,8 +284,11 @@ export class CacheWarmupService {
     this.logger.verbose("🔥 Starting cache warmup for ALL parks...");
 
     try {
-      // Get all parks
-      const parks = await this.parkRepository.find();
+      // 1. Get all parks and their current status + popularity
+      const [parks, popularParkIds] = await Promise.all([
+        this.parkRepository.find({ select: ["id", "name"] }),
+        this.popularityService.getTopParks(50),
+      ]);
 
       if (parks.length === 0) {
         this.logger.warn("No parks found, skipping warmup");
@@ -283,13 +300,30 @@ export class CacheWarmupService {
       const statusMap = await this.parksService.getBatchParkStatus(parkIds);
 
       this.logger.verbose(
-        `Found ${parks.length} parks to verify in cache (Smart Warmup)`,
+        `Found ${parks.length} parks to verify in cache (Priority: Operating -> Popular)`,
       );
+
+      // Sort: OPERATING parks first, then POPULAR parks to minimize user-facing latency
+      const popularSet = new Set(popularParkIds);
+      const sortedParkIds = [...parkIds].sort((a, b) => {
+        const statusA = statusMap.get(a) === "OPERATING" ? 0 : 1;
+        const statusB = statusMap.get(b) === "OPERATING" ? 0 : 1;
+
+        if (statusA !== statusB) return statusA - statusB;
+
+        // If status same, check popularity
+        const popA = popularSet.has(a) ? 0 : 1;
+        const popB = popularSet.has(b) ? 0 : 1;
+
+        if (popA !== popB) return popA - popB;
+
+        return 0;
+      });
 
       // Warm up in batches (Smart Warmup decision logic is inside callback)
       const warmedCount = await this.processBatch(
-        parkIds,
-        3,
+        sortedParkIds,
+        10, // Increased from 3
         "OperatingParks",
         async (parkId) => {
           const status = statusMap.get(parkId);
@@ -303,37 +337,27 @@ export class CacheWarmupService {
         `✅ Cache warmup complete: ${warmedCount}/${parks.length} parks refreshed/verified in ${duration}s`,
       );
 
-      // Warm up global stats (async, don't block return)
-      this.warmupGlobalStats().catch((err) =>
-        this.logger.error("Failed to trigger global stats warmup", err),
-      );
+      // PERFORMANCE: Execute secondary warmups sequentially to avoid DB connection contention
+      // and "client.query() already executing" warnings from overlapping raw SQL queries.
+      try {
+        await this.warmupGlobalStats();
+        await this.warmupDiscovery();
+        await this.searchService.warmupSearch();
 
-      // Warm up discovery geo (async)
-      this.warmupDiscovery().catch((err) =>
-        this.logger.error("Failed to trigger discovery warmup", err),
-      );
+        const operatingParkIds = Array.from(statusMap.entries())
+          .filter(([_, status]) => status === "OPERATING")
+          .map(([id]) => id);
 
-      // Warm up search cache (async)
-      this.searchService
-        .warmupSearch()
-        .catch((err) =>
-          this.logger.error("Failed to trigger search warmup", err),
-        );
-
-      // Warm up park statistics (async) — guarded to prevent concurrent accumulation
-      const operatingParkIds = Array.from(statusMap.entries())
-        .filter(([_, status]) => status === "OPERATING")
-        .map(([id]) => id);
-
-      if (operatingParkIds.length > 0 && !this.statsWarmupRunning) {
-        this.statsWarmupRunning = true;
-        this.warmupParkStatistics(operatingParkIds)
-          .catch((err) =>
-            this.logger.error("Failed to trigger statistics warmup", err),
-          )
-          .finally(() => {
+        if (operatingParkIds.length > 0 && !this.statsWarmupRunning) {
+          this.statsWarmupRunning = true;
+          try {
+            await this.warmupParkStatistics(operatingParkIds);
+          } finally {
             this.statsWarmupRunning = false;
-          });
+          }
+        }
+      } catch (err) {
+        this.logger.error("Secondary warmup tasks failed:", err);
       }
 
       return warmedCount;
@@ -456,23 +480,27 @@ export class CacheWarmupService {
   /**
    * Warm up cache for top N most popular attractions
    *
-   * Popularity based on queue data frequency in last 7 days.
-   * Used after wait-times sync (every 5 minutes).
+   * Strategy: Combined popularity
+   * 1. Top attractions by user traffic (PopularityService)
+   * 2. Top attractions by queue data density (Database)
    *
-   * @param limit - Number of top attractions (default: 100)
+   * @param limit - Total number of top attractions to warm (default: 200)
    * @returns Number of attractions warmed
    */
-  async warmupTopAttractions(limit: number = 100): Promise<number> {
+  async warmupTopAttractions(limit: number = 500): Promise<number> {
     const startTime = Date.now();
-    this.logger.verbose(
-      `🔥 Starting cache warmup for top ${limit} attractions...`,
-    );
-
     try {
-      // Query top attractions by queue data frequency (last 7 days)
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      this.logger.verbose(
+        `🔥 Starting cache warmup for top ${limit} attractions...`,
+      );
 
-      const topAttractions = await this.attractionRepository
+      // 1. Get top attraction IDs from Redis (User traffic)
+      const hotAttractionIds =
+        await this.popularityService.getTopAttractions(limit);
+
+      // 2. Get top attractions from DB (Queue density proxy)
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const dbTopAttractions = await this.attractionRepository
         .createQueryBuilder("attraction")
         .innerJoin("attraction.queueData", "qd")
         .where("qd.timestamp > :since", { since: sevenDaysAgo })
@@ -481,19 +509,29 @@ export class CacheWarmupService {
         .limit(limit)
         .getMany();
 
-      this.logger.verbose(`Found ${topAttractions.length} top attractions`);
+      // Merge and deduplicate
+      const combinedIds = new Set([
+        ...hotAttractionIds,
+        ...dbTopAttractions.map((a) => a.id),
+      ]);
+
+      const targetIds = Array.from(combinedIds).slice(0, limit);
+
+      this.logger.verbose(
+        `Found ${targetIds.length} unique top attractions to warm`,
+      );
 
       // Batch processing using helper
       const warmedCount = await this.processBatch(
-        topAttractions,
-        5,
+        targetIds,
+        15,
         "TopAttractions",
-        async (attraction) => this.warmupAttractionCache(attraction.id, true),
+        async (id) => this.warmupAttractionCache(id, true),
       );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Cache warmup complete: ${warmedCount}/${topAttractions.length} attractions in ${duration}s`,
+        `✅ Cache warmup complete: ${warmedCount}/${targetIds.length} attractions in ${duration}s`,
       );
 
       return warmedCount;
