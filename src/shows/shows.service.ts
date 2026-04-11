@@ -415,10 +415,11 @@ export class ShowsService {
     showId: string,
     newData: EntityLiveResponse,
   ): Promise<boolean> {
-    // Get latest entry for this show
+    // Get latest entry for this show, including park to get timezone
     const latest = await this.showLiveDataRepository.findOne({
       where: { showId },
       order: { timestamp: "DESC" },
+      relations: ["show", "show.park"],
     });
 
     // No previous data → save
@@ -449,13 +450,11 @@ export class ShowsService {
     // Date changed → save (ensure at least one data point per day)
     // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
     if (latest.timestamp) {
-      const latestDate = new Date(latest.timestamp);
-      const currentDate = new Date(); // UTC or server time (ensure consistency)
-      if (
-        latestDate.getDate() !== currentDate.getDate() ||
-        latestDate.getMonth() !== currentDate.getMonth() ||
-        latestDate.getFullYear() !== currentDate.getFullYear()
-      ) {
+      const timezone = latest.show?.park?.timezone || "UTC";
+      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
+      const currentDateStr = formatInParkTimezone(new Date(), timezone);
+
+      if (latestDateStr !== currentDateStr) {
         return true;
       }
     }

@@ -45,12 +45,13 @@ export class QueuePercentileProcessor {
 
     try {
       // Calculate for yesterday (complete 24-hour period)
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      yesterday.setHours(0, 0, 0, 0);
+      // We calculate this over UTC since we aggregate by hour across all timezones.
+      // This job runs globally, not per-park.
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
 
-      const today = new Date(yesterday);
-      today.setDate(today.getDate() + 1);
+      const yesterday = new Date(today);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
       this.logger.log(
         `   Period: ${yesterday.toISOString()} to ${today.toISOString()}`,

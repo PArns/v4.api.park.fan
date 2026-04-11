@@ -11,6 +11,7 @@ import {
   QueueType,
 } from "../external-apis/themeparks/themeparks.types";
 import { ParksService } from "../parks/parks.service";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 /**
  * Queue Data Service
@@ -359,7 +360,9 @@ export class QueueDataService {
           "allocationStatus",
           "currentGroupStart",
           "currentGroupEnd",
+          "attractionId", // Need attraction ID for relation
         ],
+        relations: ["attraction", "attraction.park"], // Load attraction and park
       });
       if (latest) {
         await this.redis
@@ -426,13 +429,10 @@ export class QueueDataService {
     // Date changed → save (ensure at least one data point per day)
     // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
     if (latest.timestamp) {
-      const latestDate = new Date(latest.timestamp);
-      const currentDate = new Date();
-      if (
-        latestDate.getDate() !== currentDate.getDate() ||
-        latestDate.getMonth() !== currentDate.getMonth() ||
-        latestDate.getFullYear() !== currentDate.getFullYear()
-      ) {
+      const timezone = latest.attraction?.park?.timezone || "UTC";
+      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
+      const currentDateStr = formatInParkTimezone(new Date(), timezone);
+      if (latestDateStr !== currentDateStr) {
         return true;
       }
     }

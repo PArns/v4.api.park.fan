@@ -3,8 +3,8 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { StatsService } from "../../stats/stats.service";
 import {
-  formatInParkTimezone,
   getCurrentDateInTimezone,
+  getYesterdayDateInTimezone,
 } from "../../common/utils/date.util";
 import { ParksService } from "../../parks/parks.service";
 
@@ -43,9 +43,7 @@ export class StatsProcessor {
 
       for (const park of parks) {
         // Calculate "yesterday" in park's timezone
-        const date = new Date();
-        date.setDate(date.getDate() - 1);
-        const yesterday = formatInParkTimezone(date, park.timezone);
+        const yesterday = getYesterdayDateInTimezone(park.timezone);
 
         await this.statsService.calculateAndStoreDailyStats(park.id, yesterday);
       }

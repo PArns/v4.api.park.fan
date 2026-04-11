@@ -1283,9 +1283,8 @@ export class AnalyticsService {
         history = await this.getParkWaitTimeHistory(parkId, startTime);
       } else {
         // Fallback if park not found or no timezone
-        const now = new Date();
-        now.setHours(0, 0, 0, 0); // Fallback start of day
-        history = await this.getParkWaitTimeHistory(parkId, now);
+        const startOfDay = getStartOfDayInTimezone("UTC");
+        history = await this.getParkWaitTimeHistory(parkId, startOfDay);
       }
     } catch (error) {
       this.logger.warn(
