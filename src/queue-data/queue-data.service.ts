@@ -11,6 +11,7 @@ import {
   QueueType,
 } from "../external-apis/themeparks/themeparks.types";
 import { ParksService } from "../parks/parks.service";
+import { formatInParkTimezone } from "../common/utils/date.util";
 
 /**
  * Queue Data Service
@@ -104,10 +105,17 @@ export class QueueDataService {
         if (shouldSave) {
           const queueEntry = this.queueDataRepository.create(queueData);
           await this.queueDataRepository.save(queueEntry);
+
+          // Get the attraction with park for the cache
+          const savedWithRelations = await this.queueDataRepository.findOne({
+            where: { id: queueEntry.id },
+            relations: ["attraction", "attraction.park"],
+          });
+
           await this.redis
             .set(
               this.latestCacheKey(attractionId, QueueType.STANDBY),
-              JSON.stringify(queueEntry),
+              JSON.stringify(savedWithRelations || queueEntry),
               "EX",
               this.LATEST_CACHE_TTL,
             )
@@ -190,11 +198,18 @@ export class QueueDataService {
           const queueEntry = this.queueDataRepository.create(queueData);
           await this.queueDataRepository.save(queueEntry);
           savedCount++;
+
+          // Get the attraction with park for the cache
+          const savedWithRelations = await this.queueDataRepository.findOne({
+            where: { id: queueEntry.id },
+            relations: ["attraction", "attraction.park"],
+          });
+
           // Update cache so the next shouldSaveQueueData call hits Redis, not DB
           await this.redis
             .set(
               this.latestCacheKey(attractionId, queueType),
-              JSON.stringify(queueEntry),
+              JSON.stringify(savedWithRelations || queueEntry),
               "EX",
               this.LATEST_CACHE_TTL,
             )
@@ -359,7 +374,9 @@ export class QueueDataService {
           "allocationStatus",
           "currentGroupStart",
           "currentGroupEnd",
+          "attractionId", // Need attraction ID for relation
         ],
+        relations: ["attraction", "attraction.park"], // Load attraction and park
       });
       if (latest) {
         await this.redis
@@ -426,13 +443,10 @@ export class QueueDataService {
     // Date changed → save (ensure at least one data point per day)
     // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
     if (latest.timestamp) {
-      const latestDate = new Date(latest.timestamp);
-      const currentDate = new Date();
-      if (
-        latestDate.getDate() !== currentDate.getDate() ||
-        latestDate.getMonth() !== currentDate.getMonth() ||
-        latestDate.getFullYear() !== currentDate.getFullYear()
-      ) {
+      const timezone = latest.attraction?.park?.timezone || "UTC";
+      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
+      const currentDateStr = formatInParkTimezone(new Date(), timezone);
+      if (latestDateStr !== currentDateStr) {
         return true;
       }
     }
