@@ -84,7 +84,7 @@ export class CacheWarmupService {
 
       // Delay between batches
       if (i + batchSize < items.length) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
@@ -495,7 +495,7 @@ export class CacheWarmupService {
    * @param limit - Total number of top attractions to warm (default: 200)
    * @returns Number of attractions warmed
    */
-  async warmupTopAttractions(limit: number = 500): Promise<number> {
+  async warmupTopAttractions(limit: number = 1000): Promise<number> {
     const startTime = Date.now();
     try {
       this.logger.verbose(
@@ -532,7 +532,7 @@ export class CacheWarmupService {
       // Batch processing using helper
       const warmedCount = await this.processBatch(
         targetIds,
-        15,
+        25, // Increased from 15
         "TopAttractions",
         async (id) => this.warmupAttractionCache(id, true),
       );

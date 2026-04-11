@@ -54,12 +54,12 @@ Warmup tasks are executed **sequentially** to prevent database connection conten
 
 | Trigger | When | What gets warmed |
 | --- | --- | --- |
-| **Wait-times sync** (every 5 min) | After `WaitTimesProcessor` | Parks (Operating + Popular), top 200 attractions (User hits + Data density), occupancy, geo discovery, global stats, park statistics. |
+| **Wait-times sync** (every 5 min) | After `WaitTimesProcessor` | Parks (Operating + Popular), top 1000 attractions (User hits + Data density), occupancy, geo discovery, global stats, park statistics. |
 | **Hourly predictions** | After `PredictionGeneratorProcessor` | Parks opening in next 12h. |
 | **warmup-calendar-daily** (daily, 5am) | Cron on `park-metadata` | **Calendar** for **all parks** (-1 month to +3 months). |
 
 ### Attraction Warmup Strategy
-The `warmupTopAttractions(limit=200)` method combines two signals:
+The `warmupTopAttractions(limit=1000)` method combines two signals:
 *   **User Traffic**: Top attractions currently being visited by users (from `PopularityService`).
 *   **Data Density**: Attractions with the most frequent queue data updates in the last 7 days (Database proxy for activity).
 

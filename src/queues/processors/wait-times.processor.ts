@@ -690,7 +690,7 @@ export class WaitTimesProcessor {
       try {
         await Promise.all([
           this.cacheWarmupService.warmupOperatingParks(),
-          this.cacheWarmupService.warmupTopAttractions(500),
+          this.cacheWarmupService.warmupTopAttractions(1000),
           this.cacheWarmupService.warmupParkOccupancy(parks.map((p) => p.id)),
         ]);
       } catch (error: unknown) {

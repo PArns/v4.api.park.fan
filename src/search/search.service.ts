@@ -27,6 +27,7 @@ import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
+import { PopularityService } from "../popularity/popularity.service";
 
 @Injectable()
 export class SearchService implements OnModuleInit {
@@ -48,6 +49,7 @@ export class SearchService implements OnModuleInit {
     private readonly analyticsService: AnalyticsService,
     private readonly queueDataService: QueueDataService,
     private readonly showsService: ShowsService,
+    private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -72,6 +74,14 @@ export class SearchService implements OnModuleInit {
       await this.parkRepository.query(
         "CREATE INDEX IF NOT EXISTS idx_park_country_trgm ON parks USING gin (country gin_trgm_ops);",
       );
+      await this.parkRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_park_name_dmetaphone ON parks (dmetaphone(name));",
+      );
+      await this.parkRepository
+        .query(
+          "CREATE INDEX IF NOT EXISTS idx_park_name_normalized ON parks USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
+        )
+        .catch(() => {});
 
       // Attraction indices
       await this.attractionRepository.query(
@@ -80,6 +90,21 @@ export class SearchService implements OnModuleInit {
       await this.attractionRepository.query(
         "CREATE INDEX IF NOT EXISTS idx_attraction_land_name_trgm ON attractions USING gin (land_name gin_trgm_ops);",
       );
+      await this.attractionRepository.query(
+        "CREATE INDEX IF NOT EXISTS idx_attraction_name_dmetaphone ON attractions (dmetaphone(name));",
+      );
+      await this.attractionRepository
+        .query(
+          "CREATE INDEX IF NOT EXISTS idx_attraction_name_normalized ON attractions USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
+        )
+        .catch(() => {});
+
+      // Word similarity index for partial matches (e.g. "phantasia" matching "phantasialand")
+      await this.attractionRepository
+        .query(
+          "CREATE INDEX IF NOT EXISTS idx_park_name_word_trgm ON parks USING gist (name gist_trgm_ops);",
+        )
+        .catch(() => {}); // gist might not be available depending on postgres version/extensions
 
       // Show indices
       await this.showRepository.query(
@@ -236,6 +261,7 @@ export class SearchService implements OnModuleInit {
     >[]
   > {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+    const topParkIds = await this.popularityService.getTopParks(20);
 
     return (
       this.parkRepository
@@ -264,39 +290,41 @@ export class SearchService implements OnModuleInit {
               .orWhere("park.city ILIKE :query")
               .orWhere("park.country ILIKE :query")
               .orWhere("park.continent ILIKE :query")
-              // 2. Normalized Match (ignores special chars)
+              // 2. Normalized Match (ignores special chars like "-" or ".")
+              // Fixes "fly" -> "F.L.Y." and "europapark" -> "Europa-Park"
               .orWhere(
                 "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // 3. Phonetic Match (Double Metaphone)
+              // 3. Phonetic Match (Double Metaphone) - handles "Phantasia" vs "Fantasia"
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
+              .orWhere("dmetaphone(park.name) LIKE dmetaphone(:query) || '%'")
               .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
               .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-              // 4. Levenshtein Distance (typo tolerance) — guard against >255 char crash
+              // 4. Levenshtein Distance (typo tolerance)
               .orWhere(
-                "LENGTH(park.name) <= 255 AND levenshtein(LOWER(park.name), LOWER(:query)) <= 3",
+                "LENGTH(park.name) <= 255 AND levenshtein(LOWER(park.name), LOWER(:query)) <= 2",
               )
-              // 5. Fuzzy Match (Case Insensitive)
-              .orWhere("similarity(LOWER(park.name), LOWER(:query)) > 0.3")
-              .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
-              .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
+              // 5. Fuzzy Match (Index-backed Trigram Similarity)
+              .orWhere("LOWER(park.name) % LOWER(:query)")
+              // 6. Word Similarity (Best for search-as-you-type "phan" -> "Phantasialand")
+              .orWhere("LOWER(:query) <% LOWER(park.name)");
           }),
         )
         .orderBy(
-          // Prioritize:
-          // 0. Exact Name Match (e.g. "fly" == "fly")
-          // 1. Normalized Exact Match (e.g. "F.L.Y." -> "fly" == "fly")
-          // 2. Exact City Match (e.g. "Orlando")
-          // 3. Prefix Match (e.g. "Flying..." starts with "fly")
-          // 4. Phonetic Match
-          // 5. Others
+          // Priority Ranking (Lower is better):
+          // 0: Exact Name Match
+          // 1: Normalized Exact Match (e.g. "fly" matches "F.L.Y.")
+          // 2: Prefix Name Match (e.g. "Phan" matches "Phantasialand")
+          // 3: Popularity Boost
+          // 4: City Match
+          // 5: Others
           `CASE
           WHEN LOWER(park.name) = LOWER(:exactQuery) THEN 0
           WHEN REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
-          WHEN LOWER(park.city) = LOWER(:exactQuery) THEN 2
-          WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 3
-          WHEN dmetaphone(park.name) = dmetaphone(:query) THEN 4
+          WHEN LOWER(park.name) LIKE LOWER(:startsWith) THEN 2
+          WHEN park.id IN (:...topIds) THEN 3
+          WHEN LOWER(park.city) = LOWER(:exactQuery) THEN 4
           ELSE 5
         END`,
           "ASC",
@@ -306,7 +334,13 @@ export class SearchService implements OnModuleInit {
         .setParameter("exactQuery", query)
         .setParameter("startsWith", `${query}%`)
         .setParameter("normalizedQueryExact", normalizedQuery)
-        .setParameter("query", query) // Ensure query parameter is available for similarity
+        .setParameter("query", query)
+        .setParameter(
+          "topIds",
+          topParkIds.length > 0
+            ? topParkIds
+            : ["00000000-0000-0000-0000-000000000000"],
+        )
         .limit(limit)
         .getMany()
     );
@@ -339,6 +373,7 @@ export class SearchService implements OnModuleInit {
     })[]
   > {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
+    const topAttractionIds = await this.popularityService.getTopAttractions(50);
 
     return (
       this.attractionRepository
@@ -370,31 +405,27 @@ export class SearchService implements OnModuleInit {
             qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
               // Land Name Match
               .orWhere("attraction.landName ILIKE :query")
-              // Normalized Name Match
+              // Normalized Name Match (Fixes "fly" -> "F.L.Y.")
               .orWhere(
                 "REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // Normalized Land Match
-              .orWhere(
-                "REGEXP_REPLACE(attraction.landName, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
-              )
               // Phonetic Match
               .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
-              // Levenshtein Distance (typo tolerance) — guard against >255 char crash
               .orWhere(
-                "LENGTH(attraction.name) <= 255 AND levenshtein(LOWER(attraction.name), LOWER(:query)) <= 3",
+                "dmetaphone(attraction.name) LIKE dmetaphone(:query) || '%'",
               )
-              // Fuzzy Matches (Case Insensitive)
+              // Levenshtein Distance (typo tolerance)
               .orWhere(
-                "similarity(LOWER(attraction.name), LOWER(:query)) > 0.3",
+                "LENGTH(attraction.name) <= 255 AND levenshtein(LOWER(attraction.name), LOWER(:query)) <= 2",
               )
-              .orWhere(
-                "similarity(LOWER(attraction.landName), LOWER(:query)) > 0.3",
-              )
+              // Fuzzy Matches (Index-backed Trigram Similarity)
+              .orWhere("LOWER(attraction.name) % LOWER(:query)")
+              // Word Similarity (Search-as-you-type)
+              .orWhere("LOWER(:query) <% LOWER(attraction.name)")
               // Parent Park Location Fuzzy Matches
-              .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
-              .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
+              .orWhere("LOWER(park.city) % LOWER(:query)")
+              .orWhere("LOWER(park.country) % LOWER(:query)");
           }),
         )
         .orderBy(
@@ -402,8 +433,9 @@ export class SearchService implements OnModuleInit {
             WHEN LOWER(attraction.name) = LOWER(:exactQuery) THEN 0
             WHEN REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQueryExact THEN 1
             WHEN LOWER(attraction.name) LIKE LOWER(:startsWith) THEN 2
-            WHEN dmetaphone(attraction.name) = dmetaphone(:query) THEN 3
-            ELSE 4
+            WHEN attraction.id IN (:...topIds) THEN 3
+            WHEN dmetaphone(attraction.name) = dmetaphone(:query) THEN 4
+            ELSE 5
           END`,
           "ASC",
         )
@@ -417,6 +449,12 @@ export class SearchService implements OnModuleInit {
         .setParameter("startsWith", `${query}%`)
         .setParameter("normalizedQueryExact", normalizedQuery)
         .setParameter("query", query)
+        .setParameter(
+          "topIds",
+          topAttractionIds.length > 0
+            ? topAttractionIds
+            : ["00000000-0000-0000-0000-000000000000"],
+        )
         .limit(limit)
         .getMany()
     );
@@ -1136,8 +1174,8 @@ export class SearchService implements OnModuleInit {
       select: ["id", "timezone"],
     });
 
-    // Build a set of (parkId, todayStr) pairs grouped by date so we can do one bulk query per unique date
-    const parkDateMap = new Map<string, string>(); // parkId -> todayStr
+    // Build map of parkId -> today's date string
+    const parkDateMap = new Map<string, string>();
     for (const park of parks) {
       parkDateMap.set(
         park.id,
@@ -1145,46 +1183,62 @@ export class SearchService implements OnModuleInit {
       );
     }
 
-    // Group parks by their local "today" date to minimize queries
-    const byDate = new Map<string, string[]>(); // todayStr -> parkIds
-    for (const [parkId, todayStr] of parkDateMap.entries()) {
-      if (!byDate.has(todayStr)) byDate.set(todayStr, []);
-      byDate.get(todayStr)!.push(parkId);
-    }
+    // Single query using CASE to handle different "today" dates per park
+    try {
+      const qb = this.scheduleRepository
+        .createQueryBuilder("s")
+        .select([
+          "s.parkId",
+          "s.openingTime",
+          "s.closingTime",
+          "s.scheduleType",
+        ])
+        .where("s.parkId IN (:...parkIds)", { parkIds })
+        .andWhere("s.scheduleType = :type", { type: ScheduleType.OPERATING });
 
-    // One query per unique date (usually just 1-2 dates globally)
-    await Promise.all(
-      Array.from(byDate.entries()).map(async ([todayStr, ids]) => {
-        try {
-          const schedules = await this.scheduleRepository
-            .createQueryBuilder("s")
-            .select([
-              "s.parkId",
-              "s.openingTime",
-              "s.closingTime",
-              "s.scheduleType",
-            ])
-            .where("s.parkId IN (:...ids)", { ids })
-            .andWhere("s.date = :date", { date: todayStr })
-            .andWhere("s.scheduleType = :type", {
-              type: ScheduleType.OPERATING,
-            })
-            .getMany();
+      // Add a dynamic where condition for each park's date
+      // For performance with many parks, we group by date
+      const byDate = new Map<string, string[]>();
+      for (const [id, date] of parkDateMap.entries()) {
+        if (!byDate.has(date)) byDate.set(date, []);
+        byDate.get(date)!.push(id);
+      }
 
-          for (const schedule of schedules) {
-            if (schedule.openingTime && schedule.closingTime) {
-              hoursMap.set(schedule.parkId, {
-                open: schedule.openingTime.toISOString(),
-                close: schedule.closingTime.toISOString(),
-                type: schedule.scheduleType,
-              });
-            }
+      qb.andWhere(
+        new Brackets((inner) => {
+          for (const [date, ids] of byDate.entries()) {
+            inner.orWhere(
+              new Brackets((inner2) => {
+                inner2
+                  .where("s.date = :date_" + date.replace(/-/g, ""), {
+                    ["date_" + date.replace(/-/g, "")]: date,
+                  })
+                  .andWhere(
+                    "s.parkId IN (:...ids_" + date.replace(/-/g, "") + ")",
+                    {
+                      ["ids_" + date.replace(/-/g, "")]: ids,
+                    },
+                  );
+              }),
+            );
           }
-        } catch {
-          // Ignore missing schedule
+        }),
+      );
+
+      const schedules = await qb.getMany();
+
+      for (const schedule of schedules) {
+        if (schedule.openingTime && schedule.closingTime) {
+          hoursMap.set(schedule.parkId, {
+            open: schedule.openingTime.toISOString(),
+            close: schedule.closingTime.toISOString(),
+            type: schedule.scheduleType,
+          });
         }
-      }),
-    );
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to fetch batch park hours: ${error}`);
+    }
 
     return hoursMap;
   }
@@ -1277,34 +1331,68 @@ export class SearchService implements OnModuleInit {
    */
   async warmupSearch(): Promise<void> {
     try {
-      const parks = await this.parkRepository
-        .createQueryBuilder("park")
-        .select(["park.name", "park.city", "park.country"])
-        .getMany();
+      const [parks, popularParkIds] = await Promise.all([
+        this.parkRepository.find({ select: ["id", "name", "city", "country"] }),
+        this.popularityService.getTopParks(30),
+      ]);
 
-      // Extract unique first words from park names (lowercase, alpha only, min 3 chars)
       const termSet = new Set<string>();
-      for (const park of parks) {
-        for (const field of [park.name, park.city, park.country]) {
-          if (!field) continue;
-          const firstWord = field
-            .split(/\s+/)[0]
-            .replace(/[^a-zA-Z]/g, "")
-            .toLowerCase();
-          if (firstWord.length >= 3) termSet.add(firstWord);
-        }
+
+      // 1. Add common global terms
+      const commonTerms = [
+        "disney",
+        "universal",
+        "six flags",
+        "europa",
+        "phantasia",
+        "efteling",
+        "cedar",
+        "alton",
+        "thorpe",
+        "walibi",
+        "gardaland",
+        "portaventura",
+        "knott",
+        "busch",
+        "seaworld",
+        "lego",
+        "merlin",
+      ];
+      commonTerms.forEach((t) => termSet.add(t));
+
+      // 2. Add prefixes for popular parks (search-as-you-type support)
+      const popularSet = new Set(popularParkIds);
+      const prioritizedParks = parks.filter((p) => popularSet.has(p.id));
+
+      for (const park of prioritizedParks) {
+        const name = park.name.toLowerCase().replace(/[^a-z0-9 ]/g, "");
+        const words = name.split(" ");
+
+        // Warm first 3 and 4 chars of the name and individual words
+        words.forEach((word) => {
+          if (word.length >= 3) termSet.add(word.substring(0, 3));
+          if (word.length >= 4) termSet.add(word.substring(0, 4));
+          if (word.length >= 3) termSet.add(word);
+        });
       }
 
       const terms = Array.from(termSet);
       this.logger.verbose(
-        `🔥 Warming search cache for ${terms.length} terms...`,
+        `🔥 Warming search cache for ${terms.length} prioritized terms...`,
       );
 
-      for (const term of terms) {
-        try {
-          await this.search({ q: term, limit: 5 } as any);
-        } catch {
-          // Ignore individual term failures
+      // Process in small batches to avoid DB/Redis spikes
+      const batchSize = 10;
+      for (let i = 0; i < terms.length; i += batchSize) {
+        const batch = terms.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map((term) =>
+            this.search({ q: term, limit: 10 } as any).catch(() => null),
+          ),
+        );
+        // Small pause between batches
+        if (i + batchSize < terms.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
 

@@ -11,6 +11,7 @@ import { ParksModule } from "../parks/parks.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { QueueDataModule } from "../queue-data/queue-data.module";
 import { ShowsModule } from "../shows/shows.module";
+import { PopularityModule } from "../popularity/popularity.module";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ShowsModule } from "../shows/shows.module";
     AnalyticsModule,
     QueueDataModule,
     ShowsModule,
+    PopularityModule,
   ],
   controllers: [SearchController],
   providers: [SearchService],
