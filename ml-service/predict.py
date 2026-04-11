@@ -171,7 +171,7 @@ def fetch_recent_wait_times(
             query,
             {
                 "attraction_ids": attraction_ids,
-                "lookback_days": f"{lookback_days} days",
+                "lookback_days": lookback_days,
             },
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
