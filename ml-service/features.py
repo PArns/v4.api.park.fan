@@ -598,7 +598,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
     )
     _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek >= 10  # Sat-Sun
+        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
     )
     df["rolling_avg_weekday"] = (
         _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
@@ -733,15 +733,13 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
                  "volatility_weekday": 0.0, "volatility_weekend": 0.0}
 
         if len(group) < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
+            return pd.Series(zeros)
 
         # Get last 7 days of data (168 hours = 7 days * 24 hours)
         recent_data = group.tail(168) if len(group) > 168 else group
 
         if len(recent_data) < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
+            return pd.Series(zeros)
 
         # Calculate linear trend (slope) using vectorized operations
         x = np.arange(len(recent_data))
@@ -750,8 +748,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         # Remove NaN values
         mask = ~np.isnan(y)
         if mask.sum() < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
+            return pd.Series(zeros)
 
         x_clean = x[mask]
         y_clean = y[mask]
@@ -777,10 +774,6 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         volatility_dampened = _dampened_vol(y_clean)
 
         # Split by day type so the model can distinguish weekday vs weekend patterns.
-        # IMPORTANT: DOW convention depends on the source:
-        #   - day_of_week DB column: EXTRACT(DOW FROM timestamp) → PostgreSQL: 0=Sunday, 6=Saturday
-        #   - pd.Timestamp.dt.dayofweek → pandas: 0=Monday, 5=Saturday, 6=Sunday
-        # We must use the correct weekend set for each convention.
         if "day_of_week" in recent_data.columns:
             dow = recent_data["day_of_week"].values
             weekend_mask = np.isin(dow, [0, 6])  # Postgres: Sunday=0, Saturday=6
@@ -790,30 +783,25 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         volatility_weekday = _dampened_vol(y_clean[~weekend_mask[mask]])
         volatility_weekend = _dampened_vol(y_clean[weekend_mask[mask]])
 
-        return pd.DataFrame(
+        return pd.Series(
             {
-                "trend_7d": [slope] * len(group),
-                "volatility_7d": [volatility_dampened] * len(group),
-                "volatility_weekday": [volatility_weekday] * len(group),
-                "volatility_weekend": [volatility_weekend] * len(group),
-            },
-            index=group.index,
+                "trend_7d": slope,
+                "volatility_7d": volatility_dampened,
+                "volatility_weekday": volatility_weekday,
+                "volatility_weekend": volatility_weekend,
+            }
         )
 
     # Apply to each attraction group and combine results
-    trend_volatility_results = df.groupby("attractionId", group_keys=False).apply(
+    trend_volatility_results = df.groupby("attractionId").apply(
         calculate_trend_volatility
     )
 
     # Assign results back to df
-    if (
-        not trend_volatility_results.empty
-        and "trend_7d" in trend_volatility_results.columns
-    ):
-        df["trend_7d"] = trend_volatility_results["trend_7d"]
-        df["volatility_7d"] = trend_volatility_results["volatility_7d"]
-        df["volatility_weekday"] = trend_volatility_results["volatility_weekday"]
-        df["volatility_weekend"] = trend_volatility_results["volatility_weekend"]
+    if not trend_volatility_results.empty:
+        for col in ["trend_7d", "volatility_7d", "volatility_weekday", "volatility_weekend"]:
+            if col in trend_volatility_results.columns:
+                df[col] = df["attractionId"].map(trend_volatility_results[col])
 
     # Clean up temp columns if any
     return df
