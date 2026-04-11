@@ -3283,10 +3283,14 @@ export class AnalyticsService {
   ): Promise<{
     percentage: number;
     crowdLevel: CrowdLevel;
+    peakCrowdLevel: CrowdLevel;
     hasData: boolean;
     confidence: "high" | "medium" | "low";
     avgWaitTime: number | null;
+    p90WaitTime: number | null;
     p90Baseline: number;
+    actualP90Baseline: number;
+    baselineType: string;
     sampleCount: number;
     isToday: boolean;
   }> {
@@ -3356,14 +3360,15 @@ export class AnalyticsService {
     const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
     const endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
 
-    // Query average wait time for the day
-    let avgWaitResult: { avgWait: number | null; count: number };
+    // Query average (P50) and peak (P90) wait times for the day
+    let dailyStats: { p50: number | null; p90: number | null; count: number };
 
     if (type === "attraction") {
       const result = await this.queueDataRepository.query(
         `
         SELECT
-          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as "avgWait",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
           COUNT(*) as count
         FROM queue_data qd
         WHERE qd."attractionId" = $1::uuid
@@ -3377,8 +3382,9 @@ export class AnalyticsService {
         [entityId, startOfDay, endOfDay],
       );
 
-      avgWaitResult = {
-        avgWait: result[0]?.avgWait ? parseFloat(result[0].avgWait) : null,
+      dailyStats = {
+        p50: result[0]?.p50 ? parseFloat(result[0].p50) : null,
+        p90: result[0]?.p90 ? parseFloat(result[0].p90) : null,
         count: parseInt(result[0]?.count || "0", 10),
       };
     } else {
@@ -3402,7 +3408,8 @@ export class AnalyticsService {
         const result = await this.queueDataRepository.query(
           `
           SELECT
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as "avgWait",
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
+            ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
             COUNT(*) as count
           FROM queue_data qd
           WHERE qd."attractionId" = ANY($1::uuid[])
@@ -3416,40 +3423,87 @@ export class AnalyticsService {
           [targetAttractionIds, startOfDay, endOfDay],
         );
 
-        avgWaitResult = {
-          avgWait: result[0]?.avgWait ? parseFloat(result[0].avgWait) : null,
+        dailyStats = {
+          p50: result[0]?.p50 ? parseFloat(result[0].p50) : null,
+          p90: result[0]?.p90 ? parseFloat(result[0].p90) : null,
           count: parseInt(result[0]?.count || "0", 10),
         };
       } else {
-        avgWaitResult = { avgWait: null, count: 0 };
+        dailyStats = { p50: null, p90: null, count: 0 };
       }
     }
 
     // Calculate result
     let percentage = 0;
     let crowdLevel: CrowdLevel = "very_low";
-    const hasData = avgWaitResult.avgWait !== null && avgWaitResult.count > 0;
+    let peakPercentage = 0;
+    let peakCrowdLevel: CrowdLevel = "very_low";
+    const hasData = dailyStats.p50 !== null && dailyStats.count > 0;
+
+    // Calculate P90 baseline if needed
+    let p90Baseline = 0;
+    if (hasData) {
+      if (type === "park") {
+        const headliners = await this.headlinerAttractionRepository.find({
+          where: { parkId: entityId },
+        });
+        const validHeadliners = headliners.filter(
+          (h) => Number(h.p90Wait548d) > 0,
+        );
+        p90Baseline =
+          validHeadliners.length > 0
+            ? validHeadliners.reduce(
+                (sum, h) => sum + Number(h.p90Wait548d),
+                0,
+              ) / validHeadliners.length
+            : 0;
+      } else {
+        const attraction = await this.attractionRepository.findOne({
+          where: { id: entityId },
+        });
+        if (attraction) {
+          const stats = await this.get90thPercentileWithConfidence(
+            entityId,
+            "attraction",
+            "UTC",
+          );
+          p90Baseline = stats.p90;
+        }
+      }
+    }
 
     if (hasData && baseline > 0) {
-      percentage = Math.round((avgWaitResult.avgWait! / baseline) * 100);
+      percentage = Math.round((dailyStats.p50! / baseline) * 100);
       crowdLevel = this.determineCrowdLevel(percentage);
     } else if (hasData) {
       // No baseline available - use moderate as default
       crowdLevel = "moderate";
-      percentage = 100; // Default when no baseline (changed from 50 to match P50=100%)
+      percentage = 100;
+    }
+
+    if (hasData && p90Baseline > 0 && dailyStats.p90 !== null) {
+      peakPercentage = Math.round((dailyStats.p90! / p90Baseline) * 100);
+      peakCrowdLevel = this.determineCrowdLevel(peakPercentage);
+    } else if (hasData) {
+      peakCrowdLevel = crowdLevel;
     }
 
     const response = {
       percentage,
       crowdLevel,
+      peakCrowdLevel, // NEW: P90-based crowd level
       hasData,
       confidence: baselineConfidence,
-      avgWaitTime: avgWaitResult.avgWait
-        ? roundToNearest5Minutes(avgWaitResult.avgWait)
+      avgWaitTime: dailyStats.p50
+        ? roundToNearest5Minutes(dailyStats.p50)
+        : null,
+      p90WaitTime: dailyStats.p90
+        ? roundToNearest5Minutes(dailyStats.p90)
         : null,
       p90Baseline: baseline, // Keep field name for backward compatibility
+      actualP90Baseline: p90Baseline,
       baselineType, // NEW: Indicates which baseline was used
-      sampleCount: avgWaitResult.count,
+      sampleCount: dailyStats.count,
       isToday,
     };
 
@@ -4090,11 +4144,19 @@ export class AnalyticsService {
    * Get headliner attraction IDs for a park as a Set (for O(1) lookup).
    */
   async getHeadlinerAttractionIds(parkId: string): Promise<Set<string>> {
-    const headliners = await this.headlinerAttractionRepository.find({
-      where: { parkId },
-      select: ["parkId", "attractionId"],
-    });
+    const headliners = await this.getHeadlinerAttractions(parkId);
     return new Set(headliners.map((h) => h.attractionId));
+  }
+
+  /**
+   * Get full headliner entities for a park.
+   */
+  async getHeadlinerAttractions(
+    parkId: string,
+  ): Promise<HeadlinerAttraction[]> {
+    return this.headlinerAttractionRepository.find({
+      where: { parkId },
+    });
   }
 
   /**

@@ -222,14 +222,16 @@ export class CalendarService {
 
     // Pre-compute predicted crowd levels for future days using headliner median / P50 baseline
     // (mirrors calculateCrowdLevelForDate logic for historical days)
-    const [headlinerIdSet, p50Baseline] = await Promise.all([
-      this.analyticsService.getHeadlinerAttractionIds(park.id),
+    const [allHeadliners, p50Baseline] = await Promise.all([
+      this.analyticsService.getHeadlinerAttractions(park.id),
       this.analyticsService.getP50BaselineFromCache(park.id),
     ]);
+    const headlinerIdSet = new Set(allHeadliners.map((h) => h.attractionId));
     const predictedCrowdLevels = this.buildPredictedCrowdLevels(
       mlPredictions.predictions,
       headlinerIdSet,
       p50Baseline,
+      allHeadliners,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -248,12 +250,21 @@ export class CalendarService {
         : [];
     const crowdLevelRaw =
       crowdLevelKeys.length > 0 ? await this.redis.mget(...crowdLevelKeys) : [];
-    const prefetchedCrowdLevels = new Map<string, CrowdLevel | "closed">();
+    const prefetchedCrowdLevels = new Map<
+      string,
+      { crowdLevel: CrowdLevel | "closed"; peakLoad?: CrowdLevel | "closed" }
+    >();
     crowdLevelRaw.forEach((raw, i) => {
       if (!raw || i >= historicalDateStrs.length) return;
       try {
-        const parsed = JSON.parse(raw) as { crowdLevel: CrowdLevel };
-        prefetchedCrowdLevels.set(historicalDateStrs[i], parsed.crowdLevel);
+        const parsed = JSON.parse(raw) as {
+          crowdLevel: CrowdLevel;
+          peakCrowdLevel?: CrowdLevel;
+        };
+        prefetchedCrowdLevels.set(historicalDateStrs[i], {
+          crowdLevel: parsed.crowdLevel,
+          peakLoad: parsed.peakCrowdLevel,
+        });
       } catch {
         // ignore invalid cache
       }
@@ -455,13 +466,19 @@ export class CalendarService {
     includeHourly: string,
     today: string,
     hourlyPredictionsPreFetched: PredictionDto[] = [],
-    prefetchedCrowdLevels: Map<string, CrowdLevel | "closed"> = new Map(),
+    prefetchedCrowdLevels: Map<
+      string,
+      { crowdLevel: CrowdLevel | "closed"; peakLoad?: CrowdLevel | "closed" }
+    > = new Map(),
     parkHasOperatingSchedule: boolean = false,
     operatingDateRange: {
       minDate: string | null;
       maxDate: string | null;
     } = { minDate: null, maxDate: null },
-    predictedCrowdLevels: Map<string, CrowdLevel> = new Map(),
+    predictedCrowdLevels: Map<
+      string,
+      { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }
+    > = new Map(),
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -609,11 +626,13 @@ export class CalendarService {
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)
     const isHistorical = dateStr <= today;
     let inferredCrowdLevel: CrowdLevel | "closed";
+    let peakLoad: CrowdLevel | "closed" | undefined;
 
     if (isHistorical) {
       const prefetched = prefetchedCrowdLevels.get(dateStr);
       if (prefetched !== undefined) {
-        inferredCrowdLevel = prefetched;
+        inferredCrowdLevel = prefetched.crowdLevel;
+        peakLoad = prefetched.peakLoad;
       } else {
         // Always query real usage data for today/past days (calculateCrowdLevelForDate
         // has its own Redis cache: 30 min for today, 24h for historical).
@@ -627,15 +646,22 @@ export class CalendarService {
           );
         inferredCrowdLevel = crowdData.hasData
           ? crowdData.crowdLevel
-          : predictedCrowdLevels.get(dateStr) ||
+          : predictedCrowdLevels.get(dateStr)?.crowdLevel ||
             mlPrediction?.crowdLevel ||
+            "moderate";
+
+        peakLoad = crowdData.hasData
+          ? crowdData.peakCrowdLevel
+          : predictedCrowdLevels.get(dateStr)?.peakLoad ||
+            mlPrediction?.crowdLevel || // Fallback to normal crowdLevel if no P90
             "moderate";
       }
     } else {
+      const predicted = predictedCrowdLevels.get(dateStr);
       inferredCrowdLevel =
-        predictedCrowdLevels.get(dateStr) ||
-        mlPrediction?.crowdLevel ||
-        "moderate";
+        predicted?.crowdLevel || mlPrediction?.crowdLevel || "moderate";
+
+      peakLoad = predicted?.peakLoad || mlPrediction?.crowdLevel || "moderate";
     }
 
     // Past + Today: only infer OPERATING from crowd level when park has NO OPERATING schedule at all.
@@ -657,6 +683,7 @@ export class CalendarService {
       crowdLevel = inferredCrowdLevel; // future day without schedule: still show prediction
     } else {
       crowdLevel = "closed";
+      peakLoad = "closed";
     }
 
     // Build operating hours
@@ -707,6 +734,7 @@ export class CalendarService {
       isToday: dateStr === today,
       hours: hours || undefined,
       crowdLevel,
+      peakLoad,
       recommendation,
       weather: weatherSummary || undefined,
       events,
@@ -825,9 +853,23 @@ export class CalendarService {
     predictions: PredictionDto[],
     headlinerIds: Set<string>,
     p50Baseline: number,
-  ): Map<string, CrowdLevel> {
-    const map = new Map<string, CrowdLevel>();
+    allHeadliners: any[] = [],
+  ): Map<string, { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }> {
+    const map = new Map<
+      string,
+      { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }
+    >();
     if (predictions.length === 0) return map;
+
+    // Calculate P90 baseline from headliners
+    const validHeadliners = allHeadliners.filter(
+      (h) => Number(h.p90Wait548d) > 0,
+    );
+    const p90Baseline =
+      validHeadliners.length > 0
+        ? validHeadliners.reduce((sum, h) => sum + Number(h.p90Wait548d), 0) /
+          validHeadliners.length
+        : p50Baseline * 1.5; // Fallback heuristic if p90 missing
 
     // Use headliners only; fall back to all attractions if none defined
     const filtered =
@@ -855,9 +897,20 @@ export class CalendarService {
           ? (sorted[mid - 1] + sorted[mid]) / 2
           : sorted[mid];
 
+      // P90 of headliner predicted waits
+      const p90Index = Math.ceil(sorted.length * 0.9) - 1;
+      const p90Value = sorted[Math.max(0, p90Index)];
+
       const pct =
         p50Baseline > 0 ? Math.round((median / p50Baseline) * 100) : 100;
-      map.set(date, this.analyticsService.determineCrowdLevel(pct));
+
+      const peakPct =
+        p90Baseline > 0 ? Math.round((p90Value / p90Baseline) * 100) : pct;
+
+      map.set(date, {
+        crowdLevel: this.analyticsService.determineCrowdLevel(pct),
+        peakLoad: this.analyticsService.determineCrowdLevel(peakPct),
+      });
     }
 
     return map;

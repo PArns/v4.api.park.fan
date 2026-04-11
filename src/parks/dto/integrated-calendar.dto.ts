@@ -132,6 +132,22 @@ export class CalendarDay {
   @ApiProperty()
   crowdLevel: CrowdLevel | "closed";
 
+  @ApiProperty({
+    description:
+      "Peak crowd level (P90) for this day (historical or predicted)",
+    enum: [
+      "very_low",
+      "low",
+      "moderate",
+      "high",
+      "very_high",
+      "extreme",
+      "closed",
+    ],
+    required: false,
+  })
+  peakLoad?: CrowdLevel | "closed";
+
   @ApiProperty({ type: () => WeatherSummary, required: false })
   weather?: WeatherSummary;
 

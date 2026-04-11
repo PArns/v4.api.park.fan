@@ -87,14 +87,18 @@ export class StatsProcessor {
           const targetDate = subDays(baseDate, i);
           const dateStr = format(targetDate, "yyyy-MM-dd");
 
-          this.logger.debug(`[Backfill] Processing ${park.name} - ${dateStr} (${i + 1}/${days})`);
+          this.logger.debug(
+            `[Backfill] Processing ${park.name} - ${dateStr} (${i + 1}/${days})`,
+          );
           await this.statsService.calculateAndStoreDailyStats(park.id, dateStr);
           processedCount++;
 
           if (processedCount % 5 === 0 || processedCount === totalSteps) {
             const progress = Math.round((processedCount / totalSteps) * 100);
             await job.progress(progress);
-            this.logger.log(`[Backfill] Progress: ${progress}% (${processedCount}/${totalSteps} records total)`);
+            this.logger.log(
+              `[Backfill] Progress: ${progress}% (${processedCount}/${totalSteps} records total)`,
+            );
           }
         }
         this.logger.log(`[Backfill] Finished park: ${park.name}`);
