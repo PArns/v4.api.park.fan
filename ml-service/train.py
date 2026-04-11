@@ -9,6 +9,7 @@ import psutil
 import os
 import logging
 import sys
+import gc
 
 from config import get_settings
 from db import fetch_training_data, fetch_attraction_accuracy
@@ -266,6 +267,7 @@ def train_model(version: str = None) -> None:
 
     # 4. Drop rows with missing target
     df = df.dropna(subset=["waitTime"])
+    gc.collect()  # Free memory from dropped rows
     logger.info(f"   Rows after cleaning: {len(df):,}")
     logger.info("")
 
@@ -353,6 +355,7 @@ def train_model(version: str = None) -> None:
 
                 # Cleanup
                 df = df.drop(columns=["attraction_id", "mae"], errors="ignore")
+                gc.collect()  # Free memory after dropping temp merge columns
             else:
                 logger.info(
                     "   No attraction accuracy stats found (using uniform weights)"
