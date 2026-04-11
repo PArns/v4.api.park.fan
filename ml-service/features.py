@@ -556,11 +556,12 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # so df must be in the same order for positional .values assignment.
     # merge_asof calls below re-sort internally and use pandas index alignment, so they
     # are unaffected by this order change.
+    original_index = df.index
     df = df.sort_values(["attractionId", "timestamp"])
 
     # 1. Time-based Rolling Features
     # Must use index for time-based rolling
-    df_indexed = df.set_index("timestamp").sort_index()
+    df_indexed = df.set_index("timestamp")
 
     # avg_wait_last_1h: [t-1h, t)
     # closed='left' excludes current timestamp, preventing data leakage
@@ -614,6 +615,8 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         .values
     )
     del _df_indexed_dow
+
+    df = df.loc[original_index]
 
     # 2. Lag Features (Exact time lookups: T-24h, T-1w)
     # Use merge_asof to find the value closest to (timestamp - lag)
