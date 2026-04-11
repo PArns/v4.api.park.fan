@@ -622,25 +622,29 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Helper to merge lagged values
     def merge_lag(source_df, lag_delta, col_name):
-        target_time = source_df["timestamp"] - lag_delta
-        temp = source_df.copy()
-        temp["target_ts"] = target_time
+        # Only take needed columns
+        temp = source_df[["attractionId", "timestamp"]].copy()
+        temp["target_ts"] = temp["timestamp"] - lag_delta
         temp = temp.sort_values("target_ts")
 
         lookup = source_df[["attractionId", "timestamp", "waitTime"]].sort_values(
             "timestamp"
         )
 
-        return pd.merge_asof(
+        merged = pd.merge_asof(
             temp,
             lookup,
             left_on="target_ts",
             right_on="timestamp",
             by="attractionId",
             tolerance=pd.Timedelta("15min"),  # Allow 15 min slop
-            direction="nearest",
-            suffixes=("", "_lag"),
-        )["waitTime_lag"]
+            direction="nearest"
+        )
+
+        # Restore original index mapping
+        merged.index = temp.index
+        merged = merged.sort_index()
+        return merged["waitTime"]
 
     # Lag 24h
     df["wait_lag_24h"] = merge_lag(df, pd.Timedelta(hours=24), "wait_lag_24h")
@@ -711,58 +715,23 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Trend features (7-day trend slope)
     # Calculate slope of wait times over last 7 days using linear regression
     # Positive = increasing trend, negative = decreasing trend
-    df["trend_7d"] = 0.0
-    df["volatility_7d"] = 0.0
-    df["volatility_weekday"] = 0.0
-    df["volatility_weekend"] = 0.0
 
-    # Use groupby().apply() for better performance
-    # This is more efficient than iterating over unique attraction IDs
-    def calculate_trend_volatility(group):
-        """Calculate trend and volatility for a single attraction's data.
+    # Pre-fetch setting once
+    cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
 
-        Computes volatility_7d (combined), volatility_weekday, and volatility_weekend
-        separately so the model can distinguish stable-weekday / busy-weekend rides.
-        """
-        group = group.sort_values("timestamp")
-
-        zeros = {"trend_7d": 0.0, "volatility_7d": 0.0,
-                 "volatility_weekday": 0.0, "volatility_weekend": 0.0}
-
-        if len(group) < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
-
-        # Get last 7 days of data (168 hours = 7 days * 24 hours)
+    def calc_group_stats(group):
+        """Calculate trend and volatility scalar values for a single attraction."""
         recent_data = group.tail(168) if len(group) > 168 else group
-
-        if len(recent_data) < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
-
-        # Calculate linear trend (slope) using vectorized operations
         x = np.arange(len(recent_data))
         y = recent_data["waitTime"].values
-
-        # Remove NaN values
         mask = ~np.isnan(y)
-        if mask.sum() < 2:
-            return pd.DataFrame({k: [v] * len(group) for k, v in zeros.items()},
-                                 index=group.index)
 
-        x_clean = x[mask]
-        y_clean = y[mask]
-
-        # Calculate slope (trend) - simple linear regression
-        n = len(x_clean)
-        if n > 1:
-            slope = (
-                n * np.sum(x_clean * y_clean) - np.sum(x_clean) * np.sum(y_clean)
-            ) / (n * np.sum(x_clean * x_clean) - np.sum(x_clean) ** 2)
-        else:
-            slope = 0.0
-
-        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
+        slope = 0.0
+        if mask.sum() > 1:
+            x_clean = x[mask]
+            y_clean = y[mask]
+            n = len(x_clean)
+            slope = (n * np.sum(x_clean * y_clean) - np.sum(x_clean) * np.sum(y_clean)) / (n * np.sum(x_clean * x_clean) - np.sum(x_clean) ** 2)
 
         def _dampened_vol(values):
             arr = values[~np.isnan(values)]
@@ -770,47 +739,37 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
                 return 0.0
             return min(np.log1p(np.std(arr)), np.log1p(cap_std))
 
-        # Combined volatility (all 7-day data)
-        volatility_dampened = _dampened_vol(y_clean)
+        vol_7d = _dampened_vol(y)
 
         # Split by day type so the model can distinguish weekday vs weekend patterns.
         # IMPORTANT: DOW convention depends on the source:
         #   - day_of_week DB column: EXTRACT(DOW FROM timestamp) → PostgreSQL: 0=Sunday, 6=Saturday
         #   - pd.Timestamp.dt.dayofweek → pandas: 0=Monday, 5=Saturday, 6=Sunday
-        # We must use the correct weekend set for each convention.
         if "day_of_week" in recent_data.columns:
             dow = recent_data["day_of_week"].values
-            weekend_mask = np.isin(dow, [0, 6])  # Postgres: Sunday=0, Saturday=6
+            weekend_mask = np.isin(dow, [0, 6])
         else:
             dow = pd.to_datetime(recent_data["timestamp"]).dt.dayofweek.values
-            weekend_mask = np.isin(dow, [5, 6])  # pandas: Saturday=5, Sunday=6
-        volatility_weekday = _dampened_vol(y_clean[~weekend_mask[mask]])
-        volatility_weekend = _dampened_vol(y_clean[weekend_mask[mask]])
+            weekend_mask = np.isin(dow, [5, 6])
 
-        return pd.DataFrame(
-            {
-                "trend_7d": [slope] * len(group),
-                "volatility_7d": [volatility_dampened] * len(group),
-                "volatility_weekday": [volatility_weekday] * len(group),
-                "volatility_weekend": [volatility_weekend] * len(group),
-            },
-            index=group.index,
-        )
+        vol_weekday = _dampened_vol(y[~weekend_mask])
+        vol_weekend = _dampened_vol(y[weekend_mask])
 
-    # Apply to each attraction group and combine results
-    trend_volatility_results = df.groupby("attractionId", group_keys=False).apply(
-        calculate_trend_volatility
-    )
+        return pd.Series({
+            "trend_7d": slope,
+            "volatility_7d": vol_7d,
+            "volatility_weekday": vol_weekday,
+            "volatility_weekend": vol_weekend
+        })
 
-    # Assign results back to df
-    if (
-        not trend_volatility_results.empty
-        and "trend_7d" in trend_volatility_results.columns
-    ):
-        df["trend_7d"] = trend_volatility_results["trend_7d"]
-        df["volatility_7d"] = trend_volatility_results["volatility_7d"]
-        df["volatility_weekday"] = trend_volatility_results["volatility_weekday"]
-        df["volatility_weekend"] = trend_volatility_results["volatility_weekend"]
+    # Group by attractionId and compute single scalar per group
+    stats = df.groupby("attractionId").apply(calc_group_stats, include_groups=False)
+
+    # Broadcast back to the original dataframe
+    # We use left merge on attractionId and restore original order via index
+    original_index = df.index
+    df = df.merge(stats, left_on="attractionId", right_index=True, how="left")
+    df.index = original_index
 
     # Clean up temp columns if any
     return df
@@ -1008,35 +967,34 @@ def add_park_occupancy_feature(
         dropout_rate = settings.OCCUPANCY_DROPOUT_RATE
         if dropout_rate > 0:
             ts = pd.to_datetime(df["timestamp"])
-            dow = ts.dt.dayofweek  # Mon=0, Sun=6
-            hour = ts.dt.hour
 
-            for park_id in df["parkId"].unique():
-                mask = df["parkId"] == park_id
-                park_dow = dow[mask]
-                park_hour = hour[mask]
+            # Using temporary columns for merge
+            df_temp = pd.DataFrame({
+                "parkId": df["parkId"],
+                "dow": ts.dt.dayofweek,  # Mon=0, Sun=6
+                "hour": ts.dt.hour,
+                "park_occupancy_pct": df["park_occupancy_pct"]
+            }, index=df.index)
 
-                # Build DOW×hour profile from this park's own training data
-                profile = (
-                    df.loc[mask]
-                    .groupby([park_dow, park_hour])["park_occupancy_pct"]
-                    .mean()
-                )
-                profile.index.names = ["dow", "hour"]
+            # Build DOW×hour profile globally for all parks
+            profile = (
+                df_temp.groupby(["parkId", "dow", "hour"])["park_occupancy_pct"]
+                .mean()
+                .reset_index(name="profile_val")
+            )
 
-                # Look up profile value for every row
-                profile_vals = [
-                    profile.get((d, h), 100.0)
-                    for d, h in zip(park_dow, park_hour)
-                ]
+            # Lookup values via merge
+            mapped = pd.merge(df_temp[["parkId", "dow", "hour"]], profile, on=["parkId", "dow", "hour"], how="left")
+            mapped.index = df_temp.index
+            profile_vals = mapped["profile_val"].fillna(100.0).values
 
-                # Random mask for dropout
-                rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
-                drop = rng.random(mask.sum()) < dropout_rate
+            # Random mask for dropout globally
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
+            drop = rng.random(len(df)) < dropout_rate
 
-                actual = df.loc[mask, "park_occupancy_pct"].values.copy()
-                actual[drop] = np.array(profile_vals)[drop]
-                df.loc[mask, "park_occupancy_pct"] = actual
+            actual = df["park_occupancy_pct"].values.copy()
+            actual[drop] = profile_vals[drop]
+            df["park_occupancy_pct"] = actual
 
         # Rolling Average Dropout: teach the model to predict when avg_wait_last_24h
         # and avg_wait_last_1h are unavailable (i.e. future predictions where we use
@@ -1047,40 +1005,28 @@ def add_park_occupancy_feature(
         if rolling_dropout_rate > 0 and "avg_wait_last_24h" in df.columns:
             ts = pd.to_datetime(df["timestamp"])
             dow = ts.dt.dayofweek  # Mon=0, Sun=6
+            is_weekend = (dow >= 5).values
 
-            for attraction_id in df["attractionId"].unique():
-                attr_mask = df["attractionId"] == attraction_id
+            # Fallbacks
+            fallback_24h = df["rolling_avg_7d"].values
+            fallback_1h = np.where(
+                is_weekend,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
 
-                rng = np.random.default_rng(
-                    settings.CATBOOST_RANDOM_SEED + hash(str(attraction_id)) % 10000
-                )
-                drop = rng.random(attr_mask.sum()) < rolling_dropout_rate
+            # Generate global dropout mask (using single seed is sufficient since rows are well-mixed)
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 1000)
+            drop = rng.random(len(df)) < rolling_dropout_rate
 
-                if not drop.any():
-                    continue
+            actual_24h = df["avg_wait_last_24h"].values.copy()
+            actual_1h = df["avg_wait_last_1h"].values.copy()
 
-                attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 5).values
+            actual_24h[drop] = fallback_24h[drop]
+            actual_1h[drop] = fallback_1h[drop]
 
-                # Fallback for avg_wait_last_24h: per-attraction rolling_avg_7d
-                # (same-week average, available for all rows)
-                fallback_24h = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
-
-                # Fallback for avg_wait_last_1h: weekday vs weekend split average
-                fallback_1h = np.where(
-                    is_weekend,
-                    df.loc[attr_mask, "rolling_avg_weekend"].values,
-                    df.loc[attr_mask, "rolling_avg_weekday"].values,
-                )
-
-                actual_24h = df.loc[attr_mask, "avg_wait_last_24h"].values.copy()
-                actual_1h = df.loc[attr_mask, "avg_wait_last_1h"].values.copy()
-
-                actual_24h[drop] = fallback_24h[drop]
-                actual_1h[drop] = fallback_1h[drop]
-
-                df.loc[attr_mask, "avg_wait_last_24h"] = actual_24h
-                df.loc[attr_mask, "avg_wait_last_1h"] = actual_1h
+            df["avg_wait_last_24h"] = actual_24h
+            df["avg_wait_last_1h"] = actual_1h
 
         # Also dropout rolling_avg_7d → replace with weekday/weekend historical mean.
         # rolling_avg_7d is used as the fallback for avg_wait_last_24h dropout above,
@@ -1090,31 +1036,20 @@ def add_park_occupancy_feature(
         if rolling_7d_dropout_rate > 0 and "rolling_avg_7d" in df.columns:
             ts = pd.to_datetime(df["timestamp"])
             dow = ts.dt.dayofweek  # Mon=0, Sun=6
+            is_weekend = (dow >= 5).values
 
-            for attraction_id in df["attractionId"].unique():
-                attr_mask = df["attractionId"] == attraction_id
+            fallback_7d = np.where(
+                is_weekend,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
 
-                rng = np.random.default_rng(
-                    settings.CATBOOST_RANDOM_SEED
-                    + hash(str(attraction_id) + "_7d") % 10000
-                )
-                drop = rng.random(attr_mask.sum()) < rolling_7d_dropout_rate
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 2000)
+            drop = rng.random(len(df)) < rolling_7d_dropout_rate
 
-                if not drop.any():
-                    continue
-
-                attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 5).values
-
-                fallback_7d = np.where(
-                    is_weekend,
-                    df.loc[attr_mask, "rolling_avg_weekend"].values,
-                    df.loc[attr_mask, "rolling_avg_weekday"].values,
-                )
-
-                actual_7d = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
-                actual_7d[drop] = fallback_7d[drop]
-                df.loc[attr_mask, "rolling_avg_7d"] = actual_7d
+            actual_7d = df["rolling_avg_7d"].values.copy()
+            actual_7d[drop] = fallback_7d[drop]
+            df["rolling_avg_7d"] = actual_7d
 
     return df
 
