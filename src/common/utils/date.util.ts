@@ -113,6 +113,27 @@ export function getTomorrowDateInTimezone(timezone: string): string {
 }
 
 /**
+ * Gets yesterday's date as "YYYY-MM-DD" in a specific timezone.
+ *
+ * Use this when you need "yesterday" in a park's local timezone.
+ * This is critical for computing daily stats from the previous day.
+ *
+ * @param timezone - IANA timezone (e.g., "Europe/Berlin", "America/New_York")
+ * @returns Yesterday's date string in the specified timezone (YYYY-MM-DD)
+ *
+ * @example
+ * // At 2024-01-02 01:00 UTC:
+ * getYesterdayDateInTimezone("UTC") // "2024-01-01"
+ * getYesterdayDateInTimezone("America/Los_Angeles") // "2023-12-31" (UTC-8, still 17:00 on 2024-01-01 local)
+ */
+export function getYesterdayDateInTimezone(timezone: string): string {
+  const todayStr = getCurrentDateInTimezone(timezone);
+  const noonInTz = fromZonedTime(`${todayStr}T12:00:00`, timezone);
+  const yesterdayInTz = addDays(noonInTz, -1);
+  return formatInTimeZone(yesterdayInTz, timezone, "yyyy-MM-dd");
+}
+
+/**
  * Gets the current time as a Date object in a specific timezone.
  *
  * This returns a Date object that represents "now" but adjusted to show
