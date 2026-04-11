@@ -441,7 +441,7 @@ export class ParksController {
       await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
     const includesHistoricalData = response.days.some((d) => d.date <= today);
-    const cacheTTL = includesHistoricalData ? 5 * 60 : 60 * 60;
+    const cacheTTL = includesHistoricalData ? 5 * 60 : 30 * 60; // 5 min for past/today, 30 min for future
 
     if (res) {
       res.setHeader(

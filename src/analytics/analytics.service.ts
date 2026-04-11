@@ -3300,7 +3300,7 @@ export class AnalyticsService {
 
     // Cache key varies by entity and date
     const cacheKey = `analytics:crowdlevel:${type}:${entityId}:${date}`;
-    const cacheTTL = isToday ? 30 * 60 : 24 * 60 * 60; // 30 min for today, 24h for historical
+    const cacheTTL = isToday ? 30 * 60 : 6 * 60 * 60; // 30 min for today, 6h for historical (reduced from 24h)
 
     // Try cache first (but skip for today to ensure freshness within 30 min window)
     const cached = await this.redis.get(cacheKey);

@@ -35,6 +35,7 @@
     "job:ml-train": "ts-node scripts/trigger-ml-training.ts",
     "job:stats-backfill": "ts-node scripts/trigger-stats-backfill.ts",
     "job:baselines-recalc": "ts-node scripts/trigger-baseline-recalculation.ts",
+    "job:clear-calendar-cache": "ts-node scripts/clear-calendar-cache.ts",
     "job:children-sync": "ts-node scripts/trigger-children-sync.ts",
     "job:clear-cache": "ts-node scripts/clear-cache.ts"
   },

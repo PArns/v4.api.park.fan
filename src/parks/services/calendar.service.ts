@@ -52,7 +52,7 @@ const SCHEDULE_REFRESH_GAP_DAYS = 14; // was 7 – avoid triggering for small ga
 @Injectable()
 export class CalendarService {
   private readonly logger = new Logger(CalendarService.name);
-  private readonly CALENDAR_CACHE_TTL = 60 * 60; // 1 hour
+  private readonly CALENDAR_CACHE_TTL = 30 * 60; // 30 minutes (reduced from 1h)
 
   constructor(
     private readonly parksService: ParksService,
