@@ -729,7 +729,12 @@ export class ParksService {
         // calendar day for parks in every timezone (west-of-UTC parks shift
         // midnight-UTC to the previous day, which would narrow the holiday range).
         const dates = scheduleData.map((e) => {
-          const raw = typeof e.date === "string" ? e.date : String(e.date);
+          const raw =
+            typeof e.date === "string"
+              ? e.date
+              : e.date instanceof Date
+                ? e.date.toISOString().split("T")[0]
+                : String(e.date);
           const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
           const dStr = isDateOnly
             ? raw
@@ -811,7 +816,11 @@ export class ParksService {
       // of UTC (e.g. "2026-03-02" → "2026-03-01" in America/New_York). Instead we detect
       // date-only strings and use them directly; full datetime strings are still converted.
       const rawDateStr: string =
-        typeof entry.date === "string" ? entry.date : String(entry.date);
+        typeof entry.date === "string"
+          ? entry.date
+          : entry.date instanceof Date
+            ? entry.date.toISOString().split("T")[0]
+            : String(entry.date);
       const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawDateStr);
       const dateStr: string = isDateOnly
         ? rawDateStr
@@ -894,7 +903,12 @@ export class ParksService {
     // Use the same date-only detection as the main loop to avoid off-by-one TZ shifts.
     const normalizedEntries = scheduleData.map((e) => {
       const rawType = e.type?.toString().toUpperCase();
-      const raw: string = typeof e.date === "string" ? e.date : String(e.date);
+      const raw: string =
+        typeof e.date === "string"
+          ? e.date
+          : e.date instanceof Date
+            ? e.date.toISOString().split("T")[0]
+            : String(e.date);
       const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
         ? raw
         : formatInParkTimezone(new Date(raw), park!.timezone);

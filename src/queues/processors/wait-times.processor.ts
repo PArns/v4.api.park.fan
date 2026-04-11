@@ -25,7 +25,10 @@ import { In } from "typeorm";
 import { Inject } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { formatInParkTimezone } from "../../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../../common/utils/date.util";
 
 /**
  * Wait Times Processor (OPTIMIZED + ENTITY ROUTING + CACHE WARMUP)
@@ -327,8 +330,7 @@ export class WaitTimesProcessor {
                         liveData.operatingHours &&
                         liveData.operatingHours.length > 0
                       ) {
-                        const todayStr = formatInParkTimezone(
-                          new Date(),
+                        const todayStr = getCurrentDateInTimezone(
                           park.timezone || "UTC",
                         );
                         // Find operating window for today
@@ -1134,7 +1136,7 @@ export class WaitTimesProcessor {
 
           if (downtimeMinutes > 0) {
             // Add to daily downtime total
-            const todayStr = formatInParkTimezone(new Date(), timezone);
+            const todayStr = getCurrentDateInTimezone(timezone);
             const dailyKey = `downtime:daily:${attractionId}:${todayStr}`;
 
             const currentTotal = await this.redis.get(dailyKey);

@@ -303,7 +303,10 @@ export class CacheWarmupService {
         `Found ${parks.length} parks to verify in cache (Priority: Operating -> Popular)`,
       );
 
-      // Sort: OPERATING parks first, then POPULAR parks to minimize user-facing latency
+      // 2. Sort Logic:
+      // - Priority 1: OPERATING parks (High priority for active users)
+      // - Priority 2: Popular (Hot) parks
+      // - Priority 3: All others (Ensures no cold start when parks open)
       const popularSet = new Set(popularParkIds);
       const sortedParkIds = [...parkIds].sort((a, b) => {
         const statusA = statusMap.get(a) === "OPERATING" ? 0 : 1;
@@ -320,18 +323,23 @@ export class CacheWarmupService {
         return 0;
       });
 
+      this.logger.verbose(
+        `Found ${parks.length} parks to verify in cache (Full Warmup: Operating -> Popular -> Rest)`,
+      );
+
       // Warm up in batches (Smart Warmup decision logic is inside callback)
       const warmedCount = await this.processBatch(
         sortedParkIds,
-        10, // Increased from 3
+        10,
         "OperatingParks",
         async (parkId) => {
           const status = statusMap.get(parkId);
+          // Force refresh for OPERATING parks to keep wait times fresh
+          // Only warm others if cache expired
           const shouldForce = status === "OPERATING";
           return this.warmupParkCache(parkId, shouldForce);
         },
       );
-
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
         `✅ Cache warmup complete: ${warmedCount}/${parks.length} parks refreshed/verified in ${duration}s`,
