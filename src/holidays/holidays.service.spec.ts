@@ -58,7 +58,7 @@ describe("HolidaysService", () => {
 
       expect(result).toBe(true);
       expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        "holiday.date = :dateStr",
+        "CAST(holiday.date AS DATE) = :dateStr",
         { dateStr: "2023-12-26" },
       );
     });

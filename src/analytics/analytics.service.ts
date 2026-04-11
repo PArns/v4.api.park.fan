@@ -3291,7 +3291,7 @@ export class AnalyticsService {
     isToday: boolean;
   }> {
     // Determine if this is today's data
-    const todayStr = formatInTimeZone(new Date(), timezone, "yyyy-MM-dd");
+    const todayStr = getCurrentDateInTimezone(timezone);
     const isToday = date === todayStr;
 
     // Cache key varies by entity and date

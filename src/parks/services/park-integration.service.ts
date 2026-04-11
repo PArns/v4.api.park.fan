@@ -223,7 +223,7 @@ export class ParkIntegrationService {
     // Find today's schedule entry
     const todaySchedule = schedule.find((s) => {
       const scheduleDate = formatInParkTimezone(s.date, park.timezone);
-      const todayDate = formatInParkTimezone(new Date(), park.timezone);
+      const todayDate = getCurrentDateInTimezone(park.timezone);
       return scheduleDate === todayDate;
     });
 
@@ -318,8 +318,7 @@ export class ParkIntegrationService {
           ) {
             // Found live hours! Use them.
             // But first: Project stale dates to Today
-            const now = new Date();
-            const todayDateString = formatInParkTimezone(now, park.timezone); // YYYY-MM-DD
+            const todayDateString = getCurrentDateInTimezone(park.timezone); // YYYY-MM-DD
 
             // Pick the first operating rule (usually there's only one for the day)
             const rule = liveData.operatingHours[0];
@@ -391,12 +390,12 @@ export class ParkIntegrationService {
     // Use park's timezone to determine "today" and "tomorrow"
     const todayInParkTz = park.timezone
       ? getCurrentDateInTimezone(park.timezone)
-      : new Date().toISOString().split("T")[0];
+      : getCurrentDateInTimezone("UTC");
 
     // Get tomorrow's date in park's timezone (for hourly predictions when park is closed)
     const tomorrowInParkTz = park.timezone
       ? getTomorrowDateInTimezone(park.timezone)
-      : new Date().toISOString().split("T")[0];
+      : getTomorrowDateInTimezone("UTC");
 
     // Trim past entries from schedule response (keep only today onwards in park timezone).
     // The DB query fetches from 2 days ago for late-night status detection, but the
@@ -560,7 +559,10 @@ export class ParkIntegrationService {
           crowdLevel = "closed";
         } else {
           // Find current hour prediction
-          const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
+          // predictedTime from ML is stored as UTC. So we match with current UTC hour.
+          // The previous code `new Date().toISOString().split(":")[0]` returned the current UTC hour, which correctly matches `predictedTime.toISOString()`.
+          // We don't need to change `nowStr` here since ML prediction entity `predictedTime` is stored in UTC and queried by UTC.
+          const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH" (in UTC)
           const currentPred = enrichedPreds.find((p) =>
             p.predictedTime.startsWith(nowStr),
           );
@@ -755,10 +757,7 @@ export class ParkIntegrationService {
             show.status === "OPERATING" && rawShowtimes.length > 0
               ? rawShowtimes.map((st) => {
                   if (!st.startTime) return st;
-                  const todayStr = formatInParkTimezone(
-                    new Date(),
-                    park.timezone,
-                  );
+                  const todayStr = getCurrentDateInTimezone(park.timezone);
                   const currentDatePart = st.startTime.substring(0, 10);
                   return currentDatePart !== todayStr
                     ? { startTime: todayStr + st.startTime.substring(10) }
