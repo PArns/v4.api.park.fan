@@ -11,7 +11,10 @@ import {
   QueueType,
 } from "../external-apis/themeparks/themeparks.types";
 import { ParksService } from "../parks/parks.service";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
 
 /**
  * Queue Data Service
@@ -42,6 +45,10 @@ export class QueueDataService {
 
   private latestCacheKey(attractionId: string, queueType: QueueType): string {
     return `parkfan:queue:latest:${attractionId}:${queueType}`;
+  }
+
+  private attractionTimezoneCacheKey(attractionId: string): string {
+    return `parkfan:attraction:tz:${attractionId}`;
   }
 
   /**
@@ -382,6 +389,14 @@ export class QueueDataService {
         await this.redis
           .set(cacheKey, JSON.stringify(latest), "EX", this.LATEST_CACHE_TTL)
           .catch(() => {}); // non-critical
+        // Cache the timezone separately so save-path cache entries (which lack
+        // the relation) can still perform timezone-aware date comparisons.
+        const tz = (latest as any).attraction?.park?.timezone;
+        if (tz) {
+          await this.redis
+            .set(this.attractionTimezoneCacheKey(attractionId), tz, "EX", 3600)
+            .catch(() => {});
+        }
       }
     }
 
@@ -443,9 +458,15 @@ export class QueueDataService {
     // Date changed → save (ensure at least one data point per day)
     // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
     if (latest.timestamp) {
-      const timezone = latest.attraction?.park?.timezone || "UTC";
+      // Prefer the relation (present on DB-miss path), fall back to the
+      // dedicated timezone key (written on DB-miss, outlives the 10-min entity
+      // cache so save-path entries also get the correct timezone).
+      const timezone =
+        (latest as any).attraction?.park?.timezone ||
+        (await this.redis.get(this.attractionTimezoneCacheKey(attractionId))) ||
+        "UTC";
       const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = formatInParkTimezone(new Date(), timezone);
+      const currentDateStr = getCurrentDateInTimezone(timezone);
       if (latestDateStr !== currentDateStr) {
         return true;
       }

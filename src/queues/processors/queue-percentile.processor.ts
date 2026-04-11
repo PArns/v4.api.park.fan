@@ -395,10 +395,10 @@ export class QueuePercentileProcessor {
 
     try {
       const endDate = new Date();
-      endDate.setHours(0, 0, 0, 0);
+      endDate.setUTCHours(0, 0, 0, 0);
 
       const startDate = new Date(endDate);
-      startDate.setDate(startDate.getDate() - days);
+      startDate.setUTCDate(startDate.getUTCDate() - days);
 
       this.logger.log(
         `   Period: ${startDate.toISOString()} to ${endDate.toISOString()}`,
@@ -410,7 +410,7 @@ export class QueuePercentileProcessor {
 
       while (currentDate < endDate) {
         const batchEnd = new Date(currentDate);
-        batchEnd.setDate(batchEnd.getDate() + 7);
+        batchEnd.setUTCDate(batchEnd.getUTCDate() + 7);
         const actualEnd = batchEnd > endDate ? endDate : batchEnd;
 
         this.logger.log(

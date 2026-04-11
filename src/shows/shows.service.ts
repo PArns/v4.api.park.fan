@@ -12,7 +12,10 @@ import {
 } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 @Injectable()
@@ -452,8 +455,7 @@ export class ShowsService {
     if (latest.timestamp) {
       const timezone = latest.show?.park?.timezone || "UTC";
       const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = formatInParkTimezone(new Date(), timezone);
-
+      const currentDateStr = getCurrentDateInTimezone(timezone);
       if (latestDateStr !== currentDateStr) {
         return true;
       }
