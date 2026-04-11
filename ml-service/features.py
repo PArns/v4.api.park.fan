@@ -211,9 +211,25 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
         # Convert to integer (CatBoost requires int/string for categorical features)
         df["weatherCode"] = df["weatherCode"].astype(int)
 
-    # Temperature average
+    # Temperature average (Sinusoidal interpolation to match TypeScript WeatherService)
+    # Min at 4am, Max at 2pm (14:00)
     if "temperatureMax" in df.columns and "temperatureMin" in df.columns:
-        df["temperature_avg"] = (df["temperatureMax"] + df["temperatureMin"]) / 2
+        # If we have hour, use it for sinusoidal interpolation
+        if "hour" in df.columns:
+            temp_min = df["temperatureMin"]
+            temp_max = df["temperatureMax"]
+            temp_range = temp_max - temp_min
+
+            # Shift curve so peak is at 14:00
+            # cos((h - 14) / 12 * PI) gives peak (1.0) at 14, trough (-1.0) at 2am
+            # We map -1.0..1.0 to 0.0..1.0 range
+            normalized_time = ((df["hour"] - 14) / 12) * np.pi
+            interpolation_factor = np.cos(normalized_time) * -0.5 + 0.5
+
+            df["temperature_avg"] = temp_min + (interpolation_factor * temp_range)
+        else:
+            # Fallback to flat average
+            df["temperature_avg"] = (df["temperatureMax"] + df["temperatureMin"]) / 2
 
     # Binary rain indicator (explicit signal, valuable for ML)
     if "precipitation" in df.columns:

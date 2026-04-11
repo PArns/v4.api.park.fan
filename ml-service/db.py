@@ -748,3 +748,21 @@ def fetch_attraction_baselines() -> pd.DataFrame:
         df = pd.read_sql(text(query), db.bind)
 
     return convert_df_types(df)
+
+
+def fetch_attraction_accuracy() -> pd.DataFrame:
+    """
+    Fetch MAE stats per attraction to use as sample weights.
+    High error attractions will get higher weights in training.
+    """
+    query = """
+    SELECT 
+        attraction_id, 
+        mae
+    FROM attraction_accuracy_stats
+    WHERE compared_predictions >= 5
+    """
+    with get_db() as db:
+        df = pd.read_sql(text(query), db.bind)
+
+    return convert_df_types(df)

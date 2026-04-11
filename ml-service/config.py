@@ -21,10 +21,16 @@ class Settings(BaseSettings):
     MODEL_VERSION: str = "v1.1.0"
 
     # CatBoost Hyperparameters
-    CATBOOST_ITERATIONS: int = 2000  # Raised from 1000: best_iteration was 998/1000 → model was still learning
+    CATBOOST_ITERATIONS: int = (
+        2000  # Raised from 1000: best_iteration was 998/1000 → model was still learning
+    )
     CATBOOST_LEARNING_RATE: float = 0.03  # 0.03 works well with 2000 iterations
-    CATBOOST_DEPTH: int = 7  # Raised from 6: more depth for complex holiday×season interactions
-    CATBOOST_BORDER_COUNT: int = 254  # Increased binning for features for greater precision
+    CATBOOST_DEPTH: int = (
+        7  # Raised from 6: more depth for complex holiday×season interactions
+    )
+    CATBOOST_BORDER_COUNT: int = (
+        254  # Increased binning for features for greater precision
+    )
     CATBOOST_L2_LEAF_REG: float = 3.0
     CATBOOST_RANDOM_SEED: int = 42
     CATBOOST_THREAD_COUNT: int = (
@@ -40,21 +46,14 @@ class Settings(BaseSettings):
     )
 
     # Sample Weight Configuration (Feedback Loop)
-    # DISABLED: Currently deactivated due to performance concerns with large prediction_accuracy table.
-    # The JOIN on prediction_accuracy significantly slows down training queries.
-    #
-    # Future Alternative (when > 6 months of data):
-    # Instead of timestamp-level matching, use attraction-level aggregated weights:
-    #   SELECT attractionId, AVG(absolute_error) as avg_error FROM prediction_accuracy GROUP BY attractionId
-    # This reduces the weight calculation to O(attractions) instead of O(training_rows).
-    #
-    # For now: Train with uniform weights. 59 features + 2 years lookback is sufficient.
-    ENABLE_SAMPLE_WEIGHTS: bool = False  # Disabled for performance
+    # Re-enabled: Now uses efficient attraction-level aggregated MAE from
+    # attraction_accuracy_stats instead of row-level prediction_accuracy JOIN.
+    ENABLE_SAMPLE_WEIGHTS: bool = True
     SAMPLE_WEIGHT_FACTOR: float = (
-        0.3  # Conservative default (0.3 = 30% boost, weights: 1.0 - 1.3)
+        0.5  # 0.5 = up to 50% boost for high-error rides (weights: 1.0 - 1.5)
     )
     MIN_DATA_DAYS_FOR_WEIGHTS: int = (
-        30  # Minimum days of data before weights are actually used
+        7  # Reduced from 30: attraction stats are pre-aggregated anyway
     )
 
     # Prediction Configuration

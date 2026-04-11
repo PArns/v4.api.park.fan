@@ -11,7 +11,7 @@ import logging
 import sys
 
 from config import get_settings
-from db import fetch_training_data
+from db import fetch_training_data, fetch_attraction_accuracy
 from features import engineer_features, get_feature_columns
 from model import WaitTimeModel
 from data_validation import validate_training_data
@@ -124,7 +124,7 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
             df.loc[occ_mask, "park_occupancy_pct"] = hist_occ[occ_mask]
 
             log.info(
-                f"   Occupancy dropout: {occ_count:,} rows ({occ_rate*100:.0f}%) → historical proxy"
+                f"   Occupancy dropout: {occ_count:,} rows ({occ_rate * 100:.0f}%) → historical proxy"
             )
 
     # --- 2. Rolling-avg dropout ---
@@ -134,7 +134,10 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
         ravg_count = int(ravg_mask.sum())
 
         if ravg_count > 0:
-            if "avg_wait_last_24h" in df.columns and "avg_wait_same_dow_4w" in df.columns:
+            if (
+                "avg_wait_last_24h" in df.columns
+                and "avg_wait_same_dow_4w" in df.columns
+            ):
                 df.loc[ravg_mask, "avg_wait_last_24h"] = df.loc[
                     ravg_mask, "avg_wait_same_dow_4w"
                 ]
@@ -149,7 +152,7 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                 df.loc[ravg_mask, "avg_wait_last_1h"] = fallback_1h[ravg_mask]
 
             log.info(
-                f"   Rolling-avg dropout: {ravg_count:,} rows ({ravg_rate*100:.0f}%) → DOW/weekend historical"
+                f"   Rolling-avg dropout: {ravg_count:,} rows ({ravg_rate * 100:.0f}%) → DOW/weekend historical"
             )
 
     return df
@@ -309,89 +312,54 @@ def train_model(version: str = None) -> None:
     X = df[feature_columns]
     y = df["waitTime"]
 
-    # 5.5. Calculate sample weights based on prediction errors (feedback loop)
-    # NOTE: Errors are now included directly in the training data via SQL JOIN
-    # This avoids loading a second massive DataFrame and merging in Python
-    # WARNING: Sample weights can improve performance on difficult cases, but:
-    # - Too high weights (factor > 1.0) can cause overfitting on errors
-    # - Only a small subset of data will have weights (only those with predictions)
-    # - Should be used conservatively (factor 0.3-0.5 recommended)
-    # - Requires sufficient data (>30 days) to avoid overfitting
+    # 5.5. Calculate sample weights based on attraction-level accuracy (feedback loop)
+    # Attractions with high MAE get higher weights to force the model to focus on them.
     sample_weights = None
 
-    # Check if we have enough data for sample weights
-    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
-    can_use_weights = (
-        settings.ENABLE_SAMPLE_WEIGHTS
-        and data_span_days >= settings.MIN_DATA_DAYS_FOR_WEIGHTS
-    )
+    if settings.ENABLE_SAMPLE_WEIGHTS:
+        logger.info("📊 Calculating sample weights from attraction accuracy stats...")
+        try:
+            # Fetch pre-calculated MAE per attraction
+            accuracy_stats = fetch_attraction_accuracy()
 
-    if can_use_weights:
-        logger.info("📊 Calculating sample weights from prediction accuracy...")
-        import numpy as np
+            if not accuracy_stats.empty:
+                # Merge accuracy stats with our training data
+                # Default weight is 1.0
+                df = df.merge(
+                    accuracy_stats[["attraction_id", "mae"]],
+                    left_on="attractionId",
+                    right_on="attraction_id",
+                    how="left",
+                )
 
-        # Check if we have error data (from SQL JOIN)
-        if "absolute_error" in df.columns:
-            # Calculate weights: higher weight for higher errors
-            # Weight formula: 1.0 + (error / max_error) * weight_factor
-            # Conservative default: 0.5 = 50% boost (weights: 1.0 - 1.5)
-            # Aggressive: 1.0 = 100% boost (weights: 1.0 - 2.0)
-
-            error_mask = df["absolute_error"].notna()
-            matched_count = error_mask.sum()
-
-            if matched_count > 0:
-                max_error = df.loc[error_mask, "absolute_error"].max()
+                # Formula: Weight = 1.0 + (MAE / 20) * factor
+                # MAE of 20 mins adds 'factor' to the weight.
+                # We cap the weight at 2.0 to avoid extreme overfitting.
                 weight_factor = settings.SAMPLE_WEIGHT_FACTOR
 
-                sample_weights = np.ones(len(df))
-                if max_error > 0:
-                    matched_errors = df.loc[error_mask, "absolute_error"]
-                    weights = 1.0 + (matched_errors / max_error) * weight_factor
-                    sample_weights[error_mask] = weights
+                # Fill missing MAE with a baseline (e.g., 10 mins)
+                df["mae"] = df["mae"].fillna(10.0)
 
-                matched_percentage = (matched_count / len(df)) * 100
-                avg_weight = weights.mean()
-                max_weight = weights.max()
+                # Calculate weights
+                weights = 1.0 + (df["mae"] / 20.0) * weight_factor
+                sample_weights = weights.clip(1.0, 2.0).values
 
                 logger.info(
-                    f"   Matched {matched_count:,} samples ({matched_percentage:.1f}%) with prediction errors"
+                    f"   Applied weights to {len(df):,} samples based on {len(accuracy_stats)} attraction stats"
                 )
                 logger.info(
-                    f"   Average weight: {avg_weight:.2f} (range: {weights.min():.2f} - {max_weight:.2f})"
-                )
-                logger.info(
-                    f"   Weight factor: {weight_factor} (configurable via SAMPLE_WEIGHT_FACTOR)"
+                    f"   Weight range: {sample_weights.min():.2f} - {sample_weights.max():.2f} (Avg: {sample_weights.mean():.2f})"
                 )
 
-                # Warning if too many samples are weighted (might indicate systematic issues)
-                if matched_percentage > 50:
-                    logger.warning(
-                        f"   ⚠️  WARNING: {matched_percentage:.1f}% of samples have weights - this might cause overfitting"
-                    )
-                    logger.warning(
-                        f"      Consider lowering SAMPLE_WEIGHT_FACTOR (current: {weight_factor})"
-                    )
-                elif matched_percentage < 5:
-                    logger.info(
-                        f"   ℹ️  Only {matched_percentage:.1f}% of samples have weights - limited impact expected"
-                    )
+                # Cleanup
+                df = df.drop(columns=["attraction_id", "mae"], errors="ignore")
             else:
                 logger.info(
-                    "   No matching prediction errors found (using uniform weights)"
+                    "   No attraction accuracy stats found (using uniform weights)"
                 )
-        else:
-            logger.info("   No prediction errors available (using uniform weights)")
-    elif (
-        settings.ENABLE_SAMPLE_WEIGHTS
-        and data_span_days < settings.MIN_DATA_DAYS_FOR_WEIGHTS
-    ):
-        logger.info(
-            f"   Sample weights disabled: Only {data_span_days} days of data (< {settings.MIN_DATA_DAYS_FOR_WEIGHTS} days required)"
-        )
-        logger.info(
-            "      Enable weights when you have more historical data to avoid overfitting"
-        )
+        except Exception as e:
+            logger.warning(f"   ⚠️ Failed to calculate sample weights: {e}")
+            sample_weights = None
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
