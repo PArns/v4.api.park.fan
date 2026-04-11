@@ -109,7 +109,7 @@ def fetch_recent_wait_times(
                 AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
             WHERE qd."attractionId"::text = ANY(:attraction_ids)
-                AND qd.timestamp >= NOW() - INTERVAL :lookback_days DAY
+                AND qd.timestamp >= NOW() - :lookback_days * INTERVAL '1 day'
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
                 AND qd.status = 'OPERATING'
@@ -1452,16 +1452,15 @@ def predict_wait_times(
         feature_context,
     )
 
-    # OPTIMIZATION: Skip ML inference for CLOSED/UNKNOWN days when schedule exists.
-    # Those predictions would be overwritten and filtered out anyway; computing them wastes CPU.
+    # OPTIMIZATION: Skip ML inference for CLOSED days when schedule exists.
+    # UNKNOWN days are kept because they should receive predictions (Calendar expects ML or fallback "moderate" for them).
     #
     # CRITICAL - Parks with "quasi keine" schedules still get predictions:
     # - No schedule in DB for prediction range → status stays OPERATING (default) → we keep all rows
     # - Only UNKNOWN/CLOSED in range (no OPERATING) → park_has_operating=False → we keep default
-    # - Empty df_inference only when every date has explicit CLOSED/UNKNOWN (park has OPERATING elsewhere)
-    df_inference = features_df[features_df["status"] == "OPERATING"]
+    df_inference = features_df[features_df["status"].isin(["OPERATING", "UNKNOWN"])]
     if df_inference.empty:
-        return []  # All days explicitly closed/unknown; filter_predictions_by_schedule would return [] anyway
+        return []  # All days explicitly closed; filter_predictions_by_schedule would return [] anyway
 
     # Predict with uncertainty estimation (only for OPERATING rows)
     try:
@@ -1478,10 +1477,15 @@ def predict_wait_times(
         uncertainties = np.zeros(len(predictions))
         use_uncertainty = False
 
-    # Format results (only OPERATING rows; CLOSED/UNKNOWN never reach the client)
+    # Format results (OPERATING and UNKNOWN rows; CLOSED never reach the client)
     results = []
     for i, (idx, row) in enumerate(df_inference.iterrows()):
         pred_wait = round_to_nearest_5(predictions[i])
+
+        # If schedule is UNKNOWN, park might be closed. Enforce a minimum 5 min wait if it's considered operating by the model
+        # or zero if the model thinks it's closed anyway.
+        if row["status"] == "UNKNOWN" and pred_wait > 0:
+            pred_wait = max(5, pred_wait)
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600

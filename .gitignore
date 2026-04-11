@@ -71,4 +71,5 @@ ml-service/models/
 *.bak*
 /.py
 !docs/
-!docs/**
+!docs/**venv/
+venv/

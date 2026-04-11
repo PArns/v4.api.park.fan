@@ -108,9 +108,10 @@ class WaitTimeModel:
             iterations=settings.CATBOOST_ITERATIONS,
             learning_rate=settings.CATBOOST_LEARNING_RATE,
             depth=settings.CATBOOST_DEPTH,
+            border_count=getattr(settings, "CATBOOST_BORDER_COUNT", 254),
             l2_leaf_reg=settings.CATBOOST_L2_LEAF_REG,
-            loss_function="RMSE",
-            eval_metric="RMSE",
+            loss_function="RMSEWithUncertainty",
+            eval_metric="RMSEWithUncertainty",
             random_seed=settings.CATBOOST_RANDOM_SEED,
             posterior_sampling=True,  # Enable virtual ensembles for uncertainty
             thread_count=thread_count,  # Use all CPU cores for parallel training
@@ -129,6 +130,9 @@ class WaitTimeModel:
 
         # Calculate metrics
         y_pred = self.model.predict(X_val[self.feature_columns])
+        # If model used RMSEWithUncertainty, predict returns (n_samples, 2)
+        if y_pred.ndim == 2 and y_pred.shape[1] == 2:
+            y_pred = y_pred[:, 0]
         metrics = self._calculate_metrics(y_val, y_pred)
 
         # Store metadata
@@ -397,6 +401,10 @@ class WaitTimeModel:
 
         predictions = self.model.predict(X_ordered)
 
+        # If model used RMSEWithUncertainty, predict returns (n_samples, 2)
+        if predictions.ndim == 2 and predictions.shape[1] == 2:
+            predictions = predictions[:, 0]
+
         # Ensure no negative predictions
         predictions = np.maximum(predictions, 0)
 
@@ -434,21 +442,26 @@ class WaitTimeModel:
         X_ordered = X[model_features].copy()
 
         # Get virtual ensemble predictions.
-        # prediction_type="VirtEnsembles" returns actual wait-time predictions per ensemble,
-        # shape: (n_samples, n_ensembles, 1).
-        # NOTE: "TotalUncertainty" returns uncertainty scalars [knowledge, data], NOT predictions —
-        # using it as predictions caused all outputs to collapse to ~5 min.
+        # Ensure virtual_ensembles_count does not exceed actual tree count
+        tree_count = getattr(self.model, "tree_count_", 10)
+        ensembles_count = min(10, max(1, tree_count))
+
         virtual_preds = self.model.virtual_ensembles_predict(
             X_ordered,
             prediction_type="VirtEnsembles",
-            virtual_ensembles_count=10,  # Use 10 virtual ensembles
+            virtual_ensembles_count=ensembles_count,
         )
 
-        # CatBoost VirtEnsembles returns (n_samples, n_ensembles, 1) for multi-output models
-        # but may return (n_samples, n_ensembles) directly for standard RMSE regression.
-        # squeeze(axis=2) would raise ValueError on a 2D array, so guard with ndim check.
+        # CatBoost VirtEnsembles returns different shapes based on loss_function:
+        # - RMSEWithUncertainty: (n_samples, n_ensembles, 2) where [:,:,0] is the prediction and [:,:,1] is data variance
+        # - RMSE: (n_samples, n_ensembles, 1) or (n_samples, n_ensembles)
         if virtual_preds.ndim == 3:
-            virtual_preds = virtual_preds.squeeze(axis=2)
+            if virtual_preds.shape[2] == 2:
+                # RMSEWithUncertainty: Extract mean prediction
+                virtual_preds = virtual_preds[:, :, 0]
+            else:
+                # Standard RMSE
+                virtual_preds = virtual_preds.squeeze(axis=2)
 
         # Calculate statistics across ensemble dimension.
         # With only 10 ensembles, p5/p95 ≈ min/max and are very noisy.
