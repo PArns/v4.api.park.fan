@@ -309,8 +309,7 @@ export class ShowsService {
 
         if (show && show.park && show.park.timezone) {
           const timezone = show.park.timezone;
-          const now = new Date();
-          const todayDateString = formatInParkTimezone(now, timezone); // YYYY-MM-DD
+          const todayDateString = getCurrentDateInTimezone(timezone); // YYYY-MM-DD
 
           showLiveData.showtimes = showLiveData.showtimes.map((st) => {
             if (!st.startTime) return st;
@@ -456,6 +455,7 @@ export class ShowsService {
       const timezone = latest.show?.park?.timezone || "UTC";
       const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
       const currentDateStr = getCurrentDateInTimezone(timezone);
+
       if (latestDateStr !== currentDateStr) {
         return true;
       }

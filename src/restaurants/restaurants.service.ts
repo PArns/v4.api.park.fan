@@ -15,7 +15,10 @@ import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
 
 @Injectable()
 export class RestaurantsService {
@@ -367,6 +370,7 @@ export class RestaurantsService {
     const latest = await this.restaurantLiveDataRepository.findOne({
       where: { restaurantId },
       order: { timestamp: "DESC" },
+      relations: ["restaurant", "restaurant.park"],
     });
 
     // No previous data → save
@@ -403,6 +407,17 @@ export class RestaurantsService {
       )
     ) {
       return true;
+    }
+
+    // Date changed → save (ensure at least one data point per day)
+    if (latest.timestamp) {
+      const timezone = latest.restaurant?.park?.timezone || "UTC";
+      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
+      const currentDateStr = getCurrentDateInTimezone(timezone);
+
+      if (latestDateStr !== currentDateStr) {
+        return true;
+      }
     }
 
     // No significant change

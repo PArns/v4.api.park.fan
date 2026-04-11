@@ -47,6 +47,7 @@ import { DiscoveryModule } from "../discovery/discovery.module";
 import { SearchModule } from "../search/search.module";
 import { RedisModule } from "../common/redis/redis.module";
 import { StatsModule } from "../stats/stats.module";
+import { PopularityModule } from "../popularity/popularity.module";
 import { StatsProcessor } from "./processors/stats.processor";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
@@ -141,6 +142,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
     DiscoveryModule,
     StatsModule,
     SearchModule,
+    PopularityModule,
     RedisModule, // For cache warmup service
     GeoipModule,
   ],
