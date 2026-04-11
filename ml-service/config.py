@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2
-    TRAIN_TEST_SPLIT: float = 0.8
+    TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (
         30  # Used for large datasets (>60 days); smaller datasets use adaptive % split
     )
@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # historical mean. This teaches the model to rely on hour/day_of_week features
     # when only an approximate occupancy is available — matching the inference scenario
     # for future predictions (tomorrow, next week) where real-time occupancy is unknown.
-    OCCUPANCY_DROPOUT_RATE: float = 0.50
+    OCCUPANCY_DROPOUT_RATE: float = 0.60
 
     # Rolling Average Dropout Rate
     # For dropout rows, avg_wait_last_24h and avg_wait_last_1h are replaced with
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # model to predict from other signals (holidays, season, hour) when real-time
     # rolling averages are unavailable — matching the inference scenario for future
     # predictions (next week, next month) where we use historical DOW/hour profiles.
-    ROLLING_AVG_DROPOUT_RATE: float = 0.40
+    ROLLING_AVG_DROPOUT_RATE: float = 0.50
 
     # rolling_avg_7d Dropout Rate
     # For dropout rows, rolling_avg_7d is replaced with rolling_avg_weekday or
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # features. A 20% dropout forces the model to learn from other signals when the
     # 7-day average is unavailable (e.g. attraction just opened, park re-opened after
     # seasonal closure).
-    ROLLING_7D_DROPOUT_RATE: float = 0.35
+    ROLLING_7D_DROPOUT_RATE: float = 0.40
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200

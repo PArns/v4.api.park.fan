@@ -42,9 +42,9 @@ def validate_training_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, An
     negative_count = negative_mask.sum()
 
     # Step 2: Remove extremely high wait times (likely sensor errors)
-    # Increased from 300 to 600 minutes (10 hours) to account for very busy days
-    # Some popular attractions can legitimately have 5-8 hour waits on peak days
-    MAX_WAIT_TIME = 600  # 10 hours - longer is likely an error
+    # Increased from 300 to 400 minutes (6.6 hours) to account for very busy days
+    # Some popular attractions can legitimately have 5-6 hour waits on peak days
+    MAX_WAIT_TIME = 400  # 6.6 hours - longer is likely an error
     extreme_high_mask = df["waitTime"] > MAX_WAIT_TIME
 
     # Step 3: Statistical outlier detection per attraction (IQR method)

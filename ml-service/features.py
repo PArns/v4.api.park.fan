@@ -711,99 +711,74 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         .fillna(0)
     )
 
+    # Calculate dampening log constants
+    cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
+    max_log_vol = np.log1p(cap_std)
+
     # Trend features (7-day trend slope)
-    # Calculate slope of wait times over last 7 days using linear regression
-    # Positive = increasing trend, negative = decreasing trend
-    df["trend_7d"] = 0.0
-    df["volatility_7d"] = 0.0
-    df["volatility_weekday"] = 0.0
-    df["volatility_weekend"] = 0.0
+    # We can't use waitTime for the deviation without introducing target leakage!
+    # Instead, we will define trend as the difference between the 24h rolling average
+    # and the 7d rolling average:
+    if "avg_wait_last_24h" in df.columns and "rolling_avg_7d" in df.columns:
+        df["trend_7d"] = (df["avg_wait_last_24h"] - df["rolling_avg_7d"]).fillna(0.0)
+    else:
+        df["trend_7d"] = 0.0
 
-    # Use groupby().apply() for better performance
-    # This is more efficient than iterating over unique attraction IDs
-    def calculate_trend_volatility(group):
-        """Calculate trend and volatility for a single attraction's data.
+    # Need time-based grouped rolling
+    # Because there are duplicate timestamps across attractions, using timestamp as the
+    # sole index will crash alignment. To assign back safely without a multi-index, we rely
+    # on `.values` mapping, which requires the DataFrame and the GroupBy output to be
+    # strictly ordered by `["attractionId", "timestamp"]`.
+    # df is already sorted by ["attractionId", "timestamp"] via line 560.
 
-        Computes volatility_7d (combined), volatility_weekday, and volatility_weekend
-        separately so the model can distinguish stable-weekday / busy-weekend rides.
-        """
-        group = group.sort_values("timestamp")
+    # We must set index to timestamp for .rolling("7d") to work, but we must sort by
+    # ["attractionId", "timestamp"] so that the output of groupby rolling aligns perfectly
+    # with `df`.
+    df_indexed = df.set_index("timestamp").sort_values(["attractionId", "timestamp"])
 
-        zeros = {"trend_7d": 0.0, "volatility_7d": 0.0,
-                 "volatility_weekday": 0.0, "volatility_weekend": 0.0}
-
-        if len(group) < 2:
-            return pd.Series(zeros)
-
-        # Get last 7 days of data (168 hours = 7 days * 24 hours)
-        recent_data = group.tail(168) if len(group) > 168 else group
-
-        if len(recent_data) < 2:
-            return pd.Series(zeros)
-
-        # Calculate linear trend (slope) using vectorized operations
-        x = np.arange(len(recent_data))
-        y = recent_data["waitTime"].values
-
-        # Remove NaN values
-        mask = ~np.isnan(y)
-        if mask.sum() < 2:
-            return pd.Series(zeros)
-
-        x_clean = x[mask]
-        y_clean = y[mask]
-
-        # Calculate slope (trend) - simple linear regression
-        n = len(x_clean)
-        if n > 1:
-            slope = (
-                n * np.sum(x_clean * y_clean) - np.sum(x_clean) * np.sum(y_clean)
-            ) / (n * np.sum(x_clean * x_clean) - np.sum(x_clean) ** 2)
-        else:
-            slope = 0.0
-
-        cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
-
-        def _dampened_vol(values):
-            arr = values[~np.isnan(values)]
-            if len(arr) < 2:
-                return 0.0
-            return min(np.log1p(np.std(arr)), np.log1p(cap_std))
-
-        # Combined volatility (all 7-day data)
-        volatility_dampened = _dampened_vol(y_clean)
-
-        # Split by day type so the model can distinguish weekday vs weekend patterns.
-        if "day_of_week" in recent_data.columns:
-            dow = recent_data["day_of_week"].values
-            weekend_mask = np.isin(dow, [0, 6])  # Postgres: Sunday=0, Saturday=6
-        else:
-            dow = pd.to_datetime(recent_data["timestamp"]).dt.dayofweek.values
-            weekend_mask = np.isin(dow, [5, 6])  # pandas: Saturday=5, Sunday=6
-        volatility_weekday = _dampened_vol(y_clean[~weekend_mask[mask]])
-        volatility_weekend = _dampened_vol(y_clean[weekend_mask[mask]])
-
-        return pd.Series(
-            {
-                "trend_7d": slope,
-                "volatility_7d": volatility_dampened,
-                "volatility_weekday": volatility_weekday,
-                "volatility_weekend": volatility_weekend,
-            }
-        )
-
-    # Apply to each attraction group and combine results
-    trend_volatility_results = df.groupby("attractionId").apply(
-        calculate_trend_volatility
+    # Calculate rolling std for last 7d
+    # .reset_index(level=0, drop=True) removes the attractionId index added by groupby,
+    # leaving just the timestamp index (which we don't care about, as we use .values)
+    df["volatility_7d"] = (
+        df_indexed.groupby("attractionId", sort=False)["waitTime"]
+        .rolling("7d", closed="left", min_periods=2)
+        .std()
+        .values
     )
 
-    # Assign results back to df
-    if not trend_volatility_results.empty:
-        for col in ["trend_7d", "volatility_7d", "volatility_weekday", "volatility_weekend"]:
-            if col in trend_volatility_results.columns:
-                df[col] = df["attractionId"].map(trend_volatility_results[col])
+    # Recreate weekday vs weekend masks
+    _df_indexed_dow = df_indexed.copy()
+    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
+        _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
+    )
+    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
+        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+    )
 
-    # Clean up temp columns if any
+    # Rolling std for weekday only
+    df["volatility_weekday"] = (
+        _df_indexed_dow.groupby("attractionId", sort=False)["_wait_weekday"]
+        .rolling("7d", closed="left", min_periods=2)
+        .std()
+        .values
+    )
+
+    # Rolling std for weekend only
+    df["volatility_weekend"] = (
+        _df_indexed_dow.groupby("attractionId", sort=False)["_wait_weekend"]
+        .rolling("7d", closed="left", min_periods=2)
+        .std()
+        .values
+    )
+
+    # Clean up and apply log limits
+    for col in ["volatility_7d", "volatility_weekday", "volatility_weekend"]:
+        df[col] = df[col].fillna(0.0)
+        df[col] = np.minimum(np.log1p(df[col]), max_log_vol)
+
+    # Restore the original sort order using the variable from line 559
+    df = df.loc[original_index]
+
     return df
 
 

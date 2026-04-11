@@ -55,10 +55,10 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         lambda x: x.rolling(window=7, min_periods=1, center=True).median()
     )
 
-    # Condition: Wait time is very low (< 10 min)
-    # BUT the surrounding context (median) is high (> 25 min)
+    # Condition: Wait time is very low (<= 5 min)
+    # BUT the surrounding context (median) is high (> 30 min)
     # This suggests a sudden, unrepresentative drop (downtime/reset) vs natural low crowds
-    anomaly_mask = (df["waitTime"] < 10) & (df["rolling_median"] > 25)
+    anomaly_mask = (df["waitTime"] <= 5) & (df["rolling_median"] > 30)
 
     df_clean = df[~anomaly_mask].copy()
     df_clean = df_clean.drop(columns=["rolling_median"])
