@@ -59,7 +59,7 @@ export class AnalyticsService {
    *
    * Strategy: Start with 5min threshold, fallback to 0 if insufficient data
    */
-  private readonly MIN_WAIT_TIME_THRESHOLD = 5;
+  private readonly MIN_WAIT_TIME_THRESHOLD = 10;
 
   /**
    * Minimum sample size required before applying MIN_WAIT_TIME_THRESHOLD
@@ -326,7 +326,7 @@ export class AnalyticsService {
     // Headliner-only for current + trend (same rides as P50 baseline and peakWaitToday)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: ["parkId", "attractionId"],
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
 
@@ -334,7 +334,7 @@ export class AnalyticsService {
     const currentAvgWait = await this.getCurrentSpotWaitTime(
       parkId,
       0.5,
-      5,
+      this.MIN_WAIT_TIME_THRESHOLD,
       headlinerIds.length > 0 ? headlinerIds : undefined,
     );
 
@@ -524,13 +524,13 @@ export class AnalyticsService {
     // Get current P50 wait time (headliner-only when available, same as calculateParkOccupancy)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: ["parkId", "attractionId"],
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
     const currentAvgWait = await this.getCurrentSpotWaitTime(
       parkId,
       0.5,
-      5,
+      this.MIN_WAIT_TIME_THRESHOLD,
       headlinerIds.length > 0 ? headlinerIds : undefined,
     );
 
@@ -905,7 +905,7 @@ export class AnalyticsService {
       .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime >= 5")
+      .andWhere("qd.waitTime >= 10")
       .andWhere("qd.queueType = 'STANDBY'")
       .getRawMany();
 
@@ -1126,7 +1126,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
       ),
       attraction_counts AS (
         -- Total attraction count
@@ -1170,7 +1170,7 @@ export class AnalyticsService {
     let peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: ["parkId", "attractionId"],
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
     if (headlinerIds.length > 0) {
@@ -1591,7 +1591,7 @@ export class AnalyticsService {
       .andWhere("qd.timestamp BETWEEN :start AND :end", { start, end })
       .andWhere("qd.status = :status", { status: "OPERATING" })
       .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime >= 5")
+      .andWhere("qd.waitTime >= 10")
       .andWhere("qd.queueType = 'STANDBY'")
       .getRawOne();
 
@@ -2536,7 +2536,7 @@ export class AnalyticsService {
          FROM queue_data qd
          WHERE qd."attractionId" = $1::uuid
            AND qd.timestamp       >= $2
-           AND qd."waitTime"      >= 5
+           AND qd."waitTime"      >= 10
            AND qd.status          = 'OPERATING'
            AND qd."queueType"     = 'STANDBY'`,
         [entityId, cutoff, resolvedTimezone],
@@ -2553,7 +2553,7 @@ export class AnalyticsService {
          INNER JOIN attractions a ON a.id = qd."attractionId"
          WHERE a."parkId"      = $1::uuid
            AND qd.timestamp   >= $2
-           AND qd."waitTime"  >= 5
+           AND qd."waitTime"  >= 10
            AND qd.status      = 'OPERATING'
            AND qd."queueType" = 'STANDBY'`,
         [entityId, cutoff, resolvedTimezone],
@@ -2694,7 +2694,7 @@ export class AnalyticsService {
         )
         GROUP BY a."parkId"
         HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
       ),
       park_status AS (
         SELECT "parkId" FROM schedule_open_parks
@@ -2849,7 +2849,7 @@ export class AnalyticsService {
         )
         GROUP BY a."parkId"
         HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
       ),
       park_status AS (
         SELECT "parkId" FROM schedule_open_parks
@@ -2875,7 +2875,7 @@ export class AnalyticsService {
         JOIN parks p ON p.id = a."parkId"
         JOIN park_status ps ON ps."parkId" = p.id
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT *
@@ -3064,7 +3064,7 @@ export class AnalyticsService {
         )
         GROUP BY a."parkId"
         HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 25
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
       ),
       park_status AS (
         SELECT "parkId" FROM schedule_open_parks
@@ -3371,7 +3371,7 @@ export class AnalyticsService {
           AND qd.timestamp <= $3
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
           AND qd."queueType" = 'STANDBY'
         `,
         [entityId, startOfDay, endOfDay],
@@ -3385,7 +3385,7 @@ export class AnalyticsService {
       // For parks, use headliner attractions to match live crowd level and baseline calculations
       const headliners = await this.headlinerAttractionRepository.find({
         where: { parkId: entityId },
-        select: ["attractionId"],
+        select: ["parkId", "attractionId"],
       });
       let targetAttractionIds = headliners.map((h) => h.attractionId);
 
@@ -3410,7 +3410,7 @@ export class AnalyticsService {
             AND qd.timestamp <= $3
             AND qd.status = 'OPERATING'
             AND qd."waitTime" IS NOT NULL
-            AND qd."waitTime" >= 5
+            AND qd."waitTime" >= 10
             AND qd."queueType" = 'STANDBY'
           `,
           [targetAttractionIds, startOfDay, endOfDay],
@@ -3543,7 +3543,7 @@ export class AnalyticsService {
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
           AND qd."queueType" = 'STANDBY'
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
@@ -3570,7 +3570,7 @@ export class AnalyticsService {
           AND qd.timestamp <= $4
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
           AND qd."queueType" = 'STANDBY'
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
@@ -3674,7 +3674,7 @@ export class AnalyticsService {
     const result = await this.queueDataRepository.query(
       `
       -- Step 1: Calculate statistics for all attractions
-      -- waitTime >= 5 excludes the "1-minute walk-on placeholder" common in water park
+      -- waitTime >= 10 excludes the "1-minute walk-on placeholder" common in water park
       -- APIs (where waitTime=1 means "open, no real queue"). This aligns with the
       -- getCurrentSpotWaitTime minWaitTime=5 default so baseline and current use the same data.
       -- Schedule JOIN: exclude days where the park is explicitly scheduled as non-OPERATING.
@@ -3698,7 +3698,7 @@ export class AnalyticsService {
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
       ),
@@ -3802,7 +3802,7 @@ export class AnalyticsService {
           AND qd.timestamp >= $3
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
-          AND qd."waitTime" >= 5
+          AND qd."waitTime" >= 10
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
         ORDER BY p90_wait DESC
@@ -4092,7 +4092,7 @@ export class AnalyticsService {
   async getHeadlinerAttractionIds(parkId: string): Promise<Set<string>> {
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: ["parkId", "attractionId"],
     });
     return new Set(headliners.map((h) => h.attractionId));
   }
@@ -4199,7 +4199,7 @@ export class AnalyticsService {
         AND qd.timestamp >= $3
         AND qd."queueType" = 'STANDBY'
         AND qd.status = 'OPERATING'
-        AND qd."waitTime" >= 5
+        AND qd."waitTime" >= 10
         AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
       `,
       [attractionId, timezone, cutoff],

@@ -13,6 +13,10 @@ import { ShowLiveData } from "../shows/entities/show-live-data.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
+import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
+import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("AnalyticsService", () => {
@@ -20,10 +24,10 @@ describe("AnalyticsService", () => {
 
   // Mock Redis
   const mockRedis = {
-    get: jest.fn(),
-    set: jest.fn(),
-    del: jest.fn(),
-    setex: jest.fn(),
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue("OK"),
+    del: jest.fn().mockResolvedValue(1),
+    setex: jest.fn().mockResolvedValue("OK"),
   };
 
   // Create standard query builder mock
@@ -52,7 +56,7 @@ describe("AnalyticsService", () => {
 
   // Repository mocks
   const mockQueueDataRepository = {
-    query: jest.fn(),
+    query: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
     find: jest.fn(),
     findOne: jest.fn(),
@@ -62,15 +66,15 @@ describe("AnalyticsService", () => {
   const mockAttractionRepository = {
     count: jest.fn(),
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
-    find: jest.fn(),
-    findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue({ timezone: "UTC" }),
   };
 
   const mockParkRepository = {
     count: jest.fn(),
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
-    find: jest.fn(),
-    findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue({ timezone: "UTC" }),
     manager: {
       query: jest.fn(),
     },
@@ -94,6 +98,7 @@ describe("AnalyticsService", () => {
   const mockScheduleEntryRepository = {
     count: jest.fn(),
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
+    findOne: jest.fn().mockResolvedValue(null),
   };
 
   const mockRestaurantLiveDataRepository = {
@@ -119,6 +124,28 @@ describe("AnalyticsService", () => {
   const mockQueueDataAggregateRepository = {
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
     find: jest.fn(),
+  };
+
+  const mockParkDailyStatsRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    find: jest.fn().mockResolvedValue([]),
+    save: jest.fn(),
+  };
+
+  const mockHeadlinerAttractionRepository = {
+    find: jest.fn().mockResolvedValue([]),
+    save: jest.fn(),
+    delete: jest.fn(),
+  };
+
+  const mockParkP50BaselineRepository = {
+    findOne: jest.fn().mockResolvedValue({ p50Baseline: 30 }),
+    upsert: jest.fn(),
+  };
+
+  const mockAttractionP50BaselineRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    upsert: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -174,6 +201,22 @@ describe("AnalyticsService", () => {
           useValue: mockQueueDataAggregateRepository,
         },
         {
+          provide: getRepositoryToken(ParkDailyStats),
+          useValue: mockParkDailyStatsRepository,
+        },
+        {
+          provide: getRepositoryToken(HeadlinerAttraction),
+          useValue: mockHeadlinerAttractionRepository,
+        },
+        {
+          provide: getRepositoryToken(ParkP50Baseline),
+          useValue: mockParkP50BaselineRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionP50Baseline),
+          useValue: mockAttractionP50BaselineRepository,
+        },
+        {
           provide: REDIS_CLIENT,
           useValue: mockRedis,
         },
@@ -205,17 +248,17 @@ describe("AnalyticsService", () => {
     });
 
     it("should calculate occupancy percentage correctly", async () => {
-      // Mock current average wait time
-      const queryBuilder = createMockQueryBuilder();
-      queryBuilder.getRawOne
-        .mockResolvedValueOnce({ avgWait: "30" }) // Current wait
-        .mockResolvedValueOnce(null) // Previous data for trend
-        .mockResolvedValueOnce(null); // Typical data
-
-      mockQueueDataRepository.createQueryBuilder.mockReturnValue(queryBuilder);
-      mockQueueDataRepository.query.mockResolvedValue([
-        { operating_count: "5" },
+      // Mock headliners to trigger headliner path
+      mockHeadlinerAttractionRepository.find.mockResolvedValueOnce([
+        { attractionId: "a1" },
       ]);
+
+      // Mock current average wait time via getCurrentSpotWaitTime
+      mockQueueDataRepository.query
+        .mockResolvedValueOnce([{ attractionId: "a1", avg_wait: "30" }]) // getCurrentSpotWaitTime
+        .mockResolvedValueOnce([]) // trend bucket 1
+        .mockResolvedValueOnce([]) // trend bucket 2
+        .mockResolvedValueOnce([{ operating_count: "5" }]); // getActiveAttractionsCount
 
       const result = await service.calculateParkOccupancy("park-123");
 
@@ -373,7 +416,7 @@ describe("AnalyticsService", () => {
       expect(stats1).toBeDefined();
       expect(stats1?.min).toBe(5);
       expect(stats1?.max).toBe(45);
-      expect(stats1?.avg).toBe(21); // Rounded
+      expect(stats1?.avg).toBe(20); // Rounded 20.25 -> 20
       expect(stats1?.count).toBe(100);
       expect(stats1?.maxTimestamp).toEqual(
         new Date("2023-01-01T10:00:00.000Z"),

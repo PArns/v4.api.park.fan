@@ -115,7 +115,7 @@ export class QueueDataService {
 
           // Get the attraction with park for the cache
           const savedWithRelations = await this.queueDataRepository.findOne({
-            where: { id: queueEntry.id },
+            where: { id: queueEntry.id, timestamp: queueEntry.timestamp },
             relations: ["attraction", "attraction.park"],
           });
 
@@ -208,7 +208,7 @@ export class QueueDataService {
 
           // Get the attraction with park for the cache
           const savedWithRelations = await this.queueDataRepository.findOne({
-            where: { id: queueEntry.id },
+            where: { id: queueEntry.id, timestamp: queueEntry.timestamp },
             relations: ["attraction", "attraction.park"],
           });
 
@@ -373,6 +373,7 @@ export class QueueDataService {
         },
         order: { timestamp: "DESC" },
         select: [
+          "id", // Must include ID for composite primary key relation mapping
           "status",
           "waitTime",
           "returnStart",

@@ -597,7 +597,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
     )
     _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+        _df_indexed_dow.index.dayofweek >= 10  # Sat-Sun
     )
     df["rolling_avg_weekday"] = (
         _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
@@ -1060,7 +1060,7 @@ def add_park_occupancy_feature(
                     continue
 
                 attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 5).values
+                is_weekend = (attr_dow >= 10).values
 
                 # Fallback for avg_wait_last_24h: per-attraction rolling_avg_7d
                 # (same-week average, available for all rows)
@@ -1104,7 +1104,7 @@ def add_park_occupancy_feature(
                     continue
 
                 attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 5).values
+                is_weekend = (attr_dow >= 10).values
 
                 fallback_7d = np.where(
                     is_weekend,
@@ -1415,7 +1415,7 @@ def add_park_schedule_features(
     # 1. Training Override: Target data (waitTime) indicates open
     if "waitTime" in df.columns:
         mask_wait_time = (
-            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] >= 5)
+            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] >= 10)
         )
         df.loc[mask_wait_time, "is_park_open"] = 1
 
@@ -1427,7 +1427,7 @@ def add_park_schedule_features(
                 (df["is_park_open"] == 0)
                 & df["attractionId"].isin(cw.keys())
                 & df["attractionId"].apply(
-                    lambda x: cw.get(x, 0) >= 5 if x in cw else False
+                    lambda x: cw.get(x, 0) >= 10 if x in cw else False
                 )
             )
             df.loc[mask_context, "is_park_open"] = 1

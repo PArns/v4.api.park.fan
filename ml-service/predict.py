@@ -111,7 +111,7 @@ def fetch_recent_wait_times(
             WHERE qd."attractionId"::text = ANY(:attraction_ids)
                 AND qd.timestamp >= NOW() - :lookback_days * INTERVAL '1 day'
                 AND qd."waitTime" IS NOT NULL
-                AND qd."waitTime" >= 5
+                AND qd."waitTime" >= 10
                 AND qd.status = 'OPERATING'
                 AND qd."queueType" = 'STANDBY'
                 AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')

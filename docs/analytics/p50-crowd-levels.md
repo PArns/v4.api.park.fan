@@ -53,7 +53,7 @@ We identify distinct "Headliner" attractions for each park using a **3-Tier Adap
 
 All historical wait-time queries used for headliner identification and baseline calculation apply two filters:
 
-1. **`waitTime >= 5`** — excludes walk-on placeholder values. Queue-Times API reports `waitTime=1` for water-park slides and other "open but no queue" attractions. Including these inflates sample counts and deflates the P50 (e.g., Rulantica P50 was 4.4 min with placeholders vs ~20 min without). The real-time path already uses `minWaitTime=5`; baselines must match.
+1. **`waitTime >= 10`** — excludes walk-on placeholder values. Queue-Times API reports `waitTime=1` for water-park slides and other "open but no queue" attractions. Including these inflates sample counts and deflates the P50 (e.g., Rulantica P50 was 4.4 min with placeholders vs ~20 min without). The real-time path already uses `minWaitTime=5`; baselines must match.
 2. **Schedule JOIN** — excludes closed-day data. Historical samples are joined against `schedule_entries` (park-level, no attractionId). Days with no schedule entry are kept (unknown = include). Days with an explicit `CLOSED`, `TICKETED_EVENT`, or similar non-OPERATING type are excluded. This prevents off-season data (e.g., Kennywood Jan–Mar) from dragging baselines down.
 
 ```sql
@@ -61,14 +61,14 @@ LEFT JOIN schedule_entries se
   ON se."parkId" = a."parkId"
   AND se.date = DATE(qd.timestamp AT TIME ZONE <park_timezone>)
   AND se."attractionId" IS NULL
-WHERE qd."waitTime" >= 5
+WHERE qd."waitTime" >= 10
   AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
 ```
 
 ### Step 2: Calculate Park Baseline
 Using only the identified Headliners:
 1. Aggregate all wait times for these attractions over the last 548 days.
-2. Apply data quality filters (`waitTime >= 5`, schedule JOIN — see above).
+2. Apply data quality filters (`waitTime >= 10`, schedule JOIN — see above).
 3. Calculate the **Median (P50)** of all samples.
 4. Store this single number as the **Park Baseline** (e.g., `25.5` minutes).
 

@@ -27,17 +27,17 @@ The ML Service is a standalone Python application responsible for predicting wai
 ## Training Pipeline
 
 1. **Data Extraction**: Raw `queue_data` is exported from PostgreSQL with data quality filters applied at the SQL level:
-   - **`waitTime >= 5`**: Excludes walk-on placeholder values (`waitTime=1` used by Queue-Times for water-park slides and similar "open but no queue" attractions). Using `> 0` would include noise that degrades model quality and misaligns with inference (which also filters at ≥ 5).
+   - **`waitTime >= 10`**: Excludes walk-on placeholder values (`waitTime=1` used by Queue-Times for water-park slides and similar "open but no queue" attractions). Using `> 0` would include noise that degrades model quality and misaligns with inference (which also filters at ≥ 5).
    - **Schedule JOIN**: Excludes samples from closed days. Training data is joined against `schedule_entries` (park-level, `attractionId IS NULL`) via `JOIN parks p → AT TIME ZONE p.timezone`. Days with no schedule = include; days with `OPERATING` = include; any other type = exclude. Prevents off-season data (e.g., seasonal parks in winter) from polluting training.
    ```sql
    LEFT JOIN schedule_entries se
      ON se."parkId" = a."parkId"
      AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
      AND se."attractionId" IS NULL
-   WHERE qd."waitTime" >= 5
+   WHERE qd."waitTime" >= 10
      AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
    ```
-   UNKNOWN days are included so the model learns to predict for parks that have schedule integration but no confirmed hours for a given day (e.g. Six Flags, parks with delayed schedule publication). The `waitTime >= 5` filter already ensures only real operating data enters training. Without this, the model never saw training examples for UNKNOWN-schedule parks — creating a training/inference asymmetry when `parkLiveStatus` corrects those rows to `is_park_open=1` at inference.
+   UNKNOWN days are included so the model learns to predict for parks that have schedule integration but no confirmed hours for a given day (e.g. Six Flags, parks with delayed schedule publication). The `waitTime >= 10` filter already ensures only real operating data enters training. Without this, the model never saw training examples for UNKNOWN-schedule parks — creating a training/inference asymmetry when `parkLiveStatus` corrects those rows to `is_park_open=1` at inference.
 2. **Preprocessing**:
    - Outlier removal (e.g., wait times > 300 min).
    - Feature engineering (Holiday lookup via `holiday_utils.py`).

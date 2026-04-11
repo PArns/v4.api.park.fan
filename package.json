@@ -33,6 +33,8 @@
     "db:test:reset": "npm run db:test:drop && npm run db:test:create",
     "clear-queues": "ts-node scripts/clear-queues.ts",
     "job:ml-train": "ts-node scripts/trigger-ml-training.ts",
+    "job:stats-backfill": "ts-node scripts/trigger-stats-backfill.ts",
+    "job:baselines-recalc": "ts-node scripts/trigger-baseline-recalculation.ts",
     "job:children-sync": "ts-node scripts/trigger-children-sync.ts",
     "job:clear-cache": "ts-node scripts/clear-cache.ts"
   },

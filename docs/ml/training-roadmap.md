@@ -51,7 +51,7 @@ Parks with UNKNOWN schedule entries (not missing entries — actual UNKNOWN rows
 ```sql
 AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
 ```
-**Why this is safe**: Both queries already filter `qd.status = 'OPERATING'` AND `qd.waitTime >= 5`. A truly closed park has no data meeting those filters → produces 0 samples → no baseline stored. Only genuinely operating UNKNOWN parks get baselines.
+**Why this is safe**: Both queries already filter `qd.status = 'OPERATING'` AND `qd.waitTime >= 10`. A truly closed park has no data meeting those filters → produces 0 samples → no baseline stored. Only genuinely operating UNKNOWN parks get baselines.
 
 **Next step**: Trigger the p50-baseline job manually after deployment to compute baselines for UNKNOWN parks. Until then, `park_occupancy_pct` remains 100 for these parks.
 
@@ -187,7 +187,7 @@ JOIN attractions a ON a."parkId" = p.id
 LEFT JOIN attraction_p50_baselines b ON b."attractionId" = a.id
 LEFT JOIN queue_data q ON q."attractionId" = a.id 
   AND q.timestamp >= NOW() - INTERVAL '7 days'
-  AND q."waitTime" >= 5
+  AND q."waitTime" >= 10
 WHERE b."attractionId" IS NULL AND q.id IS NOT NULL
 GROUP BY p.id, p.name
 ORDER BY attractions DESC;
@@ -201,7 +201,7 @@ FROM queue_data q
 JOIN attractions a ON a.id = q."attractionId"
 LEFT JOIN schedule_entries se ON se."parkId" = a."parkId" 
   AND se.date = q.timestamp::date
-WHERE q."waitTime" >= 5 AND q.status = 'OPERATING'
+WHERE q."waitTime" >= 10 AND q.status = 'OPERATING'
   AND q.timestamp >= NOW() - INTERVAL '60 days'
 GROUP BY se."scheduleType";
 ```

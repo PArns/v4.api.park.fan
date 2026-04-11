@@ -77,7 +77,7 @@ export class StatsService {
         .andWhere("q.timestamp < :queryEnd", { queryEnd })
         .andWhere("q.queueType = :qt", { qt: QueueType.STANDBY })
         .andWhere("q.waitTime IS NOT NULL")
-        .andWhere("q.waitTime >= 5")
+        .andWhere("q.waitTime >= 10")
         .getMany();
 
       // Filter for the specific date in park timezone
@@ -88,12 +88,13 @@ export class StatsService {
       if (dayQueueData.length === 0) {
         // No data for this day
         // We still might want to store a record with nulls to prevent re-calc
-        return this.upsertStats(parkId, dateStr, null, null, null);
+        return this.upsertStats(parkId, dateStr, null, null, null, null);
       }
 
-      // Calculate P90 and Max; cap max to avoid single bad queue_data poisoning ParkDailyStats/cache
+      // Calculate P50, P90 and Max; cap max to avoid single bad queue_data poisoning ParkDailyStats/cache
       const waitTimes = dayQueueData.map((q) => q.waitTime!);
-      const p90 = this.calculateP90(waitTimes);
+      const p50 = this.calculatePercentile(waitTimes, 0.5);
+      const p90 = this.calculatePercentile(waitTimes, 0.9);
       const rawMax = Math.max(...waitTimes);
       // Outlier protection: one bad row (e.g. 450 instead of 45) must not feed into cache.
       // Cap max at 3× P90 (typical peak vs typical level) or 120 min, whichever is higher but sane.
@@ -102,7 +103,14 @@ export class StatsService {
           ? Math.min(rawMax, Math.max(120, p90 * 3))
           : Math.min(rawMax, 120);
 
-      return this.upsertStats(parkId, dateStr, p90, max, dayQueueData.length);
+      return this.upsertStats(
+        parkId,
+        dateStr,
+        p50,
+        p90,
+        max,
+        dayQueueData.length,
+      );
     } catch (error) {
       this.logger.error(
         `Failed to calculate stats for ${parkId} on ${date}: ${error}`,
@@ -114,6 +122,7 @@ export class StatsService {
   private async upsertStats(
     parkId: string,
     date: string,
+    p50: number | null,
     p90: number | null,
     max: number | null,
     sampleSize: number | null,
@@ -123,6 +132,7 @@ export class StatsService {
     });
 
     if (existing) {
+      existing.p50WaitTime = p50;
       existing.p90WaitTime = p90;
       existing.maxWaitTime = max;
       existing.metadata = {
@@ -136,6 +146,7 @@ export class StatsService {
     const newItem = this.statsRepository.create({
       parkId,
       date,
+      p50WaitTime: p50,
       p90WaitTime: p90,
       maxWaitTime: max,
       metadata: { sampleSize, lastUpdated: new Date() },
@@ -143,10 +154,15 @@ export class StatsService {
     return this.statsRepository.save(newItem);
   }
 
-  private calculateP90(waitTimes: number[]): number {
+  private calculatePercentile(waitTimes: number[], percentile: number): number {
     if (waitTimes.length === 0) return 0;
-    const sorted = waitTimes.sort((a, b) => a - b);
-    const index = Math.ceil(sorted.length * 0.9) - 1;
-    return sorted[index];
+    const sorted = [...waitTimes].sort((a, b) => a - b);
+    const index = Math.ceil(sorted.length * percentile) - 1;
+    return sorted[Math.max(0, index)];
+  }
+
+  /** @deprecated Use calculatePercentile(waitTimes, 0.9) */
+  private calculateP90(waitTimes: number[]): number {
+    return this.calculatePercentile(waitTimes, 0.9);
   }
 }

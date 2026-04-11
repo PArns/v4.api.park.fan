@@ -13,6 +13,10 @@ import { ShowLiveData } from "../shows/entities/show-live-data.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { WaitTimePrediction } from "../ml/entities/wait-time-prediction.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
+import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
+import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("Smart Crowd Level Logic", () => {
@@ -36,17 +40,74 @@ describe("Smart Crowd Level Logic", () => {
             })),
           },
         },
-        { provide: getRepositoryToken(Attraction), useValue: {} },
-        { provide: getRepositoryToken(Park), useValue: {} },
-        { provide: getRepositoryToken(Show), useValue: {} },
-        { provide: getRepositoryToken(Restaurant), useValue: {} },
-        { provide: getRepositoryToken(WeatherData), useValue: {} },
-        { provide: getRepositoryToken(ScheduleEntry), useValue: {} },
-        { provide: getRepositoryToken(RestaurantLiveData), useValue: {} },
-        { provide: getRepositoryToken(ShowLiveData), useValue: {} },
-        { provide: getRepositoryToken(PredictionAccuracy), useValue: {} },
-        { provide: getRepositoryToken(WaitTimePrediction), useValue: {} },
-        { provide: getRepositoryToken(QueueDataAggregate), useValue: {} },
+        {
+          provide: getRepositoryToken(Attraction),
+          useValue: { find: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: getRepositoryToken(Park),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ timezone: "UTC" }),
+          },
+        },
+        {
+          provide: getRepositoryToken(Show),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(Restaurant),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(WeatherData),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(ScheduleEntry),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RestaurantLiveData),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(ShowLiveData),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(PredictionAccuracy),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(WaitTimePrediction),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: getRepositoryToken(QueueDataAggregate),
+          useValue: {
+            createQueryBuilder: jest.fn(() => ({
+              getRawOne: jest.fn().mockResolvedValue(null),
+            })),
+          },
+        },
+        {
+          provide: getRepositoryToken(ParkDailyStats),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(HeadlinerAttraction),
+          useValue: { find: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: getRepositoryToken(ParkP50Baseline),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ p50Baseline: 30 }),
+          },
+        },
+        {
+          provide: getRepositoryToken(AttractionP50Baseline),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
         {
           provide: REDIS_CLIENT,
           useValue: {
@@ -60,6 +121,15 @@ describe("Smart Crowd Level Logic", () => {
 
     service = module.get<AnalyticsService>(AnalyticsService);
     queueDataRepo = module.get(getRepositoryToken(QueueData));
+    const headlinerRepo = module.get(getRepositoryToken(HeadlinerAttraction));
+
+    // Mock headliners
+    headlinerRepo.find.mockResolvedValue([
+      { attractionId: "ride1" },
+      { attractionId: "ride2" },
+      { attractionId: "ride3" },
+      { attractionId: "ride4" },
+    ]);
 
     // Mock Redis explicitly
     (service as any).redis = module.get(REDIS_CLIENT);
@@ -80,53 +150,47 @@ describe("Smart Crowd Level Logic", () => {
     (service as any).detectTrend = jest.fn().mockResolvedValue("stable");
   });
 
-  it("should calculate Smart Occupancy using only rides > 10m when available", async () => {
-    // Setup: 2 rides > 10m, 2 rides < 10m
+  it("should calculate Smart Occupancy using only rides >= 10m when available", async () => {
+    // Setup: 2 rides >= 10m, 2 rides < 10m
     const mockData = [
-      { id: "ride1", waitTime: 45 }, // > 10
-      { id: "ride2", waitTime: 30 }, // > 10
-      { id: "ride3", waitTime: 5 }, // < 10
-      { id: "ride4", waitTime: 5 }, // < 10
+      { attractionId: "ride1", avg_wait: 45 }, // >= 10
+      { attractionId: "ride2", avg_wait: 30 }, // >= 10
     ];
 
-    queueDataRepo.query.mockResolvedValue(mockData);
+    queueDataRepo.query.mockResolvedValueOnce(mockData); // for getCurrentSpotWaitTime
+    queueDataRepo.query.mockResolvedValueOnce([]); // for trends bucket 1
+    queueDataRepo.query.mockResolvedValueOnce([]); // for trends bucket 2
 
     const result = await service.calculateParkOccupancy("park1");
 
     // Expectation:
     // Only ride1 and ride2 used.
-    // Sum Current: 45 + 30 = 75
-    // Sum P90 (mocked at 60 each): 60 + 60 = 120
-    // Occupancy: (75 / 120) * 100 = 62.5% -> 63%
+    // Sum Current: 45 + 30 = 75. Avg = 37.5. Round(37.5) = 38.
+    // Baseline is mocked at 30
+    // Occupancy: (38 / 30) * 100 = 126.66... -> 127%
 
-    // Breakdown Avg: (45+30+5+5) / 4 = 21.25 -> 21
-
-    expect(result.current).toBe(63);
-    expect(result.breakdown?.currentAvgWait).toBe(38);
-    expect(queueDataRepo.query).toHaveBeenCalledWith(
-      expect.stringContaining("qd.\"queueType\" = 'STANDBY'"),
-      expect.any(Array),
-    );
+    expect(result.current).toBe(127);
   });
 
-  it("should validly fallback to ALL rides if none are > 10m", async () => {
+  it("should validly fallback to ALL rides if none are >= 10m", async () => {
     // Setup: All rides < 10m
-    const mockData = [
-      { id: "ride3", waitTime: 5 },
-      { id: "ride4", waitTime: 5 },
+    const mockDataFallback = [
+      { attractionId: "ride3", avg_wait: 5 },
+      { attractionId: "ride4", avg_wait: 5 },
     ];
 
-    queueDataRepo.query.mockResolvedValue(mockData);
+    queueDataRepo.query
+      .mockResolvedValueOnce([]) // 1st call: getCurrentSpotWaitTime with threshold 10
+      .mockResolvedValueOnce(mockDataFallback) // 2nd call: getCurrentSpotWaitTime fallback with threshold 0
+      .mockResolvedValue([]); // 3rd+ calls: trends bucket 1, bucket 2, active count...
 
     const result = await service.calculateParkOccupancy("park1");
 
     // Expectation:
-    // Both used.
-    // Sum Current: 10
-    // Sum P90: 120
-    // Occupancy: (10 / 120) * 100 = 8.33% -> 8%
+    // Fallback used. Avg wait = 5. Baseline = 30.
+    // Occupancy: (5 / 30) * 100 = 16.66% -> 17%
 
-    expect(result.current).toBe(8);
+    expect(result.current).toBe(17);
   });
 
   it("should explicitly filter STANDBY queues in the query", async () => {

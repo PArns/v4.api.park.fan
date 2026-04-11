@@ -2208,7 +2208,7 @@ export class ParksService {
         `
         SELECT
           COUNT(*) as "withData",
-          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min"
+          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating5min"
         FROM attractions a
         JOIN LATERAL (
           SELECT status, "waitTime"
@@ -2307,7 +2307,7 @@ export class ParksService {
           SELECT
             p.id as "parkId",
             COUNT(*) as "withData",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min"
+            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating5min"
           FROM parks p
           JOIN attractions a ON a."parkId" = p.id
           JOIN LATERAL (

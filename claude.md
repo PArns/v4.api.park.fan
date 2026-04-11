@@ -30,6 +30,7 @@
 ### 📊 Analytics & Logic
 - [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
+- [Data Recalculation & Correction Jobs](docs/analytics/data-recalculation.md) - Manual backfills for stats and baselines.
 
 ### 🤖 Machine Learning
 - [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
