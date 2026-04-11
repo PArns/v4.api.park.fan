@@ -335,7 +335,9 @@ def fetch_holidays(
     """
     # Create cache key from sorted countries and date range
     country_codes = [c for c in country_codes if c is not None]
-    cache_key = f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
+    cache_key = (
+        f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
+    )
 
     # Check cache
     if cache_key in _holidays_cache:
@@ -728,3 +730,21 @@ def fetch_prediction_errors_for_training(
         print(f"⚠️  Failed to fetch prediction errors: {e}")
         print("   Training without sample weights (using uniform weights)")
         return pd.DataFrame()
+
+
+def fetch_attraction_baselines() -> pd.DataFrame:
+    """
+    Fetch pre-calculated P50 baselines for attractions.
+    Used for park_occupancy_pct calculation to match inference.
+    """
+    query = """
+    SELECT 
+        "attractionId" as attraction_id, 
+        "parkId" as park_id, 
+        "p50Baseline" as p50_baseline
+    FROM attraction_p50_baselines
+    """
+    with get_db() as db:
+        df = pd.read_sql(text(query), db.bind)
+
+    return convert_df_types(df)

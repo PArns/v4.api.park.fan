@@ -147,6 +147,12 @@ def calculate_holiday_info(
         prev_date_str = prev_date.strftime("%Y-%m-%d")
         if is_public_holiday(prev_date_str):
             is_bridge_day = True
+    elif day_of_week == 3:  # Thursday
+        # Check if Friday is a public holiday
+        next_date = date + timedelta(days=1)
+        next_date_str = next_date.strftime("%Y-%m-%d")
+        if is_public_holiday(next_date_str):
+            is_bridge_day = True
     elif day_of_week == 0:  # Monday
         # Check if Tuesday is a public holiday
         next_date = date + timedelta(days=1)
@@ -169,7 +175,7 @@ def calculate_holiday_info(
         next_date_str = next_date.strftime("%Y-%m-%d")
         if is_public_holiday(prev_date_str) and is_public_holiday(next_date_str):
             is_bridge_day = True
-    elif day_of_week == 3:  # Thursday
+    elif day_of_week == 3:  # Thursday (repeated check but keeping for structure)
         # Check if both Wednesday and Friday are public holidays
         prev_date = date - timedelta(days=1)
         prev_date_str = prev_date.strftime("%Y-%m-%d")

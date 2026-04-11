@@ -6,7 +6,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, time
 from typing import Dict, List
-from db import fetch_holidays, fetch_parks_metadata, fetch_park_schedules
+from db import (
+    fetch_holidays,
+    fetch_parks_metadata,
+    fetch_park_schedules,
+    fetch_attraction_baselines,
+)
 from holiday_utils import normalize_region_code, calculate_holiday_info
 from config import get_settings
 from percentile_features import add_percentile_features
@@ -395,6 +400,7 @@ def add_holiday_features(
     # override is_holiday_primary = 1 for parks in Christian-holiday-observing countries.
     _easter_countries = {"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"}
     if "date_local" in df.columns and "country" in df.columns:
+
         def _easter_sunday_date(year: int):
             """Anonymous Gregorian algorithm."""
             a, b, c = year % 19, year // 100, year % 100
@@ -408,6 +414,7 @@ def add_holiday_features(
             month = (h + ll - 7 * m + 114) // 31
             day = ((h + ll - 7 * m + 114) % 31) + 1
             import datetime as _dt
+
             return _dt.date(year, month, day)
 
         # Ensure date_local is datetimelike for .dt accessor
@@ -416,9 +423,8 @@ def add_holiday_features(
         for year in _date_local_dt.dt.year.dropna().unique():
             easter_dates.add(_easter_sunday_date(int(year)))
 
-        easter_mask = (
-            _date_local_dt.dt.date.isin(easter_dates)
-            & df["country"].isin(_easter_countries)
+        easter_mask = _date_local_dt.dt.date.isin(easter_dates) & df["country"].isin(
+            _easter_countries
         )
         df.loc[easter_mask, "is_holiday_primary"] = 1
 
@@ -661,10 +667,9 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # avg_wait_same_dow_4w: mean of last 4 same-day-of-week observations.
     # More stable than a single 1-week lag; gives a representative "normal" for this hour+dow.
-    df["avg_wait_same_dow_4w"] = (
-        df[["wait_lag_1w", "wait_lag_2w", "wait_lag_3w", "wait_lag_4w"]]
-        .mean(axis=1, skipna=True)
-    )
+    df["avg_wait_same_dow_4w"] = df[
+        ["wait_lag_1w", "wait_lag_2w", "wait_lag_3w", "wait_lag_4w"]
+    ].mean(axis=1, skipna=True)
 
     # Map features to legacy names if needed or use new ones
     # We'll keep legacy column names where appropriate to minimize model drift if not retraining everything immediately,
@@ -898,8 +903,7 @@ def add_park_occupancy_feature(
                     pg_dow = ((pandas_dow + 1) % 7).astype(int)
                     hour = ts_naive[park_future_mask].dt.hour.astype(int)
                     hist_vals = [
-                        park_hist.get((d, h), 100.0)
-                        for d, h in zip(pg_dow, hour)
+                        park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)
                     ]
                     df.loc[park_future_mask, "park_occupancy_pct"] = hist_vals
         else:
@@ -928,24 +932,50 @@ def add_park_occupancy_feature(
                 pandas_dow = ts_naive[park_mask].dt.dayofweek
                 pg_dow = ((pandas_dow + 1) % 7).astype(int)
                 hour = ts_naive[park_mask].dt.hour.astype(int)
-                hist_vals = [
-                    park_hist.get((d, h), 100.0)
-                    for d, h in zip(pg_dow, hour)
-                ]
+                hist_vals = [park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)]
                 df.loc[park_mask, "park_occupancy_pct"] = hist_vals
 
     else:
         # Training Mode: Reconstruct historical occupancy to match inference scale
-        # Use avg(per-ride P50) per park, mirroring the TypeScript calculateP50Baseline fix:
-        # avg of per-attraction medians instead of median of pooled data.
-        # Pooling all rides into one P50 is dominated by high-frequency low-P50 rides,
-        # underestimating the baseline and inflating occupancy vs. inference values.
-        per_ride_p50 = df.groupby(["parkId", "attractionId"])["waitTime"].quantile(0.50)
-        park_baselines = per_ride_p50.groupby(level="parkId").mean()
+
+        # 1. Fetch pre-calculated baselines from DB to align with inference scale
+        try:
+            stored_baselines = fetch_attraction_baselines()
+            if not stored_baselines.empty:
+                # Map stored baselines to our dataframe
+                df = df.merge(
+                    stored_baselines[["attraction_id", "p50_baseline"]],
+                    left_on="attractionId",
+                    right_on="attraction_id",
+                    how="left",
+                )
+                # For attractions without stored baseline, fallback to window-median
+                missing_mask = df["p50_baseline"].isna()
+                if missing_mask.any():
+                    window_medians = df.groupby("attractionId")["waitTime"].transform(
+                        "median"
+                    )
+                    df.loc[missing_mask, "p50_baseline"] = window_medians[missing_mask]
+
+                # Calculate park baseline as average of its attractions' P50s
+                park_baselines = df.groupby("parkId")["p50_baseline"].mean()
+            else:
+                # Fallback if table is empty
+                per_ride_p50 = df.groupby(["parkId", "attractionId"])[
+                    "waitTime"
+                ].quantile(0.50)
+                park_baselines = per_ride_p50.groupby(level="parkId").mean()
+        except Exception as e:
+            print(
+                f"⚠️  Failed to fetch stored baselines, falling back to window medians: {e}"
+            )
+            per_ride_p50 = df.groupby(["parkId", "attractionId"])["waitTime"].quantile(
+                0.50
+            )
+            park_baselines = per_ride_p50.groupby(level="parkId").mean()
 
         # 2. Calculate Instantaneous Park Average (per timestamp)
         # Group by Park + Timestamp to get the average wait at that moment
-        # Transform ensures we get a value aligned with the original index
         current_park_avg = df.groupby(["parkId", "timestamp"])["waitTime"].transform(
             "mean"
         )
@@ -965,6 +995,10 @@ def add_park_occupancy_feature(
             # Clip to reasonable limits (0-200%, matches inference cap from TypeScript API)
             occupancy = (current_park_avg.loc[mask] / baseline) * 100
             df.loc[mask, "park_occupancy_pct"] = occupancy.clip(0, 200)
+
+        # Cleanup temp columns if they were added via merge
+        if "p50_baseline" in df.columns:
+            df = df.drop(columns=["p50_baseline", "attraction_id"], errors="ignore")
 
         # Occupancy Dropout: replace actual occupancy with DOW×hour historical mean
         # for a fraction of training rows. This teaches the model to fall back on
@@ -992,8 +1026,7 @@ def add_park_occupancy_feature(
 
                 # Look up profile value for every row
                 profile_vals = [
-                    profile.get((d, h), 100.0)
-                    for d, h in zip(park_dow, park_hour)
+                    profile.get((d, h), 100.0) for d, h in zip(park_dow, park_hour)
                 ]
 
                 # Random mask for dropout
@@ -1927,8 +1960,8 @@ def get_feature_columns() -> List[str]:
         "avg_wait_same_hour_last_week",
         "avg_wait_same_hour_last_month",
         "rolling_avg_7d",
-        "rolling_avg_weekday",   # 7d rolling mean – weekday only
-        "rolling_avg_weekend",   # 7d rolling mean – weekend only
+        "rolling_avg_weekday",  # 7d rolling mean – weekday only
+        "rolling_avg_weekend",  # 7d rolling mean – weekend only
         "avg_wait_same_dow_4w",  # Average of last 4 same-day-of-week observations
         "wait_time_velocity",  # Rate of change (momentum)
         "trend_7d",

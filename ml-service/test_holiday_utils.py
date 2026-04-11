@@ -156,6 +156,19 @@ test_cases = [
             "is_bridge_day": True,  # SHOULD be bridge day for public holidays
         },
     },
+    # Test 13: Bridge day for public holidays - Thursday before Friday public holiday
+    {
+        "name": "Bridge day created for public holidays - Thursday before Friday public holiday",
+        "date": "2025-03-27",  # Thursday
+        "holiday_map": {
+            "2025-03-28": "public",  # Friday - public holiday
+        },
+        "expected": {
+            "is_holiday": False,
+            "holiday_name": None,
+            "is_bridge_day": True,  # SHOULD be bridge day for public holidays
+        },
+    },
 ]
 
 
