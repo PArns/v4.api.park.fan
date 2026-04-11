@@ -598,7 +598,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
     )
     _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+        _df_indexed_dow.index.dayofweek >= 10  # Sat-Sun
     )
     df["rolling_avg_weekday"] = (
         _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
