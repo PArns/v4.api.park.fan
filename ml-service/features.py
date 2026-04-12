@@ -320,12 +320,14 @@ def add_holiday_features(
     )
 
     # Merge park metadata
+    original_index = df.index
     df = df.merge(
         parks_metadata[["park_id", "country", "region_code", "influencingRegions"]],
         left_on="parkId",
         right_on="park_id",
         how="left",
     )
+    df.index = original_index
 
     # Use cached holidays if provided, otherwise fetch
     if cached_holidays_df is not None:
@@ -397,6 +399,7 @@ def add_holiday_features(
             how="left",
             suffixes=("", "_regional"),
         )
+        df_regional.index = df.index
         df["primary_holiday_type_regional"] = df_regional["holiday_type"]
         # Clean up temporary column
         df = df.drop(columns=["region_code_normalized"], errors="ignore")
@@ -413,6 +416,7 @@ def add_holiday_features(
             how="left",
             suffixes=("", "_national"),
         )
+        df_national.index = df.index
         df["primary_holiday_type_national"] = df_national["holiday_type"]
     else:
         df["primary_holiday_type_national"] = None
@@ -527,22 +531,39 @@ def add_holiday_features(
         return neighbor_flags, neighbor_school_flags
 
     # Apply neighbor check (only processes influencing regions, not full row)
-    neighbor_results = df.apply(check_neighbor_holidays, axis=1)
-    df["neighbor_flags"] = neighbor_results.apply(lambda x: x[0])
-    df["neighbor_school_flags"] = neighbor_results.apply(lambda x: x[1])
+    # OPTIMIZATION: Process only unique (parkId, date_local) combinations
+    unique_contexts = df[["parkId", "date_local"]].drop_duplicates()
+    if "influencingRegions" not in unique_contexts.columns:
+        original_idx = unique_contexts.index
+        unique_contexts = unique_contexts.merge(
+            parks_metadata[["park_id", "influencingRegions"]],
+            left_on="parkId",
+            right_on="park_id",
+            how="left"
+        )
+        unique_contexts.index = original_idx
 
-    # Assign neighbor features (vectorized)
-    df["is_holiday_neighbor_1"] = df["neighbor_flags"].apply(
-        lambda x: x[0] if len(x) > 0 else 0
-    )
-    df["is_holiday_neighbor_2"] = df["neighbor_flags"].apply(
-        lambda x: x[1] if len(x) > 1 else 0
-    )
-    df["is_holiday_neighbor_3"] = df["neighbor_flags"].apply(
-        lambda x: x[2] if len(x) > 2 else 0
-    )
+    neighbor_results = unique_contexts.apply(check_neighbor_holidays, axis=1)
+    unique_contexts["n1"] = neighbor_results.apply(lambda x: x[0][0] if len(x[0]) > 0 else 0)
+    unique_contexts["n2"] = neighbor_results.apply(lambda x: x[0][1] if len(x[0]) > 1 else 0)
+    unique_contexts["n3"] = neighbor_results.apply(lambda x: x[0][2] if len(x[0]) > 2 else 0)
+    unique_contexts["school_tot"] = neighbor_results.apply(lambda x: sum(x[1]) if isinstance(x[1], list) else 0)
 
-    # Totals (vectorized)
+    # Merge results back into df (restoring index!)
+    original_df_index = df.index
+    df = df.merge(
+        unique_contexts[["parkId", "date_local", "n1", "n2", "n3", "school_tot"]],
+        on=["parkId", "date_local"],
+        how="left"
+    )
+    df.index = original_df_index
+
+    # Assign neighbor features
+    df["is_holiday_neighbor_1"] = df["n1"].fillna(0).astype(int)
+    df["is_holiday_neighbor_2"] = df["n2"].fillna(0).astype(int)
+    df["is_holiday_neighbor_3"] = df["n3"].fillna(0).astype(int)
+
+    # Totals
     df["holiday_count_total"] = (
         df["is_holiday_primary"]
         + df["is_holiday_neighbor_1"]
@@ -550,9 +571,7 @@ def add_holiday_features(
         + df["is_holiday_neighbor_3"]
     )
 
-    df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df[
-        "neighbor_school_flags"
-    ].apply(lambda x: sum(x) if isinstance(x, list) else 0)
+    df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df["school_tot"].fillna(0).astype(int)
 
     df["is_school_holiday_any"] = (
         (df["is_school_holiday_primary"] == 1)
@@ -567,6 +586,7 @@ def add_holiday_features(
             "primary_holiday_type_regional",
             "primary_holiday_type_national",
             "primary_holiday_type",
+            "n1", "n2", "n3", "school_tot",
         ],
         errors="ignore",
     )
@@ -969,12 +989,14 @@ def add_park_occupancy_feature(
             stored_baselines = fetch_attraction_baselines()
             if not stored_baselines.empty:
                 # Map stored baselines to our dataframe
+                original_index = df.index
                 df = df.merge(
                     stored_baselines[["attraction_id", "p50_baseline"]],
                     left_on="attractionId",
                     right_on="attraction_id",
                     how="left",
                 )
+                df.index = original_index
                 # For attractions without stored baseline, fallback to window-median
                 missing_mask = df["p50_baseline"].isna()
                 if missing_mask.any():
@@ -1054,9 +1076,10 @@ def add_park_occupancy_feature(
                 dropped_vals = df_to_drop.merge(
                     profiles_df, on=["parkId", "_dow", "_hour"], how="left"
                 )["_profile_val"].fillna(100.0)
+                dropped_vals.index = df_to_drop.index
 
                 # Assign back using original index alignment
-                df.loc[drop_indices, "park_occupancy_pct"] = dropped_vals.values
+                df.loc[drop_indices, "park_occupancy_pct"] = dropped_vals
 
             df = df.drop(columns=["_dow", "_hour"])
 
@@ -1470,6 +1493,7 @@ def add_park_schedule_features(
                 how="left",
                 suffixes=("", "_schedule"),
             )
+            df_merged.index = df.index
 
             # Vectorized time comparisons
             mask_valid = (
@@ -1515,6 +1539,7 @@ def add_park_schedule_features(
                 right_on=["park_id", "date_only"],
                 how="left",
             )
+            df_events.index = df.index
             df["has_special_event"] = df_events["has_event"].fillna(0).astype(int)
 
         # Check for extra hours (fully vectorized)
@@ -1543,6 +1568,7 @@ def add_park_schedule_features(
                 right_on=["park_id", "date_only"],
                 how="left",
             )
+            df_extra.index = df.index
             df["has_extra_hours"] = df_extra["has_extra"].fillna(0).astype(int)
 
     # Clean up temporary columns (after all merges are done)
@@ -1742,6 +1768,7 @@ def add_bridge_day_feature(
             right_on="park_id",
             how="left",
         )
+        df_country.index = df.index
         df["country"] = df_country["country"]
 
     # Pre-compute bridge dates per country using holiday_utils
@@ -1782,6 +1809,7 @@ def add_bridge_day_feature(
             right_on=["country", "bridge_date"],
             how="left",
         )
+        df_bridge.index = df.index
         df["is_bridge_day"] = df_bridge["is_bridge"].fillna(0).astype(int)
     else:
         df["is_bridge_day"] = 0
@@ -1815,12 +1843,14 @@ def add_holiday_distance_features(
     # Get country mapping
     events = df.copy()
     if "country" not in events.columns:
+        original_events_index = events.index
         events = events.merge(
             parks_metadata[["park_id", "country"]],
             left_on="parkId",
             right_on="park_id",
             how="left",
         )
+        events.index = original_events_index
 
     # Filter all event days (Holidays + Bridge Days)
     event_days = events[
