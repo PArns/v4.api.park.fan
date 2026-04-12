@@ -660,46 +660,36 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.loc[original_index]
 
-    # 2. Lag Features (Exact time lookups: T-24h, T-1w)
-    # Use merge_asof to find the value closest to (timestamp - lag)
-    # Group-wise merge_asof is not direct, so we loop or use exact match on shifted time?
-    # Approximate match is better for robustness.
+    # 2. Lag Features (Exact time lookups: T-24h, T-1w, etc.)
+    # Optimized: Prepare lookup once and calculate all lags in a single pass
+    lookup = df[["attractionId", "timestamp", "waitTime"]].sort_values("timestamp")
 
-    # Helper to merge lagged values
-    def merge_lag(source_df, lag_delta, col_name):
-        target_time = source_df["timestamp"] - lag_delta
-        temp = source_df.copy()
-        temp["target_ts"] = target_time
+    lags = {
+        "wait_lag_24h": pd.Timedelta(hours=24),
+        "wait_lag_1w": pd.Timedelta(days=7),
+        "wait_lag_1m": pd.Timedelta(days=30),
+        "wait_lag_2w": pd.Timedelta(days=14),
+        "wait_lag_3w": pd.Timedelta(days=21),
+        "wait_lag_4w": pd.Timedelta(days=28),
+    }
+
+    for col_name, delta in lags.items():
+        temp = df[["attractionId", "timestamp"]].copy()
+        temp["target_ts"] = temp["timestamp"] - delta
         temp = temp.sort_values("target_ts")
 
-        lookup = source_df[["attractionId", "timestamp", "waitTime"]].sort_values(
-            "timestamp"
-        )
-
-        return pd.merge_asof(
+        df[col_name] = pd.merge_asof(
             temp,
             lookup,
             left_on="target_ts",
             right_on="timestamp",
             by="attractionId",
-            tolerance=pd.Timedelta("15min"),  # Allow 15 min slop
+            tolerance=pd.Timedelta("15min"),
             direction="nearest",
             suffixes=("", "_lag"),
-        )["waitTime_lag"]
-
-    # Lag 24h
-    df["wait_lag_24h"] = merge_lag(df, pd.Timedelta(hours=24), "wait_lag_24h")
-
-    # Lag 1 week
-    df["wait_lag_1w"] = merge_lag(df, pd.Timedelta(days=7), "wait_lag_1w")
-
-    # Lag 1 month (30 days)
-    df["wait_lag_1m"] = merge_lag(df, pd.Timedelta(days=30), "wait_lag_1m")
-
-    # Lag 2w / 3w / 4w (same day-of-week, further back)
-    df["wait_lag_2w"] = merge_lag(df, pd.Timedelta(days=14), "wait_lag_2w")
-    df["wait_lag_3w"] = merge_lag(df, pd.Timedelta(days=21), "wait_lag_3w")
-    df["wait_lag_4w"] = merge_lag(df, pd.Timedelta(days=28), "wait_lag_4w")
+        )[
+            "waitTime"
+        ].values  # positional alignment works because we use temp derived from df
 
     # avg_wait_same_dow_4w: mean of last 4 same-day-of-week observations.
     # More stable than a single 1-week lag; gives a representative "normal" for this hour+dow.
@@ -1021,138 +1011,94 @@ def add_park_occupancy_feature(
 
         # 3. Calculate Percentage
         # We process per park to divide by the correct baseline
-        for park_id in df["parkId"].unique():
-            if park_id not in park_baselines:
-                continue
+        # Optimized: Use map for park baselines instead of loop
+        baseline_map = park_baselines.to_dict()
+        df["_park_baseline"] = (
+            df["parkId"].map(baseline_map).fillna(1.0).replace(0, 1.0)
+        )
 
-            baseline = park_baselines[park_id]
-            if baseline == 0:
-                baseline = 1  # Avoid div by zero
-
-            mask = df["parkId"] == park_id
-            # Occupancy = (Current Avg / Baseline) * 100
-            # Clip to reasonable limits (0-200%, matches inference cap from TypeScript API)
-            occupancy = (current_park_avg.loc[mask] / baseline) * 100
-            df.loc[mask, "park_occupancy_pct"] = occupancy.clip(0, 200)
+        # Occupancy = (Current Avg / Baseline) * 100
+        df["park_occupancy_pct"] = (current_park_avg / df["_park_baseline"] * 100).clip(
+            0, 200
+        )
+        df = df.drop(columns=["_park_baseline"])
 
         # Cleanup temp columns if they were added via merge
         if "p50_baseline" in df.columns:
             df = df.drop(columns=["p50_baseline", "attraction_id"], errors="ignore")
 
         # Occupancy Dropout: replace actual occupancy with DOW×hour historical mean
-        # for a fraction of training rows. This teaches the model to fall back on
-        # hour/day_of_week features when only an approximate occupancy is available,
-        # which is exactly the inference scenario for future predictions.
         settings = get_settings()
         dropout_rate = settings.OCCUPANCY_DROPOUT_RATE
         if dropout_rate > 0:
             ts = pd.to_datetime(df["timestamp"])
-            dow = ts.dt.dayofweek  # Mon=0, Sun=6
-            hour = ts.dt.hour
+            df["_dow"] = ts.dt.dayofweek
+            df["_hour"] = ts.dt.hour
 
-            for park_id in df["parkId"].unique():
-                mask = df["parkId"] == park_id
-                park_dow = dow[mask]
-                park_hour = hour[mask]
+            # Vectorized dropout across all parks
+            # 1. Build global DOW x Hour profile map as a DataFrame for merging
+            profiles_df = (
+                df.groupby(["parkId", "_dow", "_hour"])["park_occupancy_pct"]
+                .mean()
+                .reset_index()
+                .rename(columns={"park_occupancy_pct": "_profile_val"})
+            )
 
-                # Build DOW×hour profile from this park's own training data
-                profile = (
-                    df.loc[mask]
-                    .groupby([park_dow, park_hour])["park_occupancy_pct"]
-                    .mean()
-                )
-                profile.index.names = ["dow", "hour"]
+            # Random mask for dropout
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
+            drop_indices = df.index[rng.random(len(df)) < dropout_rate]
 
-                # Look up profile value for every row
-                profile_vals = [
-                    profile.get((d, h), 100.0) for d, h in zip(park_dow, park_hour)
-                ]
+            if len(drop_indices) > 0:
+                # 2. Efficient Merge for dropout rows only
+                df_to_drop = df.loc[drop_indices, ["parkId", "_dow", "_hour"]]
+                dropped_vals = df_to_drop.merge(
+                    profiles_df, on=["parkId", "_dow", "_hour"], how="left"
+                )["_profile_val"].fillna(100.0)
 
-                # Random mask for dropout
-                rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
-                drop = rng.random(mask.sum()) < dropout_rate
+                # Assign back using original index alignment
+                df.loc[drop_indices, "park_occupancy_pct"] = dropped_vals.values
 
-                actual = df.loc[mask, "park_occupancy_pct"].values.copy()
-                actual[drop] = np.array(profile_vals)[drop]
-                df.loc[mask, "park_occupancy_pct"] = actual
+            df = df.drop(columns=["_dow", "_hour"])
 
-        # Rolling Average Dropout: teach the model to predict when avg_wait_last_24h
-        # and avg_wait_last_1h are unavailable (i.e. future predictions where we use
-        # DOW/hour historical profiles instead of real rolling values).
-        # Without this, the model learns to rely on these features at >50% importance,
-        # making future predictions converge to a flat ~30 min regardless of holidays/season.
+        # Rolling Average Dropout: Vectorized replacement
         rolling_dropout_rate = settings.ROLLING_AVG_DROPOUT_RATE
         if rolling_dropout_rate > 0 and "avg_wait_last_24h" in df.columns:
-            ts = pd.to_datetime(df["timestamp"])
-            dow = ts.dt.dayofweek  # Mon=0, Sun=6
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 1)
+            drop_mask = rng.random(len(df)) < rolling_dropout_rate
 
-            for attraction_id in df["attractionId"].unique():
-                attr_mask = df["attractionId"] == attraction_id
+            if drop_mask.any():
+                ts = pd.to_datetime(df["timestamp"])
+                is_weekend = (ts.dt.dayofweek >= 5).values
 
-                rng = np.random.default_rng(
-                    settings.CATBOOST_RANDOM_SEED + hash(str(attraction_id)) % 10000
-                )
-                drop = rng.random(attr_mask.sum()) < rolling_dropout_rate
-
-                if not drop.any():
-                    continue
-
-                attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 10).values
-
-                # Fallback for avg_wait_last_24h: per-attraction rolling_avg_7d
-                # (same-week average, available for all rows)
-                fallback_24h = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
-
-                # Fallback for avg_wait_last_1h: weekday vs weekend split average
+                # Pre-calculate fallback values for the whole dataframe
+                fallback_24h = df["rolling_avg_7d"].values
                 fallback_1h = np.where(
                     is_weekend,
-                    df.loc[attr_mask, "rolling_avg_weekend"].values,
-                    df.loc[attr_mask, "rolling_avg_weekday"].values,
+                    df["rolling_avg_weekend"].values,
+                    df["rolling_avg_weekday"].values,
                 )
 
-                actual_24h = df.loc[attr_mask, "avg_wait_last_24h"].values.copy()
-                actual_1h = df.loc[attr_mask, "avg_wait_last_1h"].values.copy()
+                # Apply only to dropped rows
+                df.loc[drop_mask, "avg_wait_last_24h"] = fallback_24h[drop_mask]
+                df.loc[drop_mask, "avg_wait_last_1h"] = fallback_1h[drop_mask]
 
-                actual_24h[drop] = fallback_24h[drop]
-                actual_1h[drop] = fallback_1h[drop]
-
-                df.loc[attr_mask, "avg_wait_last_24h"] = actual_24h
-                df.loc[attr_mask, "avg_wait_last_1h"] = actual_1h
-
-        # Also dropout rolling_avg_7d → replace with weekday/weekend historical mean.
-        # rolling_avg_7d is used as the fallback for avg_wait_last_24h dropout above,
-        # so without this it is always reliable in training and the model over-relies on
-        # it (26%+ importance) at the expense of attractionId and other structural features.
+        # 7d Rolling Average Dropout: Vectorized replacement
         rolling_7d_dropout_rate = settings.ROLLING_7D_DROPOUT_RATE
         if rolling_7d_dropout_rate > 0 and "rolling_avg_7d" in df.columns:
-            ts = pd.to_datetime(df["timestamp"])
-            dow = ts.dt.dayofweek  # Mon=0, Sun=6
+            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 2)
+            drop_mask = rng.random(len(df)) < rolling_7d_dropout_rate
 
-            for attraction_id in df["attractionId"].unique():
-                attr_mask = df["attractionId"] == attraction_id
-
-                rng = np.random.default_rng(
-                    settings.CATBOOST_RANDOM_SEED
-                    + hash(str(attraction_id) + "_7d") % 10000
-                )
-                drop = rng.random(attr_mask.sum()) < rolling_7d_dropout_rate
-
-                if not drop.any():
-                    continue
-
-                attr_dow = dow[attr_mask]
-                is_weekend = (attr_dow >= 10).values
+            if drop_mask.any():
+                ts = pd.to_datetime(df["timestamp"])
+                is_weekend = (ts.dt.dayofweek >= 5).values
 
                 fallback_7d = np.where(
                     is_weekend,
-                    df.loc[attr_mask, "rolling_avg_weekend"].values,
-                    df.loc[attr_mask, "rolling_avg_weekday"].values,
+                    df["rolling_avg_weekend"].values,
+                    df["rolling_avg_weekday"].values,
                 )
 
-                actual_7d = df.loc[attr_mask, "rolling_avg_7d"].values.copy()
-                actual_7d[drop] = fallback_7d[drop]
-                df.loc[attr_mask, "rolling_avg_7d"] = actual_7d
+                df.loc[drop_mask, "rolling_avg_7d"] = fallback_7d[drop_mask]
 
     return df
 
