@@ -56,13 +56,27 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         lambda x: x.rolling(window=7, min_periods=1, center=True).median()
     )
 
-    # Condition: Wait time is very low (<= 5 min)
-    # BUT the surrounding context (median) is high (> 30 min)
-    # This suggests a sudden, unrepresentative drop (downtime/reset) vs natural low crowds
-    anomaly_mask = (df["waitTime"] <= 5) & (df["rolling_median"] > 30)
+    # 1. Catch sudden drops (Downtime/Reset)
+    # Condition: Wait time is very low (<= 5 min) BUT the surrounding context (median) is high (> 20 min)
+    # We lowered median threshold from 30 to 20 because we now have more low-wait data.
+    drop_mask = (df["waitTime"] <= 5) & (df["rolling_median"] > 20)
+
+    # 2. Catch extreme high outliers (API errors / data glitches)
+    # Values above 500 mins (8.3 hours) are almost certainly erroneous or irrelevant for general model.
+    high_outlier_mask = df["waitTime"] > 500
+
+    # Combine masks
+    anomaly_mask = drop_mask | high_outlier_mask
 
     df_clean = df[~anomaly_mask].copy()
     df_clean = df_clean.drop(columns=["rolling_median"])
+
+    removed_drops = drop_mask.sum()
+    removed_highs = high_outlier_mask.sum()
+
+    logger.info(
+        f"   Detected {removed_drops} sensor drops and {removed_highs} extreme high outliers"
+    )
 
     removed = initial_count - len(df_clean)
     logger.info(

@@ -160,7 +160,7 @@ def fetch_training_data(
                 AND qd.status = 'OPERATING'
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
-                AND qd."waitTime" >= 10
+                AND qd."waitTime" >= 0
                 AND (
                     se.id IS NULL                          -- no schedule entry at all
                     OR se."scheduleType" = 'OPERATING'     -- confirmed operating
