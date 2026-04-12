@@ -565,10 +565,9 @@ def create_prediction_features(
 
     # OPTIMIZATION: Vectorized holiday lookups (replaces slow loop)
     # Pre-process parks metadata to create lookup structures
-    park_country_map = (
-        parks_metadata.set_index("park_id")[["country", "region_code"]]
-        .to_dict("index")
-    )
+    park_country_map = parks_metadata.set_index("park_id")[
+        ["country", "region_code"]
+    ].to_dict("index")
 
     # Parse influencing regions once per park (not per row!)
     park_influences_map = {}
@@ -643,18 +642,22 @@ def create_prediction_features(
         )
         # Normalize region codes (e.g. "DE-NW" -> "NW") to match training feature logic
         df["park_region"] = df["parkId"].map(
-            lambda pid: normalize_region_code(
-                park_country_map.get(pid, {}).get("region_code", "") or None
+            lambda pid: (
+                normalize_region_code(
+                    park_country_map.get(pid, {}).get("region_code", "") or None
+                )
+                or ""
             )
-            or ""
         )
         df["date_str"] = df["local_date"].astype(str)
 
         # Primary key: country|region|date or country||date (if no region)
         df["primary_key"] = df.apply(
-            lambda row: f"{row['park_country']}|{row['park_region']}|{row['date_str']}"
-            if row["park_region"]
-            else f"{row['park_country']}||{row['date_str']}",
+            lambda row: (
+                f"{row['park_country']}|{row['park_region']}|{row['date_str']}"
+                if row["park_region"]
+                else f"{row['park_country']}||{row['date_str']}"
+            ),
             axis=1,
         )
 
@@ -715,9 +718,7 @@ def create_prediction_features(
         )
 
         # "Any School Holiday" Logic (vectorized)
-        df["is_school_holiday_any"] = (df["school_holiday_count_total"] > 0).astype(
-            int
-        )
+        df["is_school_holiday_any"] = (df["school_holiday_count_total"] > 0).astype(int)
 
         # Cleanup temporary columns
         df = df.drop(
@@ -930,7 +931,11 @@ def create_prediction_features(
     if feature_context and "parkLiveStatus" in feature_context:
         for park_id, live_status in feature_context["parkLiveStatus"].items():
             if live_status == "OPERATING":
-                mask = (df["parkId"] == park_id) & (df["status"] == "UNKNOWN") & (df["is_park_open"] == 0)
+                mask = (
+                    (df["parkId"] == park_id)
+                    & (df["status"] == "UNKNOWN")
+                    & (df["is_park_open"] == 0)
+                )
                 if mask.any():
                     df.loc[mask, "is_park_open"] = 1
                     df.loc[mask, "status"] = "OPERATING"
@@ -1162,12 +1167,14 @@ def create_prediction_features(
 
                 volatility_weekday = _dampened_vol_pred(
                     attraction_data["rolling_std_weekday"].iloc[-1]
-                    if "rolling_std_weekday" in attraction_data.columns and len(attraction_data) > 0
+                    if "rolling_std_weekday" in attraction_data.columns
+                    and len(attraction_data) > 0
                     else None
                 )
                 volatility_weekend = _dampened_vol_pred(
                     attraction_data["rolling_std_weekend"].iloc[-1]
-                    if "rolling_std_weekend" in attraction_data.columns and len(attraction_data) > 0
+                    if "rolling_std_weekend" in attraction_data.columns
+                    and len(attraction_data) > 0
                     else None
                 )
 
@@ -1211,8 +1218,10 @@ def create_prediction_features(
                 # This avoids saturating all uvicorn workers with DataFrame scans.
                 _attr_lookup: dict = (
                     attraction_data.groupby(
-                        [pd.to_datetime(attraction_data["date"]).dt.date,
-                         attraction_data["hour"].astype(int)]
+                        [
+                            pd.to_datetime(attraction_data["date"]).dt.date,
+                            attraction_data["hour"].astype(int),
+                        ]
                     )["avg_wait"]
                     .mean()
                     .to_dict()
@@ -1221,7 +1230,10 @@ def create_prediction_features(
                 def _same_dow_avg_fast(ts_local, weeks: list):
                     vals = []
                     for w in weeks:
-                        key = ((ts_local - timedelta(days=7 * w)).date(), int(ts_local.hour))
+                        key = (
+                            (ts_local - timedelta(days=7 * w)).date(),
+                            int(ts_local.hour),
+                        )
                         if key in _attr_lookup:
                             vals.append(_attr_lookup[key])
                     return float(np.mean(vals)) if vals else rolling_7d
@@ -1233,6 +1245,7 @@ def create_prediction_features(
                 # weekdays from weekends and low-season from peak-season future dates.
                 if park_tz:
                     import pytz as _pytz_future
+
                     _tz_future = _pytz_future.timezone(park_tz)
                     future_24h_cutoff = base_time_pd + timedelta(hours=24)
                     for idx in df.index[mask]:
@@ -1252,7 +1265,9 @@ def create_prediction_features(
                         df.at[idx, "avg_wait_last_24h"] = dow_avg
                         # avg_wait_last_1h → same-hour historical avg split by weekday/weekend
                         hour_hist = (
-                            rolling_avg_weekend if row_is_weekend else rolling_avg_weekday
+                            rolling_avg_weekend
+                            if row_is_weekend
+                            else rolling_avg_weekday
                         )
                         # prefer same-hour same-DOW lookup for better hour granularity
                         hour_key = (
@@ -1265,6 +1280,7 @@ def create_prediction_features(
 
                 if park_tz:
                     import pytz as _pytz
+
                     _tz = _pytz.timezone(park_tz)
                     same_dow_vals = []
                     for idx in df.index[mask]:
@@ -1275,10 +1291,14 @@ def create_prediction_features(
                             ts_local_row = ts_utc.tz_convert(_tz)
                         except Exception:
                             ts_local_row = ts_utc
-                        same_dow_vals.append(_same_dow_avg_fast(ts_local_row, [1, 2, 3, 4]))
+                        same_dow_vals.append(
+                            _same_dow_avg_fast(ts_local_row, [1, 2, 3, 4])
+                        )
                     df.loc[mask, "avg_wait_same_dow_4w"] = same_dow_vals
                 else:
-                    df.loc[mask, "avg_wait_same_dow_4w"] = _same_dow_avg_fast(base_time_local, [1, 2, 3, 4])
+                    df.loc[mask, "avg_wait_same_dow_4w"] = _same_dow_avg_fast(
+                        base_time_local, [1, 2, 3, 4]
+                    )
 
     # Calculate wait time velocity (momentum) BEFORE overriding lags
     # Initialize with default (no change)

@@ -33,7 +33,9 @@ model: Optional[WaitTimeModel] = None
 
 # Sentinel file: written after training so all workers detect the new version.
 # Path is on the shared models volume so every worker process sees it.
-_SENTINEL_FILE = os.path.join(os.environ.get("MODEL_DIR", "/app/models"), "active_version.txt")
+_SENTINEL_FILE = os.path.join(
+    os.environ.get("MODEL_DIR", "/app/models"), "active_version.txt"
+)
 
 
 def _read_sentinel() -> Optional[str]:
@@ -64,7 +66,9 @@ def _maybe_reload_model() -> None:
     global model
     sentinel_version = _read_sentinel()
     if sentinel_version and (model is None or model.version != sentinel_version):
-        logger.info(f"Sentinel detected new model version {sentinel_version}, reloading...")
+        logger.info(
+            f"Sentinel detected new model version {sentinel_version}, reloading..."
+        )
         try:
             new_model = WaitTimeModel(sentinel_version)
             new_model.load()
@@ -299,7 +303,9 @@ async def train_model_endpoint(request: TrainRequest):
             # This replaces the single-process `global model = new_model` pattern
             # which only updated the worker that ran the training thread.
             _write_sentinel(version)
-            logger.info(f"✅ Sentinel written for {version} — all workers will reload on next request")
+            logger.info(
+                f"✅ Sentinel written for {version} — all workers will reload on next request"
+            )
 
         except Exception as e:
             import traceback

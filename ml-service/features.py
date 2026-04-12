@@ -974,7 +974,9 @@ def add_park_occupancy_feature(
                     df.loc[missing_mask, "p50_baseline"] = window_medians[missing_mask]
 
                 # Calculate park baseline as average of its attractions' P50s
-                per_ride_p50 = df.groupby(["parkId", "attractionId"])["p50_baseline"].first()
+                per_ride_p50 = df.groupby(["parkId", "attractionId"])[
+                    "p50_baseline"
+                ].first()
                 park_baselines = per_ride_p50.groupby(level="parkId").mean()
             else:
                 # Fallback if table is empty

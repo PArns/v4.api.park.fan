@@ -78,7 +78,7 @@ export class ThemeParksDataSource implements IDataSource {
         if (Array.isArray(entity.queue)) {
           queueObj = {};
           for (const q of entity.queue) {
-            if (q && typeof q === 'object') {
+            if (q && typeof q === "object") {
               if (q.queueType) {
                 const { queueType, ...rest } = q;
                 queueObj[queueType] = rest;
@@ -103,7 +103,8 @@ export class ThemeParksDataSource implements IDataSource {
         // CRITICAL FIX: Keep queue as object (not array) to preserve all queue type data
         // The processor expects: { STANDBY: {...}, SINGLE_RIDER: {...}, etc }
         // NOT an array: [{ queueType: 'STANDBY', ... }, ...]
-        queue: queueObj && Object.keys(queueObj).length > 0 ? queueObj : undefined,
+        queue:
+          queueObj && Object.keys(queueObj).length > 0 ? queueObj : undefined,
         showtimes: entity.showtimes,
         operatingHours: entity.operatingHours,
         diningAvailability: entity.diningAvailability ? "available" : undefined,
