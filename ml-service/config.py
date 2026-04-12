@@ -2,7 +2,7 @@
 Configuration for ML Service
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
@@ -94,10 +94,11 @@ class Settings(BaseSettings):
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # Ignore extra fields from .env
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 @lru_cache()

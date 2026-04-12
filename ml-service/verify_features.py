@@ -23,7 +23,7 @@ def test_feature_engineering():
     # 1. Create dummy input data
     # Create timestamps covering a full day to check cyclical features
     timestamps = pd.date_range(
-        start="2025-12-01 00:00", end="2025-12-01 23:00", freq="H"
+        start="2025-12-01 00:00", end="2025-12-01 23:00", freq="h"
     )
     df = pd.DataFrame(
         {
