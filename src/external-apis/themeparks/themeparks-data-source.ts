@@ -70,22 +70,45 @@ export class ThemeParksDataSource implements IDataSource {
   async fetchParkLiveData(externalId: string): Promise<LiveDataResponse> {
     const liveDataArray = await this.client.getParkLiveData(externalId);
 
-    const entities: EntityLiveData[] = liveDataArray.map((entity) => ({
-      externalId: entity.id,
-      source: this.name,
-      entityType: this.mapEntityType(entity.entityType),
-      name: entity.name,
-      status: this.mapStatus(entity.status),
-      waitTime: entity.queue?.STANDBY?.waitTime ?? undefined,
-      lastUpdated: entity.lastUpdated,
-      // CRITICAL FIX: Keep queue as object (not array) to preserve all queue type data
-      // The processor expects: { STANDBY: {...}, SINGLE_RIDER: {...}, etc }
-      // NOT an array: [{ queueType: 'STANDBY', ... }, ...]
-      queue: entity.queue ?? undefined,
-      showtimes: entity.showtimes,
-      operatingHours: entity.operatingHours,
-      diningAvailability: entity.diningAvailability ? "available" : undefined,
-    }));
+    const entities: EntityLiveData[] = liveDataArray.map((entity) => {
+      // Ensure queue is an object, converting from array if necessary
+      let queueObj: any = undefined;
+
+      if (entity.queue) {
+        if (Array.isArray(entity.queue)) {
+          queueObj = {};
+          for (const q of entity.queue) {
+            if (q && typeof q === 'object') {
+              if (q.queueType) {
+                const { queueType, ...rest } = q;
+                queueObj[queueType] = rest;
+              } else {
+                Object.assign(queueObj, q);
+              }
+            }
+          }
+        } else {
+          queueObj = entity.queue;
+        }
+      }
+
+      return {
+        externalId: entity.id,
+        source: this.name,
+        entityType: this.mapEntityType(entity.entityType),
+        name: entity.name,
+        status: this.mapStatus(entity.status),
+        waitTime: queueObj?.STANDBY?.waitTime ?? undefined,
+        lastUpdated: entity.lastUpdated,
+        // CRITICAL FIX: Keep queue as object (not array) to preserve all queue type data
+        // The processor expects: { STANDBY: {...}, SINGLE_RIDER: {...}, etc }
+        // NOT an array: [{ queueType: 'STANDBY', ... }, ...]
+        queue: queueObj && Object.keys(queueObj).length > 0 ? queueObj : undefined,
+        showtimes: entity.showtimes,
+        operatingHours: entity.operatingHours,
+        diningAvailability: entity.diningAvailability ? "available" : undefined,
+      };
+    });
 
     return {
       source: this.name,
