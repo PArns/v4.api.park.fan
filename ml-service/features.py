@@ -550,6 +550,45 @@ def add_holiday_features(
         + df["is_holiday_neighbor_3"]
     )
 
+    # 3. Days until next holiday (Arrival signal)
+    # Strategy: Find the next public holiday for each country and calculate distance
+    df["days_until_next_holiday"] = 7  # Default to cap
+
+    if not national_holidays.empty:
+        # Get only public holidays
+        public_national = national_holidays[
+            national_holidays["holiday_type"] == "public"
+        ].copy()
+
+        if not public_national.empty:
+            public_national["holiday_date"] = pd.to_datetime(public_national["date"])
+            public_national = public_national.sort_values("holiday_date")
+
+            # Prepare df for merge_asof
+            df["_temp_ts"] = pd.to_datetime(df["date_local"])
+            original_order = df.index
+            df = df.sort_values("_temp_ts")
+
+            # Find NEXT holiday (direction='forward')
+            df = pd.merge_asof(
+                df,
+                public_national[["country", "holiday_date"]],
+                left_on="_temp_ts",
+                right_on="holiday_date",
+                by="country",
+                direction="forward",
+            )
+
+            # Calculate difference
+            df["days_until_next_holiday"] = (
+                (df["holiday_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
+            )
+
+            # Cleanup and restore order
+            df = df.drop(columns=["_temp_ts", "holiday_date"])
+            df.index = original_order
+            df = df.sort_index()
+
     df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df[
         "neighbor_school_flags"
     ].apply(lambda x: sum(x) if isinstance(x, list) else 0)
@@ -1935,6 +1974,7 @@ def get_feature_columns() -> List[str]:
         "school_holiday_count_total",
         "is_school_holiday_any",  # Consolidated school holiday signal (matches inference)
         "is_bridge_day",  # Extended weekends
+        "days_until_next_holiday",  # Days until arrival signal
         # Park schedule features
         "is_park_open",
         "has_special_event",
