@@ -51,11 +51,21 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
           parks.push(park);
         } else {
           // Check if opens soon OR has no schedule (returns true by default)
+          // OR if it has active rides right now (force inclusion for accuracy samples)
           const shouldInclude = await this.parksService.isParkOperatingToday(
             park.id,
           );
+          
           if (shouldInclude) {
             parks.push(park);
+          } else {
+            // Check for very recent ride activity (last 2 hours)
+            // This is a safety net for accuracy samples
+            const hasRecentActivity = await this.parksService.hasRecentRideActivity(park.id);
+            if (hasRecentActivity) {
+              this.logger.log(`Force-including park ${park.name} for predictions due to recent ride activity`);
+              parks.push(park);
+            }
           }
         }
       }

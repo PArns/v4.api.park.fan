@@ -2213,16 +2213,16 @@ export class ParksService {
     // No schedule or UNKNOWN: check today's ride data to decide.
     // Uses park-local midnight as the start (not a rolling 24h) to avoid
     // yesterday's operating data leaking into today's closed determination.
-    // ≥3 rides with data AND ≥25% with waitTime ≥ 5 → likely open.
-    // ≥3 rides with data AND 0% with waitTime ≥ 5 → likely closed.
+    // ≥3 rides with data AND ≥25% with waitTime ≥ 10 → likely open.
+    // ≥3 rides with data AND 0% with waitTime ≥ 10 → likely closed.
     // Too little data → default true (conservative, we don't know).
     const todayStart = getStartOfDayInTimezone(park.timezone);
-    const rideStats: { withData: string; operating5min: string }[] =
+    const rideStats: { withData: string; operating10min: string }[] =
       await this.parkRepository.manager.query(
         `
         SELECT
           COUNT(*) as "withData",
-          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating5min"
+          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
         FROM attractions a
         JOIN LATERAL (
           SELECT status, "waitTime"
@@ -2239,12 +2239,38 @@ export class ParksService {
 
     if (rideStats.length > 0) {
       const withData = parseInt(rideStats[0].withData, 10);
-      const operating5min = parseInt(rideStats[0].operating5min, 10);
+      const operating10min = parseInt(rideStats[0].operating10min, 10);
       if (withData >= 3) {
-        return operating5min / withData >= 0.25;
+        return operating10min / withData >= 0.25;
       }
     }
     return true;
+  }
+
+  /**
+   * Checks if any rides in the park have been active in the last 2 hours.
+   * Used as a safety net to ensure active parks get predictions even if
+   * the schedule says CLOSED.
+   */
+  async hasRecentRideActivity(parkId: string): Promise<boolean> {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+    const result = await this.parkRepository.manager.query(
+      `
+      SELECT COUNT(*) as "activeRides"
+      FROM queue_data qd
+      INNER JOIN attractions a ON a.id = qd."attractionId"
+      WHERE a."parkId" = $1::uuid
+        AND qd.timestamp >= $2
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" >= 10
+    `,
+      [parkId, twoHoursAgo],
+    );
+
+    const activeRides = parseInt(result[0]?.activeRides || "0", 10);
+    // If at least 2 rides are active, we consider the park active
+    return activeRides >= 2;
   }
 
   /**
