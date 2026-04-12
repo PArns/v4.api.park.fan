@@ -26,23 +26,25 @@ The ML Service is a standalone Python application responsible for predicting wai
 
 ## Training Pipeline
 
-1. **Data Extraction**: Raw `queue_data` is exported from PostgreSQL with data quality filters applied at the SQL level:
-   - **`waitTime >= 10`**: Excludes walk-on placeholder values (`waitTime=1` used by Queue-Times for water-park slides and similar "open but no queue" attractions). Using `> 0` would include noise that degrades model quality and misaligns with inference (which also filters at ≥ 5).
-   - **Schedule JOIN**: Excludes samples from closed days. Training data is joined against `schedule_entries` (park-level, `attractionId IS NULL`) via `JOIN parks p → AT TIME ZONE p.timezone`. Days with no schedule = include; days with `OPERATING` = include; any other type = exclude. Prevents off-season data (e.g., seasonal parks in winter) from polluting training.
+1. **Data Extraction**: Raw `queue_data` is exported from PostgreSQL with quality filters:
+   - **`waitTime >= 5`**: Includes early morning walk-ons. Previously 10 min was used, but analysis showed Phantasialand and others legitimately open with 5 min while area-wide opening is staggered. Technical noise (0/1 min) is still excluded at SQL level.
+   - **Schedule JOIN**: Excludes samples from closed days. Training data is joined against `schedule_entries` (park-level, `attractionId IS NULL`) via `JOIN parks p → AT TIME ZONE p.timezone`. Days with no schedule = include; days with `OPERATING` = include; any other type = exclude.
    ```sql
    LEFT JOIN schedule_entries se
      ON se."parkId" = a."parkId"
      AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
      AND se."attractionId" IS NULL
-   WHERE qd."waitTime" >= 10
+   WHERE qd."waitTime" >= 5
      AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
    ```
-   UNKNOWN days are included so the model learns to predict for parks that have schedule integration but no confirmed hours for a given day (e.g. Six Flags, parks with delayed schedule publication). The `waitTime >= 10` filter already ensures only real operating data enters training. Without this, the model never saw training examples for UNKNOWN-schedule parks — creating a training/inference asymmetry when `parkLiveStatus` corrects those rows to `is_park_open=1` at inference.
-2. **Preprocessing**:
-   - Outlier removal (e.g., wait times > 300 min).
-   - Feature engineering (Holiday lookup via `holiday_utils.py`).
-   - Handling missing weather data.
-   - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.30`): 30% of training rows have their `park_occupancy_pct` replaced with the DOW×hour mean from that park's training data. This teaches the model to rely on `hour`/`day_of_week` when real-time occupancy is unavailable (future predictions), instead of overfitting to the always-perfect training-time value.
+   UNKNOWN days are included to learn from parks without confirmed calendars (e.g. USJ).
+2. **Preprocessing & Anomaly Filtering**:
+   - **Contextual Anomaly Detection**: Differentiates real walk-ons from technical heartbeats.
+     - **Sensor Drops**: Filters `waitTime <= 5` if surrounding context (7h median) is `> 20`.
+     - **Technical Heartbeats**: Filters `waitTime <= 5` if the *entire park's* median at that timestamp is also `<= 5` (suggests park/area is actually still closed).
+     - **Outliers**: Filters `waitTime > 500` (API glitches).
+   - **Feature Engineering**: Holiday lookup, weather curves (sinusoidal), etc.
+   - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.60`): 60% of training rows have their `park_occupancy_pct` replaced with DOW×hour means to force learning from temporal/holiday signals.
 3. **Training**:
    - `train.py` splits data (Train/Test).
    - CatBoost trains on historical data.
@@ -111,7 +113,7 @@ In **predict.py**, UNKNOWN/CLOSED-only for a date is only applied when `park_has
 NestJS passes `featureContext.parkLiveStatus: Record<parkId, “OPERATING”|”CLOSED”>` in every prediction request. This is determined by `getBatchParkStatus` in `parks.service.ts`, which uses:
 
 1. **Primary**: `schedule_entries` — OPERATING entry with `openingTime ≤ now < closingTime`.
-2. **Heuristic fallback** (parks not covered by primary): Ride data from the last 2 hours. A park is considered OPERATING if ≥ 3 attractions have recent data AND ≥ 25% report `waitTime ≥ 5 min`. Parks with an explicit `CLOSED` schedule today are excluded from the heuristic.
+2. **Heuristic fallback** (parks not covered by primary): Ride data from the last 2 hours. A park is considered OPERATING if ≥ 3 attractions have recent data AND ≥ 25% report `waitTime ≥ 10 min`. Parks with an explicit `CLOSED` schedule today are excluded from the heuristic.
 
 In `predict.py`, after the schedule loop, any row with `status=”UNKNOWN”` and `is_park_open=0` is corrected to `is_park_open=1` when `parkLiveStatus=”OPERATING”`. This never overrides explicit `CLOSED` entries.
 

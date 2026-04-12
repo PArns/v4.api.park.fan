@@ -50,32 +50,49 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure timestamp sort
     df = df.sort_values(["attractionId", "timestamp"])
 
-    # Calculate rolling median (centered) to determine "context"
-    # We use a centered window to see what's happening around the data point
+    # Calculate rolling median (centered) to determine "context" for sudden drops
+    # We use a centered window to see what's happening around the data point for this ride
     df["rolling_median"] = df.groupby("attractionId")["waitTime"].transform(
         lambda x: x.rolling(window=7, min_periods=1, center=True).median()
     )
 
+    # Calculate park-wide median at each timestamp to detect technical heartbeats
+    # (Fake 5 min waits before park or area opening)
+    park_medians = (
+        df.groupby(["parkId", "timestamp"])["waitTime"]
+        .median()
+        .reset_index()
+        .rename(columns={"waitTime": "park_timestamp_median"})
+    )
+    df = df.merge(park_medians, on=["parkId", "timestamp"], how="left")
+
     # 1. Catch sudden drops (Downtime/Reset)
     # Condition: Wait time is very low (<= 5 min) BUT the surrounding context (median) is high (> 20 min)
-    # We lowered median threshold from 30 to 20 because we now have more low-wait data.
     drop_mask = (df["waitTime"] <= 5) & (df["rolling_median"] > 20)
 
     # 2. Catch extreme high outliers (API errors / data glitches)
-    # Values above 500 mins (8.3 hours) are almost certainly erroneous or irrelevant for general model.
+    # Values above 500 mins (8.3 hours) are almost certainly erroneous.
     high_outlier_mask = df["waitTime"] > 500
 
+    # 3. Catch technical heartbeats (Fake 5 min)
+    # Condition: Ride reports 5 min, BUT the entire park is also at <= 5 min.
+    # This differentiates "Park opening with 5 min everywhere" (Heatbeat)
+    # from "One ride empty, others busy" (Real walk-on).
+    # Logic: If park-wide median is <= 5, then a 5 min ride is likely just a heartbeat.
+    heartbeat_mask = (df["waitTime"] <= 5) & (df["park_timestamp_median"] <= 5)
+
     # Combine masks
-    anomaly_mask = drop_mask | high_outlier_mask
+    anomaly_mask = drop_mask | high_outlier_mask | heartbeat_mask
 
     df_clean = df[~anomaly_mask].copy()
-    df_clean = df_clean.drop(columns=["rolling_median"])
+    df_clean = df_clean.drop(columns=["rolling_median", "park_timestamp_median"])
 
     removed_drops = drop_mask.sum()
     removed_highs = high_outlier_mask.sum()
+    removed_heartbeats = heartbeat_mask.sum()
 
     logger.info(
-        f"   Detected {removed_drops} sensor drops and {removed_highs} extreme high outliers"
+        f"   Detected {removed_drops} sensor drops, {removed_highs} extreme high outliers, and {removed_heartbeats} technical heartbeats"
     )
 
     removed = initial_count - len(df_clean)
