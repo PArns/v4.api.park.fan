@@ -498,7 +498,7 @@ def train_model(version: str = None) -> None:
     logger.info(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
     logger.info(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
     logger.info(f"   Depth: {settings.CATBOOST_DEPTH}")
-    logger.info("   Early stopping: 50 rounds")
+    logger.info("   Early stopping: 100 rounds")
     logger.info("")
 
     model = WaitTimeModel(version)

@@ -117,7 +117,7 @@ class WaitTimeModel:
             thread_count=thread_count,  # Use all CPU cores for parallel training
             task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
             verbose=100,
-            early_stopping_rounds=50,
+            early_stopping_rounds=100,
         )
 
         # Train
@@ -436,7 +436,7 @@ class WaitTimeModel:
             defaults = self._get_default_feature_values()
             for col in missing_cols:
                 default_val = defaults.get(col, 0.0)
-                X[col] = default_val
+                X.loc[:, col] = default_val
 
         # Ensure columns are in correct order (CatBoost is sensitive to order)
         X_ordered = X[model_features].copy()
