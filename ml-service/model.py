@@ -124,9 +124,13 @@ class WaitTimeModel:
         self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
 
         training_time = time.time() - training_start
+        best_iteration = self.model.get_best_iteration()
+        tree_count = self.model.tree_count_
         print(
             f"\n   Training completed in {training_time:.2f}s ({training_time / 60:.1f} minutes)"
         )
+        print(f"   Best iteration: {best_iteration}")
+        print(f"   Total trees: {tree_count}")
 
         # Calculate metrics
         y_pred = self.model.predict(X_val[self.feature_columns])
