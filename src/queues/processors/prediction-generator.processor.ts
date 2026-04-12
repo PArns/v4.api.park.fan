@@ -44,29 +44,33 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       // Filter to parks that are operating OR might operate soon
       const parks = [];
       for (const park of allParks) {
-        const status = statusMap.get(park.id);
-        const isOperating = status === "OPERATING";
-
-        if (isOperating) {
+        const currentStatus = statusMap.get(park.id);
+        
+        // Strategy: 
+        // 1. If currently OPERATING (confirmed by schedule or heuristic), include it.
+        // 2. If UNKNOWN or CLOSED, check if it operates at any point today.
+        // 3. If still not included, check for very recent ride activity (safety net).
+        
+        if (currentStatus === "OPERATING") {
           parks.push(park);
-        } else {
-          // Check if opens soon OR has no schedule (returns true by default)
-          // OR if it has active rides right now (force inclusion for accuracy samples)
-          const shouldInclude = await this.parksService.isParkOperatingToday(
-            park.id,
-          );
-          
-          if (shouldInclude) {
-            parks.push(park);
-          } else {
-            // Check for very recent ride activity (last 2 hours)
-            // This is a safety net for accuracy samples
-            const hasRecentActivity = await this.parksService.hasRecentRideActivity(park.id);
-            if (hasRecentActivity) {
-              this.logger.log(`Force-including park ${park.name} for predictions due to recent ride activity`);
-              parks.push(park);
-            }
-          }
+          continue;
+        }
+
+        // Check if park is scheduled to operate at any point today
+        // (Returns true for UNKNOWN/no-schedule parks by default)
+        const isOperatingToday = await this.parksService.isParkOperatingToday(park.id);
+        
+        if (isOperatingToday) {
+          parks.push(park);
+          continue;
+        }
+
+        // Final safety net: check for very recent ride activity (last 2 hours)
+        // This handles cases where schedule is wrong/missing but park is clearly open.
+        const hasRecentActivity = await this.parksService.hasRecentRideActivity(park.id);
+        if (hasRecentActivity) {
+          this.logger.log(`Force-including park ${park.name} for predictions due to recent ride activity`);
+          parks.push(park);
         }
       }
 
