@@ -11,14 +11,14 @@ sys.path.append("/app")
 from db import fetch_training_data
 from train import remove_anomalies
 from model import WaitTimeModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 
 # Test parameters
 RESAMPLING_INTERVALS = ["5min", "15min", "30min", "1h"]
-END_DATE = datetime.utcnow()
+END_DATE = datetime.now(timezone.utc)
 START_DATE = END_DATE - timedelta(days=7)  # Last 7 days
 
 print("=" * 60)

@@ -23,7 +23,7 @@ def test_feature_engineering():
     # 1. Create dummy input data
     # Create timestamps covering a full day to check cyclical features
     timestamps = pd.date_range(
-        start="2025-12-01 00:00", end="2025-12-01 23:00", freq="H"
+        start="2025-12-01 00:00", end="2025-12-01 23:00", freq="h"
     )
     df = pd.DataFrame(
         {
@@ -43,6 +43,7 @@ def test_feature_engineering():
         {
             "park_id": ["p1"],
             "country": ["DE"],
+            "region_code": ["NW"],
             "timezone": ["Europe/Berlin"],
             "influencingRegions": [
                 [
@@ -61,6 +62,7 @@ def test_feature_engineering():
         {
             "country": ["DE", "FR"],
             "date": [pd.to_datetime("2025-12-01"), pd.to_datetime("2025-12-01")],
+            "region": [None, None],
             "holiday_type": ["school", "public"],  # DE=school, FR=public
             "is_nationwide": [True, True],
         }

@@ -807,122 +807,202 @@ def create_prediction_features(
             )
 
         # Parks without schedule integration: no OPERATING rows at all → treat as "no schedule"
-        # (keep predictions; don't zero out for UNKNOWN/CLOSED-only).
         park_level = schedules_df[
             (schedules_df["attractionId"].isin(["nan", "None"]))
             | (schedules_df["attractionId"].isna())
         ]
-        # Cast parkId to str to avoid UUID-object vs string key mismatches
+
+        # Determine park schedule integration (at least one OPERATING row)
         park_has_operating = (
             park_level.groupby(park_level["parkId"].astype(str))["scheduleType"]
             .apply(lambda x: (x == "OPERATING").any())
             .to_dict()
         )
 
-        for idx, row in df.iterrows():
-            park_id = str(row["parkId"])  # str() ensures dict lookup matches
-            attraction_id = str(row["attractionId"])
-            timestamp = row["timestamp"]
+        # Ensure index alignment and type matching for merges
+        df = df.reset_index(drop=True)
+        df["parkId"] = df["parkId"].astype(str)
+        if "attractionId" in df.columns:
+            df["attractionId"] = df["attractionId"].astype(str)
 
-            # Use local timestamp for schedule date comparison
-            # Schedules are stored as local calendar dates (DATE type in DB)
-            # We must compare with the date in the park's timezone, not UTC
-            if "local_timestamp" in row.index and pd.notna(row["local_timestamp"]):
-                local_ts = row["local_timestamp"]
-                date_only = pd.Timestamp(local_ts.date())
+        # Ensure local_timestamp and date_local exist in df
+        if "local_timestamp" not in df.columns:
+            df["local_timestamp"] = pd.to_datetime(df["timestamp"])
+        df["local_timestamp"] = pd.to_datetime(df["local_timestamp"])
+        df["schedule_date"] = pd.to_datetime(df["local_timestamp"].dt.date)
+
+        # Create lookup structure for park-level schedules
+        park_schedules = schedules_df[
+            (schedules_df["attractionId"].isin(["nan", "None"]))
+            | (schedules_df["attractionId"].isna())
+        ].copy()
+
+        # Prepare operating schedules
+        operating_schedules = park_schedules[
+            park_schedules["scheduleType"] == "OPERATING"
+        ].copy()
+
+        if not operating_schedules.empty:
+            operating_schedules["date_only"] = pd.to_datetime(operating_schedules["date"].dt.date)
+            # Keep first operating schedule per park/date
+            operating_schedules = operating_schedules.groupby(["parkId", "date_only"]).first().reset_index()
+
+            # Merge df with operating_schedules
+            df_merged = df.merge(
+                operating_schedules[["parkId", "date_only", "openingTime", "closingTime"]],
+                left_on=["parkId", "schedule_date"],
+                right_on=["parkId", "date_only"],
+                how="left",
+            )
+            # Set index to match df
+            df_merged.index = df.index
+
+            # Use local_timestamp since openingTime/closingTime from DB are timezone-aware (UTC stored in DB as TIMESTAMPTZ)
+            # Make sure df_merged openingTime/closingTime and df["timestamp"] are comparable.
+            ts_compare = pd.to_datetime(df_merged["timestamp"], utc=True)
+            opening = df_merged["openingTime"]
+            closing = df_merged["closingTime"]
+
+            # Set tz to UTC to compare if opening has tzinfo
+            if getattr(opening.dt, "tz", None) is not None:
+                opening = opening.dt.tz_convert("UTC")
+                closing = closing.dt.tz_convert("UTC")
             else:
-                # Fallback to UTC date (defensive, should not happen)
-                date_only = pd.Timestamp(timestamp.date())
+                # If opening time from DB is naive, make ts_compare naive (UTC) as well
+                ts_compare = ts_compare.dt.tz_localize(None)
 
-            # Filter schedules for this park/date
-            # We want:
-            # 1. Park schedules (attractionId is null/nan)
-            # 2. Attraction schedules (attractionId matches)
-            park_schedules = schedules_df[
-                (schedules_df["parkId"] == park_id)
-                & (schedules_df["date"] == date_only)
-            ]
+            mask_valid = opening.notna() & closing.notna()
+            mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
 
-            if not park_schedules.empty:
-                # 1. Check Park Status & Opening Hours
-                # Park-wide schedules usually have attractionId = None (or 'nan' after string conversion)
-                global_schedules = park_schedules[
-                    (park_schedules["attractionId"] == "nan")
-                    | (park_schedules["attractionId"] == "None")
-                    | (park_schedules["attractionId"].isna())
+            df.loc[mask_open, "is_park_open"] = 1
+            mask_closed_operating_day = mask_valid & ~mask_open
+            df.loc[mask_closed_operating_day, "status"] = "CLOSED"
+
+        # Handle non-operating schedules (CLOSED / UNKNOWN) on dates with NO operating schedule
+        # First, find the dates where operating schedules were missing
+        if not operating_schedules.empty:
+            has_operating = df.merge(
+                operating_schedules[["parkId", "date_only"]],
+                left_on=["parkId", "schedule_date"],
+                right_on=["parkId", "date_only"],
+                how="left",
+                indicator=True
+            )["_merge"] == "both"
+            has_operating.index = df.index
+        else:
+            has_operating = pd.Series(False, index=df.index)
+
+        mask_no_operating = ~has_operating
+
+        if mask_no_operating.any():
+            # For these rows, we check if park_has_operating is True.
+            # If so, set status to UNKNOWN or CLOSED depending on what exists, and is_park_open = 0
+
+            # Map park_has_operating flag to df
+            df_park_has_operating = df["parkId"].map(park_has_operating).fillna(False)
+            df_park_has_operating.index = df.index
+
+            # Look up if schedule has UNKNOWN for that park/date
+            unknown_schedules = park_schedules[park_schedules["scheduleType"] == "UNKNOWN"].copy()
+            if not unknown_schedules.empty:
+                unknown_schedules["date_only"] = pd.to_datetime(unknown_schedules["date"].dt.date)
+                unknown_schedules = unknown_schedules.groupby(["parkId", "date_only"]).first().reset_index()
+
+                has_unknown = df.merge(
+                    unknown_schedules[["parkId", "date_only"]],
+                    left_on=["parkId", "schedule_date"],
+                    right_on=["parkId", "date_only"],
+                    how="left",
+                    indicator=True
+                )["_merge"] == "both"
+                has_unknown.index = df.index
+            else:
+                has_unknown = pd.Series(False, index=df.index)
+
+            # Look up if schedule has CLOSED for that park/date
+            closed_schedules = park_schedules[park_schedules["scheduleType"] == "CLOSED"].copy()
+            if not closed_schedules.empty:
+                closed_schedules["date_only"] = pd.to_datetime(closed_schedules["date"].dt.date)
+                closed_schedules = closed_schedules.groupby(["parkId", "date_only"]).first().reset_index()
+
+                has_closed = df.merge(
+                    closed_schedules[["parkId", "date_only"]],
+                    left_on=["parkId", "schedule_date"],
+                    right_on=["parkId", "date_only"],
+                    how="left",
+                    indicator=True
+                )["_merge"] == "both"
+                has_closed.index = df.index
+            else:
+                has_closed = pd.Series(False, index=df.index)
+
+            mask_apply_non_op = mask_no_operating & df_park_has_operating & (has_unknown | has_closed)
+
+            # Default to CLOSED if no operating, park_has_operating, and it has some non-op schedule
+            df.loc[mask_apply_non_op, "is_park_open"] = 0
+            df.loc[mask_apply_non_op, "status"] = "CLOSED"
+
+            # Overwrite with UNKNOWN if it has an UNKNOWN entry
+            mask_apply_unknown = mask_apply_non_op & has_unknown
+            df.loc[mask_apply_unknown, "status"] = "UNKNOWN"
+
+        # Check for special events
+        event_schedules = park_schedules[
+            park_schedules["scheduleType"].isin(["TICKETED_EVENT", "PRIVATE_EVENT"])
+        ].copy()
+        if not event_schedules.empty:
+            event_schedules["date_only"] = pd.to_datetime(event_schedules["date"].dt.date)
+            event_schedules = event_schedules.groupby(["parkId", "date_only"]).first().reset_index()
+            has_event = df.merge(
+                event_schedules[["parkId", "date_only"]],
+                left_on=["parkId", "schedule_date"],
+                right_on=["parkId", "date_only"],
+                how="left",
+                indicator=True
+            )["_merge"] == "both"
+            has_event.index = df.index
+            df.loc[has_event, "has_special_event"] = 1
+
+        # Check for extra hours
+        extra_hours_schedules = park_schedules[
+            park_schedules["scheduleType"] == "EXTRA_HOURS"
+        ].copy()
+        if not extra_hours_schedules.empty:
+            extra_hours_schedules["date_only"] = pd.to_datetime(extra_hours_schedules["date"].dt.date)
+            extra_hours_schedules = extra_hours_schedules.groupby(["parkId", "date_only"]).first().reset_index()
+            has_extra = df.merge(
+                extra_hours_schedules[["parkId", "date_only"]],
+                left_on=["parkId", "schedule_date"],
+                right_on=["parkId", "date_only"],
+                how="left",
+                indicator=True
+            )["_merge"] == "both"
+            has_extra.index = df.index
+            df.loc[has_extra, "has_extra_hours"] = 1
+
+        # Check specific attraction status (Maintenance or Closed)
+        if "attractionId" in df.columns:
+            attr_schedules = schedules_df[
+                schedules_df["attractionId"].notna() & ~schedules_df["attractionId"].isin(["nan", "None"])
+            ].copy()
+            if not attr_schedules.empty:
+                attr_schedules["date_only"] = pd.to_datetime(attr_schedules["date"].dt.date)
+                attr_schedules_closed = attr_schedules[
+                    attr_schedules["scheduleType"].isin(["MAINTENANCE", "CLOSED"])
                 ]
+                if not attr_schedules_closed.empty:
+                    attr_schedules_closed = attr_schedules_closed.groupby(["parkId", "attractionId", "date_only"]).first().reset_index()
+                    has_attr_closed = df.merge(
+                        attr_schedules_closed[["parkId", "attractionId", "date_only"]],
+                        left_on=["parkId", "attractionId", "schedule_date"],
+                        right_on=["parkId", "attractionId", "date_only"],
+                        how="left",
+                        indicator=True
+                    )["_merge"] == "both"
+                    has_attr_closed.index = df.index
+                    df.loc[has_attr_closed, "status"] = "CLOSED"
 
-                if not global_schedules.empty:
-                    # Operating hours: only OPERATING has times; CLOSED/UNKNOWN = no prediction or closed
-                    operating = global_schedules[
-                        global_schedules["scheduleType"] == "OPERATING"
-                    ]
-                    if not operating.empty:
-                        opening = operating.iloc[0]["openingTime"]
-                        closing = operating.iloc[0]["closingTime"]
-
-                        # Robust comparison handling mixed timezones
-                        ts_compare = timestamp
-
-                        # case 1: DB has timezone, we need to match it
-                        if getattr(opening, "tzinfo", None) is not None:
-                            if ts_compare.tzinfo is None:
-                                ts_compare = pd.Timestamp(ts_compare).tz_localize("UTC")
-                            ts_compare = ts_compare.tz_convert(opening.tzinfo)
-                        # case 2: DB is naive, we must be naive (UTC)
-                        else:
-                            if ts_compare.tzinfo is not None:
-                                ts_compare = ts_compare.tz_convert("UTC").tz_localize(
-                                    None
-                                )
-
-                        is_open = opening <= ts_compare <= closing
-                        df.at[idx, "is_park_open"] = int(is_open)
-
-                        if not is_open:
-                            df.at[idx, "status"] = "CLOSED"
-                    else:
-                        # No OPERATING for this date: only CLOSED/UNKNOWN. Only treat as closed/unknown
-                        # if this park has schedule integration (at least one OPERATING row elsewhere).
-                        if park_has_operating.get(park_id, False):
-                            has_unknown = (
-                                global_schedules["scheduleType"] == "UNKNOWN"
-                            ).any()
-                            df.at[idx, "is_park_open"] = 0
-                            df.at[idx, "status"] = (
-                                "UNKNOWN" if has_unknown else "CLOSED"
-                            )
-                        # else: park has no OPERATING at all (no schedule integration) → leave open
-
-                    # Special events / Extra hours
-                    if any(
-                        global_schedules["scheduleType"].isin(
-                            ["TICKETED_EVENT", "PRIVATE_EVENT"]
-                        )
-                    ):
-                        df.at[idx, "has_special_event"] = 1
-
-                    if "EXTRA_HOURS" in global_schedules["scheduleType"].values:
-                        df.at[idx, "has_extra_hours"] = 1
-
-                # 2. Check Specific Attraction Status (Overrides park status if strictly closed/maintenance)
-                # But typically if park is closed, attraction is closed.
-                # If park is open, attraction might be maintenance.
-                attr_schedules = park_schedules[
-                    park_schedules["attractionId"] == attraction_id
-                ]
-
-                if not attr_schedules.empty:
-                    # Check for MAINTENANCE or CLOSED
-                    if any(
-                        attr_schedules["scheduleType"].isin(["MAINTENANCE", "CLOSED"])
-                    ):
-                        df.at[idx, "status"] = (
-                            "CLOSED"  # Or 'MAINTENANCE' specifically if we want distinct status
-                        )
-                        # If attraction is closed, is_park_open feature for the model implies "can guests ride?"
-                        # technically park is open but this ride isn't.
-                        # But we are overriding prediction anyway, so feature value matters less.
+        df = df.drop(columns=["schedule_date"], errors="ignore")
 
     # Live park status override: if NestJS determined a park is OPERATING via ride data,
     # correct is_park_open for rows with UNKNOWN schedule (no data from wiki).
