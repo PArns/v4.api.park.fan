@@ -1649,24 +1649,16 @@ def add_holiday_distance_features(
     Calculate distance to the next public holiday or bridge day.
     Provides a strong arrival signal for destination resorts.
     """
-    df["days_until_next_holiday"] = 7  # Default to cap
+    # 3. Holiday Distance Features (Arrival & Departure signals)
+    # Strategy: Find the next AND previous public holiday/bridge day per country
+    df["days_until_next_holiday"] = 7
+    df["days_since_last_holiday"] = 7
+    df["is_long_weekend"] = 0  # Part of a 3+ day block
 
-    # 1. Prepare Event List (Public Holidays + Bridge Days)
-    # We need to know which days are holidays or bridge days per country
     if "date_local" not in df.columns:
         return df
 
-    # Create temporary country mapping if needed
-    df_temp = df[["parkId", "date_local"]].copy()
-    df_temp = df_temp.merge(
-        parks_metadata[["park_id", "country"]],
-        left_on="parkId",
-        right_on="park_id",
-        how="left",
-    )
-
-    # 2. Extract all 'Event' days from the current dataframe
-    # This includes both public holidays and the bridge days we just calculated
+    # Get country mapping
     events = df.copy()
     if "country" not in events.columns:
         events = events.merge(
@@ -1676,43 +1668,64 @@ def add_holiday_distance_features(
             how="left",
         )
 
+    # Filter all event days (Holidays + Bridge Days)
     event_days = events[
         (events["is_holiday_primary"] == 1) | (events.get("is_bridge_day", 0) == 1)
     ][["country", "date_local"]].drop_duplicates()
 
-    if event_days.empty:
-        return df
+    if not event_days.empty:
+        event_days["event_date"] = pd.to_datetime(event_days["date_local"])
+        event_days = event_days.sort_values("event_date")
 
-    event_days["event_date"] = pd.to_datetime(event_days["date_local"])
-    event_days = event_days.sort_values("event_date")
+        # Prepare main df
+        df["_temp_ts"] = pd.to_datetime(df["date_local"])
+        original_order = df.index
+        df = df.sort_values("_temp_ts")
 
-    # 3. Vectorized distance calculation
-    df["_temp_ts"] = pd.to_datetime(df["date_local"])
-    original_order = df.index
-    df = df.sort_values("_temp_ts")
+        # A. Next Event (Arrival Signal)
+        df = pd.merge_asof(
+            df,
+            event_days[["country", "event_date"]],
+            left_on="_temp_ts",
+            right_on="event_date",
+            by="country",
+            direction="forward",
+        )
+        df["days_until_next_holiday"] = (
+            (df["event_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
+        )
+        df = df.drop(columns=["event_date"])
 
-    # Merge with NEXT event (direction='forward')
-    # Using 'country' as key ensures we look at the correct calendar
-    df = pd.merge_asof(
-        df,
-        event_days[["country", "event_date"]],
-        left_on="_temp_ts",
-        right_on="event_date",
-        by="country",
-        direction="forward",
-    )
+        # B. Previous Event (Departure Signal)
+        df = pd.merge_asof(
+            df,
+            event_days[["country", "event_date"]],
+            left_on="_temp_ts",
+            right_on="event_date",
+            by="country",
+            direction="backward",
+        )
+        df["days_since_last_holiday"] = (
+            (df["_temp_ts"] - df["event_date"]).dt.days.fillna(7).clip(0, 7)
+        )
+        df = df.drop(columns=["event_date"])
 
-    # Distance in days
-    df["days_until_next_holiday"] = (
-        (df["event_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
-    )
+        # C. Long Weekend Flag (Heuristic)
+        # If we are in a holiday or bridge day, OR if we are a weekend directly
+        # adjacent to one, mark as long weekend.
+        is_event = (df["is_holiday_primary"] == 1) | (df["is_bridge_day"] == 1)
+        # Distances <= 1 mean the day is part of or adjacent to a holiday/bridge block
+        # Combined with is_weekend, this captures the full Thu-Sun or Fri-Mon blocks
+        df["is_long_weekend"] = (
+            is_event
+            | ((df["is_weekend"] == 1) & (df["days_until_next_holiday"] <= 1))
+            | ((df["is_weekend"] == 1) & (df["days_since_last_holiday"] <= 1))
+        ).astype(int)
 
-    # Cleanup
-    df = df.drop(
-        columns=["_temp_ts", "event_date", "country", "park_id"], errors="ignore"
-    )
-    df.index = original_order
-    df = df.sort_index()
+        # Cleanup
+        df = df.drop(columns=["_temp_ts", "country", "park_id"], errors="ignore")
+        df.index = original_order
+        df = df.sort_index()
 
     return df
 
@@ -2023,6 +2036,8 @@ def get_feature_columns() -> List[str]:
         "is_school_holiday_any",  # Consolidated school holiday signal (matches inference)
         "is_bridge_day",  # Extended weekends
         "days_until_next_holiday",  # Days until arrival signal
+        "days_since_last_holiday",  # Days since departure signal
+        "is_long_weekend",  # Part of a 3+ day block
         # Park schedule features
         "is_park_open",
         "has_special_event",
