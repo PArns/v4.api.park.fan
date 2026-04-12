@@ -350,6 +350,9 @@ class WaitTimeModel:
         if self.model is None:
             raise ValueError("Model not loaded. Call load() first.")
 
+        # Explicit copy to avoid SettingWithCopyWarning on incoming slice
+        X = X.copy()
+
         # Use model's feature list (from metadata) for backward compatibility
         # If not loaded yet, use current feature list
         model_features = self.model_feature_columns or self.feature_columns
@@ -383,7 +386,7 @@ class WaitTimeModel:
                 else:
                     # Numeric features: use numeric default
                     default_val = defaults.get(col, 0.0)
-                X[col] = default_val
+                X.loc[:, col] = default_val
 
         # Check for extra columns (warn but don't fail)
         extra_cols = set(X.columns) - set(model_features)
@@ -426,6 +429,9 @@ class WaitTimeModel:
         """
         if self.model is None:
             raise ValueError("Model not loaded. Call load() first.")
+
+        # Explicit copy to avoid SettingWithCopyWarning on incoming slice
+        X = X.copy()
 
         # Use model's feature list (from metadata) for backward compatibility
         model_features = self.model_feature_columns or self.feature_columns
