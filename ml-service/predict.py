@@ -514,6 +514,20 @@ def create_prediction_features(
 
     df["is_raining"] = (df["precipitation"] > 0).astype(int)
 
+    # Rain Trend Features (starting/stopping) - matches features.py logic
+    # Sort by (parkId, timestamp) to correctly find state changes
+    original_index = df.index
+    df = df.sort_values(["parkId", "timestamp"])
+
+    # In inference, we might only have a single row or a short window.
+    # We use shift(1) per park to find changes.
+    was_raining = df.groupby("parkId")["is_raining"].shift(1).fillna(0)
+    df["is_rain_starting"] = ((df["is_raining"] == 1) & (was_raining == 0)).astype(int)
+    df["is_rain_stopping"] = ((df["is_raining"] == 0) & (was_raining == 1)).astype(int)
+
+    # Restore original order
+    df = df.loc[original_index]
+
     # Holiday features
     df_start = df["timestamp"].min()
     df_end = df["timestamp"].max()
@@ -1084,6 +1098,76 @@ def create_prediction_features(
                 if mask.any():
                     df.loc[mask, "is_park_open"] = 1
                     df.loc[mask, "status"] = "OPERATING"
+
+    # 3. Holiday Distance Features (Arrival & Departure signals)
+    # Strategy: Find the next AND previous public holiday/bridge day per country
+    df["days_until_next_holiday"] = 7
+    df["days_since_last_holiday"] = 7
+    df["is_long_weekend"] = 0  # Part of a 3+ day block
+
+    # We need country mapping for distance calculation
+    df_temp = df.merge(
+        parks_metadata[["park_id", "country"]],
+        left_on="parkId",
+        right_on="park_id",
+        how="left",
+    )
+
+    # Filter all event days (Holidays + Bridge Days) from our current dataframe
+    event_days = df_temp[
+        (df_temp["is_holiday_primary"] == 1) | (df_temp.get("is_bridge_day", 0) == 1)
+    ][["country", "date_local"]].drop_duplicates()
+
+    if not event_days.empty:
+        event_days["event_date"] = pd.to_datetime(event_days["date_local"])
+        event_days = event_days.sort_values("event_date")
+
+        # Prepare main df for merge_asof
+        df["_temp_ts"] = pd.to_datetime(df["date_local"])
+        original_order = df.index
+        df["country"] = df_temp["country"]
+        df = df.sort_values("_temp_ts")
+
+        # A. Next Event (Arrival Signal)
+        df = pd.merge_asof(
+            df,
+            event_days[["country", "event_date"]],
+            left_on="_temp_ts",
+            right_on="event_date",
+            by="country",
+            direction="forward",
+        )
+        df["days_until_next_holiday"] = (
+            (df["event_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
+        )
+        df = df.drop(columns=["event_date"])
+
+        # B. Previous Event (Departure Signal)
+        df = pd.merge_asof(
+            df,
+            event_days[["country", "event_date"]],
+            left_on="_temp_ts",
+            right_on="event_date",
+            by="country",
+            direction="backward",
+        )
+        df["days_since_last_holiday"] = (
+            (df["_temp_ts"] - df["event_date"]).dt.days.fillna(7).clip(0, 7)
+        )
+        df = df.drop(columns=["event_date"])
+
+        # C. Long Weekend Flag (Heuristic)
+        is_event = (df["is_holiday_primary"] == 1) | (df["is_bridge_day"] == 1)
+        df["is_long_weekend"] = (
+            is_event
+            | ((df["is_weekend"] == 1) & (df["days_until_next_holiday"] <= 1))
+            | ((df["is_weekend"] == 1) & (df["days_since_last_holiday"] <= 1))
+        ).astype(int)
+
+        # Cleanup and restore order
+        df = df.drop(columns=["_temp_ts", "country"])
+        df.index = original_order
+        df = df.sort_index()
 
     # Historical features (most important!)
     # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB
