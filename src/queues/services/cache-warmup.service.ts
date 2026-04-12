@@ -229,29 +229,20 @@ export class CacheWarmupService {
         }
       }
 
-      // Fetch park + relations via parallel queries (avoids Cartesian product JOIN)
-      // Use findBySlug which already includes all necessary relations for integrated response
-      const parkBase = await this.parkRepository.findOne({
-        where: { id: parkId },
-        select: ["id", "slug", "continent", "country", "city"],
-      });
+      // Fetch park with its destination relation directly via ID
+      const parkBase = await this.parksService.findById(parkId);
 
       if (!parkBase) {
         this.logger.warn(`Park ${parkId} not found, skipping warmup`);
         return false;
       }
 
-      // Load with full relations (shows, restaurants, attractions)
-      const park = await this.parksService.findByGeographicPathWithRelations(
-        parkBase.continent,
-        parkBase.country,
-        parkBase.city,
-        parkBase.slug,
-      );
+      // Load with full relations (shows, restaurants, attractions) using efficient parallel queries
+      const park = await this.parksService.loadParkRelations(parkBase);
 
       if (!park) {
         this.logger.warn(
-          `Park ${parkBase.slug} could not be fully loaded, skipping warmup`,
+          `Park ${parkBase.slug} relations could not be loaded, skipping warmup`,
         );
         return false;
       }
