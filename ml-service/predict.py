@@ -775,7 +775,6 @@ def create_prediction_features(
             logger.warning(
                 "No local_timestamp column - using UTC for schedule dates (may miss boundary dates)"
             )
-            # FIX: Use df['timestamp'] instead of undefined df_start/df_end
             start_date_local = df["timestamp"].min().date()
             end_date_local = df["timestamp"].max().date()
 
