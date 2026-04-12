@@ -150,9 +150,9 @@ export class PredictionAccuracyService {
     const maxTime =
       pendingPredictions[pendingPredictions.length - 1].targetTime;
 
-    // Expand window by 15 mins
-    const dataWindowStart = new Date(minTime.getTime() - 15 * 60 * 1000);
-    const dataWindowEnd = new Date(maxTime.getTime() + 15 * 60 * 1000);
+    // Expand window by 30 mins
+    const dataWindowStart = new Date(minTime.getTime() - 30 * 60 * 1000);
+    const dataWindowEnd = new Date(maxTime.getTime() + 30 * 60 * 1000);
 
     // Get all attraction IDs in this batch
     const attractionIds = [
@@ -205,14 +205,14 @@ export class PredictionAccuracyService {
       const targetTimeMs = prediction.targetTime.getTime();
       const records = queueDataMap.get(prediction.attractionId) || [];
 
-      // Find best match within ±15 minutes
+      // Find best match within ±30 minutes
       // Since records are sorted by time, we can find the closest one
       let bestMatch: QueueData | null = null;
-      let minDiff = 15 * 60 * 1000 + 1; // Start just outside window
+      let minDiff = 30 * 60 * 1000 + 1; // Start just outside window
 
       for (const record of records) {
         const diff = Math.abs(record.timestamp.getTime() - targetTimeMs);
-        if (diff <= 15 * 60 * 1000) {
+        if (diff <= 30 * 60 * 1000) {
           if (diff < minDiff) {
             minDiff = diff;
             bestMatch = record;

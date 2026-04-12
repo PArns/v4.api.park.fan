@@ -65,7 +65,7 @@ export class PredictionAccuracyProcessor {
     this.logger.log("📊 Starting accuracy stats aggregation...");
 
     try {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
       // Single SQL query to aggregate stats per attraction
       const results = await this.accuracyRepository.query(
@@ -79,7 +79,7 @@ export class PredictionAccuracyProcessor {
         WHERE target_time >= $1
         GROUP BY attraction_id
         `,
-        [thirtyDaysAgo],
+        [ninetyDaysAgo],
       );
 
       let upsertCount = 0;
