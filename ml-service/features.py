@@ -550,45 +550,6 @@ def add_holiday_features(
         + df["is_holiday_neighbor_3"]
     )
 
-    # 3. Days until next holiday (Arrival signal)
-    # Strategy: Find the next public holiday for each country and calculate distance
-    df["days_until_next_holiday"] = 7  # Default to cap
-
-    if not national_holidays.empty:
-        # Get only public holidays
-        public_national = national_holidays[
-            national_holidays["holiday_type"] == "public"
-        ].copy()
-
-        if not public_national.empty:
-            public_national["holiday_date"] = pd.to_datetime(public_national["date"])
-            public_national = public_national.sort_values("holiday_date")
-
-            # Prepare df for merge_asof
-            df["_temp_ts"] = pd.to_datetime(df["date_local"])
-            original_order = df.index
-            df = df.sort_values("_temp_ts")
-
-            # Find NEXT holiday (direction='forward')
-            df = pd.merge_asof(
-                df,
-                public_national[["country", "holiday_date"]],
-                left_on="_temp_ts",
-                right_on="holiday_date",
-                by="country",
-                direction="forward",
-            )
-
-            # Calculate difference
-            df["days_until_next_holiday"] = (
-                (df["holiday_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
-            )
-
-            # Cleanup and restore order
-            df = df.drop(columns=["_temp_ts", "holiday_date"])
-            df.index = original_order
-            df = df.sort_index()
-
     df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df[
         "neighbor_school_flags"
     ].apply(lambda x: sum(x) if isinstance(x, list) else 0)
@@ -1677,6 +1638,85 @@ def add_bridge_day_feature(
     return df
 
 
+def add_holiday_distance_features(
+    df: pd.DataFrame,
+    parks_metadata: pd.DataFrame,
+    start_date: datetime,
+    end_date: datetime,
+    cached_holidays_df: pd.DataFrame = None,
+) -> pd.DataFrame:
+    """
+    Calculate distance to the next public holiday or bridge day.
+    Provides a strong arrival signal for destination resorts.
+    """
+    df["days_until_next_holiday"] = 7  # Default to cap
+
+    # 1. Prepare Event List (Public Holidays + Bridge Days)
+    # We need to know which days are holidays or bridge days per country
+    if "date_local" not in df.columns:
+        return df
+
+    # Create temporary country mapping if needed
+    df_temp = df[["parkId", "date_local"]].copy()
+    df_temp = df_temp.merge(
+        parks_metadata[["park_id", "country"]],
+        left_on="parkId",
+        right_on="park_id",
+        how="left",
+    )
+
+    # 2. Extract all 'Event' days from the current dataframe
+    # This includes both public holidays and the bridge days we just calculated
+    events = df.copy()
+    if "country" not in events.columns:
+        events = events.merge(
+            parks_metadata[["park_id", "country"]],
+            left_on="parkId",
+            right_on="park_id",
+            how="left",
+        )
+
+    event_days = events[
+        (events["is_holiday_primary"] == 1) | (events.get("is_bridge_day", 0) == 1)
+    ][["country", "date_local"]].drop_duplicates()
+
+    if event_days.empty:
+        return df
+
+    event_days["event_date"] = pd.to_datetime(event_days["date_local"])
+    event_days = event_days.sort_values("event_date")
+
+    # 3. Vectorized distance calculation
+    df["_temp_ts"] = pd.to_datetime(df["date_local"])
+    original_order = df.index
+    df = df.sort_values("_temp_ts")
+
+    # Merge with NEXT event (direction='forward')
+    # Using 'country' as key ensures we look at the correct calendar
+    df = pd.merge_asof(
+        df,
+        event_days[["country", "event_date"]],
+        left_on="_temp_ts",
+        right_on="event_date",
+        by="country",
+        direction="forward",
+    )
+
+    # Distance in days
+    df["days_until_next_holiday"] = (
+        (df["event_date"] - df["_temp_ts"]).dt.days.fillna(7).clip(0, 7)
+    )
+
+    # Cleanup
+    df = df.drop(
+        columns=["_temp_ts", "event_date", "country", "park_id"], errors="ignore"
+    )
+    df.index = original_order
+    df = df.sort_index()
+
+    return df
+
+
 def add_park_has_schedule_feature(
     df: pd.DataFrame,
     feature_context: Dict = None,
@@ -1853,6 +1893,12 @@ def engineer_features(
     )
     print(f"   Bridge day features: {time_module.time() - bridge_start:.2f}s")
 
+    dist_start = time_module.time()
+    df = add_holiday_distance_features(
+        df, parks_metadata, start_date, end_date, cached_holidays_df
+    )
+    print(f"   Holiday distance features: {time_module.time() - dist_start:.2f}s")
+
     schedule_start = time_module.time()
     df = add_park_schedule_features(df, start_date, end_date, cached_schedules_df)
     print(f"   Schedule features: {time_module.time() - schedule_start:.2f}s")
@@ -1894,6 +1940,7 @@ def engineer_features(
     weather_time = time_module.time() - weather_start
     holiday_time = time_module.time() - holiday_start
     bridge_time = time_module.time() - bridge_start
+    dist_time = time_module.time() - dist_start
     schedule_time = time_module.time() - schedule_start
     attraction_time = time_module.time() - attraction_start
     historical_time = time_module.time() - historical_start
@@ -1910,6 +1957,7 @@ def engineer_features(
         "Weather features": weather_time,
         "Holiday features": holiday_time,
         "Bridge day features": bridge_time,
+        "Holiday distance": dist_time,
         "Schedule features": schedule_time,
         "Attraction features": attraction_time,
         "Historical features": historical_time,
