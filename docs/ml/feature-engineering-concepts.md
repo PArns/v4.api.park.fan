@@ -35,7 +35,12 @@ A critical requirement for reliable ML is that the scale of features during trai
 ### Name-based Type Heuristics
 *   **Problem**: Explicit attraction types (COASTER, DARK_RIDE) are often missing from third-party APIs.
 *   **Solution**: The system uses Regex-based heuristics on attraction names to categorize rides.
-*   **Significance**: This enables cross-park learning. The model can learn that "Coasters" are wind-sensitive or that "Water Rides" peak during high heat, applying this knowledge even to new parks with limited history.
+*   **Significance**: This enables cross-park learning. The model can learn that "Coasters" are wind-sensitive (using keywords like *Tower, Sky, High, Loop*) or that "Water Rides" (keywords like *Splash, River, Flume, Chiapas*) peak during high heat, applying this knowledge even to new parks with limited history.
+
+### Training-side Downtime Reconstruction
+*   **Concept**: Capturing the "Pent-up Demand" effect.
+*   **Mechanism**: The training pipeline reconstructs historical downtime by counting `DOWN` status signals in the raw data. It calculates `downtime_minutes_today` cumulatively.
+*   **Significance**: This allows the model to learn that wait times typically spike immediately after a popular ride reopens following a technical disturbance.
 
 ### Inference-Training Parity
 Reliable predictions require identical logic in both stages:
