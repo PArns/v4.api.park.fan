@@ -76,32 +76,27 @@ def filter_predictions_by_schedule(
             filtered_predictions.extend(park_preds)
             continue
 
-        # Get unique dates from predictions (in park's local timezone)
-        date_set = set()
-        for pred in park_preds:
-            try:
-                pred_time_str = pred["predictedTime"]
-                # Parse ISO string
-                if pred_time_str.endswith("Z"):
-                    pred_time_str = pred_time_str[:-1] + "+00:00"
-                pred_time_utc = datetime.fromisoformat(pred_time_str)
-
-                # Convert to park's timezone
-                if pred_time_utc.tzinfo is None:
-                    pred_time_utc = pytz.UTC.localize(pred_time_utc)
-                pred_time_local = pred_time_utc.astimezone(park_tz)
-                date_set.add(pred_time_local.date())
-            except Exception as e:
-                print(
-                    f"⚠️  Error parsing prediction time {pred.get('predictedTime')}: {e}"
-                )
-                continue
-
-        if not date_set:
+        # Convert predictions to DataFrame for vectorized processing
+        preds_df = pd.DataFrame(park_preds)
+        if "predictedTime" not in preds_df.columns:
             continue
 
-        # Query schedule for these dates (OPERATING, CLOSED, UNKNOWN)
-        # Only OPERATING days get predictions; CLOSED/UNKNOWN = no schedule or confirmed closed
+        # Parse prediction times to UTC and convert to park local time
+        try:
+            # Handle standard JS 'Z' strings if present
+            preds_df["_parsed_time"] = preds_df["predictedTime"].astype(str).str.replace('Z', '+00:00')
+            preds_df["_utc_time"] = pd.to_datetime(preds_df["_parsed_time"], utc=True)
+            preds_df["_local_time"] = preds_df["_utc_time"].dt.tz_convert(park_tz)
+            preds_df["_date"] = preds_df["_local_time"].dt.date
+        except Exception as e:
+            print(f"⚠️  Error parsing prediction times for park {park_id}: {e}")
+            continue
+
+        unique_dates = preds_df["_date"].unique()
+        if len(unique_dates) == 0:
+            continue
+
+        # Query schedule for these dates
         query = text(
             """
             SELECT
@@ -119,150 +114,55 @@ def filter_predictions_by_schedule(
 
         with get_db() as db:
             result = db.execute(
-                query, {"park_id": park_id, "dates": [d.isoformat() for d in date_set]}
+                query, {"park_id": park_id, "dates": [d.isoformat() for d in unique_dates]}
             )
-            schedules = result.fetchall()
+            schedules_raw = result.fetchall()
 
-            # Debug: Log schedules found (logging removed to reduce spam)
-            for s in schedules:
-                opening_utc = s[2]
-                closing_utc = s[3]
+        if not schedules_raw:
+            # FALLBACK LOGIC: No schedule data, keep all predictions
+            filtered_predictions.extend(park_preds)
+            continue
 
-                # Convert to local time for display
-                if opening_utc and closing_utc:
-                    opening_pd = pd.Timestamp(opening_utc)
-                    closing_pd = pd.Timestamp(closing_utc)
+        # Convert schedules to DataFrame
+        sched_df = pd.DataFrame(schedules_raw, columns=["date", "scheduleType", "openingTime", "closingTime"])
+        sched_df["date"] = pd.to_datetime(sched_df["date"]).dt.date
 
-                    # Ensure timezone aware
-                    if opening_pd.tzinfo is None:
-                        opening_pd = opening_pd.tz_localize(pytz.UTC)
-                    if closing_pd.tzinfo is None:
-                        closing_pd = closing_pd.tz_localize(pytz.UTC)
+        operating_mask = sched_df["scheduleType"].isin(["OPERATING", "UNKNOWN"])
+        operating_dates = set(sched_df.loc[operating_mask, "date"])
 
-                    # Convert to park timezone
-                    opening_local = opening_pd.tz_convert(park_tz)
-                    closing_local = closing_pd.tz_convert(park_tz)
-
-                    # Schedule details logging removed to reduce spam
-                else:
-                    # No schedule logging removed
-                    pass
-
-        if schedules:
-            # Build set of dates when park is OPERATING or UNKNOWN (exclude CLOSED days)
-            operating_dates_from_query = set()
-            for s in schedules:
-                if s[1] in (
-                    "OPERATING",
-                    "UNKNOWN",
-                ):  # keep UNKNOWN dates so they can be predicted
-                    d = s[0]  # date
-                    if isinstance(d, datetime):
-                        d = d.date()
-                    operating_dates_from_query.add(d)
-
+        if not operating_dates and prediction_type == "daily":
             # Not all parks have schedule integration. If we have only UNKNOWN/CLOSED rows
             # (no OPERATING at all), treat like "no schedule" → keep all predictions.
-            if not operating_dates_from_query and prediction_type == "daily":
-                filtered_predictions.extend(park_preds)
-                continue
-
-            if prediction_type == "hourly":
-                # HOURLY: Only show predictions for TODAY (in park's timezone)
-                # Filter out predictions AFTER park closing time for today
-                # Get current date in park's timezone (logging removed)
-
-                schedule_map = {}
-                for schedule_row in schedules:
-                    date = schedule_row[0]
-                    opening = schedule_row[2]  # openingTime (timestamp with tz)
-                    closing = schedule_row[3]  # closingTime (timestamp with tz)
-
-                    if opening and closing:
-                        # Convert to pandas Timestamp first to handle datetime64 from DB
-                        opening = pd.Timestamp(opening)
-                        closing = pd.Timestamp(closing)
-
-                        # Ensure timezone aware
-                        if opening.tzinfo is None:
-                            opening = opening.tz_localize(pytz.UTC)
-                        if closing.tzinfo is None:
-                            closing = closing.tz_localize(pytz.UTC)
-
-                        # Convert to park timezone
-                        opening_local = opening.tz_convert(park_tz)
-                        closing_local = closing.tz_convert(park_tz)
-
-                        schedule_map[date] = {
-                            "opening": opening_local,
-                            "closing": closing_local,
-                        }
-
-                # Filter predictions: Keep only those for TODAY and BEFORE or AT closing time
-                for pred in park_preds:
-                    try:
-                        pred_time_str = pred["predictedTime"]
-                        if pred_time_str.endswith("Z"):
-                            pred_time_str = pred_time_str[:-1] + "+00:00"
-                        pred_time_utc = datetime.fromisoformat(pred_time_str)
-
-                        if pred_time_utc.tzinfo is None:
-                            pred_time_utc = pytz.UTC.localize(pred_time_utc)
-                        pred_time_local = pred_time_utc.astimezone(park_tz)
-                        pred_date = pred_time_local.date()
-
-                        # Removed strict 'today only' check to allow next-day predictions
-                        # if pred_date != today_park:
-                        #     continue
-
-                        if pred_date in schedule_map:
-                            opening = schedule_map[pred_date]["opening"]
-                            closing = schedule_map[pred_date]["closing"]
-
-                            # Keep predictions within operating hours (from opening up to, but NOT including, closing)
-                            # Example: If park closes at 20:00, show predictions for 11:00, 12:00, ..., 19:00 but NOT 20:00
-                            # Convert pred_time_local to pd.Timestamp to match opening/closing types
-                            pred_time_local_ts = pd.Timestamp(pred_time_local)
-                            if opening <= pred_time_local_ts < closing:
-                                filtered_predictions.append(pred)
-                            # else: Prediction is at or after closing time, filter it out
-                        # else: No schedule for this date - park might be closed today, skip prediction
-                    except Exception as e:
-                        print(f"⚠️  Error filtering prediction: {e}")
-                        continue
-
-            elif prediction_type == "daily":
-                # DAILY: Only keep predictions for dates when park is OPERATING or UNKNOWN (exclude CLOSED)
-                operating_dates = operating_dates_from_query
-
-                # print(f"🗓️  Operating dates for {park_id}: {sorted(operating_dates)}")
-
-                # Filter predictions
-                for pred in park_preds:
-                    try:
-                        pred_time_str = pred["predictedTime"]
-                        if pred_time_str.endswith("Z"):
-                            pred_time_str = pred_time_str[:-1] + "+00:00"
-                        pred_time_utc = datetime.fromisoformat(pred_time_str)
-
-                        if pred_time_utc.tzinfo is None:
-                            pred_time_utc = pytz.UTC.localize(pred_time_utc)
-                        pred_time_local = pred_time_utc.astimezone(park_tz)
-                        pred_date = pred_time_local.date()
-
-                        # Debug logging removed to reduce log spam
-
-                        # Only include predictions for days when park is operating
-                        if pred_date in operating_dates:
-                            filtered_predictions.append(pred)
-                        # else: Park closed on this day (off-season), skip
-                    except Exception as e:
-                        print(f"⚠️  Error filtering daily prediction: {e}")
-                        continue
-        else:
-            # FALLBACK LOGIC: No schedule data, keep all predictions
-            # Logging removed to reduce spam (only log if it's a real issue)
             filtered_predictions.extend(park_preds)
+            continue
+
+        if prediction_type == "hourly":
+            # Filter predictions within operating hours
+            # Parse DB opening/closing times to local
+            sched_df["openingTime"] = pd.to_datetime(sched_df["openingTime"], utc=True).dt.tz_convert(park_tz)
+            sched_df["closingTime"] = pd.to_datetime(sched_df["closingTime"], utc=True).dt.tz_convert(park_tz)
+
+            # Merge predictions with their schedules by date
+            merged = preds_df.merge(
+                sched_df[["date", "openingTime", "closingTime"]],
+                left_on="_date",
+                right_on="date",
+                how="inner"
+            )
+
+            # Keep predictions inside operating hours
+            valid_mask = (merged["_local_time"] >= merged["openingTime"]) & (merged["_local_time"] < merged["closingTime"])
+
+            # Reconstruct original dicts from the valid rows
+            # Drop the temporary columns we created
+            valid_df = merged[valid_mask].drop(columns=["_parsed_time", "_utc_time", "_local_time", "_date", "date", "openingTime", "closingTime"])
+            filtered_predictions.extend(valid_df.to_dict("records"))
+
+        elif prediction_type == "daily":
+            # Only keep predictions for operating or unknown dates
+            valid_df = preds_df[preds_df["_date"].isin(operating_dates)]
+            valid_df = valid_df.drop(columns=["_parsed_time", "_utc_time", "_local_time", "_date"])
+            filtered_predictions.extend(valid_df.to_dict("records"))
 
     # Filtering stats not logged to avoid spam (many parks × frequent requests).
     return filtered_predictions

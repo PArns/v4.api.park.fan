@@ -28,6 +28,9 @@ In `predict.py` existiert noch eine große `for idx in df.index[mask]:` Schleife
 ### C. Zusätzliches Wetter-Feature ("Rain Trend")
 Es wurden die Features `is_rain_starting` und `is_rain_stopping` implementiert. Da Menschen stark auf den *Beginn* von Regen reagieren (Flucht in Dark Rides), hilft dies dem Modell, schnelle Änderungen der Wartezeit zu verstehen.
 
+### D. Schedule Processing Loop Vektorisierung
+Der Ansatz in `schedule_filter.py` für Schedules wurde verbessert. Das Verarbeiten der Schedules und die Zuweisung zu den Vorhersagen nutzt nun `pd.merge` und Pandas DataFrame Logik anstelle von langsamen `for`-Schleifen pro Vorhersage, was die Filterung massiv beschleunigt.
+
 ## 4. Sinnvolle zukünftige Verbesserungen (Roadmap)
 
 ### Feature Engineering & Pipeline
@@ -36,6 +39,5 @@ Es wurden die Features `is_rain_starting` und `is_rain_stopping` implementiert. 
 
 ### Datenqualität & Training
 1. **Downtime & "Zero Wait" Trennung:** Aktuell werden Zeiten `waitTime < 10` oft als Noise entfernt. Manche Rides haben aber echte 5-Minuten Phasen. Ein genaueres Thresholding pro Attraktions-Typ (z.B. Coaster vs. Show) könnte die Trainingsdaten verfeinern.
-2. **Schedule Processing Loop Vektorisierung:** Der Merge-basierte Ansatz in `predict.py` für Schedules ist bereits gut, aber das Verarbeiten der `UNKNOWN`/`CLOSED` Konflikte hat noch Verbesserungspotenzial durch komplexere `pd.merge_asof` Strategien, um die Schleifen komplett zu eliminieren.
 
 Zusammenfassend: Die ML Pipeline ist auf einem architektonisch hervorragenden Stand. Die konsequente Nutzung der Park-Timezone und die Auslagerung von Aggregationen in PostgreSQL sind Best Practices. Die weitere Vektorisierung in Pandas und das MAPE-Clipping sind die logischen nächsten Schritte.
