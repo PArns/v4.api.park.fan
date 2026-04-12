@@ -76,19 +76,21 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3. Catch technical heartbeats (Fake 5 min)
     # Condition: Ride reports 5 min, BUT the entire park is also at <= 5 min AND it's early.
-    # Logic: Only filter these if it's before 10am (local time). After 10am, 
-    # a 5-min park median is likely a genuine quiet day, not a technical heartbeat.
+    # Logic: Only filter these if it's before 1 hour after park opening (local time).
+    # After that, a 5-min park median is likely a genuine quiet day, not a technical heartbeat.
     heartbeat_mask = (
-        (df["waitTime"] <= 5) & 
-        (df["park_timestamp_median"] <= 5) & 
-        (df["hour"] < 10)
+        (df["waitTime"] <= 5)
+        & (df["park_timestamp_median"] <= 5)
+        & (df["hour"] < (df["opening_hour"] + 1))
     )
 
     # Combine masks
     anomaly_mask = drop_mask | high_outlier_mask | heartbeat_mask
 
     df_clean = df[~anomaly_mask].copy()
-    df_clean = df_clean.drop(columns=["rolling_median", "park_timestamp_median"])
+    df_clean = df_clean.drop(
+        columns=["rolling_median", "park_timestamp_median", "opening_hour"]
+    )
 
     removed_drops = drop_mask.sum()
     removed_highs = high_outlier_mask.sum()

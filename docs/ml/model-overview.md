@@ -41,7 +41,7 @@ The ML Service is a standalone Python application responsible for predicting wai
 2. **Preprocessing & Anomaly Filtering**:
    - **Contextual Anomaly Detection**: Differentiates real walk-ons from technical heartbeats.
      - **Sensor Drops**: Filters `waitTime <= 5` if surrounding context (7h median) is `> 20`.
-     - **Technical Heartbeats**: Filters `waitTime <= 5` if the *entire park's* median at that timestamp is also `<= 5` (suggests park/area is actually still closed).
+     - **Technical Heartbeats**: Filters `waitTime <= 5` if the *entire park's* median at that timestamp is also `<= 5` AND it is before 1 hour after park opening (dynamic per park). This preserves valid quiet day data during the rest of the day.
      - **Outliers**: Filters `waitTime > 500` (API glitches).
    - **Feature Engineering**: Holiday lookup, weather curves (sinusoidal), etc.
    - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.60`): 60% of training rows have their `park_occupancy_pct` replaced with DOW×hour means to force learning from temporal/holiday signals.

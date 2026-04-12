@@ -139,6 +139,8 @@ def fetch_training_data(
                 MAX(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)) as hour,
                 MAX(EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)) as day_of_week,
                 MAX(EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone)) as month,
+                -- Dynamic opening hour for heartbeat filtering (default to 9am if unknown)
+                COALESCE(MAX(EXTRACT(HOUR FROM se."openingTime" AT TIME ZONE p.timezone)), 9) as opening_hour,
                 MAX(CASE
                     WHEN EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) IN (12, 1, 2) THEN 0
                     WHEN EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) IN (3, 4, 5) THEN 1
