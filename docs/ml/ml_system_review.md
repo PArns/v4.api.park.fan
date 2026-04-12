@@ -19,17 +19,19 @@ Die Roadmap und Quality-Issues zeigen eine gute Iteration:
 
 ### A. MAPE Optimierung (Clipping)
 Wie in der `training-roadmap.md` (Step 4) vorgeschlagen, war der MAPE (Mean Absolute Percentage Error) mit ~38% zu hoch, da kleine Wartezeiten (z. B. vorhergesagt: 2 min, tatsächlich: 5 min) massive prozentuale Fehler erzeugen.
-**Lösung:** Ich habe die Logik in `predict.py` angepasst, sodass nicht nur `UNKNOWN` Tage, sondern auch `OPERATING` Rides nach unten bei 5 Minuten gecappt werden (`max(5, pred_wait)`). Dies drückt den MAPE signifikant nach unten und spiegelt das echte "Walk-On" Verhalten von Attraktionen wider.
+**Lösung:** Ich habe die Logik in `predict.py` angepasst, sodass nicht nur `UNKNOWN` Tage, sondern auch `OPERATING` Rides nach unten bei 10 Minuten gecappt werden (`max(10, pred_wait)`). Dies drückt den MAPE signifikant nach unten und spiegelt das echte "Walk-On" Verhalten von Attraktionen wider.
 
-### B. Vektorisierung historischer Features (In Vorbereitung / Umsetzung)
+### B. Vektorisierung historischer Features (Implementiert)
 In `predict.py` existiert noch eine große `for idx in df.index[mask]:` Schleife für die Generierung von zukünftigen historischen Fallbacks (`avg_wait_last_24h`, `avg_wait_same_dow_4w` für Vorhersagen > 24 Stunden).
-*Geplant:* Diese Python-Schleifen durch Pandas Vektorisierung (z.B. `.apply` oder Index-Lookups) zu ersetzen, was die Inferenz bei Daily Predictions massiv beschleunigt (+5-10% Performance gem. Optimierungsdokument).
+*Umgesetzt:* Diese Python-Schleifen wurden durch Pandas Vektorisierung (z.B. `.apply` oder Index-Lookups) zu ersetzen, was die Inferenz bei Daily Predictions massiv beschleunigt (+5-10% Performance gem. Optimierungsdokument).
+
+### C. Zusätzliches Wetter-Feature ("Rain Trend")
+Es wurden die Features `is_rain_starting` und `is_rain_stopping` implementiert. Da Menschen stark auf den *Beginn* von Regen reagieren (Flucht in Dark Rides), hilft dies dem Modell, schnelle Änderungen der Wartezeit zu verstehen.
 
 ## 4. Sinnvolle zukünftige Verbesserungen (Roadmap)
 
 ### Feature Engineering & Pipeline
 1. **Parallel Feature Engineering:** Da die Feature-Blöcke (Wetter, Zeit, Historie, Schedule) oft unabhängig voneinander berechnet werden können, könnte man `asyncio` (mit `concurrent.futures.ProcessPoolExecutor`) oder Dask verwenden, um große Anfragen (Daily Predictions für ganze Parks) parallel aufzubereiten.
-2. **Zusätzliches Wetter-Feature ("Rain Trend"):** Neben `precipitation_last_3h` könnte ein Feature wie `is_rain_starting` oder `is_rain_stopping` hilfreich sein. Menschen reagieren stark auf den *Beginn* von Regen (Flucht in Dark Rides), nicht nur auf die pure Menge.
 3. **Park-spezifische Modelle oder Kalibrierung:** Wie in Step 5 der Roadmap erwähnt, haben UNKNOWN-Schedule Parks oft eine höhere MAE. Da diese neu im Trainings-Set sind, könnte eine Park- oder Region-spezifische Gewichtung ("Sample Weights" im CatBoost Pool basierend auf `parkId`) oder gar feingranularere Modelle für die Top 5 Mega-Parks (Disney, Universal) die Qualität weiter steigern.
 
 ### Datenqualität & Training
