@@ -52,6 +52,85 @@ def round_to_nearest_5(value: float) -> int:
     return int((value + 2.5) // 5) * 5
 
 
+def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add attraction type heuristics based on attraction name.
+    """
+    if "attractionName" not in df.columns:
+        df["is_coaster"] = 0
+        df["is_water_ride"] = 0
+        df["is_indoor"] = 0
+        df["is_wind_sensitive"] = 0
+        return df
+
+    import re
+
+    # 1. Coasters (Achterbahnen)
+    coaster_patterns = [
+        r"coaster",
+        r"achterbahn",
+        r"montaña rusa",
+        r"grand huit",
+        r"express",
+        r"mountain",
+        r"taron",
+        r"blue fire",
+        r"silver star",
+    ]
+    coaster_regex = re.compile("|".join(coaster_patterns), re.IGNORECASE)
+
+    # 2. Water Rides (Wasserbahnen)
+    water_patterns = [
+        r"water",
+        r"wasser",
+        r"splash",
+        r"river",
+        r"flume",
+        r"rapids",
+        r"log",
+        r"chiapas",
+        r"rafting",
+        r"pirates",
+    ]
+    water_regex = re.compile("|".join(water_patterns), re.IGNORECASE)
+
+    # 3. Indoor Rides (Themenfahrten / Shows)
+    indoor_patterns = [
+        r"cinema",
+        r"4d",
+        r"theater",
+        r"indoor",
+        r"dark",
+        r"mansion",
+        r"mous au chocolat",
+        r"hotel",
+        r"museum",
+    ]
+    indoor_regex = re.compile("|".join(indoor_patterns), re.IGNORECASE)
+
+    # Apply heuristics
+    names = df["attractionName"].astype(str)
+    df["is_coaster"] = names.apply(
+        lambda x: 1 if coaster_regex.search(x) else 0
+    ).astype(int)
+    df["is_water_ride"] = names.apply(
+        lambda x: 1 if water_regex.search(x) else 0
+    ).astype(int)
+    df["is_indoor"] = names.apply(lambda x: 1 if indoor_regex.search(x) else 0).astype(
+        int
+    )
+
+    # Wind sensitive: mostly high coasters and towers
+    wind_patterns = [r"tower", r"sky", r"high", r"drop", r"starflyer"]
+    wind_regex = re.compile("|".join(wind_patterns), re.IGNORECASE)
+    df["is_wind_sensitive"] = (
+        (df["is_coaster"] == 1)
+        | names.apply(lambda x: 1 if wind_regex.search(x) else 0)
+    ).astype(int)
+
+    return df
+
+
 # Cache for recent wait times (short-lived, 2 minutes)
 _recent_wait_times_cache = {}
 _recent_wait_times_cache_ttl = 120  # 2 minutes
@@ -96,6 +175,7 @@ def fetch_recent_wait_times(
         WITH hourly_agg AS (
             SELECT
                 qd."attractionId"::text as "attractionId",
+                a.name as "attractionName",
                 DATE(qd.timestamp AT TIME ZONE p.timezone) as date,
                 EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone) as hour,
                 EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone) as day_of_week,
@@ -111,16 +191,17 @@ def fetch_recent_wait_times(
             WHERE qd."attractionId"::text = ANY(:attraction_ids)
                 AND qd.timestamp >= NOW() - :lookback_days * INTERVAL '1 day'
                 AND qd."waitTime" IS NOT NULL
-                AND qd."waitTime" >= 10
+                AND qd."waitTime" >= 5
                 AND qd.status = 'OPERATING'
                 AND qd."queueType" = 'STANDBY'
                 AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
-            GROUP BY qd."attractionId", DATE(qd.timestamp AT TIME ZONE p.timezone),
+            GROUP BY qd."attractionId", a.name, DATE(qd.timestamp AT TIME ZONE p.timezone),
                      EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone),
                      EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)
         )
         SELECT
             "attractionId",
+            "attractionName",
             date,
             hour,
             day_of_week,
@@ -327,6 +408,8 @@ def create_prediction_features(
     # Logic: Use provided hourly forecast if available, otherwise fallback to historical daily averages
 
     use_forecast = False
+    historical_temp_avg = {}  # Map for temperature deviation baseline
+
     if weather_forecast and len(weather_forecast) > 0:
         try:
             # Convert forecast objects to dicts if needed
@@ -335,13 +418,9 @@ def create_prediction_features(
             wf_df["time"] = pd.to_datetime(wf_df["time"])
 
             # Normalize both columns to timezone-naive UTC for robust merging
-            # 1. Handle Weather Forecast DataFrame
             if wf_df["time"].dt.tz is not None:
-                # Convert to UTC then remove timezone info
                 wf_df["time"] = wf_df["time"].dt.tz_convert("UTC").dt.tz_localize(None)
 
-            # 2. Handle Prediction DataFrame
-            # Create join_time and ensure it is also timezone-naive UTC
             df["join_time"] = df["timestamp"].dt.round("h")
             if df["join_time"].dt.tz is not None:
                 df["join_time"] = (
@@ -349,10 +428,10 @@ def create_prediction_features(
                 )
 
             # Merge logic
-            # Note: weather_forecast is assumed to apply to all parks in this batch (usually same park)
             df = df.merge(wf_df, left_on="join_time", right_on="time", how="left")
 
             # Map columns and fill defaults
+            # Use sinusoidal interpolation if we have hour and potentially min/max
             df["temperature_avg"] = df["temperature"].fillna(20.0)
             df["precipitation"] = df["precipitation"].fillna(0.0)
             df["windSpeedMax"] = df["windSpeed"].fillna(0.0)
@@ -360,11 +439,7 @@ def create_prediction_features(
             df["weatherCode"] = df["weatherCode"].fillna(0).astype(int)
 
             # NEW: Weather interaction features
-            # Precipitation last 3h (for forecast, we approximate with current precipitation * 3)
-            df["precipitation_last_3h"] = (
-                df["precipitation"] * 3.0
-            )  # Approximation for forecast
-            # Temperature deviation will be calculated later after we have monthly averages
+            df["precipitation_last_3h"] = df["precipitation"] * 3.0  # Approx
 
             # Cleanup join columns
             df = df.drop(
@@ -388,37 +463,34 @@ def create_prediction_features(
             )
             use_forecast = False
 
-    if not use_forecast:
-        # Weather features (use seasonal averages from DB for better accuracy)
-        # Get the month we're predicting for (use local time for accurate month)
-        # Use the first timestamp's local month if available, otherwise UTC month
-        if timestamps:
-            # Try to use local timestamp if available (more accurate for timezone-aware predictions)
-            if "local_timestamp" in df.columns and len(df) > 0:
-                prediction_month = df["local_timestamp"].iloc[0].month
-            else:
-                prediction_month = timestamps[0].month
+    if True:  # Always fetch DB weather for deviation baseline
+        # Get the month we're predicting for
+        if "local_timestamp" in df.columns and len(df) > 0:
+            prediction_month = df["local_timestamp"].iloc[0].month
+        elif timestamps:
+            prediction_month = timestamps[0].month
         else:
             prediction_month = datetime.now(timezone.utc).month
 
         # OPTIMIZATION: Cache weather historical averages (1 hour TTL)
-        # Weather averages change rarely, so caching is safe and effective
         cache_key = f"{','.join(sorted(set(park_ids)))}:{prediction_month}"
-        weather_df = None
+        weather_db_df = None
 
         if cache_key in _weather_historical_cache:
             cached_data, cache_time = _weather_historical_cache[cache_key]
             import time
 
             if time.time() - cache_time < _weather_historical_cache_ttl:
-                weather_df = cached_data.copy()
+                weather_db_df = cached_data.copy()
 
-        if weather_df is None:
+        if weather_db_df is None:
             # Cache miss - load from DB
-            weather_query = text(
-                """
+            # We now fetch Max/Min even for predict to allow sinusoidal fallback
+            weather_query = text("""
                 SELECT
                     "parkId"::text as "parkId",
+                    AVG("temperatureMax") as temp_max,
+                    AVG("temperatureMin") as temp_min,
                     AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
                     AVG("precipitationSum") as precip_avg,
                     AVG("windSpeedMax") as wind_avg,
@@ -426,11 +498,10 @@ def create_prediction_features(
                     MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
                 FROM weather_data
                 WHERE "parkId"::text = ANY(:park_ids)
-                    AND EXTRACT(MONTH FROM date) = :month  -- Same month from historical data
-                    AND date >= CURRENT_DATE - INTERVAL '3 years'  -- Use 3 years of historical data
+                    AND EXTRACT(MONTH FROM date) = :month
+                    AND date >= CURRENT_DATE - INTERVAL '3 years'
                 GROUP BY "parkId"
-            """
-            )
+            """)
 
             try:
                 with get_db() as db:
@@ -438,14 +509,14 @@ def create_prediction_features(
                         weather_query,
                         {"park_ids": list(set(park_ids)), "month": prediction_month},
                     )
-                    weather_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                    weather_df = convert_df_types(weather_df)
-
-                    # Update cache
+                    weather_db_df = pd.DataFrame(
+                        result.fetchall(), columns=result.keys()
+                    )
+                    weather_db_df = convert_df_types(weather_db_df)
                     import time
 
                     _weather_historical_cache[cache_key] = (
-                        weather_df.copy(),
+                        weather_db_df.copy(),
                         time.time(),
                     )
             except Exception as e:
@@ -455,62 +526,55 @@ def create_prediction_features(
                 logger.warning(
                     f"Failed to fetch historical weather data: {e}. Using defaults."
                 )
-                weather_df = pd.DataFrame()
+                weather_db_df = pd.DataFrame()
 
-        # Merge weather data
-        if not weather_df.empty:
-            df = df.merge(weather_df, left_on="parkId", right_on="parkId", how="left")
-            df["temperature_avg"] = df["temp_avg"].fillna(20.0)
-            df["precipitation"] = df["precip_avg"].fillna(0.0)
-            df["windSpeedMax"] = df["wind_avg"].fillna(0.0)
-            df["snowfallSum"] = df["snow_avg"].fillna(0.0)
-            df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
+        if not weather_db_df.empty:
+            historical_temp_avg = weather_db_df.set_index("parkId")[
+                "temp_avg"
+            ].to_dict()
 
-            # temperature_deviation is computed below after monthly avg is available
+            if not use_forecast:
+                # Merge historical data as primary
+                df = df.merge(weather_db_df, on="parkId", how="left")
 
-            # NEW: Precipitation last 3h (for historical data, approximate with daily average)
-            df["precipitation_last_3h"] = (
-                df["precipitation"] * 0.125
-            )  # Daily / 24h * 3h approximation
+                # Apply sinusoidal interpolation to historical fallback
+                # Min at 4am, Max at 2pm (14:00)
+                temp_min = df["temp_min"].fillna(15.0)
+                temp_max = df["temp_max"].fillna(25.0)
+                temp_range = temp_max - temp_min
 
-            df = df.drop(
-                columns=[
-                    "temp_avg",
-                    "precip_avg",
-                    "wind_avg",
-                    "snow_avg",
-                    "weather_code_mode",
-                ],
-                errors="ignore",
-            )
-        else:
-            df["temperature_avg"] = 20.0
-            df["precipitation"] = 0.0
-            df["windSpeedMax"] = 0.0
-            df["snowfallSum"] = 0.0
-            df["weatherCode"] = 0
-            df["temperature_deviation"] = 0.0
-            df["precipitation_last_3h"] = 0.0
+                normalized_time = ((df["hour"] - 14) / 12) * np.pi
+                interpolation_factor = np.cos(normalized_time) * -0.5 + 0.5
+                df["temperature_avg"] = temp_min + (interpolation_factor * temp_range)
 
-    # Calculate temperature deviation if not already set (for forecast data)
-    if (
-        "temperature_deviation" not in df.columns
-        or df["temperature_deviation"].isna().any()
-    ):
-        # Compute deviation as current temp minus per-park monthly mean.
-        # Covers both forecast path (no deviation set yet) and historical path.
-        if "month" in df.columns:
-            monthly_avg = df.groupby(["parkId", "month"])["temperature_avg"].transform(
-                "mean"
-            )
-            df["temperature_deviation"] = df["temperature_avg"] - monthly_avg
-            df["temperature_deviation"] = df["temperature_deviation"].fillna(0)
-        else:
-            df["temperature_deviation"] = 0.0
+                df["precipitation"] = df["precip_avg"].fillna(0.0)
+                df["windSpeedMax"] = df["wind_avg"].fillna(0.0)
+                df["snowfallSum"] = df["snow_avg"].fillna(0.0)
+                df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
+                df["precipitation_last_3h"] = df["precipitation"] * 0.125
+
+                df = df.drop(
+                    columns=[
+                        "temp_max",
+                        "temp_min",
+                        "temp_avg",
+                        "precip_avg",
+                        "wind_avg",
+                        "snow_avg",
+                        "weather_code_mode",
+                    ],
+                    errors="ignore",
+                )
+
+    # Calculate temperature deviation CORRECTLY against long-term averages
+    # Differentiates from simple variance within the forecasted batch.
+    df["_hist_temp_baseline"] = df["parkId"].map(historical_temp_avg).fillna(20.0)
+    df["temperature_deviation"] = df["temperature_avg"] - df["_hist_temp_baseline"]
+    df = df.drop(columns=["_hist_temp_baseline"])
 
     # Ensure precipitation_last_3h is set
     if "precipitation_last_3h" not in df.columns:
-        df["precipitation_last_3h"] = df["precipitation"] * 0.125  # Approximation
+        df["precipitation_last_3h"] = df["precipitation"] * 0.125
 
     df["is_raining"] = (df["precipitation"] > 0).astype(int)
 
@@ -1174,16 +1238,23 @@ def create_prediction_features(
     # This avoids expensive Python calculations for every attraction
     recent_data = fetch_recent_wait_times(attraction_ids, lookback_days=730)
 
-    # Initialize with defaults
-    df["avg_wait_last_24h"] = 30.0
+    # Initialize with defaults (0.0 to match training fallback)
+    df["avg_wait_last_24h"] = 0.0
     df["avg_wait_last_1h"] = 0.0
-    df["avg_wait_same_hour_last_week"] = 35.0
-    df["avg_wait_same_hour_last_month"] = 35.0  # NEW: Monthly trend
-    df["rolling_avg_7d"] = 32.0  # Will be overwritten with DB-computed values
-    df["trend_7d"] = 0.0  # NEW: 7-day trend (0 = no trend)
-    df["volatility_7d"] = 0.0  # Will be overwritten with DB-computed values
+    df["avg_wait_same_hour_last_week"] = 0.0
+    df["avg_wait_same_hour_last_month"] = 0.0
+    df["rolling_avg_7d"] = 0.0
+    df["trend_7d"] = 0.0
+    df["volatility_7d"] = 0.0
 
     if not recent_data.empty:
+        # Map attraction names for type heuristic
+        attr_names_map = (
+            recent_data.groupby("attractionId")["attractionName"].first().to_dict()
+        )
+        df["attractionName"] = df["attractionId"].map(attr_names_map)
+        df = add_attraction_type_features(df)
+
         recent_data["date"] = pd.to_datetime(recent_data["date"])
         # Ensure timezone-naive for comparison with cutoff dates
         if recent_data["date"].dt.tz is not None:
@@ -1343,30 +1414,8 @@ def create_prediction_features(
                     else rolling_7d
                 )
 
-                # Calculate 7-day trend (slope) - NEW
-                # Simple approximation: compare last 7 days average to previous 7 days average
-                cutoff_14d_local = (base_time_local - timedelta(days=14)).date()
-                last_14_days = attraction_data[
-                    pd.to_datetime(attraction_data["date"]).dt.date >= cutoff_14d_local
-                ]
-
-                trend_7d = 0.0
-                if len(last_14_days) >= 2:
-                    # Split into two 7-day periods
-                    # mid_point = cutoff_7d_local (unused)
-
-                    recent_7d = last_14_days[
-                        pd.to_datetime(last_14_days["date"]).dt.date >= cutoff_7d_local
-                    ]
-                    previous_7d = last_14_days[
-                        pd.to_datetime(last_14_days["date"]).dt.date < cutoff_7d_local
-                    ]
-
-                    if len(recent_7d) > 0 and len(previous_7d) > 0:
-                        recent_avg = recent_7d["avg_wait"].mean()
-                        previous_avg = previous_7d["avg_wait"].mean()
-                        # Trend = difference per day (approximation)
-                        trend_7d = (recent_avg - previous_avg) / 7.0
+                # Calculate 7-day trend (momentum) - matches features.py logic
+                trend_7d = avg_24h - rolling_7d
 
                 # OPTIMIZATION: Use pre-computed rolling_std_7d from DB (window function)
                 # Volatility: std of last 7d, log1p-dampened and capped to match training

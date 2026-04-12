@@ -131,11 +131,14 @@ def fetch_training_data(
             -- Aggregate 5-min data to hourly buckets (reduces ~12x data volume)
             SELECT
                 qd."attractionId",
+                a.name as "attractionName",
                 a."parkId",
                 a."attractionType",
                 DATE_TRUNC('hour', qd.timestamp) as timestamp,
                 -- Use median for robustness against outliers
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "waitTime",
+                -- NEW: Downtime signal (count occurrences of DOWN status in this hour)
+                COUNT(CASE WHEN qd.status = 'DOWN' THEN 1 END) as downtime_count,
                 MAX(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)) as hour,
                 MAX(EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)) as day_of_week,
                 MAX(EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone)) as month,
@@ -171,6 +174,7 @@ def fetch_training_data(
                 )
             GROUP BY
                 qd."attractionId",
+                a.name,
                 a."parkId",
                 a."attractionType",
                 DATE_TRUNC('hour', qd.timestamp)

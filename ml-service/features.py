@@ -1184,6 +1184,108 @@ def add_downtime_features(
             if mask.any() and downtime_mins > 0:
                 df.loc[mask, "had_downtime_today"] = 1
                 df.loc[mask, "downtime_minutes_today"] = float(downtime_mins)
+    elif "downtime_count" in df.columns:
+        # Training Mode: Reconstruct downtime from SQL signals
+        # Sort to ensure cumsum is chronological
+        original_index = df.index
+        df = df.sort_values(["attractionId", "timestamp"])
+
+        # Determine if there was ANY downtime earlier today for this attraction
+        # Convert downtime_count to minutes (approx 5 min per raw sample)
+        df["_mins_down"] = df["downtime_count"] * 5.0
+
+        # Group by attraction and date to get cumulative downtime for "today"
+        df["downtime_minutes_today"] = df.groupby(["attractionId", "date_local"])[
+            "_mins_down"
+        ].transform(lambda x: x.cumsum().shift(1).fillna(0))
+
+        # Binary flag: was it down at any point earlier today?
+        df["had_downtime_today"] = (df["downtime_minutes_today"] > 0).astype(int)
+
+        # Cleanup
+        df = df.drop(columns=["_mins_down"])
+        df = df.loc[original_index]
+
+    return df
+
+
+def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add attraction type heuristics based on attraction name.
+    Useful since attractionType column is currently empty in DB.
+    """
+    if "attractionName" not in df.columns:
+        # Default flags if name is missing
+        df["is_coaster"] = 0
+        df["is_water_ride"] = 0
+        df["is_indoor"] = 0
+        df["is_wind_sensitive"] = 0
+        return df
+
+    import re
+
+    # 1. Coasters (Achterbahnen)
+    coaster_patterns = [
+        r"coaster",
+        r"achterbahn",
+        r"montaña rusa",
+        r"grand huit",
+        r"express",
+        r"mountain",
+        r"taron",
+        r"blue fire",
+        r"silver star",
+    ]
+    coaster_regex = re.compile("|".join(coaster_patterns), re.IGNORECASE)
+
+    # 2. Water Rides (Wasserbahnen)
+    water_patterns = [
+        r"water",
+        r"wasser",
+        r"splash",
+        r"river",
+        r"flume",
+        r"rapids",
+        r"log",
+        r"chiapas",
+        r"rafting",
+        r"pirates",
+    ]
+    water_regex = re.compile("|".join(water_patterns), re.IGNORECASE)
+
+    # 3. Indoor Rides (Themenfahrten / Shows)
+    indoor_patterns = [
+        r"cinema",
+        r"4d",
+        r"theater",
+        r"indoor",
+        r"dark",
+        r"mansion",
+        r"mous au chocolat",
+        r"hotel",
+        r"museum",
+    ]
+    indoor_regex = re.compile("|".join(indoor_patterns), re.IGNORECASE)
+
+    # Apply heuristics
+    names = df["attractionName"].astype(str)
+    df["is_coaster"] = names.apply(
+        lambda x: 1 if coaster_regex.search(x) else 0
+    ).astype(int)
+    df["is_water_ride"] = names.apply(
+        lambda x: 1 if water_regex.search(x) else 0
+    ).astype(int)
+    df["is_indoor"] = names.apply(lambda x: 1 if indoor_regex.search(x) else 0).astype(
+        int
+    )
+
+    # Wind sensitive: mostly high coasters and towers
+    wind_patterns = [r"tower", r"sky", r"high", r"drop", r"starflyer"]
+    wind_regex = re.compile("|".join(wind_patterns), re.IGNORECASE)
+    df["is_wind_sensitive"] = (
+        (df["is_coaster"] == 1)
+        | names.apply(lambda x: 1 if wind_regex.search(x) else 0)
+    ).astype(int)
 
     return df
 
@@ -1919,6 +2021,7 @@ def engineer_features(
     # Attraction and Park features (using available data only)
     attraction_start = time_module.time()
     df = add_park_attraction_count_feature(df, parks_metadata)
+    df = add_attraction_type_features(df)
     print(f"   Attraction features: {time_module.time() - attraction_start:.2f}s")
 
     historical_start = time_module.time()
@@ -2044,6 +2147,10 @@ def get_feature_columns() -> List[str]:
         "has_extra_hours",
         # Attraction features
         "park_attraction_count",  # Number of attractions in park (indicator of park size)
+        "is_coaster",
+        "is_water_ride",
+        "is_indoor",
+        "is_wind_sensitive",
         # Historical features
         "avg_wait_last_24h",
         "avg_wait_last_1h",

@@ -30,7 +30,19 @@ A critical requirement for reliable ML is that the scale of features during trai
 ### Rain Trend Analysis (`is_rain_starting`, `is_rain_stopping`)
 *   **Behavioral Signal**: Guests react instantly when it *starts* raining (flocking to indoor dark rides or shows). The binary change signal is often more informative than the total precipitation value itself.
 
-## 4. Technical Architecture: Vectorization
+## 4. Model Generalization & Parity
+
+### Name-based Type Heuristics
+*   **Problem**: Explicit attraction types (COASTER, DARK_RIDE) are often missing from third-party APIs.
+*   **Solution**: The system uses Regex-based heuristics on attraction names to categorize rides.
+*   **Significance**: This enables cross-park learning. The model can learn that "Coasters" are wind-sensitive or that "Water Rides" peak during high heat, applying this knowledge even to new parks with limited history.
+
+### Inference-Training Parity
+Reliable predictions require identical logic in both stages:
+*   **Trend Logic**: Calculated as `avg_last_24h - rolling_avg_7d`. This "Momentum" signal must have the same scale and mathematical meaning in both pipelines.
+*   **Default Values**: Missing historical data defaults to `0.0`. Using inconsistent defaults (e.g., 30.0 in inference vs 0.0 in training) would lead to biased predictions for new attractions.
+
+## 5. Technical Architecture: Vectorization
 
 To handle over 1,000,000 training rows efficiently on standard hardware, the feature engineering pipeline is **100% vectorized**.
 
