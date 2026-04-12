@@ -1393,53 +1393,52 @@ def create_prediction_features(
 
                     _tz_future = _pytz_future.timezone(park_tz)
                     future_24h_cutoff = base_time_pd + timedelta(hours=24)
-                    for idx in df.index[mask]:
-                        ts_utc_row = pd.Timestamp(df.at[idx, "timestamp"])
-                        if ts_utc_row.tzinfo is None:
-                            ts_utc_row = ts_utc_row.tz_localize("UTC")
-                        if ts_utc_row <= future_24h_cutoff:
-                            continue  # within 24h: keep real recent values
-                        try:
-                            ts_local_row = ts_utc_row.tz_convert(_tz_future)
-                        except Exception:
-                            ts_local_row = ts_utc_row
-                        row_hour = int(ts_local_row.hour)
-                        row_is_weekend = ts_local_row.dayofweek >= 5
-                        # avg_wait_last_24h → same-DOW-4-week avg (captures weekly pattern)
-                        dow_avg = _same_dow_avg_fast(ts_local_row, [1, 2, 3, 4])
-                        df.at[idx, "avg_wait_last_24h"] = dow_avg
-                        # avg_wait_last_1h → same-hour historical avg split by weekday/weekend
-                        hour_hist = (
-                            rolling_avg_weekend
-                            if row_is_weekend
-                            else rolling_avg_weekday
-                        )
-                        # prefer same-hour same-DOW lookup for better hour granularity
-                        hour_key = (
-                            (ts_local_row - timedelta(days=7)).date(),
-                            row_hour,
-                        )
-                        if hour_key in _attr_lookup:
-                            hour_hist = _attr_lookup[hour_key]
-                        df.at[idx, "avg_wait_last_1h"] = hour_hist
 
-                if park_tz:
-                    import pytz as _pytz
+                    # Ensure timezone aware timestamps locally
+                    ts_utc = pd.to_datetime(df.loc[mask, "timestamp"])
+                    if ts_utc.dt.tz is None:
+                        ts_utc = ts_utc.dt.tz_localize("UTC")
+                    ts_local = ts_utc.dt.tz_convert(_tz_future)
 
-                    _tz = _pytz.timezone(park_tz)
-                    same_dow_vals = []
-                    for idx in df.index[mask]:
-                        ts_utc = pd.Timestamp(df.at[idx, "timestamp"])
-                        if ts_utc.tzinfo is None:
-                            ts_utc = ts_utc.tz_localize("UTC")
-                        try:
-                            ts_local_row = ts_utc.tz_convert(_tz)
-                        except Exception:
-                            ts_local_row = ts_utc
-                        same_dow_vals.append(
-                            _same_dow_avg_fast(ts_local_row, [1, 2, 3, 4])
+                    # Condition: only apply where time is > 24h ahead
+                    future_mask = ts_utc > future_24h_cutoff
+
+                    # Calculate same-DOW-4-week avg via vectorized apply over the local timestamps
+                    # Since _same_dow_avg_fast requires complex dictionary lookup, we apply it.
+                    same_dow_vals = ts_local.apply(
+                        lambda x: _same_dow_avg_fast(x, [1, 2, 3, 4])
+                    )
+
+                    # Update 'avg_wait_same_dow_4w' for all mask rows
+                    df.loc[mask, "avg_wait_same_dow_4w"] = same_dow_vals.values
+
+                    # Update 'avg_wait_last_24h' and 'avg_wait_last_1h' only for future mask rows
+                    # (where we drop real-time recent values)
+                    future_indices = df.loc[mask].index[future_mask]
+                    if len(future_indices) > 0:
+                        df.loc[future_indices, "avg_wait_last_24h"] = same_dow_vals[
+                            future_mask
+                        ].values
+
+                        ts_local_future = ts_local[future_mask]
+                        row_hours = ts_local_future.dt.hour.values
+                        row_is_weekends = (ts_local_future.dt.dayofweek >= 5).values
+
+                        # Start with default weekday/weekend rolling averages
+                        hour_hists = np.where(
+                            row_is_weekends, rolling_avg_weekend, rolling_avg_weekday
                         )
-                    df.loc[mask, "avg_wait_same_dow_4w"] = same_dow_vals
+
+                        # Lookup from _attr_lookup if key exists
+                        ts_minus_7d = ts_local_future - pd.Timedelta(days=7)
+                        dates = ts_minus_7d.dt.date.values
+
+                        for i, idx in enumerate(future_indices):
+                            hour_key = (dates[i], row_hours[i])
+                            if hour_key in _attr_lookup:
+                                hour_hists[i] = _attr_lookup[hour_key]
+
+                        df.loc[future_indices, "avg_wait_last_1h"] = hour_hists
                 else:
                     df.loc[mask, "avg_wait_same_dow_4w"] = _same_dow_avg_fast(
                         base_time_local, [1, 2, 3, 4]
@@ -1646,10 +1645,10 @@ def predict_wait_times(
     for i, (idx, row) in enumerate(df_inference.iterrows()):
         pred_wait = round_to_nearest_5(predictions[i])
 
-        # If schedule is UNKNOWN, park might be closed. Enforce a minimum 5 min wait if it's considered operating by the model
+        # Enforce a minimum 10 min wait if the ride is considered operating by the model
         # or zero if the model thinks it's closed anyway.
-        if row["status"] == "UNKNOWN" and pred_wait > 0:
-            pred_wait = max(5, pred_wait)
+        if row["status"] in ["UNKNOWN", "OPERATING"] and pred_wait > 0:
+            pred_wait = max(10, pred_wait)
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600

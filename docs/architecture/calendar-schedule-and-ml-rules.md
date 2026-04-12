@@ -80,7 +80,7 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 
 - **Schedule features:** From `schedule_entries`, OPERATING/CLOSED/UNKNOWN are evaluated per park/date. A park with no OPERATING entry at all is treated as “no schedule” → predictions are kept.
 - **Inference skip for CLOSED/UNKNOWN:** Rows with `status === “CLOSED”` or `”UNKNOWN”` are **excluded before** model.predict by default. However, if `featureContext.parkLiveStatus[parkId] === “OPERATING”` (ride-based detection), UNKNOWN rows are overridden to `is_park_open=1` and inference IS run for those rows. Explicit CLOSED entries are always respected.
-- **`parkLiveStatus` context:** NestJS sends `featureContext.parkLiveStatus` with every prediction request. Derived from `getBatchParkStatus`: schedule-based first, then ride-heuristic fallback (≥3 attractions with data, ≥25% with `waitTime ≥ 5` in last 2h). Parks with explicit CLOSED schedule today are excluded from the heuristic.
+- **`parkLiveStatus` context:** NestJS sends `featureContext.parkLiveStatus` with every prediction request. Derived from `getBatchParkStatus`: schedule-based first, then ride-heuristic fallback (≥3 attractions with data, ≥25% with `waitTime ≥ 10` in last 2h). Parks with explicit CLOSED schedule today are excluded from the heuristic.
 
 ### 4.4 Summary: ML ↔ Calendar
 

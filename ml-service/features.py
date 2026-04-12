@@ -235,6 +235,26 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     if "precipitation" in df.columns:
         df["is_raining"] = (df["precipitation"] > 0).astype(int)
 
+        # Rain Trend Features (is_rain_starting, is_rain_stopping)
+        # Behavioral signals: guests seek shelter when rain starts
+        if "timestamp" in df.columns:
+            original_index = df.index
+            df = df.sort_values(["parkId", "timestamp"])
+
+            # Use shift(1) to find the previous state
+            was_raining = df.groupby("parkId")["is_raining"].shift(1).fillna(0)
+            df["is_rain_starting"] = (
+                (df["is_raining"] == 1) & (was_raining == 0)
+            ).astype(int)
+            df["is_rain_stopping"] = (
+                (df["is_raining"] == 0) & (was_raining == 1)
+            ).astype(int)
+
+            df = df.loc[original_index]
+        else:
+            df["is_rain_starting"] = 0
+            df["is_rain_stopping"] = 0
+
         # Precipitation last 3 hours (cumulative effect)
         # For training: use rolling window on historical data
         # For inference: will be provided via feature_context
@@ -1957,6 +1977,8 @@ def get_feature_columns() -> List[str]:
         "snowfallSum",  # Explains outdoor ride closures
         "weatherCode",
         "is_raining",  # Explicit rain signal
+        "is_rain_starting",  # Explicit change signal
+        "is_rain_stopping",  # Explicit change signal
         # Holiday features (cross-border tourism!)
         "is_holiday_primary",
         "is_school_holiday_primary",
