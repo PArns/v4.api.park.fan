@@ -67,29 +67,16 @@ class Settings(BaseSettings):
     VOLATILITY_CAP_STD_MINUTES: float = 15
 
     # Occupancy dropout rate for training (0.0 = disabled, 0.3 = 30% of rows).
-    # For dropout rows, real-time park_occupancy_pct is replaced with the DOW×hour
-    # historical mean. This teaches the model to rely on hour/day_of_week features
-    # when only an approximate occupancy is available — matching the inference scenario
-    # for future predictions (tomorrow, next week) where real-time occupancy is unknown.
-    OCCUPANCY_DROPOUT_RATE: float = 0.60
+    # Raised to 0.75: break dominance of real-time occupancy.
+    OCCUPANCY_DROPOUT_RATE: float = 0.75
 
     # Rolling Average Dropout Rate
-    # For dropout rows, avg_wait_last_24h and avg_wait_last_1h are replaced with
-    # rolling_avg_7d and rolling_avg_weekday/weekend respectively. This teaches the
-    # model to predict from other signals (holidays, season, hour) when real-time
-    # rolling averages are unavailable — matching the inference scenario for future
-    # predictions (next week, next month) where we use historical DOW/hour profiles.
-    ROLLING_AVG_DROPOUT_RATE: float = 0.50
+    # Raised to 0.65: force model to rely on structural features (DOW, Hour, Holidays).
+    ROLLING_AVG_DROPOUT_RATE: float = 0.65
 
     # rolling_avg_7d Dropout Rate
-    # For dropout rows, rolling_avg_7d is replaced with rolling_avg_weekday or
-    # rolling_avg_weekend. Without this, rolling_avg_7d is never blurred in training
-    # (it is used as the fallback for avg_wait_last_24h dropout) and the model
-    # over-relies on it (26%+ importance), suppressing attractionId and structural
-    # features. A 20% dropout forces the model to learn from other signals when the
-    # 7-day average is unavailable (e.g. attraction just opened, park re-opened after
-    # seasonal closure).
-    ROLLING_7D_DROPOUT_RATE: float = 0.40
+    # Raised to 0.55: ensure features like attractionId and season gain importance.
+    ROLLING_7D_DROPOUT_RATE: float = 0.55
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
