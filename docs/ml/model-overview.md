@@ -27,7 +27,7 @@ The ML Service is a standalone Python application responsible for predicting wai
 ## Training Pipeline
 
 1. **Data Extraction**: Raw `queue_data` is exported from PostgreSQL with data quality filters applied at the SQL level:
-   - **`waitTime >= 10`**: Excludes walk-on placeholder values (`waitTime=1` used by Queue-Times for water-park slides and similar "open but no queue" attractions). Using `> 0` would include noise that degrades model quality and misaligns with inference (which also filters at ≥ 5).
+   - **`waitTime >= 10`**: Excludes walk-on placeholder values (`waitTime=1` used by Queue-Times for water-park slides and similar "open but no queue" attractions). Using `> 0` would include noise that degrades model quality and misaligns with inference (which also filters at ≥ 10).
    - **Schedule JOIN**: Excludes samples from closed days. Training data is joined against `schedule_entries` (park-level, `attractionId IS NULL`) via `JOIN parks p → AT TIME ZONE p.timezone`. Days with no schedule = include; days with `OPERATING` = include; any other type = exclude. Prevents off-season data (e.g., seasonal parks in winter) from polluting training.
    ```sql
    LEFT JOIN schedule_entries se
@@ -111,7 +111,7 @@ In **predict.py**, UNKNOWN/CLOSED-only for a date is only applied when `park_has
 NestJS passes `featureContext.parkLiveStatus: Record<parkId, “OPERATING”|”CLOSED”>` in every prediction request. This is determined by `getBatchParkStatus` in `parks.service.ts`, which uses:
 
 1. **Primary**: `schedule_entries` — OPERATING entry with `openingTime ≤ now < closingTime`.
-2. **Heuristic fallback** (parks not covered by primary): Ride data from the last 2 hours. A park is considered OPERATING if ≥ 3 attractions have recent data AND ≥ 25% report `waitTime ≥ 5 min`. Parks with an explicit `CLOSED` schedule today are excluded from the heuristic.
+2. **Heuristic fallback** (parks not covered by primary): Ride data from the last 2 hours. A park is considered OPERATING if ≥ 3 attractions have recent data AND ≥ 25% report `waitTime ≥ 10 min`. Parks with an explicit `CLOSED` schedule today are excluded from the heuristic.
 
 In `predict.py`, after the schedule loop, any row with `status=”UNKNOWN”` and `is_park_open=0` is corrected to `is_park_open=1` when `parkLiveStatus=”OPERATING”`. This never overrides explicit `CLOSED` entries.
 

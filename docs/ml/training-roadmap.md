@@ -63,7 +63,7 @@ AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
 
 **Previous regression**: Naive inclusion caused MAE 14.4 → R² 0.37 (closed UNKNOWN parks contributed zero-wait rows, `is_park_open=0` incorrect for open ones).
 
-**Fix** (applied): Added `unknown_operating_days` CTE in `db.py` using ride heuristic (≥3 attractions, ≥25% waitTime≥5) to include only genuinely operating UNKNOWN park-days. `is_park_open` correction already handled by existing `features.py` logic (any row with `waitTime≥5` auto-sets `is_park_open=1`).
+**Fix** (applied): Added `unknown_operating_days` CTE in `db.py` using ride heuristic (≥3 attractions, ≥25% waitTime≥10) to include only genuinely operating UNKNOWN park-days. `is_park_open` correction already handled by existing `features.py` logic (any row with `waitTime≥10` auto-sets `is_park_open=1`).
 
 **Result**:
 - Training rows: 520k → 765k (+47%)
@@ -141,9 +141,9 @@ CLOSED:     1,707 entries across 61 parks
 **Key insight**: UNKNOWN is the largest category. Most parks that appear to be "well-known" (Universal, Six Flags etc.) never provide schedule data to ThemeParks.wiki.
 
 UNKNOWN parks by operation status:
-- **Genuinely operating** (pct_5plus > 25%): USJ, Universal Studios, Warner Bros Movie World, Lake Compounce, Kennywood, Cinecittà World, Adventureland, Beto Carrero, Blackpool
-- **Seasonal / closed** (pct_5plus < 15%): Canada's Wonderland, Energylandia, Fårup Sommerland, Le Pal
-- **Definitely closed** (pct_5plus = 0%): Six Flags parks (seasonal), Disney Typhoon Lagoon, Grona Lund, Lotte World
+- **Genuinely operating** (pct_10plus > 25%): USJ, Universal Studios, Warner Bros Movie World, Lake Compounce, Kennywood, Cinecittà World, Adventureland, Beto Carrero, Blackpool
+- **Seasonal / closed** (pct_10plus < 15%): Canada's Wonderland, Energylandia, Fårup Sommerland, Le Pal
+- **Definitely closed** (pct_10plus = 0%): Six Flags parks (seasonal), Disney Typhoon Lagoon, Grona Lund, Lotte World
 
 ---
 
@@ -155,13 +155,13 @@ UNKNOWN parks by operation status:
 - `park_occupancy_pct` is no longer flat-100 for UNKNOWN parks
 
 ### Step 2: UNKNOWN Training Inclusion — DONE 2026-04-05
-- `unknown_operating_days` CTE added to `db.py` (ride heuristic: ≥3 attractions, ≥25% waitTime≥5)
+- `unknown_operating_days` CTE added to `db.py` (ride heuristic: ≥3 attractions, ≥25% waitTime≥10)
 - `is_park_open` handled by existing `features.py` correction logic (no change needed)
 - Model v20260405_1322 trained with 765k rows (+47%), MAE 6.30
 
 ### Step 3: Evaluate Seasonal Pattern Handling
 - Check if predictions degrade for seasonal parks that just opened (Canada's Wonderland, Six Flags)
-- These parks have 0 pct_5plus now but will be operating in summer
+- These parks have 0 pct_10plus now but will be operating in summer
 - They will NOT be included via ride heuristic until they actually open (correct behaviour)
 - First predictions for summer-opening parks will be cold-start (no training data for that attraction)
 
