@@ -595,6 +595,7 @@ def create_prediction_features(
 
                 # Apply sinusoidal interpolation to historical fallback
                 # Min at 4am, Max at 2pm (14:00)
+                temp_min = df["temp_max"].fillna(25.0)  # Use max if min missing
                 temp_min = df["temp_min"].fillna(15.0)
                 temp_max = df["temp_max"].fillna(25.0)
                 temp_range = temp_max - temp_min
@@ -609,6 +610,7 @@ def create_prediction_features(
                 df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
                 df["precipitation_last_3h"] = df["precipitation"] * 0.125
 
+                # Cleanup historical source columns but KEEP temperature_avg
                 df = df.drop(
                     columns=[
                         "temp_max",
@@ -624,6 +626,9 @@ def create_prediction_features(
 
     # Calculate temperature deviation CORRECTLY against long-term averages
     # Differentiates from simple variance within the forecasted batch.
+    if "temperature_avg" not in df.columns:
+        df["temperature_avg"] = 20.0
+        
     df["_hist_temp_baseline"] = df["parkId"].map(historical_temp_avg).fillna(20.0)
     df["temperature_deviation"] = df["temperature_avg"] - df["_hist_temp_baseline"]
     df = df.drop(columns=["_hist_temp_baseline"])
