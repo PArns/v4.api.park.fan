@@ -75,11 +75,14 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     high_outlier_mask = df["waitTime"] > 500
 
     # 3. Catch technical heartbeats (Fake 5 min)
-    # Condition: Ride reports 5 min, BUT the entire park is also at <= 5 min.
-    # This differentiates "Park opening with 5 min everywhere" (Heatbeat)
-    # from "One ride empty, others busy" (Real walk-on).
-    # Logic: If park-wide median is <= 5, then a 5 min ride is likely just a heartbeat.
-    heartbeat_mask = (df["waitTime"] <= 5) & (df["park_timestamp_median"] <= 5)
+    # Condition: Ride reports 5 min, BUT the entire park is also at <= 5 min AND it's early.
+    # Logic: Only filter these if it's before 10am (local time). After 10am, 
+    # a 5-min park median is likely a genuine quiet day, not a technical heartbeat.
+    heartbeat_mask = (
+        (df["waitTime"] <= 5) & 
+        (df["park_timestamp_median"] <= 5) & 
+        (df["hour"] < 10)
+    )
 
     # Combine masks
     anomaly_mask = drop_mask | high_outlier_mask | heartbeat_mask

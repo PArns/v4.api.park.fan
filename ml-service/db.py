@@ -136,13 +136,13 @@ def fetch_training_data(
                 DATE_TRUNC('hour', qd.timestamp) as timestamp,
                 -- Use median for robustness against outliers
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "waitTime",
-                EXTRACT(HOUR FROM DATE_TRUNC('hour', qd.timestamp)) as hour,
-                EXTRACT(DOW FROM DATE_TRUNC('hour', qd.timestamp)) as day_of_week,
-                EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) as month,
+                EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone) as hour,
+                EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone) as day_of_week,
+                EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) as month,
                 CASE
-                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (12, 1, 2) THEN 0
-                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (3, 4, 5) THEN 1
-                    WHEN EXTRACT(MONTH FROM DATE_TRUNC('hour', qd.timestamp)) IN (6, 7, 8) THEN 2
+                    WHEN EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) IN (12, 1, 2) THEN 0
+                    WHEN EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) IN (3, 4, 5) THEN 1
+                    WHEN EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone) IN (6, 7, 8) THEN 2
                     ELSE 3
                 END as season
             FROM queue_data qd
