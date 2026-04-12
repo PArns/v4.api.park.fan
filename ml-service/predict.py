@@ -624,11 +624,20 @@ def create_prediction_features(
                     errors="ignore",
                 )
 
-    # Calculate temperature deviation CORRECTLY against long-term averages
-    # Differentiates from simple variance within the forecasted batch.
+    # Ensure all weather columns are initialized with defaults
     if "temperature_avg" not in df.columns:
         df["temperature_avg"] = 20.0
-        
+    if "precipitation" not in df.columns:
+        df["precipitation"] = 0.0
+    if "windSpeedMax" not in df.columns:
+        df["windSpeedMax"] = 0.0
+    if "snowfallSum" not in df.columns:
+        df["snowfallSum"] = 0.0
+    if "weatherCode" not in df.columns:
+        df["weatherCode"] = 0
+
+    # Calculate temperature deviation CORRECTLY against long-term averages
+    # Differentiates from simple variance within the forecasted batch.
     df["_hist_temp_baseline"] = df["parkId"].map(historical_temp_avg).fillna(20.0)
     df["temperature_deviation"] = df["temperature_avg"] - df["_hist_temp_baseline"]
     df = df.drop(columns=["_hist_temp_baseline"])
