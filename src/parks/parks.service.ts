@@ -2341,13 +2341,13 @@ export class ParksService {
         const stats: {
           parkId: string;
           withData: string;
-          operating5min: string;
+          operating10min: string;
         }[] = await this.parkRepository.manager.query(
           `
           SELECT
             p.id as "parkId",
             COUNT(*) as "withData",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating5min"
+            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
           FROM parks p
           JOIN attractions a ON a."parkId" = p.id
           JOIN LATERAL (
@@ -2366,9 +2366,9 @@ export class ParksService {
 
         for (const stat of stats) {
           const withData = parseInt(stat.withData, 10);
-          const operating5min = parseInt(stat.operating5min, 10);
-          // Require ≥3 rides with recent data and ≥25% reporting ≥5 min wait
-          if (withData >= 3 && operating5min / withData >= 0.25) {
+          const operating10min = parseInt(stat.operating10min, 10);
+          // Require ≥3 rides with recent data and ≥25% reporting ≥10 min wait
+          if (withData >= 3 && operating10min / withData >= 0.25) {
             statusMap.set(stat.parkId, "OPERATING");
           }
         }

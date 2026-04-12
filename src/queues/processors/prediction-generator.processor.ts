@@ -45,12 +45,12 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       const parks = [];
       for (const park of allParks) {
         const currentStatus = statusMap.get(park.id);
-        
-        // Strategy: 
+
+        // Strategy:
         // 1. If currently OPERATING (confirmed by schedule or heuristic), include it.
         // 2. If UNKNOWN or CLOSED, check if it operates at any point today.
         // 3. If still not included, check for very recent ride activity (safety net).
-        
+
         if (currentStatus === "OPERATING") {
           parks.push(park);
           continue;
@@ -58,8 +58,10 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
 
         // Check if park is scheduled to operate at any point today
         // (Returns true for UNKNOWN/no-schedule parks by default)
-        const isOperatingToday = await this.parksService.isParkOperatingToday(park.id);
-        
+        const isOperatingToday = await this.parksService.isParkOperatingToday(
+          park.id,
+        );
+
         if (isOperatingToday) {
           parks.push(park);
           continue;
@@ -67,9 +69,13 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
 
         // Final safety net: check for very recent ride activity (last 2 hours)
         // This handles cases where schedule is wrong/missing but park is clearly open.
-        const hasRecentActivity = await this.parksService.hasRecentRideActivity(park.id);
+        const hasRecentActivity = await this.parksService.hasRecentRideActivity(
+          park.id,
+        );
         if (hasRecentActivity) {
-          this.logger.log(`Force-including park ${park.name} for predictions due to recent ride activity`);
+          this.logger.log(
+            `Force-including park ${park.name} for predictions due to recent ride activity`,
+          );
           parks.push(park);
         }
       }
