@@ -425,6 +425,7 @@ def create_prediction_features(
     df["hour"] = df["local_timestamp"].dt.hour
     df["day_of_week"] = df["local_timestamp"].dt.dayofweek
     df["month"] = df["local_timestamp"].dt.month
+    df["date_local"] = df["local_timestamp"].dt.date
 
     # Cyclical time encoding
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
@@ -449,6 +450,9 @@ def create_prediction_features(
         df["month"] == 12
     )
     df["is_peak_season"] = df["is_peak_season"].astype(int)
+
+    # Initialize bridge day flag (overwritten by context or logic below)
+    df["is_bridge_day"] = 0
 
     # Region-specific weekends
     # OPTIMIZATION: Use centralized function from features.py to avoid code duplication
