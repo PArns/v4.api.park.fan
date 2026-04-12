@@ -1232,9 +1232,25 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
         r"grand huit",
         r"express",
         r"mountain",
+        r"roller",
+        r"spinning",
+        r"inverted",
+        r"hyper",
+        r"giga",
+        r"strata",
+        r"wooden",
+        r"steel",
         r"taron",
-        r"blue fire",
-        r"silver star",
+        r"f\.l\.y\.",
+        r"baron",
+        r"mamba",
+        r"karacho",
+        r"desert",
+        r"helix",
+        r"shambhala",
+        r"kondaa",
+        r"untamed",
+        r"velocicoaster",
     ]
     coaster_regex = re.compile("|".join(coaster_patterns), re.IGNORECASE)
 
@@ -1250,6 +1266,16 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
         r"chiapas",
         r"rafting",
         r"pirates",
+        r"falls",
+        r"tidal",
+        r"wave",
+        r"bayou",
+        r"lagoon",
+        r"monsoon",
+        r"plunge",
+        r"chutes",
+        r"viking",
+        r"atlantis",
     ]
     water_regex = re.compile("|".join(water_patterns), re.IGNORECASE)
 
@@ -1257,6 +1283,8 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
     indoor_patterns = [
         r"cinema",
         r"4d",
+        r"3d",
+        r"5d",
         r"theater",
         r"indoor",
         r"dark",
@@ -1264,6 +1292,19 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
         r"mous au chocolat",
         r"hotel",
         r"museum",
+        r"quest",
+        r"voyage",
+        r"haunted",
+        r"ghost",
+        r"secret",
+        r"adventure",
+        r"expedition",
+        r"tales",
+        r"piraten",
+        r"small world",
+        r"buzz lightyear",
+        r"spiderman",
+        r"transformers",
     ]
     indoor_regex = re.compile("|".join(indoor_patterns), re.IGNORECASE)
 
@@ -1280,7 +1321,18 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Wind sensitive: mostly high coasters and towers
-    wind_patterns = [r"tower", r"sky", r"high", r"drop", r"starflyer"]
+    wind_patterns = [
+        r"tower",
+        r"sky",
+        r"high",
+        r"drop",
+        r"starflyer",
+        r"giant",
+        r"loop",
+        r"swing",
+        r"flyer",
+        r"wheel",
+    ]
     wind_regex = re.compile("|".join(wind_patterns), re.IGNORECASE)
     df["is_wind_sensitive"] = (
         (df["is_coaster"] == 1)
