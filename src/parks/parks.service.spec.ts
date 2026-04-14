@@ -41,6 +41,7 @@ describe("ParksService", () => {
     })),
     manager: {
       query: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
     },
   };
 
@@ -172,7 +173,7 @@ describe("ParksService", () => {
       expect(result).toEqual(testPark);
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "test-magic-kingdom" },
-        relations: ["destination", "attractions", "shows", "restaurants"],
+        relations: ["destination"],
       });
     });
 
@@ -184,7 +185,7 @@ describe("ParksService", () => {
       expect(result).toBeNull();
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "non-existent" },
-        relations: ["destination", "attractions", "shows", "restaurants"],
+        relations: ["destination"],
       });
     });
   });

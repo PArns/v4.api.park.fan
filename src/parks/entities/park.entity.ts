@@ -123,6 +123,10 @@ export class Park {
   @Column()
   timezone: string;
 
+  @Column({ default: true })
+  @Index()
+  isOperating: boolean;
+
   // Multi-country influence for ML predictions (holidays/school breaks)
   // Structure: [{ countryCode: 'DE', regionCode: 'DE-NRW' }, { countryCode: 'NL', regionCode: null }]
   @Column("jsonb", { nullable: true })

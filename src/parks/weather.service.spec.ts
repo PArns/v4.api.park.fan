@@ -4,6 +4,7 @@ import { WeatherService } from "./weather.service";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client";
 
 describe("WeatherService", () => {
   let service: WeatherService;
@@ -56,7 +57,7 @@ describe("WeatherService", () => {
           useValue: mockParkRepository,
         },
         {
-          provide: "OpenMeteoClient",
+          provide: OpenMeteoClient,
           useValue: mockOpenMeteoClient,
         },
         {

@@ -86,66 +86,85 @@ export class WartezeitenScheduleProcessor {
 
       let successCount = 0;
       let skipCount = 0;
+      let isRateLimitBlocked = false;
 
-      for (const park of parks) {
-        try {
-          const openingTimes = await this.wartezeitenClient.getOpeningTimes(
-            park.wartezeitenEntityId!,
-          );
+      const chunkSize = 5;
+      const delayBetweenChunksMs = 1000;
 
-          if (openingTimes && openingTimes.length > 0) {
-            const today = openingTimes[0];
+      for (let i = 0; i < parks.length; i += chunkSize) {
+        if (isRateLimitBlocked) break;
 
-            if (today.opened_today) {
-              // Validate that closingTime is after openingTime
-              const openingTime = new Date(today.open_from);
-              const closingTime = new Date(today.closed_from);
+        const chunk = parks.slice(i, i + chunkSize);
 
-              if (closingTime <= openingTime) {
+        await Promise.all(
+          chunk.map(async (park) => {
+            if (isRateLimitBlocked) return;
+
+            try {
+              const openingTimes = await this.wartezeitenClient.getOpeningTimes(
+                park.wartezeitenEntityId!,
+              );
+
+              if (openingTimes && openingTimes.length > 0) {
+                const today = openingTimes[0];
+
+                if (today.opened_today) {
+                  // Validate that closingTime is after openingTime
+                  const openingTime = new Date(today.open_from);
+                  const closingTime = new Date(today.closed_from);
+
+                  if (closingTime <= openingTime) {
+                    this.logger.warn(
+                      `⚠️  Invalid schedule data for ${park.name}: closingTime (${today.closed_from}) is before or equal to openingTime (${today.open_from}). Skipping update.`,
+                    );
+                    skipCount++;
+                    return;
+                  }
+
+                  // Persist to schedule table
+                  const scheduleUpdate = {
+                    date: today.open_from, // ISO string acts as date
+                    type: "OPERATING",
+                    openingTime: today.open_from,
+                    closingTime: today.closed_from,
+                    description: "Wartezeiten.app daily sync",
+                  };
+
+                  await this.parksService.saveScheduleData(park.id, [
+                    scheduleUpdate,
+                  ]);
+                  successCount++;
+
+                  this.logger.verbose(
+                    `✅ Updated schedule for ${park.name}: ${today.open_from} - ${today.closed_from}`,
+                  );
+                } else {
+                  this.logger.verbose(`${park.name} is closed today`);
+                  skipCount++;
+                }
+              }
+            } catch (error) {
+              const errorMessage =
+                error instanceof Error ? error.message : String(error);
+
+              // Check for global rate limit block
+              if (errorMessage.includes("Global Rate Limit")) {
                 this.logger.warn(
-                  `⚠️  Invalid schedule data for ${park.name}: closingTime (${today.closed_from}) is before or equal to openingTime (${today.open_from}). Skipping update.`,
+                  "⏳ Wartezeiten API is globally blocked. Skipping remaining parks.",
                 );
-                skipCount++;
-                continue;
+                isRateLimitBlocked = true;
+                return;
               }
 
-              // Persist to schedule table
-              const scheduleUpdate = {
-                date: today.open_from, // ISO string acts as date
-                type: "OPERATING",
-                openingTime: today.open_from,
-                closingTime: today.closed_from,
-                description: "Wartezeiten.app daily sync",
-              };
-
-              await this.parksService.saveScheduleData(park.id, [
-                scheduleUpdate,
-              ]);
-              successCount++;
-
-              this.logger.verbose(
-                `✅ Updated schedule for ${park.name}: ${today.open_from} - ${today.closed_from}`,
+              this.logger.warn(
+                `Failed to fetch opening times for ${park.name}: ${errorMessage}`,
               );
-            } else {
-              this.logger.verbose(`${park.name} is closed today`);
-              skipCount++;
             }
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
+          }),
+        );
 
-          // Check for global rate limit block
-          if (errorMessage.includes("Global Rate Limit")) {
-            this.logger.warn(
-              "⏳ Wartezeiten API is globally blocked. Skipping remaining parks.",
-            );
-            break; // Exit loop early
-          }
-
-          this.logger.warn(
-            `Failed to fetch opening times for ${park.name}: ${errorMessage}`,
-          );
+        if (i + chunkSize < parks.length && !isRateLimitBlocked) {
+          await new Promise((resolve) => setTimeout(resolve, delayBetweenChunksMs));
         }
       }
 

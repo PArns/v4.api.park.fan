@@ -1023,52 +1023,67 @@ export class ParkMetadataProcessor {
    */
   private async syncSchedulesForAllParks(): Promise<void> {
     this.logger.log("📅 Syncing schedules...");
-    const parks = await this.parkRepository.find();
+    // Only fetch operating parks
+    const parks = await this.parkRepository.find({
+      where: { isOperating: true },
+    });
+
+    // Filter to Wiki parks
+    const wikiParks = parks.filter(
+      (park) => park.dataSources && park.dataSources.includes("themeparks-wiki")
+    );
+
     let totalScheduleEntries = 0;
+    const chunkSize = 5;
+    const delayBetweenChunks = 1000;
 
-    for (const park of parks) {
-      // Only sync schedules for parks with Wiki data
-      if (!park.dataSources || !park.dataSources.includes("themeparks-wiki")) {
-        continue;
-      }
+    for (let i = 0; i < wikiParks.length; i += chunkSize) {
+      const chunk = wikiParks.slice(i, i + chunkSize);
 
-      try {
-        // Try to get Wiki external ID from park entity first (faster)
-        let wikiExternalId = park.wikiEntityId;
+      await Promise.all(chunk.map(async (park) => {
+        try {
+          // Try to get Wiki external ID from park entity first (faster)
+          let wikiExternalId = park.wikiEntityId;
 
-        // Fallback to mapping if wikiEntityId is not set
-        if (!wikiExternalId) {
-          const mapping = await this.mappingRepository.findOne({
-            where: {
-              internalEntityId: park.id,
-              internalEntityType: "park",
-              externalSource: "themeparks-wiki",
-            },
-          });
+          // Fallback to mapping if wikiEntityId is not set
+          if (!wikiExternalId) {
+            const mapping = await this.mappingRepository.findOne({
+              where: {
+                internalEntityId: park.id,
+                internalEntityType: "park",
+                externalSource: "themeparks-wiki",
+              },
+            });
 
-          if (!mapping) {
-            this.logger.warn(
-              `No Wiki ID found for park ${park.name}, skipping schedule sync`,
-            );
-            continue;
+            if (!mapping) {
+              this.logger.warn(
+                `No Wiki ID found for park ${park.name}, skipping schedule sync`,
+              );
+              return;
+            }
+
+            wikiExternalId = mapping.externalEntityId;
           }
 
-          wikiExternalId = mapping.externalEntityId;
+          const scheduleResponse =
+            await this.themeParksClient.getScheduleExtended(wikiExternalId, 12);
+          const savedEntries = await this.parksService.saveScheduleData(
+            park.id,
+            scheduleResponse.schedule,
+          );
+
+          totalScheduleEntries += savedEntries;
+
+          // Fill gaps for Holidays/Bridge Days
+          await this.parksService.fillScheduleGaps(park.id);
+          await this.parksService.invalidateCalendarMonthCache(park.id);
+        } catch (error) {
+          this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
         }
+      }));
 
-        const scheduleResponse =
-          await this.themeParksClient.getScheduleExtended(wikiExternalId, 12);
-        const savedEntries = await this.parksService.saveScheduleData(
-          park.id,
-          scheduleResponse.schedule,
-        );
-        totalScheduleEntries += savedEntries;
-
-        // Fill gaps for Holidays/Bridge Days
-        await this.parksService.fillScheduleGaps(park.id);
-        await this.parksService.invalidateCalendarMonthCache(park.id);
-      } catch (error) {
-        this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
+      if (i + chunkSize < wikiParks.length) {
+        await this.sleep(delayBetweenChunks);
       }
     }
 
@@ -1090,90 +1105,99 @@ export class ParkMetadataProcessor {
     this.logger.log(`🌍 Geocoding ${parksWithoutGeodata.length} parks...`);
     let geocodedCount = 0;
 
-    for (const park of parksWithoutGeodata) {
-      // Initialize an object to hold updates for the park
-      const updates: Partial<Park> = {};
-      let needsUpdate = false;
+    const chunkSize = 5;
+    const delayBetweenChunks = 500;
 
-      // 3. Reverse Geocoding (if coordinates exist)
-      if (park.latitude && park.longitude) {
-        // Smart Check: If we have coordinates but no region data, we should try to geocode again
-        // regardless of geocodingAttemptedAt, because we might have cached data without regions.
-        // The GoogleGeocodingClient handles the smart caching (fetch only if missing in cache).
-        const missingRegionData = !park.region || !park.regionCode;
+    for (let i = 0; i < parksWithoutGeodata.length; i += chunkSize) {
+      const chunk = parksWithoutGeodata.slice(i, i + chunkSize);
 
-        const shouldGeocode =
-          !park.city ||
-          !park.country ||
-          !park.countryCode || // Also geocode if countryCode is missing
-          !park.geocodingAttemptedAt ||
-          missingRegionData; // Retry if we are missing regional data
+      await Promise.all(chunk.map(async (park) => {
+        // Initialize an object to hold updates for the park
+        const updates: Partial<Park> = {};
+        let needsUpdate = false;
 
-        if (shouldGeocode) {
-          try {
-            const geoData = await this.geocodingClient.reverseGeocode(
-              Number(park.latitude),
-              Number(park.longitude),
-            );
+        // 3. Reverse Geocoding (if coordinates exist)
+        if (park.latitude && park.longitude) {
+          // Smart Check: If we have coordinates but no region data, we should try to geocode again
+          // regardless of geocodingAttemptedAt, because we might have cached data without regions.
+          // The GoogleGeocodingClient handles the smart caching (fetch only if missing in cache).
+          const missingRegionData = !park.region || !park.regionCode;
 
-            if (geoData) {
-              updates.city = geoData.city;
-              updates.citySlug = generateSlug(geoData.city);
-              updates.country = geoData.country;
-              updates.countrySlug = geoData.country
-                ? generateSlug(geoData.country)
-                : undefined;
-              updates.countryCode = geoData.countryCode; // Now available directly from geocoding
-              updates.continent = geoData.continent;
-              updates.continentSlug = geoData.continent
-                ? generateSlug(geoData.continent)
-                : undefined;
-              if (geoData.region) updates.region = geoData.region;
-              if (geoData.regionCode) {
-                updates.regionCode = geoData.regionCode.substring(0, 50);
-              }
+          const shouldGeocode =
+            !park.city ||
+            !park.country ||
+            !park.countryCode || // Also geocode if countryCode is missing
+            !park.geocodingAttemptedAt ||
+            missingRegionData; // Retry if we are missing regional data
 
-              // Reset retry count only if we got the most important fields back
-              // (regionCode might be missing for some countries, but countryCode and city are usually there)
-              if (geoData.countryCode && geoData.city) {
-                updates.metadataRetryCount = 0;
-              }
-
-              updates.geocodingAttemptedAt = new Date();
-              needsUpdate = true;
-              this.logger.verbose(
-                `Geocoded ${park.name}: ${geoData.city}, ${geoData.regionCode || geoData.region || ""}, ${geoData.country} (${geoData.continent})`,
+          if (shouldGeocode) {
+            try {
+              const geoData = await this.geocodingClient.reverseGeocode(
+                Number(park.latitude),
+                Number(park.longitude),
               );
-            } else {
+
+              if (geoData) {
+                updates.city = geoData.city;
+                updates.citySlug = generateSlug(geoData.city);
+                updates.country = geoData.country;
+                updates.countrySlug = geoData.country
+                  ? generateSlug(geoData.country)
+                  : undefined;
+                updates.countryCode = geoData.countryCode; // Now available directly from geocoding
+                updates.continent = geoData.continent;
+                updates.continentSlug = geoData.continent
+                  ? generateSlug(geoData.continent)
+                  : undefined;
+                if (geoData.region) updates.region = geoData.region;
+                if (geoData.regionCode) {
+                  updates.regionCode = geoData.regionCode.substring(0, 50);
+                }
+
+                // Reset retry count only if we got the most important fields back
+                // (regionCode might be missing for some countries, but countryCode and city are usually there)
+                if (geoData.countryCode && geoData.city) {
+                  updates.metadataRetryCount = 0;
+                }
+
+                updates.geocodingAttemptedAt = new Date();
+                needsUpdate = true;
+                this.logger.verbose(
+                  `Geocoded ${park.name}: ${geoData.city}, ${geoData.regionCode || geoData.region || ""}, ${geoData.country} (${geoData.continent})`,
+                );
+              } else {
+                // Mark as attempted even if failed to avoid constant retries (unless smart retry logic overrides)
+                if (!missingRegionData) {
+                  updates.geocodingAttemptedAt = new Date();
+                  needsUpdate = true;
+                }
+              }
+            } catch (error: any) {
+              this.logger.warn(
+                `Geocoding failed for ${park.name}: ${error.message}`,
+              );
               // Mark as attempted even if failed to avoid constant retries (unless smart retry logic overrides)
               if (!missingRegionData) {
                 updates.geocodingAttemptedAt = new Date();
                 needsUpdate = true;
               }
             }
-          } catch (error: any) {
-            this.logger.warn(
-              `Geocoding failed for ${park.name}: ${error.message}`,
-            );
-            // Mark as attempted even if failed to avoid constant retries (unless smart retry logic overrides)
-            if (!missingRegionData) {
-              updates.geocodingAttemptedAt = new Date();
-              needsUpdate = true;
-            }
           }
         }
-      }
 
-      if (needsUpdate) {
-        await this.parksService.updateGeodata(park.id, updates);
-        geocodedCount++;
-      } else if (!park.geocodingAttemptedAt) {
-        // If no geocoding was performed and it was never attempted, mark it as attempted
-        await this.parksService.markGeocodingAttempted(park.id);
-      }
+        if (needsUpdate) {
+          await this.parksService.updateGeodata(park.id, updates);
+          geocodedCount++;
+        } else if (!park.geocodingAttemptedAt) {
+          // If no geocoding was performed and it was never attempted, mark it as attempted
+          await this.parksService.markGeocodingAttempted(park.id);
+        }
+      }));
 
-      // Rate limiting (100ms delay)
-      await this.sleep(100);
+      // Rate limiting
+      if (i + chunkSize < parksWithoutGeodata.length) {
+        await this.sleep(delayBetweenChunks);
+      }
     }
 
     this.logger.log(
