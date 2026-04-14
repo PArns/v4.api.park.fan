@@ -835,11 +835,17 @@ export class ParksService {
       );
 
       // Normalize API type: "Closed"/"CLOSED" → CLOSED so off-season (e.g. Phantasialand Feb) is persisted
+      // Also normalize "PARK_OPEN" to OPERATING
       const rawType = entry.type?.toString().toUpperCase();
-      const scheduleType: ScheduleType =
-        rawType === "CLOSED"
-          ? ScheduleType.CLOSED
-          : (entry.type as ScheduleType);
+      let scheduleType: ScheduleType;
+
+      if (rawType === "CLOSED") {
+        scheduleType = ScheduleType.CLOSED;
+      } else if (rawType === "PARK_OPEN") {
+        scheduleType = ScheduleType.OPERATING;
+      } else {
+        scheduleType = entry.type as ScheduleType;
+      }
 
       // dateStr is already the park-local calendar date (YYYY-MM-DD)
       const normalizedDate = new Date(`${dateStr}T12:00:00Z`);
@@ -912,10 +918,19 @@ export class ParksService {
       const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
         ? raw
         : formatInParkTimezone(new Date(raw), park!.timezone);
+
+      let scheduleType: ScheduleType;
+      if (rawType === "CLOSED") {
+        scheduleType = ScheduleType.CLOSED;
+      } else if (rawType === "PARK_OPEN") {
+        scheduleType = ScheduleType.OPERATING;
+      } else {
+        scheduleType = e.type as ScheduleType;
+      }
+
       return {
         date,
-        scheduleType:
-          rawType === "CLOSED" ? ScheduleType.CLOSED : (e.type as ScheduleType),
+        scheduleType,
       };
     });
 
