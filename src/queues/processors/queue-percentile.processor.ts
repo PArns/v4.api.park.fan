@@ -250,8 +250,123 @@ export class QueuePercentileProcessor {
 
     this.logger.log(`   🔍 Found ${candidates.length} seasonal candidates`);
 
+    // Step 3b: "Zero-history" candidates — never seen OPERATING at all, but CLOSED on
+    // every park-open day in the lookback window (≥ MIN_PARK_OPEN_DAYS_CLOSED days).
+    // Catches event-only rides (e.g. Halloween) at parks where we started tracking
+    // after the last event ran. Reset in Step 2 corrects them once they operate again.
+    const MIN_ZERO_HISTORY_OPEN_DAYS = MIN_PARK_OPEN_DAYS_CLOSED;
+    const zeroHistoryCandidates: { attractionId: string; parkId: string }[] =
+      await this.dataSource.query(
+        `
+      WITH park_open_days AS (
+        SELECT DISTINCT
+          a."parkId",
+          DATE(q.timestamp AT TIME ZONE p.timezone) as open_day
+        FROM queue_data q
+        JOIN attractions a ON a.id = q."attractionId"
+        JOIN parks p ON p.id = a."parkId"
+        WHERE q.status = 'OPERATING'
+          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+      ),
+      park_open_day_counts AS (
+        SELECT "parkId", COUNT(DISTINCT open_day) as open_days
+        FROM park_open_days
+        GROUP BY "parkId"
+      ),
+      -- Only apply zero-history logic to parks where the majority of
+      -- tracked attractions have at least one OPERATING record.
+      -- Prevents flagging parks with systematic data-source gaps
+      -- (e.g. parks where the API never reports OPERATING status).
+      park_tracking_quality AS (
+        SELECT t."parkId"
+        FROM (
+          SELECT a."parkId",
+            EXISTS(
+              SELECT 1 FROM queue_data q2
+              WHERE q2."attractionId" = a.id AND q2.status = 'OPERATING'
+            ) AS has_operating
+          FROM attractions a
+          WHERE EXISTS (SELECT 1 FROM queue_data q3 WHERE q3."attractionId" = a.id)
+        ) t
+        GROUP BY t."parkId"
+        HAVING SUM(CASE WHEN t.has_operating THEN 1 ELSE 0 END)
+             > SUM(CASE WHEN NOT t.has_operating THEN 1 ELSE 0 END)
+      ),
+      never_operating AS (
+        SELECT DISTINCT a.id as "attractionId", a."parkId"
+        FROM attractions a
+        WHERE EXISTS (
+          SELECT 1 FROM queue_data q2 WHERE q2."attractionId" = a.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM queue_data q2
+          WHERE q2."attractionId" = a.id AND q2.status = 'OPERATING'
+        )
+      ),
+      current_status AS (
+        SELECT DISTINCT ON ("attractionId")
+          "attractionId", status
+        FROM queue_data
+        WHERE timestamp >= NOW() - INTERVAL '7 days'
+        ORDER BY "attractionId", timestamp DESC
+      ),
+      attraction_operating_days AS (
+        SELECT DISTINCT
+          q."attractionId",
+          DATE(q.timestamp AT TIME ZONE p.timezone) as op_day
+        FROM queue_data q
+        JOIN attractions a ON a.id = q."attractionId"
+        JOIN parks p ON p.id = a."parkId"
+        WHERE q.status = 'OPERATING'
+          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+      ),
+      closed_on_open_days AS (
+        SELECT
+          no."attractionId",
+          no."parkId",
+          COUNT(DISTINCT pod.open_day) as closed_days
+        FROM never_operating no
+        JOIN park_open_days pod ON pod."parkId" = no."parkId"
+        WHERE NOT EXISTS (
+          SELECT 1 FROM attraction_operating_days aod
+          WHERE aod."attractionId" = no."attractionId"
+            AND aod.op_day = pod.open_day
+        )
+        GROUP BY no."attractionId", no."parkId"
+      )
+      SELECT cod."attractionId", cod."parkId"
+      FROM closed_on_open_days cod
+      JOIN never_operating no ON no."attractionId" = cod."attractionId"
+      JOIN current_status cs ON cs."attractionId" = cod."attractionId"
+      JOIN park_open_day_counts poc ON poc."parkId" = cod."parkId"
+      JOIN park_tracking_quality ptq ON ptq."parkId" = cod."parkId"
+      WHERE cod.closed_days = poc.open_days
+        AND poc.open_days >= $3
+        AND cs.status = 'CLOSED'
+        AND NOT (cod."attractionId" = ANY($1))
+    `,
+        [
+          Array.from(recentlyOperatingIds),
+          LOOKBACK_DAYS,
+          MIN_ZERO_HISTORY_OPEN_DAYS,
+        ],
+      );
+
+    const existingCandidateIds = new Set(candidates.map((c) => c.attractionId));
+    const allCandidates = [
+      ...candidates,
+      ...zeroHistoryCandidates.filter(
+        (c) => !existingCandidateIds.has(c.attractionId),
+      ),
+    ];
+
+    this.logger.log(
+      `   🎃 Found ${zeroHistoryCandidates.length} zero-history seasonal candidates`,
+    );
+
     // Step 4: For each candidate, derive seasonMonths from all-time OPERATING history
-    for (const { attractionId } of candidates) {
+    // (zero-history candidates will have seasonMonths = null — unknown season)
+    for (const { attractionId } of allCandidates) {
       const monthRows: { month: number }[] = await this.dataSource.query(
         `SELECT DISTINCT EXTRACT(MONTH FROM q.timestamp AT TIME ZONE p.timezone)::int as month
         FROM queue_data q
@@ -273,7 +388,9 @@ export class QueuePercentileProcessor {
       });
     }
 
-    this.logger.log(`✅ Attractions: marked ${candidates.length} as seasonal.`);
+    this.logger.log(
+      `✅ Attractions: marked ${allCandidates.length} as seasonal (${candidates.length} with history, ${zeroHistoryCandidates.length} zero-history).`,
+    );
 
     // ── Shows ──────────────────────────────────────────────────────────────
     // Signal: ThemeParks.wiki stops updating `lastUpdated` when a show is no
