@@ -1,8 +1,8 @@
 /**
  * TypeScript Type Definitions for ThemeParks.wiki API
  *
- * The official 'themeparks' SDK does not provide TypeScript definitions.
  * These types are based on API analysis from https://api.themeparks.wiki/docs/v1/
+ * We use direct REST API calls instead of the 'themeparks' npm package for better control.
  *
  * API Response Analysis (2025-11-17):
  * - GET /v1/destinations → { destinations: DestinationResponse[] }

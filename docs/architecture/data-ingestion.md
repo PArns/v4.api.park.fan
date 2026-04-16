@@ -23,11 +23,11 @@ When two sources report different wait times for the *same* attraction:
 
 ## Supported Sources
 
-### 1. Themeparks (Library)
+### 1. ThemeParks.wiki (Direct API)
 - **Location**: `src/external-apis/themeparks`
-- **Description**: Wraps the popular `themeparks` Node.js library.
+- **Description**: Direct client for the [ThemeParks.wiki REST API](https://api.themeparks.wiki/docs/v1/). 
 - **Role**: **Primary** source for most major supported parks (Disney, Universal, etc.).
-- **Data**: Wait Times, Status, Opening Hours.
+- **Data**: Wait Times, Status, Opening Hours, Forecasts.
 
 ### 2. Queue-Times.com
 - **Location**: `src/external-apis/queue-times`
