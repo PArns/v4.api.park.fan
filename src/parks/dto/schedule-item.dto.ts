@@ -83,12 +83,12 @@ export class ScheduleItemDto {
 
   @ApiProperty({
     description:
-      "Type of holiday: 'public' (public holiday), 'school' (school holiday), 'bank' (bank holiday), 'observance' (observance), or null",
-    enum: ["public", "school", "bank", "observance"],
+      "Type of holiday: 'public' (public holiday), 'school' (school holiday), 'bank' (bank holiday), 'observance' (observance), 'bridge' (bridge day), or null",
+    enum: ["public", "school", "bank", "observance", "bridge"],
     required: false,
     nullable: true,
   })
-  holidayType: "public" | "school" | "bank" | "observance" | null;
+  holidayType: "public" | "school" | "bank" | "observance" | "bridge" | null;
 
   @ApiProperty({
     description:
@@ -125,7 +125,7 @@ export class ScheduleItemDto {
     purchases: any | null;
     isHoliday?: boolean;
     holidayName?: string | null;
-    holidayType?: "public" | "school" | "bank" | "observance" | null;
+    holidayType?: "public" | "school" | "bank" | "observance" | "bridge" | null;
     isPublicHoliday?: boolean;
     isSchoolHoliday?: boolean;
     isBridgeDay?: boolean;

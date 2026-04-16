@@ -50,7 +50,7 @@ export class HolidaysService {
       localName?: string;
       country: string;
       region?: string;
-      holidayType: "public" | "observance" | "school" | "bank";
+      holidayType: "public" | "observance" | "school" | "bank" | "bridge";
       isNationwide: boolean;
     }> = [];
     for (const holiday of holidays) {
@@ -109,7 +109,7 @@ export class HolidaysService {
         localName?: string;
         country: string;
         region?: string;
-        holidayType: "public" | "observance" | "school" | "bank";
+        holidayType: "public" | "observance" | "school" | "bank" | "bridge";
         isNationwide: boolean;
       }
     >();
@@ -368,19 +368,7 @@ export class HolidaysService {
     }
 
     // Deduplicate by externalId before batch upsert
-    const uniqueHolidays = new Map<
-      string,
-      {
-        externalId: string;
-        date: Date;
-        name: string;
-        localName?: string;
-        country: string;
-        region?: string;
-        holidayType: "public" | "observance" | "school" | "bank";
-        isNationwide: boolean;
-      }
-    >();
+    const uniqueHolidays = new Map<string, HolidayInput>();
     for (const h of holidaysToUpsert) {
       uniqueHolidays.set(h.externalId, h);
     }
@@ -678,8 +666,10 @@ export class HolidaysService {
    * Check if a date is a bridge day (Brückentag)
    *
    * Logic:
-   * - If Friday AND Thursday is a holiday -> Bridge Day
-   * - If Monday AND Tuesday is a holiday -> Bridge Day
+   * 1. Check if explicitly marked as 'bridge' type in DB (e.g. from Nager.Date)
+   * 2. Fallback to heuristic:
+   *    - If Friday AND Thursday is a holiday -> Bridge Day
+   *    - If Monday AND Tuesday is a holiday -> Bridge Day
    */
   async isBridgeDay(
     date: Date,
@@ -687,8 +677,48 @@ export class HolidaysService {
     regionCode?: string,
     timezone: string = "UTC",
   ): Promise<boolean> {
+    const effectiveTimezone =
+      timezone && timezone !== "UTC"
+        ? timezone
+        : getTimezoneForCountry(countryCode) || "UTC";
+
+    const dateStr = formatInParkTimezone(date, effectiveTimezone);
+    const cacheKey = `holiday:bridge:${countryCode}:${regionCode || "national"}:${dateStr}`;
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return cached === "true";
+    }
+
+    // 1. Check DB for explicit bridge entry
+    const explicitQuery = this.holidayRepository
+      .createQueryBuilder("holiday")
+      .where("holiday.country = :countryCode", { countryCode })
+      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr })
+      .andWhere("holiday.holidayType = 'bridge'");
+
+    if (regionCode) {
+      const normalizedRegion = normalizeRegionCode(regionCode);
+      const fullRegionCode = `${countryCode}-${normalizedRegion}`;
+      explicitQuery.andWhere(
+        "(holiday.isNationwide = true OR holiday.region = :fullRegionCode)",
+        { fullRegionCode },
+      );
+    } else {
+      explicitQuery.andWhere("holiday.isNationwide = true");
+    }
+
+    const explicitCount = await explicitQuery.getCount();
+    if (explicitCount > 0) {
+      await this.redis.set(cacheKey, "true", "EX", 24 * 60 * 60);
+      return true;
+    }
+
+    // 2. Fallback to heuristic
+    let isHeuristicBridge = false;
+
     // Get ISO day of week in target timezone (1 = Monday, ..., 5 = Friday, 6 = Saturday, 7 = Sunday)
-    const dayOfWeek = Number(formatInTimeZone(date, timezone, "i"));
+    const dayOfWeek = Number(formatInTimeZone(date, effectiveTimezone, "i"));
 
     // Case 1: Friday (5) bridging Thursday Holiday
     if (dayOfWeek === 5) {
@@ -697,24 +727,30 @@ export class HolidaysService {
         thursday,
         countryCode,
         regionCode,
-        timezone,
+        effectiveTimezone,
       );
-      if (isThuHoliday) return true;
+      if (isThuHoliday) isHeuristicBridge = true;
     }
 
     // Case 2: Monday (1) bridging Tuesday Holiday
-    if (dayOfWeek === 1) {
+    if (!isHeuristicBridge && dayOfWeek === 1) {
       const tuesday = addDays(date, 1);
       const isTueHoliday = await this.isHoliday(
         tuesday,
         countryCode,
         regionCode,
-        timezone,
+        effectiveTimezone,
       );
-      if (isTueHoliday) return true;
+      if (isTueHoliday) isHeuristicBridge = true;
     }
 
-    return false;
+    await this.redis.set(
+      cacheKey,
+      String(isHeuristicBridge),
+      "EX",
+      24 * 60 * 60,
+    );
+    return isHeuristicBridge;
   }
 
   /**

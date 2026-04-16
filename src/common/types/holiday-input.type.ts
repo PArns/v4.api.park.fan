@@ -11,6 +11,6 @@ export interface HolidayInput {
   localName?: string;
   country: string;
   region?: string;
-  holidayType: "public" | "observance" | "school" | "bank";
+  holidayType: "public" | "observance" | "school" | "bank" | "bridge";
   isNationwide: boolean;
 }
