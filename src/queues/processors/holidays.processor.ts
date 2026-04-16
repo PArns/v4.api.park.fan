@@ -102,9 +102,23 @@ export class HolidaysProcessor {
               isoCode,
             );
             totalHolidaysSaved += savedCount;
+
+            // 1.1 Long Weekends (Nager.Date)
+            for (let year = startYear; year <= endYear; year++) {
+              const longWeekends = await this.nagerDateClient.getLongWeekends(
+                year,
+                isoCode,
+              );
+              const savedBridges =
+                await this.holidaysService.saveLongWeekendsFromApi(
+                  longWeekends,
+                  isoCode,
+                );
+              totalHolidaysSaved += savedBridges;
+            }
           } catch (error) {
             this.logger.error(
-              `Failed to fetch Nager public holidays for ${isoCode}: ${error}`,
+              `Failed to fetch Nager holidays/weekends for ${isoCode}: ${error}`,
             );
           }
 

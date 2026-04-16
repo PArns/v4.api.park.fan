@@ -131,6 +131,56 @@ export class HolidaysService {
   }
 
   /**
+   * Save long weekends (bridge days) from Nager.Date API
+   */
+  async saveLongWeekendsFromApi(
+    longWeekends: import("../external-apis/nager-date/nager-date.types").NagerLongWeekend[],
+    countryCode: string,
+  ): Promise<number> {
+    if (longWeekends.length === 0) return 0;
+
+    const holidaysToUpsert: HolidayInput[] = [];
+
+    for (const lw of longWeekends) {
+      if (!lw.needBridgeDay) continue;
+
+      // Nager doesn't tell us WHICH day is the bridge day in the /LongWeekend response,
+      // only the range. Usually it's the Friday after or Monday before a holiday.
+      // However, we can store the whole period or use our internal logic.
+      // Better: The Nager API /LongWeekend logic is used to supplement our detection.
+      
+      // For now, we store the start/end as a 'bridge' type if it's not a weekend
+      // and not already a holiday.
+      const start = new Date(`${lw.startDate}T12:00:00Z`);
+      const end = new Date(`${lw.endDate}T12:00:00Z`);
+      const current = new Date(start);
+
+      while (current <= end) {
+        const dayOfWeek = current.getUTCDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        if (!isWeekend) {
+          const dateStr = current.toISOString().split("T")[0];
+          const externalId = `nager-bridge:${countryCode}:${dateStr}`;
+
+          holidaysToUpsert.push({
+            externalId,
+            date: new Date(current.setUTCHours(0, 0, 0, 0)),
+            name: "Bridge Day",
+            localName: "Brückentag",
+            country: countryCode,
+            holidayType: "bridge",
+            isNationwide: true,
+          });
+        }
+        current.setUTCDate(current.getUTCDate() + 1);
+      }
+    }
+
+    return this.saveRawHolidays(holidaysToUpsert);
+  }
+
+  /**
    * Map Nager.Date holiday types to our enum
    *
    * Priority:

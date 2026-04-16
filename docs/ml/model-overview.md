@@ -45,11 +45,10 @@ The ML Service is a standalone Python application responsible for predicting wai
      - **Outliers**: Filters `waitTime > 500` (API glitches).
    - **Feature Engineering**: Holiday lookup, weather curves (sinusoidal), etc.
    - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.60`): 60% of training rows have their `park_occupancy_pct` replaced with DOW×hour means to force learning from temporal/holiday signals.
-3. **Training**:
-   - `train.py` splits data (Train/Test).
-   - CatBoost trains on historical data.
-   - Model artifacts saved to `models/`.
-4. **Validation**: RMSE/MAE metrics are logged.
+3. **Validation**: 
+   - **Randomized Weekly Block Split**: To ensure robust validation during seasonal transitions (e.g., winter to spring), data is grouped into weekly blocks. 20% of these weeks are randomly selected for validation, while the rest are used for training. This ensures that both sets contain representative data from all operational phases.
+   - **Metrics**: RMSE/MAE metrics are logged and stored in the database.
+
 
 ## Usage
 

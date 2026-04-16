@@ -75,12 +75,13 @@ export class Holiday {
    * - observance: Observed but not official (e.g., Father's Day)
    * - school: School vacation period
    * - bank: Bank holiday only
+   * - bridge: Bridge day (Brückentag) connecting holiday and weekend
    */
   @Column({
     type: "enum",
-    enum: ["public", "observance", "school", "bank"],
+    enum: ["public", "observance", "school", "bank", "bridge"],
   })
-  holidayType: "public" | "observance" | "school" | "bank";
+  holidayType: "public" | "observance" | "school" | "bank" | "bridge";
 
   /**
    * Whether this is a nationwide holiday
