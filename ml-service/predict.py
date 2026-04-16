@@ -494,8 +494,21 @@ def create_prediction_features(
             df["snowfallSum"] = df["snowfall"].fillna(0.0)
             df["weatherCode"] = df["weatherCode"].fillna(0).astype(int)
 
-            # NEW: Weather interaction features
-            df["precipitation_last_3h"] = df["precipitation"] * 3.0  # Approx
+            # Compute precipitation_last_3h as a proper 3h rolling sum — identical
+            # to the training pipeline (features.py groupby().rolling("3h").sum()).
+            # We have all hourly forecast rows, so we can do the real computation.
+            _orig_forecast_order = df.index
+            df = df.sort_values(["parkId", "timestamp"])
+            _df_sorted = df.set_index("timestamp")
+            df["precipitation_last_3h"] = (
+                _df_sorted.groupby("parkId")["precipitation"]
+                .rolling("3h", closed="left", min_periods=1)
+                .sum()
+                .reset_index(level=0, drop=True)
+                .values
+            )
+            df = df.loc[_orig_forecast_order]
+            df["precipitation_last_3h"] = df["precipitation_last_3h"].fillna(0)
 
             # Cleanup join columns
             df = df.drop(
@@ -608,6 +621,8 @@ def create_prediction_features(
                 df["windSpeedMax"] = df["wind_avg"].fillna(0.0)
                 df["snowfallSum"] = df["snow_avg"].fillna(0.0)
                 df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
+                # precipitation here is daily total (mm/day); divide by 8 (24h/3h)
+                # to get average mm per 3h period — matches training scale.
                 df["precipitation_last_3h"] = df["precipitation"] * 0.125
 
                 # Cleanup historical source columns but KEEP temperature_avg
@@ -642,7 +657,8 @@ def create_prediction_features(
     df["temperature_deviation"] = df["temperature_avg"] - df["_hist_temp_baseline"]
     df = df.drop(columns=["_hist_temp_baseline"])
 
-    # Ensure precipitation_last_3h is set
+    # Ensure precipitation_last_3h is set (last-resort fallback; precipitation is
+    # a daily total here so /8 converts mm/day → avg mm per 3h block, matching training scale).
     if "precipitation_last_3h" not in df.columns:
         df["precipitation_last_3h"] = df["precipitation"] * 0.125
 

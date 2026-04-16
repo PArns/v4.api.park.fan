@@ -1039,78 +1039,10 @@ def add_park_occupancy_feature(
         if "p50_baseline" in df.columns:
             df = df.drop(columns=["p50_baseline", "attraction_id"], errors="ignore")
 
-        # Occupancy Dropout: replace actual occupancy with DOW×hour historical mean
-        settings = get_settings()
-        dropout_rate = settings.OCCUPANCY_DROPOUT_RATE
-        if dropout_rate > 0:
-            ts = pd.to_datetime(df["timestamp"])
-            df["_dow"] = ts.dt.dayofweek
-            df["_hour"] = ts.dt.hour
-
-            # Vectorized dropout across all parks
-            # 1. Build global DOW x Hour profile map as a DataFrame for merging
-            profiles_df = (
-                df.groupby(["parkId", "_dow", "_hour"])["park_occupancy_pct"]
-                .mean()
-                .reset_index()
-                .rename(columns={"park_occupancy_pct": "_profile_val"})
-            )
-
-            # Random mask for dropout
-            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
-            drop_indices = df.index[rng.random(len(df)) < dropout_rate]
-
-            if len(drop_indices) > 0:
-                # 2. Efficient Merge for dropout rows only
-                df_to_drop = df.loc[drop_indices, ["parkId", "_dow", "_hour"]]
-                dropped_vals = df_to_drop.merge(
-                    profiles_df, on=["parkId", "_dow", "_hour"], how="left"
-                )["_profile_val"].fillna(100.0)
-
-                # Assign back using original index alignment
-                df.loc[drop_indices, "park_occupancy_pct"] = dropped_vals.values
-
-            df = df.drop(columns=["_dow", "_hour"])
-
-        # Rolling Average Dropout: Vectorized replacement
-        rolling_dropout_rate = settings.ROLLING_AVG_DROPOUT_RATE
-        if rolling_dropout_rate > 0 and "avg_wait_last_24h" in df.columns:
-            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 1)
-            drop_mask = rng.random(len(df)) < rolling_dropout_rate
-
-            if drop_mask.any():
-                ts = pd.to_datetime(df["timestamp"])
-                is_weekend = (ts.dt.dayofweek >= 5).values
-
-                # Pre-calculate fallback values for the whole dataframe
-                fallback_24h = df["rolling_avg_7d"].values
-                fallback_1h = np.where(
-                    is_weekend,
-                    df["rolling_avg_weekend"].values,
-                    df["rolling_avg_weekday"].values,
-                )
-
-                # Apply only to dropped rows
-                df.loc[drop_mask, "avg_wait_last_24h"] = fallback_24h[drop_mask]
-                df.loc[drop_mask, "avg_wait_last_1h"] = fallback_1h[drop_mask]
-
-        # 7d Rolling Average Dropout: Vectorized replacement
-        rolling_7d_dropout_rate = settings.ROLLING_7D_DROPOUT_RATE
-        if rolling_7d_dropout_rate > 0 and "rolling_avg_7d" in df.columns:
-            rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED + 2)
-            drop_mask = rng.random(len(df)) < rolling_7d_dropout_rate
-
-            if drop_mask.any():
-                ts = pd.to_datetime(df["timestamp"])
-                is_weekend = (ts.dt.dayofweek >= 5).values
-
-                fallback_7d = np.where(
-                    is_weekend,
-                    df["rolling_avg_weekend"].values,
-                    df["rolling_avg_weekday"].values,
-                )
-
-                df.loc[drop_mask, "rolling_avg_7d"] = fallback_7d[drop_mask]
+        # NOTE: All dropout (occupancy, rolling-avg, rolling_7d) is applied in
+        # apply_training_dropout() in train.py — NOT here.
+        # This function runs during both training and inference, so adding dropout
+        # here would corrupt real-time occupancy data at inference time.
 
     return df
 

@@ -117,7 +117,7 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     learns to rely on them (avg_wait_last_24h dominates at ~30%, holiday features
     near 0%). With dropout it must also learn from calendar/holiday/seasonal signals.
 
-    Two independent dropout passes:
+    Three independent dropout passes:
     1. Occupancy dropout (cfg.OCCUPANCY_DROPOUT_RATE):
        park_occupancy_pct → park's own rolling_avg_weekday or rolling_avg_weekend
        converted to an approximate occupancy ratio.  Simulates future predictions
@@ -128,6 +128,15 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
        avg_wait_last_1h  → rolling_avg_weekday / rolling_avg_weekend
        Simulates next-week / next-month predictions where yesterday's wait is
        irrelevant.
+
+    3. Rolling-7d dropout (cfg.ROLLING_7D_DROPOUT_RATE):
+       rolling_avg_7d → rolling_avg_weekend / rolling_avg_weekday
+       Simulates predictions beyond a week where the 7-day rolling average is
+       not yet known.
+
+    NOTE: This function is called ONLY during training (train.py).
+    add_park_occupancy_feature() (features.py) runs during inference too, so
+    dropout must NOT be placed there.
     """
     import numpy as np
 
@@ -190,6 +199,25 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
 
             log.info(
                 f"   Rolling-avg dropout: {ravg_count:,} rows ({ravg_rate * 100:.0f}%) → DOW/weekend historical"
+            )
+
+    # --- 3. Rolling-7d dropout ---
+    r7d_rate = cfg.ROLLING_7D_DROPOUT_RATE
+    if r7d_rate > 0 and "rolling_avg_7d" in df.columns:
+        r7d_mask = rng.random(n) < r7d_rate
+        r7d_count = int(r7d_mask.sum())
+
+        if r7d_count > 0:
+            is_weekend_mask = df["is_weekend"].values == 1
+            fallback_7d = np.where(
+                is_weekend_mask,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
+            df.loc[r7d_mask, "rolling_avg_7d"] = fallback_7d[r7d_mask]
+
+            log.info(
+                f"   Rolling-7d dropout: {r7d_count:,} rows ({r7d_rate * 100:.0f}%) → weekend/weekday historical"
             )
 
     return df
