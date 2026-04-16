@@ -14,6 +14,7 @@ import { AdminController } from "./admin.controller";
     BullModule.registerQueue({ name: "ml-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
     BullModule.registerQueue({ name: "children-metadata" }),
+    BullModule.registerQueue({ name: "prediction-accuracy" }),
   ],
   controllers: [AdminController],
 })
