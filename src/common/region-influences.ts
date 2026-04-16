@@ -383,7 +383,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "US", regionCode: "US-AZ" }, // Arizona
     { countryCode: "US", regionCode: "US-NV" }, // Nevada
     { countryCode: "US", regionCode: "US-OR" }, // Oregon
-    { countryCode: "MX", regionCode: null }, // Mexico (Baja California proximity)
+    { countryCode: "MX", regionCode: "MX-BCN" }, // Baja California (Mexico)
   ],
 
   // Texas (Six Flags Over Texas, SeaWorld San Antonio)
@@ -412,6 +412,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "US", regionCode: "US-MD" }, // Maryland
     { countryCode: "US", regionCode: "US-OH" }, // Ohio
     { countryCode: "US", regionCode: "US-DE" }, // Delaware
+    { countryCode: "US", regionCode: "US-WV" }, // West Virginia
   ],
 
   // New Jersey (Six Flags Great Adventure)
@@ -420,6 +421,48 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "US", regionCode: "US-PA" },
     { countryCode: "US", regionCode: "US-CT" },
     { countryCode: "US", regionCode: "US-DE" },
+    { countryCode: "US", regionCode: "US-MD" },
+  ],
+
+  // New York (The Great Escape, Legoland NY)
+  "US-NY": [
+    { countryCode: "US", regionCode: "US-NJ" },
+    { countryCode: "US", regionCode: "US-PA" },
+    { countryCode: "US", regionCode: "US-CT" },
+    { countryCode: "US", regionCode: "US-MA" },
+    { countryCode: "US", regionCode: "US-VT" },
+    { countryCode: "CA", regionCode: "CA-ON" },
+    { countryCode: "CA", regionCode: "CA-QC" },
+  ],
+
+  // Massachusetts (Six Flags New England)
+  "US-MA": [
+    { countryCode: "US", regionCode: "US-CT" },
+    { countryCode: "US", regionCode: "US-RI" },
+    { countryCode: "US", regionCode: "US-NY" },
+    { countryCode: "US", regionCode: "US-VT" },
+    { countryCode: "US", regionCode: "US-NH" },
+  ],
+
+  // Illinois (Six Flags Great America)
+  "US-IL": [
+    { countryCode: "US", regionCode: "US-WI" },
+    { countryCode: "US", regionCode: "US-IA" },
+    { countryCode: "US", regionCode: "US-MO" },
+    { countryCode: "US", regionCode: "US-KY" },
+    { countryCode: "US", regionCode: "US-IN" },
+  ],
+
+  // Missouri (Silver Dollar City, Worlds of Fun, Six Flags St. Louis)
+  "US-MO": [
+    { countryCode: "US", regionCode: "US-IA" },
+    { countryCode: "US", regionCode: "US-IL" },
+    { countryCode: "US", regionCode: "US-KY" },
+    { countryCode: "US", regionCode: "US-TN" },
+    { countryCode: "US", regionCode: "US-AR" },
+    { countryCode: "US", regionCode: "US-OK" },
+    { countryCode: "US", regionCode: "US-KS" },
+    { countryCode: "US", regionCode: "US-NE" },
   ],
 
   // Virginia (Busch Gardens Williamsburg, Kings Dominion)
@@ -428,6 +471,28 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "US", regionCode: "US-NC" },
     { countryCode: "US", regionCode: "US-WV" },
     { countryCode: "US", regionCode: "US-DC" },
+    { countryCode: "US", regionCode: "US-KY" },
+    { countryCode: "US", regionCode: "US-TN" },
+  ],
+
+  // North Carolina (Carowinds)
+  "US-NC": [
+    { countryCode: "US", regionCode: "US-VA" },
+    { countryCode: "US", regionCode: "US-SC" },
+    { countryCode: "US", regionCode: "US-GA" },
+    { countryCode: "US", regionCode: "US-TN" },
+  ],
+
+  // Tennessee (Dollywood)
+  "US-TN": [
+    { countryCode: "US", regionCode: "US-KY" },
+    { countryCode: "US", regionCode: "US-VA" },
+    { countryCode: "US", regionCode: "US-NC" },
+    { countryCode: "US", regionCode: "US-GA" },
+    { countryCode: "US", regionCode: "US-AL" },
+    { countryCode: "US", regionCode: "US-MS" },
+    { countryCode: "US", regionCode: "US-AR" },
+    { countryCode: "US", regionCode: "US-MO" },
   ],
 
   // Georgia (Six Flags Over Georgia)
@@ -437,6 +502,43 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "US", regionCode: "US-NC" },
     { countryCode: "US", regionCode: "US-AL" },
     { countryCode: "US", regionCode: "US-TN" },
+  ],
+
+  // Oklahoma (Frontier City)
+  "US-OK": [
+    { countryCode: "US", regionCode: "US-KS" },
+    { countryCode: "US", regionCode: "US-MO" },
+    { countryCode: "US", regionCode: "US-AR" },
+    { countryCode: "US", regionCode: "US-TX" },
+    { countryCode: "US", regionCode: "US-NM" },
+    { countryCode: "US", regionCode: "US-CO" },
+  ],
+
+  // Iowa (Adventureland)
+  "US-IA": [
+    { countryCode: "US", regionCode: "US-MN" },
+    { countryCode: "US", regionCode: "US-WI" },
+    { countryCode: "US", regionCode: "US-IL" },
+    { countryCode: "US", regionCode: "US-MO" },
+    { countryCode: "US", regionCode: "US-NE" },
+    { countryCode: "US", regionCode: "US-SD" },
+  ],
+
+  // Minnesota (Nickelodeon Universe)
+  "US-MN": [
+    { countryCode: "US", regionCode: "US-WI" },
+    { countryCode: "US", regionCode: "US-IA" },
+    { countryCode: "US", regionCode: "US-SD" },
+    { countryCode: "US", regionCode: "US-ND" },
+    { countryCode: "CA", regionCode: "CA-ON" },
+    { countryCode: "CA", regionCode: "CA-MB" },
+  ],
+
+  // Connecticut (Lake Compounce)
+  "US-CT": [
+    { countryCode: "US", regionCode: "US-MA" },
+    { countryCode: "US", regionCode: "US-RI" },
+    { countryCode: "US", regionCode: "US-NY" },
   ],
 
   // ==========================================
@@ -464,6 +566,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "JP", regionCode: "JP-24" }, // Mie
     { countryCode: "JP", regionCode: "JP-21" }, // Gifu
     { countryCode: "JP", regionCode: "JP-22" }, // Shizuoka
+    { countryCode: "JP", regionCode: "JP-20" }, // Nagano
   ],
 
   // ==========================================
@@ -473,6 +576,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   // Queensland (Dreamworld, Warner Bros. Movie World, Sea World)
   "AU-QLD": [
     { countryCode: "AU", regionCode: "AU-NSW" }, // New South Wales
+    { countryCode: "AU", regionCode: "AU-VIC" }, // Victoria (High interstate tourism)
     { countryCode: "NZ", regionCode: null }, // New Zealand
   ],
 
@@ -504,6 +608,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   "DK-82": [
     { countryCode: "DK", regionCode: "DK-83" }, // Region of Southern Denmark
     { countryCode: "DK", regionCode: "DK-81" }, // North Denmark
+    { countryCode: "DK", regionCode: "DK-84" }, // Zealand
     { countryCode: "DE", regionCode: "DE-SH" }, // Schleswig-Holstein
   ],
 
@@ -513,6 +618,13 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "DE", regionCode: "DE-SH" },
   ],
 
+  // North Denmark (Nordjylland)
+  "DK-81": [
+    { countryCode: "DK", regionCode: "DK-82" }, // Central Denmark
+    { countryCode: "NO", regionCode: null }, // Norway (Ferry connection)
+    { countryCode: "SE", regionCode: null }, // Sweden (Ferry connection)
+  ],
+
   // ==========================================
   // CANADA (CA)
   // ==========================================
@@ -520,6 +632,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   // Ontario (Canada's Wonderland)
   "CA-ON": [
     { countryCode: "CA", regionCode: "CA-QC" }, // Quebec
+    { countryCode: "CA", regionCode: "CA-MB" }, // Manitoba
     { countryCode: "US", regionCode: "US-NY" }, // New York
     { countryCode: "US", regionCode: "US-MI" }, // Michigan
     { countryCode: "US", regionCode: "US-OH" }, // Ohio
@@ -528,8 +641,11 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   // Quebec (La Ronde)
   "CA-QC": [
     { countryCode: "CA", regionCode: "CA-ON" },
+    { countryCode: "CA", regionCode: "CA-NB" }, // New Brunswick
     { countryCode: "US", regionCode: "US-NY" },
     { countryCode: "US", regionCode: "US-VT" }, // Vermont
+    { countryCode: "US", regionCode: "US-NH" }, // New Hampshire
+    { countryCode: "US", regionCode: "US-ME" }, // Maine
   ],
 
   // ==========================================
@@ -541,6 +657,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "KR", regionCode: "KR-11" }, // Seoul
     { countryCode: "KR", regionCode: "KR-42" }, // Gangwon
     { countryCode: "KR", regionCode: "KR-43" }, // North Chungcheong
+    { countryCode: "KR", regionCode: "KR-44" }, // South Chungcheong
   ],
 
   // Seoul
@@ -557,12 +674,15 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   "SE-AB": [
     { countryCode: "SE", regionCode: "SE-C" }, // Uppsala
     { countryCode: "SE", regionCode: "SE-D" }, // Södermanland
+    { countryCode: "SE", regionCode: "SE-U" }, // Västmanland
     { countryCode: "FI", regionCode: null }, // Finland
   ],
 
   // Västra Götaland (Liseberg)
   "SE-O": [
     { countryCode: "SE", regionCode: "SE-N" }, // Halland
+    { countryCode: "SE", regionCode: "SE-S" }, // Värmland
+    { countryCode: "SE", regionCode: "SE-F" }, // Jönköping
     { countryCode: "DK", regionCode: null }, // Denmark
     { countryCode: "NO", regionCode: null }, // Norway
   ],
@@ -575,6 +695,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   "CN-31": [
     { countryCode: "CN", regionCode: "CN-32" }, // Jiangsu
     { countryCode: "CN", regionCode: "CN-33" }, // Zhejiang
+    { countryCode: "CN", regionCode: "CN-34" }, // Anhui
   ],
 
   // Beijing
@@ -585,6 +706,9 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
 
   // Guangdong (Chimelong)
   "CN-44": [
+    { countryCode: "CN", regionCode: "CN-35" }, // Fujian
+    { countryCode: "CN", regionCode: "CN-36" }, // Jiangxi
+    { countryCode: "CN", regionCode: "CN-43" }, // Hunan
     { countryCode: "CN", regionCode: "CN-45" }, // Guangxi
     { countryCode: "HK", regionCode: null }, // Hong Kong
     { countryCode: "MO", regionCode: null }, // Macau
@@ -599,6 +723,57 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "MX", regionCode: "MX-MEX" }, // State of Mexico
     { countryCode: "MX", regionCode: "MX-PUE" }, // Puebla
     { countryCode: "MX", regionCode: "MX-MOR" }, // Morelos
+    { countryCode: "MX", regionCode: "MX-HID" }, // Hidalgo
+    { countryCode: "MX", regionCode: "MX-TLA" }, // Tlaxcala
+  ],
+
+  // Morelos (Six Flags Hurricane Harbor Oaxtepec)
+  "MX-MOR": [
+    { countryCode: "MX", regionCode: "MX-CMX" }, // Mexico City
+    { countryCode: "MX", regionCode: "MX-MEX" }, // State of Mexico
+    { countryCode: "MX", regionCode: "MX-PUE" }, // Puebla
+    { countryCode: "MX", regionCode: "MX-GUE" }, // Guerrero
+  ],
+
+  // ==========================================
+  // ITALY (IT)
+  // ==========================================
+
+  // Lazio (Cinecittà World)
+  "IT-LA": [
+    { countryCode: "IT", regionCode: "IT-TC" }, // Tuscany
+    { countryCode: "IT", regionCode: "IT-UM" }, // Umbria
+    { countryCode: "IT", regionCode: "IT-MA" }, // Marche
+    { countryCode: "IT", regionCode: "IT-AB" }, // Abruzzo
+    { countryCode: "IT", regionCode: "IT-MO" }, // Molise
+    { countryCode: "IT", regionCode: "IT-CA" }, // Campania
+  ],
+
+  // ==========================================
+  // BRAZIL (BR)
+  // ==========================================
+
+  // Santa Catarina (Beto Carrero World)
+  "BR-SC": [
+    { countryCode: "BR", regionCode: "BR-PR" }, // Paraná
+    { countryCode: "BR", regionCode: "BR-RS" }, // Rio Grande do Sul
+    { countryCode: "AR", regionCode: null }, // Argentina (Misiones proximity)
+  ],
+
+  // ==========================================
+  // SAUDI ARABIA (SA)
+  // ==========================================
+
+  // Riyadh Province (Six Flags Qiddiya)
+  "SA-01": [
+    { countryCode: "SA", regionCode: "SA-03" }, // Al-Madinah
+    { countryCode: "SA", regionCode: "SA-04" }, // Al-Qassim
+    { countryCode: "SA", regionCode: "SA-05" }, // Ha'il
+    { countryCode: "SA", regionCode: "SA-02" }, // Makkah
+    { countryCode: "SA", regionCode: "SA-06" }, // Northern Borders
+    { countryCode: "SA", regionCode: "SA-10" }, // Najran
+    { countryCode: "SA", regionCode: "SA-13" }, // Aseer
+    { countryCode: "AE", regionCode: null }, // UAE
   ],
 };
 
