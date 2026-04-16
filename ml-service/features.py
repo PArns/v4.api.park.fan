@@ -424,7 +424,10 @@ def add_holiday_features(
 
     # Assign primary features (vectorized)
     # Weekend extensions are already included in holidays_df from above
-    df["is_holiday_primary"] = (df["primary_holiday_type"] == "public").astype(int)
+    # We include 'bridge' and 'bank' as holidays as they typically correlate with high traffic
+    df["is_holiday_primary"] = df["primary_holiday_type"].isin(
+        ["public", "bank", "bridge"]
+    ).astype(int)
     df["is_school_holiday_primary"] = (df["primary_holiday_type"] == "school").astype(
         int
     )
@@ -519,7 +522,7 @@ def add_holiday_features(
                 if not n_type:
                     n_type = holiday_map_national.get((n_country, date))
 
-                neighbor_flags[i] = int(n_type == "public")
+                neighbor_flags[i] = int(n_type in ["public", "bank", "bridge"])
                 neighbor_school_flags[i] = int(n_type == "school")
             except Exception:
                 pass
