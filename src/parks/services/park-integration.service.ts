@@ -186,7 +186,7 @@ export class ParkIntegrationService {
       nextSchedule,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
-      this.parksService.getUpcomingSchedule(park.id, 7),
+      this.parksService.getUpcomingSchedule(park.id, 16),
       this.queueDataService.findCurrentStatusByPark(park.id),
       this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
       this.parksService.getNextSchedule(park.id).catch(() => null),
@@ -216,7 +216,7 @@ export class ParkIntegrationService {
       current: currentEntity ? WeatherItemDto.fromEntity(currentEntity) : null,
       now: weatherNow,
       forecast: weatherData.forecast
-        .slice(0, 6)
+        .slice(0, 16)
         .map((w) => WeatherItemDto.fromEntity(w)),
     };
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
