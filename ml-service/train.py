@@ -430,81 +430,70 @@ def train_model(version: str = None) -> None:
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
-    # 6. Train/Validation Split - ADAPTIVE
+    # 6. Train/Validation Split - Randomized Weekly Block Split
     # Strategy:
-    # - Small datasets (< 14 days): Use percentage split (80/20)
-    # - Growing datasets (14-60 days): Scale validation from 20% up to 30 days
-    # - Large datasets (> 60 days): Use fixed 30-day validation window
-    # This ensures proper train/val ratio as data accumulates
-
-    # Calculate actual data span
-    data_span_days = (df["timestamp"].max() - df["timestamp"].min()).days
-
-    # Initialize train_mask to None — only set in the time-based split path.
-    # Percentage-split paths use slice indexing instead (handled at line ~427).
-    train_mask = None
-
-    # Adaptive validation sizing
-    if data_span_days < 14:
-        # Very small dataset: use percentage split
-        # Very small dataset: use percentage split
-        validation_ratio = 0.2  # 20% for validation
-        logger.info(
-            f"📊 Using percentage-based split (80/20) - only {data_span_days} days of data"
-        )
-
-        df = df.sort_values("timestamp")  # Ensure time ordering
+    # Instead of taking the last N days (which fails during seasonal transitions),
+    # we group data by week and randomly select 20% of the weeks for validation.
+    # This ensures both training and validation sets contain data from all seasonal
+    # phases (e.g., cold winter and busy spring start).
+    
+    # Create a unique week identifier (Year + ISO Week)
+    df["_week_id"] = (df["timestamp"].dt.year * 100 + df["timestamp"].dt.isocalendar().week).astype(int)
+    unique_weeks = df["_week_id"].unique()
+    
+    if len(unique_weeks) < 4:
+        # Fallback for very sparse data: use simple percentage split
+        validation_ratio = 0.2
+        logger.info(f"📊 Sparse data ({len(unique_weeks)} weeks): Using simple 80/20 percentage split")
+        
+        df = df.sort_values("timestamp")
         split_idx = int(len(df) * (1 - validation_ratio))
-
+        
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
         X_val = X.iloc[split_idx:]
         y_val = y.iloc[split_idx:]
-
+        
+        if sample_weights is not None:
+            train_weights = sample_weights[:split_idx]
+        else:
+            train_weights = None
     else:
-        # Time-based split for larger datasets
-        # Scale validation days from 20% of span (min) to 30 days (max)
-        if data_span_days < 60:
-            # Growing phase: use 20% of data span, capped at 30 days
-            validation_days = min(int(data_span_days * 0.2), 30)
-            logger.info(
-                f"📊 Using adaptive time-based split - {validation_days} days validation ({data_span_days} days total)"
-            )
+        # Blocked Split: Select 20% of weeks for validation
+        import numpy as np
+        rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
+        
+        # Shuffle weeks and pick 20%
+        shuffled_weeks = unique_weeks.copy()
+        rng.shuffle(shuffled_weeks)
+        
+        val_week_count = max(1, int(len(unique_weeks) * 0.2))
+        val_weeks = set(shuffled_weeks[:val_week_count])
+        
+        val_mask = df["_week_id"].isin(val_weeks)
+        train_mask = ~val_mask
+        
+        X_train = X[train_mask]
+        y_train = y[train_mask]
+        X_val = X[val_mask]
+        y_val = y[val_mask]
+        
+        if sample_weights is not None:
+            train_weights = sample_weights[train_mask.values]
         else:
-            # Stable phase: fixed VALIDATION_DAYS, but never exceed 20% of data span.
-            # Without this cap, 30 days on 75 days of data = 40% validation (too little training).
-            # Target: ~4% validation (30d on 730d), capped at 20% for smaller datasets.
-            max_validation_days = max(7, int(data_span_days * 0.20))
-            validation_days = min(settings.VALIDATION_DAYS, max_validation_days)
-            logger.info(
-                f"📊 Using time-based split - {validation_days} days validation ({data_span_days} days total)"
-            )
+            train_weights = None
 
-        validation_cutoff = end_date - timedelta(days=validation_days)
+        logger.info(
+            f"📊 Randomized Weekly Block Split: {len(unique_weeks) - val_week_count} weeks for training, "
+            f"{val_week_count} weeks for validation"
+        )
+        logger.info(
+            f"   Validation weeks: {sorted(list(val_weeks))}"
+        )
 
-        # Safety check: ensure validation cutoff is after data start
-        data_start = df["timestamp"].min()
-        if validation_cutoff <= data_start:
-            # Fallback to percentage split
-            logger.warning(
-                f"⚠️  Validation cutoff ({validation_cutoff}) is before data start ({data_start})"
-            )
-            logger.warning("   Falling back to percentage-based split (80/20)")
-            df = df.sort_values("timestamp")
-            split_idx = int(len(df) * 0.8)
-
-            X_train = X.iloc[:split_idx]
-            y_train = y.iloc[:split_idx]
-            X_val = X.iloc[split_idx:]
-            y_val = y.iloc[split_idx:]
-        else:
-            train_mask = df["timestamp"] < validation_cutoff
-            val_mask = df["timestamp"] >= validation_cutoff
-
-            X_train = X[train_mask]
-            y_train = y[train_mask]
-            X_val = X[val_mask]
-            y_val = y[val_mask]
+    # Cleanup temporary column
+    df = df.drop(columns=["_week_id"], errors="ignore")
+    gc.collect()
 
     logger.info("📈 Train/Validation Split:")
     logger.info(f"   Training samples: {len(X_train):,}")
@@ -514,10 +503,6 @@ def train_model(version: str = None) -> None:
     if len(X_train) == 0:
         logger.error("❌ ERROR: Training set is empty after split!")
         logger.error(f"   Total rows: {len(df):,}")
-        logger.error(f"   Data span: {data_span_days} days")
-        logger.error(
-            f"   Validation cutoff: {validation_cutoff if data_span_days >= 7 else 'N/A (percentage split)'}"
-        )
         return
 
     if len(X_val) == 0:
