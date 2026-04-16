@@ -46,6 +46,7 @@ export class AdminController {
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
+    @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -193,6 +194,32 @@ export class AdminController {
     );
     return {
       message: "ML training job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Manually trigger prediction accuracy aggregation
+   *
+   * Refreshes MAE/MAPE/R2 metrics for all attractions.
+   */
+  @Post("aggregate-accuracy-stats")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger accuracy stats aggregation",
+    description: "Manually triggers the aggregation of prediction accuracy metrics",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Accuracy aggregation job queued successfully",
+  })
+  async triggerAccuracyAggregation(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const job = await this.accuracyQueue.add("aggregate-stats", {}, { priority: 5 });
+    return {
+      message: "Accuracy aggregation job queued",
       jobId: job.id.toString(),
     };
   }
