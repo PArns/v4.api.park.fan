@@ -678,6 +678,12 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         temp["target_ts"] = temp["timestamp"] - delta
         temp = temp.sort_values("target_ts")
 
+        # IMPORTANT: do NOT use .values here.
+        # temp is sorted by target_ts (different row order from df).
+        # merge_asof returns a DataFrame with temp's index (df's labels, target_ts-sorted).
+        # Without .values, pandas uses index alignment when assigning back to df,
+        # placing each merged value at the correct df row regardless of sort order.
+        # Using .values would strip the index and cause positional misalignment.
         df[col_name] = pd.merge_asof(
             temp,
             lookup,
@@ -687,9 +693,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
             tolerance=pd.Timedelta("15min"),
             direction="nearest",
             suffixes=("", "_lag"),
-        )[
-            "waitTime"
-        ].values  # positional alignment works because we use temp derived from df
+        )["waitTime"]
 
     # avg_wait_same_dow_4w: mean of last 4 same-day-of-week observations.
     # More stable than a single 1-week lag; gives a representative "normal" for this hour+dow.
@@ -760,18 +764,26 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # sole index will crash alignment. To assign back safely without a multi-index, we rely
     # on `.values` mapping, which requires the DataFrame and the GroupBy output to be
     # strictly ordered by `["attractionId", "timestamp"]`.
-    # df is already sorted by ["attractionId", "timestamp"] via line 560.
+    #
+    # df was restored to original_index order after the rolling section (line ~661).
+    # Re-sort here so that .values assignment from groupby+rolling aligns with df rows.
+    # (Mirrors the sort at the start of section 1.)
+    df = df.sort_values(["attractionId", "timestamp"])
 
-    # We must set index to timestamp for .rolling("7d") to work, but we must sort by
-    # ["attractionId", "timestamp"] so that the output of groupby rolling aligns perfectly
-    # with `df`.
-    df_indexed = df.set_index("timestamp").sort_values(["attractionId", "timestamp"])
+    # We must set index to timestamp for .rolling("7d") to work.
+    # Do NOT call sort_index() or sort_values() on df_indexed — after set_index the
+    # "timestamp" column no longer exists as a column, so sort_values(["attractionId",
+    # "timestamp"]) would raise a KeyError.  Keeping df_indexed in [attractionId,
+    # timestamp] order (inherited from the sort above) is sufficient: within each
+    # attractionId group the timestamps are already monotonically increasing, satisfying
+    # the requirement for time-based rolling windows.
+    df_indexed = df.set_index("timestamp")
 
     # Calculate rolling std for last 7d
-    # .reset_index(level=0, drop=True) removes the attractionId index added by groupby,
-    # leaving just the timestamp index (which we don't care about, as we use .values)
+    # sort=True (default) ensures groupby returns groups in attractionId-sorted order,
+    # so .values aligns with df which is also sorted by ["attractionId", "timestamp"].
     df["volatility_7d"] = (
-        df_indexed.groupby("attractionId", sort=False)["waitTime"]
+        df_indexed.groupby("attractionId", sort=True)["waitTime"]
         .rolling("7d", closed="left", min_periods=2)
         .std()
         .values
@@ -788,7 +800,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Rolling std for weekday only
     df["volatility_weekday"] = (
-        _df_indexed_dow.groupby("attractionId", sort=False)["_wait_weekday"]
+        _df_indexed_dow.groupby("attractionId", sort=True)["_wait_weekday"]
         .rolling("7d", closed="left", min_periods=2)
         .std()
         .values
@@ -796,7 +808,7 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Rolling std for weekend only
     df["volatility_weekend"] = (
-        _df_indexed_dow.groupby("attractionId", sort=False)["_wait_weekend"]
+        _df_indexed_dow.groupby("attractionId", sort=True)["_wait_weekend"]
         .rolling("7d", closed="left", min_periods=2)
         .std()
         .values

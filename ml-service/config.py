@@ -62,21 +62,22 @@ class Settings(BaseSettings):
 
     # Volatility feature cap (7d std in minutes). Values above this are capped so
     # volatility_7d doesn't dominate feature importance; occupancy/time stay primary.
-    # Lowered from 40 → 15 to reduce the dominance of volatility_7d (was 32.91% importance)
-    # and allow temporal/holiday features to contribute meaningfully.
-    VOLATILITY_CAP_STD_MINUTES: float = 15
+    # Raised back to 30 (was briefly 15 which suppressed all volatility signal).
+    VOLATILITY_CAP_STD_MINUTES: float = 30
 
-    # Occupancy dropout rate for training (0.0 = disabled, 0.3 = 30% of rows).
-    # Raised to 0.75: break dominance of real-time occupancy.
-    OCCUPANCY_DROPOUT_RATE: float = 0.75
+    # Occupancy dropout rate for training (0.0 = disabled, 0.5 = 50% of rows).
+    # Simulates future predictions where real-time occupancy is unknown.
+    # Reverted from 0.75 (too aggressive — destroyed short-term signal, caused R²≈0).
+    OCCUPANCY_DROPOUT_RATE: float = 0.50
 
     # Rolling Average Dropout Rate
-    # Raised to 0.65: force model to rely on structural features (DOW, Hour, Holidays).
-    ROLLING_AVG_DROPOUT_RATE: float = 0.65
+    # Simulates next-week predictions where avg_wait_last_24h is irrelevant.
+    # Reverted from 0.65 (too aggressive — see above).
+    ROLLING_AVG_DROPOUT_RATE: float = 0.40
 
     # rolling_avg_7d Dropout Rate
-    # Raised to 0.55: ensure features like attractionId and season gain importance.
-    ROLLING_7D_DROPOUT_RATE: float = 0.55
+    # Reverted from 0.55 (too aggressive — see above).
+    ROLLING_7D_DROPOUT_RATE: float = 0.30
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
