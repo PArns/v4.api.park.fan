@@ -1888,10 +1888,14 @@ def add_holiday_distance_features(
             | ((df["is_weekend"] == 1) & (df["days_since_last_holiday"] <= 1))
         ).astype(int)
 
-        # Cleanup
+        # Cleanup and restore original row order.
+        # IMPORTANT: use .loc[original_order], NOT  df.index = ... + sort_index().
+        # After sort_values + merge_asof, the rows are in _temp_ts order.
+        # Overwriting the index with original labels and then sorting would
+        # assign wrong labels to wrong rows.  .loc[original_order] correctly
+        # picks rows by their original index labels and reorders them.
         df = df.drop(columns=["_temp_ts", "country", "park_id"], errors="ignore")
-        df.index = original_order
-        df = df.sort_index()
+        df = df.loc[original_order]
 
     return df
 

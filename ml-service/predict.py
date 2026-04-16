@@ -1298,10 +1298,12 @@ def create_prediction_features(
             | ((df["is_weekend"] == 1) & (df["days_since_last_holiday"] <= 1))
         ).astype(int)
 
-        # Cleanup and restore order
+        # Cleanup and restore original row order.
+        # IMPORTANT: use .loc[original_order], NOT df.index = ... + sort_index().
+        # After sort_values + merge_asof the rows are in _temp_ts order;
+        # overwriting the index labels and sorting would assign wrong labels.
         df = df.drop(columns=["_temp_ts", "country"])
-        df.index = original_order
-        df = df.sort_index()
+        df = df.loc[original_order]
 
     # Historical features (most important!)
     # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB
