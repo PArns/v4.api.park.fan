@@ -343,6 +343,8 @@ export class PredictionAccuracyService {
       where: {
         attractionId,
         targetTime: Between(startDate, new Date()),
+        actualWaitTime: Between(5, 999), // Only include >= 5 min
+        wasUnplannedClosure: false, // Exclude unplanned closures
       },
     });
 
@@ -711,8 +713,8 @@ export class PredictionAccuracyService {
         SELECT 
           attraction_id as "attractionId",
           COUNT(*) as "totalPredictions",
-          COUNT(CASE WHEN actual_wait_time IS NOT NULL THEN 1 END) as "comparedPredictions",
-          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time IS NOT NULL), 0) as "mae"
+          COUNT(CASE WHEN actual_wait_time >= 5 AND "wasUnplannedClosure" = false THEN 1 END) as "comparedPredictions",
+          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND "wasUnplannedClosure" = false), 0) as "mae"
         FROM prediction_accuracy
         WHERE attraction_id = ANY($1)
           AND target_time >= $2
@@ -1131,6 +1133,8 @@ export class PredictionAccuracyService {
 
     // 2. Get Aggregated Metrics for Matched Predictions
     // Calculate sums needed for MAE, RMSE, MAPE, R2
+    // IMPORTANT: We filter out unplanned closures and low wait times (< 5 min)
+    // to align with the ML training set (see ml-service/db.py) and remove noise.
     const statsResult = await this.accuracyRepository
       .createQueryBuilder("pa")
       .select("COUNT(*)", "matchedCount")
@@ -1141,6 +1145,8 @@ export class PredictionAccuracyService {
       .addSelect("SUM(POWER(pa.actualWaitTime, 2))", "sumSqActual") // For SStot
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.actualWaitTime IS NOT NULL")
+      .andWhere("pa.actualWaitTime >= 5") // Match training set threshold
+      .andWhere('pa."wasUnplannedClosure" = false') // Exclude random closures
       .getRawOne();
 
     const matchedCount = parseInt(statsResult.matchedCount || "0", 10);
@@ -1286,7 +1292,8 @@ export class PredictionAccuracyService {
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
+      .andWhere("pa.actualWaitTime >= 5")
+      .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("pa.attractionId")
       .addGroupBy("a.name")
       .addGroupBy("p.name")
@@ -1340,10 +1347,12 @@ export class PredictionAccuracyService {
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "totalCount")
       .addSelect(
-        "COUNT(CASE WHEN pa.actualWaitTime IS NOT NULL THEN 1 END)",
+        'COUNT(CASE WHEN pa.actualWaitTime >= 5 AND pa."wasUnplannedClosure" = false THEN 1 END)',
         "matchedCount",
       )
       .where("pa.targetTime >= :startDate", { startDate })
+      .andWhere("pa.actualWaitTime >= 5")
+      .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("DATE(pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("date", "DESC")
       .getRawMany();
@@ -1391,7 +1400,8 @@ export class PredictionAccuracyService {
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
+      .andWhere("pa.actualWaitTime >= 5")
+      .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("hour", "ASC")
       .getRawMany();
@@ -1434,7 +1444,8 @@ export class PredictionAccuracyService {
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
+      .andWhere("pa.actualWaitTime >= 5")
+      .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("EXTRACT(DOW FROM pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("day_of_week", "ASC")
       .getRawMany();
@@ -1561,6 +1572,8 @@ export class PredictionAccuracyService {
     const accuracyRecords = await this.accuracyRepository.find({
       where: {
         targetTime: Between(startDate, new Date()),
+        actualWaitTime: Between(5, 999),
+        wasUnplannedClosure: false,
       },
       relations: ["attraction"],
     });
@@ -1656,6 +1669,8 @@ export class PredictionAccuracyService {
       .where("a.parkId = :parkId", { parkId })
       .andWhere("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.targetTime <= :endDate", { endDate: new Date() })
+      .andWhere("pa.actualWaitTime >= 5")
+      .andWhere('pa."wasUnplannedClosure" = false')
       .select([
         "pa.id",
         "pa.attractionId",
