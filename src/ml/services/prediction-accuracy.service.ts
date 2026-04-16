@@ -1133,22 +1133,30 @@ export class PredictionAccuracyService {
 
     // 2. Get Aggregated Metrics for Matched Predictions
     // Calculate sums needed for MAE, RMSE, MAPE, R2
-    // IMPORTANT: We filter out unplanned closures and low wait times (< 5 min)
-    // to align with the ML training set (see ml-service/db.py) and remove noise.
+    // IMPROVEMENT: We now include wait times >= 0 in coverage calculation
+    // BUT only for UNKNOWN or OPERATING schedules (as requested by user).
+    // Explicitly CLOSED parks often send "0" by default which would fake verification.
     const statsResult = await this.accuracyRepository
       .createQueryBuilder("pa")
+      .innerJoin("attractions", "a", 'a.id = pa."attraction_id"')
+      .leftJoin(
+        "schedule_entries",
+        "se",
+        'se."parkId" = a."parkId" AND se.date = DATE(pa.target_time) AND se."attractionId" IS NULL',
+      )
       .select("COUNT(*)", "matchedCount")
-      .addSelect("AVG(pa.absoluteError)", "mae")
-      .addSelect("AVG(pa.percentageError)", "mape")
-      .addSelect("SUM(POWER(pa.absoluteError, 2))", "sumSqError") // For SSres / RMSE
-      .addSelect("SUM(pa.actualWaitTime)", "sumActual") // For Mean Actual
-      .addSelect("SUM(POWER(pa.actualWaitTime, 2))", "sumSqActual") // For SStot
-      .where("pa.targetTime >= :startDate", { startDate })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
-      .andWhere("pa.actualWaitTime >= 5") // Match training set threshold
+      .addSelect("AVG(pa.absolute_error)", "mae")
+      .addSelect("AVG(pa.percentage_error)", "mape")
+      .addSelect("SUM(POWER(pa.absolute_error, 2))", "sumSqError")
+      .addSelect("SUM(pa.actual_wait_time)", "sumActual")
+      .addSelect("SUM(POWER(pa.actual_wait_time, 2))", "sumSqActual")
+      .where("pa.target_time >= :startDate", { startDate })
+      .andWhere("pa.actual_wait_time IS NOT NULL")
+      .andWhere(
+        "(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND (se.\"scheduleType\" IS NULL OR se.\"scheduleType\" != 'CLOSED')))",
+      )
       .andWhere('pa."wasUnplannedClosure" = false') // Exclude random closures
       .getRawOne();
-
     const matchedCount = parseInt(statsResult.matchedCount || "0", 10);
     const mae = parseFloat(parseFloat(statsResult.mae || "0").toFixed(1));
     const mape = parseFloat(parseFloat(statsResult.mape || "0").toFixed(1));

@@ -103,29 +103,29 @@ def fetch_training_data(
 
     query = text(
         """
-        WITH unknown_operating_days AS (
-            -- Identify UNKNOWN-schedule (park, date) pairs where the park was
-            -- genuinely operating via ride heuristic:
-            --   >= 3 attractions with any data AND >= 25% with waitTime >= 10.
-            -- This separates open UNKNOWN parks (USJ, Universal, Warner Bros etc.)
-            -- from seasonally-closed ones (Six Flags off-season, Canada's Wonderland etc.).
-            -- Only covers the training window to keep the CTE small.
+        WITH operating_days_heuristic AS (
+            -- Identify days where the park was genuinely operating via ride heuristic
+            -- even if the schedule says CLOSED or UNKNOWN.
+            -- Heuristic: >= 3 attractions with any data AND >= 10% with waitTime >= 5.
+            -- This separates genuinely open parks from seasonally-closed ones
+            -- while being inclusive of quiet parks or those with "heartbeat" 5-min waits.
             SELECT
                 a."parkId",
                 DATE(q.timestamp AT TIME ZONE p.timezone) AS day
             FROM queue_data q
             INNER JOIN attractions a ON a.id = q."attractionId"
             INNER JOIN parks p ON p.id = a."parkId"
-            INNER JOIN schedule_entries se
+            LEFT JOIN schedule_entries se
                 ON se."parkId" = a."parkId"
                 AND se.date = DATE(q.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
-                AND se."scheduleType" = 'UNKNOWN'
             WHERE q."waitTime" IS NOT NULL
                 AND q.timestamp BETWEEN :start_date AND :end_date
+                -- Only check heuristic if not already confirmed OPERATING
+                AND (se."scheduleType" IS NULL OR se."scheduleType" != 'OPERATING')
             GROUP BY a."parkId", DATE(q.timestamp AT TIME ZONE p.timezone)
             HAVING COUNT(*) >= 3
-                AND 100.0 * COUNT(CASE WHEN q."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
+                AND 100.0 * COUNT(CASE WHEN q."waitTime" >= 5 THEN 1 END) / COUNT(*) >= 10
         ),
         hourly_queue AS (
             -- Aggregate 5-min data to hourly buckets (reduces ~12x data volume)
@@ -157,20 +157,20 @@ def fetch_training_data(
                 ON se."parkId" = a."parkId"
                 AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
-            -- Join heuristic lookup to allow UNKNOWN parks that were genuinely open
-            LEFT JOIN unknown_operating_days uod
-                ON uod."parkId" = a."parkId"
-                AND uod.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
+            -- Join heuristic lookup
+            LEFT JOIN operating_days_heuristic odh
+                ON odh."parkId" = a."parkId"
+                AND odh.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
             WHERE qd."queueType" = 'STANDBY'
-                AND qd.status = 'OPERATING'
+                -- Relaxed: Accept OPERATING status OR any positive wait time (some parks report CLOSED but have wait times)
+                AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
                 AND (
-                    se.id IS NULL                          -- no schedule entry at all
-                    OR se."scheduleType" = 'OPERATING'     -- confirmed operating
-                    OR (se."scheduleType" = 'UNKNOWN' AND uod.day IS NOT NULL)
-                    -- UNKNOWN but ride heuristic confirms park was operating that day
+                    se."scheduleType" = 'OPERATING'        -- confirmed operating
+                    OR (se."scheduleType" IS NULL AND odh.day IS NOT NULL) -- No schedule in DB + heuristic says open
+                    OR (se."scheduleType" = 'UNKNOWN' AND odh.day IS NOT NULL) -- UNKNOWN schedule + heuristic says open
                 )
             GROUP BY
                 qd."attractionId",

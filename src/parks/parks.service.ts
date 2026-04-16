@@ -2232,11 +2232,12 @@ export class ParksService {
     // ≥3 rides with data AND 0% with waitTime ≥ 10 → likely closed.
     // Too little data → default true (conservative, we don't know).
     const todayStart = getStartOfDayInTimezone(park.timezone);
-    const rideStats: { withData: string; operating10min: string }[] =
+    const rideStats: { withData: string; operating5min: string; operating10min: string }[] =
       await this.parkRepository.manager.query(
         `
         SELECT
           COUNT(*) as "withData",
+          SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min",
           SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
         FROM attractions a
         JOIN LATERAL (
@@ -2254,9 +2255,10 @@ export class ParksService {
 
     if (rideStats.length > 0) {
       const withData = parseInt(rideStats[0].withData, 10);
+      const operating5min = parseInt(rideStats[0].operating5min, 10);
       const operating10min = parseInt(rideStats[0].operating10min, 10);
       if (withData >= 3) {
-        return operating10min / withData >= 0.25;
+        return (operating10min / withData >= 0.25) || (operating5min / withData >= 0.5);
       }
     }
     return true;
@@ -2327,41 +2329,43 @@ export class ParksService {
     }
 
     // Heuristic Fallback: For parks not currently OPERATING per schedule, check ride data.
-    // Applies ONLY to parks with NO schedule data at all (e.g. newly added parks without
-    // ThemeParks.wiki schedule coverage). Parks with ANY schedule entry trust the schedule
-    // entirely — this prevents falsely showing OPERATING for up to 2h after closing when
-    // rides still have recent data but the scheduled operating window has ended.
-    const closedParkIds = parkIds.filter(
+    // Applies ONLY to parks with UNKNOWN or NO schedule data for today.
+    // Explicitly CLOSED parks for today trust the schedule entirely.
+    const candidateParkIds = parkIds.filter(
       (id) => statusMap.get(id) === "CLOSED",
     );
 
-    if (closedParkIds.length > 0) {
-      // Exclude any park that has schedule data in the DB — trust the schedule.
-      // Parks without any schedule entry at all are candidates for the ride-based fallback.
-      const parksWithScheduleRows: { parkId: string }[] =
+    if (candidateParkIds.length > 0) {
+      // Exclude any park that has an explicit CLOSED schedule entry for today.
+      // UNKNOWN rows (common for gap-fills) or missing rows should still allow the ride-based fallback.
+      const parksWithClosedScheduleRows: { parkId: string }[] =
         await this.parkRepository.manager.query(
           `SELECT DISTINCT se."parkId"
            FROM schedule_entries se
-           WHERE se."parkId" = ANY($1)`,
-          [closedParkIds],
+           WHERE se."parkId" = ANY($1)
+             AND se."scheduleType" = 'CLOSED'
+             AND se.date = CURRENT_DATE`,
+          [candidateParkIds],
         );
-      const parksWithSchedule = new Set(
-        parksWithScheduleRows.map((r) => r.parkId),
+
+      const parksWithClosedSchedule = new Set(
+        parksWithClosedScheduleRows.map((r) => r.parkId),
       );
-      const parksNeedingFallback = closedParkIds.filter(
-        (id) => !parksWithSchedule.has(id),
+      const parksNeedingFallback = candidateParkIds.filter(
+          (id) => !parksWithClosedSchedule.has(id),
       );
 
-      if (parksNeedingFallback.length > 0) {
-        const stats: {
+      if (parksNeedingFallback.length > 0) {        const stats: {
           parkId: string;
           withData: string;
+          operating5min: string;
           operating10min: string;
         }[] = await this.parkRepository.manager.query(
           `
           SELECT
             p.id as "parkId",
             COUNT(*) as "withData",
+            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min",
             SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
           FROM parks p
           JOIN attractions a ON a."parkId" = p.id
@@ -2381,9 +2385,19 @@ export class ParksService {
 
         for (const stat of stats) {
           const withData = parseInt(stat.withData, 10);
+          const operating5min = parseInt(stat.operating5min, 10);
           const operating10min = parseInt(stat.operating10min, 10);
-          // Require ≥3 rides with recent data and ≥25% reporting ≥10 min wait
-          if (withData >= 3 && operating10min / withData >= 0.25) {
+
+          // Relaxed heuristic:
+          // 1. Classic: ≥3 rides with data AND ≥25% reporting ≥10 min wait
+          // 2. Heartbeat: ≥3 rides with data AND ≥50% reporting ANY wait (≥5 min)
+          //    (handles "heartbeat" parks that only report 5 mins)
+          const isClassicOperating =
+            withData >= 3 && operating10min / withData >= 0.25;
+          const isHeartbeatOperating =
+            withData >= 3 && operating5min / withData >= 0.5;
+
+          if (isClassicOperating || isHeartbeatOperating) {
             statusMap.set(stat.parkId, "OPERATING");
           }
         }

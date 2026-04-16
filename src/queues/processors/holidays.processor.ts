@@ -5,10 +5,6 @@ import { HolidaysService } from "../../holidays/holidays.service";
 import { NagerDateClient } from "../../external-apis/nager-date/nager-date.client";
 import { OpenHolidaysClient } from "../../external-apis/open-holidays/open-holidays.client";
 import { ParksService } from "../../parks/parks.service";
-import {
-  PEAK_SEASONS_BY_COUNTRY,
-  getPeakSeasonHolidays,
-} from "../../common/peak-seasons";
 import { HolidayInput } from "../../common/types/holiday-input.type";
 
 /**
@@ -164,44 +160,6 @@ export class HolidaysProcessor {
       this.logger.log(
         `✅ Holidays sync complete! Saved ${totalHolidaysSaved} holiday-days across ${countries.length} countries`,
       );
-
-      // 3. Peak Seasons (Hardcoded for countries without API coverage)
-      this.logger.log("📅 Syncing hardcoded peak seasons...");
-      let totalPeakHolidaysSaved = 0;
-      const peakHolidaysToUpsert: HolidayInput[] = [];
-
-      for (const isoCode of countries) {
-        if (!PEAK_SEASONS_BY_COUNTRY[isoCode]) continue;
-
-        const peakHolidays = getPeakSeasonHolidays(isoCode, startYear, endYear);
-        for (const holiday of peakHolidays) {
-          const dateStr = holiday.date.toISOString().split("T")[0];
-          const externalId = `peak:${isoCode}:${dateStr}:${holiday.name.replace(/\s+/g, "-").toLowerCase()}`;
-
-          peakHolidaysToUpsert.push({
-            externalId,
-            date: holiday.date,
-            name: holiday.name,
-            localName: holiday.name,
-            country: isoCode,
-            region: undefined,
-            holidayType: "school",
-            isNationwide: true,
-          });
-        }
-      }
-
-      if (peakHolidaysToUpsert.length > 0) {
-        // Bulk upsert in batches of 500
-        for (let i = 0; i < peakHolidaysToUpsert.length; i += 500) {
-          const batch = peakHolidaysToUpsert.slice(i, i + 500);
-          await this.holidaysService.saveRawHolidays(batch);
-          totalPeakHolidaysSaved += batch.length;
-        }
-        this.logger.log(
-          `✅ Synced ${totalPeakHolidaysSaved} peak season days for countries without API coverage`,
-        );
-      }
 
       // 4. Easter Sunday — Nager.Date only returns it for Brandenburg (DE-BB), not as nationwide.
       //    However, Easter Sunday is one of the highest-traffic days for all European theme parks.
