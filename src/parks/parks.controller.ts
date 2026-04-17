@@ -47,9 +47,14 @@ import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { Park } from "./entities/park.entity";
+import { ScheduleType } from "./entities/schedule-entry.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
 
 /**
  * Parks Controller
@@ -725,11 +730,22 @@ export class ParksController {
       defaultToDaysAhead: 30, // Default to: 30 days ahead
     });
 
-    const schedules = await this.parksService.getSchedule(
-      park.id,
-      fromDate,
-      toDate,
-    );
+    const fromDateStr = formatInParkTimezone(fromDate, park.timezone);
+    const toDateStr = formatInParkTimezone(toDate, park.timezone);
+
+    const [schedules, hasOfficialSchedule, derivedHistoricalHours] =
+      await Promise.all([
+        this.parksService.getSchedule(park.id, fromDate, toDate),
+        this.parksService.hasOperatingSchedule(park.id),
+        this.parksService.getDerivedHistoricalHours(
+          park.id,
+          fromDateStr,
+          toDateStr,
+          park.timezone,
+        ),
+      ]);
+
+    const today = getCurrentDateInTimezone(park.timezone);
 
     return {
       park: {
@@ -738,10 +754,33 @@ export class ParksController {
         slug: park.slug,
         timezone: park.timezone,
       },
-      schedule: schedules.map((s) => ScheduleItemDto.fromEntity(s)),
+      schedule: schedules.map((s) => {
+        const dto = ScheduleItemDto.fromEntity(s);
+        const dateStr = dto.date;
+
+        // Apply reconstruction logic for past days without official schedule
+        if (
+          dateStr <= today &&
+          s.scheduleType === ScheduleType.UNKNOWN &&
+          !hasOfficialSchedule
+        ) {
+          const derived = derivedHistoricalHours.get(dateStr);
+          if (derived) {
+            dto.scheduleType = ScheduleType.OPERATING;
+            dto.openingTime = derived.openingTime;
+            dto.closingTime = derived.closingTime;
+            dto.isEstimated = true;
+            dto.isInferred = true;
+          } else if (dateStr < today) {
+            // Strictly past day with no activity: mark as CLOSED
+            dto.scheduleType = ScheduleType.CLOSED;
+          }
+        }
+
+        return dto;
+      }),
     };
   }
-
   /**
    * GET /v1/parks/:continent/:country/:city/:parkSlug/wait-times
    *

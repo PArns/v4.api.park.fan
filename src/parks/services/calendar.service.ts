@@ -1,52 +1,47 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
-import { InjectQueue } from "@nestjs/bull";
-import { Queue } from "bull";
-import { Redis } from "ioredis";
-import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
+import { Park } from "../entities/park.entity";
+import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import {
   IntegratedCalendarResponse,
   CalendarDay,
   OperatingHours,
-  WeatherSummary,
   CalendarEvent,
+  InfluencingHoliday,
+  WeatherSummary,
   HourlyPrediction,
 } from "../dto/integrated-calendar.dto";
-import { Park } from "../entities/park.entity";
-import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
-import { ParkStatus } from "../../common/types/status.type";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
-import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
-import { InfluencingHoliday } from "../dto/schedule-item.dto";
-import { WeatherData } from "../entities/weather-data.entity";
-import { Holiday } from "../../holidays/entities/holiday.entity";
-import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
 } from "../../common/utils/date.util";
-import { normalizeRegionCode } from "../../common/utils/region.util";
 import {
   calculateHolidayInfo,
   HolidayEntry,
 } from "../../common/utils/holiday.utils";
+import { normalizeRegionCode } from "../../common/utils/region.util";
+import { WeatherData } from "../entities/weather-data.entity";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { Holiday } from "../../holidays/entities/holiday.entity";
+import { PredictionDto } from "../../ml/dto";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
+import { ParkStatus } from "../../common/types/status.type";
 
-/** TTL for "schedule refresh requested" rate-limit key (avoid hammering ThemeParks API). */
-const SCHEDULE_REFRESH_RATE_LIMIT_TTL_SEC = 12 * 60 * 60; // 12 hours (was 6h – less aggressive)
-/** Only trigger on-demand refresh when requested range ends this many days beyond our last schedule date. */
-const SCHEDULE_REFRESH_GAP_DAYS = 14; // was 7 – avoid triggering for small gaps
+const SCHEDULE_REFRESH_GAP_DAYS = 5; // Trigger refresh if schedule ends < 5 days from requested date
 
 /**
  * Calendar Service
  *
- * Orchestrates data from multiple sources to build integrated calendar responses.
  * Combines Schedule, Weather, ML Predictions, Holidays, and Events into a unified API.
  */
 @Injectable()
@@ -138,15 +133,7 @@ export class CalendarService {
       (includeHourly !== "none" && fromStr <= tomorrow && toStr >= today);
 
     // Fetch all data in parallel (including hourly ML when needed)
-    const [
-      schedules,
-      weatherData,
-      mlPredictions,
-      holidays,
-      operatingDateRange,
-      hourlyPredictionsList,
-      isSeasonal,
-    ] = await Promise.all([
+    const results = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
         this.logger.warn(
           `Schedule unavailable for ${park.slug}: ${err.message}`,
@@ -205,7 +192,28 @@ export class CalendarService {
             .catch(() => [] as PredictionDto[])
         : Promise.resolve([] as PredictionDto[]),
       this.parksService.isParkSeasonal(park.id),
+      this.parksService.getDerivedHistoricalHours(
+        park.id,
+        fromStr,
+        toStr,
+        park.timezone,
+      ),
     ]);
+
+    const schedules = results[0] as ScheduleEntry[];
+    const weatherData = results[1] as WeatherData[];
+    const mlPredictions = results[2] as { predictions: PredictionDto[] };
+    const holidays = results[3] as Holiday[];
+    const operatingDateRange = results[4] as {
+      minDate: string | null;
+      maxDate: string | null;
+    };
+    const hourlyPredictionsList = results[5] as PredictionDto[];
+    const isSeasonal = results[6] as boolean;
+    const derivedHistoricalHours = results[7] as Map<
+      string,
+      { openingTime: string; closingTime: string }
+    >;
 
     // Derive booleans / range info from operatingDateRange
     const parkHasOperatingSchedule =
@@ -236,7 +244,6 @@ export class CalendarService {
       mlPredictions.predictions,
       headlinerIdSet,
       p50Baseline,
-      allHeadliners,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -285,8 +292,9 @@ export class CalendarService {
 
     // Build all calendar days in parallel
     const days = await Promise.all(
-      datesToBuild.map((date) =>
-        this.buildCalendarDay(
+      datesToBuild.map((date) => {
+        const dateStr = formatInParkTimezone(date, park.timezone);
+        return this.buildCalendarDay(
           park,
           date,
           schedules,
@@ -301,8 +309,9 @@ export class CalendarService {
           operatingDateRange,
           predictedCrowdLevels,
           isSeasonal,
-        ),
-      ),
+          derivedHistoricalHours.get(dateStr) || null,
+        );
+      }),
     );
 
     // Build response
@@ -438,28 +447,35 @@ export class CalendarService {
 
     if (!rangeNeedsData) return;
 
-    const rateLimitKey = `schedule:refresh:requested:${park.id}`;
-    const wasSet = await this.redis.set(
-      rateLimitKey,
-      "1",
-      "EX",
-      SCHEDULE_REFRESH_RATE_LIMIT_TTL_SEC,
-      "NX",
+    // Rate limiting: once per 12h
+    const cacheKey = `calendar:refresh-check:${park.id}`;
+    const wasChecked = await this.redis.get(cacheKey);
+    if (wasChecked) return;
+
+    await this.redis.set(cacheKey, "1", "EX", 12 * 60 * 60);
+
+    // Trigger sync job
+    await this.parkMetadataQueue.add(
+      "sync-park-schedule",
+      { parkId: park.id },
+      { removeOnComplete: true },
     );
-    if (wasSet === "OK") {
-      await this.parkMetadataQueue.add(
-        "sync-park-schedule",
-        { parkId: park.id },
-        { removeOnComplete: true },
-      );
-      this.logger.debug(
-        `Triggered on-demand schedule refresh for ${park.slug} (range needs data until ${toStr})`,
-      );
-    }
+    this.logger.debug(
+      `Triggered on-demand schedule refresh for ${park.slug} (range needs data until ${toStr})`,
+    );
   }
 
   /**
-   * Build a single calendar day
+   * Builds a single calendar day entry
+   *
+   * @param park - Park entity
+   * @param date - The date to build (park local midnight)
+   * @param schedules - Pre-fetched schedule list
+   * @param weatherData - Pre-fetched weather list
+   * @param mlPredictions - Pre-fetched daily ML predictions
+   * @param holidays - Pre-fetched holiday list (local + influencing)
+   * @param includeHourly - Current includeHourly config
+   * @param today - Current date string (YYYY-MM-DD)
    * @param hourlyPredictionsPreFetched - Hourly ML predictions for the park (fetched once per calendar build to avoid N+1)
    * @param prefetchedCrowdLevels - Crowd level cache (Redis MGET) for historical dates to avoid N round-trips
    */
@@ -487,6 +503,7 @@ export class CalendarService {
       { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }
     > = new Map(),
     isSeasonal: boolean = false,
+    derivedHours: { openingTime: string; closingTime: string } | null = null,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -618,6 +635,22 @@ export class CalendarService {
             ? "UNKNOWN"
             : "UNKNOWN";
 
+    // Recover status from ride activity for past days
+    const isHistorical = dateStr <= today;
+    const isStrictlyPast = dateStr < today;
+    let isEstimated = false;
+
+    if (isHistorical && status === "UNKNOWN" && !parkHasOperatingSchedule) {
+      if (derivedHours) {
+        status = "OPERATING";
+        isEstimated = true;
+      } else if (isStrictlyPast) {
+        // No activity detected on a past day: it was CLOSED
+        status = "CLOSED";
+      }
+      // If it is 'today' and no activity yet, we keep it as UNKNOWN (allowing predictions below)
+    }
+
     // Seasonal Closure detection (Gap-fill)
     if (
       status === "UNKNOWN" &&
@@ -647,7 +680,6 @@ export class CalendarService {
     }
 
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)
-    const isHistorical = dateStr <= today;
     let inferredCrowdLevel: CrowdLevel | "closed";
     let peakLoad: CrowdLevel | "closed" | undefined;
 
@@ -687,30 +719,19 @@ export class CalendarService {
       peakLoad = predicted?.peakLoad || mlPrediction?.crowdLevel || "moderate";
     }
 
-    // Past + Today: only infer OPERATING from crowd level when park has NO OPERATING schedule at all.
-    // Parks with OPERATING entries: keep UNKNOWN for days without schedule (gap-fill UNKNOWN).
-    if (
-      isHistorical &&
-      status === "UNKNOWN" &&
-      inferredCrowdLevel !== "closed" &&
-      !parkHasOperatingSchedule
-    ) {
-      status = "OPERATING";
-    }
-
-    // Future UNKNOWN (no schedule): show ML crowd prediction; past/today non-OPERATING or CLOSED → closed
+    // Future UNKNOWN (no schedule): show ML crowd prediction; strictly past CLOSED → closed
     let crowdLevel: CrowdLevel | "closed";
     if (status === "OPERATING") {
       crowdLevel = inferredCrowdLevel;
-    } else if (status === "UNKNOWN" && !isHistorical) {
-      crowdLevel = inferredCrowdLevel; // future day without schedule: still show prediction
+    } else if (status === "UNKNOWN" && !isStrictlyPast) {
+      crowdLevel = inferredCrowdLevel; // future day (or today) without schedule: still show prediction
     } else {
       crowdLevel = "closed";
       peakLoad = "closed";
     }
 
     // Build operating hours
-    let hours: OperatingHours | null = null;
+    let hours: OperatingHours | undefined = undefined;
     if (schedule && schedule.scheduleType === ScheduleType.OPERATING) {
       hours = {
         openingTime: schedule.openingTime?.toISOString() || "",
@@ -718,52 +739,51 @@ export class CalendarService {
         type: schedule.scheduleType,
         isInferred: false,
       };
-    } else if (status === "OPERATING" && mlPrediction) {
-      hours = await this.inferOperatingHours(park, date);
+    } else if (isHistorical && derivedHours) {
+      // Use reconstructed hours for the past
+      hours = {
+        openingTime: derivedHours.openingTime,
+        closingTime: derivedHours.closingTime,
+        type: ScheduleType.OPERATING,
+        isInferred: true,
+      };
     }
 
     // Build weather summary
-    const weatherSummary: WeatherSummary | null = weather
+    const weatherSummary: WeatherSummary | undefined = weather
       ? {
           condition: weather.weatherCode
             ? getWeatherDescription(weather.weatherCode)
-            : "Unknown",
-          icon: weather.weatherCode || 0,
-          tempMin: weather.temperatureMin || 0,
-          tempMax: weather.temperatureMax || 0,
-          rainChance: Math.round(
-            (weather.precipitationSum ?? 0) > 0
-              ? Math.min(((weather.precipitationSum ?? 0) / 10) * 100, 100)
-              : 0,
-          ),
+            : "unknown",
+          tempMin: Number(weather.temperatureMin) ?? 0,
+          tempMax: Number(weather.temperatureMax) ?? 0,
+          rainChance: Number(weather.precipitationSum) ?? 0,
+          icon: 0,
         }
-      : null;
+      : undefined;
 
-    // Compute visit recommendation using crowd level + contextual signals
-    const recommendation = this.computeRecommendation(
-      crowdLevel,
-      status,
-      isHoliday,
-      isSchoolVacation,
-      isBridgeDay,
-      influencingHolidays.length,
-      weatherSummary,
-    );
-
-    // Build calendar day
     const day: CalendarDay = {
       date: dateStr,
       status,
-      isToday: dateStr === today,
-      hours: hours || undefined,
+      hours,
       crowdLevel,
       peakLoad,
-      recommendation,
-      weather: weatherSummary || undefined,
-      events,
+      weather: weatherSummary,
+      isToday: dateStr === today,
+      isEstimated,
       isHoliday,
       isBridgeDay,
       isSchoolVacation,
+      recommendation: this.computeRecommendation(
+        crowdLevel,
+        status,
+        isHoliday,
+        isSchoolVacation,
+        isBridgeDay,
+        influencingHolidays.length,
+        weatherSummary || null,
+      ),
+      events: events.length > 0 ? events : undefined,
       influencingHolidays:
         influencingHolidays.length > 0 ? influencingHolidays : undefined,
     };
@@ -771,9 +791,8 @@ export class CalendarService {
     // Add hourly data if requested (uses pre-fetched list to avoid N+1 ML calls)
     if (this.shouldIncludeHourly(date, includeHourly, park.timezone)) {
       day.hourly = this.buildHourlyPredictionsFromList(
-        date,
-        status,
-        park.timezone,
+        park,
+        dateStr,
         hourlyPredictionsPreFetched,
       );
     }
@@ -782,88 +801,68 @@ export class CalendarService {
   }
 
   /**
-   * Determine if hourly data should be included for this date
+   * Helper to build hourly predictions for a single day from a pre-fetched list
+   */
+  private buildHourlyPredictionsFromList(
+    park: Park,
+    dateStr: string,
+    allPredictions: PredictionDto[],
+  ): HourlyPrediction[] | undefined {
+    const dailyPreds = allPredictions.filter((p) =>
+      p.predictedTime.startsWith(dateStr),
+    );
+    if (dailyPreds.length === 0) return undefined;
+
+    // Group by hour
+    const hoursMap = new Map<string, PredictionDto[]>();
+    for (const p of dailyPreds) {
+      const hour = p.predictedTime.substring(11, 13); // HH
+      if (!hoursMap.has(hour)) hoursMap.set(hour, []);
+      hoursMap.get(hour)!.push(p);
+    }
+
+    // Aggregate (median)
+    const result: HourlyPrediction[] = [];
+    for (const [hour, preds] of hoursMap) {
+      const waits = preds.map((p) => p.predictedWaitTime);
+      waits.sort((a, b) => a - b);
+      const median = waits[Math.floor(waits.length / 2)];
+
+      // Use a generic P50 baseline (25m) for hourly mapping
+      const { rating } = this.analyticsService.getLoadRating(median, 25);
+
+      result.push({
+        hour: parseInt(hour, 10),
+        crowdLevel: rating,
+        predictedWaitTime: Math.round(median),
+      });
+    }
+
+    return result.sort((a, b) => a.hour - b.hour);
+  }
+
+  /**
+   * Decides if hourly data should be included for a specific date
    */
   private shouldIncludeHourly(
     date: Date,
     includeHourly: string,
     timezone: string,
   ): boolean {
-    const todayStr = getCurrentDateInTimezone(timezone);
-    const tomorrowStr = getTomorrowDateInTimezone(timezone);
+    if (includeHourly === "none") return false;
+    if (includeHourly === "all") return true;
+
     const dateStr = formatInParkTimezone(date, timezone);
+    const today = getCurrentDateInTimezone(timezone);
 
-    switch (includeHourly) {
-      case "today+tomorrow":
-        return dateStr === todayStr || dateStr === tomorrowStr;
-      case "today":
-        return dateStr === todayStr;
-      case "all":
-        return true;
-      case "none":
-        return false;
-      default:
-        return false;
+    if (includeHourly === "today") return dateStr === today;
+
+    if (includeHourly === "today+tomorrow") {
+      const tomorrow = getTomorrowDateInTimezone(timezone);
+      return dateStr === today || dateStr === tomorrow;
     }
-  }
 
-  /**
-   * Build hourly predictions for a day from pre-fetched list (avoids N+1 ML calls per calendar build).
-   */
-  private buildHourlyPredictionsFromList(
-    date: Date,
-    dayStatus: ParkStatus,
-    timezone: string,
-    hourlyPredictions: PredictionDto[],
-  ): HourlyPrediction[] {
-    if (dayStatus !== "OPERATING" || !hourlyPredictions.length) {
-      return [];
-    }
-    const dateStr = formatInParkTimezone(date, timezone);
-    const hourlyData = hourlyPredictions.filter((p) =>
-      p.predictedTime?.startsWith(dateStr),
-    );
-    return hourlyData.map((p) => {
-      const hour = new Date(p.predictedTime).getHours();
-      return {
-        hour,
-        crowdLevel: (p.crowdLevel === "closed"
-          ? "very_low"
-          : p.crowdLevel) as CrowdLevel,
-        predictedWaitTime: roundToNearest5Minutes(p.predictedWaitTime || 30),
-        probability: p.confidence,
-      };
-    });
-  }
-
-  /**
-   * Infer operating hours based on ML predictions and historical data
-   */
-  private async inferOperatingHours(
-    park: Park,
-    date: Date,
-  ): Promise<OperatingHours> {
-    // Simple heuristic: use standard theme park hours
-    const dayOfWeek = date.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-    const openingHour = isWeekend ? 9 : 10;
-    const closingHour = isWeekend ? 20 : 18;
-
-    const dateStr = formatInParkTimezone(date, park.timezone);
-    const openingTime = new Date(
-      `${dateStr}T${String(openingHour).padStart(2, "0")}:00:00`,
-    );
-    const closingTime = new Date(
-      `${dateStr}T${String(closingHour).padStart(2, "0")}:00:00`,
-    );
-
-    return {
-      openingTime: openingTime.toISOString(),
-      closingTime: closingTime.toISOString(),
-      type: ScheduleType.OPERATING,
-      isInferred: true,
-    };
+    return false;
   }
 
   /**
@@ -874,95 +873,65 @@ export class CalendarService {
    */
   private buildPredictedCrowdLevels(
     predictions: PredictionDto[],
-    headlinerIds: Set<string>,
+    headlinerIdSet: Set<string>,
     p50Baseline: number,
-    allHeadliners: any[] = [],
   ): Map<string, { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }> {
-    const map = new Map<
+    const result = new Map<
       string,
       { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }
     >();
-    if (predictions.length === 0) return map;
+    const datesMap = new Map<string, PredictionDto[]>();
 
-    // Calculate P90 baseline from headliners
-    const validHeadliners = allHeadliners.filter(
-      (h) => Number(h.p90Wait548d) > 0,
-    );
-    const p90Baseline =
-      validHeadliners.length > 0
-        ? validHeadliners.reduce((sum, h) => sum + Number(h.p90Wait548d), 0) /
-          validHeadliners.length
-        : p50Baseline * 1.5; // Fallback heuristic if p90 missing
-
-    // Use headliners only; fall back to all attractions if none defined
-    const filtered =
-      headlinerIds.size > 0
-        ? predictions.filter((p) => headlinerIds.has(p.attractionId))
-        : predictions;
-
-    // Group predicted wait times by date
-    const byDate = new Map<string, number[]>();
-    for (const p of filtered) {
-      const date = p.predictedTime?.split("T")[0];
-      if (!date || p.predictedWaitTime == null) continue;
-      if (!byDate.has(date)) byDate.set(date, []);
-      byDate.get(date)!.push(p.predictedWaitTime);
+    // 1. Group by date
+    for (const p of predictions) {
+      const date = p.predictedTime.split("T")[0];
+      if (!datesMap.has(date)) datesMap.set(date, []);
+      datesMap.get(date)!.push(p);
     }
 
-    for (const [date, waits] of byDate) {
-      if (waits.length === 0) continue;
+    // 2. Aggregate per date
+    for (const [date, dailyPreds] of datesMap) {
+      // Filter to headliners
+      const headliners =
+        headlinerIdSet.size > 0
+          ? dailyPreds.filter((p) => headlinerIdSet.has(p.attractionId))
+          : dailyPreds;
 
-      // Median of headliner predicted waits
-      const sorted = [...waits].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      const median =
-        sorted.length % 2 === 0
-          ? (sorted[mid - 1] + sorted[mid]) / 2
-          : sorted[mid];
+      if (headliners.length === 0) continue;
 
-      // P90 of headliner predicted waits
-      const p90Index = Math.ceil(sorted.length * 0.9) - 1;
-      const p90Value = sorted[Math.max(0, p90Index)];
+      // Logic identical to calculateCrowdLevelForDate:
+      // a) Median wait time
+      const waits = headliners.map((p) => p.predictedWaitTime);
+      waits.sort((a, b) => a - b);
+      const medianWait = waits[Math.floor(waits.length / 2)];
 
-      const pct =
-        p50Baseline > 0 ? Math.round((median / p50Baseline) * 100) : 100;
+      // b) P90 Peak Load proxy (simplification: 90th percentile of predicted waits)
+      const p90Wait = waits[Math.floor(waits.length * 0.9)];
 
-      const peakPct =
-        p90Baseline > 0 ? Math.round((p90Value / p90Baseline) * 100) : pct;
+      // c) Map to crowd level using P50 baseline
+      const { rating: crowdLevel } = this.analyticsService.getLoadRating(
+        medianWait,
+        p50Baseline,
+      );
+      const { rating: peakLoad } = this.analyticsService.getLoadRating(
+        p90Wait,
+        p50Baseline,
+      );
 
-      map.set(date, {
-        crowdLevel: this.analyticsService.determineCrowdLevel(pct),
-        peakLoad: this.analyticsService.determineCrowdLevel(peakPct),
-      });
+      result.set(date, { crowdLevel, peakLoad });
     }
 
-    return map;
+    return result;
   }
 
   /**
-   * Map average wait time to crowd level (DEPRECATED - kept for reference only)
-   * DO NOT USE - Use AnalyticsService.calculateCrowdLevelForDate() instead
-   *
-   * This method used absolute thresholds which don't adapt to park-specific baselines.
-   * All crowd level calculations MUST use P90-relative percentages.
-   */
-  // private mapWaitTimeToCrowdLevel(avgWaitTime: number): CrowdLevel {
-  //   if (avgWaitTime <= 15) return "very_low";
-  //   if (avgWaitTime <= 30) return "low";
-  //   if (avgWaitTime <= 45) return "moderate";
-  //   if (avgWaitTime <= 60) return "high";
-  //   return "very_high";
-  // }
-
-  /**
-   * Compute visit recommendation combining crowd level with contextual signals.
-   *
-   * Scoring (higher = worse):
-   *   crowd level base: very_low=0, low=1, moderate=2, high=3, very_high=4, extreme=5
-   *   +2  public holiday (crowds significantly higher than predicted)
-   *   +1  school vacation
+   * Compute visit recommendation score (0-5)
+   * Factors:
+   *   Crowd Level: very_low(0) to extreme(5)
+   *   +2  public holiday (local)
+   *   +1  school vacation (local)
    *   +1  bridge day
-   *   +1  ≥2 influencing holidays from neighboring regions
+   *   +1  heavy influencing holidays from neighboring regions
    *   +1  rain likely (rainChance > 60%) — poor visitor experience
    *
    * Final score → recommendation:

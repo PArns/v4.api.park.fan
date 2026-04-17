@@ -41,6 +41,12 @@ export class ParkWithDistanceDto {
   status: string;
 
   @ApiProperty({
+    description: "Whether the park provides official operating hours",
+    example: true,
+  })
+  hasOperatingSchedule: boolean;
+
+  @ApiProperty({
     description: "Total number of attractions",
     example: 35,
   })

@@ -6,6 +6,18 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added 
+- **Smart Gaps: Historical Hour Reconstruction** (`docs/analytics/smart-gaps.md`): Automatically reconstructs park opening/closing hours for past days using a 15-minute sliding window and 10% attraction activity threshold (rides with waitTime >= 5 min only). Includes rounding to nearest full hour and strict exclusion of service points (bars, snacks) via name-based blacklist. 
+- **`isEstimated` flag for Calendar API**: New per-day flag in `CalendarDay` to signal reconstructed historical data. 
+- **`hasOperatingSchedule` flag for Parks API**: New per-park flag to signal if a park provides an official API calendar (true) or relies on inference/estimates (false). Added to all park-related DTOs and Nearby responses. 
+- **Automated Seasonal Detection**: Logic to identify "Seasonal Parks" (winter gaps > 21 days) to suppress crowd predictions during off-season while allowing them for year-round parks with UNKNOWN schedule. 
+
+### Changed 
+- **Optimized Seasonal Check**: Accelerated `isParkSeasonal` query by 120x (from 72ms to 0.6ms) using SQL Window Functions (`LEAD`). 
+- **ML Feature Context Alignment**: ML service now receives real-time reconstructed opening hours instead of static 9/10 AM fallbacks, improving prediction accuracy for "No-Schedule" parks. 
+- **Batch Processing for DTO Enrichment**: Introduced `getBatchHasOperatingSchedule` to prevent N+1 queries when listing parks. 
+
+
 ### Added
 
 - **Training roadmap doc** (`docs/ml/training-roadmap.md`): Tracks known ML issues, data quality analysis, and next steps for training improvements including UNKNOWN park inclusion strategy.

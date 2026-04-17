@@ -181,6 +181,7 @@ export class LocationService {
       p50Baselines,
       p90Baselines,
       analyticsMap,
+      parkHasOperatingSchedule,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
@@ -190,6 +191,7 @@ export class LocationService {
       this.analyticsService.getBatchAttractionP50s(attractionIds),
       this.analyticsService.getBatchAttractionP90s(attractionIds),
       this.analyticsService.getBatchAttractionPercentilesToday(attractionIds),
+      this.parksService.hasOperatingSchedule(parkId),
     ]);
 
     const parkAnalytics = await this.analyticsService
@@ -275,6 +277,7 @@ export class LocationService {
         ),
       ),
       status: parkStatus,
+      hasOperatingSchedule: parkHasOperatingSchedule,
       analytics: parkAnalytics
         ? {
             avgWaitTime: parkAnalytics.avgWaitTime,
@@ -346,11 +349,13 @@ export class LocationService {
     const parkIds = sortedParks.map((p) => p.id);
 
     // Batch fetch status, analytics, and schedules
-    const [statusMap, occupancyMap, schedules] = await Promise.all([
-      this.parksService.getBatchParkStatus(parkIds),
-      this.analyticsService["getBatchParkOccupancy"](parkIds),
-      this.batchFetchSchedules(parkIds),
-    ]);
+    const [statusMap, occupancyMap, schedules, operatingScheduleMap] =
+      await Promise.all([
+        this.parksService.getBatchParkStatus(parkIds),
+        this.analyticsService["getBatchParkOccupancy"](parkIds),
+        this.batchFetchSchedules(parkIds),
+        this.parksService.getBatchHasOperatingSchedule(parkIds),
+      ]);
 
     // Get statistics for each park (with timezone context) - Batch optimized
     const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
@@ -386,6 +391,7 @@ export class LocationService {
         city: park.city || null,
         country: park.country || null,
         status,
+        hasOperatingSchedule: operatingScheduleMap.get(park.id) || false,
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,
         analytics: occupancy

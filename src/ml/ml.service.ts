@@ -533,14 +533,19 @@ export class MLService {
         if (schedule?.openingTime) {
           parkOpeningTimes[parkId] = schedule.openingTime.toISOString();
         } else {
-          // Infer opening time (09:00 / 10:00) for parks without schedule
-          // This ensures ML service treats them as "potentially open" in its features
-          const date = new Date(todayStr + "T12:00:00Z");
-          const dayOfWeek = date.getDay();
-          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-          const openingHour = isWeekend ? 9 : 10;
-          parkOpeningTimes[parkId] =
-            `${todayStr}T${String(openingHour).padStart(2, "0")}:00:00Z`;
+          // No official schedule: try to derive opening time from today's activity
+          const derived = await this.parksService.getDerivedHistoricalHours(
+            parkId,
+            todayStr,
+            todayStr,
+            park?.timezone || "UTC",
+          );
+          const todayDerived = derived.get(todayStr);
+          if (todayDerived) {
+            parkOpeningTimes[parkId] = todayDerived.openingTime;
+          }
+          // If no activity yet today, parkOpeningTimes[parkId] remains undefined
+          // which correctly signals the model that the park hasn't "really" opened yet.
         }
       } catch (error) {
         this.logger.warn(`Failed to get park opening time: ${error}`);

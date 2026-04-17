@@ -1,8 +1,9 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { ParkStatus } from "../../common/types/status.type";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
-import { ScheduleType } from "../entities/schedule-entry.entity";
 import { InfluencingHoliday } from "./schedule-item.dto";
+
+export { InfluencingHoliday };
 
 /**
  * Calendar Metadata
@@ -30,10 +31,12 @@ export class OperatingHours {
   @ApiProperty()
   closingTime: string;
 
-  @ApiProperty()
-  type: ScheduleType;
+  @ApiProperty({ enum: ["OPERATING", "CLOSED"] })
+  type: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: "Whether these hours are reconstructed from activity data",
+  })
   isInferred: boolean;
 }
 
@@ -131,6 +134,22 @@ export class CalendarDay {
   @ApiProperty()
   isToday: boolean;
 
+  @ApiProperty({
+    description:
+      "Whether this day's status or hours are estimated/reconstructed",
+    required: false,
+  })
+  isEstimated?: boolean;
+
+  @ApiProperty()
+  isHoliday: boolean;
+
+  @ApiProperty()
+  isBridgeDay: boolean;
+
+  @ApiProperty()
+  isSchoolVacation: boolean;
+
   @ApiProperty({ type: () => OperatingHours, required: false })
   hours?: OperatingHours;
 
@@ -159,26 +178,11 @@ export class CalendarDay {
   @ApiProperty({ type: () => [CalendarEvent], required: false })
   events?: CalendarEvent[];
 
-  @ApiProperty()
-  isHoliday: boolean;
-
-  @ApiProperty()
-  isBridgeDay: boolean;
-
-  @ApiProperty()
-  isSchoolVacation: boolean;
-
-  @ApiProperty({
-    description: "Holidays from neighbor regions that might influence crowds",
-    type: [InfluencingHoliday],
-    required: false,
-  })
+  @ApiProperty({ type: () => [InfluencingHoliday], required: false })
   influencingHolidays?: InfluencingHoliday[];
 
   @ApiProperty({
-    description:
-      "Visit recommendation based on crowd level, weather, and holiday context",
-    required: false,
+    description: "Recommendation for visiting (score-based labels)",
     enum: [
       "highly_recommended",
       "recommended",
@@ -188,7 +192,7 @@ export class CalendarDay {
       "closed",
     ],
   })
-  recommendation?:
+  recommendation:
     | "highly_recommended"
     | "recommended"
     | "neutral"
@@ -196,12 +200,27 @@ export class CalendarDay {
     | "strongly_avoid"
     | "closed";
 
-  @ApiProperty({ type: () => [HourlyPrediction], required: false })
+  @ApiProperty({
+    description: "Hourly predictions (0-23)",
+    type: () => [HourlyPrediction],
+    required: false,
+  })
   hourly?: HourlyPrediction[];
 }
 
 /**
- * Integrated Calendar Response
+ * Metadata for a month response
+ */
+export class CalendarMonthResponse {
+  @ApiProperty({ description: "Month (YYYY-MM)" })
+  month: string;
+
+  @ApiProperty({ type: () => [CalendarDay] })
+  days: CalendarDay[];
+}
+
+/**
+ * Full integrated response structure
  */
 export class IntegratedCalendarResponse {
   @ApiProperty({ description: "Metadata about the calendar response" })

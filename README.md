@@ -34,6 +34,7 @@
 - **🤖 ML Predictions** — Machine learning forecasts for wait times and crowd levels
 - **🌤️ Weather Integration** — Current conditions and 16-day forecasts for all parks
 - **📅 Park Schedules** — Opening hours, special events, and operating calendars
+- **🕵️ Smart Gaps** — Reconstruction of historical opening hours from ride activity when official data is missing
 - **🌍 Multi-Source Data** — Aggregated from multiple providers for maximum coverage
 - **📊 Analytics Ready** — TimescaleDB-powered time-series data for insights
 - **⚡ High Performance** — Redis caching and Bull queue processing
@@ -51,6 +52,28 @@
 | **ML Service** | Python 3.11 · CatBoost · FastAPI |
 | **DevOps** | Docker Compose · GitHub Actions |
 | **Testing** | Jest · Supertest · Testcontainers |
+
+---
+
+## 📅 Special Logic: Schedules & Seasons
+
+The API implements advanced logic to handle parks without official API schedules (e.g., Efteling, Hellendoorn) and seasonal closures.
+
+### 1. `hasOperatingSchedule` Flag
+All park objects include a `hasOperatingSchedule` boolean:
+- `true`: The park provides official operating hours via an API.
+- `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed from activity (past).
+
+### 2. Historical Hour Reconstruction
+For past days without official data, the system reconstructs opening hours from ride activity. See the [Smart Gaps Documentation](docs/analytics/smart-gaps.md) for technical details.
+- **Opening Time**: First 15min window with >= 10% ride activity, rounded down.
+- **Closing Time**: Last 15min window with activity, rounded up.
+- **Rounding**: Both times are rounded to the **nearest full hour** for maximum plausibility.
+
+### 3. Seasonal Detection
+The system automatically identifies "Seasonal Parks" (parks with winter gaps > 21 days). 
+- **Seasonal Parks**: Future dates outside the known operating range are marked as `CLOSED` (suppressing crowd predictions).
+- **Year-Round Parks**: Future dates without schedules remain `UNKNOWN`, allowing ML-powered crowd and wait-time predictions for trip planning.
 
 ---
 

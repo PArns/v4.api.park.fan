@@ -1098,6 +1098,80 @@ export class ParksService {
     await this.redis.set(cacheKey, isSeasonal ? "1" : "0", "EX", 86400); // 24h
     return isSeasonal;
   }
+
+  /**
+   * Derives historical opening hours from ride activity.
+   * Logic:
+   * - Opening: First 15min window where >= 10% of attractions (min 2, max 10) show activity, rounded down.
+   * - Closing: Last 15min window with activity, rounded up.
+   */
+  async getDerivedHistoricalHours(
+    parkId: string,
+    fromDate: string,
+    toDate: string,
+    timezone: string,
+  ): Promise<Map<string, { openingTime: string; closingTime: string }>> {
+    const results = await this.scheduleRepository.manager.query(
+      `
+      WITH park_info AS (
+        SELECT COUNT(*) as total_attr 
+        FROM attractions 
+        WHERE "parkId" = $1
+          AND name NOT ILIKE '%bar%'
+          AND name NOT ILIKE '%snack%'
+          AND name NOT ILIKE '%corner%'
+          AND name NOT ILIKE '%restaurant%'
+          AND name NOT ILIKE '%shop%'
+          AND name NOT ILIKE '%cafe%'
+          AND name NOT ILIKE '%hire%'
+      ),
+      windowed_activity AS (
+        SELECT 
+          (q.timestamp AT TIME ZONE $4)::date as "date",
+          date_trunc('hour', q.timestamp AT TIME ZONE $4) + (date_part('minute', q.timestamp AT TIME ZONE $4)::int / 15 * interval '15 min') as "window",
+          COUNT(DISTINCT q."attractionId") FILTER (WHERE q."waitTime" >= 5) as "active_count"
+        FROM queue_data q
+        JOIN attractions a ON q."attractionId" = a.id
+        WHERE a."parkId" = $1
+          AND a.name NOT ILIKE '%bar%'
+          AND a.name NOT ILIKE '%snack%'
+          AND a.name NOT ILIKE '%corner%'
+          AND a.name NOT ILIKE '%restaurant%'
+          AND a.name NOT ILIKE '%shop%'
+          AND a.name NOT ILIKE '%cafe%'
+          AND a.name NOT ILIKE '%hire%'
+          AND q.timestamp >= ($2::date AT TIME ZONE $4)
+          AND q.timestamp <= ($3::date AT TIME ZONE $4 + INTERVAL '1 day')
+        GROUP BY 1, 2
+      ),
+      daily_bounds AS (
+        SELECT 
+          "date",
+          MIN("window") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "first_window",
+          MAX("window") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "last_window"
+        FROM windowed_activity
+        GROUP BY 1
+      )
+      SELECT 
+        "date",
+        date_trunc('hour', "first_window") as "derived_open",
+        date_trunc('hour', "last_window" + INTERVAL '59 minutes') as "derived_close"
+      FROM daily_bounds
+      WHERE "first_window" IS NOT NULL AND "last_window" IS NOT NULL
+    `,
+      [parkId, fromDate, toDate, timezone],
+    );
+
+    const map = new Map<string, { openingTime: string; closingTime: string }>();
+    results.forEach((r: any) => {
+      const dStr = r.date.toISOString().split("T")[0];
+      map.set(dStr, {
+        openingTime: r.derived_open.toISOString(),
+        closingTime: r.derived_close.toISOString(),
+      });
+    });
+    return map;
+  }
   /**
    * Fills missing schedule entries with CLOSED or UNKNOWN and holiday/bridge metadata.
    *

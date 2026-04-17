@@ -110,6 +110,18 @@ export class ScheduleItemDto {
   isBridgeDay: boolean;
 
   @ApiProperty({
+    description: "Whether this schedule was estimated from activity data",
+    required: false,
+  })
+  isEstimated?: boolean;
+
+  @ApiProperty({
+    description: "Whether the specific times are inferred/rounded",
+    required: false,
+  })
+  isInferred?: boolean;
+
+  @ApiProperty({
     description: "Holidays from neighbor regions that might influence crowds",
     type: [InfluencingHoliday],
     required: false,
@@ -129,6 +141,8 @@ export class ScheduleItemDto {
     isPublicHoliday?: boolean;
     isSchoolHoliday?: boolean;
     isBridgeDay?: boolean;
+    isEstimated?: boolean;
+    isInferred?: boolean;
   }): ScheduleItemDto {
     const dto = new ScheduleItemDto();
     // Handle both Date objects and string dates
@@ -160,6 +174,8 @@ export class ScheduleItemDto {
     dto.isSchoolHoliday =
       schedule.isSchoolHoliday ?? schedule.holidayType === "school";
     dto.isBridgeDay = schedule.isBridgeDay || false;
+    dto.isEstimated = schedule.isEstimated || false;
+    dto.isInferred = schedule.isInferred || false;
     dto.influencingHolidays = (schedule as any).influencingHolidays || [];
     return dto;
   }

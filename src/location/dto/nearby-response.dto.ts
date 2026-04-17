@@ -99,6 +99,12 @@ export class NearbyParkInfoDto {
   status: string;
 
   @ApiProperty({
+    description: "Whether the park provides official operating hours",
+    example: true,
+  })
+  hasOperatingSchedule: boolean;
+
+  @ApiProperty({
     description: "Park analytics",
     required: false,
     nullable: true,
