@@ -28,7 +28,12 @@ export interface HolidayInfo {
  * Holiday type: "public" for public holidays, "school" for school holidays
  * Bridge days only apply to public holidays, not school holidays
  */
-export type HolidayType = "public" | "school" | "observance" | "bank" | "bridge";
+export type HolidayType =
+  | "public"
+  | "school"
+  | "observance"
+  | "bank"
+  | "bridge";
 
 /**
  * Holiday entry with type information
@@ -290,7 +295,7 @@ export function calculateHolidayInfo(
   }
 
   // Bridge day cannot be a holiday
-  const finalIsBridgeDay = isHoliday ? false : (currentIsBridge || isBridgeDay);
+  const finalIsBridgeDay = isHoliday ? false : currentIsBridge || isBridgeDay;
 
   // Convenience flags
   // Note: "observance" holidays are typically not official public holidays,

@@ -532,6 +532,15 @@ export class MLService {
 
         if (schedule?.openingTime) {
           parkOpeningTimes[parkId] = schedule.openingTime.toISOString();
+        } else {
+          // Infer opening time (09:00 / 10:00) for parks without schedule
+          // This ensures ML service treats them as "potentially open" in its features
+          const date = new Date(todayStr + "T12:00:00Z");
+          const dayOfWeek = date.getDay();
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          const openingHour = isWeekend ? 9 : 10;
+          parkOpeningTimes[parkId] =
+            `${todayStr}T${String(openingHour).padStart(2, "0")}:00:00Z`;
         }
       } catch (error) {
         this.logger.warn(`Failed to get park opening time: ${error}`);
@@ -898,36 +907,107 @@ export class MLService {
       predictionsByPark.get(parkId)!.push(pred);
     }
 
-    // Get park statuses in batch using CONSOLIDATED function
-    // This ensures we don't store predictions for parks that are closed
-    const parkIds = Array.from(predictionsByPark.keys());
-
-    // Use consolidated status calculation (hybrid: schedule + ride fallback)
-    const parkStatusMap = await this.parksService.getBatchParkStatus(parkIds);
-
-    // Filter predictions: Only keep predictions for OPERATING parks
+    // Filter predictions: only keep predictions for parks that we successfully mapped
+    // and that are not explicitly CLOSED or in a seasonal gap on the predicted date.
     const validPredictions: PredictionDto[] = [];
-    let filteredCount = 0;
+    const parkInfoCache = new Map<
+      string,
+      {
+        hasHistory: boolean;
+        minDate: string | null;
+        maxDate: string | null;
+        isSeasonal: boolean;
+        timezone: string;
+      }
+    >();
 
     for (const [parkId, parkPredictions] of predictionsByPark) {
-      const status = parkStatusMap.get(parkId);
+      // Get park info for seasonal gap detection
+      let info = parkInfoCache.get(parkId);
+      if (!info) {
+        const park = await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: ["timezone"],
+        });
+        const timezone = park?.timezone || "UTC";
+        const [range, isSeasonal] = await Promise.all([
+          this.parksService.getOperatingDateRange(parkId, timezone),
+          this.parksService.isParkSeasonal(parkId),
+        ]);
+        info = {
+          hasHistory: !!(range.minDate && range.maxDate),
+          minDate: range.minDate,
+          maxDate: range.maxDate,
+          isSeasonal,
+          timezone,
+        };
+        parkInfoCache.set(parkId, info);
+      }
 
-      // Only store predictions for parks that are currently OPERATING
-      if (status === "OPERATING") {
-        validPredictions.push(...parkPredictions);
-      } else {
-        filteredCount += parkPredictions.length;
+      // Get unique dates for this park's predictions to batch schedule lookup
+      const dates = [
+        ...new Set(parkPredictions.map((p) => p.predictedTime.split("T")[0])),
+      ];
+      const schedules = await this.scheduleEntryRepository.find({
+        where: {
+          parkId,
+          date: In(dates.map((d) => new Date(d + "T12:00:00Z"))),
+        },
+      });
+
+      const scheduleMap = new Map<string, ScheduleType>();
+      schedules.forEach((s) => {
+        const dStr = formatInParkTimezone(s.date, info!.timezone);
+        scheduleMap.set(dStr, s.scheduleType);
+      });
+
+      for (const pred of parkPredictions) {
+        const dateStr = pred.predictedTime.split("T")[0];
+        const scheduleType = scheduleMap.get(dateStr);
+
+        // 1. Skip if explicitly CLOSED
+        if (scheduleType === ScheduleType.CLOSED) continue;
+
+        // 2. Skip if in seasonal gap (UNKNOWN/missing between min and max operating dates)
+        if (
+          info.hasHistory &&
+          (!scheduleType || scheduleType === ScheduleType.UNKNOWN) &&
+          info.minDate &&
+          info.maxDate &&
+          dateStr > info.minDate &&
+          dateStr < info.maxDate
+        ) {
+          continue;
+        }
+
+        // 3. Skip if before first known operating date (only for seasonal parks)
+        if (
+          info.hasHistory &&
+          info.isSeasonal &&
+          info.minDate &&
+          dateStr < info.minDate
+        ) {
+          continue;
+        }
+
+        // 4. Skip if after last known operating date (only for seasonal parks)
+        if (
+          info.hasHistory &&
+          info.isSeasonal &&
+          info.maxDate &&
+          dateStr > info.maxDate
+        ) {
+          continue;
+        }
+
+        validPredictions.push(pred);
       }
     }
 
-    if (filteredCount > 0) {
-      this.logger.debug(
-        `🕒 Filtered ${filteredCount}/${predictions.length} predictions (parks closed/not operating)`,
-      );
-    }
-
     if (validPredictions.length === 0) {
-      this.logger.verbose("No valid predictions to store (all parks closed)");
+      this.logger.verbose(
+        "No valid predictions to store (all filtered by schedule/gaps)",
+      );
       return;
     }
 

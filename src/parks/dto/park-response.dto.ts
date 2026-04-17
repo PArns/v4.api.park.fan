@@ -63,8 +63,17 @@ export class ParkResponseDto {
   })
   longitude: number | null;
 
-  @ApiProperty({ description: "Timezone identifier", example: "Europe/Berlin" })
+  @ApiProperty({
+    description: "Timezone identifier",
+    example: "Europe/Berlin",
+  })
   timezone: string;
+
+  @ApiProperty({
+    description: "Whether the park provides official operating hours",
+    example: true,
+  })
+  hasOperatingSchedule: boolean;
 
   @ApiProperty({
     description: "Current operating status",
@@ -160,7 +169,7 @@ export class ParkResponseDto {
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,
       timezone: park.timezone,
-
+      hasOperatingSchedule: false, // Default, overwritten by services
       status: "CLOSED", // Default, overwritten by service
     };
   }

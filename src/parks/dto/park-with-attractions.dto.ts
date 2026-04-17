@@ -350,6 +350,12 @@ export class ParkWithAttractionsDto {
   timezone: string;
 
   @ApiProperty({
+    description: "Whether the park provides official operating hours",
+    example: true,
+  })
+  hasOperatingSchedule: boolean;
+
+  @ApiProperty({
     description: "Current operating status",
     enum: ["OPERATING", "CLOSED"],
     required: false,
@@ -461,6 +467,7 @@ export class ParkWithAttractionsDto {
       regionCode: park.regionCode || null,
       continent: park.continent || null,
       timezone: park.timezone,
+      hasOperatingSchedule: false, // Default, overwritten by service
       status: "CLOSED", // Default to ensure order
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,

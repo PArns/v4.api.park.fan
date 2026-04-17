@@ -148,7 +148,7 @@ export class HolidaysService {
       // only the range. Usually it's the Friday after or Monday before a holiday.
       // However, we can store the whole period or use our internal logic.
       // Better: The Nager API /LongWeekend logic is used to supplement our detection.
-      
+
       // For now, we store the start/end as a 'bridge' type if it's not a weekend
       // and not already a holiday.
       const start = new Date(`${lw.startDate}T12:00:00Z`);

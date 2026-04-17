@@ -114,6 +114,9 @@ export class CalendarService {
         meta: {
           slug: park.slug,
           timezone: park.timezone,
+          hasOperatingSchedule:
+            allDays.length > 0 &&
+            allDays.some((d) => d.hours && !d.hours.isInferred),
         },
         days: daysInRange,
       };
@@ -142,6 +145,7 @@ export class CalendarService {
       holidays,
       operatingDateRange,
       hourlyPredictionsList,
+      isSeasonal,
     ] = await Promise.all([
       this.parksService.getSchedule(park.id, fromDate, toDate).catch((err) => {
         this.logger.warn(
@@ -200,6 +204,7 @@ export class CalendarService {
             .then((r) => r.predictions)
             .catch(() => [] as PredictionDto[])
         : Promise.resolve([] as PredictionDto[]),
+      this.parksService.isParkSeasonal(park.id),
     ]);
 
     // Derive booleans / range info from operatingDateRange
@@ -295,6 +300,7 @@ export class CalendarService {
           parkHasOperatingSchedule,
           operatingDateRange,
           predictedCrowdLevels,
+          isSeasonal,
         ),
       ),
     );
@@ -304,6 +310,7 @@ export class CalendarService {
       meta: {
         slug: park.slug,
         timezone: park.timezone,
+        hasOperatingSchedule: parkHasOperatingSchedule,
       },
       days,
     };
@@ -479,6 +486,7 @@ export class CalendarService {
       string,
       { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }
     > = new Map(),
+    isSeasonal: boolean = false,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -610,17 +618,32 @@ export class CalendarService {
             ? "UNKNOWN"
             : "UNKNOWN";
 
-    // Fallback: if no schedule entry exists (or UNKNOWN) and date is strictly between
-    // known operating dates, infer CLOSED (seasonal closure gap, e.g. Phantasialand Jan-Mar).
-    // This prevents showing predictions for days that are clearly closed.
+    // Seasonal Closure detection (Gap-fill)
     if (
       status === "UNKNOWN" &&
       operatingDateRange.minDate &&
-      operatingDateRange.maxDate &&
-      dateStr > operatingDateRange.minDate &&
-      dateStr < operatingDateRange.maxDate
+      operatingDateRange.maxDate
     ) {
-      status = "CLOSED";
+      // 1. Classic Gap (between two operating dates)
+      if (
+        dateStr > operatingDateRange.minDate &&
+        dateStr < operatingDateRange.maxDate
+      ) {
+        status = "CLOSED";
+      }
+
+      // 2. Off-season (before first known or after last known operating date)
+      // Only infer CLOSED if the park has a history of seasonal closures.
+      // This prevents killing future crowd predictions for year-round parks
+      // that just haven't published next month's hours yet.
+      if (isSeasonal) {
+        if (
+          dateStr < operatingDateRange.minDate ||
+          dateStr > operatingDateRange.maxDate
+        ) {
+          status = "CLOSED";
+        }
+      }
     }
 
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)

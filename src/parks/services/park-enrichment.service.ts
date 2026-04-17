@@ -66,19 +66,21 @@ export class ParkEnrichmentService {
       context.set(park.id, { timezone: park.timezone, startTime });
     }
 
-    // Batch fetch all data in parallel (5 queries total regardless of park count)
+    // Batch fetch all data in parallel (6 queries total regardless of park count)
     const [
       statusMap,
       occupancyMap,
       statisticsMap,
       schoolHolidayMap,
       schedules,
+      operatingScheduleMap,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus(parkIds),
       this.analyticsService.getBatchParkOccupancy(parkIds),
       this.analyticsService.getBatchParkStatistics(parkIds, context),
       this.getBatchSchoolHolidayStatus(parks),
       this.parksService.getBatchSchedules(parkIds),
+      this.parksService.getBatchHasOperatingSchedule(parkIds),
     ]);
 
     // Map each park using fetched data
@@ -91,6 +93,7 @@ export class ParkEnrichmentService {
         schoolHolidayMap,
         schedules.today,
         schedules.next,
+        operatingScheduleMap.get(park.id) || false,
       ),
     );
   }
@@ -139,11 +142,15 @@ export class ParkEnrichmentService {
     schoolHolidayMap: Map<string, boolean>,
     todayScheduleMap: Map<string, ScheduleEntry[]>,
     nextScheduleMap: Map<string, ScheduleEntry | null>,
+    hasOperatingSchedule: boolean,
   ): ParkResponseDto {
     const dto = ParkResponseDto.fromEntity(park);
 
     // Status
     dto.status = (statusMap.get(park.id) as "OPERATING" | "CLOSED") || "CLOSED";
+
+    // Schedule available flag
+    dto.hasOperatingSchedule = hasOperatingSchedule;
 
     // School Holiday
     dto.isSchoolVacation = schoolHolidayMap.get(park.id) || false;

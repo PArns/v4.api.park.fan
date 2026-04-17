@@ -13,6 +13,11 @@ export class CalendarMeta {
 
   @ApiProperty({ description: "Park timezone (IANA format)" })
   timezone: string;
+
+  @ApiProperty({
+    description: "Whether the park provides official operating hours",
+  })
+  hasOperatingSchedule: boolean;
 }
 
 /**

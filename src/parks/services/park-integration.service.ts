@@ -184,14 +184,18 @@ export class ParkIntegrationService {
       queueDataMap,
       mlPredictionsResult,
       nextSchedule,
+      parkHasOperatingSchedule,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 16),
       this.queueDataService.findCurrentStatusByPark(park.id),
       this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
       this.parksService.getNextSchedule(park.id).catch(() => null),
+      this.parksService.hasOperatingSchedule(park.id),
     ]);
     const hourlyRes = mlPredictionsResult;
+
+    dto.hasOperatingSchedule = parkHasOperatingSchedule;
 
     const currentEntity = weatherData.current;
     const weatherNow =

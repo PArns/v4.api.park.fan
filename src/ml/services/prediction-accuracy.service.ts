@@ -1153,7 +1153,7 @@ export class PredictionAccuracyService {
       .where("pa.target_time >= :startDate", { startDate })
       .andWhere("pa.actual_wait_time IS NOT NULL")
       .andWhere(
-        "(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND (se.\"scheduleType\" IS NULL OR se.\"scheduleType\" != 'CLOSED')))",
+        '(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND (se."scheduleType" IS NULL OR se."scheduleType" != \'CLOSED\')))',
       )
       .andWhere('pa."wasUnplannedClosure" = false') // Exclude random closures
       .getRawOne();
