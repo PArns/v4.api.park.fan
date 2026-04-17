@@ -194,18 +194,27 @@ export class WaitTimesProcessor {
               }
 
               // Process Entities
+              const seenAttractionIds = new Set<string>();
               if (liveData.entities && liveData.entities.length > 0) {
                 for (const entityLiveData of liveData.entities) {
                   try {
                     let savedCount = 0;
                     switch (entityLiveData.entityType) {
-                      case EntityType.ATTRACTION:
+                      case EntityType.ATTRACTION: {
+                        const internalId = mappingLookup.get(
+                          `${entityLiveData.source}:${entityLiveData.externalId}`,
+                        );
+                        if (internalId) {
+                          seenAttractionIds.add(internalId);
+                          await this.touchAttractionLastSeen(internalId);
+                        }
                         savedCount = await this.processAttractionLiveData(
                           entityLiveData,
                           mappingLookup,
                         );
                         savedAttractions += savedCount;
                         break;
+                      }
                       case EntityType.SHOW:
                         savedCount = await this.processShowLiveData(
                           entityLiveData,
@@ -259,6 +268,29 @@ export class WaitTimesProcessor {
                       }
                     }
                   } catch (_e) {}
+                }
+              }
+
+              // Reverse-Reconciliation: Attraktionen, die seit >24h in keiner
+              // Quelle mehr erscheinen, auf CLOSED setzen. Nur ausführen, wenn
+              // wir tatsächlich Daten aus mind. einer Quelle bekommen haben —
+              // sonst würden bei globalen API-Ausfällen alle Attraktionen
+              // fälschlich geschlossen.
+              if (seenAttractionIds.size > 0) {
+                try {
+                  const closed = await this.reconcileMissingAttractions(
+                    pAttractions,
+                    seenAttractionIds,
+                  );
+                  if (closed > 0) {
+                    this.logger.log(
+                      `🗑️  ${park.name}: closed ${closed} stale attraction(s) (not seen in any source for >24h)`,
+                    );
+                  }
+                } catch (e) {
+                  this.logger.debug(
+                    `Reconcile failed for park ${park.name}: ${e}`,
+                  );
                 }
               }
             } catch (_e) {
@@ -315,6 +347,91 @@ export class WaitTimesProcessor {
       internalId,
       this.adaptEntityLiveData(entityData),
     );
+  }
+
+  /**
+   * Redis key for "last seen in any upstream source".
+   * Touched ONLY when an attraction appears in a real source feed — the
+   * hourly heartbeat does NOT update it, so this is a reliable signal for
+   * reverse-reconciliation.
+   */
+  private attractionLastSeenKey(attractionId: string): string {
+    return `attraction:last-seen:${attractionId}`;
+  }
+
+  private readonly LAST_SEEN_TTL_SECONDS = 14 * 24 * 3600; // 14 days buffer
+  private readonly STALE_THRESHOLD_MS = 24 * 3600 * 1000; // 24h
+
+  private async touchAttractionLastSeen(attractionId: string): Promise<void> {
+    try {
+      await this.redis.set(
+        this.attractionLastSeenKey(attractionId),
+        Date.now().toString(),
+        "EX",
+        this.LAST_SEEN_TTL_SECONDS,
+      );
+    } catch (_e) {
+      // non-critical
+    }
+  }
+
+  /**
+   * Reverse-Reconciliation: close attractions that no upstream source
+   * reported for >24h. Writes a CLOSED queue_data entry so the seasonal
+   * detection job (detect-seasonal) can flag them afterwards.
+   *
+   * Grace period: skip attractions younger than 24h (createdAt) — they may
+   * simply not have been seen yet on their very first sync cycle.
+   */
+  private async reconcileMissingAttractions(
+    parkAttractions: Array<{ id: string; name: string }>,
+    seenAttractionIds: Set<string>,
+  ): Promise<number> {
+    const now = Date.now();
+    const missing = parkAttractions.filter((a) => !seenAttractionIds.has(a.id));
+    if (missing.length === 0) return 0;
+
+    // Load createdAt for the grace-period check in one query
+    const attractionMeta = await this.attractionsService.getRepository().find({
+      where: { id: In(missing.map((a) => a.id)) },
+      select: ["id", "createdAt"],
+    });
+    const createdAtMap = new Map(
+      attractionMeta.map((a) => [a.id, a.createdAt.getTime()]),
+    );
+
+    let closedCount = 0;
+    for (const attraction of missing) {
+      const createdAt = createdAtMap.get(attraction.id) ?? now;
+      // Skip newly created attractions to avoid closing them before the
+      // first successful source fetch cycle has populated last-seen.
+      if (now - createdAt < this.STALE_THRESHOLD_MS) continue;
+
+      const lastSeenRaw = await this.redis
+        .get(this.attractionLastSeenKey(attraction.id))
+        .catch(() => null);
+      const lastSeenMs = lastSeenRaw ? parseInt(lastSeenRaw, 10) : 0;
+
+      // If we have a recent sighting (<24h), skip — probably a transient gap.
+      if (lastSeenMs && now - lastSeenMs < this.STALE_THRESHOLD_MS) continue;
+
+      // No recent sighting → close. saveLiveData short-circuits to a
+      // status-only save when no queue is present, and shouldSaveQueueData
+      // deduplicates if we've already written CLOSED previously.
+      try {
+        const saved = await this.queueDataService.saveLiveData(attraction.id, {
+          id: attraction.id,
+          name: attraction.name,
+          entityType: EntityType.ATTRACTION,
+          status: LiveStatus.CLOSED,
+          lastUpdated: new Date().toISOString(),
+        });
+        if (saved > 0) closedCount++;
+      } catch (_e) {
+        // non-fatal; continue with remaining attractions
+      }
+    }
+    return closedCount;
   }
 
   private async processShowLiveData(
@@ -553,6 +670,19 @@ export class WaitTimesProcessor {
           for (const a of attractions) {
             const last = latestMap.get(a.id);
             if (!last || now.getTime() - last.timestamp.getTime() > 3600000) {
+              // Skip heartbeat for attractions that haven't been seen in any
+              // upstream source for >24h — the reverse-reconciliation step
+              // has already written a CLOSED entry, and further heartbeats
+              // would just re-stamp `lastUpdated=now` and mask staleness.
+              const lastSeenRaw = await this.redis
+                .get(this.attractionLastSeenKey(a.id))
+                .catch(() => null);
+              const lastSeenMs = lastSeenRaw ? parseInt(lastSeenRaw, 10) : 0;
+              const isStale =
+                !lastSeenMs ||
+                now.getTime() - lastSeenMs > this.STALE_THRESHOLD_MS;
+              if (isStale) continue;
+
               await this.queueDataRepository.save({
                 attractionId: a.id,
                 queueType: QueueType.STANDBY,

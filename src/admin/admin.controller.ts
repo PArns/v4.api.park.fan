@@ -47,6 +47,7 @@ export class AdminController {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
+    @InjectQueue("analytics") private analyticsQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -207,7 +208,8 @@ export class AdminController {
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger accuracy stats aggregation",
-    description: "Manually triggers the aggregation of prediction accuracy metrics",
+    description:
+      "Manually triggers the aggregation of prediction accuracy metrics",
   })
   @ApiResponse({
     status: 202,
@@ -217,9 +219,48 @@ export class AdminController {
     message: string;
     jobId: string;
   }> {
-    const job = await this.accuracyQueue.add("aggregate-stats", {}, { priority: 5 });
+    const job = await this.accuracyQueue.add(
+      "aggregate-stats",
+      {},
+      { priority: 5 },
+    );
     return {
       message: "Accuracy aggregation job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Manually trigger seasonal attraction detection
+   *
+   * Re-runs the detect-seasonal analytics job (normally scheduled daily at
+   * 2:30am) to re-evaluate which attractions/shows should be flagged as
+   * seasonal. Useful after deploying fixes that affect the CLOSED-status
+   * signal (e.g. reverse-reconciliation for attractions no longer reported
+   * by any upstream source).
+   */
+  @Post("detect-seasonal")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger seasonal detection",
+    description:
+      "Manually triggers the seasonal attraction/show detection job (normally daily at 2:30am)",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Seasonal detection job queued successfully",
+  })
+  async triggerSeasonalDetection(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const job = await this.analyticsQueue.add(
+      "detect-seasonal",
+      {},
+      { priority: 5 },
+    );
+    return {
+      message: "Seasonal detection job queued",
       jobId: job.id.toString(),
     };
   }

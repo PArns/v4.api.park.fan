@@ -21,6 +21,9 @@ When two sources report different wait times for the *same* attraction:
 - **Sanity Check**: We discard data that looks "stuck" (unchanged for > 2 hours) if a fresher source is available.
 - **Normalization**: All statuses are mapped to our internal enum (`OPERATING`, `DOWN`, `CLOSED`).
 
+## Reverse Reconciliation (stale attraction auto-close)
+Upstream sources sometimes stop reporting an attraction entirely (e.g. seasonal Halloween mazes after the event ends). Without a counter-signal the last-known `OPERATING` status would remain indefinitely. See [`reverse-reconciliation.md`](./reverse-reconciliation.md) for the mechanism that writes a `CLOSED` entry once an attraction has not been seen in any source for >24h.
+
 ## Supported Sources
 
 ### 1. ThemeParks.wiki (Direct API)
