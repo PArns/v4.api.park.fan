@@ -956,7 +956,13 @@ export class CalendarService {
    *   +1  school vacation (local)
    *   +1  bridge day
    *   +1  heavy influencing holidays from neighboring regions
-   *   +1  rain likely (rainChance > 60%) — poor visitor experience
+   *
+   *   Weather (WMO code in weather.icon):
+   *   +3  thunderstorm (WMO 95–99) — dangerous, strongly avoid
+   *   +2  heavy/freezing rain or violent showers (WMO 65, 67, 82)
+   *   +1  moderate rain, snow, fog, or notable precipitation (>5mm)
+   *   +1  extreme heat (tempMax ≥ 35°C)
+   *   +1  freezing cold (tempMax ≤ 2°C)
    *
    * Final score → recommendation:
    *   0-1 → highly_recommended
@@ -997,7 +1003,49 @@ export class CalendarService {
     if (isSchoolVacation) score += 1;
     if (isBridgeDay) score += 1;
     if (influencingHolidayCount >= 2) score += 1;
-    if (weather && weather.rainChance > 60) score += 1;
+
+    if (weather) {
+      const code = weather.icon; // WMO weather code
+      const precip = weather.rainChance; // precipitationSum in mm
+
+      // Weather score + minimum floor so bad weather always overrides low crowd scores:
+      //   Thunderstorm  → +3, floor 4 (= at least "avoid")
+      //   Heavy rain    → +2, floor 3 (= at least "neutral")
+      //   Moderate bad  → +1, floor 2 (= at least "recommended")
+      if (code >= 95) {
+        // Thunderstorm (slight, hail, heavy hail) — dangerous
+        score += 3;
+        score = Math.max(score, 4); // floor: avoid
+      } else if (code === 65 || code === 67 || code === 82) {
+        // Heavy/freezing rain or violent rain showers
+        score += 2;
+        score = Math.max(score, 3); // floor: neutral
+      } else if (
+        code === 63 || // moderate rain
+        code === 55 || // dense drizzle
+        code === 57 || // dense freezing drizzle
+        code === 66 || // freezing rain light
+        code === 73 || // moderate snow
+        code === 75 || // heavy snow
+        code === 81 || // moderate showers
+        code === 85 || // slight snow showers
+        code === 86 || // heavy snow showers
+        code === 45 || // fog
+        code === 48 // rime fog
+      ) {
+        score += 1;
+        score = Math.max(score, 2); // floor: recommended
+      } else if (precip > 5) {
+        // Significant precipitation even for lighter codes (>5mm = proper rain day)
+        score += 1;
+        score = Math.max(score, 2);
+      }
+
+      // Extreme heat — uncomfortable outdoor experience
+      if (weather.tempMax >= 35) score += 1;
+      // Freezing cold — unpleasant for most outdoor rides
+      if (weather.tempMax <= 2) score += 1;
+    }
 
     if (score <= 1) return "highly_recommended";
     if (score === 2) return "recommended";
