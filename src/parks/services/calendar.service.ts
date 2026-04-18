@@ -282,6 +282,29 @@ export class CalendarService {
       }
     });
 
+    // For today: override crowdLevel with real-time occupancy (current spot wait) so the calendar
+    // matches the park overview. calculateCrowdLevelForDate uses P50 of the whole day so far
+    // (morning + afternoon averaged), while the park overview uses the current spot wait —
+    // causing "moderate" on the calendar vs "high" in the overview on busy afternoons.
+    const occupancyRaw = await this.redis.get(`park:occupancy:${park.id}`);
+    if (occupancyRaw) {
+      try {
+        const occ = JSON.parse(occupancyRaw) as { current: number };
+        if (typeof occ.current === "number" && occ.current > 0) {
+          const liveCrowdLevel = this.analyticsService.determineCrowdLevel(
+            occ.current,
+          ) as CrowdLevel;
+          const existing = prefetchedCrowdLevels.get(today);
+          prefetchedCrowdLevels.set(today, {
+            crowdLevel: liveCrowdLevel,
+            peakLoad: existing?.peakLoad, // keep daily peak from historical cache
+          });
+        }
+      } catch {
+        // ignore — fall back to calculateCrowdLevelForDate path
+      }
+    }
+
     // Collect all dates in the range
     const datesToBuild: Date[] = [];
     const currentDate = new Date(fromDate);
