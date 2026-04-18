@@ -31,6 +31,7 @@ import { generateSlug } from "../../common/utils/slug.util";
  */
 @Entity("attractions")
 @Index(["parkId", "slug"], { unique: true }) // Slug unique per park
+@Index(["parkId", "name"]) // Optimize deduplication and name-based filtering within a park
 // GIN trigram indexes for fuzzy search — managed by SearchService.onModuleInit(), not TypeORM sync
 @Index("idx_attraction_name_trgm", { synchronize: false })
 @Index("idx_attraction_land_name_trgm", { synchronize: false })

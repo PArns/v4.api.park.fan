@@ -1113,8 +1113,8 @@ export class ParksService {
   ): Promise<Map<string, { openingTime: string; closingTime: string }>> {
     const results = await this.scheduleRepository.manager.query(
       `
-      WITH park_info AS (
-        SELECT COUNT(*) as total_attr 
+      WITH park_rides AS (
+        SELECT id 
         FROM attractions 
         WHERE "parkId" = $1
           AND name NOT ILIKE '%bar%'
@@ -1125,21 +1125,16 @@ export class ParksService {
           AND name NOT ILIKE '%cafe%'
           AND name NOT ILIKE '%hire%'
       ),
+      park_info AS (
+        SELECT COUNT(*) as total_attr FROM park_rides
+      ),
       windowed_activity AS (
         SELECT 
           (q.timestamp AT TIME ZONE $4)::date as "date",
           date_trunc('hour', q.timestamp AT TIME ZONE $4) + (date_part('minute', q.timestamp AT TIME ZONE $4)::int / 15 * interval '15 min') as "window",
           COUNT(DISTINCT q."attractionId") FILTER (WHERE q."waitTime" >= 5) as "active_count"
         FROM queue_data q
-        JOIN attractions a ON q."attractionId" = a.id
-        WHERE a."parkId" = $1
-          AND a.name NOT ILIKE '%bar%'
-          AND a.name NOT ILIKE '%snack%'
-          AND a.name NOT ILIKE '%corner%'
-          AND a.name NOT ILIKE '%restaurant%'
-          AND a.name NOT ILIKE '%shop%'
-          AND a.name NOT ILIKE '%cafe%'
-          AND a.name NOT ILIKE '%hire%'
+        WHERE q."attractionId" IN (SELECT id FROM park_rides)
           AND q.timestamp >= ($2::date AT TIME ZONE $4)
           AND q.timestamp <= ($3::date AT TIME ZONE $4 + INTERVAL '1 day')
         GROUP BY 1, 2

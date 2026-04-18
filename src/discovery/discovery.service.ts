@@ -92,6 +92,10 @@ export class DiscoveryService {
       },
     });
 
+    const parkIds = parks.map((p) => p.id);
+    const scheduleFlags =
+      await this.parksService.getBatchHasOperatingSchedule(parkIds);
+
     // Build hierarchical structure
     const continentMap = new Map<string, ContinentDto>();
 
@@ -167,6 +171,7 @@ export class DiscoveryService {
         slug: park.slug,
         url: parkBaseUrl,
         timezone: park.timezone,
+        hasOperatingSchedule: scheduleFlags.get(park.id) ?? false,
         attractionCount: 0, // Will be hydrated with live stats
         status: "CLOSED", // Default, will be hydrated
       };

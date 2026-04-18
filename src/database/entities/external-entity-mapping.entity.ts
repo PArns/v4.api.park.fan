@@ -14,7 +14,7 @@ import {
  */
 @Entity("external_entity_mapping")
 @Index(["externalSource", "externalEntityId"], { unique: true })
-@Index(["internalEntityId", "internalEntityType"])
+@Index("idx_mapping_internal", ["internalEntityId", "internalEntityType"])
 export class ExternalEntityMapping {
   @PrimaryGeneratedColumn("uuid")
   id: string;

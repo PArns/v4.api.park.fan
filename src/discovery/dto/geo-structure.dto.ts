@@ -44,6 +44,12 @@ export class ParkReferenceDto {
   status: "OPERATING" | "CLOSED" | "REFURBISHMENT";
 
   @ApiProperty({
+    description: "Whether the park provides an official operating schedule API",
+    example: true,
+  })
+  hasOperatingSchedule: boolean;
+
+  @ApiProperty({
     description: "Live park analytics",
     example: {
       statistics: {
