@@ -987,6 +987,10 @@ export class ParkIntegrationService {
         park,
       );
     }
+    // Deduplicate attractions, shows and restaurants by name before returning
+    dto.attractions = this.deduplicateEntities(dto.attractions || []);
+    dto.shows = this.deduplicateEntities(dto.shows || []);
+    dto.restaurants = this.deduplicateEntities(dto.restaurants || []);
 
     // Cache the complete response with dynamic TTL
     // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data
@@ -999,7 +1003,58 @@ export class ParkIntegrationService {
   }
 
   /**
-   * Refresh cache in background (stale-while-revalidate pattern)
+   * Deduplicates a list of entities (attractions, shows, restaurants) by name.
+   * Prioritizes OPERATING status and entities with coordinates.
+   * Works with both flat DTOs and nested wait-time structures.
+   */
+  private deduplicateEntities<T>(entities: T[]): T[] {
+    if (!entities || entities.length <= 1) return entities;
+
+    const map = new Map<string, T>();
+
+    for (const entity of entities) {
+      // Handle both flat and nested structures (wait-times response)
+      const e = entity as any;
+      const name = (e.name || e.attraction?.name || "").trim();
+      if (!name) continue;
+
+      const existing = map.get(name) as any;
+
+      if (!existing) {
+        map.set(name, entity);
+        continue;
+      }
+
+      // Priority Logic:
+      // 1. Prefer OPERATING over anything else
+      const currentStatus = e.status || e.queues?.[0]?.status;
+      const existingStatus = existing.status || existing.queues?.[0]?.status;
+
+      if (currentStatus === "OPERATING" && existingStatus !== "OPERATING") {
+        map.set(name, entity);
+        continue;
+      }
+
+      // 2. If same status, prefer entity with coordinates
+      const currentLat = e.latitude || e.attraction?.latitude;
+      const existingLat = existing.latitude || existing.attraction?.latitude;
+
+      if (
+        currentStatus === existingStatus &&
+        currentLat != null &&
+        existingLat == null
+      ) {
+        map.set(name, entity);
+        continue;
+      }
+    }
+
+    return Array.from(map.values());
+  }
+
+  /**
+* Refresh cache in background (stale-while-revalidate pattern)
+...
    * This ensures users always get fast cached responses
    */
   private async refreshCacheInBackground(park: Park): Promise<void> {
@@ -1386,7 +1441,9 @@ export class ParkIntegrationService {
         timezone: park.timezone,
         status: parkStatus,
       },
-      attractions: Array.from(attractionsMap.values()),
+      attractions: this.deduplicateEntities(
+        Array.from(attractionsMap.values()) as any,
+      ),
     };
   }
 }

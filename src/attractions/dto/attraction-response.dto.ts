@@ -5,6 +5,7 @@ import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
+import { cleanSlugSuffix } from "../../common/utils/slug.util";
 
 /**
  * Attraction Response DTO
@@ -228,7 +229,7 @@ export class AttractionResponseDto {
     return {
       id: attraction.id,
       name: attraction.name,
-      slug: attraction.slug,
+      slug: cleanSlugSuffix(attraction.slug),
 
       status: "CLOSED", // Default
 

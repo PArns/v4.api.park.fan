@@ -18,6 +18,7 @@ import {
   buildCityDiscoveryUrl,
 } from "../common/utils/url.util";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { cleanSlugSuffix } from "../common/utils/slug.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -198,22 +199,55 @@ export class SearchService implements OnModuleInit {
       this.enrichRestaurantResults(rawRestaurants),
     ]);
 
-    const results: SearchResultItemDto[] = [
+    // Step 3: Deduplicate results by name and parent park
+    // This prevents showing the same attraction twice if it exists under different IDs (e.g. from multiple sources)
+    const deduplicatedResults: SearchResultItemDto[] = [];
+    const seen = new Set<string>();
+
+    // Priority sort: OPERATING entities first, then others
+    const allEnriched = [
       ...enrichedParks,
       ...enrichedAttractions,
       ...enrichedShows,
       ...enrichedRestaurants,
+    ].sort((a, b) => {
+      if (a.status === "OPERATING" && b.status !== "OPERATING") return -1;
+      if (a.status !== "OPERATING" && b.status === "OPERATING") return 1;
+      return 0;
+    });
+
+    for (const res of allEnriched) {
+      // Key: name + parentParkId (if available) + type
+      const parentId = res.parentPark?.id || res.id;
+      const key = `${res.type}:${res.name.toLowerCase().trim()}:${parentId}`;
+
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduplicatedResults.push(res);
+      }
+    }
+
+    const results: SearchResultItemDto[] = [
+      ...deduplicatedResults,
       ...locations,
     ];
     const counts: SearchCounts = {
-      park: { returned: enrichedParks.length, total: rawParks.length },
+      park: {
+        returned: deduplicatedResults.filter((r) => r.type === "park").length,
+        total: rawParks.length,
+      },
       attraction: {
-        returned: enrichedAttractions.length,
+        returned: deduplicatedResults.filter((r) => r.type === "attraction")
+          .length,
         total: rawAttractions.length,
       },
-      show: { returned: enrichedShows.length, total: rawShows.length },
+      show: {
+        returned: deduplicatedResults.filter((r) => r.type === "show").length,
+        total: rawShows.length,
+      },
       restaurant: {
-        returned: enrichedRestaurants.length,
+        returned: deduplicatedResults.filter((r) => r.type === "restaurant")
+          .length,
         total: rawRestaurants.length,
       },
       location: { returned: locations.length, total: locations.length },
@@ -899,9 +933,11 @@ export class SearchService implements OnModuleInit {
         type: "attraction" as const,
         id: attraction.id,
         name: attraction.name,
-        slug: attraction.slug,
+        slug: cleanSlugSuffix(attraction.slug),
         url: attraction.park
-          ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
+          ? buildAttractionUrl(attraction.park, {
+              slug: cleanSlugSuffix(attraction.slug),
+            })
           : null,
         latitude: attraction.park?.latitude
           ? Number(attraction.park.latitude)

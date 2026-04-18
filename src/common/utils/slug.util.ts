@@ -60,6 +60,15 @@ export function generateSlug(name: string): string {
 }
 
 /**
+ * Removes numeric suffixes (like -2, -3) from the end of a slug.
+ * Used for presentation only, when duplicates are already handled by logic.
+ */
+export function cleanSlugSuffix(slug: string): string {
+  if (!slug) return slug;
+  return slug.replace(/-[0-9]+$/, "");
+}
+
+/**
  * Generates a unique slug by appending a suffix if needed.
  *
  * Used by entity hooks to resolve slug conflicts.
