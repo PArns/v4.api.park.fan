@@ -1,4 +1,9 @@
-import { Injectable, Logger, Inject } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  Inject,
+  OnApplicationBootstrap,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
@@ -27,7 +32,7 @@ import { PopularityService } from "../../popularity/popularity.service";
  * - Skip if cache is fresh (< 2 min old) to avoid redundant work
  */
 @Injectable()
-export class CacheWarmupService {
+export class CacheWarmupService implements OnApplicationBootstrap {
   private readonly logger = new Logger(CacheWarmupService.name);
   private readonly CACHE_FRESHNESS_THRESHOLD = 2 * 60; // 2 minutes in seconds
   private statsWarmupRunning = false;
@@ -47,6 +52,43 @@ export class CacheWarmupService {
     private readonly searchService: SearchService,
     private readonly popularityService: PopularityService,
   ) {}
+
+  /**
+   * Triggered on application startup.
+   * Warms up most popular parks immediately to avoid cold-start latency.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    this.logger.log(
+      "🚀 Application started. Triggering initial cache warmup...",
+    );
+    // Trigger in background to not block startup
+    this.warmupTopParksOnStartup().catch((err) =>
+      this.logger.error("Startup warmup failed", err),
+    );
+  }
+
+  /**
+   * Specifically warms up the top 20 most popular parks.
+   */
+  private async warmupTopParksOnStartup(): Promise<void> {
+    try {
+      const topParkIds = await this.popularityService.getTopParks(20);
+      if (topParkIds.length === 0) return;
+
+      this.logger.log(`🔥 Warming up top ${topParkIds.length} parks...`);
+      const warmed = await this.processBatch(
+        topParkIds,
+        5,
+        "StartupWarmup",
+        async (id) => this.warmupParkCache(id, true),
+      );
+      this.logger.log(
+        `✅ Initial startup warmup complete. ${warmed} parks ready.`,
+      );
+    } catch (_err) {
+      this.logger.warn("Initial warmup failed (likely Redis not ready yet)");
+    }
+  }
 
   /**
    * Generic batch processor for warmup tasks
@@ -295,21 +337,19 @@ export class CacheWarmupService {
       );
 
       // 2. Sort Logic:
-      // - Priority 1: OPERATING parks (High priority for active users)
-      // - Priority 2: Popular (Hot) parks
-      // - Priority 3: All others (Ensures no cold start when parks open)
+      // - Combined Priority: Popular OPERATING parks > Other OPERATING parks > Popular CLOSED parks > Rest
       const popularSet = new Set(popularParkIds);
       const sortedParkIds = [...parkIds].sort((a, b) => {
-        const statusA = statusMap.get(a) === "OPERATING" ? 0 : 1;
-        const statusB = statusMap.get(b) === "OPERATING" ? 0 : 1;
+        const isOpA = statusMap.get(a) === "OPERATING";
+        const isOpB = statusMap.get(b) === "OPERATING";
+        const isPopA = popularSet.has(a);
+        const isPopB = popularSet.has(b);
 
-        if (statusA !== statusB) return statusA - statusB;
+        // Weighting: Operating = 2 points, Popular = 1 point
+        const scoreA = (isOpA ? 2 : 0) + (isPopA ? 1 : 0);
+        const scoreB = (isOpB ? 2 : 0) + (isPopB ? 1 : 0);
 
-        // If status same, check popularity
-        const popA = popularSet.has(a) ? 0 : 1;
-        const popB = popularSet.has(b) ? 0 : 1;
-
-        if (popA !== popB) return popA - popB;
+        if (scoreA !== scoreB) return scoreB - scoreA; // Descending by score
 
         return 0;
       });

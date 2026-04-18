@@ -58,6 +58,7 @@ import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { QueueDataAggregate } from "../analytics/entities/queue-data-aggregate.entity";
 import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stats.entity";
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
+import { AttractionP50Baseline } from "../analytics/entities/attraction-p50-baseline.entity";
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
       QueueDataAggregate,
       AttractionAccuracyStats,
       PredictionAccuracy,
+      AttractionP50Baseline,
     ]),
     // Register Bull queues with Redis connection
     BullModule.forRootAsync({

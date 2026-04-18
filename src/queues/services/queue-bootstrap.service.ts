@@ -5,6 +5,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Park } from "../../parks/entities/park.entity";
+import { AttractionP50Baseline } from "../../analytics/entities/attraction-p50-baseline.entity";
 
 /**
  * Queue Bootstrap Service
@@ -42,6 +43,8 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
     @InjectRepository(Park) private parkRepository: Repository<Park>,
+    @InjectRepository(AttractionP50Baseline)
+    private p50Repository: Repository<AttractionP50Baseline>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
   ) {}
@@ -228,55 +231,61 @@ export class QueueBootstrapService implements OnModuleInit {
       this.logger.warn(`Failed to trigger ML/analytics jobs: ${e}`);
     }
 
-    // 5. Trigger P50 Baseline Calculation (NEW: P50-based crowd level system)
-    // This ensures P50 baselines are calculated on startup for all parks
+    // 5. Trigger P50 Baseline Calculation (Optimized: Skip if fresh)
     try {
-      const p50ParkJobActive = await this.isJobActiveOrWaiting(
-        this.p50BaselineQueue,
-        "calculate-park-baselines",
-      );
+      const latestP50 = await this.p50Repository.findOne({
+        where: {},
+        order: { updatedAt: "DESC" },
+      });
 
-      if (!p50ParkJobActive) {
-        await this.p50BaselineQueue.add(
-          "calculate-park-baselines",
-          {},
-          {
-            priority: 4,
-            jobId: "bootstrap-p50-parks",
-            removeOnComplete: true,
-          },
-        );
-        this.logger.log("✅ Boot: P50 park baselines calculation queued");
-      } else {
-        this.logger.debug(
-          "⏭️  Boot: P50 park baselines already running, skipping",
-        );
-      }
+      const isP50Fresh =
+        latestP50 &&
+        Date.now() - latestP50.updatedAt.getTime() < 12 * 60 * 60 * 1000;
 
-      // Trigger attraction P50 calculation (runs after park baselines)
-      const p50AttrJobActive = await this.isJobActiveOrWaiting(
-        this.p50BaselineQueue,
-        "calculate-attraction-baselines",
-      );
-
-      if (!p50AttrJobActive) {
-        await this.p50BaselineQueue.add(
-          "calculate-attraction-baselines",
-          {},
-          {
-            priority: 5,
-            jobId: "bootstrap-p50-attractions",
-            removeOnComplete: true,
-            delay: 60000, // Delay 1min to let park baselines finish first
-          },
-        );
+      if (isP50Fresh) {
         this.logger.log(
-          "✅ Boot: P50 attraction baselines calculation queued (delayed 1min)",
+          `✅ P50 Baselines are fresh (from ${latestP50.updatedAt.toISOString()}). Skipping initial calculation.`,
         );
       } else {
-        this.logger.debug(
-          "⏭️  Boot: P50 attraction baselines already running, skipping",
+        const p50ParkJobActive = await this.isJobActiveOrWaiting(
+          this.p50BaselineQueue,
+          "calculate-park-baselines",
         );
+
+        if (!p50ParkJobActive) {
+          await this.p50BaselineQueue.add(
+            "calculate-park-baselines",
+            {},
+            {
+              priority: 4,
+              jobId: "bootstrap-p50-parks",
+              removeOnComplete: true,
+            },
+          );
+          this.logger.log("✅ Boot: P50 park baselines calculation queued");
+        }
+
+        // Trigger attraction P50 calculation (runs after park baselines)
+        const p50AttrJobActive = await this.isJobActiveOrWaiting(
+          this.p50BaselineQueue,
+          "calculate-attraction-baselines",
+        );
+
+        if (!p50AttrJobActive) {
+          await this.p50BaselineQueue.add(
+            "calculate-attraction-baselines",
+            {},
+            {
+              priority: 5,
+              jobId: "bootstrap-p50-attractions",
+              removeOnComplete: true,
+              delay: 60000, // Delay 1min to let park baselines finish first
+            },
+          );
+          this.logger.log(
+            "✅ Boot: P50 attraction baselines calculation queued (delayed 1min)",
+          );
+        }
       }
     } catch (e) {
       this.logger.warn(`Failed to trigger P50 baseline jobs: ${e}`);
