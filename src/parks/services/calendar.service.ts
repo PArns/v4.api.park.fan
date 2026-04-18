@@ -782,7 +782,7 @@ export class CalendarService {
           tempMin: Number(weather.temperatureMin) ?? 0,
           tempMax: Number(weather.temperatureMax) ?? 0,
           rainChance: Number(weather.precipitationSum) ?? 0,
-          icon: 0,
+          icon: weather.weatherCode ?? 0,
         }
       : undefined;
 
