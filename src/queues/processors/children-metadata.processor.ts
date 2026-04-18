@@ -13,6 +13,7 @@ import { EntityResponse } from "../../external-apis/themeparks/themeparks.types"
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
+import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks.exclusions";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
@@ -129,15 +130,21 @@ export class ChildrenMetadataProcessor {
                   park.wikiEntityId,
                 );
 
-              // Filter by entity type
+              // Filter by entity type and EXCLUSIONS
               const attractions = childrenResponse.children.filter(
-                (child) => child.entityType === "ATTRACTION",
+                (child) =>
+                  child.entityType === "ATTRACTION" &&
+                  !THEMEPARKS_EXCLUSIONS.includes(child.id),
               );
               const shows = childrenResponse.children.filter(
-                (child) => child.entityType === "SHOW",
+                (child) =>
+                  child.entityType === "SHOW" &&
+                  !THEMEPARKS_EXCLUSIONS.includes(child.id),
               );
               const restaurants = childrenResponse.children.filter(
-                (child) => child.entityType === "RESTAURANT",
+                (child) =>
+                  child.entityType === "RESTAURANT" &&
+                  !THEMEPARKS_EXCLUSIONS.includes(child.id),
               );
 
               let parkAttractions = 0;

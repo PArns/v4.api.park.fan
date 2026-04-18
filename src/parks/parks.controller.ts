@@ -774,6 +774,7 @@ export class ParksController {
           } else if (dateStr < today) {
             // Strictly past day with no activity: mark as CLOSED
             dto.scheduleType = ScheduleType.CLOSED;
+            dto.isEstimated = true;
           }
         }
 

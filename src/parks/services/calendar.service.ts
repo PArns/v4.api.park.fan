@@ -647,6 +647,7 @@ export class CalendarService {
       } else if (isStrictlyPast) {
         // No activity detected on a past day: it was CLOSED
         status = "CLOSED";
+        isEstimated = true;
       }
       // If it is 'today' and no activity yet, we keep it as UNKNOWN (allowing predictions below)
     }
