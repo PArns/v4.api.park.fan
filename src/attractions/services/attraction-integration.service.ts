@@ -585,7 +585,7 @@ export class AttractionIntegrationService {
         `
         SELECT 
           DATE(qd.timestamp AT TIME ZONE $3) as date,
-          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3) as hour,
+          (EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3) || ':' || LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
           AVG(qd."waitTime") as avg_wait,
           COUNT(*) as sample_count
@@ -598,9 +598,9 @@ export class AttractionIntegrationService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= 5
         GROUP BY DATE(qd.timestamp AT TIME ZONE $3),
-                 EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)
+                 time_slot
         HAVING COUNT(*) >= 1
-        ORDER BY date, hour
+        ORDER BY date, time_slot
       `,
         [
           attractionId,
@@ -642,7 +642,7 @@ export class AttractionIntegrationService {
       const queueDataByDate = new Map<
         string,
         Array<{
-          hour: number;
+          time_slot: string;
           p90: number;
           avgWait: number;
           sampleCount: number;
@@ -658,7 +658,7 @@ export class AttractionIntegrationService {
           queueDataByDate.set(dateStr, []);
         }
         queueDataByDate.get(dateStr)!.push({
-          hour: parseInt(row.hour, 10),
+          time_slot: row.time_slot,
           p90: roundToNearest5Minutes(parseFloat(row.p90)), // Ensure rounding (already done in SQL, but double-check)
           avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)), // Ensure rounding
           sampleCount: parseInt(row.sample_count, 10) || 0,
@@ -745,13 +745,13 @@ export class AttractionIntegrationService {
           // Build hourly P90 array (only for hours within operating hours)
           const hourlyP90: Array<{ hour: string; value: number }> = [];
           const hourDataMap = new Map<
-            number,
+            string,
             { p90: number; avgWait: number; sampleCount: number }
           >();
 
           // Create map of existing hour data
           for (const hourData of dayQueueData) {
-            hourDataMap.set(hourData.hour, {
+            hourDataMap.set(hourData.time_slot, {
               p90: hourData.p90,
               avgWait: hourData.avgWait,
               sampleCount: hourData.sampleCount,
@@ -760,94 +760,39 @@ export class AttractionIntegrationService {
 
           // Extract opening and closing hours from schedule if available
           // Round times to nearest 5 minutes (0, 5, 10, 15, 20, etc.)
-          let openingHour: number | null = null;
-          let closingHour: number | null = null;
+          let openingTimeSlot: string | null = null;
+          let closingTimeSlot: string | null = null;
+          let openingHourVal: number | null = null;
+          let closingHourVal: number | null = null;
 
           if (schedule && schedule.openingTime && schedule.closingTime) {
-            // Get time in park timezone and round to nearest 5 minutes
-            // schedule.openingTime and schedule.closingTime are stored as UTC timestamps
-            // We need to convert them to park timezone first
-            const openingTimeStr = formatInTimeZone(
-              schedule.openingTime,
-              timezone,
-              "HH:mm",
-            );
-            const [openingHourRaw, openingMinuteRaw] = openingTimeStr
-              .split(":")
-              .map(Number);
-            // Round minutes to nearest 5 (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)
-            const openingMinuteRounded = Math.round(openingMinuteRaw / 5) * 5;
-            // If rounded to 60, increment hour and set minute to 0
-            if (openingMinuteRounded === 60) {
-              openingHour = (openingHourRaw + 1) % 24;
-            } else {
-              openingHour = openingHourRaw;
+            const openingTimeStr = formatInTimeZone(schedule.openingTime, timezone, "HH:mm");
+            const [oH, oM] = openingTimeStr.split(":").map(Number);
+            const oMRounded = Math.floor(oM / 15) * 15;
+            openingTimeSlot = `${oH.toString().padStart(2, "0")}:${oMRounded.toString().padStart(2, "0")}`;
+            openingHourVal = oH;
+
+            const closingTimeStr = formatInTimeZone(schedule.closingTime, timezone, "HH:mm");
+            const [cH, cM] = closingTimeStr.split(":").map(Number);
+            const cMRounded = Math.ceil(cM / 15) * 15;
+            let finalCH = cH;
+            let finalCM = cMRounded;
+            if (finalCM === 60) {
+              finalCH = (finalCH + 1) % 24;
+              finalCM = 0;
             }
-
-            // Debug logging
-            this.logger.debug(
-              `Schedule for ${dateStr}: openingTime UTC=${schedule.openingTime.toISOString()}, ` +
-                `park timezone=${openingTimeStr}, rounded hour=${openingHour}`,
-            );
-
-            // Extract closing hour in park timezone.
-            // closingTime may be on the schedule date, the next calendar day (e.g. close at
-            // 00:30 or 01:00), or further out for multi-day schedule blocks from the API.
-            // We only care about the time component — the smart projection check below
-            // (latestDataHour within 2 hours of closingHour) prevents bad projections.
-            //
-            // scheduleDateStr: TypeORM returns PostgreSQL DATE columns as "YYYY-MM-DD" strings,
-            // not Date objects. Use the string directly — do NOT call formatInParkTimezone on it,
-            // as that would parse it as UTC midnight and shift the date for UTC+ parks.
-            const scheduleDateStr =
-              typeof schedule.date === "string"
-                ? schedule.date
-                : (schedule.date as unknown as Date).toISOString().slice(0, 10);
-            const closingDateStr = formatInParkTimezone(
-              schedule.closingTime,
-              timezone,
-            );
-            const scheduleDate = fromZonedTime(
-              `${scheduleDateStr}T00:00:00`,
-              timezone,
-            );
-            const nextDay = addDays(scheduleDate, 1);
-            const nextDayStr = formatInParkTimezone(nextDay, timezone);
-
-            // Debug-log when closingTime is more than one day out (multi-day block)
-            if (
-              closingDateStr !== scheduleDateStr &&
-              closingDateStr !== nextDayStr
-            ) {
-              this.logger.debug(
-                `[AttractionIntegrationService] closingTime (${closingDateStr}) is more than 1 day after schedule date (${scheduleDateStr}) for attraction ${attractionId} on ${dateStr} — likely a multi-day schedule block. Using time component only.`,
-              );
-            }
-
-            const closingTimeStr = formatInTimeZone(
-              schedule.closingTime,
-              timezone,
-              "HH:mm",
-            );
-            const [closingHourRaw, closingMinuteRaw] = closingTimeStr
-              .split(":")
-              .map(Number);
-            // Round minutes to nearest 5
-            const closingMinuteRounded = Math.round(closingMinuteRaw / 5) * 5;
-            // If rounded to 60, increment hour and set minute to 0
-            if (closingMinuteRounded === 60) {
-              closingHour = (closingHourRaw + 1) % 24;
-            } else {
-              closingHour = closingHourRaw;
-            }
+            closingTimeSlot = `${finalCH.toString().padStart(2, "0")}:${finalCM.toString().padStart(2, "0")}`;
+            closingHourVal = finalCH;
           }
 
           // Add all existing hour data
           for (const hourData of dayQueueData) {
-            const hour = hourData.hour;
-            const hourStr = `${hour.toString().padStart(2, "0")}:00`;
+            // Filter by operating hours if available
+            if (openingTimeSlot && hourData.time_slot < openingTimeSlot) continue;
+            if (closingTimeSlot && hourData.time_slot > closingTimeSlot) continue;
+
             hourlyP90.push({
-              hour: hourStr,
+              hour: hourData.time_slot,
               value: roundToNearest5Minutes(hourData.p90),
             });
           }
@@ -858,29 +803,23 @@ export class AttractionIntegrationService {
           // This prevents false projections when attraction opened late (e.g., 15:00 instead of 11:00)
           const earliestDataHour =
             hourDataMap.size > 0
-              ? Math.min(...Array.from(hourDataMap.keys()))
+              ? Math.min(...Array.from(hourDataMap.keys()).map(t => parseInt(t.split(':')[0], 10)))
               : null;
 
           // Only project opening hour if we have data AND earliest data is within 2 hours of opening
           const shouldProjectOpening =
-            openingHour !== null &&
+            openingHourVal !== null &&
             earliestDataHour !== null &&
-            earliestDataHour - openingHour <= 2 && // Earliest data within 2 hours of opening
-            earliestDataHour >= openingHour; // Don't project if data is before opening
+            earliestDataHour - openingHourVal <= 2 &&
+            earliestDataHour >= openingHourVal;
 
-          if (shouldProjectOpening) {
-            // Check if we already have this hour in the array
-            const openingHourStr = `${openingHour!.toString().padStart(2, "0")}:00`;
-            const hasOpeningHour = hourlyP90.some(
-              (h) => h.hour === openingHourStr,
-            );
-
-            if (!hasOpeningHour) {
-              // Use the earliest hour's data for opening
-              const nearestValue = hourDataMap.get(earliestDataHour!)?.p90 || 0;
-
+          if (shouldProjectOpening && openingTimeSlot) {
+            const hasOpeningSlot = hourlyP90.some((h) => h.hour === openingTimeSlot);
+            if (!hasOpeningSlot) {
+              const earliestSlot = Array.from(hourDataMap.keys()).sort()[0];
+              const nearestValue = hourDataMap.get(earliestSlot)?.p90 || 0;
               hourlyP90.push({
-                hour: openingHourStr,
+                hour: openingTimeSlot,
                 value: roundToNearest5Minutes(nearestValue),
               });
             }
@@ -892,29 +831,23 @@ export class AttractionIntegrationService {
           // This prevents false projections when attraction closed early
           const latestDataHour =
             hourDataMap.size > 0
-              ? Math.max(...Array.from(hourDataMap.keys()))
+              ? Math.max(...Array.from(hourDataMap.keys()).map(t => parseInt(t.split(':')[0], 10)))
               : null;
 
           // Only project closing hour if we have data AND latest data is within 2 hours of closing
           const shouldProjectClosing =
-            closingHour !== null &&
+            closingHourVal !== null &&
             latestDataHour !== null &&
-            closingHour - latestDataHour <= 2 && // Latest data within 2 hours of closing
-            latestDataHour <= closingHour; // Don't project if data is after closing
+            closingHourVal - latestDataHour <= 2 &&
+            latestDataHour <= closingHourVal;
 
-          if (shouldProjectClosing) {
-            // Check if we already have this hour in the array
-            const closingHourStr = `${closingHour!.toString().padStart(2, "0")}:00`;
-            const hasClosingHour = hourlyP90.some(
-              (h) => h.hour === closingHourStr,
-            );
-
-            if (!hasClosingHour) {
-              // Use the latest hour's data for closing
-              const nearestValue = hourDataMap.get(latestDataHour!)?.p90 || 0;
-
+          if (shouldProjectClosing && closingTimeSlot) {
+            const hasClosingSlot = hourlyP90.some((h) => h.hour === closingTimeSlot);
+            if (!hasClosingSlot) {
+              const latestSlot = Array.from(hourDataMap.keys()).sort().reverse()[0];
+              const nearestValue = hourDataMap.get(latestSlot)?.p90 || 0;
               hourlyP90.push({
-                hour: closingHourStr,
+                hour: closingTimeSlot,
                 value: roundToNearest5Minutes(nearestValue),
               });
             }
@@ -927,33 +860,22 @@ export class AttractionIntegrationService {
           // This ensures real-time data is visible in the chart
           if (dateStr === todayStr) {
             const now = new Date();
-            const currentHourInTimezone = parseInt(
-              formatInTimeZone(now, timezone, "HH"),
-              10,
-            );
-            const currentHourStr = `${currentHourInTimezone.toString().padStart(2, "0")}:00`;
+            const curHStr = formatInTimeZone(now, timezone, "HH");
+            const curM = parseInt(formatInTimeZone(now, timezone, "mm"), 10);
+            const curMSlot = (Math.floor(curM / 15) * 15).toString().padStart(2, "0");
+            const currentSlotStr = `${curHStr}:${curMSlot}`;
 
-            // Check if we already have data for current hour
-            const hasCurrentHour = hourlyP90.some(
-              (h) => h.hour === currentHourStr,
-            );
-
-            if (!hasCurrentHour) {
-              // Get the latest available data point (from hourDataMap or last entry)
+            const hasCurrentSlot = hourlyP90.some((h) => h.hour === currentSlotStr);
+            if (!hasCurrentSlot) {
               let currentValue = 0;
-
               if (hourDataMap.size > 0) {
-                // Use the most recent hour's data
-                const latestHour = Math.max(...Array.from(hourDataMap.keys()));
-                currentValue = hourDataMap.get(latestHour)?.p90 || 0;
+                const latestSlot = Array.from(hourDataMap.keys()).sort().reverse()[0];
+                currentValue = hourDataMap.get(latestSlot)?.p90 || 0;
               }
-
               hourlyP90.push({
-                hour: currentHourStr,
+                hour: currentSlotStr,
                 value: roundToNearest5Minutes(currentValue),
               });
-
-              // Re-sort after adding current hour
               hourlyP90.sort((a, b) => a.hour.localeCompare(b.hour));
             }
           }

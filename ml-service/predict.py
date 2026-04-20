@@ -332,17 +332,17 @@ def generate_future_timestamps(
         List of future timestamps
     """
     if prediction_type == "hourly":
-        # Round base_time to the NEXT full hour (not current hour)
-        # This ensures all predictions have timestamps like "2024-01-15T14:00:00"
-        # If it's 14:37, round up to 15:00 (next hour)
+        # Round base_time to the NEXT 15-minute slot
+        # This ensures all predictions have timestamps like "2024-01-15T14:15:00"
+        minutes = (base_time.minute // 15 + 1) * 15
         rounded_base = base_time.replace(minute=0, second=0, microsecond=0)
-        if base_time.minute > 0 or base_time.second > 0 or base_time.microsecond > 0:
-            rounded_base = rounded_base + timedelta(hours=1)
+        rounded_base = rounded_base + timedelta(minutes=minutes)
 
-        # Next 24 hours from rounded base (starting from next full hour)
+        # Next 24 hours in 15-minute slots (starting from next slot)
+        # 24 hours * 4 slots per hour = 96 slots
         return [
-            rounded_base + timedelta(hours=i)
-            for i in range(settings.HOURLY_PREDICTIONS)
+            rounded_base + timedelta(minutes=15 * i)
+            for i in range(settings.HOURLY_PREDICTIONS * 4)
         ]
     elif prediction_type == "daily":
         # Next 14 days (at 14:00 each day, typical peak time)
