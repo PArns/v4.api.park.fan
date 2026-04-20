@@ -438,21 +438,28 @@ export class AnalyticsService {
       avgLastHour = buckets[1] ?? null;
       avgPrevHour = buckets[2] ?? null;
     } else {
-      // Fallback: all attractions (legacy)
+      // Fallback: all attractions, avg-of-per-ride-averages per bucket
       const trendQuery = `
-        SELECT
-          CASE
-            WHEN qd.timestamp >= $3 THEN 1
-            WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
-          END as bucket,
-          AVG(qd."waitTime") as avg_wait
-        FROM queue_data qd
-        JOIN attractions a ON qd."attractionId" = a.id
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."queueType" = 'STANDBY'
+        WITH per_ride_bucket AS (
+          SELECT
+            qd."attractionId",
+            CASE
+              WHEN qd.timestamp >= $3 THEN 1
+              WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
+            END as bucket,
+            AVG(qd."waitTime") as avg_wait
+          FROM queue_data qd
+          JOIN attractions a ON qd."attractionId" = a.id
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp >= $2
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."queueType" = 'STANDBY'
+          GROUP BY qd."attractionId", bucket
+        )
+        SELECT bucket, AVG(avg_wait) as avg_wait
+        FROM per_ride_bucket
+        WHERE bucket IS NOT NULL
         GROUP BY bucket
       `;
       const trendResult = await this.queueDataRepository.query(trendQuery, [
@@ -1030,17 +1037,22 @@ export class AnalyticsService {
           qd.timestamp DESC
       ),
       today_hourly AS (
-        -- Aggregate by hour to find peak (using Park Timezone)
-        SELECT 
-          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4) as hour,
-          AVG(qd."waitTime") as hour_avg
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp >= $3  -- Start of today (Effective)
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
+        -- avg-of-per-ride-averages per hour so each ride contributes equally.
+        SELECT hour, AVG(ride_avg) as hour_avg
+        FROM (
+          SELECT
+            EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4) as hour,
+            qd."attractionId",
+            AVG(qd."waitTime") as ride_avg
+          FROM queue_data qd
+          INNER JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp >= $3
+            AND qd."queueType" = 'STANDBY'
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+          GROUP BY hour, qd."attractionId"
+        ) per_ride
         GROUP BY hour
         ORDER BY hour_avg DESC
         LIMIT 1
