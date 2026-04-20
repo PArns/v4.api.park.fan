@@ -1823,21 +1823,14 @@ export class AnalyticsService {
       maxTimestamp: batchStat?.maxTimestamp || null,
     };
 
-    // Get typical wait for this hour/weekday (2-year average)
-    const typicalWait = await this.getTypicalWaitForHour(
-      attractionId,
-      currentHour,
-      currentDayOfWeek,
-      timezone,
-    );
-
-    // Get 95th percentile for this hour/weekday
-    const p95ThisHour = await this.get95thPercentileForAttraction(
-      attractionId,
-      currentHour,
-      currentDayOfWeek,
-      timezone,
-    );
+    // Get typical wait (AVG) and P95 for this hour/weekday (2-year average)
+    const { avg: typicalWait, p95: p95ThisHour } =
+      await this.getTypicalStatsForHour(
+        attractionId,
+        currentHour,
+        currentDayOfWeek,
+        timezone,
+      );
 
     // Calculate current vs typical
     const currentVsTypical =
@@ -1925,29 +1918,6 @@ export class AnalyticsService {
     return result;
   }
 
-  /** @deprecated Use getTypicalStatsForHour */
-  private async getTypicalWaitForHour(
-    attractionId: string,
-    hour: number,
-    dayOfWeek: number,
-    timezone: string,
-  ): Promise<number | null> {
-    return (
-      await this.getTypicalStatsForHour(attractionId, hour, dayOfWeek, timezone)
-    ).avg;
-  }
-
-  /** @deprecated Use getTypicalStatsForHour */
-  private async get95thPercentileForAttraction(
-    attractionId: string,
-    hour: number,
-    dayOfWeek: number,
-    timezone: string,
-  ): Promise<number | null> {
-    return (
-      await this.getTypicalStatsForHour(attractionId, hour, dayOfWeek, timezone)
-    ).p95;
-  }
 
   /**
    * Detect wait time trend for a specific attraction
