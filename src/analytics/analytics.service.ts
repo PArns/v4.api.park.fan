@@ -438,21 +438,28 @@ export class AnalyticsService {
       avgLastHour = buckets[1] ?? null;
       avgPrevHour = buckets[2] ?? null;
     } else {
-      // Fallback: all attractions (legacy)
+      // Fallback: all attractions, avg-of-per-ride-averages per bucket
       const trendQuery = `
-        SELECT
-          CASE
-            WHEN qd.timestamp >= $3 THEN 1
-            WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
-          END as bucket,
-          AVG(qd."waitTime") as avg_wait
-        FROM queue_data qd
-        JOIN attractions a ON qd."attractionId" = a.id
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."queueType" = 'STANDBY'
+        WITH per_ride_bucket AS (
+          SELECT
+            qd."attractionId",
+            CASE
+              WHEN qd.timestamp >= $3 THEN 1
+              WHEN qd.timestamp >= $2 AND qd.timestamp < $3 THEN 2
+            END as bucket,
+            AVG(qd."waitTime") as avg_wait
+          FROM queue_data qd
+          JOIN attractions a ON qd."attractionId" = a.id
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp >= $2
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."queueType" = 'STANDBY'
+          GROUP BY qd."attractionId", bucket
+        )
+        SELECT bucket, AVG(avg_wait) as avg_wait
+        FROM per_ride_bucket
+        WHERE bucket IS NOT NULL
         GROUP BY bucket
       `;
       const trendResult = await this.queueDataRepository.query(trendQuery, [
@@ -1030,17 +1037,22 @@ export class AnalyticsService {
           qd.timestamp DESC
       ),
       today_hourly AS (
-        -- Aggregate by hour to find peak (using Park Timezone)
-        SELECT 
-          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4) as hour,
-          AVG(qd."waitTime") as hour_avg
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp >= $3  -- Start of today (Effective)
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
+        -- avg-of-per-ride-averages per hour so each ride contributes equally.
+        SELECT hour, AVG(ride_avg) as hour_avg
+        FROM (
+          SELECT
+            EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4) as hour,
+            qd."attractionId",
+            AVG(qd."waitTime") as ride_avg
+          FROM queue_data qd
+          INNER JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp >= $3
+            AND qd."queueType" = 'STANDBY'
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+          GROUP BY hour, qd."attractionId"
+        ) per_ride
         GROUP BY hour
         ORDER BY hour_avg DESC
         LIMIT 1
@@ -1117,16 +1129,23 @@ export class AnalyticsService {
           AND qd.status = 'OPERATING'
       ),
       today_avg AS (
-        -- Overall P90 for today (not average - we use P90 as the representative metric)
-        SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as avg_wait_today
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp BETWEEN $3 AND $4
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 10
+        -- avg-of-per-ride P90: each ride contributes equally regardless of
+        -- reporting frequency, consistent with all other park-wide aggregations.
+        SELECT AVG(per_ride.p90) as avg_wait_today
+        FROM (
+          SELECT
+            qd."attractionId",
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90
+          FROM queue_data qd
+          INNER JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp BETWEEN $3 AND $4
+            AND qd."queueType" = 'STANDBY'
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."waitTime" >= 10
+          GROUP BY qd."attractionId"
+        ) per_ride
       ),
       attraction_counts AS (
         -- Total attraction count
@@ -1280,7 +1299,8 @@ export class AnalyticsService {
           parkId,
           park.timezone,
         );
-        history = await this.getParkWaitTimeHistory(parkId, startTime);
+        const endTime = await this.getEffectiveEndTime(parkId, park.timezone);
+        history = await this.getParkWaitTimeHistory(parkId, startTime, endTime);
       } else {
         // Fallback if park not found or no timezone
         const startOfDay = getStartOfDayInTimezone("UTC");
@@ -1374,6 +1394,7 @@ export class AnalyticsService {
           AND qd.timestamp BETWEEN $2 AND $3
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" > 0
           AND qd."queueType" = 'STANDBY'
         GROUP BY qd."attractionId"
       ),
@@ -1484,27 +1505,32 @@ export class AnalyticsService {
   async getParkWaitTimeHistory(
     parkId: string,
     startTime: Date,
+    endTime?: Date | null,
   ): Promise<import("./types/analytics-response.type").WaitTimeHistoryItem[]> {
-    // Use provided start time
-    const startOfDay = startTime;
+    const now = new Date();
+    // Cap end at closing time (if known) or now — whichever is earlier
+    const effectiveEnd = endTime && endTime < now ? endTime : now;
 
-    // Group by 10-minute intervals to get a smooth average trend for the park
+    // Group by 10-minute intervals to get a smooth average trend for the park.
+    // waitTime > 0 excludes placeholder/walk-on reports that deflate the P90.
     const result = await this.queueDataRepository.query(
       `
-      SELECT 
+      SELECT
         to_timestamp(floor(extract(epoch from qd.timestamp) / 600) * 600) AT TIME ZONE 'UTC' as interval_timestamp,
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric) as avg_wait
       FROM queue_data qd
       INNER JOIN attractions a ON a.id = qd."attractionId"
       WHERE a."parkId" = $1::uuid
         AND qd.timestamp >= $2
+        AND qd.timestamp <= $3
         AND qd.status = 'OPERATING'
         AND qd."waitTime" IS NOT NULL
+        AND qd."waitTime" > 0
         AND qd."queueType" = 'STANDBY'
       GROUP BY interval_timestamp
       ORDER BY interval_timestamp ASC
       `,
-      [parkId, startOfDay],
+      [parkId, startTime, effectiveEnd],
     );
 
     return result.map(
@@ -2553,19 +2579,31 @@ export class AnalyticsService {
       );
       aggRow = rows[0];
     } else {
+      // Use avg-of-per-ride-P50s/P90s to match calculateP50Baseline.
+      // A pooled PERCENTILE_CONT across all park attractions is dominated by
+      // high-frequency low-wait rides, producing a deflated fallback baseline.
       const rows = await this.queueDataRepository.query(
         `SELECT
-           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
-           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
-           COUNT(*)::int                                               AS sample_count,
-           COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
-         FROM queue_data qd
-         INNER JOIN attractions a ON a.id = qd."attractionId"
-         WHERE a."parkId"      = $1::uuid
-           AND qd.timestamp   >= $2
-           AND qd."waitTime"  >= 10
-           AND qd.status      = 'OPERATING'
-           AND qd."queueType" = 'STANDBY'`,
+           AVG(per_ride.p50)::numeric                  AS p50,
+           AVG(per_ride.p90)::numeric                  AS p90,
+           SUM(per_ride.sample_count)::int             AS sample_count,
+           MAX(per_ride.distinct_days)::int            AS distinct_days
+         FROM (
+           SELECT
+             qd."attractionId",
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
+             PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
+             COUNT(*)::int                                               AS sample_count,
+             COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
+           FROM queue_data qd
+           INNER JOIN attractions a ON a.id = qd."attractionId"
+           WHERE a."parkId"      = $1::uuid
+             AND qd.timestamp   >= $2
+             AND qd."waitTime"  >= 10
+             AND qd.status      = 'OPERATING'
+             AND qd."queueType" = 'STANDBY'
+           GROUP BY qd."attractionId"
+         ) per_ride`,
         [entityId, cutoff, resolvedTimezone],
       );
       aggRow = rows[0];
@@ -3366,9 +3404,33 @@ export class AnalyticsService {
       }
     }
 
-    // Calculate date range for the specific day
-    const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
-    const endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+    // Calculate date range for the specific day.
+    // When a schedule is available, trim 5 minutes from both ends so that
+    // pre-opening ride tests and post-closing stragglers don't deflate the P50.
+    const SCHEDULE_TRIM_MS = 5 * 60 * 1000;
+    let startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
+    let endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+
+    if (type === "park") {
+      const daySchedule = await this.scheduleEntryRepository.findOne({
+        where: {
+          parkId: entityId,
+          date: date as any,
+          scheduleType: ScheduleType.OPERATING,
+        },
+        order: { openingTime: "ASC" },
+      });
+      if (daySchedule?.openingTime) {
+        startOfDay = new Date(
+          daySchedule.openingTime.getTime() + SCHEDULE_TRIM_MS,
+        );
+      }
+      if (daySchedule?.closingTime) {
+        endOfDay = new Date(
+          daySchedule.closingTime.getTime() - SCHEDULE_TRIM_MS,
+        );
+      }
+    }
 
     // Query average (P50) and peak (P90) wait times for the day
     let dailyStats: { p50: number | null; p90: number | null; count: number };
@@ -3415,20 +3477,32 @@ export class AnalyticsService {
       }
 
       if (targetAttractionIds.length > 0) {
+        // Use avg-of-per-ride-P50s, matching calculateP50Baseline exactly.
+        // A single pooled PERCENTILE_CONT is skewed by rides that report more
+        // frequently: a high-frequency low-wait ride dominates the pool and pulls
+        // the park P50 below the baseline, causing systematic crowd-level underestimation.
         const result = await this.queueDataRepository.query(
           `
           SELECT
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
-            ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
-            COUNT(*) as count
-          FROM queue_data qd
-          WHERE qd."attractionId" = ANY($1::uuid[])
-            AND qd.timestamp >= $2
-            AND qd.timestamp <= $3
-            AND qd.status = 'OPERATING'
-            AND qd."waitTime" IS NOT NULL
-            AND qd."waitTime" >= 10
-            AND qd."queueType" = 'STANDBY'
+            ROUND(AVG(per_ride.p50)::numeric, 2)   as p50,
+            ROUND(AVG(per_ride.p90)::numeric, 2)   as p90,
+            SUM(per_ride.cnt)::integer              as count
+          FROM (
+            SELECT
+              qd."attractionId",
+              PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as p50,
+              PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
+              COUNT(*) as cnt
+            FROM queue_data qd
+            WHERE qd."attractionId" = ANY($1::uuid[])
+              AND qd.timestamp >= $2
+              AND qd.timestamp <= $3
+              AND qd.status = 'OPERATING'
+              AND qd."waitTime" IS NOT NULL
+              AND qd."waitTime" >= 10
+              AND qd."queueType" = 'STANDBY'
+            GROUP BY qd."attractionId"
+          ) per_ride
           `,
           [targetAttractionIds, startOfDay, endOfDay],
         );
