@@ -1117,16 +1117,23 @@ export class AnalyticsService {
           AND qd.status = 'OPERATING'
       ),
       today_avg AS (
-        -- Overall P90 for today (not average - we use P90 as the representative metric)
-        SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as avg_wait_today
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp BETWEEN $3 AND $4
-          AND qd."queueType" = 'STANDBY'
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 10
+        -- avg-of-per-ride P90: each ride contributes equally regardless of
+        -- reporting frequency, consistent with all other park-wide aggregations.
+        SELECT AVG(per_ride.p90) as avg_wait_today
+        FROM (
+          SELECT
+            qd."attractionId",
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90
+          FROM queue_data qd
+          INNER JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND qd.timestamp BETWEEN $3 AND $4
+            AND qd."queueType" = 'STANDBY'
+            AND qd.status = 'OPERATING'
+            AND qd."waitTime" IS NOT NULL
+            AND qd."waitTime" >= 10
+          GROUP BY qd."attractionId"
+        ) per_ride
       ),
       attraction_counts AS (
         -- Total attraction count
