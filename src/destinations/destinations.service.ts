@@ -24,50 +24,62 @@ export class DestinationsService {
     this.logger.log("Syncing destinations from ThemeParks.wiki...");
 
     const apiResponse = await this.themeParksClient.getDestinations();
-    let syncedCount = 0;
+
+    // 1. Fetch all existing destinations to avoid N+1 queries
+    const existingDestinations = await this.destinationRepository.find();
+    const existingMap = new Map<string, Destination>(
+      existingDestinations.map((d) => [d.externalId, d]),
+    );
+    const existingSlugs = existingDestinations.map((d) => d.slug);
+
+    const toUpdate: Destination[] = [];
+    const toInsert: Partial<Destination>[] = [];
 
     for (const apiDestination of apiResponse.destinations) {
       const mappedData = this.themeParksMapper.mapDestination(apiDestination);
 
-      // Check if destination exists (by externalId)
-      const existing = await this.destinationRepository.findOne({
-        where: { externalId: mappedData.externalId },
-      });
+      const existing = existingMap.get(mappedData.externalId!);
 
       if (existing) {
-        // Update existing destination (keep existing slug)
-        await this.destinationRepository.update(existing.id, {
-          name: mappedData.name,
-        });
+        // Update existing destination if name changed (keep existing slug)
+        if (existing.name !== mappedData.name) {
+          existing.name = mappedData.name!;
+          toUpdate.push(existing);
+        }
       } else {
         // Generate unique slug
         const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-
-        // Get all existing slugs
-        const existingDestinations = await this.destinationRepository.find({
-          select: ["slug"],
-        });
-        const existingSlugs = existingDestinations.map((d) => d.slug);
 
         // Generate unique slug (append -2, -3, etc. if needed)
         const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
         mappedData.slug = uniqueSlug;
 
-        // Insert new destination with ON CONFLICT DO NOTHING
-        // This prevents race condition errors when multiple processes
-        // try to create the same destination simultaneously
-        await this.destinationRepository
-          .createQueryBuilder()
-          .insert()
-          .into(Destination)
-          .values(mappedData)
-          .orIgnore() // PostgreSQL: ON CONFLICT DO NOTHING
-          .execute();
+        // Add to insert list and track the new slug
+        toInsert.push(mappedData);
+        existingSlugs.push(uniqueSlug);
       }
-
-      syncedCount++;
     }
 
+    // 2. Perform bulk updates if any
+    if (toUpdate.length > 0) {
+      this.logger.log(`Updating ${toUpdate.length} destinations...`);
+      await this.destinationRepository.save(toUpdate);
+    }
+
+    // 3. Perform bulk inserts if any
+    if (toInsert.length > 0) {
+      this.logger.log(`Inserting ${toInsert.length} new destinations...`);
+      // Use query builder for ON CONFLICT DO NOTHING to prevent race conditions
+      await this.destinationRepository
+        .createQueryBuilder()
+        .insert()
+        .into(Destination)
+        .values(toInsert)
+        .orIgnore() // PostgreSQL: ON CONFLICT DO NOTHING
+        .execute();
+    }
+
+    const syncedCount = apiResponse.destinations.length;
     this.logger.log(`✅ Synced ${syncedCount} destinations`);
     return syncedCount;
   }
