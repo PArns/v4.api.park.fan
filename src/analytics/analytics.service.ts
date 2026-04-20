@@ -122,7 +122,9 @@ export class AnalyticsService {
       order: { openingTime: "ASC" },
     });
 
-    const result = schedule?.openingTime ?? getStartOfDayInTimezone(timezone);
+    const result = schedule?.openingTime
+      ? new Date(schedule.openingTime.getTime() + 5 * 60000)
+      : getStartOfDayInTimezone(timezone);
     // Use short TTL for the midnight fallback so a schedule sync within the hour is picked up quickly.
     // Use full TTL_SCHEDULE once a real opening time is known (it won't change during the day).
     const ttl = schedule?.openingTime ? this.TTL_SCHEDULE : this.TTL_REALTIME;
@@ -151,7 +153,9 @@ export class AnalyticsService {
       },
       order: { openingTime: "ASC" },
     });
-    return schedule?.closingTime ?? null;
+    return schedule?.closingTime
+      ? new Date(schedule.closingTime.getTime() - 5 * 60000)
+      : null;
   }
 
   /**
@@ -1342,6 +1346,7 @@ export class AnalyticsService {
   async getBatchAttractionStatistics(
     attractionIds: string[],
     startTime: Date,
+    endTime: Date = new Date(),
   ): Promise<
     Map<
       string,
@@ -1356,13 +1361,18 @@ export class AnalyticsService {
   > {
     if (attractionIds.length === 0) return new Map();
 
-    const now = new Date();
     const startOfDay = startTime;
 
     // Use CTE to get stats and find the timestamp of the max wait
     const result = await this.queueDataRepository.query(
       `
-      WITH stats AS (
+      WITH ride_bounds AS (
+        SELECT "attractionId", MIN(timestamp) + INTERVAL '5 minutes' as first_op
+        FROM queue_data
+        WHERE "attractionId" = ANY($1) AND timestamp BETWEEN $2 AND $3 AND status = 'OPERATING'
+        GROUP BY "attractionId"
+      ),
+      stats AS (
         SELECT 
           qd."attractionId",
           AVG(qd."waitTime") as avg_wait,
@@ -1370,8 +1380,10 @@ export class AnalyticsService {
           MAX(qd."waitTime") as max_wait,
           COUNT(*) as count
         FROM queue_data qd
+        JOIN ride_bounds rb ON rb."attractionId" = qd."attractionId"
         WHERE qd."attractionId" = ANY($1)
           AND qd.timestamp BETWEEN $2 AND $3
+          AND qd.timestamp >= rb.first_op
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
           AND qd."queueType" = 'STANDBY'
@@ -1383,8 +1395,10 @@ export class AnalyticsService {
           qd.timestamp as max_timestamp
         FROM queue_data qd
         INNER JOIN stats s ON s."attractionId" = qd."attractionId"
+        JOIN ride_bounds rb ON rb."attractionId" = qd."attractionId"
         WHERE qd."attractionId" = ANY($1)
           AND qd.timestamp BETWEEN $2 AND $3
+          AND qd.timestamp >= rb.first_op
           AND qd."waitTime" IS NOT NULL
           -- Floating point comparison check
           AND ABS(qd."waitTime" - s.max_wait) < 0.01
@@ -1401,7 +1415,7 @@ export class AnalyticsService {
       FROM stats s
       LEFT JOIN max_timestamps mt ON mt."attractionId" = s."attractionId"
       `,
-      [attractionIds, startOfDay, now],
+      [attractionIds, startOfDay, endTime],
     );
 
     const map = new Map();
@@ -1435,24 +1449,37 @@ export class AnalyticsService {
   async getBatchAttractionWaitTimeHistory(
     attractionIds: string[],
     startTime: Date,
+    endTime: Date = new Date(),
   ): Promise<Map<string, { timestamp: string; waitTime: number }[]>> {
     if (attractionIds.length === 0) return new Map();
 
     // Use provided start time
     const startOfDay = startTime;
 
-    const result = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("qd.attractionId", "attractionId")
-      .addSelect("qd.timestamp", "timestamp")
-      .addSelect("qd.waitTime", "waitTime")
-      .where("qd.attractionId IN (:...ids)", { ids: attractionIds })
-      .andWhere("qd.timestamp >= :start", { start: startOfDay })
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.queueType = :type", { type: "STANDBY" })
-      .orderBy("qd.timestamp", "ASC")
-      .getRawMany();
+    const result = await this.queueDataRepository.query(
+      `
+      WITH ride_bounds AS (
+        SELECT "attractionId", MIN(timestamp) + INTERVAL '5 minutes' as first_op
+        FROM queue_data
+        WHERE "attractionId" = ANY($1) AND timestamp BETWEEN $2 AND $3 AND status = 'OPERATING'
+        GROUP BY "attractionId"
+      )
+      SELECT
+        qd."attractionId" as "attractionId",
+        qd.timestamp as "timestamp",
+        qd."waitTime" as "waitTime"
+      FROM queue_data qd
+      JOIN ride_bounds rb ON rb."attractionId" = qd."attractionId"
+      WHERE qd."attractionId" = ANY($1)
+        AND qd.timestamp BETWEEN $2 AND $3
+        AND qd.timestamp >= rb.first_op
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" IS NOT NULL
+        AND qd."queueType" = 'STANDBY'
+      ORDER BY qd.timestamp ASC
+      `,
+      [attractionIds, startOfDay, endTime],
+    );
 
     const map = new Map<string, { timestamp: string; waitTime: number }[]>();
 
@@ -1807,11 +1834,32 @@ export class AnalyticsService {
     const currentHour = parseInt(formatInTimeZone(now, timezone, "H"));
     const currentDayOfWeek = parseInt(formatInTimeZone(now, timezone, "i")) % 7;
 
+    // Find the attraction's park to determine effective end time if needed
+    let effectiveEndTime = now;
+    try {
+      const attraction = await this.attractionRepository.findOne({
+        where: { id: attractionId },
+        select: ["parkId"],
+      });
+      if (attraction) {
+        const endTime = await this.getEffectiveEndTime(
+          attraction.parkId,
+          timezone,
+        );
+        if (endTime && endTime < now) {
+          effectiveEndTime = endTime;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
     // Get today's statistics (using provided start time)
     // Use batch method (efficient CTE) instead of multiple queries
     const batchStats = await this.getBatchAttractionStatistics(
       [attractionId],
       startTime,
+      effectiveEndTime,
     );
     const batchStat = batchStats.get(attractionId);
 
@@ -1850,6 +1898,7 @@ export class AnalyticsService {
     const historyMap = await this.getBatchAttractionWaitTimeHistory(
       [attractionId],
       startTime,
+      effectiveEndTime,
     );
     const history = historyMap.get(attractionId) || [];
 
@@ -3367,8 +3416,41 @@ export class AnalyticsService {
     }
 
     // Calculate date range for the specific day
-    const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
-    const endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+    let startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
+    let endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+
+    // Adjust for schedule opening/closing times if available
+    try {
+      let parkIdForSchedule = entityId;
+      if (type === "attraction") {
+        const attraction = await this.attractionRepository.findOne({
+          where: { id: entityId },
+          select: ["parkId"],
+        });
+        if (attraction) parkIdForSchedule = attraction.parkId;
+      }
+      const schedule = await this.scheduleEntryRepository.findOne({
+        where: {
+          parkId: parkIdForSchedule,
+          date: date as any,
+          scheduleType: ScheduleType.OPERATING,
+        },
+        order: { openingTime: "ASC" },
+      });
+      if (schedule) {
+        if (schedule.openingTime) {
+          const adjStart = new Date(schedule.openingTime.getTime() + 5 * 60000);
+          if (adjStart > startOfDay && adjStart < endOfDay)
+            startOfDay = adjStart;
+        }
+        if (schedule.closingTime) {
+          const adjEnd = new Date(schedule.closingTime.getTime() - 5 * 60000);
+          if (adjEnd > startOfDay && adjEnd < endOfDay) endOfDay = adjEnd;
+        }
+      }
+    } catch {
+      // Ignore
+    }
 
     // Query average (P50) and peak (P90) wait times for the day
     let dailyStats: { p50: number | null; p90: number | null; count: number };
@@ -3376,14 +3458,22 @@ export class AnalyticsService {
     if (type === "attraction") {
       const result = await this.queueDataRepository.query(
         `
+        WITH ride_bounds AS (
+          SELECT "attractionId", MIN(timestamp) + INTERVAL '5 minutes' as first_op
+          FROM queue_data
+          WHERE "attractionId" = $1::uuid AND timestamp >= $2 AND timestamp <= $3 AND status = 'OPERATING'
+          GROUP BY "attractionId"
+        )
         SELECT
           ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
           ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
           COUNT(*) as count
         FROM queue_data qd
+        JOIN ride_bounds rb ON rb."attractionId" = qd."attractionId"
         WHERE qd."attractionId" = $1::uuid
           AND qd.timestamp >= $2
           AND qd.timestamp <= $3
+          AND qd.timestamp >= rb.first_op
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= 10
@@ -3417,14 +3507,22 @@ export class AnalyticsService {
       if (targetAttractionIds.length > 0) {
         const result = await this.queueDataRepository.query(
           `
+          WITH ride_bounds AS (
+            SELECT "attractionId", MIN(timestamp) + INTERVAL '5 minutes' as first_op
+            FROM queue_data
+            WHERE "attractionId" = ANY($1::uuid[]) AND timestamp >= $2 AND timestamp <= $3 AND status = 'OPERATING'
+            GROUP BY "attractionId"
+          )
           SELECT
             ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
             ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
             COUNT(*) as count
           FROM queue_data qd
+          JOIN ride_bounds rb ON rb."attractionId" = qd."attractionId"
           WHERE qd."attractionId" = ANY($1::uuid[])
             AND qd.timestamp >= $2
             AND qd.timestamp <= $3
+            AND qd.timestamp >= rb.first_op
             AND qd.status = 'OPERATING'
             AND qd."waitTime" IS NOT NULL
             AND qd."waitTime" >= 10
