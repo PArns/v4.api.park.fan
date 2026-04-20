@@ -1280,7 +1280,8 @@ export class AnalyticsService {
           parkId,
           park.timezone,
         );
-        history = await this.getParkWaitTimeHistory(parkId, startTime);
+        const endTime = await this.getEffectiveEndTime(parkId, park.timezone);
+        history = await this.getParkWaitTimeHistory(parkId, startTime, endTime);
       } else {
         // Fallback if park not found or no timezone
         const startOfDay = getStartOfDayInTimezone("UTC");
@@ -1374,6 +1375,7 @@ export class AnalyticsService {
           AND qd.timestamp BETWEEN $2 AND $3
           AND qd.status = 'OPERATING'
           AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" > 0
           AND qd."queueType" = 'STANDBY'
         GROUP BY qd."attractionId"
       ),
@@ -1484,27 +1486,32 @@ export class AnalyticsService {
   async getParkWaitTimeHistory(
     parkId: string,
     startTime: Date,
+    endTime?: Date | null,
   ): Promise<import("./types/analytics-response.type").WaitTimeHistoryItem[]> {
-    // Use provided start time
-    const startOfDay = startTime;
+    const now = new Date();
+    // Cap end at closing time (if known) or now — whichever is earlier
+    const effectiveEnd = endTime && endTime < now ? endTime : now;
 
-    // Group by 10-minute intervals to get a smooth average trend for the park
+    // Group by 10-minute intervals to get a smooth average trend for the park.
+    // waitTime > 0 excludes placeholder/walk-on reports that deflate the P90.
     const result = await this.queueDataRepository.query(
       `
-      SELECT 
+      SELECT
         to_timestamp(floor(extract(epoch from qd.timestamp) / 600) * 600) AT TIME ZONE 'UTC' as interval_timestamp,
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric) as avg_wait
       FROM queue_data qd
       INNER JOIN attractions a ON a.id = qd."attractionId"
       WHERE a."parkId" = $1::uuid
         AND qd.timestamp >= $2
+        AND qd.timestamp <= $3
         AND qd.status = 'OPERATING'
         AND qd."waitTime" IS NOT NULL
+        AND qd."waitTime" > 0
         AND qd."queueType" = 'STANDBY'
       GROUP BY interval_timestamp
       ORDER BY interval_timestamp ASC
       `,
-      [parkId, startOfDay],
+      [parkId, startTime, effectiveEnd],
     );
 
     return result.map(
@@ -3366,9 +3373,33 @@ export class AnalyticsService {
       }
     }
 
-    // Calculate date range for the specific day
-    const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
-    const endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+    // Calculate date range for the specific day.
+    // When a schedule is available, trim 5 minutes from both ends so that
+    // pre-opening ride tests and post-closing stragglers don't deflate the P50.
+    const SCHEDULE_TRIM_MS = 5 * 60 * 1000;
+    let startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
+    let endOfDay = fromZonedTime(`${date}T23:59:59`, timezone);
+
+    if (type === "park") {
+      const daySchedule = await this.scheduleEntryRepository.findOne({
+        where: {
+          parkId: entityId,
+          date: date as any,
+          scheduleType: ScheduleType.OPERATING,
+        },
+        order: { openingTime: "ASC" },
+      });
+      if (daySchedule?.openingTime) {
+        startOfDay = new Date(
+          daySchedule.openingTime.getTime() + SCHEDULE_TRIM_MS,
+        );
+      }
+      if (daySchedule?.closingTime) {
+        endOfDay = new Date(
+          daySchedule.closingTime.getTime() - SCHEDULE_TRIM_MS,
+        );
+      }
+    }
 
     // Query average (P50) and peak (P90) wait times for the day
     let dailyStats: { p50: number | null; p90: number | null; count: number };
