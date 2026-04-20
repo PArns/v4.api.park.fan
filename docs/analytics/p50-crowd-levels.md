@@ -72,6 +72,8 @@ Using only the identified Headliners:
 3. Calculate the **Median (P50)** of all samples.
 4. Store this single number as the **Park Baseline** (e.g., `25.5` minutes).
 
+> **Intra-day trimming not applied to baselines (by design):** The baseline deliberately uses full daily data windows rather than schedule-trimmed windows. Because P50 is the median, the small fraction of pre-opening or post-closing samples (typically <15% of daily data) cannot shift the median — you would need >50% of samples to be "off-hours" for the median to move. The daily crowd-level query *does* apply schedule trimming (see below), which correctly nudges the ratio upward toward more realistic levels on typical days. A forced baseline recalculation is therefore not required when the trimming fix is deployed.
+
 ---
 
 ## 3. Crowd Level Thresholds
@@ -115,11 +117,40 @@ See [Caching Strategy](../architecture/caching-strategy.md) for `park_daily_stat
   - **Park**: `getP50BaselineFromCache(parkId)` → headliner P50; fallback `get90thPercentileWithConfidence(..., "park")`.
   - **Attraction**: `getAttractionP50BaselineFromCache(attractionId)`, `getBatchAttractionP50s(ids)`; fallback sliding-window P50/P90.
   - `getLoadRating(current, baseline)`, `getAttractionCrowdLevel(waitTime, baseline)` → same threshold table.
-- **`P50BaselineProcessor`**: Bull job (daily) for park and attraction P50 baselines.
+  - `calculateCrowdLevelForDate(entityId, type, date, timezone)` — historical crowd level for a specific date. For `type='park'`, fetches the schedule entry for that date and applies a **±5-minute boundary trim** (`openingTime+5min … closingTime-5min`) so pre-opening ride tests and post-closing stragglers are excluded. Falls back to full day (00:00–23:59) if no schedule entry exists.
+- **`P50BaselineProcessor`**: Bull job (daily at 3 AM) for park and attraction P50 baselines.
 
 ---
 
-## 5. Machine Learning Integration
+## 5. Known Issue: Pre-Opening Data Deflating Crowd Levels
+
+### Problem
+
+Several data sources (Queue-Times, Themeparks.wiki) begin reporting ride status as `OPERATING` before the park's official ride-opening time. Example: Phantasialand gates open at 09:00 but most rides only open at 10:00; however some rides already report `waitTime=10, status=OPERATING` at 08:00 during staff rides / pre-opening tests.
+
+Without time-window trimming, the daily P50 for `calculateCrowdLevelForDate` used data from `00:00–23:59`. These early-morning low values (e.g., a ride that reports 10 min at 08:00 and 45 min for the rest of the day) dragged the daily P50 down, causing the crowd level to appear systematically lower than reality (e.g., "Low" on a genuinely "High" day).
+
+The same issue affected:
+- **Daily ride statistics** (`getBatchAttractionStatistics`): `MIN(waitTime)` returned 0 or 10 for rides that were genuinely busy all day, because walk-on or pre-opening 0-minute reports were included.
+- **Wait-time history chart** (`getParkWaitTimeHistory`): The chart showed P90 values at 08:00 even though the park was not yet operating.
+
+### Solution (implemented 2026-04-20)
+
+| Component | Change |
+|-----------|--------|
+| `calculateCrowdLevelForDate` | When a schedule entry exists for the queried date, the P50/P90 window is trimmed to `openingTime+5 min … closingTime-5 min`. Falls back to midnight–23:59 if no schedule. |
+| `getParkWaitTimeHistory` | Added `waitTime > 0` filter; end of chart now capped at `closingTime` (or `now`, whichever is earlier). |
+| `getBatchAttractionStatistics` | Added `waitTime > 0` so `MIN()` cannot return 0 for a ride that was genuinely busy all day. |
+
+### Why No Baseline Recalculation Is Needed
+
+The P50 baselines (`park_p50_baselines`) are calculated over 548 days of data. Pre-opening data is typically ≤15% of daily samples. Because P50 is the median, this small minority cannot shift it — the median only moves when more than 50% of values change. The 3 AM daily job recalculates baselines automatically, so any minor residual inconsistency resolves within 24 hours.
+
+The direction of the remaining transient bias (baseline slightly low, daily P50 trimmed upward) produces crowd levels that are slightly higher than before — exactly the desired correction away from systematic under-reporting.
+
+---
+
+## 6. Machine Learning Integration
 
 The ML Service (`ml-service`) also uses the P50 Baseline as a feature.
 - **Input Feature**: `p50_baseline` (passed in request).

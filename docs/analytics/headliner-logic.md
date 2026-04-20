@@ -73,5 +73,9 @@ When investigating "weird" crowd levels (e.g., "Very Low" when it looks busy):
    - *Example*: If P50 is 5 mins, the park will always look "Extreme". If P50 is 90 mins, it will always look "Very Low".
 3. **Check Real-Time Data**: Are the headliners actually operating?
    - If all headliners are `DOWN`, the system falls back to available rides, which might skew comparisons.
+4. **Check Schedule**: Does today have a valid `OPERATING` schedule entry?
+   - `SELECT * FROM schedule_entries WHERE "parkId" = '...' AND date = CURRENT_DATE AND "scheduleType" = 'OPERATING'`
+   - If missing, `calculateCrowdLevelForDate` and the wait-time history chart fall back to midnight–23:59, which includes pre-opening and post-closing data and can depress crowd levels.
+   - See [Known Issue: Pre-Opening Data](p50-crowd-levels.md#5-known-issue-pre-opening-data-deflating-crowd-levels) for background.
 
 **Attraction-level baselines:** Per-ride P50 baselines are stored in `attraction_p50_baselines` and used for ride crowd levels (load rating). See [P50 Crowd Levels](p50-crowd-levels.md).
