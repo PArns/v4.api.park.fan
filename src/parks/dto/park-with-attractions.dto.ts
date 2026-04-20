@@ -5,6 +5,7 @@ import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -147,6 +148,15 @@ export class ParkAttractionDto {
     nullable: true,
   })
   isCurrentlyInSeason?: boolean | null;
+
+  @ApiProperty({
+    description:
+      "Recommended visit time slots for today based on 15-min ML predictions. " +
+      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 40% of minimum.",
+    required: false,
+    nullable: true,
+  })
+  bestVisitTimes?: BestVisitSlot[] | null;
 }
 
 export class ParkShowDto {

@@ -35,6 +35,7 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PopularityService } from "../../popularity/popularity.service";
+import { computeBestVisitTimes } from "../../common/utils/best-visit-times.util";
 
 /**
  * Park Integration Service
@@ -711,6 +712,19 @@ export class ParkIntegrationService {
           // Fallback: try to build URL from park data in DTO if available
           // This handles cases where park entity might not have geo data loaded
           attraction.url = null;
+        }
+
+        // Best visit times — derived from per-attraction ML predictions (already batched).
+        // Cached with the park response (15 min TTL via park:integrated cache).
+        if (mlPreds.length > 0) {
+          attraction.bestVisitTimes = computeBestVisitTimes(
+            mlPreds,
+            todaySchedule?.closingTime
+              ? todaySchedule.closingTime instanceof Date
+                ? todaySchedule.closingTime.toISOString()
+                : String(todaySchedule.closingTime)
+              : null,
+          );
         }
 
         // Mark headliner attractions

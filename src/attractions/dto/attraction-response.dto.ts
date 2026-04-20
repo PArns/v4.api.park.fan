@@ -6,6 +6,7 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
+import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 
 /**
  * Attraction Response DTO
@@ -224,6 +225,15 @@ export class AttractionResponseDto {
     type: [ScheduleItemDto],
   })
   schedule?: ScheduleItemDto[];
+
+  @ApiProperty({
+    description:
+      "Recommended visit time slots for today based on 15-min ML predictions. " +
+      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 40% of minimum.",
+    required: false,
+    nullable: true,
+  })
+  bestVisitTimes?: BestVisitSlot[] | null;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

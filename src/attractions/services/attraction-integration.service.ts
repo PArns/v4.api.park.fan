@@ -27,7 +27,8 @@ import {
   getStartOfDayInTimezone,
 } from "../../common/utils/date.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
-import { addDays, subDays } from "date-fns";
+import { computeBestVisitTimes } from "../../common/utils/best-visit-times.util";
+import { subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
@@ -411,6 +412,18 @@ export class AttractionIntegrationService {
             park,
           );
         }
+
+        // --- Best visit times (today only, >= now+15min) ---
+        // Uses today's closing time from schedule so recommendations don't exceed operating hours.
+        // Cached with the integrated response (TTL_INTEGRATED_RESPONSE = 5 min).
+        if (mlPredictionsRaw.length > 0) {
+          const todayStr = getCurrentDateInTimezone(park.timezone);
+          const todayEntry = dto.schedule.find((s) => s.date === todayStr);
+          dto.bestVisitTimes = computeBestVisitTimes(
+            mlPredictionsRaw,
+            todayEntry?.closingTime ?? null,
+          );
+        }
       } catch (error) {
         this.logger.error("Failed to fetch attraction statistics:", error);
         dto.statistics = null;
@@ -766,13 +779,21 @@ export class AttractionIntegrationService {
           let closingHourVal: number | null = null;
 
           if (schedule && schedule.openingTime && schedule.closingTime) {
-            const openingTimeStr = formatInTimeZone(schedule.openingTime, timezone, "HH:mm");
+            const openingTimeStr = formatInTimeZone(
+              schedule.openingTime,
+              timezone,
+              "HH:mm",
+            );
             const [oH, oM] = openingTimeStr.split(":").map(Number);
             const oMRounded = Math.floor(oM / 15) * 15;
             openingTimeSlot = `${oH.toString().padStart(2, "0")}:${oMRounded.toString().padStart(2, "0")}`;
             openingHourVal = oH;
 
-            const closingTimeStr = formatInTimeZone(schedule.closingTime, timezone, "HH:mm");
+            const closingTimeStr = formatInTimeZone(
+              schedule.closingTime,
+              timezone,
+              "HH:mm",
+            );
             const [cH, cM] = closingTimeStr.split(":").map(Number);
             const cMRounded = Math.ceil(cM / 15) * 15;
             let finalCH = cH;
@@ -788,8 +809,10 @@ export class AttractionIntegrationService {
           // Add all existing hour data
           for (const hourData of dayQueueData) {
             // Filter by operating hours if available
-            if (openingTimeSlot && hourData.time_slot < openingTimeSlot) continue;
-            if (closingTimeSlot && hourData.time_slot > closingTimeSlot) continue;
+            if (openingTimeSlot && hourData.time_slot < openingTimeSlot)
+              continue;
+            if (closingTimeSlot && hourData.time_slot > closingTimeSlot)
+              continue;
 
             hourlyP90.push({
               hour: hourData.time_slot,
@@ -803,7 +826,11 @@ export class AttractionIntegrationService {
           // This prevents false projections when attraction opened late (e.g., 15:00 instead of 11:00)
           const earliestDataHour =
             hourDataMap.size > 0
-              ? Math.min(...Array.from(hourDataMap.keys()).map(t => parseInt(t.split(':')[0], 10)))
+              ? Math.min(
+                  ...Array.from(hourDataMap.keys()).map((t) =>
+                    parseInt(t.split(":")[0], 10),
+                  ),
+                )
               : null;
 
           // Only project opening hour if we have data AND earliest data is within 2 hours of opening
@@ -814,7 +841,9 @@ export class AttractionIntegrationService {
             earliestDataHour >= openingHourVal;
 
           if (shouldProjectOpening && openingTimeSlot) {
-            const hasOpeningSlot = hourlyP90.some((h) => h.hour === openingTimeSlot);
+            const hasOpeningSlot = hourlyP90.some(
+              (h) => h.hour === openingTimeSlot,
+            );
             if (!hasOpeningSlot) {
               const earliestSlot = Array.from(hourDataMap.keys()).sort()[0];
               const nearestValue = hourDataMap.get(earliestSlot)?.p90 || 0;
@@ -831,7 +860,11 @@ export class AttractionIntegrationService {
           // This prevents false projections when attraction closed early
           const latestDataHour =
             hourDataMap.size > 0
-              ? Math.max(...Array.from(hourDataMap.keys()).map(t => parseInt(t.split(':')[0], 10)))
+              ? Math.max(
+                  ...Array.from(hourDataMap.keys()).map((t) =>
+                    parseInt(t.split(":")[0], 10),
+                  ),
+                )
               : null;
 
           // Only project closing hour if we have data AND latest data is within 2 hours of closing
@@ -842,9 +875,13 @@ export class AttractionIntegrationService {
             latestDataHour <= closingHourVal;
 
           if (shouldProjectClosing && closingTimeSlot) {
-            const hasClosingSlot = hourlyP90.some((h) => h.hour === closingTimeSlot);
+            const hasClosingSlot = hourlyP90.some(
+              (h) => h.hour === closingTimeSlot,
+            );
             if (!hasClosingSlot) {
-              const latestSlot = Array.from(hourDataMap.keys()).sort().reverse()[0];
+              const latestSlot = Array.from(hourDataMap.keys())
+                .sort()
+                .reverse()[0];
               const nearestValue = hourDataMap.get(latestSlot)?.p90 || 0;
               hourlyP90.push({
                 hour: closingTimeSlot,
@@ -862,14 +899,20 @@ export class AttractionIntegrationService {
             const now = new Date();
             const curHStr = formatInTimeZone(now, timezone, "HH");
             const curM = parseInt(formatInTimeZone(now, timezone, "mm"), 10);
-            const curMSlot = (Math.floor(curM / 15) * 15).toString().padStart(2, "0");
+            const curMSlot = (Math.floor(curM / 15) * 15)
+              .toString()
+              .padStart(2, "0");
             const currentSlotStr = `${curHStr}:${curMSlot}`;
 
-            const hasCurrentSlot = hourlyP90.some((h) => h.hour === currentSlotStr);
+            const hasCurrentSlot = hourlyP90.some(
+              (h) => h.hour === currentSlotStr,
+            );
             if (!hasCurrentSlot) {
               let currentValue = 0;
               if (hourDataMap.size > 0) {
-                const latestSlot = Array.from(hourDataMap.keys()).sort().reverse()[0];
+                const latestSlot = Array.from(hourDataMap.keys())
+                  .sort()
+                  .reverse()[0];
                 currentValue = hourDataMap.get(latestSlot)?.p90 || 0;
               }
               hourlyP90.push({

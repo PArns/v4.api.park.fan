@@ -63,7 +63,7 @@ describe("DestinationsService (Optimized)", () => {
       id: `uuid-${i}`,
       externalId: `ext-${i}`,
       name: i === 0 ? `Old Name ${i}` : `Destination ${i}`, // Only the first one changed
-      slug: `slug-${i}`
+      slug: `slug-${i}`,
     }));
 
     destinationRepository.find.mockResolvedValue(existing);
@@ -71,10 +71,14 @@ describe("DestinationsService (Optimized)", () => {
 
     await service.syncDestinations();
 
-    console.log(`findOne calls: ${destinationRepository.findOne.mock.calls.length}`);
+    console.log(
+      `findOne calls: ${destinationRepository.findOne.mock.calls.length}`,
+    );
     console.log(`find calls: ${destinationRepository.find.mock.calls.length}`);
     console.log(`save calls: ${destinationRepository.save.mock.calls.length}`);
-    console.log(`insert calls (createQueryBuilder): ${destinationRepository.createQueryBuilder.mock.calls.length}`);
+    console.log(
+      `insert calls (createQueryBuilder): ${destinationRepository.createQueryBuilder.mock.calls.length}`,
+    );
 
     // Expectation:
     // 0 findOne calls (was 50)
