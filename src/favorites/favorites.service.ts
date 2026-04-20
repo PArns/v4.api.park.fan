@@ -616,34 +616,20 @@ export class FavoritesService {
         forecasts: undefined,
         predictionAccuracy: undefined,
         effectiveStatus: undefined,
-        latitude: null,
-        longitude: null,
+        latitude: integrated.latitude,
+        longitude: integrated.longitude,
         park: integrated.park
           ? {
               id: integrated.park.id,
               name: integrated.park.name,
               slug: integrated.park.slug,
               timezone: integrated.park.timezone,
-              continent: null,
-              country: null,
-              city: null,
+              continent: integrated.park.continent,
+              country: integrated.park.country,
+              city: integrated.park.city,
             }
           : null,
-        statistics: integrated.statistics
-          ? {
-              avgWaitToday: null,
-              peakWaitToday: integrated.statistics.peakWaitToday,
-              peakWaitTimestamp: null,
-              minWaitToday: null,
-              typicalWaitThisHour: null,
-              percentile95ThisHour: null,
-              currentVsTypical: null,
-              dataPoints: 0,
-              history: [],
-              timestamp: integrated.statistics.timestamp,
-            }
-          : integrated.statistics,
-        baseline: null,
+        statistics: integrated.statistics,
         distance:
           userLocation && attraction.latitude && attraction.longitude
             ? Math.round(
