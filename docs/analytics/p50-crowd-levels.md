@@ -117,7 +117,7 @@ See [Caching Strategy](../architecture/caching-strategy.md) for `park_daily_stat
   - **Park**: `getP50BaselineFromCache(parkId)` → headliner P50; fallback `get90thPercentileWithConfidence(..., "park")`.
   - **Attraction**: `getAttractionP50BaselineFromCache(attractionId)`, `getBatchAttractionP50s(ids)`; fallback sliding-window P50/P90.
   - `getLoadRating(current, baseline)`, `getAttractionCrowdLevel(waitTime, baseline)` → same threshold table.
-  - `calculateCrowdLevelForDate(entityId, type, date, timezone)` — historical crowd level for a specific date. For `type='park'`, fetches the schedule entry for that date and applies a **±5-minute boundary trim** (`openingTime+5min … closingTime-5min`) so pre-opening ride tests and post-closing stragglers are excluded. Falls back to full day (00:00–23:59) if no schedule entry exists.
+  - `calculateCrowdLevelForDate(entityId, type, date, timezone)` — historical crowd level for a specific date. For `type='park'`, computes daily P50/P90 as **avg-of-per-ride-P50s** (matching `calculateP50Baseline`) and applies a **±5-minute schedule trim** (`openingTime+5min … closingTime-5min`) when a schedule entry exists. Falls back to full day (00:00–23:59) if no schedule entry exists.
 - **`P50BaselineProcessor`**: Bull job (daily at 3 AM) for park and attraction P50 baselines.
 
 ---
@@ -138,7 +138,7 @@ The same issue affected:
 
 | Component | Change |
 |-----------|--------|
-| `calculateCrowdLevelForDate` | When a schedule entry exists for the queried date, the P50/P90 window is trimmed to `openingTime+5 min … closingTime-5 min`. Falls back to midnight–23:59 if no schedule. |
+| `calculateCrowdLevelForDate` | **Methodology fix (root cause of underestimation):** daily park P50/P90 now computed as avg-of-per-ride-P50s (matching the baseline), not as a pooled `PERCENTILE_CONT` across all headliner rows. A pooled query is dominated by high-frequency low-wait rides and systematically produces a lower value than the baseline. Additionally, when a schedule entry exists for the queried date, the window is trimmed to `openingTime+5 min … closingTime-5 min`. Falls back to midnight–23:59 if no schedule. |
 | `getParkWaitTimeHistory` | Added `waitTime > 0` filter; end of chart now capped at `closingTime` (or `now`, whichever is earlier). |
 | `getBatchAttractionStatistics` | Added `waitTime > 0` so `MIN()` cannot return 0 for a ride that was genuinely busy all day. |
 

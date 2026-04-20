@@ -3446,20 +3446,32 @@ export class AnalyticsService {
       }
 
       if (targetAttractionIds.length > 0) {
+        // Use avg-of-per-ride-P50s, matching calculateP50Baseline exactly.
+        // A single pooled PERCENTILE_CONT is skewed by rides that report more
+        // frequently: a high-frequency low-wait ride dominates the pool and pulls
+        // the park P50 below the baseline, causing systematic crowd-level underestimation.
         const result = await this.queueDataRepository.query(
           `
           SELECT
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
-            ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
-            COUNT(*) as count
-          FROM queue_data qd
-          WHERE qd."attractionId" = ANY($1::uuid[])
-            AND qd.timestamp >= $2
-            AND qd.timestamp <= $3
-            AND qd.status = 'OPERATING'
-            AND qd."waitTime" IS NOT NULL
-            AND qd."waitTime" >= 10
-            AND qd."queueType" = 'STANDBY'
+            ROUND(AVG(per_ride.p50)::numeric, 2)   as p50,
+            ROUND(AVG(per_ride.p90)::numeric, 2)   as p90,
+            SUM(per_ride.cnt)::integer              as count
+          FROM (
+            SELECT
+              qd."attractionId",
+              PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as p50,
+              PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
+              COUNT(*) as cnt
+            FROM queue_data qd
+            WHERE qd."attractionId" = ANY($1::uuid[])
+              AND qd.timestamp >= $2
+              AND qd.timestamp <= $3
+              AND qd.status = 'OPERATING'
+              AND qd."waitTime" IS NOT NULL
+              AND qd."waitTime" >= 10
+              AND qd."queueType" = 'STANDBY'
+            GROUP BY qd."attractionId"
+          ) per_ride
           `,
           [targetAttractionIds, startOfDay, endOfDay],
         );
