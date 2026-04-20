@@ -2560,19 +2560,31 @@ export class AnalyticsService {
       );
       aggRow = rows[0];
     } else {
+      // Use avg-of-per-ride-P50s/P90s to match calculateP50Baseline.
+      // A pooled PERCENTILE_CONT across all park attractions is dominated by
+      // high-frequency low-wait rides, producing a deflated fallback baseline.
       const rows = await this.queueDataRepository.query(
         `SELECT
-           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
-           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
-           COUNT(*)::int                                               AS sample_count,
-           COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
-         FROM queue_data qd
-         INNER JOIN attractions a ON a.id = qd."attractionId"
-         WHERE a."parkId"      = $1::uuid
-           AND qd.timestamp   >= $2
-           AND qd."waitTime"  >= 10
-           AND qd.status      = 'OPERATING'
-           AND qd."queueType" = 'STANDBY'`,
+           AVG(per_ride.p50)::numeric                  AS p50,
+           AVG(per_ride.p90)::numeric                  AS p90,
+           SUM(per_ride.sample_count)::int             AS sample_count,
+           MAX(per_ride.distinct_days)::int            AS distinct_days
+         FROM (
+           SELECT
+             qd."attractionId",
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
+             PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
+             COUNT(*)::int                                               AS sample_count,
+             COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
+           FROM queue_data qd
+           INNER JOIN attractions a ON a.id = qd."attractionId"
+           WHERE a."parkId"      = $1::uuid
+             AND qd.timestamp   >= $2
+             AND qd."waitTime"  >= 10
+             AND qd.status      = 'OPERATING'
+             AND qd."queueType" = 'STANDBY'
+           GROUP BY qd."attractionId"
+         ) per_ride`,
         [entityId, cutoff, resolvedTimezone],
       );
       aggRow = rows[0];
