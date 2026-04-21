@@ -12,13 +12,18 @@ interface PredictionInput {
 const MIN_GAP_MS = 60 * 60 * 1000; // 1 hour minimum between recommendations
 const MAX_OPTIMAL = 2;
 const MAX_GOOD = 3;
+// Predictions use 15-min slot timestamps (e.g. 16:45 represents 16:45–17:00).
+// Extend the lookback window by one slot so the currently-active slot is included
+// in the comparison — otherwise a 20-min "now" gets excluded and 25-min future
+// slots are incorrectly labelled as the best option.
+const SLOT_DURATION_MS = 15 * 60 * 1000;
 
 /**
  * Compute best visit time recommendations from 15-min ML predictions.
  *
  * Returns up to 5 slots (≤2 optimal, ≤3 good) sorted by time.
- * Slots are filtered to >= now+15min so a stale cache never returns
- * a recommendation that is already in the past.
+ * The currently-active slot (whose timestamp may be up to 15 min in the past)
+ * is included so that "go now" can be recommended when wait times are lowest.
  *
  * Strategy: pick the lowest-wait distinct time slots (≥1h apart).
  * "optimal" = absolute minimum wait; "good" = within 25% of minimum.
@@ -30,7 +35,8 @@ export function computeBestVisitTimes(
   predictions: PredictionInput[],
   closingTimeIso: string | null | undefined,
 ): BestVisitSlot[] | null {
-  const cutoff = Date.now(); // only show future slots
+  // Include the currently-active 15-min slot even if its timestamp is slightly in the past.
+  const cutoff = Date.now() - SLOT_DURATION_MS;
   const closingMs = closingTimeIso ? new Date(closingTimeIso).getTime() : null;
 
   const future = predictions
