@@ -398,13 +398,13 @@ export class HolidaysService {
     startDate: string,
     endDate: string,
   ): Promise<Holiday[]> {
-    // Use CAST to ensure we compare date strings (YYYY-MM-DD)
-    // regardless of the stored time component or execution timezone
     return this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("CAST(holiday.date AS DATE) >= :startDate", { startDate })
-      .andWhere("CAST(holiday.date AS DATE) <= :endDate", { endDate })
+      .andWhere("holiday.date BETWEEN :startDate AND :endDate", {
+        startDate,
+        endDate,
+      })
       .orderBy("holiday.date", "ASC")
       .getMany();
   }
@@ -415,8 +415,10 @@ export class HolidaysService {
   async getAllHolidays(startDate: Date, endDate: Date): Promise<Holiday[]> {
     return this.holidayRepository
       .createQueryBuilder("holiday")
-      .where("holiday.date >= :startDate", { startDate })
-      .andWhere("holiday.date <= :endDate", { endDate })
+      .where("holiday.date BETWEEN :startDate AND :endDate", {
+        startDate,
+        endDate,
+      })
       .orderBy("holiday.date", "ASC")
       .addOrderBy("holiday.country", "ASC")
       .getMany();
@@ -450,7 +452,7 @@ export class HolidaysService {
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr });
+      .andWhere("holiday.date = :dateStr", { dateStr });
 
     if (regionCode) {
       // Normalize region code to handle variants (e.g., NRW -> NW)
@@ -501,7 +503,7 @@ export class HolidaysService {
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr })
+      .andWhere("holiday.date = :dateStr", { dateStr })
       .andWhere("holiday.holidayType = 'school'");
 
     if (regionCode) {
@@ -694,7 +696,7 @@ export class HolidaysService {
     const explicitQuery = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("CAST(holiday.date AS DATE) = :dateStr", { dateStr })
+      .andWhere("holiday.date = :dateStr", { dateStr })
       .andWhere("holiday.holidayType = 'bridge'");
 
     if (regionCode) {

@@ -40,8 +40,18 @@ export class PredictionAccuracyProcessor {
 
       const TTL_30_DAYS = 30 * 24 * 60 * 60;
       await Promise.all([
-        this.redis.set("ml:accuracy:last_run", new Date().toISOString(), "EX", TTL_30_DAYS),
-        this.redis.set("ml:accuracy:last_run_count", newComparisons.toString(), "EX", TTL_30_DAYS),
+        this.redis.set(
+          "ml:accuracy:last_run",
+          new Date().toISOString(),
+          "EX",
+          TTL_30_DAYS,
+        ),
+        this.redis.set(
+          "ml:accuracy:last_run_count",
+          newComparisons.toString(),
+          "EX",
+          TTL_30_DAYS,
+        ),
       ]);
 
       this.logger.log(

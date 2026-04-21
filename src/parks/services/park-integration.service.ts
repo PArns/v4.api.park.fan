@@ -499,7 +499,11 @@ export class ParkIntegrationService {
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
         this.analyticsService.getHeadlinerAttractionIds(park.id),
-        this.mlService.getBatchStoredPredictions(attractionIds, "hourly", new Date(Date.now() - 15 * 60 * 1000)),
+        this.mlService.getBatchStoredPredictions(
+          attractionIds,
+          "hourly",
+          new Date(Date.now() - 15 * 60 * 1000),
+        ),
       ]);
 
       for (const attraction of dto.attractions) {
@@ -725,7 +729,8 @@ export class ParkIntegrationService {
             : String(todaySchedule.closingTime)
           : null;
         const storedPreds = storedPredictionsMap.get(attraction.id) ?? [];
-        const predsForBestVisit = storedPreds.length > 0 ? storedPreds : mlPreds;
+        const predsForBestVisit =
+          storedPreds.length > 0 ? storedPreds : mlPreds;
         if (predsForBestVisit.length > 0) {
           attraction.bestVisitTimes = computeBestVisitTimes(
             predsForBestVisit,

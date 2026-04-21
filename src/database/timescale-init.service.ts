@@ -60,9 +60,17 @@ export class TimescaleInitService implements OnModuleInit {
       await this.createHypertable("show_live_data", "timestamp", "1 day");
       await this.createHypertable("restaurant_live_data", "timestamp", "1 day");
       await this.createHypertable("queue_data_aggregates", "hour", "7 days");
+      await this.createHypertable(
+        "wait_time_predictions",
+        "createdAt",
+        "7 days",
+      );
 
       // Set up compression policies (preserves hourly data!)
       await this.setupCompressionPolicies();
+
+      // Set up retention policies (auto-drop old chunks)
+      await this.setupRetentionPolicies();
 
       this.logger.log("✅ TimescaleDB hypertables initialized successfully!");
     } catch (error) {
@@ -102,24 +110,6 @@ export class TimescaleInitService implements OnModuleInit {
         return;
       }
 
-      // Get row count before truncation
-      // SECURITY: Use parameterized query with identifier quoting
-      const countResult = await this.dataSource.query(
-        `SELECT COUNT(*) as count FROM ${this.quoteIdentifier(tableName)};`,
-      );
-      const rowCount = parseInt(countResult[0]?.count || "0");
-
-      if (rowCount > 0) {
-        this.logger.warn(
-          `  ⚠️  ${tableName} has ${rowCount} rows. Truncating before conversion...`,
-        );
-        // SECURITY: Table name is validated against whitelist, but use identifier quoting
-        await this.dataSource.query(
-          `TRUNCATE TABLE ${this.quoteIdentifier(tableName)} CASCADE;`,
-        );
-        this.logger.debug(`  ✓ Truncated ${tableName}`);
-      }
-
       // Get current primary key constraint name
       const pkName = await this.getPrimaryKeyConstraintName(tableName);
 
@@ -154,10 +144,9 @@ export class TimescaleInitService implements OnModuleInit {
       );
       this.logger.debug(`  ✓ Added composite primary key (${compositePK})`);
 
-      // Convert to hypertable
-      // SECURITY: All parameters are validated against whitelist, but use identifier quoting
+      // Convert to hypertable — migrate_data preserves existing rows
       await this.dataSource.query(
-        `SELECT create_hypertable($1, $2, chunk_time_interval => $3::interval, if_not_exists => TRUE);`,
+        `SELECT create_hypertable($1, $2, chunk_time_interval => $3::interval, if_not_exists => TRUE, migrate_data => TRUE);`,
         [tableName, timeColumn, chunkInterval],
       );
 
@@ -279,6 +268,16 @@ export class TimescaleInitService implements OnModuleInit {
         "Hourly percentile aggregates",
       );
 
+      // Enable compression on wait_time_predictions (compress after 14 days)
+      await this.enableCompression(
+        "wait_time_predictions",
+        "createdAt",
+        14,
+        "ML Predictions",
+        "attractionId",
+        "predictedTime ASC",
+      );
+
       this.logger.log("✅ Compression policies configured");
     } catch (error) {
       const errorMessage =
@@ -298,6 +297,8 @@ export class TimescaleInitService implements OnModuleInit {
     timeColumn: string,
     compressAfterDays: number,
     description: string,
+    segmentBy?: string,
+    orderBy?: string,
   ): Promise<void> {
     try {
       // Check if compression is already enabled
@@ -311,9 +312,19 @@ export class TimescaleInitService implements OnModuleInit {
       if (!isEnabled) {
         // Enable compression
         // SECURITY: Table name is validated, but use identifier quoting
-        await this.dataSource.query(
-          `ALTER TABLE ${this.quoteIdentifier(tableName)} SET (timescaledb.compress);`,
-        );
+        let alterSql = `ALTER TABLE ${this.quoteIdentifier(tableName)} SET (timescaledb.compress`;
+        if (segmentBy) {
+          alterSql += `, timescaledb.compress_segmentby = '${this.quoteIdentifier(segmentBy)}'`;
+        }
+        if (orderBy) {
+          const parts = orderBy.split(" ");
+          const col = parts[0];
+          const dir = parts[1] || "";
+          alterSql += `, timescaledb.compress_orderby = '${this.quoteIdentifier(col)} ${dir}'`;
+        }
+        alterSql += `);`;
+
+        await this.dataSource.query(alterSql);
         this.logger.debug(`  ✓ Enabled compression on ${tableName}`);
       }
 
@@ -344,6 +355,42 @@ export class TimescaleInitService implements OnModuleInit {
         error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `  ⚠️  Failed to enable compression on ${tableName}: ${errorMessage}`,
+      );
+    }
+  }
+
+  private async setupRetentionPolicies(): Promise<void> {
+    this.logger.log("🗑️  Setting up retention policies...");
+    await this.addRetentionPolicy("wait_time_predictions", 90);
+    this.logger.log("✅ Retention policies configured");
+  }
+
+  private async addRetentionPolicy(
+    tableName: string,
+    retainDays: number,
+  ): Promise<void> {
+    try {
+      const existing = await this.dataSource.query(
+        `SELECT * FROM timescaledb_information.jobs
+         WHERE hypertable_name = $1 AND proc_name = 'policy_retention';`,
+        [tableName],
+      );
+      if (existing.length === 0) {
+        await this.dataSource.query(
+          `SELECT add_retention_policy($1, $2::interval);`,
+          [tableName, `${retainDays} days`],
+        );
+        this.logger.debug(
+          `  ✓ ${tableName}: Retain ${retainDays} days, drop older chunks automatically`,
+        );
+      } else {
+        this.logger.debug(`  ✓ ${tableName}: Retention policy already exists`);
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `  ⚠️  Failed to add retention policy on ${tableName}: ${errorMessage}`,
       );
     }
   }
