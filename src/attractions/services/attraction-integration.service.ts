@@ -413,7 +413,7 @@ export class AttractionIntegrationService {
           );
         }
 
-        // --- Best visit times (today only, >= now+15min) ---
+        // --- Best visit times (today only, including current active 15-min slot) ---
         // Uses today's closing time from schedule so recommendations don't exceed operating hours.
         // Cached with the integrated response (TTL_INTEGRATED_RESPONSE = 5 min).
         if (mlPredictionsRaw.length > 0) {

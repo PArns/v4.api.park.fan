@@ -499,7 +499,7 @@ export class ParkIntegrationService {
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
         this.analyticsService.getHeadlinerAttractionIds(park.id),
-        this.mlService.getBatchStoredPredictions(attractionIds, "hourly", new Date()),
+        this.mlService.getBatchStoredPredictions(attractionIds, "hourly", new Date(Date.now() - 15 * 60 * 1000)),
       ]);
 
       for (const attraction of dto.attractions) {
