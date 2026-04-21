@@ -683,15 +683,14 @@ export class WaitTimesProcessor {
                 now.getTime() - lastSeenMs > this.STALE_THRESHOLD_MS;
               if (isStale) continue;
 
-              await this.queueDataRepository.save({
-                id: crypto.randomUUID(),
+              const heartbeatEntry = this.queueDataRepository.create({
                 attractionId: a.id,
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
                 waitTime: last ? last.waitTime : 0,
                 lastUpdated: now,
-                timestamp: now,
               });
+              await this.queueDataRepository.save(heartbeatEntry);
               totalHeartbeats++;
             }
           }
