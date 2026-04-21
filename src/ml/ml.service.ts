@@ -1180,11 +1180,14 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
   ): Promise<PredictionDto[]> {
     // Try stored predictions first for both hourly and daily.
-    // Pass startTime=now for hourly so we never serve already-elapsed time slots.
+    // Include the currently-active 15-min slot (timestamp may be up to 15 min in the past)
+    // so "go now" can surface as a best-visit-time recommendation.
     const stored = await this.getStoredPredictions(
       attractionId,
       predictionType,
-      predictionType === "hourly" ? new Date() : undefined,
+      predictionType === "hourly"
+        ? new Date(Date.now() - 15 * 60 * 1000)
+        : undefined,
     );
 
     if (stored.length > 0) {
