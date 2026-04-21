@@ -1125,6 +1125,53 @@ export class MLService {
     return queryBuilder.getMany();
   }
 
+  async getBatchStoredPredictions(
+    attractionIds: string[],
+    predictionType: "hourly" | "daily" = "hourly",
+    startTime?: Date,
+  ): Promise<Map<string, PredictionDto[]>> {
+    if (attractionIds.length === 0) {
+      return new Map();
+    }
+
+    const createdAtCutoff =
+      predictionType === "hourly"
+        ? new Date(Date.now() - 2 * 60 * 60 * 1000)
+        : new Date(Date.now() - 26 * 60 * 60 * 1000);
+
+    const queryBuilder = this.predictionRepository
+      .createQueryBuilder("p")
+      .where("p.attractionId IN (:...attractionIds)", { attractionIds })
+      .andWhere("p.predictionType = :predictionType", { predictionType })
+      .andWhere("p.createdAt >= :createdAtCutoff", { createdAtCutoff })
+      .orderBy("p.predictedTime", "ASC");
+
+    if (startTime) {
+      queryBuilder.andWhere("p.predictedTime >= :startTime", { startTime });
+    }
+
+    const rows = await queryBuilder.getMany();
+
+    const result = new Map<string, PredictionDto[]>();
+    for (const p of rows) {
+      const list = result.get(p.attractionId) ?? [];
+      list.push({
+        attractionId: p.attractionId,
+        predictedTime: p.predictedTime.toISOString(),
+        predictedWaitTime: p.predictedWaitTime,
+        predictionType: p.predictionType,
+        confidence: p.confidence,
+        crowdLevel: p.crowdLevel,
+        baseline: p.baseline,
+        modelVersion: p.modelVersion,
+        status: p.status || undefined,
+      });
+      result.set(p.attractionId, list);
+    }
+
+    return result;
+  }
+
   /**
    * Get predictions (try DB first, fall back to ML service)
    */

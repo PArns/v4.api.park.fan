@@ -484,6 +484,7 @@ export class ParkIntegrationService {
         attractionHistoryMap,
         trendsMap,
         headlinerIds,
+        storedPredictionsMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP50s(attractionIds),
         this.analyticsService.getBatchAttractionP90s(attractionIds),
@@ -498,6 +499,7 @@ export class ParkIntegrationService {
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
         this.analyticsService.getHeadlinerAttractionIds(park.id),
+        this.mlService.getBatchStoredPredictions(attractionIds, "hourly", new Date()),
       ]);
 
       for (const attraction of dto.attractions) {
@@ -714,16 +716,20 @@ export class ParkIntegrationService {
           attraction.url = null;
         }
 
-        // Best visit times — derived from per-attraction ML predictions (already batched).
-        // Cached with the park response (15 min TTL via park:integrated cache).
-        if (mlPreds.length > 0) {
+        // Best visit times — use stored DB predictions (same source as the single-attraction
+        // endpoint) so rankings are consistent across park/favorites and detail views.
+        // Falls back to the live getParkPredictions data when no stored predictions exist.
+        const closingTimeIso = todaySchedule?.closingTime
+          ? todaySchedule.closingTime instanceof Date
+            ? todaySchedule.closingTime.toISOString()
+            : String(todaySchedule.closingTime)
+          : null;
+        const storedPreds = storedPredictionsMap.get(attraction.id) ?? [];
+        const predsForBestVisit = storedPreds.length > 0 ? storedPreds : mlPreds;
+        if (predsForBestVisit.length > 0) {
           attraction.bestVisitTimes = computeBestVisitTimes(
-            mlPreds,
-            todaySchedule?.closingTime
-              ? todaySchedule.closingTime instanceof Date
-                ? todaySchedule.closingTime.toISOString()
-                : String(todaySchedule.closingTime)
-              : null,
+            predsForBestVisit,
+            closingTimeIso,
           );
         }
 
