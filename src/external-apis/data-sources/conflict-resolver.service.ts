@@ -217,7 +217,7 @@ export class ConflictResolverService {
       if (entity.qtWaitTime) waitTimes.push(entity.qtWaitTime);
       if (entity.wzWaitTime) waitTimes.push(entity.wzWaitTime);
 
-      if (waitTimes.length > 1) {
+      if (waitTimes.length >= 1) {
         entity.waitTime = this.calculateConsensusWaitTime(waitTimes);
       }
 
@@ -242,27 +242,6 @@ export class ConflictResolverService {
               `(source with wait time >= 5 min: qt=${entity.qtWaitTime ?? "-"}, wz=${entity.wzWaitTime ?? "-"})`,
           );
           entity.status = LiveStatus.OPERATING;
-
-          // Wiki reports no wait time for CLOSED attractions (queue object is absent).
-          // Without propagating the secondary source's wait time here, entity.waitTime
-          // stays undefined → adaptEntityLiveData builds no queue object →
-          // saveLiveData only persists non-OPERATING statuses when queue is absent,
-          // so the OPERATING override is silently dropped and never reaches the DB.
-          if (!entity.waitTime) {
-            if (
-              entity.qtWaitTime != null &&
-              entity.qtWaitTime >= 5 &&
-              entity.qtStatus === LiveStatus.OPERATING
-            ) {
-              entity.waitTime = entity.qtWaitTime;
-            } else if (
-              entity.wzWaitTime != null &&
-              entity.wzWaitTime >= 5 &&
-              entity.wzStatus === LiveStatus.OPERATING
-            ) {
-              entity.waitTime = entity.wzWaitTime;
-            }
-          }
         }
       }
 
