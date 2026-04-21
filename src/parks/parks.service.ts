@@ -97,6 +97,13 @@ export class ParksService {
         continue;
       }
 
+      const destinationParks = await this.parkRepository.find({
+        where: { destinationId: destination.id },
+      });
+      const parksByExternalId = new Map(
+        destinationParks.map((p) => [p.externalId, p]),
+      );
+
       for (const parkSummary of apiDestination.parks) {
         // Fetch full park entity data
         const parkEntity = await this.themeParksClient.getEntity(
@@ -109,15 +116,16 @@ export class ParksService {
         );
 
         // Check if park exists (by externalId)
-        let existing = await this.parkRepository.findOne({
-          where: { externalId: mappedData.externalId },
-        });
+        let existing = mappedData.externalId
+          ? (parksByExternalId.get(mappedData.externalId) ??
+            (await this.parkRepository.findOne({
+              where: { externalId: mappedData.externalId },
+            })))
+          : null;
 
         // If not found by externalId, check for potential duplicates by name
         if (!existing) {
-          const allParks = await this.parkRepository.find({
-            where: { destinationId: destination.id },
-          });
+          const allParks = destinationParks;
 
           const duplicate = findDuplicatePark(
             mappedData.name!,
@@ -186,10 +194,11 @@ export class ParksService {
               }
 
               // TRUE MERGE: Migrate child entities (shows, restaurants)
-              // Check if there's a "losing" park by externalId
-              const losingPark = await this.parkRepository.findOne({
-                where: { externalId: mappedData.externalId },
-              });
+              // losingPark would have been found at the externalId check above; null here is safe
+              const losingPark =
+                (mappedData.externalId &&
+                  parksByExternalId.get(mappedData.externalId)) ||
+                null;
 
               if (losingPark && losingPark.id !== duplicate.id) {
                 // Silent migration - log only summary
@@ -1777,15 +1786,21 @@ export class ParksService {
    * @param parkId - Park ID (UUID)
    * @returns Today's schedule entries
    */
-  async getTodaySchedule(parkId: string): Promise<ScheduleEntry[]> {
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["id", "timezone"],
-    });
+  async getTodaySchedule(
+    parkId: string,
+    timezone?: string,
+  ): Promise<ScheduleEntry[]> {
+    let tz = timezone;
+    if (!tz) {
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["id", "timezone"],
+      });
+      if (!park) return [];
+      tz = park.timezone ?? "UTC";
+    }
 
-    if (!park) return [];
-
-    const todayStr = getCurrentDateInTimezone(park.timezone || "UTC");
+    const todayStr = getCurrentDateInTimezone(tz);
     const cacheKey = `schedule:today:${parkId}:${todayStr}`;
     const cached = await this.redis.get(cacheKey);
 

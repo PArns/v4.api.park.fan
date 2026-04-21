@@ -1367,6 +1367,17 @@ def create_prediction_features(
             if not park_info.empty:
                 park_timezones[park_id] = park_info.iloc[0]["timezone"]
 
+        import pytz
+
+        base_time_local_cache: dict = {}
+        for tz_name in set(park_timezones.values()):
+            try:
+                base_time_local_cache[tz_name] = base_time_pd.tz_convert(
+                    pytz.timezone(tz_name)
+                )
+            except Exception:
+                base_time_local_cache[tz_name] = base_time_pd
+
         for attraction_id in attraction_ids:
             attraction_data = recent_data[recent_data["attractionId"] == attraction_id]
             park_id = attraction_to_park.get(attraction_id)
@@ -1376,18 +1387,11 @@ def create_prediction_features(
                 # Overall average (all data)
                 overall_avg = attraction_data["avg_wait"].mean()
 
-                # Convert base_time to local time for this park
-                if park_tz:
-                    try:
-                        import pytz
-
-                        tz = pytz.timezone(park_tz)
-                        base_time_local = base_time_pd.tz_convert(tz)
-                    except Exception:
-                        # Fallback to UTC if timezone conversion fails
-                        base_time_local = base_time_pd
-                else:
-                    base_time_local = base_time_pd
+                base_time_local = (
+                    base_time_local_cache.get(park_tz, base_time_pd)
+                    if park_tz
+                    else base_time_pd
+                )
 
                 # OPTIMIZATION: Use pre-computed rolling_avg_7d from DB (window function)
                 # This avoids expensive Python aggregation for every attraction

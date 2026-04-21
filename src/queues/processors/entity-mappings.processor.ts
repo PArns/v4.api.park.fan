@@ -1,7 +1,7 @@
 import { Processor, Process } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { Job } from "bull";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { AttractionsService } from "../../attractions/attractions.service";
@@ -222,9 +222,6 @@ export class EntityMappingsProcessor {
   /**
    * Match entities from two sources and create mappings
    */
-  /**
-   * Match entities from two sources and create mappings
-   */
   private async matchAndMapEntities(
     parkId: string,
     source1Entities: EntityMetadata[],
@@ -234,126 +231,152 @@ export class EntityMappingsProcessor {
     source2Name: string,
     stats: Record<string, number>,
   ): Promise<void> {
-    if (source1Entities.length === 0 || source2Entities.length === 0) {
-      return;
-    }
+    if (source1Entities.length === 0 || source2Entities.length === 0) return;
 
-    // Use EntityMatcher to find matches
     const matchResult = this.entityMatcher.matchEntities(
       source1Entities,
       source2Entities,
     );
+    if (matchResult.matched.length === 0) return;
 
-    // For each matched pair, find internal ID and create both mappings
-    for (const match of matchResult.matched) {
-      const repository = this.getRepository(entityType);
+    const repository = this.getRepository(entityType);
+    const source1ExternalIds = matchResult.matched.map(
+      (m) => m.entity1.externalId,
+    );
 
-      // Find internal entity by source1 externalId (usually Wiki, but could be Wartezeiten for WZ-only parks)
-      // NOTE: For Wiki-based parks, seeding sets Attraction.externalId = Wiki ID
-      // For Wartezeiten-only parks, externalId = Wartezeiten UUID
-      let entity = await repository.findOne({
+    // Preload entities by source1 externalId (primary lookup)
+    const entitiesByExternalId = new Map<string, any>(
+      (
+        await repository.find({
+          where: { parkId, externalId: In(source1ExternalIds) },
+        })
+      ).map((e: any) => [e.externalId, e]),
+    );
+
+    // Fallback: for unresolved IDs, query via existing source1 mappings
+    const unresolved = source1ExternalIds.filter(
+      (id) => !entitiesByExternalId.has(id),
+    );
+    if (unresolved.length > 0) {
+      const fallbackMappings = await this.mappingRepository.find({
         where: {
-          parkId,
-          externalId: match.entity1.externalId,
+          externalSource: source1Name,
+          externalEntityId: In(unresolved),
+          internalEntityType: entityType,
         },
-        relations: [], // Ensure we don't fetch unnecessary relations
       });
-
-      // Fallback: If not found by source1 externalId, try finding via existing mapping
-      // This handles cases where:
-      // 1. Entity was created with a different source's ID
-      // 2. Entity already has a mapping from a previous sync
-      if (!entity) {
-        const existingMapping = await this.mappingRepository.findOne({
-          where: {
-            externalSource: source1Name,
-            externalEntityId: match.entity1.externalId,
-            internalEntityType: entityType,
-          },
+      if (fallbackMappings.length > 0) {
+        const internalIds = fallbackMappings.map((m) => m.internalEntityId);
+        const fallbackEntities = await repository.find({
+          where: { id: In(internalIds) },
         });
-
-        if (existingMapping) {
-          entity = await repository.findOne({
-            where: { id: existingMapping.internalEntityId },
-            relations: [],
-          });
-        }
-
-        // If still not found, skip this match
-        if (!entity) {
-          this.logger.debug(
-            `Entity not found for ${source1Name}:${match.entity1.externalId} in park ${parkId}`,
-          );
-          continue;
+        const entityById = new Map<string, any>(
+          fallbackEntities.map((e: any) => [e.id, e]),
+        );
+        for (const m of fallbackMappings) {
+          const e = entityById.get(m.internalEntityId);
+          if (e) entitiesByExternalId.set(m.externalEntityId, e);
         }
       }
+    }
 
-      // Create mapping for source1 (Update confidence/cache)
-      await this.createMapping(
-        entity.id,
-        entityType,
-        source1Name,
-        match.entity1.externalId,
-        1.0, // Source of Truth
-        "exact", // Was 'seed-source'
-      );
+    // Build mapping records and collect enrichment work
+    const mappingRecords: Partial<ExternalEntityMapping>[] = [];
+    const qtIdUpdates: { id: string; qtNumericId: string }[] = [];
+    const landInfoUpdates: {
+      id: string;
+      landName: string;
+      landId: string | null;
+    }[] = [];
+    const landUpdatesOther: {
+      id: string;
+      landName: string;
+      landId: string | null;
+    }[] = [];
+
+    for (const match of matchResult.matched) {
+      const entity = entitiesByExternalId.get(match.entity1.externalId);
+      if (!entity) {
+        this.logger.debug(
+          `Entity not found for ${source1Name}:${match.entity1.externalId} in park ${parkId}`,
+        );
+        continue;
+      }
+
+      mappingRecords.push({
+        internalEntityId: entity.id,
+        internalEntityType: entityType,
+        externalSource: source1Name,
+        externalEntityId: match.entity1.externalId,
+        matchConfidence: 1.0,
+        matchMethod: "exact",
+      });
       stats[source1Name] = (stats[source1Name] || 0) + 1;
 
-      // Create mapping for source2 (Queue-Times OR Wartezeiten)
-      // This is the NEW link we need!
-      await this.createMapping(
-        entity.id,
-        entityType,
-        source2Name,
-        match.entity2.externalId,
-        match.confidence,
-        "geographic", // Was 'name+location'
-      );
+      mappingRecords.push({
+        internalEntityId: entity.id,
+        internalEntityType: entityType,
+        externalSource: source2Name,
+        externalEntityId: match.entity2.externalId,
+        matchConfidence: match.confidence,
+        matchMethod: "geographic",
+      });
       stats[source2Name] = (stats[source2Name] || 0) + 1;
 
-      // ENRICHMENT: Update additional fields based on entity type
       if (entityType === "attraction") {
-        const updates: Partial<any> = {};
-
-        // Update queueTimesEntityId if source2 is Queue-Times
-        // Extract numeric ID from "qt-ride-8" -> "8"
         if (source2Name === "queue-times") {
           const qtNumericId = this.extractQueueTimesNumericId(
             match.entity2.externalId,
           );
           if (qtNumericId && !entity.queueTimesEntityId) {
-            updates.queueTimesEntityId = qtNumericId;
+            qtIdUpdates.push({ id: entity.id, qtNumericId });
           }
         }
-
-        // Update land information if available and missing
         if (match.entity2.landName && !entity.landName) {
-          // Only update if missing (don't overwrite Wiki if present)
-          await this.attractionsService.updateLandInfo(
-            entity.id,
-            match.entity2.landName,
-            match.entity2.landId || null,
-          );
-        }
-
-        // Apply queueTimesEntityId update if needed
-        if (Object.keys(updates).length > 0) {
-          await this.attractionsService
-            .getRepository()
-            .update(entity.id, updates);
-        }
-      } else if (entityType === "show" || entityType === "restaurant") {
-        // Update land information for Shows and Restaurants if available and missing
-        // Note: Queue-Times doesn't typically have Shows/Restaurants, but Wartezeiten might
-        if (match.entity2.landName && !entity.landName) {
-          const repository = this.getRepository(entityType);
-          await repository.update(entity.id, {
+          landInfoUpdates.push({
+            id: entity.id,
             landName: match.entity2.landName,
-            landExternalId: match.entity2.landId || null,
+            landId: match.entity2.landId || null,
           });
         }
+      } else if (
+        (entityType === "show" || entityType === "restaurant") &&
+        match.entity2.landName &&
+        !entity.landName
+      ) {
+        landUpdatesOther.push({
+          id: entity.id,
+          landName: match.entity2.landName,
+          landId: match.entity2.landId || null,
+        });
       }
     }
+
+    // Flush: bulk upsert all mappings
+    if (mappingRecords.length > 0) {
+      await this.mappingRepository.upsert(mappingRecords, {
+        conflictPaths: ["externalSource", "externalEntityId"],
+        skipUpdateIfNoValuesChanged: true,
+      });
+    }
+
+    // Flush: attraction enrichments (concurrent per-entity, different rows)
+    await Promise.all([
+      ...qtIdUpdates.map(({ id, qtNumericId }) =>
+        this.attractionsService
+          .getRepository()
+          .update(id, { queueTimesEntityId: qtNumericId }),
+      ),
+      ...landInfoUpdates.map(({ id, landName, landId }) =>
+        this.attractionsService.updateLandInfo(id, landName, landId),
+      ),
+      ...landUpdatesOther.map(({ id, landName, landId }) =>
+        this.getRepository(entityType).update(id, {
+          landName,
+          landExternalId: landId,
+        }),
+      ),
+    ]);
   }
 
   /**
@@ -394,63 +417,5 @@ export class EntityMappingsProcessor {
     }
 
     return null;
-  }
-
-  /**
-   * Create entity mapping with duplicate check
-   */
-  private async createMapping(
-    internalEntityId: string,
-    internalEntityType: "park" | "attraction" | "show" | "restaurant",
-    externalSource: string,
-    externalEntityId: string,
-    matchConfidence: number,
-    matchMethod: "exact" | "fuzzy" | "manual" | "geographic", // Fixed type
-  ): Promise<void> {
-    // Check if mapping exists for this external source/ID pair
-    // The Unique Constraint is likely on (externalSource, externalEntityId)
-    const existing = await this.mappingRepository.findOne({
-      where: {
-        externalSource,
-        externalEntityId,
-      },
-    });
-
-    if (existing) {
-      // Update if internal ID differs (should not happen often) or to update details
-      if (existing.internalEntityId !== internalEntityId) {
-        this.logger.warn(
-          `Updating mapping for ${externalSource}:${externalEntityId} from ${existing.internalEntityId} to ${internalEntityId}`,
-        );
-        await this.mappingRepository.update(existing.id, {
-          internalEntityId,
-          internalEntityType,
-          matchConfidence,
-          matchMethod,
-        });
-      }
-      // else: identical mapping exists, do nothing
-    } else {
-      try {
-        await this.mappingRepository.save({
-          internalEntityId,
-          internalEntityType,
-          externalSource,
-          externalEntityId,
-          matchConfidence,
-          matchMethod,
-        });
-      } catch (error: any) {
-        // Catch race conditions
-        if (error.code === "23505") {
-          // Postgres duplicate key
-          this.logger.warn(
-            `Duplicate key ignored for ${externalSource}:${externalEntityId}`,
-          );
-        } else {
-          throw error;
-        }
-      }
-    }
   }
 }

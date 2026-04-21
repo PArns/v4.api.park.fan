@@ -9,6 +9,18 @@ import {
 import { ParksService } from "../../parks/parks.service";
 import { format, subDays, parseISO, isValid } from "date-fns";
 
+const STATS_CONCURRENCY = 10;
+
+async function batchedAll<T>(
+  items: T[],
+  fn: (item: T) => Promise<unknown>,
+  concurrency: number,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += concurrency) {
+    await Promise.all(items.slice(i, i + concurrency).map(fn));
+  }
+}
+
 @Processor("stats")
 export class StatsProcessor {
   private readonly logger = new Logger(StatsProcessor.name);
@@ -24,10 +36,14 @@ export class StatsProcessor {
     try {
       const parks = await this.parksService.findAll();
 
-      for (const park of parks) {
-        const today = getCurrentDateInTimezone(park.timezone);
-        await this.statsService.calculateAndStoreDailyStats(park.id, today);
-      }
+      await batchedAll(
+        parks,
+        (park) => {
+          const today = getCurrentDateInTimezone(park.timezone);
+          return this.statsService.calculateAndStoreDailyStats(park.id, today);
+        },
+        STATS_CONCURRENCY,
+      );
 
       this.logger.debug(`Updated stats for ${parks.length} parks.`);
     } catch (error) {
@@ -42,12 +58,17 @@ export class StatsProcessor {
     try {
       const parks = await this.parksService.findAll();
 
-      for (const park of parks) {
-        // Calculate "yesterday" in park's timezone
-        const yesterday = getYesterdayDateInTimezone(park.timezone);
-
-        await this.statsService.calculateAndStoreDailyStats(park.id, yesterday);
-      }
+      await batchedAll(
+        parks,
+        (park) => {
+          const yesterday = getYesterdayDateInTimezone(park.timezone);
+          return this.statsService.calculateAndStoreDailyStats(
+            park.id,
+            yesterday,
+          );
+        },
+        STATS_CONCURRENCY,
+      );
 
       this.logger.log(`Finalized yesterday's stats for ${parks.length} parks.`);
     } catch (error) {

@@ -45,18 +45,16 @@ def convert_to_local_time(
     tz_map = parks_metadata.set_index("park_id")["timezone"].to_dict()
 
     # We need a 'local_timestamp' column for features
-    # Vectorized approach per park (much faster than apply)
+    # Group by parkId once to avoid O(n*k) boolean masking over the full DataFrame
     df["local_timestamp"] = df["timestamp"]  # Default to UTC
 
-    for park_id in df["parkId"].unique():
+    for park_id, idx in df.groupby("parkId").groups.items():
         tz_name = tz_map.get(park_id)
         if not tz_name:
             continue
 
         try:
-            mask = df["parkId"] == park_id
-            # Convert to local time
-            df.loc[mask, "local_timestamp"] = df.loc[mask, "timestamp"].dt.tz_convert(
+            df.loc[idx, "local_timestamp"] = df.loc[idx, "timestamp"].dt.tz_convert(
                 tz_name
             )
         except Exception as e:
@@ -425,9 +423,9 @@ def add_holiday_features(
     # Assign primary features (vectorized)
     # Weekend extensions are already included in holidays_df from above
     # We include 'bridge' and 'bank' as holidays as they typically correlate with high traffic
-    df["is_holiday_primary"] = df["primary_holiday_type"].isin(
-        ["public", "bank", "bridge"]
-    ).astype(int)
+    df["is_holiday_primary"] = (
+        df["primary_holiday_type"].isin(["public", "bank", "bridge"]).astype(int)
+    )
     df["is_school_holiday_primary"] = (df["primary_holiday_type"] == "school").astype(
         int
     )
@@ -1542,8 +1540,7 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
     - Use mean for wait times (represents hourly average)
     - Forward fill up to 2 hours for minor gaps
 
-    OPTIMIZATION: Uses chunked processing to avoid memory explosion
-    from holding 2275 DataFrames in memory simultaneously
+    Processes groups in chunks to bound peak memory usage.
     """
     if df.empty:
         return df
@@ -1553,11 +1550,10 @@ def resample_data(df: pd.DataFrame) -> pd.DataFrame:
 
     print(f"   Rows before resampling: {len(df):,}")
 
-    # CRITICAL FIX: Process in chunks to avoid 15GB memory spike
-    CHUNK_SIZE = 100  # Process 100 attractions at a time
+    # Process in chunks of 100 attractions to avoid holding all groups in memory at once
+    CHUNK_SIZE = 100
     resampled_chunks = []
 
-    # Get all groups first (this is fast, just creates tuples)
     groups = list(df.groupby(["attractionId", "parkId"]))
     total_groups = len(groups)
 

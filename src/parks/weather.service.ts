@@ -209,73 +209,46 @@ export class WeatherService {
       return 0;
     }
 
-    for (const day of weatherData) {
-      try {
-        // day.date is "YYYY-MM-DD" in the park's local timezone (Open-Meteo uses
-        // timezone:"auto"). Store as noon UTC so the PostgreSQL DATE column always
-        // extracts the correct calendar day regardless of the session timezone.
-        // Midnight UTC would shift European parks (UTC+N) to the previous calendar day.
-        const dateObj = new Date(`${day.date}T12:00:00Z`);
+    // day.date is "YYYY-MM-DD" in the park's local timezone (Open-Meteo uses
+    // timezone:"auto"). Store as noon UTC so the PostgreSQL DATE column always
+    // extracts the correct calendar day regardless of the session timezone.
+    // Midnight UTC would shift European parks (UTC+N) to the previous calendar day.
+    const liveFields =
+      dataType === "current" && currentConditions
+        ? {
+            temperatureCurrent: currentConditions.temperature,
+            apparentTemperature: currentConditions.apparentTemperature,
+            humidity: currentConditions.humidity,
+            isDay: currentConditions.isDay,
+          }
+        : {};
 
-        // Check if record exists
-        const existing = await this.weatherDataRepository.findOne({
-          where: {
-            parkId,
-            date: dateObj,
-          },
-        });
+    const records = weatherData.map((day) => ({
+      parkId,
+      date: new Date(`${day.date}T12:00:00Z`),
+      dataType,
+      temperatureMax: day.temperatureMax,
+      temperatureMin: day.temperatureMin,
+      precipitationSum: day.precipitationSum,
+      rainSum: day.rainSum,
+      snowfallSum: day.snowfallSum,
+      weatherCode: day.weatherCode,
+      windSpeedMax: day.windSpeedMax,
+      ...liveFields,
+    }));
 
-        const liveFields =
-          dataType === "current" && currentConditions
-            ? {
-                temperatureCurrent: currentConditions.temperature,
-                apparentTemperature: currentConditions.apparentTemperature,
-                humidity: currentConditions.humidity,
-                isDay: currentConditions.isDay,
-              }
-            : {};
-
-        if (existing) {
-          // Update existing record using composite key
-          await this.weatherDataRepository.update(
-            { parkId, date: existing.date },
-            {
-              dataType,
-              temperatureMax: day.temperatureMax,
-              temperatureMin: day.temperatureMin,
-              precipitationSum: day.precipitationSum,
-              rainSum: day.rainSum,
-              snowfallSum: day.snowfallSum,
-              weatherCode: day.weatherCode,
-              windSpeedMax: day.windSpeedMax,
-              ...liveFields,
-            },
-          );
-        } else {
-          // Create new record
-          await this.weatherDataRepository.save({
-            parkId,
-            date: dateObj,
-            dataType,
-            temperatureMax: day.temperatureMax,
-            temperatureMin: day.temperatureMin,
-            precipitationSum: day.precipitationSum,
-            rainSum: day.rainSum,
-            snowfallSum: day.snowfallSum,
-            weatherCode: day.weatherCode,
-            windSpeedMax: day.windSpeedMax,
-            ...liveFields,
-          });
-        }
-
-        savedCount++;
-      } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Failed to save weather data for ${day.date}: ${errorMessage}`,
-        );
-      }
+    try {
+      await this.weatherDataRepository.upsert(records, {
+        conflictPaths: ["parkId", "date"],
+        skipUpdateIfNoValuesChanged: true,
+      });
+      savedCount = records.length;
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to save weather data for park ${parkId}: ${errorMessage}`,
+      );
     }
 
     return savedCount;

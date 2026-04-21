@@ -82,41 +82,59 @@ export class ShowsService {
         (child) => child.entityType === "SHOW",
       );
 
+      const parkShows = await this.showRepository.find({
+        where: { parkId: park.id },
+        select: ["id", "externalId", "slug"],
+      });
+      const showsByExternalId = new Map(
+        parkShows.map((s) => [s.externalId, s]),
+      );
+      const existingSlugs = new Set(parkShows.map((s) => s.slug));
+
+      const toUpdate: {
+        id: string;
+        name?: string;
+        latitude?: number;
+        longitude?: number;
+      }[] = [];
+      const toInsert: Partial<Show>[] = [];
+
       for (const showEntity of shows) {
         const mappedData = this.themeParksMapper.mapShow(showEntity, park.id);
-
-        // Check if show exists (by externalId)
-        const existing = await this.showRepository.findOne({
-          where: { externalId: mappedData.externalId },
-        });
+        const existing = showsByExternalId.get(mappedData.externalId!);
 
         if (existing) {
-          // Update existing show (keep existing slug)
-          await this.showRepository.update(existing.id, {
+          toUpdate.push({
+            id: existing.id,
             name: mappedData.name,
-            latitude: mappedData.latitude,
-            longitude: mappedData.longitude,
+            ...(mappedData.latitude != null && {
+              latitude: mappedData.latitude,
+            }),
+            ...(mappedData.longitude != null && {
+              longitude: mappedData.longitude,
+            }),
           });
         } else {
-          // Generate unique slug for this park
           const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-
-          // Get all existing slugs for this park
-          const existingShows = await this.showRepository.find({
-            where: { parkId: park.id },
-            select: ["slug"],
-          });
-          const existingSlugs = existingShows.map((s) => s.slug);
-
-          // Generate unique slug
-          const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+          const uniqueSlug = generateUniqueSlug(baseSlug, [...existingSlugs]);
+          existingSlugs.add(uniqueSlug);
           mappedData.slug = uniqueSlug;
-
-          // Insert new show
-          await this.showRepository.save(mappedData);
+          toInsert.push(mappedData);
         }
 
         syncedCount++;
+      }
+
+      if (toUpdate.length > 0) {
+        await Promise.all(
+          toUpdate.map(({ id, ...fields }) =>
+            this.showRepository.update(id, fields),
+          ),
+        );
+      }
+
+      if (toInsert.length > 0) {
+        await this.showRepository.save(toInsert);
       }
     }
 

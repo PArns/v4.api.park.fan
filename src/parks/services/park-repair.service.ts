@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -22,7 +22,6 @@ export class ParkRepairService {
   constructor(
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
-    private readonly dataSource: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkMergeService: ParkMergeService,
   ) {}
@@ -44,32 +43,32 @@ export class ParkRepairService {
       errors: [],
     };
 
+    const correctQtIds = fixes.map((f) => f.correctQtId);
+    const conflicting = await this.parkRepository.find({
+      where: { queueTimesEntityId: In(correctQtIds) },
+      select: ["id", "name", "queueTimesEntityId"],
+    });
+    const qtIdToOwner = new Map(
+      conflicting.map((p) => [p.queueTimesEntityId!, p]),
+    );
+
     for (const fix of fixes) {
       try {
-        await this.dataSource.transaction(async (manager) => {
-          // Validate that the correct QT ID is not already used
-          const existingPark = await manager.findOne(Park, {
-            where: { queueTimesEntityId: fix.correctQtId },
-          });
-
-          if (existingPark && existingPark.id !== fix.parkId) {
-            throw new Error(
-              `QT-ID ${fix.correctQtId} is already used by park "${existingPark.name}" (${existingPark.id})`,
-            );
-          }
-
-          // Update the park
-          await manager.update(Park, fix.parkId, {
-            queueTimesEntityId: fix.correctQtId,
-          });
-
-          result.fixedQtMismatches++;
-          this.logger.log(
-            `✅ Fixed QT-ID for park ${fix.parkId}: ${fix.correctQtId}`,
+        const existingPark = qtIdToOwner.get(fix.correctQtId);
+        if (existingPark && existingPark.id !== fix.parkId) {
+          throw new Error(
+            `QT-ID ${fix.correctQtId} is already used by park "${existingPark.name}" (${existingPark.id})`,
           );
+        }
+
+        await this.parkRepository.update(fix.parkId, {
+          queueTimesEntityId: fix.correctQtId,
         });
 
-        // Invalidate cache
+        result.fixedQtMismatches++;
+        this.logger.log(
+          `✅ Fixed QT-ID for park ${fix.parkId}: ${fix.correctQtId}`,
+        );
         await this.invalidateParkCache(fix.parkId);
       } catch (error) {
         const errorMessage =
@@ -106,32 +105,32 @@ export class ParkRepairService {
       errors: [],
     };
 
+    const correctWzIds = fixes.map((f) => f.correctWzId);
+    const conflicting = await this.parkRepository.find({
+      where: { wartezeitenEntityId: In(correctWzIds) },
+      select: ["id", "name", "wartezeitenEntityId"],
+    });
+    const wzIdToOwner = new Map(
+      conflicting.map((p) => [p.wartezeitenEntityId!, p]),
+    );
+
     for (const fix of fixes) {
       try {
-        await this.dataSource.transaction(async (manager) => {
-          // Validate that the correct WZ ID is not already used
-          const existingPark = await manager.findOne(Park, {
-            where: { wartezeitenEntityId: fix.correctWzId },
-          });
-
-          if (existingPark && existingPark.id !== fix.parkId) {
-            throw new Error(
-              `WZ-ID ${fix.correctWzId} is already used by park "${existingPark.name}" (${existingPark.id})`,
-            );
-          }
-
-          // Update the park
-          await manager.update(Park, fix.parkId, {
-            wartezeitenEntityId: fix.correctWzId,
-          });
-
-          result.fixedWzMismatches++;
-          this.logger.log(
-            `✅ Fixed WZ-ID for park ${fix.parkId}: ${fix.correctWzId}`,
+        const existingPark = wzIdToOwner.get(fix.correctWzId);
+        if (existingPark && existingPark.id !== fix.parkId) {
+          throw new Error(
+            `WZ-ID ${fix.correctWzId} is already used by park "${existingPark.name}" (${existingPark.id})`,
           );
+        }
+
+        await this.parkRepository.update(fix.parkId, {
+          wartezeitenEntityId: fix.correctWzId,
         });
 
-        // Invalidate cache
+        result.fixedWzMismatches++;
+        this.logger.log(
+          `✅ Fixed WZ-ID for park ${fix.parkId}: ${fix.correctWzId}`,
+        );
         await this.invalidateParkCache(fix.parkId);
       } catch (error) {
         const errorMessage =
@@ -166,47 +165,51 @@ export class ParkRepairService {
       errors: [],
     };
 
+    const qtIds = additions.map((a) => a.qtId);
+    const parkIds = additions.map((a) => a.parkId);
+    const [conflicting, targetParks] = await Promise.all([
+      this.parkRepository.find({
+        where: { queueTimesEntityId: In(qtIds) },
+        select: ["id", "name", "queueTimesEntityId"],
+      }),
+      this.parkRepository.find({
+        where: { id: In(parkIds) },
+        select: ["id", "queueTimesEntityId"],
+      }),
+    ]);
+    const qtIdToOwner = new Map(
+      conflicting.map((p) => [p.queueTimesEntityId!, p]),
+    );
+    const parkById = new Map(targetParks.map((p) => [p.id, p]));
+
     for (const addition of additions) {
       try {
-        await this.dataSource.transaction(async (manager) => {
-          // Validate that the QT ID is not already used
-          const existingPark = await manager.findOne(Park, {
-            where: { queueTimesEntityId: addition.qtId },
-          });
-
-          if (existingPark) {
-            throw new Error(
-              `QT-ID ${addition.qtId} is already used by park "${existingPark.name}" (${existingPark.id})`,
-            );
-          }
-
-          // Get the park to ensure it exists and doesn't already have a QT ID
-          const park = await manager.findOne(Park, {
-            where: { id: addition.parkId },
-          });
-
-          if (!park) {
-            throw new Error(`Park ${addition.parkId} not found`);
-          }
-
-          if (park.queueTimesEntityId) {
-            throw new Error(
-              `Park ${addition.parkId} already has QT-ID: ${park.queueTimesEntityId}`,
-            );
-          }
-
-          // Update the park
-          await manager.update(Park, addition.parkId, {
-            queueTimesEntityId: addition.qtId,
-          });
-
-          result.addedQtIds++;
-          this.logger.log(
-            `✅ Added QT-ID ${addition.qtId} to park ${addition.parkId}`,
+        const existingPark = qtIdToOwner.get(addition.qtId);
+        if (existingPark) {
+          throw new Error(
+            `QT-ID ${addition.qtId} is already used by park "${existingPark.name}" (${existingPark.id})`,
           );
+        }
+
+        const park = parkById.get(addition.parkId);
+        if (!park) {
+          throw new Error(`Park ${addition.parkId} not found`);
+        }
+
+        if (park.queueTimesEntityId) {
+          throw new Error(
+            `Park ${addition.parkId} already has QT-ID: ${park.queueTimesEntityId}`,
+          );
+        }
+
+        await this.parkRepository.update(addition.parkId, {
+          queueTimesEntityId: addition.qtId,
         });
 
-        // Invalidate cache
+        result.addedQtIds++;
+        this.logger.log(
+          `✅ Added QT-ID ${addition.qtId} to park ${addition.parkId}`,
+        );
         await this.invalidateParkCache(addition.parkId);
       } catch (error) {
         const errorMessage =
@@ -243,47 +246,51 @@ export class ParkRepairService {
       errors: [],
     };
 
+    const wzIds = additions.map((a) => a.wzId);
+    const parkIds = additions.map((a) => a.parkId);
+    const [conflicting, targetParks] = await Promise.all([
+      this.parkRepository.find({
+        where: { wartezeitenEntityId: In(wzIds) },
+        select: ["id", "name", "wartezeitenEntityId"],
+      }),
+      this.parkRepository.find({
+        where: { id: In(parkIds) },
+        select: ["id", "wartezeitenEntityId"],
+      }),
+    ]);
+    const wzIdToOwner = new Map(
+      conflicting.map((p) => [p.wartezeitenEntityId!, p]),
+    );
+    const parkById = new Map(targetParks.map((p) => [p.id, p]));
+
     for (const addition of additions) {
       try {
-        await this.dataSource.transaction(async (manager) => {
-          // Validate that the WZ ID is not already used
-          const existingPark = await manager.findOne(Park, {
-            where: { wartezeitenEntityId: addition.wzId },
-          });
-
-          if (existingPark) {
-            throw new Error(
-              `WZ-ID ${addition.wzId} is already used by park "${existingPark.name}" (${existingPark.id})`,
-            );
-          }
-
-          // Get the park to ensure it exists and doesn't already have a WZ ID
-          const park = await manager.findOne(Park, {
-            where: { id: addition.parkId },
-          });
-
-          if (!park) {
-            throw new Error(`Park ${addition.parkId} not found`);
-          }
-
-          if (park.wartezeitenEntityId) {
-            throw new Error(
-              `Park ${addition.parkId} already has WZ-ID: ${park.wartezeitenEntityId}`,
-            );
-          }
-
-          // Update the park
-          await manager.update(Park, addition.parkId, {
-            wartezeitenEntityId: addition.wzId,
-          });
-
-          result.addedWzIds++;
-          this.logger.log(
-            `✅ Added WZ-ID ${addition.wzId} to park ${addition.parkId}`,
+        const existingPark = wzIdToOwner.get(addition.wzId);
+        if (existingPark) {
+          throw new Error(
+            `WZ-ID ${addition.wzId} is already used by park "${existingPark.name}" (${existingPark.id})`,
           );
+        }
+
+        const park = parkById.get(addition.parkId);
+        if (!park) {
+          throw new Error(`Park ${addition.parkId} not found`);
+        }
+
+        if (park.wartezeitenEntityId) {
+          throw new Error(
+            `Park ${addition.parkId} already has WZ-ID: ${park.wartezeitenEntityId}`,
+          );
+        }
+
+        await this.parkRepository.update(addition.parkId, {
+          wartezeitenEntityId: addition.wzId,
         });
 
-        // Invalidate cache
+        result.addedWzIds++;
+        this.logger.log(
+          `✅ Added WZ-ID ${addition.wzId} to park ${addition.parkId}`,
+        );
         await this.invalidateParkCache(addition.parkId);
       } catch (error) {
         const errorMessage =

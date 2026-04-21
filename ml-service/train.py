@@ -436,24 +436,28 @@ def train_model(version: str = None) -> None:
     # we group data by week and randomly select 20% of the weeks for validation.
     # This ensures both training and validation sets contain data from all seasonal
     # phases (e.g., cold winter and busy spring start).
-    
+
     # Create a unique week identifier (Year + ISO Week)
-    df["_week_id"] = (df["timestamp"].dt.year * 100 + df["timestamp"].dt.isocalendar().week).astype(int)
+    df["_week_id"] = (
+        df["timestamp"].dt.year * 100 + df["timestamp"].dt.isocalendar().week
+    ).astype(int)
     unique_weeks = df["_week_id"].unique()
-    
+
     if len(unique_weeks) < 4:
         # Fallback for very sparse data: use simple percentage split
         validation_ratio = 0.2
-        logger.info(f"📊 Sparse data ({len(unique_weeks)} weeks): Using simple 80/20 percentage split")
-        
+        logger.info(
+            f"📊 Sparse data ({len(unique_weeks)} weeks): Using simple 80/20 percentage split"
+        )
+
         df = df.sort_values("timestamp")
         split_idx = int(len(df) * (1 - validation_ratio))
-        
+
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
         X_val = X.iloc[split_idx:]
         y_val = y.iloc[split_idx:]
-        
+
         if sample_weights is not None:
             train_weights = sample_weights[:split_idx]
         else:
@@ -461,23 +465,24 @@ def train_model(version: str = None) -> None:
     else:
         # Blocked Split: Select 20% of weeks for validation
         import numpy as np
+
         rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
-        
+
         # Shuffle weeks and pick 20%
         shuffled_weeks = unique_weeks.copy()
         rng.shuffle(shuffled_weeks)
-        
+
         val_week_count = max(1, int(len(unique_weeks) * 0.2))
         val_weeks = set(shuffled_weeks[:val_week_count])
-        
+
         val_mask = df["_week_id"].isin(val_weeks)
         train_mask = ~val_mask
-        
+
         X_train = X[train_mask]
         y_train = y[train_mask]
         X_val = X[val_mask]
         y_val = y[val_mask]
-        
+
         if sample_weights is not None:
             train_weights = sample_weights[train_mask.values]
         else:
@@ -487,9 +492,7 @@ def train_model(version: str = None) -> None:
             f"📊 Randomized Weekly Block Split: {len(unique_weeks) - val_week_count} weeks for training, "
             f"{val_week_count} weeks for validation"
         )
-        logger.info(
-            f"   Validation weeks: {sorted(list(val_weeks))}"
-        )
+        logger.info(f"   Validation weeks: {sorted(list(val_weeks))}")
 
     # Cleanup temporary column
     df = df.drop(columns=["_week_id"], errors="ignore")

@@ -42,10 +42,8 @@ def filter_predictions_by_schedule(
     # Fetch park metadata for timezone info
     parks_metadata = fetch_parks_metadata()
 
-    # CRITICAL FIX: Convert UUID objects to strings for comparison
-    # Predictions have park_id as strings, but DB returns UUID objects
+    # DB returns UUID objects; predictions use string park_ids — normalise to str.
     if not parks_metadata.empty:
-        # Avoid SettingWithCopyWarning if it's a slice
         parks_metadata = parks_metadata.copy()
         parks_metadata["park_id"] = parks_metadata["park_id"].astype(str)
 
@@ -62,7 +60,7 @@ def filter_predictions_by_schedule(
         # Get park metadata for timezone
         park_info = parks_metadata[parks_metadata["park_id"] == park_id]
         if park_info.empty:
-            # No metadata - keep all predictions (should be rare now with UUID fix)
+            # No metadata - keep all predictions
             print(f"⚠️  No metadata for park {park_id}, keeping all predictions")
             filtered_predictions.extend(park_preds)
             continue

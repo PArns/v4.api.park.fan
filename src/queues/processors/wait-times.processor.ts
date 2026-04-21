@@ -634,10 +634,22 @@ export class WaitTimesProcessor {
     let totalHeartbeats = 0;
     try {
       const parks = await this.parksService.findAll();
+
+      const allAttractions = await this.attractionsService
+        .getRepository()
+        .find({ select: ["id", "name", "externalId", "parkId"] });
+      const attractionsByPark = new Map<string, typeof allAttractions>();
+      for (const a of allAttractions) {
+        const list = attractionsByPark.get(a.parkId) ?? [];
+        list.push(a);
+        attractionsByPark.set(a.parkId, list);
+      }
+
       for (const park of parks) {
         try {
           const todaySchedule = await this.parksService.getTodaySchedule(
             park.id,
+            park.timezone ?? undefined,
           );
           const operating = todaySchedule.find(
             (s) => s.scheduleType === "OPERATING" && s.openingTime,
@@ -649,12 +661,7 @@ export class WaitTimesProcessor {
             ? new Date(operating.closingTime)
             : null;
           if (now < open || (close && now > close)) continue;
-          const attractions = await this.attractionsService
-            .getRepository()
-            .find({
-              where: { parkId: park.id },
-              select: ["id", "name", "externalId"],
-            });
+          const attractions = attractionsByPark.get(park.id) ?? [];
           if (attractions.length === 0) continue;
           const latestData = await this.queueDataRepository
             .createQueryBuilder("qd")
