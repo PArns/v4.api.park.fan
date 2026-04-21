@@ -1237,14 +1237,17 @@ export class ParksService {
       .andWhere("schedule.date <= :endDate", { endDate: endStr })
       .getMany();
 
-    const existingDates = new Set(
-      existingEntries.map((e) =>
-        formatInParkTimezone(
-          e.date instanceof Date ? e.date : new Date(e.date),
-          park.timezone,
-        ),
-      ),
-    );
+    // Map existing entries by their local date string for O(1) lookup
+    const existingEntryMap = new Map<string, ScheduleEntry>();
+    existingEntries.forEach((e) => {
+      const eDateStr = formatInParkTimezone(
+        e.date instanceof Date ? e.date : new Date(e.date),
+        park.timezone,
+      );
+      existingEntryMap.set(eDateStr, e);
+    });
+
+    const existingDates = new Set(existingEntryMap.keys());
 
     // 2. Fetch Holidays
     // Extend range by 1 day for bridge day detection
@@ -1350,20 +1353,8 @@ export class ParksService {
         existingDates.add(dateStr); // Prevent duplicate within same run
         filledCount++;
       } else {
-        // Entry exists: collect updates for batch processing
-        const existing = existingEntries.find((e) => {
-          const eDateStr = formatInParkTimezone(
-            e.date instanceof Date ? e.date : new Date(e.date),
-            park.timezone,
-          );
-          return eDateStr === dateStr;
-        });
-
-        if (!existing) {
-          // Advance to next day
-          dateStr = addDays(noonUtc, 1).toISOString().slice(0, 10);
-          continue;
-        }
+        // Entry exists: collect updates for batch processing (O(1) lookup via Map)
+        const existing = existingEntryMap.get(dateStr)!;
 
         const holidayChanged =
           existing.isHoliday !== holidayInfo.isHoliday ||
