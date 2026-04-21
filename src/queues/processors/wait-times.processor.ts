@@ -684,11 +684,13 @@ export class WaitTimesProcessor {
               if (isStale) continue;
 
               await this.queueDataRepository.save({
+                id: crypto.randomUUID(),
                 attractionId: a.id,
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
                 waitTime: last ? last.waitTime : 0,
                 lastUpdated: now,
+                timestamp: now,
               });
               totalHeartbeats++;
             }
