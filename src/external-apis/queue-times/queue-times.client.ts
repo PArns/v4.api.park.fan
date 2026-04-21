@@ -69,18 +69,22 @@ export class QueueTimesClient {
       const response = await this.client.get<QueueTimesParkQueueData>(url);
       return response.data;
     } catch (error) {
-      // Extract useful error information
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       const isNetworkError =
+        error instanceof AggregateError ||
         errorMessage.includes("ENOTFOUND") ||
         errorMessage.includes("ECONNREFUSED") ||
-        errorMessage.includes("ETIMEDOUT") ||
-        errorMessage.includes("AggregateError");
+        errorMessage.includes("ETIMEDOUT");
 
       if (isNetworkError) {
+        // AggregateError wraps multiple causes — log each inner error for diagnosis
+        const causes =
+          error instanceof AggregateError && error.errors?.length
+            ? error.errors.map((e: unknown) => String(e)).join(", ")
+            : errorMessage;
         this.logger.warn(
-          `Network error fetching queue times for park ${parkId}: ${errorMessage}`,
+          `Network error fetching queue times for park ${parkId}: ${causes}`,
         );
       } else {
         this.logger.error(
@@ -88,7 +92,6 @@ export class QueueTimesClient {
         );
       }
 
-      // Log to dedicated file for later analysis
       logExternalApiError("QueueTimesClient", "getParkQueueTimes", error, {
         parkId,
         url,

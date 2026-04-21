@@ -6,6 +6,7 @@ import {
 } from "./interfaces/data-source.interface";
 import { EntityMatcherService } from "./entity-matcher.service";
 import { ConflictResolverService } from "./conflict-resolver.service";
+import { logExternalApiError } from "../../common/utils/file-logger.util";
 
 /**
  * Multi-Source Orchestrator
@@ -236,7 +237,29 @@ export class MultiSourceOrchestrator {
           const liveData = await source.fetchParkLiveData(externalId);
           liveDataBySource.set(sourceName, liveData);
         } catch (error) {
-          this.logger.error(`Failed to fetch from ${sourceName}: ${error}`);
+          const isNetworkError =
+            error instanceof AggregateError ||
+            (error instanceof Error &&
+              (error.message.includes("ENOTFOUND") ||
+                error.message.includes("ECONNREFUSED") ||
+                error.message.includes("ETIMEDOUT")));
+          const detail =
+            error instanceof AggregateError && error.errors?.length
+              ? error.errors.map((e: unknown) => String(e)).join(", ")
+              : String(error);
+          if (isNetworkError) {
+            this.logger.warn(
+              `Network error fetching from ${sourceName}: ${detail}`,
+            );
+          } else {
+            this.logger.error(`Failed to fetch from ${sourceName}: ${detail}`);
+            logExternalApiError(
+              "MultiSourceOrchestrator",
+              `fetchParkLiveData:${sourceName}`,
+              error,
+              { parkId, sourceName, externalId },
+            );
+          }
         }
       },
     );
