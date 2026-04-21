@@ -43,7 +43,7 @@ export class MLService {
   private readonly ML_SERVICE_URL: string;
 
   // Cache TTLs based on prediction generation frequency
-  private readonly TTL_HOURLY_PREDICTIONS = 60 * 60; // 1 hour - aligned with hourly generation
+  private readonly TTL_HOURLY_PREDICTIONS = 30 * 60; // 30 minutes - matches createdAtCutoff window
   private readonly TTL_DAILY_PREDICTIONS = 6 * 60 * 60; // 6 hours - more stable, less volatile
 
   constructor(
@@ -1112,17 +1112,64 @@ export class MLService {
     }
 
     // Require predictions to have been created recently.
-    // Hourly predictions are regenerated every hour — allow 2h window to survive a delayed cron run.
+    // Hourly predictions are regenerated every 15 min — allow 30 min (2 intervals) to survive a delayed run.
     // Daily predictions are regenerated once per day — allow 26h window.
     const createdAtCutoff =
       predictionType === "hourly"
-        ? new Date(Date.now() - 2 * 60 * 60 * 1000)
+        ? new Date(Date.now() - 30 * 60 * 1000)
         : new Date(Date.now() - 26 * 60 * 60 * 1000);
     queryBuilder.andWhere("p.createdAt >= :createdAtCutoff", {
       createdAtCutoff,
     });
 
     return queryBuilder.getMany();
+  }
+
+  async getBatchStoredPredictions(
+    attractionIds: string[],
+    predictionType: "hourly" | "daily" = "hourly",
+    startTime?: Date,
+  ): Promise<Map<string, PredictionDto[]>> {
+    if (attractionIds.length === 0) {
+      return new Map();
+    }
+
+    const createdAtCutoff =
+      predictionType === "hourly"
+        ? new Date(Date.now() - 30 * 60 * 1000)
+        : new Date(Date.now() - 26 * 60 * 60 * 1000);
+
+    const queryBuilder = this.predictionRepository
+      .createQueryBuilder("p")
+      .where("p.attractionId IN (:...attractionIds)", { attractionIds })
+      .andWhere("p.predictionType = :predictionType", { predictionType })
+      .andWhere("p.createdAt >= :createdAtCutoff", { createdAtCutoff })
+      .orderBy("p.predictedTime", "ASC");
+
+    if (startTime) {
+      queryBuilder.andWhere("p.predictedTime >= :startTime", { startTime });
+    }
+
+    const rows = await queryBuilder.getMany();
+
+    const result = new Map<string, PredictionDto[]>();
+    for (const p of rows) {
+      const list = result.get(p.attractionId) ?? [];
+      list.push({
+        attractionId: p.attractionId,
+        predictedTime: p.predictedTime.toISOString(),
+        predictedWaitTime: p.predictedWaitTime,
+        predictionType: p.predictionType,
+        confidence: p.confidence,
+        crowdLevel: p.crowdLevel,
+        baseline: p.baseline,
+        modelVersion: p.modelVersion,
+        status: p.status || undefined,
+      });
+      result.set(p.attractionId, list);
+    }
+
+    return result;
   }
 
   /**

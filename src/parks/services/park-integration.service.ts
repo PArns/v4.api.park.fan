@@ -53,10 +53,10 @@ export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
   // Multi-tier caching strategy aligned with actual update frequencies
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (matches background job update frequency)
+  // TTL for OPERATING parks is driven by wait-times sync (every 5 min), not by prediction generation.
+  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (matches wait-times sync)
   private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
   private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
-  private readonly TTL_ML_HOURLY = 60 * 60; // 1 hour (hourly predictions update at :15)
   private readonly TTL_WEATHER_FORECAST = 6 * 60 * 60; // 6 hours (forecast updates every 12h)
   private readonly TTL_WEATHER_CURRENT = 6 * 60 * 60; // 6 hours (current updates every 12h)
   private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
@@ -484,6 +484,7 @@ export class ParkIntegrationService {
         attractionHistoryMap,
         trendsMap,
         headlinerIds,
+        storedPredictionsMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP50s(attractionIds),
         this.analyticsService.getBatchAttractionP90s(attractionIds),
@@ -498,6 +499,7 @@ export class ParkIntegrationService {
         ),
         this.analyticsService.getBatchAttractionTrends(attractionIds),
         this.analyticsService.getHeadlinerAttractionIds(park.id),
+        this.mlService.getBatchStoredPredictions(attractionIds, "hourly", new Date()),
       ]);
 
       for (const attraction of dto.attractions) {
@@ -714,16 +716,20 @@ export class ParkIntegrationService {
           attraction.url = null;
         }
 
-        // Best visit times — derived from per-attraction ML predictions (already batched).
-        // Cached with the park response (15 min TTL via park:integrated cache).
-        if (mlPreds.length > 0) {
+        // Best visit times — use stored DB predictions (same source as the single-attraction
+        // endpoint) so rankings are consistent across park/favorites and detail views.
+        // Falls back to the live getParkPredictions data when no stored predictions exist.
+        const closingTimeIso = todaySchedule?.closingTime
+          ? todaySchedule.closingTime instanceof Date
+            ? todaySchedule.closingTime.toISOString()
+            : String(todaySchedule.closingTime)
+          : null;
+        const storedPreds = storedPredictionsMap.get(attraction.id) ?? [];
+        const predsForBestVisit = storedPreds.length > 0 ? storedPreds : mlPreds;
+        if (predsForBestVisit.length > 0) {
           attraction.bestVisitTimes = computeBestVisitTimes(
-            mlPreds,
-            todaySchedule?.closingTime
-              ? todaySchedule.closingTime instanceof Date
-                ? todaySchedule.closingTime.toISOString()
-                : String(todaySchedule.closingTime)
-              : null,
+            predsForBestVisit,
+            closingTimeIso,
           );
         }
 

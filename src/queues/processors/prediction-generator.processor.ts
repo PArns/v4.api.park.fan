@@ -1,9 +1,11 @@
 import { Processor, Process } from "@nestjs/bull";
-import { Logger, OnModuleInit } from "@nestjs/common";
+import { Logger, OnModuleInit, Inject } from "@nestjs/common";
 import { Job } from "bull";
+import { Redis } from "ioredis";
 import { MLService } from "../../ml/ml.service";
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * Prediction Generator Processor
@@ -19,6 +21,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     private mlService: MLService,
     private parksService: ParksService,
     private cacheWarmupService: CacheWarmupService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     this.logger.log("🔧 PredictionGeneratorProcessor CONSTRUCTED");
   }
@@ -123,6 +126,12 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 await this.mlService.storePredictions(response.predictions);
                 totalPredictions += response.predictions.length;
                 successParks++;
+
+                // Invalidate park integrated cache so the next request picks up
+                // fresh bestVisitTimes immediately instead of waiting for TTL expiry.
+                await this.redis
+                  .del(`park:integrated:${park.id}`)
+                  .catch(() => {});
               } else {
                 this.logger.debug(
                   `No hourly predictions returned for park: ${park.name}`,
