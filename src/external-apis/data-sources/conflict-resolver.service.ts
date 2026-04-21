@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   LiveDataResponse,
+  LiveStatus,
   OperatingWindow,
 } from "./interfaces/data-source.interface";
 import { normalizeForMatching } from "../../common/utils/slug.util";
@@ -18,6 +19,8 @@ interface MergedEntity {
   waitTime?: number; // Final calculated wait time
   qtWaitTime?: number; // Temporary: Queue-Times wait time
   wzWaitTime?: number; // Temporary: Wartezeiten wait time
+  qtStatus?: LiveStatus; // Temporary: Queue-Times status
+  wzStatus?: LiveStatus; // Temporary: Wartezeiten status
   [key: string]: any; // Additional properties from sources
 }
 
@@ -218,9 +221,35 @@ export class ConflictResolverService {
         entity.waitTime = this.calculateConsensusWaitTime(waitTimes);
       }
 
+      // Prefer sources with actual data (>= 5 min) over a CLOSED/DOWN base status.
+      // Wiki is used as base but can report stale "closed" while other sources
+      // are actively reporting operating attractions with real wait times.
+      if (
+        entity.status === LiveStatus.CLOSED ||
+        entity.status === LiveStatus.DOWN
+      ) {
+        const hasOperatingSourceWithData =
+          (entity.qtWaitTime != null &&
+            entity.qtWaitTime >= 5 &&
+            entity.qtStatus === LiveStatus.OPERATING) ||
+          (entity.wzWaitTime != null &&
+            entity.wzWaitTime >= 5 &&
+            entity.wzStatus === LiveStatus.OPERATING);
+
+        if (hasOperatingSourceWithData) {
+          this.logger.log(
+            `Status override for "${entity.name}": ${entity.status} → OPERATING ` +
+              `(source with wait time >= 5 min: qt=${entity.qtWaitTime ?? "-"}, wz=${entity.wzWaitTime ?? "-"})`,
+          );
+          entity.status = LiveStatus.OPERATING;
+        }
+      }
+
       // Cleanup temporary merge fields
       delete entity.qtWaitTime;
       delete entity.wzWaitTime;
+      delete entity.qtStatus;
+      delete entity.wzStatus;
     }
 
     return Array.from(merged.values());
@@ -248,10 +277,11 @@ export class ConflictResolverService {
       const existing = merged.get(key)!;
       existing.sources.push(sourceName);
 
-      // Store source-specific wait time for later conflict resolution
+      // Store source-specific wait time and status for later conflict resolution
       if (entity.waitTime) {
         const sourceKey = this.getSourceKey(sourceName);
         existing[`${sourceKey}WaitTime`] = entity.waitTime;
+        existing[`${sourceKey}Status`] = entity.status;
       }
     } else {
       // New entity: add to map
