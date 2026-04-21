@@ -147,9 +147,16 @@ export class P50BaselineProcessor {
             );
 
             if (baseline.p50 === 0) {
-              this.logger.warn(
-                `P50 baseline is 0 for attraction ${attraction.name} (${attraction.id}) - insufficient data`,
-              );
+              // sampleCount=0 means no qualifying data (waitTime<10 or show/walkthrough) — not a real error
+              if (baseline.sampleCount > 0) {
+                this.logger.warn(
+                  `P50 baseline is 0 for attraction ${attraction.name} (${attraction.id}) - ${baseline.sampleCount} samples but median is 0`,
+                );
+              } else {
+                this.logger.debug(
+                  `Skipping P50 for ${attraction.name} — no qualifying data (low-wait or show attraction)`,
+                );
+              }
               failureCount++;
               continue;
             }

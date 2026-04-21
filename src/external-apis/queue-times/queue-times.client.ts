@@ -6,6 +6,23 @@ import {
 } from "./queue-times.types";
 import { logExternalApiError } from "../../common/utils/file-logger.util";
 
+const TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 1_000;
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof AggregateError) return true;
+  if (!(error instanceof Error)) return false;
+  const msg = error.message;
+  return (
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("EAI_AGAIN") ||
+    msg.includes("ENOTFOUND") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("ECONNREFUSED")
+  );
+}
+
 /**
  * Queue-Times.com API Client
  *
@@ -24,7 +41,7 @@ export class QueueTimesClient {
   constructor() {
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 30000, // 30 seconds (increased from 10s to reduce timeout errors)
+      timeout: TIMEOUT_MS,
     });
   }
 
@@ -41,10 +58,7 @@ export class QueueTimesClient {
       return response.data;
     } catch (error) {
       this.logger.error(`Error fetching parks from Queue-Times: ${error}`);
-
-      // Log to dedicated file for later analysis
       logExternalApiError("QueueTimesClient", "getParks", error, { url });
-
       throw error;
     }
   }
@@ -52,52 +66,63 @@ export class QueueTimesClient {
   /**
    * GET /parks/{parkId}/queue_times.json
    *
-   * Fetches queue times for a specific park (rides grouped by lands)
-   * Timestamps are in UTC
+   * Fetches queue times for a specific park with exponential-backoff retry
+   * for transient network errors (ETIMEDOUT, EAI_AGAIN, ECONNRESET).
    *
    * @param parkId - Queue-Times park ID (numeric)
    */
   async getParkQueueTimes(parkId: number): Promise<QueueTimesParkQueueData> {
-    // SECURITY: Validate parkId to prevent injection
     if (!Number.isInteger(parkId) || parkId <= 0) {
       throw new Error(`Invalid parkId: ${parkId}. Must be a positive integer.`);
     }
 
     const url = `/parks/${parkId}/queue_times.json`;
+    let lastError: unknown;
 
-    try {
-      const response = await this.client.get<QueueTimesParkQueueData>(url);
-      return response.data;
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      const isNetworkError =
-        error instanceof AggregateError ||
-        errorMessage.includes("ENOTFOUND") ||
-        errorMessage.includes("ECONNREFUSED") ||
-        errorMessage.includes("ETIMEDOUT");
-
-      if (isNetworkError) {
-        // AggregateError wraps multiple causes — log each inner error for diagnosis
-        const causes =
-          error instanceof AggregateError && error.errors?.length
-            ? error.errors.map((e: unknown) => String(e)).join(", ")
-            : errorMessage;
-        this.logger.warn(
-          `Network error fetching queue times for park ${parkId}: ${causes}`,
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_BASE_MS * 2 ** (attempt - 1); // 1s, 2s
+        this.logger.debug(
+          `Retrying park ${parkId} (attempt ${attempt}/${MAX_RETRIES}) after ${delay}ms`,
         );
-      } else {
-        this.logger.error(
-          `Error fetching queue times for park ${parkId}: ${errorMessage}`,
-        );
+        await new Promise((r) => setTimeout(r, delay));
       }
 
-      logExternalApiError("QueueTimesClient", "getParkQueueTimes", error, {
-        parkId,
-        url,
-      });
+      try {
+        const response = await this.client.get<QueueTimesParkQueueData>(url);
+        return response.data;
+      } catch (error) {
+        lastError = error;
 
-      throw error;
+        if (!isRetryableError(error) || attempt === MAX_RETRIES) {
+          break;
+        }
+      }
     }
+
+    const error = lastError;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isNetwork = isRetryableError(error);
+
+    if (isNetwork) {
+      const causes =
+        error instanceof AggregateError && error.errors?.length
+          ? error.errors.map((e: unknown) => String(e)).join(", ")
+          : errorMessage;
+      this.logger.warn(
+        `Network error fetching queue times for park ${parkId} (after ${MAX_RETRIES} retries): ${causes}`,
+      );
+    } else {
+      this.logger.error(
+        `Error fetching queue times for park ${parkId}: ${errorMessage}`,
+      );
+    }
+
+    logExternalApiError("QueueTimesClient", "getParkQueueTimes", error, {
+      parkId,
+      url,
+    });
+
+    throw error;
   }
 }
