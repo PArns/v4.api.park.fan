@@ -661,7 +661,7 @@ export class WaitTimesProcessor {
             .where("qd.attractionId IN (:...ids)", {
               ids: attractions.map((a) => a.id),
             })
-            .andWhere("qd.queueType = :qt", { queueType: QueueType.STANDBY })
+            .andWhere("qd.queueType = :qt", { qt: QueueType.STANDBY })
             .distinctOn(["qd.attractionId"])
             .orderBy("qd.attractionId", "ASC")
             .addOrderBy("qd.timestamp", "DESC")
