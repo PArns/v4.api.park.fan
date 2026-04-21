@@ -43,7 +43,7 @@ export class MLService {
   private readonly ML_SERVICE_URL: string;
 
   // Cache TTLs based on prediction generation frequency
-  private readonly TTL_HOURLY_PREDICTIONS = 60 * 60; // 1 hour - aligned with hourly generation
+  private readonly TTL_HOURLY_PREDICTIONS = 15 * 60; // 15 minutes - aligned with 15-min generation
   private readonly TTL_DAILY_PREDICTIONS = 6 * 60 * 60; // 6 hours - more stable, less volatile
 
   constructor(
@@ -1112,11 +1112,11 @@ export class MLService {
     }
 
     // Require predictions to have been created recently.
-    // Hourly predictions are regenerated every hour — allow 2h window to survive a delayed cron run.
+    // Hourly predictions are regenerated every 15 min — allow 30 min (2 intervals) to survive a delayed run.
     // Daily predictions are regenerated once per day — allow 26h window.
     const createdAtCutoff =
       predictionType === "hourly"
-        ? new Date(Date.now() - 2 * 60 * 60 * 1000)
+        ? new Date(Date.now() - 30 * 60 * 1000)
         : new Date(Date.now() - 26 * 60 * 60 * 1000);
     queryBuilder.andWhere("p.createdAt >= :createdAtCutoff", {
       createdAtCutoff,
@@ -1136,7 +1136,7 @@ export class MLService {
 
     const createdAtCutoff =
       predictionType === "hourly"
-        ? new Date(Date.now() - 2 * 60 * 60 * 1000)
+        ? new Date(Date.now() - 30 * 60 * 1000)
         : new Date(Date.now() - 26 * 60 * 60 * 1000);
 
     const queryBuilder = this.predictionRepository

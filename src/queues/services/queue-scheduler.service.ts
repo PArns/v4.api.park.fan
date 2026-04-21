@@ -15,6 +15,7 @@ import { Queue } from "bull";
  * - weather: Every 12 hours (0:00 and 12:00)
  * - weather-historical: Daily at 5am (mark past data as historical)
  * - holidays: Monthly on 1st at 2am (holidays change rarely)
+ * - ml-predictions: Every 15 minutes (fresh crowd/wait predictions)
  * - ml-training: Daily at 6am (retrain model with new data)
  * - prediction-accuracy: Every hour (compare predictions with actuals)
  * - occupancy-calculation: Every 15 minutes (placeholder for Phase 5)
@@ -340,10 +341,11 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Hourly Predictions: Every hour at :15
+    // Predictions: Every 15 minutes (fresh predictions for bestVisitTimes and crowd levels)
     const hasHourlyPredictionsCron = await this.hasRepeatableJob(
       this.predictionsQueue,
       "hourly-predictions-cron",
+      "*/15 * * * *",
     );
 
     if (!hasHourlyPredictionsCron) {
@@ -352,7 +354,7 @@ export class QueueSchedulerService implements OnModuleInit {
         {},
         {
           repeat: {
-            cron: "15 * * * *", // Every hour at :15 (after wait times sync)
+            cron: "*/15 * * * *", // Every 15 minutes
           },
           jobId: "hourly-predictions-cron",
         },
