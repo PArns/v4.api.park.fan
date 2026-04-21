@@ -90,9 +90,10 @@ export class QueueDataService {
     let savedCount = 0;
 
     if (!liveData.queue) {
-      // If no queue data, but status is explicitly CLOSED/DOWN/REFURBISHMENT, we should record that.
-      // Otherwise we miss the "Close" signal if the API just sends status + empty queue.
-      if (liveData.status && liveData.status !== "OPERATING") {
+      // Record any explicit status change even without queue data.
+      // Covers: CLOSED/DOWN/REFURBISHMENT (no queue expected) AND OPERATING for
+      // attractions without posted wait times (walk-throughs, free-flow rides).
+      if (liveData.status) {
         // Force a save for STANDBY queue to record the status change
         const queueData: Partial<QueueData> = {
           attractionId,
@@ -101,7 +102,8 @@ export class QueueDataService {
           lastUpdated: liveData.lastUpdated
             ? new Date(liveData.lastUpdated)
             : new Date(),
-          waitTime: 0, // Closed = 0 wait
+          // Non-OPERATING statuses have 0 wait; OPERATING without queue has no posted time
+          waitTime: liveData.status !== "OPERATING" ? 0 : undefined,
         };
 
         const shouldSave = await this.shouldSaveQueueData(

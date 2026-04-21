@@ -143,6 +143,9 @@ export class ThemeParksDataSource implements IDataSource {
       case "REFURBISHMENT":
         return LiveStatus.REFURBISHMENT;
       default:
+        this.logger.warn(
+          `Unknown status from ThemeParks.wiki: "${tpStatus}" — treating as CLOSED`,
+        );
         return LiveStatus.CLOSED;
     }
   }

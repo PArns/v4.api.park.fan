@@ -277,11 +277,13 @@ export class ConflictResolverService {
       const existing = merged.get(key)!;
       existing.sources.push(sourceName);
 
-      // Store source-specific wait time and status for later conflict resolution
-      if (entity.waitTime) {
-        const sourceKey = this.getSourceKey(sourceName);
+      // Store source-specific wait time and status for later conflict resolution.
+      // Status is always stored so the override check can evaluate it even
+      // when waitTime is 0 (open ride, no queue) or undefined.
+      const sourceKey = this.getSourceKey(sourceName);
+      existing[`${sourceKey}Status`] = entity.status;
+      if (entity.waitTime != null) {
         existing[`${sourceKey}WaitTime`] = entity.waitTime;
-        existing[`${sourceKey}Status`] = entity.status;
       }
     } else {
       // New entity: add to map
