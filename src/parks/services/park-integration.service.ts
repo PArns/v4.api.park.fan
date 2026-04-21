@@ -128,31 +128,15 @@ export class ParkIntegrationService {
       if (cached) {
         const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
 
-        // Self-Healing: Check if cache is "corrupted" (missing relations that exist in DB)
-        // This fixes the issue where a cold start cached an incomplete response
-        const hasShowsInDb = park.shows && park.shows.length > 0;
-        const hasRestaurantsInDb =
-          park.restaurants && park.restaurants.length > 0;
-
-        const missingShowsInCache =
-          hasShowsInDb && (!cachedDto.shows || cachedDto.shows.length === 0);
-        const missingRestaurantsInCache =
-          hasRestaurantsInDb &&
-          (!cachedDto.restaurants || cachedDto.restaurants.length === 0);
-
-        // Check if attractions have URLs (new feature - invalidate cache if missing)
+        // Check if attractions have URLs (invalidate cache if missing)
         const hasAttractionsWithoutUrls =
           cachedDto.attractions &&
           cachedDto.attractions.length > 0 &&
           cachedDto.attractions.some((att) => !att.url);
 
-        if (
-          missingShowsInCache ||
-          missingRestaurantsInCache ||
-          hasAttractionsWithoutUrls
-        ) {
+        if (hasAttractionsWithoutUrls) {
           this.logger.warn(
-            `Detected incomplete cache for ${park.slug} (missing shows/restaurants or attraction URLs). Force rebuilding.`,
+            `Detected incomplete cache for ${park.slug} (missing attraction URLs). Force rebuilding.`,
           );
           // Fall through to rebuild logic below
         } else {
