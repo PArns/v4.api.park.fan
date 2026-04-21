@@ -1,6 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
-import { ValidationPipe } from "@nestjs/common";
+import { ValidationPipe, LogLevel } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
@@ -43,8 +43,16 @@ process.on("unhandledRejection", (reason: unknown) => {
 });
 
 async function bootstrap(): Promise<void> {
+  const logLevel = process.env.LOG_LEVEL ?? "log";
+  const logLevelMap: Record<string, LogLevel[]> = {
+    verbose: ["verbose", "debug", "log", "warn", "error"],
+    debug: ["debug", "log", "warn", "error"],
+    log: ["log", "warn", "error"],
+    warn: ["warn", "error"],
+    error: ["error"],
+  };
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: ["log", "error", "warn"],
+    logger: logLevelMap[logLevel] ?? logLevelMap["log"],
   });
 
   // Custom X-Powered-By header

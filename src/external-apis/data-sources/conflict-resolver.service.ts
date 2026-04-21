@@ -237,7 +237,7 @@ export class ConflictResolverService {
             entity.wzStatus === LiveStatus.OPERATING);
 
         if (hasOperatingSourceWithData) {
-          this.logger.log(
+          this.logger.debug(
             `Status override for "${entity.name}": ${entity.status} → OPERATING ` +
               `(source with wait time >= 5 min: qt=${entity.qtWaitTime ?? "-"}, wz=${entity.wzWaitTime ?? "-"})`,
           );
