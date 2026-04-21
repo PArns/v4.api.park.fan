@@ -38,9 +38,10 @@ export class PredictionAccuracyProcessor {
       const { newComparisons } =
         await this.predictionAccuracyService.compareWithActuals();
 
+      const TTL_30_DAYS = 30 * 24 * 60 * 60;
       await Promise.all([
-        this.redis.set("ml:accuracy:last_run", new Date().toISOString()),
-        this.redis.set("ml:accuracy:last_run_count", newComparisons.toString()),
+        this.redis.set("ml:accuracy:last_run", new Date().toISOString(), "EX", TTL_30_DAYS),
+        this.redis.set("ml:accuracy:last_run_count", newComparisons.toString(), "EX", TTL_30_DAYS),
       ]);
 
       this.logger.log(
@@ -131,6 +132,8 @@ export class PredictionAccuracyProcessor {
       await this.redis.set(
         "ml:accuracy:last_aggregation",
         new Date().toISOString(),
+        "EX",
+        30 * 24 * 60 * 60,
       );
       this.logger.log(`✅ Aggregated stats for ${upsertCount} attractions`);
     } catch (error) {
@@ -174,13 +177,18 @@ export class PredictionAccuracyProcessor {
         (pendingResult.affected || 0) +
         (completedResult.affected || 0);
 
+      const TTL_30_DAYS = 30 * 24 * 60 * 60;
       await this.redis.set(
         "ml:accuracy:last_cleanup",
         new Date().toISOString(),
+        "EX",
+        TTL_30_DAYS,
       );
       await this.redis.set(
         "ml:accuracy:last_cleanup_count",
         totalDeleted.toString(),
+        "EX",
+        TTL_30_DAYS,
       );
 
       this.logger.log(

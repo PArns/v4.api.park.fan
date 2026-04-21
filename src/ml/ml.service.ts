@@ -43,7 +43,7 @@ export class MLService {
   private readonly ML_SERVICE_URL: string;
 
   // Cache TTLs based on prediction generation frequency
-  private readonly TTL_HOURLY_PREDICTIONS = 15 * 60; // 15 minutes - aligned with 15-min generation
+  private readonly TTL_HOURLY_PREDICTIONS = 30 * 60; // 30 minutes - matches createdAtCutoff window
   private readonly TTL_DAILY_PREDICTIONS = 6 * 60 * 60; // 6 hours - more stable, less volatile
 
   constructor(

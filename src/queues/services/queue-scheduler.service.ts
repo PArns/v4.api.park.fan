@@ -284,10 +284,11 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Prediction Accuracy: Every 5 minutes (Phase 5.6)
+    // Prediction Accuracy: Every 15 minutes (aligned with prediction generation cycle)
     const hasPredictionAccuracyCron = await this.hasRepeatableJob(
       this.predictionAccuracyQueue,
       "prediction-accuracy-cron",
+      "*/15 * * * *",
     );
 
     if (!hasPredictionAccuracyCron) {
@@ -296,7 +297,7 @@ export class QueueSchedulerService implements OnModuleInit {
         {},
         {
           repeat: {
-            cron: "*/5 * * * *", // Every 5 minutes (faster processing to prevent backlog)
+            cron: "*/15 * * * *",
           },
           jobId: "prediction-accuracy-cron",
         },
