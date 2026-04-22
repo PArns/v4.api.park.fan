@@ -34,6 +34,10 @@ import {
 } from "../common/utils/url.util";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
+import {
+  formatTodaySchedule,
+  formatNextSchedule,
+} from "../common/utils/schedule.util";
 
 /**
  * Favorites Service
@@ -419,23 +423,8 @@ export class FavoritesService {
                 occupancy: occupancy.current,
               }
             : undefined,
-          todaySchedule:
-            todaySchedule && todaySchedule.length > 0
-              ? {
-                  openingTime:
-                    todaySchedule[0].openingTime?.toISOString() || "",
-                  closingTime:
-                    todaySchedule[0].closingTime?.toISOString() || "",
-                  scheduleType: todaySchedule[0].scheduleType,
-                }
-              : undefined,
-          nextSchedule: nextSchedule
-            ? {
-                openingTime: nextSchedule.openingTime?.toISOString() || "",
-                closingTime: nextSchedule.closingTime?.toISOString() || "",
-                scheduleType: nextSchedule.scheduleType,
-              }
-            : undefined,
+          todaySchedule: formatTodaySchedule(todaySchedule),
+          nextSchedule: formatNextSchedule(nextSchedule),
         });
       }
     }

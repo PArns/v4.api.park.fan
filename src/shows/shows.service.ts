@@ -549,53 +549,7 @@ export class ShowsService {
         continue;
       }
 
-      // Fix: Project Stale Showtimes to Today on Read
-      if (
-        data.status === "OPERATING" &&
-        data.showtimes &&
-        data.showtimes.length > 0 &&
-        data.show &&
-        data.show.park &&
-        data.show.park.timezone
-      ) {
-        const timezone = data.show.park.timezone;
-        const todayDateString = formatInParkTimezone(now, timezone);
-
-        data.showtimes = data.showtimes.map((st) => {
-          if (!st.startTime) return st;
-
-          // Project to today's date if show is operating
-          const originalDate = new Date(st.startTime);
-          const originalTimeStr = formatInTimeZone(
-            originalDate,
-            timezone,
-            "HH:mm:ss",
-          );
-          const projectedTime = `${todayDateString}T${originalTimeStr}`;
-          const projectedDate = fromZonedTime(projectedTime, timezone);
-
-          return {
-            ...st,
-            startTime: projectedDate.toISOString(),
-            endTime: st.endTime
-              ? (() => {
-                  const endDate = new Date(st.endTime);
-                  const endTimeStr = formatInTimeZone(
-                    endDate,
-                    timezone,
-                    "HH:mm:ss",
-                  );
-                  const projectedEndTime = `${todayDateString}T${endTimeStr}`;
-                  return fromZonedTime(
-                    projectedEndTime,
-                    timezone,
-                  ).toISOString();
-                })()
-              : undefined,
-          };
-        });
-      }
-
+      this.projectShowtimesToToday(data, now);
       resultMap.set(data.showId, data);
     }
 
@@ -670,58 +624,58 @@ export class ShowsService {
         continue; // Don't include in result map → show will be treated as no live data
       }
 
-      // Fix: Project Stale Showtimes to Today on Read
-      // This ensures that even if the DB has old dates (e.g. from yesterday or last month),
-      // we show them as "Today" if the show is OPERATING.
-      if (
-        data.status === "OPERATING" &&
-        data.showtimes &&
-        data.showtimes.length > 0 &&
-        data.show &&
-        data.show.park &&
-        data.show.park.timezone
-      ) {
-        const timezone = data.show.park.timezone;
-        const todayDateString = formatInParkTimezone(now, timezone);
-
-        data.showtimes = data.showtimes.map((st) => {
-          if (!st.startTime) return st;
-
-          // Check if we already fixed it (optimization) or if it's stale
-          // We can just blindly project to today's date + original time because
-          // we only do this if status is OPERATING (implying the show is running today).
-
-          // Robust reconstruction:
-          const iso = st.startTime; // 2025-11-13T11:30:00+01:00
-
-          // Reconstruct: Today's YYYY-MM-DD + Original Time Part (T...)
-          // We use the original ISO string's time part to preserve offset and time
-          // Assumption: park timezone offset hasn't changed significantly or we accept the slight error
-          // closer match: todayDateString is YYYY-MM-DD.
-          // We need to keep the T... part.
-
-          // Safer: Check if the date string part needs updating
-          const currentDatePart = iso.substring(0, 10);
-          if (currentDatePart !== todayDateString) {
-            const newIso = todayDateString + iso.substring(10);
-            return {
-              ...st,
-              startTime: newIso,
-              endTime: st.endTime
-                ? todayDateString + st.endTime.substring(10)
-                : st.endTime,
-            };
-          }
-          return st;
-        });
-      }
-
+      this.projectShowtimesToToday(data, now);
       result.set(data.showId, data);
     }
 
     return result;
   }
+
   /**
+   * Projects all showtime start/end times to today's date in the park's timezone.
+   * Only runs when status is OPERATING and showtimes + timezone are present.
+   * Mutates data.showtimes in place.
+   */
+  private projectShowtimesToToday(data: ShowLiveData, now: Date): void {
+    if (
+      data.status !== "OPERATING" ||
+      !data.showtimes ||
+      data.showtimes.length === 0 ||
+      !data.show?.park?.timezone
+    )
+      return;
+
+    const timezone = data.show.park.timezone;
+    const todayDateString = formatInParkTimezone(now, timezone);
+
+    data.showtimes = data.showtimes.map((st) => {
+      if (!st.startTime) return st;
+      if (st.startTime.substring(0, 10) === todayDateString) return st;
+
+      const originalDate = new Date(st.startTime);
+      const originalTimeStr = formatInTimeZone(originalDate, timezone, "HH:mm:ss");
+      const projectedDate = fromZonedTime(
+        `${todayDateString}T${originalTimeStr}`,
+        timezone,
+      );
+
+      return {
+        ...st,
+        startTime: projectedDate.toISOString(),
+        endTime: st.endTime
+          ? (() => {
+              const endDate = new Date(st.endTime);
+              const endTimeStr = formatInTimeZone(endDate, timezone, "HH:mm:ss");
+              return fromZonedTime(
+                `${todayDateString}T${endTimeStr}`,
+                timezone,
+              ).toISOString();
+            })()
+          : undefined,
+      };
+    });
+  }
+
   /**
    * Find today's operating data for all shows in a park
    *
