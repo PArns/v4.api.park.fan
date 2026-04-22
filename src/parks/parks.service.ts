@@ -2474,30 +2474,32 @@ export class ParksService {
     }
 
     // Heuristic Fallback: For parks not currently OPERATING per schedule, check ride data.
-    // Applies ONLY to parks with UNKNOWN or NO schedule data for today.
-    // Explicitly CLOSED parks for today trust the schedule entirely.
+    // Applies ONLY to parks with no known schedule for today (UNKNOWN gap-fills or missing data).
+    // Parks with any OPERATING or CLOSED schedule for today trust the schedule entirely.
     const candidateParkIds = parkIds.filter(
       (id) => statusMap.get(id) === "CLOSED",
     );
 
     if (candidateParkIds.length > 0) {
-      // Exclude any park that has an explicit CLOSED schedule entry for today.
-      // UNKNOWN rows (common for gap-fills) or missing rows should still allow the ride-based fallback.
-      const parksWithClosedScheduleRows: { parkId: string }[] =
+      // Exclude any park that has a known schedule entry for today (CLOSED or OPERATING).
+      // Parks with OPERATING schedule that hasn't started yet (e.g. opens at 10:00, now 8:30)
+      // must NOT fall through to the ride-based heuristic — the schedule already tells us they're closed.
+      // Only parks with no schedule data at all (UNKNOWN gap-fills or missing) use the ride fallback.
+      const parksWithKnownScheduleRows: { parkId: string }[] =
         await this.parkRepository.manager.query(
           `SELECT DISTINCT se."parkId"
            FROM schedule_entries se
            WHERE se."parkId" = ANY($1)
-             AND se."scheduleType" = 'CLOSED'
+             AND se."scheduleType" IN ('CLOSED', 'OPERATING')
              AND se.date = CURRENT_DATE`,
           [candidateParkIds],
         );
 
-      const parksWithClosedSchedule = new Set(
-        parksWithClosedScheduleRows.map((r) => r.parkId),
+      const parksWithKnownSchedule = new Set(
+        parksWithKnownScheduleRows.map((r) => r.parkId),
       );
       const parksNeedingFallback = candidateParkIds.filter(
-        (id) => !parksWithClosedSchedule.has(id),
+        (id) => !parksWithKnownSchedule.has(id),
       );
 
       if (parksNeedingFallback.length > 0) {
