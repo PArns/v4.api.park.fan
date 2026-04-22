@@ -47,9 +47,9 @@
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.1.19",
     "@nestjs/platform-express": "^11.1.19",
-    "@nestjs/swagger": "^11.3.0",
+    "@nestjs/swagger": "^11.4.1",
     "@nestjs/typeorm": "^11.0.1",
-    "axios": "^1.15.0",
+    "axios": "^1.15.2",
     "bull": "^4.16.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -57,7 +57,7 @@
     "date-fns-tz": "^3.2.0",
     "ioredis": "^5.10.1",
     "luxon": "^3.7.2",
-    "marked": "^18.0.0",
+    "marked": "^18.0.2",
     "maxmind": "^5.0.6",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
@@ -66,7 +66,7 @@
     "tar": "^7.5.13",
     "transliteration": "^2.6.1",
     "typeorm": "^0.3.28",
-    "uuid": "^13.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.21",
@@ -79,10 +79,10 @@
     "@types/node": "^25.6.0",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",
-    "@typescript-eslint/eslint-plugin": "^8.58.2",
-    "@typescript-eslint/parser": "^8.58.2",
+    "@typescript-eslint/eslint-plugin": "^8.59.0",
+    "@typescript-eslint/parser": "^8.59.0",
     "dotenv": "^17.4.2",
-    "eslint": "^10.2.0",
+    "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "jest": "^30.3.0",
@@ -93,7 +93,7 @@
     "ts-loader": "^9.5.7",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.3"
   },
   "pnpm": {
     "overrides": {
