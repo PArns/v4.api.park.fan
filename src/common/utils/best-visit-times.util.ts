@@ -13,17 +13,43 @@ const MIN_GAP_MS = 60 * 60 * 1000; // 1 hour minimum between recommendations
 const MAX_OPTIMAL = 2;
 const MAX_GOOD = 3;
 // Predictions use 15-min slot timestamps (e.g. 16:45 represents 16:45–17:00).
-// Extend the lookback window by one slot so the currently-active slot is included
-// in the comparison — otherwise a 20-min "now" gets excluded and 25-min future
-// slots are incorrectly labelled as the best option.
-const SLOT_DURATION_MS = 15 * 60 * 1000;
+export const SLOT_DURATION_MS = 15 * 60 * 1000;
+
+/**
+ * Returns the UTC start timestamp (ms) of the currently-active 15-min slot.
+ * E.g. at 13:55 → 13:45:00.000Z; at 13:44 → 13:30:00.000Z.
+ */
+export function currentSlotStartMs(): number {
+  return Math.floor(Date.now() / SLOT_DURATION_MS) * SLOT_DURATION_MS;
+}
+
+/**
+ * Returns TTL (seconds) until the next aligned boundary plus a small buffer.
+ *
+ * Aligning cache expiry to 5-minute marks ensures the cache always expires
+ * at or shortly after a slot boundary (since all slot boundaries :00/:15/:30/:45
+ * are also 5-minute marks). The buffer (default 5s) prevents the cache from
+ * expiring exactly on the boundary and being rebuilt before the new slot is
+ * fully in effect.
+ *
+ * @param boundaryMs  Alignment interval in ms (default: 5 minutes)
+ * @param bufferSeconds  Extra seconds added after the boundary (default: 5)
+ */
+export function ttlSecondsToNextBoundary(
+  boundaryMs = 5 * 60 * 1000,
+  bufferSeconds = 5,
+): number {
+  const now = Date.now();
+  const nextBoundary = Math.ceil(now / boundaryMs) * boundaryMs;
+  return Math.ceil((nextBoundary - now) / 1000) + bufferSeconds;
+}
 
 /**
  * Compute best visit time recommendations from 15-min ML predictions.
  *
  * Returns up to 5 slots (≤2 optimal, ≤3 good) sorted by time.
- * The currently-active slot (whose timestamp may be up to 15 min in the past)
- * is included so that "go now" can be recommended when wait times are lowest.
+ * Only the currently-active slot and future slots are considered —
+ * expired slots (predictedTime < current slot start) are excluded.
  *
  * Strategy: pick the lowest-wait distinct time slots (≥1h apart).
  * "optimal" = absolute minimum wait; "good" = within 25% of minimum.
@@ -35,8 +61,10 @@ export function computeBestVisitTimes(
   predictions: PredictionInput[],
   closingTimeIso: string | null | undefined,
 ): BestVisitSlot[] | null {
-  // Include the currently-active 15-min slot even if its timestamp is slightly in the past.
-  const cutoff = Date.now() - SLOT_DURATION_MS;
+  // Slot-aligned cutoff: only include the current slot and future slots.
+  // floor(now / 15min) * 15min gives the exact start of the active slot,
+  // so the previous slot is excluded the moment the new slot begins.
+  const cutoff = currentSlotStartMs();
   const closingMs = closingTimeIso ? new Date(closingTimeIso).getTime() : null;
 
   const future = predictions

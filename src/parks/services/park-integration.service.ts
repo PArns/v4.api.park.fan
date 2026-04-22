@@ -35,7 +35,11 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PopularityService } from "../../popularity/popularity.service";
-import { computeBestVisitTimes } from "../../common/utils/best-visit-times.util";
+import {
+  computeBestVisitTimes,
+  currentSlotStartMs,
+  ttlSecondsToNextBoundary,
+} from "../../common/utils/best-visit-times.util";
 
 /**
  * Park Integration Service
@@ -486,7 +490,7 @@ export class ParkIntegrationService {
         this.mlService.getBatchStoredPredictions(
           attractionIds,
           "hourly",
-          new Date(Date.now() - 15 * 60 * 1000),
+          new Date(currentSlotStartMs()),
         ),
       ]);
 
@@ -1095,11 +1099,11 @@ export class ParkIntegrationService {
     _timezone: string, // Unused but kept for backwards compatibility
   ): number {
     if (status === "OPERATING") {
-      // Park is open -> use short TTL for fresh live data.
-      // Jitter ±30s spreads cache expiry across parks to avoid thundering herd
-      // (all parks recomputing simultaneously every 5 min).
-      const jitter = Math.floor(Math.random() * 61) - 30; // -30 to +30 seconds
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING + jitter;
+      // Park is open → align expiry to next 5-min boundary (+5s buffer).
+      // This ensures the cache always expires at a slot transition rather
+      // than at a rolling offset. Natural per-park spread (each response is
+      // computed at a slightly different clock time) replaces the old jitter.
+      return ttlSecondsToNextBoundary();
     }
 
     // Park is CLOSED - check if we *should* be open (Unexpected Closure)
@@ -1114,13 +1118,12 @@ export class ParkIntegrationService {
     );
 
     if (isScheduledOpen) {
-      // Park is CLOSED but Schedule says OPEN -> Likely a temporary closure or data issue.
-      // Use short TTL to recover quickly if it reopens.
+      // Park is CLOSED but Schedule says OPEN → likely a temporary closure.
+      // Use boundary-aligned TTL to recover quickly if it reopens.
       this.logger.debug(
         "Park is CLOSED but within operating hours. Using short TTL.",
       );
-      const jitter = Math.floor(Math.random() * 61) - 30;
-      return this.TTL_INTEGRATED_RESPONSE_OPERATING + jitter;
+      return ttlSecondsToNextBoundary();
     }
 
     // Find next OPERATING schedule entry
