@@ -393,7 +393,9 @@ export class RestaurantsService {
     }
 
     // Operating hours changed → save
-    if (hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)) {
+    if (
+      hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)
+    ) {
       return true;
     }
 

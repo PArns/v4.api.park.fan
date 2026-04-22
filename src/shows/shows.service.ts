@@ -412,7 +412,9 @@ export class ShowsService {
     }
 
     // Operating hours changed → save
-    if (hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)) {
+    if (
+      hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)
+    ) {
       return true;
     }
 
@@ -653,7 +655,11 @@ export class ShowsService {
       if (st.startTime.substring(0, 10) === todayDateString) return st;
 
       const originalDate = new Date(st.startTime);
-      const originalTimeStr = formatInTimeZone(originalDate, timezone, "HH:mm:ss");
+      const originalTimeStr = formatInTimeZone(
+        originalDate,
+        timezone,
+        "HH:mm:ss",
+      );
       const projectedDate = fromZonedTime(
         `${todayDateString}T${originalTimeStr}`,
         timezone,
@@ -665,7 +671,11 @@ export class ShowsService {
         endTime: st.endTime
           ? (() => {
               const endDate = new Date(st.endTime);
-              const endTimeStr = formatInTimeZone(endDate, timezone, "HH:mm:ss");
+              const endTimeStr = formatInTimeZone(
+                endDate,
+                timezone,
+                "HH:mm:ss",
+              );
               return fromZonedTime(
                 `${todayDateString}T${endTimeStr}`,
                 timezone,

@@ -1,7 +1,4 @@
-import {
-  formatInParkTimezone,
-  getCurrentDateInTimezone,
-} from "./date.util";
+import { formatInParkTimezone, getCurrentDateInTimezone } from "./date.util";
 
 type OperatingHoursEntry = { type: string; startTime: string; endTime: string };
 
