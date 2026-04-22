@@ -16,6 +16,10 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import {
+  hasDateChangedInTimezone,
+  hasOperatingHoursChanged,
+} from "../common/utils/live-data.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 @Injectable()
@@ -50,15 +54,7 @@ export class ShowsService {
   async syncShows(): Promise<number> {
     this.logger.log("Syncing shows from ThemeParks.wiki...");
 
-    // Ensure parks are synced first
-    let parks = await this.parksService.findAll();
-
-    if (parks.length === 0) {
-      this.logger.warn("No parks found. Syncing parks first...");
-      await this.parksService.syncParks();
-      // Re-fetch parks after syncing
-      parks = await this.parksService.findAll();
-    }
+    const parks = await this.parksService.ensureParksLoaded();
 
     let syncedCount = 0;
 
@@ -381,48 +377,6 @@ export class ShowsService {
     }
   }
 
-  async saveLiveData(
-    showId: string,
-    status: string,
-    showtimes: ShowtimeData[],
-    lastUpdated: Date,
-    operatingHours?: { openingTime: string; closingTime: string },
-  ): Promise<void> {
-    try {
-      // Check if show exists, create if missing (orphan data from external API)
-      // This handles race condition where live data arrives before metadata sync
-      const showExists = await this.showRepository.findOne({
-        where: { id: showId },
-        select: ["id"], // Minimal select for performance
-      });
-
-      if (!showExists) {
-        // Cannot create placeholder without parkId (NOT NULL constraint)
-        // Skip placeholder creation - show will be created properly when metadata sync runs
-        this.logger.warn(
-          `Show ${showId} not found in database. Cannot create placeholder without parkId. ` +
-            `Skipping live data save. Show will be created by metadata sync.`,
-        );
-        return;
-      }
-
-      // Save live data (BeforeInsert hook will generate id and timestamp)
-      // TypeScript workaround: cast to any because TypeORM doesn't recognize showId FK field
-      await this.showLiveDataRepository.save({
-        showId,
-        status,
-        showtimes,
-        lastUpdated,
-        operatingHours,
-      } as any);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(`❌ Failed to save show live data: ${errorMessage}`);
-      throw error;
-    }
-  }
-
   /**
    * Delta strategy: Only save if data has changed significantly
    *
@@ -458,25 +412,19 @@ export class ShowsService {
     }
 
     // Operating hours changed → save
-    if (
-      this.hasOperatingHoursChanged(
-        latest.operatingHours,
-        newData.operatingHours,
-      )
-    ) {
+    if (hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)) {
       return true;
     }
 
     // Date changed → save (ensure at least one data point per day)
-    // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
-    if (latest.timestamp) {
-      const timezone = latest.show?.park?.timezone || "UTC";
-      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = getCurrentDateInTimezone(timezone);
-
-      if (latestDateStr !== currentDateStr) {
-        return true;
-      }
+    if (
+      latest.timestamp &&
+      hasDateChangedInTimezone(
+        latest.timestamp,
+        latest.show?.park?.timezone || "UTC",
+      )
+    ) {
+      return true;
     }
 
     // No significant change
@@ -541,41 +489,6 @@ export class ShowsService {
   }
 
   /**
-   * Compare two operating hours arrays for changes
-   */
-  private hasOperatingHoursChanged(
-    oldHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | null
-      | undefined,
-    newHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | undefined,
-  ): boolean {
-    if (!oldHours && !newHours) return false;
-    if (!oldHours || !newHours) return true;
-    if (oldHours.length !== newHours.length) return true;
-
-    const oldSorted = [...oldHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-    const newSorted = [...newHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-
-    for (let i = 0; i < oldSorted.length; i++) {
-      if (
-        oldSorted[i].type !== newSorted[i].type ||
-        oldSorted[i].startTime !== newSorted[i].startTime ||
-        oldSorted[i].endTime !== newSorted[i].endTime
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
    * Find current status for a show (most recent live data)
    */
   async findCurrentStatusByShow(showId: string): Promise<ShowLiveData | null> {
@@ -636,53 +549,7 @@ export class ShowsService {
         continue;
       }
 
-      // Fix: Project Stale Showtimes to Today on Read
-      if (
-        data.status === "OPERATING" &&
-        data.showtimes &&
-        data.showtimes.length > 0 &&
-        data.show &&
-        data.show.park &&
-        data.show.park.timezone
-      ) {
-        const timezone = data.show.park.timezone;
-        const todayDateString = formatInParkTimezone(now, timezone);
-
-        data.showtimes = data.showtimes.map((st) => {
-          if (!st.startTime) return st;
-
-          // Project to today's date if show is operating
-          const originalDate = new Date(st.startTime);
-          const originalTimeStr = formatInTimeZone(
-            originalDate,
-            timezone,
-            "HH:mm:ss",
-          );
-          const projectedTime = `${todayDateString}T${originalTimeStr}`;
-          const projectedDate = fromZonedTime(projectedTime, timezone);
-
-          return {
-            ...st,
-            startTime: projectedDate.toISOString(),
-            endTime: st.endTime
-              ? (() => {
-                  const endDate = new Date(st.endTime);
-                  const endTimeStr = formatInTimeZone(
-                    endDate,
-                    timezone,
-                    "HH:mm:ss",
-                  );
-                  const projectedEndTime = `${todayDateString}T${endTimeStr}`;
-                  return fromZonedTime(
-                    projectedEndTime,
-                    timezone,
-                  ).toISOString();
-                })()
-              : undefined,
-          };
-        });
-      }
-
+      this.projectShowtimesToToday(data, now);
       resultMap.set(data.showId, data);
     }
 
@@ -757,58 +624,58 @@ export class ShowsService {
         continue; // Don't include in result map → show will be treated as no live data
       }
 
-      // Fix: Project Stale Showtimes to Today on Read
-      // This ensures that even if the DB has old dates (e.g. from yesterday or last month),
-      // we show them as "Today" if the show is OPERATING.
-      if (
-        data.status === "OPERATING" &&
-        data.showtimes &&
-        data.showtimes.length > 0 &&
-        data.show &&
-        data.show.park &&
-        data.show.park.timezone
-      ) {
-        const timezone = data.show.park.timezone;
-        const todayDateString = formatInParkTimezone(now, timezone);
-
-        data.showtimes = data.showtimes.map((st) => {
-          if (!st.startTime) return st;
-
-          // Check if we already fixed it (optimization) or if it's stale
-          // We can just blindly project to today's date + original time because
-          // we only do this if status is OPERATING (implying the show is running today).
-
-          // Robust reconstruction:
-          const iso = st.startTime; // 2025-11-13T11:30:00+01:00
-
-          // Reconstruct: Today's YYYY-MM-DD + Original Time Part (T...)
-          // We use the original ISO string's time part to preserve offset and time
-          // Assumption: park timezone offset hasn't changed significantly or we accept the slight error
-          // closer match: todayDateString is YYYY-MM-DD.
-          // We need to keep the T... part.
-
-          // Safer: Check if the date string part needs updating
-          const currentDatePart = iso.substring(0, 10);
-          if (currentDatePart !== todayDateString) {
-            const newIso = todayDateString + iso.substring(10);
-            return {
-              ...st,
-              startTime: newIso,
-              endTime: st.endTime
-                ? todayDateString + st.endTime.substring(10)
-                : st.endTime,
-            };
-          }
-          return st;
-        });
-      }
-
+      this.projectShowtimesToToday(data, now);
       result.set(data.showId, data);
     }
 
     return result;
   }
+
   /**
+   * Projects all showtime start/end times to today's date in the park's timezone.
+   * Only runs when status is OPERATING and showtimes + timezone are present.
+   * Mutates data.showtimes in place.
+   */
+  private projectShowtimesToToday(data: ShowLiveData, now: Date): void {
+    if (
+      data.status !== "OPERATING" ||
+      !data.showtimes ||
+      data.showtimes.length === 0 ||
+      !data.show?.park?.timezone
+    )
+      return;
+
+    const timezone = data.show.park.timezone;
+    const todayDateString = formatInParkTimezone(now, timezone);
+
+    data.showtimes = data.showtimes.map((st) => {
+      if (!st.startTime) return st;
+      if (st.startTime.substring(0, 10) === todayDateString) return st;
+
+      const originalDate = new Date(st.startTime);
+      const originalTimeStr = formatInTimeZone(originalDate, timezone, "HH:mm:ss");
+      const projectedDate = fromZonedTime(
+        `${todayDateString}T${originalTimeStr}`,
+        timezone,
+      );
+
+      return {
+        ...st,
+        startTime: projectedDate.toISOString(),
+        endTime: st.endTime
+          ? (() => {
+              const endDate = new Date(st.endTime);
+              const endTimeStr = formatInTimeZone(endDate, timezone, "HH:mm:ss");
+              return fromZonedTime(
+                `${todayDateString}T${endTimeStr}`,
+                timezone,
+              ).toISOString();
+            })()
+          : undefined,
+      };
+    });
+  }
+
   /**
    * Find today's operating data for all shows in a park
    *

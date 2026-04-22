@@ -42,7 +42,6 @@ export class HolidaysService {
     holidays: NagerPublicHoliday[],
     countryCode: string,
   ): Promise<number> {
-    let savedCount = 0;
     const holidaysToUpsert: Array<{
       externalId: string;
       date: Date;
@@ -99,35 +98,7 @@ export class HolidaysService {
       }
     }
 
-    // Deduplicate by externalId before batch upsert to avoid "ON CONFLICT" errors
-    const uniqueHolidays = new Map<
-      string,
-      {
-        externalId: string;
-        date: Date;
-        name: string;
-        localName?: string;
-        country: string;
-        region?: string;
-        holidayType: "public" | "observance" | "school" | "bank" | "bridge";
-        isNationwide: boolean;
-      }
-    >();
-    for (const h of holidaysToUpsert) {
-      uniqueHolidays.set(h.externalId, h);
-    }
-    const finalHolidays = Array.from(uniqueHolidays.values());
-
-    if (finalHolidays.length > 0) {
-      // Bulk upsert in batches of 500
-      for (let i = 0; i < finalHolidays.length; i += 500) {
-        const batch = finalHolidays.slice(i, i + 500);
-        await this.holidayRepository.upsert(batch, ["externalId"]);
-        savedCount += batch.length;
-      }
-    }
-
-    return savedCount;
+    return this.saveRawHolidays(holidaysToUpsert);
   }
 
   /**
@@ -303,7 +274,6 @@ export class HolidaysService {
     entries: import("../external-apis/open-holidays/open-holidays.types").OpenHolidaysEntry[],
     countryCode: string,
   ): Promise<number> {
-    let savedCount = 0;
     const holidaysToUpsert: HolidayInput[] = [];
 
     for (const entry of entries) {
@@ -367,23 +337,7 @@ export class HolidaysService {
       }
     }
 
-    // Deduplicate by externalId before batch upsert
-    const uniqueHolidays = new Map<string, HolidayInput>();
-    for (const h of holidaysToUpsert) {
-      uniqueHolidays.set(h.externalId, h);
-    }
-    const finalHolidays = Array.from(uniqueHolidays.values());
-
-    if (finalHolidays.length > 0) {
-      // Bulk upsert in batches of 500
-      for (let i = 0; i < finalHolidays.length; i += 500) {
-        const batch = finalHolidays.slice(i, i + 500);
-        await this.holidayRepository.upsert(batch, ["externalId"]);
-        savedCount += batch.length;
-      }
-    }
-
-    return savedCount;
+    return this.saveRawHolidays(holidaysToUpsert);
   }
 
   /**

@@ -23,6 +23,10 @@ import {
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
+import {
+  formatTodaySchedule,
+  formatNextSchedule,
+} from "../common/utils/schedule.util";
 
 /**
  * Location Service
@@ -286,21 +290,8 @@ export class LocationService {
           }
         : undefined,
       timezone: park.timezone,
-      todaySchedule:
-        todaySchedule && todaySchedule.length > 0
-          ? {
-              openingTime: todaySchedule[0].openingTime?.toISOString() || "",
-              closingTime: todaySchedule[0].closingTime?.toISOString() || "",
-              scheduleType: todaySchedule[0].scheduleType,
-            }
-          : undefined,
-      nextSchedule: nextSchedule
-        ? {
-            openingTime: nextSchedule.openingTime?.toISOString() || "",
-            closingTime: nextSchedule.closingTime?.toISOString() || "",
-            scheduleType: nextSchedule.scheduleType,
-          }
-        : undefined,
+      todaySchedule: formatTodaySchedule(todaySchedule),
+      nextSchedule: formatNextSchedule(nextSchedule),
     };
 
     return {
@@ -405,21 +396,8 @@ export class LocationService {
           : undefined,
         url: buildParkUrl(park) || null,
         timezone: park.timezone,
-        todaySchedule:
-          todaySchedule && todaySchedule.length > 0
-            ? {
-                openingTime: todaySchedule[0].openingTime?.toISOString() || "",
-                closingTime: todaySchedule[0].closingTime?.toISOString() || "",
-                scheduleType: todaySchedule[0].scheduleType,
-              }
-            : undefined,
-        nextSchedule: nextSchedule
-          ? {
-              openingTime: nextSchedule.openingTime?.toISOString() || "",
-              closingTime: nextSchedule.closingTime?.toISOString() || "",
-              scheduleType: nextSchedule.scheduleType,
-            }
-          : undefined,
+        todaySchedule: formatTodaySchedule(todaySchedule),
+        nextSchedule: formatNextSchedule(nextSchedule),
       };
     });
 
