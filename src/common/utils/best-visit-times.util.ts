@@ -24,6 +24,27 @@ export function currentSlotStartMs(): number {
 }
 
 /**
+ * Returns TTL (seconds) until the next aligned boundary plus a small buffer.
+ *
+ * Aligning cache expiry to 5-minute marks ensures the cache always expires
+ * at or shortly after a slot boundary (since all slot boundaries :00/:15/:30/:45
+ * are also 5-minute marks). The buffer (default 5s) prevents the cache from
+ * expiring exactly on the boundary and being rebuilt before the new slot is
+ * fully in effect.
+ *
+ * @param boundaryMs  Alignment interval in ms (default: 5 minutes)
+ * @param bufferSeconds  Extra seconds added after the boundary (default: 5)
+ */
+export function ttlSecondsToNextBoundary(
+  boundaryMs = 5 * 60 * 1000,
+  bufferSeconds = 5,
+): number {
+  const now = Date.now();
+  const nextBoundary = Math.ceil(now / boundaryMs) * boundaryMs;
+  return Math.ceil((nextBoundary - now) / 1000) + bufferSeconds;
+}
+
+/**
  * Compute best visit time recommendations from 15-min ML predictions.
  *
  * Returns up to 5 slots (≤2 optimal, ≤3 good) sorted by time.

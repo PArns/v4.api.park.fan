@@ -27,7 +27,10 @@ import {
   getStartOfDayInTimezone,
 } from "../../common/utils/date.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
-import { computeBestVisitTimes } from "../../common/utils/best-visit-times.util";
+import {
+  computeBestVisitTimes,
+  ttlSecondsToNextBoundary,
+} from "../../common/utils/best-visit-times.util";
 import { subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
@@ -459,12 +462,13 @@ export class AttractionIntegrationService {
       dto.url = null;
     }
 
-    // Cache the complete response (5 minutes for real-time freshness)
+    // Cache aligned to next 5-min boundary (+5s buffer) so the entry expires
+    // at or just after a slot transition rather than at an arbitrary rolling offset.
     await this.redis.set(
       cacheKey,
       JSON.stringify(dto),
       "EX",
-      this.TTL_INTEGRATED_RESPONSE,
+      ttlSecondsToNextBoundary(),
     );
 
     return dto;
