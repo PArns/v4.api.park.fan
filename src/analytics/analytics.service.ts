@@ -1944,7 +1944,6 @@ export class AnalyticsService {
     return result;
   }
 
-
   /**
    * Detect wait time trend for a specific attraction
    * Analyzes last 2-3 hours to determine if wait times are increasing/decreasing/stable
