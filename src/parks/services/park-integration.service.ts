@@ -35,7 +35,10 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PopularityService } from "../../popularity/popularity.service";
-import { computeBestVisitTimes } from "../../common/utils/best-visit-times.util";
+import {
+  computeBestVisitTimes,
+  currentSlotStartMs,
+} from "../../common/utils/best-visit-times.util";
 
 /**
  * Park Integration Service
@@ -486,7 +489,7 @@ export class ParkIntegrationService {
         this.mlService.getBatchStoredPredictions(
           attractionIds,
           "hourly",
-          new Date(Date.now() - 15 * 60 * 1000),
+          new Date(currentSlotStartMs()),
         ),
       ]);
 

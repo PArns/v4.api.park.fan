@@ -9,6 +9,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../common/utils/date.util";
+import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { logMLServiceError } from "../common/utils/file-logger.util";
 import {
@@ -1185,9 +1186,7 @@ export class MLService {
     const stored = await this.getStoredPredictions(
       attractionId,
       predictionType,
-      predictionType === "hourly"
-        ? new Date(Date.now() - 15 * 60 * 1000)
-        : undefined,
+      predictionType === "hourly" ? new Date(currentSlotStartMs()) : undefined,
     );
 
     if (stored.length > 0) {
