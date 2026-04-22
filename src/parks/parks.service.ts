@@ -626,6 +626,20 @@ export class ParksService {
   }
 
   /**
+   * Returns all parks, triggering a sync if none exist yet.
+   * Shared bootstrap helper for entity sync methods (attractions, shows, restaurants).
+   */
+  async ensureParksLoaded(): Promise<Park[]> {
+    let parks = await this.findAll();
+    if (parks.length === 0) {
+      this.logger.warn("No parks found. Syncing parks first...");
+      await this.syncParks();
+      parks = await this.findAll();
+    }
+    return parks;
+  }
+
+  /**
    * Finds all parks with filtering and sorting
    */
   async findAllWithFilters(filters: {

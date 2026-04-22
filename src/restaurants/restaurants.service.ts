@@ -15,10 +15,11 @@ import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { formatInParkTimezone } from "../common/utils/date.util";
 import {
-  formatInParkTimezone,
-  getCurrentDateInTimezone,
-} from "../common/utils/date.util";
+  hasDateChangedInTimezone,
+  hasOperatingHoursChanged,
+} from "../common/utils/live-data.util";
 
 @Injectable()
 export class RestaurantsService {
@@ -55,15 +56,7 @@ export class RestaurantsService {
       `Syncing restaurants from ThemeParks.wiki... (Deep Sync: ${options.deep ? "ON" : "OFF"})`,
     );
 
-    // Ensure parks are synced first
-    let parks = await this.parksService.findAll();
-
-    if (parks.length === 0) {
-      this.logger.warn("No parks found. Syncing parks first...");
-      await this.parksService.syncParks();
-      // Re-fetch parks after syncing
-      parks = await this.parksService.findAll();
-    }
+    const parks = await this.parksService.ensureParksLoaded();
 
     let syncedCount = 0;
 
@@ -400,62 +393,22 @@ export class RestaurantsService {
     }
 
     // Operating hours changed → save
+    if (hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)) {
+      return true;
+    }
+
+    // Date changed → save (ensure at least one data point per day)
     if (
-      this.hasOperatingHoursChanged(
-        latest.operatingHours,
-        newData.operatingHours,
+      latest.timestamp &&
+      hasDateChangedInTimezone(
+        latest.timestamp,
+        latest.restaurant?.park?.timezone || "UTC",
       )
     ) {
       return true;
     }
 
-    // Date changed → save (ensure at least one data point per day)
-    if (latest.timestamp) {
-      const timezone = latest.restaurant?.park?.timezone || "UTC";
-      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = getCurrentDateInTimezone(timezone);
-
-      if (latestDateStr !== currentDateStr) {
-        return true;
-      }
-    }
-
     // No significant change
-    return false;
-  }
-
-  /**
-   * Compare two operating hours arrays for changes
-   */
-  private hasOperatingHoursChanged(
-    oldHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | null
-      | undefined,
-    newHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | undefined,
-  ): boolean {
-    if (!oldHours && !newHours) return false;
-    if (!oldHours || !newHours) return true;
-    if (oldHours.length !== newHours.length) return true;
-
-    const oldSorted = [...oldHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-    const newSorted = [...newHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-
-    for (let i = 0; i < oldSorted.length; i++) {
-      if (
-        oldSorted[i].type !== newSorted[i].type ||
-        oldSorted[i].startTime !== newSorted[i].startTime ||
-        oldSorted[i].endTime !== newSorted[i].endTime
-      ) {
-        return true;
-      }
-    }
     return false;
   }
 

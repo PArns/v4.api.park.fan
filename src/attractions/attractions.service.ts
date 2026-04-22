@@ -48,15 +48,7 @@ export class AttractionsService {
   async syncAttractions(): Promise<number> {
     this.logger.log("Syncing attractions from ThemeParks.wiki...");
 
-    // Ensure parks are synced first
-    let parks = await this.parksService.findAll();
-
-    if (parks.length === 0) {
-      this.logger.warn("No parks found. Syncing parks first...");
-      await this.parksService.syncParks();
-      // Re-fetch parks after syncing
-      parks = await this.parksService.findAll();
-    }
+    const parks = await this.parksService.ensureParksLoaded();
 
     let syncedCount = 0;
 

@@ -16,6 +16,10 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import {
+  hasDateChangedInTimezone,
+  hasOperatingHoursChanged,
+} from "../common/utils/live-data.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 @Injectable()
@@ -50,15 +54,7 @@ export class ShowsService {
   async syncShows(): Promise<number> {
     this.logger.log("Syncing shows from ThemeParks.wiki...");
 
-    // Ensure parks are synced first
-    let parks = await this.parksService.findAll();
-
-    if (parks.length === 0) {
-      this.logger.warn("No parks found. Syncing parks first...");
-      await this.parksService.syncParks();
-      // Re-fetch parks after syncing
-      parks = await this.parksService.findAll();
-    }
+    const parks = await this.parksService.ensureParksLoaded();
 
     let syncedCount = 0;
 
@@ -381,48 +377,6 @@ export class ShowsService {
     }
   }
 
-  async saveLiveData(
-    showId: string,
-    status: string,
-    showtimes: ShowtimeData[],
-    lastUpdated: Date,
-    operatingHours?: { openingTime: string; closingTime: string },
-  ): Promise<void> {
-    try {
-      // Check if show exists, create if missing (orphan data from external API)
-      // This handles race condition where live data arrives before metadata sync
-      const showExists = await this.showRepository.findOne({
-        where: { id: showId },
-        select: ["id"], // Minimal select for performance
-      });
-
-      if (!showExists) {
-        // Cannot create placeholder without parkId (NOT NULL constraint)
-        // Skip placeholder creation - show will be created properly when metadata sync runs
-        this.logger.warn(
-          `Show ${showId} not found in database. Cannot create placeholder without parkId. ` +
-            `Skipping live data save. Show will be created by metadata sync.`,
-        );
-        return;
-      }
-
-      // Save live data (BeforeInsert hook will generate id and timestamp)
-      // TypeScript workaround: cast to any because TypeORM doesn't recognize showId FK field
-      await this.showLiveDataRepository.save({
-        showId,
-        status,
-        showtimes,
-        lastUpdated,
-        operatingHours,
-      } as any);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(`❌ Failed to save show live data: ${errorMessage}`);
-      throw error;
-    }
-  }
-
   /**
    * Delta strategy: Only save if data has changed significantly
    *
@@ -458,25 +412,19 @@ export class ShowsService {
     }
 
     // Operating hours changed → save
-    if (
-      this.hasOperatingHoursChanged(
-        latest.operatingHours,
-        newData.operatingHours,
-      )
-    ) {
+    if (hasOperatingHoursChanged(latest.operatingHours, newData.operatingHours)) {
       return true;
     }
 
     // Date changed → save (ensure at least one data point per day)
-    // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
-    if (latest.timestamp) {
-      const timezone = latest.show?.park?.timezone || "UTC";
-      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = getCurrentDateInTimezone(timezone);
-
-      if (latestDateStr !== currentDateStr) {
-        return true;
-      }
+    if (
+      latest.timestamp &&
+      hasDateChangedInTimezone(
+        latest.timestamp,
+        latest.show?.park?.timezone || "UTC",
+      )
+    ) {
+      return true;
     }
 
     // No significant change
@@ -537,41 +485,6 @@ export class ShowsService {
       }
     }
 
-    return false;
-  }
-
-  /**
-   * Compare two operating hours arrays for changes
-   */
-  private hasOperatingHoursChanged(
-    oldHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | null
-      | undefined,
-    newHours:
-      | Array<{ type: string; startTime: string; endTime: string }>
-      | undefined,
-  ): boolean {
-    if (!oldHours && !newHours) return false;
-    if (!oldHours || !newHours) return true;
-    if (oldHours.length !== newHours.length) return true;
-
-    const oldSorted = [...oldHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-    const newSorted = [...newHours].sort((a, b) =>
-      a.startTime.localeCompare(b.startTime),
-    );
-
-    for (let i = 0; i < oldSorted.length; i++) {
-      if (
-        oldSorted[i].type !== newSorted[i].type ||
-        oldSorted[i].startTime !== newSorted[i].startTime ||
-        oldSorted[i].endTime !== newSorted[i].endTime
-      ) {
-        return true;
-      }
-    }
     return false;
   }
 
