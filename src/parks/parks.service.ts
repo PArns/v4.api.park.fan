@@ -30,6 +30,10 @@ import {
   hasScheduleData,
   hasRecentQueueData,
 } from "./utils/park-merge.util";
+import {
+  isParkOpen,
+  RideStatusData,
+} from "../common/utils/status-calculator.util";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -2448,109 +2452,68 @@ export class ParksService {
       return new Map();
     }
 
-    const now = new Date();
-
-    // Find any OPERATING schedule that works for right now
-    // We rely on openingTime/closingTime being absolute UTC timestamps
-    const activeSchedules = await this.scheduleRepository
+    // Load park-level schedule entries for today (+ yesterday to cover post-midnight closings)
+    const scheduleEntries = await this.scheduleRepository
       .createQueryBuilder("schedule")
-      .select("schedule.parkId", "parkId")
       .where("schedule.parkId IN (:...parkIds)", { parkIds })
-      .andWhere("schedule.scheduleType = 'OPERATING'")
-      .andWhere("schedule.openingTime <= :now", { now })
-      .andWhere("schedule.closingTime > :now", { now })
-      .getRawMany();
+      .andWhere("schedule.attractionId IS NULL")
+      .andWhere("schedule.date >= CURRENT_DATE - INTERVAL '1 day'")
+      .andWhere("schedule.date <= CURRENT_DATE")
+      .getMany();
 
-    const statusMap = new Map<string, "OPERATING" | "CLOSED">();
-
-    // Default all to CLOSED
-    for (const id of parkIds) {
-      statusMap.set(id, "CLOSED");
+    const schedulesByPark = new Map<string, ScheduleEntry[]>();
+    for (const entry of scheduleEntries) {
+      if (!schedulesByPark.has(entry.parkId)) {
+        schedulesByPark.set(entry.parkId, []);
+      }
+      schedulesByPark.get(entry.parkId)!.push(entry);
     }
 
-    // Mark active ones as OPERATING based on schedule
-    for (const schedule of activeSchedules) {
-      statusMap.set(schedule.parkId, "OPERATING");
-    }
-
-    // Heuristic Fallback: For parks not currently OPERATING per schedule, check ride data.
-    // Applies ONLY to parks with UNKNOWN or NO schedule data for today.
-    // Explicitly CLOSED parks for today trust the schedule entirely.
-    const candidateParkIds = parkIds.filter(
-      (id) => statusMap.get(id) === "CLOSED",
+    // Load latest ride data (last 30 min) per attraction — used by isParkOpen() fallback
+    // for parks that have no schedule integration at all.
+    const rideRows: {
+      parkId: string;
+      status: string;
+      waitTime: number;
+      timestamp: string;
+    }[] = await this.parkRepository.manager.query(
+      `
+      SELECT a."parkId", q.status, q."waitTime", q.timestamp
+      FROM attractions a
+      JOIN LATERAL (
+        SELECT status, "waitTime", timestamp
+        FROM queue_data qd
+        WHERE qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '30 minutes'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      ) q ON true
+      WHERE a."parkId" = ANY($1)
+      `,
+      [parkIds],
     );
 
-    if (candidateParkIds.length > 0) {
-      // Exclude any park that has an explicit CLOSED schedule entry for today.
-      // UNKNOWN rows (common for gap-fills) or missing rows should still allow the ride-based fallback.
-      const parksWithClosedScheduleRows: { parkId: string }[] =
-        await this.parkRepository.manager.query(
-          `SELECT DISTINCT se."parkId"
-           FROM schedule_entries se
-           WHERE se."parkId" = ANY($1)
-             AND se."scheduleType" = 'CLOSED'
-             AND se.date = CURRENT_DATE`,
-          [candidateParkIds],
-        );
-
-      const parksWithClosedSchedule = new Set(
-        parksWithClosedScheduleRows.map((r) => r.parkId),
-      );
-      const parksNeedingFallback = candidateParkIds.filter(
-        (id) => !parksWithClosedSchedule.has(id),
-      );
-
-      if (parksNeedingFallback.length > 0) {
-        const stats: {
-          parkId: string;
-          withData: string;
-          operating5min: string;
-          operating10min: string;
-        }[] = await this.parkRepository.manager.query(
-          `
-          SELECT
-            p.id as "parkId",
-            COUNT(*) as "withData",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
-          FROM parks p
-          JOIN attractions a ON a."parkId" = p.id
-          JOIN LATERAL (
-            SELECT status, "waitTime"
-            FROM queue_data qd
-            WHERE qd."attractionId" = a.id
-              AND qd.timestamp > NOW() - INTERVAL '2 hours'
-            ORDER BY timestamp DESC
-            LIMIT 1
-          ) q ON true
-          WHERE p.id = ANY($1)
-          GROUP BY p.id
-        `,
-          [parksNeedingFallback],
-        );
-
-        for (const stat of stats) {
-          const withData = parseInt(stat.withData, 10);
-          const operating5min = parseInt(stat.operating5min, 10);
-          const operating10min = parseInt(stat.operating10min, 10);
-
-          // Relaxed heuristic:
-          // 1. Classic: ≥3 rides with data AND ≥25% reporting ≥10 min wait
-          // 2. Heartbeat: ≥3 rides with data AND ≥50% reporting ANY wait (≥5 min)
-          //    (handles "heartbeat" parks that only report 5 mins)
-          const isClassicOperating =
-            withData >= 3 && operating10min / withData >= 0.25;
-          const isHeartbeatOperating =
-            withData >= 3 && operating5min / withData >= 0.5;
-
-          if (isClassicOperating || isHeartbeatOperating) {
-            statusMap.set(stat.parkId, "OPERATING");
-          }
-        }
+    const ridesByPark = new Map<string, RideStatusData[]>();
+    for (const row of rideRows) {
+      if (!ridesByPark.has(row.parkId)) {
+        ridesByPark.set(row.parkId, []);
       }
+      ridesByPark.get(row.parkId)!.push({
+        status: row.status,
+        waitTime: row.waitTime,
+        lastUpdated: new Date(row.timestamp),
+      });
     }
 
-    // ... logic ...
+    const statusMap = new Map<string, "OPERATING" | "CLOSED">();
+    for (const id of parkIds) {
+      const isOpen = isParkOpen(
+        schedulesByPark.get(id) ?? [],
+        ridesByPark.get(id) ?? [],
+      );
+      statusMap.set(id, isOpen ? "OPERATING" : "CLOSED");
+    }
+
     return statusMap;
   }
 
