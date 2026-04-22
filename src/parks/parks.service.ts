@@ -2502,26 +2502,25 @@ export class ParksService {
         (id) => !parksWithKnownSchedule.has(id),
       );
 
+      // Mirror isParkOpen() from status-calculator.util.ts:
+      // ≥1 ride with status=OPERATING and waitTime > 0 within 30 minutes → OPERATING.
+      // Closed parks report 0 or stale placeholder waits; only real wait times count.
       if (parksNeedingFallback.length > 0) {
         const stats: {
           parkId: string;
-          withData: string;
-          operating5min: string;
-          operating10min: string;
+          operatingWithWait: string;
         }[] = await this.parkRepository.manager.query(
           `
           SELECT
             p.id as "parkId",
-            COUNT(*) as "withData",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 5 THEN 1 ELSE 0 END) as "operating5min",
-            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" >= 10 THEN 1 ELSE 0 END) as "operating10min"
+            SUM(CASE WHEN q.status = 'OPERATING' AND q."waitTime" > 0 THEN 1 ELSE 0 END) as "operatingWithWait"
           FROM parks p
           JOIN attractions a ON a."parkId" = p.id
           JOIN LATERAL (
             SELECT status, "waitTime"
             FROM queue_data qd
             WHERE qd."attractionId" = a.id
-              AND qd.timestamp > NOW() - INTERVAL '2 hours'
+              AND qd.timestamp > NOW() - INTERVAL '30 minutes'
             ORDER BY timestamp DESC
             LIMIT 1
           ) q ON true
@@ -2532,20 +2531,7 @@ export class ParksService {
         );
 
         for (const stat of stats) {
-          const withData = parseInt(stat.withData, 10);
-          const operating5min = parseInt(stat.operating5min, 10);
-          const operating10min = parseInt(stat.operating10min, 10);
-
-          // Relaxed heuristic:
-          // 1. Classic: ≥3 rides with data AND ≥25% reporting ≥10 min wait
-          // 2. Heartbeat: ≥3 rides with data AND ≥50% reporting ANY wait (≥5 min)
-          //    (handles "heartbeat" parks that only report 5 mins)
-          const isClassicOperating =
-            withData >= 3 && operating10min / withData >= 0.25;
-          const isHeartbeatOperating =
-            withData >= 3 && operating5min / withData >= 0.5;
-
-          if (isClassicOperating || isHeartbeatOperating) {
+          if (parseInt(stat.operatingWithWait, 10) > 0) {
             statusMap.set(stat.parkId, "OPERATING");
           }
         }
