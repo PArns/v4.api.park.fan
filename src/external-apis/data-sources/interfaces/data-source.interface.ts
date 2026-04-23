@@ -64,6 +64,7 @@ export interface ParkMetadata {
   latitude?: number;
   longitude?: number;
   destinationId?: string; // Only for ThemeParks.wiki
+  attractions?: Array<{ name: string; externalId: string }>;
 }
 
 /**

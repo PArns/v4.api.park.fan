@@ -21,6 +21,7 @@ export interface MergeResult {
   migratedRestaurants: number;
   migratedScheduleEntries: number;
   migratedMappings: number;
+  migratedStats: number;
   errors: string[];
 }
 
@@ -40,14 +41,11 @@ export class ParkMergeService {
   ) {}
 
   /**
-   * Merges two parks into one
-   *
-   * @param winnerId - ID of the park to keep (winner)
-   * @param loserId - ID of the park to merge into winner (loser)
-   * @returns Merge result with statistics
+   * Merges two parks into one.
+   * Comprehensive merge including all related entities and historical data.
    */
   async mergeParks(winnerId: string, loserId: string): Promise<MergeResult> {
-    this.logger.log(`🔀 Starting park merge: ${loserId} → ${winnerId}`);
+    this.logger.log(`🔀 Starting COMPREHENSIVE park merge: ${loserId} → ${winnerId}`);
 
     const result: MergeResult = {
       success: false,
@@ -60,114 +58,61 @@ export class ParkMergeService {
       migratedRestaurants: 0,
       migratedScheduleEntries: 0,
       migratedMappings: 0,
+      migratedStats: 0,
       errors: [],
     };
 
     try {
       await this.dataSource.transaction(async (manager) => {
         // Load both parks
-        const winner = await manager.findOne(Park, {
-          where: { id: winnerId },
-        });
-        const loser = await manager.findOne(Park, {
-          where: { id: loserId },
-        });
+        const winner = await manager.findOne(Park, { where: { id: winnerId } });
+        const loser = await manager.findOne(Park, { where: { id: loserId } });
 
-        if (!winner) {
-          throw new Error(`Winner park ${winnerId} not found`);
-        }
-        if (!loser) {
-          throw new Error(`Loser park ${loserId} not found`);
+        if (!winner || !loser) {
+          throw new Error(`Park not found (Winner: ${!!winner}, Loser: ${!!loser})`);
         }
 
         result.winnerName = winner.name;
         result.loserName = loser.name;
 
-        // Determine winner if not explicitly provided (shouldn't happen, but safety check)
-        // Note: We use the provided winnerId, but log if there's a better candidate
-        const hasScheduleWinner = await hasScheduleData(
-          winner.id,
-          manager.getRepository(ScheduleEntry),
-        );
-        const hasScheduleLoser = await hasScheduleData(
-          loser.id,
-          manager.getRepository(ScheduleEntry),
-        );
-        const priorityWinner = calculateParkPriority(
-          winner,
-          hasScheduleWinner,
-          false,
-        );
-        const priorityLoser = calculateParkPriority(
-          loser,
-          hasScheduleLoser,
-          false,
-        );
-
-        if (priorityLoser > priorityWinner) {
-          this.logger.warn(
-            `⚠️ Loser park has higher priority (${priorityLoser} vs ${priorityWinner}), but using provided winner`,
-          );
-        }
-
-        // 1. Consolidate Entity IDs
+        // 1. Consolidate Park-Level Metadata & IDs
         await this.consolidateEntityIds(manager, winner, loser);
 
-        // 2. Migrate Attractions (with collision handling)
-        const attractionCount = await this.migrateAttractions(
-          manager,
-          winner.id,
-          loser.id,
-        );
-        result.migratedAttractions = attractionCount;
+        // 2. Migrate Core Entities with Collision Handling (Attractions, Shows, Restaurants)
+        result.migratedAttractions = await this.migrateEntities(manager, "attractions", winner.id, loser.id);
+        result.migratedShows = await this.migrateEntities(manager, "shows", winner.id, loser.id);
+        result.migratedRestaurants = await this.migrateEntities(manager, "restaurants", winner.id, loser.id);
 
-        // 3. Migrate Shows
-        const showCount = await this.migrateShows(manager, winner.id, loser.id);
-        result.migratedShows = showCount;
+        // 3. Migrate Historical Stats & Timeseries
+        result.migratedStats = await this.migrateTableData(manager, "park_daily_stats", "parkId", winner.id, loser.id, ["date"]);
+        await this.migrateTableData(manager, "schedule_entries", "parkId", winner.id, loser.id, ["date", "scheduleType"]);
+        
+        // 4. Migrate Park-Specific Analysis Tables
+        await this.migrateTableData(manager, "park_p50_baselines", "parkId", winner.id, loser.id, []);
+        await this.migrateTableData(manager, "park_occupancy", "parkId", winner.id, loser.id, ["timestamp"]);
+        await this.migrateTableData(manager, "headliner_attractions", "parkId", winner.id, loser.id, ["attractionId"]);
+        await this.migrateTableData(manager, "weather_data", "parkId", winner.id, loser.id, ["timestamp"]);
 
-        // 4. Migrate Restaurants
-        const restaurantCount = await this.migrateRestaurants(
-          manager,
-          winner.id,
-          loser.id,
-        );
-        result.migratedRestaurants = restaurantCount;
+        // 5. Migrate Park-Level Mappings
+        result.migratedMappings = await manager.createQueryBuilder()
+          .update(ExternalEntityMapping)
+          .set({ internal_entity_id: winner.id })
+          .where("internal_entity_id = :loserId AND internal_entity_type = 'park'", { loserId: loser.id })
+          .execute()
+          .then(r => r.affected || 0);
 
-        // 5. Migrate ScheduleEntries
-        const scheduleCount = await this.migrateScheduleEntries(
-          manager,
-          winner.id,
-          loser.id,
-        );
-        result.migratedScheduleEntries = scheduleCount;
-
-        // 6. Migrate ExternalEntityMappings (for park-level mappings)
-        const mappingCount = await this.migrateParkMappings(
-          manager,
-          winner.id,
-          loser.id,
-        );
-        result.migratedMappings = mappingCount;
-
-        // 7. Delete the loser park
+        // 6. Delete the loser park (now empty of related data)
         await manager.delete(Park, loser.id);
 
-        this.logger.log(
-          `✅ Successfully merged "${loser.name}" into "${winner.name}"`,
-        );
+        this.logger.log(`✅ Successfully merged "${loser.name}" into "${winner.name}"`);
       });
 
       result.success = true;
-
-      // 8. Invalidate caches
       await this.invalidateParkCaches(winnerId);
+      await this.invalidateParkCaches(loserId);
 
-      this.logger.log(
-        `✅ Merge complete: ${result.migratedAttractions} attractions, ${result.migratedShows} shows, ${result.migratedRestaurants} restaurants, ${result.migratedScheduleEntries} schedule entries, ${result.migratedMappings} mappings`,
-      );
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       result.errors.push(errorMessage);
       this.logger.error(`❌ Merge failed: ${errorMessage}`);
       throw error;
@@ -177,254 +122,115 @@ export class ParkMergeService {
   }
 
   /**
-   * Consolidates Entity IDs from loser into winner
+   * Universal entity migration (Attractions, Shows, Restaurants)
+   * Handles collisions by merging time-series data and deleting the duplicate entity.
    */
-  private async consolidateEntityIds(
+  private async migrateEntities(
     manager: any,
-    winner: Park,
-    loser: Park,
-  ): Promise<void> {
+    tableName: string,
+    winnerId: string,
+    loserId: string,
+  ): Promise<number> {
+    const loserEntities = await manager.query(`SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`, [loserId]);
+    let count = 0;
+
+    for (const entity of loserEntities) {
+      // Find potential match in winner park
+      const match = await manager.query(
+        `SELECT id FROM ${tableName} WHERE "parkId" = $1 AND (slug = $2 OR name = $3)`,
+        [winnerId, entity.slug, entity.name]
+      );
+
+      if (match.length > 0) {
+        const winnerEntityId = match[0].id;
+        // Collision: Move all dependent data to winner's entity
+        await this.consolidateEntityData(manager, tableName, winnerEntityId, entity.id);
+        // Delete redundant entity
+        await manager.query(`DELETE FROM ${tableName} WHERE id = $1`, [entity.id]);
+      } else {
+        // No collision: Just re-parent
+        await manager.query(`UPDATE ${tableName} SET "parkId" = $1 WHERE id = $2`, [winnerId, entity.id]);
+      }
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * Moves all dependent data (queue_data, mappings, etc.) from one entity to another.
+   */
+  private async consolidateEntityData(manager: any, type: string, winnerId: string, loserId: string): Promise<void> {
+    // 1. Mappings
+    await manager.query(
+      `DELETE FROM external_entity_mapping WHERE internal_entity_id = $1 AND (external_source, external_entity_id) IN 
+       (SELECT external_source, external_entity_id FROM external_entity_mapping WHERE internal_entity_id = $2)`,
+      [loserId, winnerId]
+    );
+    await manager.query(`UPDATE external_entity_mapping SET internal_entity_id = $1 WHERE internal_entity_id = $2`, [winnerId, loserId]);
+
+    if (type === "attractions") {
+      // Temporarily lift decompression limit for TimescaleDB
+      await manager.query('SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
+      
+      await manager.query(`UPDATE queue_data SET "attractionId" = $1 WHERE "attractionId" = $2`, [winnerId, loserId]);
+      await manager.query(`UPDATE forecast_data SET "attractionId" = $1 WHERE "attractionId" = $2`, [winnerId, loserId]);
+      await manager.query(`UPDATE wait_time_predictions SET "attractionId" = $1 WHERE "attractionId" = $2`, [winnerId, loserId]);
+      
+      // Accuracy tables
+      await manager.query(`UPDATE prediction_accuracy SET attraction_id = $1 WHERE attraction_id = $2`, [winnerId, loserId]);
+      await manager.query(`DELETE FROM attraction_accuracy_stats WHERE attraction_id = $1`, [loserId]);
+      await manager.query(`DELETE FROM attraction_p50_baselines WHERE "attractionId" = $1`, [loserId]);
+      
+      await manager.query('SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000');
+    }
+    // Note: Add show/restaurant specific consolidation if needed
+  }
+
+  /**
+   * Generic table data migration with duplicate prevention.
+   */
+  private async migrateTableData(
+    manager: any,
+    tableName: string,
+    idColumn: string,
+    winnerId: string,
+    loserId: string,
+    conflictColumns: string[]
+  ): Promise<number> {
+    if (conflictColumns.length > 0) {
+      const conflictList = conflictColumns.map(c => `"${c}"`).join(", ");
+      await manager.query(
+        `DELETE FROM ${tableName} WHERE "${idColumn}" = $1 AND (${conflictList}) IN 
+         (SELECT ${conflictList} FROM ${tableName} WHERE "${idColumn}" = $2)`,
+        [loserId, winnerId]
+      );
+    } else {
+      // No specific conflict columns? Just delete winner entry if it exists to overwrite with loser data (e.g. baselines)
+      await manager.query(`DELETE FROM ${tableName} WHERE "${idColumn}" = $1`, [winnerId]);
+    }
+
+    const result = await manager.query(`UPDATE ${tableName} SET "${idColumn}" = $1 WHERE "${idColumn}" = $2`, [winnerId, loserId]);
+    return result[1] || 0;
+  }
+
+  private async consolidateEntityIds(manager: any, winner: Park, loser: Park): Promise<void> {
     const updates: Partial<Park> = {};
-
-    // Wiki ID: Winner keeps, loser's is ignored if winner has one
-    if (!winner.wikiEntityId && loser.wikiEntityId) {
-      updates.wikiEntityId = loser.wikiEntityId;
-    }
-
-    // Queue-Times ID: Winner keeps, loser's is ignored if winner has one
-    if (!winner.queueTimesEntityId && loser.queueTimesEntityId) {
-      updates.queueTimesEntityId = loser.queueTimesEntityId;
-    }
-
-    // Wartezeiten ID: Winner keeps, loser's is ignored if winner has one
-    if (!winner.wartezeitenEntityId && loser.wartezeitenEntityId) {
-      updates.wartezeitenEntityId = loser.wartezeitenEntityId;
-    }
-
-    // Update name to Wiki name if available (Wiki has priority)
-    if (loser.wikiEntityId && !winner.wikiEntityId) {
-      // If loser has Wiki ID but winner doesn't, we might want to use loser's name
-      // But typically winner should have Wiki ID if it's the winner
-      // So we keep winner's name
-    }
+    if (!winner.wikiEntityId && loser.wikiEntityId) updates.wikiEntityId = loser.wikiEntityId;
+    if (!winner.queueTimesEntityId && loser.queueTimesEntityId) updates.queueTimesEntityId = loser.queueTimesEntityId;
+    if (!winner.wartezeitenEntityId && loser.wartezeitenEntityId) updates.wartezeitenEntityId = loser.wartezeitenEntityId;
 
     if (Object.keys(updates).length > 0) {
       await manager.update(Park, winner.id, updates);
-      this.logger.log(
-        `✅ Consolidated Entity IDs: ${Object.keys(updates).join(", ")}`,
-      );
     }
   }
 
-  /**
-   * Migrates attractions from loser to winner, handling collisions
-   */
-  private async migrateAttractions(
-    manager: any,
-    winnerId: string,
-    loserId: string,
-  ): Promise<number> {
-    // Get existing attractions from both parks
-    const existingAttractions = await manager.query(
-      `SELECT id, slug, "land_name", "land_external_id", "queue_times_entity_id" 
-       FROM attractions 
-       WHERE "parkId" = $1::uuid`,
-      [winnerId],
-    );
-
-    const loserAttractions = await manager.query(
-      `SELECT id, slug, "land_name", "land_external_id", "queue_times_entity_id" 
-       FROM attractions 
-       WHERE "parkId" = $1::uuid`,
-      [loserId],
-    );
-
-    let migratedCount = 0;
-
-    for (const loserAttr of loserAttractions) {
-      const match = existingAttractions.find(
-        (a: any) => a.slug === loserAttr.slug,
-      );
-
-      if (match) {
-        // COLLISION: Merge data, move mappings, delete ghost attraction
-        const updates: string[] = [];
-
-        // 1. Copy Land Data if missing in primary
-        if (loserAttr.land_name || loserAttr.land_external_id) {
-          await manager.query(
-            `UPDATE attractions 
-             SET "land_name" = COALESCE("land_name", $1),
-                 "land_external_id" = COALESCE("land_external_id", $2)
-             WHERE id = $3`,
-            [loserAttr.land_name, loserAttr.land_external_id, match.id],
-          );
-          updates.push("land data");
-        }
-
-        // 2. Copy Queue-Times ID if missing
-        if (loserAttr.queue_times_entity_id && !match.queue_times_entity_id) {
-          await manager.query(
-            `UPDATE attractions 
-             SET "queue_times_entity_id" = $1
-             WHERE id = $2`,
-            [loserAttr.queue_times_entity_id, match.id],
-          );
-          updates.push("QT-ID");
-        }
-
-        // 3. Move External Mappings from Ghost to Primary
-        const mappingUpdate = await manager.query(
-          `UPDATE external_entity_mapping 
-           SET "internal_entity_id" = $1 
-           WHERE "internal_entity_id" = $2`,
-          [match.id, loserAttr.id],
-        );
-        if (mappingUpdate[1] > 0) {
-          updates.push(`${mappingUpdate[1]} mappings`);
-        }
-
-        // 4. Move Queue Data (Wait Times History)
-        const queueDataUpdate = await manager.query(
-          `UPDATE queue_data 
-           SET "attractionId" = $1 
-           WHERE "attractionId" = $2::uuid`,
-          [match.id, loserAttr.id],
-        );
-        if (queueDataUpdate[1] > 0) {
-          updates.push(`${queueDataUpdate[1]} queue data entries`);
-        }
-
-        // 5. Move Wait Time Predictions
-        const predictionsUpdate = await manager.query(
-          `UPDATE wait_time_predictions 
-           SET "attractionId" = $1 
-           WHERE "attractionId" = $2::uuid`,
-          [match.id, loserAttr.id],
-        );
-        if (predictionsUpdate[1] > 0) {
-          updates.push(`${predictionsUpdate[1]} predictions`);
-        }
-
-        // 6. Move Prediction Accuracy Records
-        const accuracyUpdate = await manager.query(
-          `UPDATE prediction_accuracy 
-           SET "attraction_id" = $1 
-           WHERE "attraction_id" = $2`,
-          [match.id, loserAttr.id],
-        );
-        if (accuracyUpdate[1] > 0) {
-          updates.push(`${accuracyUpdate[1]} accuracy records`);
-        }
-
-        // 7. Delete the ghost attraction
-        await manager.query(`DELETE FROM attractions WHERE id = $1`, [
-          loserAttr.id,
-        ]);
-
-        this.logger.log(
-          `    Merged attraction "${loserAttr.slug}": ${updates.join(", ")}`,
-        );
-        migratedCount++;
-      } else {
-        // NO COLLISION: Move
-        await manager.query(
-          `UPDATE attractions SET "parkId" = $1 WHERE id = $2`,
-          [winnerId, loserAttr.id],
-        );
-        migratedCount++;
-      }
-    }
-
-    return migratedCount;
-  }
-
-  /**
-   * Migrates shows from loser to winner
-   */
-  private async migrateShows(
-    manager: any,
-    winnerId: string,
-    loserId: string,
-  ): Promise<number> {
-    const result = await manager.query(
-      `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-      [winnerId, loserId],
-    );
-    return result[1] || 0;
-  }
-
-  /**
-   * Migrates restaurants from loser to winner
-   */
-  private async migrateRestaurants(
-    manager: any,
-    winnerId: string,
-    loserId: string,
-  ): Promise<number> {
-    const result = await manager.query(
-      `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-      [winnerId, loserId],
-    );
-    return result[1] || 0;
-  }
-
-  /**
-   * Migrates schedule entries from loser to winner
-   */
-  private async migrateScheduleEntries(
-    manager: any,
-    winnerId: string,
-    loserId: string,
-  ): Promise<number> {
-    const result = await manager.query(
-      `UPDATE schedule_entries SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-      [winnerId, loserId],
-    );
-    return result[1] || 0;
-  }
-
-  /**
-   * Migrates park-level ExternalEntityMappings from loser to winner
-   */
-  private async migrateParkMappings(
-    manager: any,
-    winnerId: string,
-    loserId: string,
-  ): Promise<number> {
-    const result = await manager.query(
-      `UPDATE external_entity_mapping 
-       SET "internal_entity_id" = $1 
-       WHERE "internal_entity_id" = $2 
-       AND "internal_entity_type" = 'park'`,
-      [winnerId, loserId],
-    );
-    return result[1] || 0;
-  }
-
-  /**
-   * Invalidates all caches related to the merged park
-   */
   private async invalidateParkCaches(parkId: string): Promise<void> {
     try {
-      const patterns = [
-        `park:integrated:${parkId}`,
-        `park:${parkId}:*`,
-        `schedule:${parkId}:*`,
-        `schedule:*:${parkId}:*`,
-        `wait-times:${parkId}:*`,
-      ];
-
+      const patterns = [`park:integrated:${parkId}`, `park:${parkId}:*`, `schedule:${parkId}:*`, `wait-times:${parkId}:*` ];
       for (const pattern of patterns) {
         const keys = await this.redis.keys(pattern);
-        if (keys.length > 0) {
-          await this.redis.del(...keys);
-        }
+        if (keys.length > 0) await this.redis.del(...keys);
       }
-    } catch (error) {
-      this.logger.warn(
-        `Failed to invalidate cache for park ${parkId}: ${error}`,
-      );
-    }
+    } catch (e) {}
   }
 }

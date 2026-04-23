@@ -5,6 +5,7 @@ import {
   OperatingWindow,
 } from "./interfaces/data-source.interface";
 import { normalizeForMatching } from "../../common/utils/slug.util";
+import { EntityMatcherService } from "./entity-matcher.service";
 
 /**
  * Merged Entity Structure
@@ -213,7 +214,10 @@ export class ConflictResolverService {
         let bestKey: string | undefined = undefined;
 
         for (const [existingNorm, originalKey] of normalizedKeys.entries()) {
-          const sim = this.calculateStringSimilarity(norm, existingNorm);
+          const sim = EntityMatcherService.calculateStringSimilarity(
+            norm,
+            existingNorm,
+          );
           if (sim > 0.9 && sim > bestSim) {
             bestSim = sim;
             bestKey = originalKey;

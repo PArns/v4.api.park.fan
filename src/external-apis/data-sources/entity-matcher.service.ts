@@ -78,34 +78,71 @@ export class EntityMatcherService {
         const aliases = manualOverrides[normWikiName] || [];
 
         if (aliases.length > 0) {
-          // Look for an alias match in qtOnly
           const overrideMatch = qtOnly.find((p) =>
             aliases.includes(this.normalizeByKey(p.name)),
           );
 
           if (overrideMatch) {
-            // this.logger.debug(
-            //   `🎯 Manual match applied: "${wiki.name}" ↔ "${overrideMatch.name}"`,
-            // );
             manualMatchCount++;
             bestMatch = overrideMatch;
             bestScore = 1.0;
           }
         }
+      }
 
-        // 2. Fallback to fuzzy matching if no manual match found
-        if (!bestMatch) {
-          for (const qt of qtOnly) {
-            const score = this.calculateParkSimilarity(wiki, qt);
-            if (score > bestScore && score >= 0.7) {
-              // 70% threshold (lowered from 75% to catch exact name matches with minor data gaps)
-              bestScore = score;
-              bestMatch = qt;
+      // 3. Smart Strategy: Slug Match (High Confidence)
+      if (!bestMatch) {
+        const wikiSlug = normalizeForMatching(wiki.name);
+        const slugMatch = qtOnly.find(
+          (p) => normalizeForMatching(p.name) === wikiSlug,
+        );
+        if (slugMatch) {
+          bestMatch = slugMatch;
+          bestScore = 0.95;
+          this.logger.debug(`🔗 Slug match: "${wiki.name}" ↔ "${slugMatch.name}"`);
+        }
+      }
+
+      // 4. Smart Strategy: Ride Signature Match (Very High Confidence)
+      // If two parks share multiple unique attraction names, they are the same.
+      if (!bestMatch && wiki.attractions && wiki.attractions.length > 0) {
+        const wikiRides = new Set(
+          wiki.attractions.map((a) => normalizeForMatching(a.name)),
+        );
+
+        for (const qt of qtOnly) {
+          if (!qt.attractions || qt.attractions.length === 0) continue;
+
+          let sharedRides = 0;
+          for (const qtRide of qt.attractions) {
+            if (wikiRides.has(normalizeForMatching(qtRide.name))) {
+              sharedRides++;
             }
+          }
+
+          // If they share 5+ rides or >30% of their lineup, it's a match
+          const threshold = Math.min(5, Math.ceil(wiki.attractions.length * 0.3));
+          if (sharedRides >= threshold && sharedRides >= 3) {
+            bestMatch = qt;
+            bestScore = 0.98;
+            this.logger.debug(
+              `🧬 Ride Signature match: "${wiki.name}" ↔ "${qt.name}" (shared: ${sharedRides} rides)`,
+            );
+            break;
           }
         }
       }
 
+      // 5. Fallback to fuzzy matching
+      if (!bestMatch) {
+        for (const qt of qtOnly) {
+          const score = this.calculateParkSimilarity(wiki, qt);
+          if (score > bestScore && score >= 0.7) {
+            bestScore = score;
+            bestMatch = qt;
+          }
+        }
+      }
       if (bestMatch) {
         matched.push({ wiki, qt: bestMatch, confidence: bestScore });
         qtOnly.splice(qtOnly.indexOf(bestMatch), 1);
@@ -357,8 +394,30 @@ export class EntityMatcherService {
   }
 
   /**
+   * Simple Dice's Coefficient similarity for strings
+   */
+  static calculateStringSimilarity(str1: string, str2: string): number {
+    const s1 = str1.toLowerCase().replace(/\s+/g, "");
+    const s2 = str2.toLowerCase().replace(/\s+/g, "");
+    if (s1 === s2) return 1.0;
+    if (s1.length < 2 || s2.length < 2) return 0.0;
+
+    const bigrams1 = new Set();
+    for (let i = 0; i < s1.length - 1; i++) bigrams1.add(s1.substring(i, i + 2));
+    const bigrams2 = new Set();
+    for (let i = 0; i < s2.length - 1; i++) bigrams2.add(s2.substring(i, i + 2));
+
+    let intersect = 0;
+    for (const b of bigrams1) {
+      if (bigrams2.has(b)) intersect++;
+    }
+
+    return (2.0 * intersect) / (bigrams1.size + bigrams2.size);
+  }
+
+  /**
    * Match entities (attractions, shows, restaurants) within a park
-   *
+  ...
    * @param source1Entities - Entities from source 1 (e.g. Wiki)
    * @param source2Entities - Entities from source 2 (e.g. Queue-Times)
    */

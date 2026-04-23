@@ -45,6 +45,12 @@ export class ThemeParksDataSource implements IDataSource {
         // Fetch detailed park entity to get location/timezone
         try {
           const parkEntity = await this.client.getEntity(parkSummary.id);
+          
+          // Optimization: Fetch children to enable attraction-based matching signature
+          const childData = await this.client.getEntityChildren(parkSummary.id);
+          const attractions = (childData.children || [])
+            .filter(c => c.entityType === 'ATTRACTION')
+            .map(c => ({ name: c.name, externalId: c.id }));
 
           allParks.push({
             externalId: parkEntity.id,
@@ -54,6 +60,7 @@ export class ThemeParksDataSource implements IDataSource {
             latitude: parkEntity.location?.latitude ?? undefined,
             longitude: parkEntity.location?.longitude ?? undefined,
             destinationId: parkEntity.destinationId,
+            attractions,
           });
         } catch (error) {
           this.logger.warn(

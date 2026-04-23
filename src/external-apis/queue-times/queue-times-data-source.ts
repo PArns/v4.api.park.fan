@@ -40,6 +40,13 @@ export class QueueTimesDataSource implements IDataSource {
 
     for (const group of parkGroups) {
       for (const park of group.parks) {
+        // Optimization: Include rides in metadata if available for signature matching
+        // Some groups might already have ride lists in this summary call
+        const attractions = ((park as any).rides || []).map((r: any) => ({
+          name: r.name,
+          externalId: `qt-ride-${r.id}`,
+        }));
+
         allParks.push({
           externalId: `qt-park-${park.id}`,
           source: this.name,
@@ -49,6 +56,7 @@ export class QueueTimesDataSource implements IDataSource {
           timezone: park.timezone,
           latitude: parseFloat(park.latitude),
           longitude: parseFloat(park.longitude),
+          attractions: attractions.length > 0 ? attractions : undefined,
         });
       }
     }
