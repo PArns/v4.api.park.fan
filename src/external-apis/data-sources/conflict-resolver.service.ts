@@ -188,34 +188,85 @@ export class ConflictResolverService {
     wzEntities: any[] = [],
   ): any[] {
     const merged = new Map<string, MergedEntity>();
+    const normalizedKeys = new Map<string, string>(); // normName -> originalName in 'merged'
 
     // Step 1: Add all Wiki entities (base/anchor)
     for (const entity of wikiEntities) {
-      const key = normalizeForMatching(entity.name);
-      merged.set(key, {
+      const normKey = normalizeForMatching(entity.name);
+      merged.set(entity.name, {
         ...entity,
         source: "themeparks-wiki",
         sources: ["themeparks-wiki"],
       });
+      normalizedKeys.set(normKey, entity.name);
     }
+
+    // Helper for fuzzy matching within a park's entities
+    const findBestMatch = (name: string): string | undefined => {
+      const norm = normalizeForMatching(name);
+      // 1. Exact match (fast)
+      if (normalizedKeys.has(norm)) return normalizedKeys.get(norm);
+
+      // 2. Fuzzy match (only for longer names to avoid false positives)
+      if (norm.length > 5) {
+        let bestSim = 0;
+        let bestKey: string | undefined = undefined;
+
+        for (const [existingNorm, originalKey] of normalizedKeys.entries()) {
+          const sim = this.calculateStringSimilarity(norm, existingNorm);
+          if (sim > 0.9 && sim > bestSim) {
+            bestSim = sim;
+            bestKey = originalKey;
+          }
+        }
+        return bestKey;
+      }
+      return undefined;
+    };
 
     // Step 2: Merge Queue-Times entities
     for (const qtEntity of qtEntities) {
-      this.addOrMergeEntity(merged, qtEntity, "queue-times");
+      const matchKey = findBestMatch(qtEntity.name);
+      if (matchKey) {
+        this.updateMergedEntry(merged.get(matchKey)!, qtEntity, "queue-times");
+      } else {
+        const normKey = normalizeForMatching(qtEntity.name);
+        merged.set(qtEntity.name, {
+          ...qtEntity,
+          source: "queue-times",
+          sources: ["queue-times"],
+        });
+        normalizedKeys.set(normKey, qtEntity.name);
+      }
     }
 
     // Step 3: Merge Wartezeiten entities
     for (const wzEntity of wzEntities) {
-      this.addOrMergeEntity(merged, wzEntity, "wartezeiten-app");
+      const matchKey = findBestMatch(wzEntity.name);
+      if (matchKey) {
+        this.updateMergedEntry(
+          merged.get(matchKey)!,
+          wzEntity,
+          "wartezeiten-app",
+        );
+      } else {
+        const normKey = normalizeForMatching(wzEntity.name);
+        merged.set(wzEntity.name, {
+          ...wzEntity,
+          source: "wartezeiten-app",
+          sources: ["wartezeiten-app"],
+        });
+        normalizedKeys.set(normKey, wzEntity.name);
+      }
     }
 
     // Step 4: Resolve wait time conflicts
     for (const [_key, entity] of merged.entries()) {
       const waitTimes: number[] = [];
 
-      if (entity.waitTime) waitTimes.push(entity.waitTime);
-      if (entity.qtWaitTime) waitTimes.push(entity.qtWaitTime);
-      if (entity.wzWaitTime) waitTimes.push(entity.wzWaitTime);
+      if (entity.waitTime != null) waitTimes.push(entity.waitTime);
+      if (entity.qtWaitTime != null) waitTimes.push(entity.qtWaitTime);
+      if (entity.wzWaitTime != null) waitTimes.push(entity.wzWaitTime);
 
       if (waitTimes.length >= 1) {
         entity.waitTime = this.calculateConsensusWaitTime(waitTimes);
@@ -256,14 +307,49 @@ export class ConflictResolverService {
   }
 
   /**
+   * Internal helper to update a merged entity entry
+   */
+  private updateMergedEntry(
+    existing: MergedEntity,
+    entity: any,
+    sourceName: string,
+  ): void {
+    if (!existing.sources.includes(sourceName)) {
+      existing.sources.push(sourceName);
+    }
+
+    const sourceKey = this.getSourceKey(sourceName);
+    existing[`${sourceKey}Status`] = entity.status;
+    if (entity.waitTime != null) {
+      existing[`${sourceKey}WaitTime`] = entity.waitTime;
+    }
+  }
+
+  /**
+   * Simple Dice's Coefficient similarity for strings
+   */
+  private calculateStringSimilarity(str1: string, str2: string): number {
+    const s1 = str1.replace(/\s+/g, "");
+    const s2 = str2.replace(/\s+/g, "");
+    if (s1 === s2) return 1.0;
+    if (s1.length < 2 || s2.length < 2) return 0.0;
+
+    const bigrams1 = new Set();
+    for (let i = 0; i < s1.length - 1; i++) bigrams1.add(s1.substring(i, i + 2));
+    const bigrams2 = new Set();
+    for (let i = 0; i < s2.length - 1; i++) bigrams2.add(s2.substring(i, i + 2));
+
+    let intersect = 0;
+    for (const b of bigrams1) {
+      if (bigrams2.has(b)) intersect++;
+    }
+
+    return (2.0 * intersect) / (bigrams1.size + bigrams2.size);
+  }
+
+  /**
    * Add or merge entity into the merged entities map
-   *
-   * If entity already exists (matched by name), merges data.
-   * Otherwise, adds as new entity.
-   *
-   * @param merged - Map of normalized name to merged entity
-   * @param entity - Entity to add or merge
-   * @param sourceName - Source identifier (e.g., "queue-times")
+   * @deprecated Use findBestMatch and updateMergedEntry inside mergeEntities
    */
   private addOrMergeEntity(
     merged: Map<string, MergedEntity>,
@@ -277,9 +363,6 @@ export class ConflictResolverService {
       const existing = merged.get(key)!;
       existing.sources.push(sourceName);
 
-      // Store source-specific wait time and status for later conflict resolution.
-      // Status is always stored so the override check can evaluate it even
-      // when waitTime is 0 (open ride, no queue) or undefined.
       const sourceKey = this.getSourceKey(sourceName);
       existing[`${sourceKey}Status`] = entity.status;
       if (entity.waitTime != null) {
