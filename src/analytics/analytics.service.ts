@@ -3806,6 +3806,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" >= 10
+          AND qd."waitTime" < 300
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
       ),
@@ -3910,6 +3911,7 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
           AND qd.status = 'OPERATING'
           AND qd."waitTime" >= 10
+          AND qd."waitTime" < 300
           AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
         GROUP BY a.id, a."parkId"
         ORDER BY p90_wait DESC
