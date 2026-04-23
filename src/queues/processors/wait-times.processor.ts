@@ -346,6 +346,7 @@ export class WaitTimesProcessor {
     return this.queueDataService.saveLiveData(
       internalId,
       this.adaptEntityLiveData(entityData),
+      entityData.source,
     );
   }
 
@@ -419,13 +420,17 @@ export class WaitTimesProcessor {
       // status-only save when no queue is present, and shouldSaveQueueData
       // deduplicates if we've already written CLOSED previously.
       try {
-        const saved = await this.queueDataService.saveLiveData(attraction.id, {
-          id: attraction.id,
-          name: attraction.name,
-          entityType: EntityType.ATTRACTION,
-          status: LiveStatus.CLOSED,
-          lastUpdated: new Date().toISOString(),
-        });
+        const saved = await this.queueDataService.saveLiveData(
+          attraction.id,
+          {
+            id: attraction.id,
+            name: attraction.name,
+            entityType: EntityType.ATTRACTION,
+            status: LiveStatus.CLOSED,
+            lastUpdated: new Date().toISOString(),
+          },
+          "system-reconciliation",
+        );
         if (saved > 0) closedCount++;
       } catch (_e) {
         // non-fatal; continue with remaining attractions
@@ -695,6 +700,7 @@ export class WaitTimesProcessor {
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
                 waitTime: last ? last.waitTime : 0,
+                dataSource: last ? last.dataSource : "system-heartbeat",
                 lastUpdated: now,
               });
               await this.queueDataRepository.save(heartbeatEntry);

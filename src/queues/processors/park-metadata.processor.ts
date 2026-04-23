@@ -390,10 +390,9 @@ export class ParkMetadataProcessor {
     // This aligns with processQueueTimesOnlyPark / processWartezeitenOnlyPark logic
 
     let parkExternalId = anchor.externalId;
-    if (!wiki) {
-      if (qt) parkExternalId = `qt-${qt.externalId}`;
-      else if (wz) parkExternalId = `wz-${wz.externalId}`;
-    }
+    // No manual prefixing needed here as data sources (Queue-Times, Wartezeiten) 
+    // already provide prefixed externalIds (e.g., 'qt-park-123', 'wz-456')
+    // to avoid collisions with ThemeParks.wiki UUIDs.
 
     // CRITICAL: Check for existing park by multiple criteria to prevent duplicates
     // 1. Check by externalId (primary)
@@ -772,7 +771,7 @@ export class ParkMetadataProcessor {
    * Process a park that exists ONLY in Queue-Times
    */
   private async processQueueTimesOnlyPark(qt: ParkMetadata): Promise<void> {
-    const qtExternalId = `qt-${qt.externalId}`; // Prefix to avoid collision
+    const qtExternalId = qt.externalId; // Already prefixed (e.g., 'qt-park-123') in DataSource
 
     // Check if park already exists by externalId
     let park = await this.parkRepository.findOne({
@@ -857,7 +856,7 @@ export class ParkMetadataProcessor {
    * (Allowed only for specific parks)
    */
   private async processWartezeitenOnlyPark(wz: ParkMetadata): Promise<void> {
-    const wzExternalId = `wz-${wz.externalId}`; // Prefix to avoid collision
+    const wzExternalId = wz.externalId; // Already prefixed (e.g., 'wz-123') in DataSource
 
     // Check if park already exists by externalId
     let park = await this.parkRepository.findOne({

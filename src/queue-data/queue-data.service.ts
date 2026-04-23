@@ -82,10 +82,12 @@ export class QueueDataService {
    *
    * @param attractionId - Our internal attraction ID (UUID)
    * @param liveData - Live data from ThemeParks.wiki API
+   * @param source - Optional data source name (e.g., 'queue-times')
    */
   async saveLiveData(
     attractionId: string,
     liveData: EntityLiveResponse,
+    source?: string,
   ): Promise<number> {
     let savedCount = 0;
 
@@ -99,6 +101,7 @@ export class QueueDataService {
           attractionId,
           queueType: QueueType.STANDBY,
           status: liveData.status,
+          dataSource: source || "themeparks-wiki",
           lastUpdated: liveData.lastUpdated
             ? new Date(liveData.lastUpdated)
             : new Date(),
@@ -150,6 +153,7 @@ export class QueueDataService {
         attractionId,
         queueType,
         status: liveData.status,
+        dataSource: source || "themeparks-wiki",
         lastUpdated: liveData.lastUpdated
           ? new Date(liveData.lastUpdated)
           : null,
