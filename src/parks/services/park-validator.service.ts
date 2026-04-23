@@ -201,12 +201,40 @@ export class ParkValidatorService {
         continue;
       }
 
-      const similarity = calculateNameSimilarity(park.name, apiPark.name);
-      if (similarity < 0.8 && normalizeForMatching(park.name) !== normalizeForMatching(apiPark.name)) {
+      // Check for duplicate WZ ID usage across our DB
+      const parksWithSameWzId = parksWithWzId.filter(
+        (p) => p.wartezeitenEntityId === wzId,
+      );
+      if (parksWithSameWzId.length > 1) {
         mismatches.push({
-          parkId: park.id, parkName: park.name, city: park.city,
-          currentWzId: wzId, expectedWzId: null, apiParkName: apiPark.name,
-          similarity, reason: `Name mismatch (${(similarity * 100).toFixed(0)}%)`,
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentWzId: wzId,
+          expectedWzId: null,
+          apiParkName: apiPark.name,
+          similarity: 0,
+          reason: `WZ-ID used by ${parksWithSameWzId.length} parks (duplicate)`,
+        });
+        continue;
+      }
+
+      const similarity = calculateNameSimilarity(park.name, apiPark.name);
+      const normalizedDbName = normalizeForMatching(park.name);
+      const normalizedApiName = normalizeForMatching(apiPark.name);
+      const isNameMismatch =
+        similarity < 1.0 && (similarity < 0.8 || normalizedDbName !== normalizedApiName);
+
+      if (isNameMismatch) {
+        mismatches.push({
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentWzId: wzId,
+          expectedWzId: null,
+          apiParkName: apiPark.name,
+          similarity,
+          reason: `Name mismatch (similarity: ${(similarity * 100).toFixed(1)}%)`,
         });
       }
     }
@@ -234,24 +262,42 @@ export class ParkValidatorService {
           continue;
         }
 
-        const similarity = calculateNameSimilarity(p1.name, p2.name);
-        let geoMatch = false;
-        if (p1.latitude && p2.latitude) {
-            const dist = calculateHaversineDistance(
-                { latitude: p1.latitude, longitude: p1.longitude },
-                { latitude: p2.latitude, longitude: p2.longitude },
-                "km"
-            );
-            geoMatch = dist < 1.0;
+        const sameCity = p1.city && p2.city && p1.city === p2.city;
+        let geoProximity = false;
+        if (p1.latitude && p1.longitude && p2.latitude && p2.longitude) {
+          const dist = calculateHaversineDistance(
+            { latitude: p1.latitude, longitude: p1.longitude },
+            { latitude: p2.latitude, longitude: p2.longitude },
+            "km",
+          );
+          geoProximity = dist < 1.0;
         }
 
-        if (similarity > 0.95 || (similarity > 0.85 && (p1.city === p2.city || geoMatch))) {
+        const nameSimilarity = calculateNameSimilarity(p1.name, p2.name);
+        const isDuplicate =
+          (sameCity && nameSimilarity >= 0.85) ||
+          (geoProximity && nameSimilarity >= 0.85) ||
+          (nameSimilarity >= 0.98 && (sameCity || geoProximity));
+
+        if (isDuplicate) {
+          const reasons: string[] = [];
+          if (sameCity) reasons.push("same city");
+          if (geoProximity) reasons.push("geo proximity < 1km");
+          if (nameSimilarity >= 0.98) reasons.push("very high name similarity");
+
           duplicates.push({
             park1: { id: p1.id, name: p1.name, city: p1.city },
             park2: { id: p2.id, name: p2.name, city: p2.city },
-            score: similarity,
-            reason: geoMatch ? "Geo proximity" : "Name similarity",
-            sharedEntityIds: {},
+            score: nameSimilarity,
+            reason: reasons.join(", "),
+            sharedEntityIds: {
+              wiki: p1.wikiEntityId !== null && p2.wikiEntityId !== null,
+              queueTimes:
+                p1.queueTimesEntityId !== null && p2.queueTimesEntityId !== null,
+              wartezeiten:
+                p1.wartezeitenEntityId !== null &&
+                p2.wartezeitenEntityId !== null,
+            },
           });
         }
       }
@@ -260,30 +306,201 @@ export class ParkValidatorService {
   }
 
   async validateAll(): Promise<ValidationReport> {
-    const [mismatchedQtIds, mismatchedWzIds, missingQtIds, missingWzIds, duplicates] = await Promise.all([
+    this.logger.log("🚀 Starting complete park validation...");
+
+    const [
+      mismatchedQtIds,
+      mismatchedWzIds,
+      missingQtIds,
+      missingWzIds,
+      duplicates,
+    ] = await Promise.all([
       this.validateQueueTimesIds(),
       this.validateWartezeitenIds(),
-      this.findMissingQueueTimesIds(), // Implementation omitted for brevity in this replace, keeping existing logic
-      this.findMissingWartezeitenIds(), // Same
+      this.findMissingQueueTimesIds(),
+      this.findMissingWartezeitenIds(),
       this.findDuplicates(),
     ]);
 
+    const totalParks = await this.parkRepository.count();
+    const parksWithQtId = await this.parkRepository.count({
+      where: { queueTimesEntityId: Not(IsNull()) },
+    });
+    const parksWithWzId = await this.parkRepository.count({
+      where: { wartezeitenEntityId: Not(IsNull()) },
+    });
+
+    const issuesFound =
+      mismatchedQtIds.length +
+      mismatchedWzIds.length +
+      missingQtIds.length +
+      missingWzIds.length +
+      duplicates.length;
+
+    this.logger.log(
+      `✅ Validation complete: ${issuesFound} issues found (${mismatchedQtIds.length} QT mismatches, ${mismatchedWzIds.length} WZ mismatches, ${missingQtIds.length} missing QT IDs, ${missingWzIds.length} missing WZ IDs, ${duplicates.length} duplicates)`,
+    );
+
     return {
-      mismatchedQtIds, mismatchedWzIds, missingQtIds, missingWzIds, duplicates,
+      mismatchedQtIds,
+      mismatchedWzIds,
+      missingQtIds,
+      missingWzIds,
+      duplicates,
       summary: {
-        totalParks: 0, parksWithQtId: 0, parksWithWzId: 0,
-        issuesFound: mismatchedQtIds.length + mismatchedWzIds.length + missingQtIds.length + missingWzIds.length + duplicates.length
-      }
+        totalParks,
+        parksWithQtId,
+        parksWithWzId,
+        issuesFound,
+      },
     };
   }
 
   async findMissingQueueTimesIds(): Promise<MissingQtId[]> {
-    // Simplified implementation for now, using name matching
-    return [];
+    this.logger.log("🔍 Finding parks missing Queue-Times IDs...");
+
+    const parksWithoutQtId = await this.parkRepository.find({
+      where: { queueTimesEntityId: IsNull() },
+      select: ["id", "name", "city", "latitude", "longitude"],
+    });
+
+    if (parksWithoutQtId.length === 0) return [];
+
+    const apiParksResponse = await this.queueTimesClient.getParks();
+    const apiParks = apiParksResponse.flatMap((group) => group.parks);
+
+    const usedQtIds = await this.parkRepository
+      .createQueryBuilder("park")
+      .select("park.queueTimesEntityId", "qtId")
+      .where("park.queueTimesEntityId IS NOT NULL")
+      .getRawMany();
+    const usedQtIdSet = new Set(
+      usedQtIds
+        .map((r) => this.extractQueueTimesNumericId(r.qtId))
+        .filter(Boolean),
+    );
+
+    const suggestions: MissingQtId[] = [];
+
+    for (const park of parksWithoutQtId) {
+      let bestMatch: (typeof apiParks)[0] | null = null;
+      let bestDistance: number | null = null;
+      let bestSimilarity = 0;
+
+      for (const apiPark of apiParks) {
+        if (usedQtIdSet.has(apiPark.id)) continue;
+
+        let distance: number | null = null;
+        if (
+          park.latitude &&
+          park.longitude &&
+          apiPark.latitude &&
+          apiPark.longitude
+        ) {
+          const apiLat = parseFloat(apiPark.latitude);
+          const apiLng = parseFloat(apiPark.longitude);
+          distance = calculateHaversineDistance(
+            { latitude: park.latitude, longitude: park.longitude },
+            { latitude: apiLat, longitude: apiLng },
+            "km",
+          );
+          if (distance > 1000) {
+            const flipped = calculateHaversineDistance(
+              { latitude: park.latitude, longitude: park.longitude },
+              { latitude: apiLat, longitude: -apiLng },
+              "km",
+            );
+            if (flipped < 100) distance = flipped;
+          }
+          if (distance <= 1.0) {
+            const similarity = calculateNameSimilarity(park.name, apiPark.name);
+            if (!bestMatch || distance < (bestDistance || Infinity)) {
+              bestMatch = apiPark;
+              bestDistance = distance;
+              bestSimilarity = similarity;
+            }
+          }
+        }
+
+        if (!bestMatch) {
+          const similarity = calculateNameSimilarity(park.name, apiPark.name);
+          if (similarity >= 0.85 && similarity > bestSimilarity) {
+            bestMatch = apiPark;
+            bestDistance = distance;
+            bestSimilarity = similarity;
+          }
+        }
+      }
+
+      if (bestMatch) {
+        suggestions.push({
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          suggestedQtId: `qt-park-${bestMatch.id}`,
+          apiParkName: bestMatch.name,
+          distanceKm: bestDistance,
+          similarity: bestSimilarity,
+        });
+      }
+    }
+
+    this.logger.log(
+      `✅ Found ${suggestions.length} parks that might need Queue-Times IDs`,
+    );
+    return suggestions;
   }
 
   async findMissingWartezeitenIds(): Promise<MissingWzId[]> {
-    return [];
+    this.logger.log("🔍 Finding parks missing Wartezeiten.app IDs...");
+
+    const parksWithoutWzId = await this.parkRepository.find({
+      where: { wartezeitenEntityId: IsNull() },
+      select: ["id", "name", "city"],
+    });
+
+    if (parksWithoutWzId.length === 0) return [];
+
+    const apiParks = await this.wartezeitenClient.getParks("en");
+
+    const usedWzIds = await this.parkRepository
+      .createQueryBuilder("park")
+      .select("park.wartezeitenEntityId", "wzId")
+      .where("park.wartezeitenEntityId IS NOT NULL")
+      .getRawMany();
+    const usedWzIdSet = new Set(usedWzIds.map((r) => r.wzId).filter(Boolean));
+
+    const apiParksByName = new Map<string, (typeof apiParks)[0]>();
+    for (const park of apiParks) {
+      const normalized = normalizeForMatching(park.name);
+      if (!apiParksByName.has(normalized)) {
+        apiParksByName.set(normalized, park);
+      }
+    }
+
+    const suggestions: MissingWzId[] = [];
+
+    for (const park of parksWithoutWzId) {
+      const apiPark = apiParksByName.get(normalizeForMatching(park.name));
+      if (apiPark && !usedWzIdSet.has(apiPark.uuid)) {
+        const similarity = calculateNameSimilarity(park.name, apiPark.name);
+        if (similarity >= 0.85) {
+          suggestions.push({
+            parkId: park.id,
+            parkName: park.name,
+            city: park.city,
+            suggestedWzId: apiPark.uuid,
+            apiParkName: apiPark.name,
+            similarity,
+          });
+        }
+      }
+    }
+
+    this.logger.log(
+      `✅ Found ${suggestions.length} parks that might need Wartezeiten IDs`,
+    );
+    return suggestions;
   }
 
   /**

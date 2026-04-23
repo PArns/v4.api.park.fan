@@ -85,13 +85,14 @@ export class ParkMergeService {
 
         // 3. Migrate Historical Stats & Timeseries
         result.migratedStats = await this.migrateTableData(manager, "park_daily_stats", "parkId", winner.id, loser.id, ["date"]);
-        await this.migrateTableData(manager, "schedule_entries", "parkId", winner.id, loser.id, ["date", "scheduleType"]);
-        
+        result.migratedScheduleEntries = await this.migrateTableData(manager, "schedule_entries", "parkId", winner.id, loser.id, ["date", "scheduleType"]);
+
         // 4. Migrate Park-Specific Analysis Tables
-        await this.migrateTableData(manager, "park_p50_baselines", "parkId", winner.id, loser.id, []);
+        // park_p50_baselines: winner's baseline is authoritative; only migrate if winner has none
+        await this.migrateTableData(manager, "park_p50_baselines", "parkId", winner.id, loser.id, null);
         await this.migrateTableData(manager, "park_occupancy", "parkId", winner.id, loser.id, ["timestamp"]);
         await this.migrateTableData(manager, "headliner_attractions", "parkId", winner.id, loser.id, ["attractionId"]);
-        await this.migrateTableData(manager, "weather_data", "parkId", winner.id, loser.id, ["timestamp"]);
+        await this.migrateTableData(manager, "weather_data", "parkId", winner.id, loser.id, ["date"]);
 
         // 5. Migrate Park-Level Mappings
         result.migratedMappings = await manager.createQueryBuilder()
@@ -188,6 +189,8 @@ export class ParkMergeService {
 
   /**
    * Generic table data migration with duplicate prevention.
+   * conflictColumns: columns that form a unique constraint (duplicates removed from loser before migration).
+   * Pass null to use winner-authoritative mode: loser rows are only migrated when winner has none.
    */
   private async migrateTableData(
     manager: any,
@@ -195,21 +198,33 @@ export class ParkMergeService {
     idColumn: string,
     winnerId: string,
     loserId: string,
-    conflictColumns: string[]
+    conflictColumns: string[] | null,
   ): Promise<number> {
-    if (conflictColumns.length > 0) {
-      const conflictList = conflictColumns.map(c => `"${c}"`).join(", ");
-      await manager.query(
-        `DELETE FROM ${tableName} WHERE "${idColumn}" = $1 AND (${conflictList}) IN 
-         (SELECT ${conflictList} FROM ${tableName} WHERE "${idColumn}" = $2)`,
-        [loserId, winnerId]
+    if (conflictColumns === null) {
+      // Winner-authoritative: only migrate loser's data if winner has no rows at all
+      const winnerRows = await manager.query(
+        `SELECT 1 FROM ${tableName} WHERE "${idColumn}" = $1 LIMIT 1`,
+        [winnerId],
       );
-    } else {
-      // No specific conflict columns? Just delete winner entry if it exists to overwrite with loser data (e.g. baselines)
-      await manager.query(`DELETE FROM ${tableName} WHERE "${idColumn}" = $1`, [winnerId]);
+      if (winnerRows.length > 0) {
+        // Winner already has data — discard loser's to avoid overwriting authoritative data
+        await manager.query(`DELETE FROM ${tableName} WHERE "${idColumn}" = $1`, [loserId]);
+        return 0;
+      }
+    } else if (conflictColumns.length > 0) {
+      // Remove loser rows that would collide with winner rows on the given columns
+      const conflictList = conflictColumns.map((c) => `"${c}"`).join(", ");
+      await manager.query(
+        `DELETE FROM ${tableName} WHERE "${idColumn}" = $1 AND (${conflictList}) IN
+         (SELECT ${conflictList} FROM ${tableName} WHERE "${idColumn}" = $2)`,
+        [loserId, winnerId],
+      );
     }
 
-    const result = await manager.query(`UPDATE ${tableName} SET "${idColumn}" = $1 WHERE "${idColumn}" = $2`, [winnerId, loserId]);
+    const result = await manager.query(
+      `UPDATE ${tableName} SET "${idColumn}" = $1 WHERE "${idColumn}" = $2`,
+      [winnerId, loserId],
+    );
     return result[1] || 0;
   }
 

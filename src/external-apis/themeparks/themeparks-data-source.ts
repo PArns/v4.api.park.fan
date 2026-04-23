@@ -45,12 +45,19 @@ export class ThemeParksDataSource implements IDataSource {
         // Fetch detailed park entity to get location/timezone
         try {
           const parkEntity = await this.client.getEntity(parkSummary.id);
-          
-          // Optimization: Fetch children to enable attraction-based matching signature
-          const childData = await this.client.getEntityChildren(parkSummary.id);
-          const attractions = (childData.children || [])
-            .filter(c => c.entityType === 'ATTRACTION')
-            .map(c => ({ name: c.name, externalId: c.id }));
+
+          // Fetch children for ride-signature matching — failures are non-fatal
+          let attractions: Array<{ name: string; externalId: string }> = [];
+          try {
+            const childData = await this.client.getEntityChildren(parkSummary.id);
+            attractions = (childData.children || [])
+              .filter((c) => c.entityType === "ATTRACTION")
+              .map((c) => ({ name: c.name, externalId: c.id }));
+          } catch (childError) {
+            this.logger.warn(
+              `Could not fetch children for ${parkSummary.name}: ${childError}`,
+            );
+          }
 
           allParks.push({
             externalId: parkEntity.id,
@@ -60,7 +67,7 @@ export class ThemeParksDataSource implements IDataSource {
             latitude: parkEntity.location?.latitude ?? undefined,
             longitude: parkEntity.location?.longitude ?? undefined,
             destinationId: parkEntity.destinationId,
-            attractions,
+            attractions: attractions.length > 0 ? attractions : undefined,
           });
         } catch (error) {
           this.logger.warn(

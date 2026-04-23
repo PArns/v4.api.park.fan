@@ -172,6 +172,9 @@ export class Park {
   @UpdateDateColumn({ type: "timestamptz" })
   updatedAt: Date;
 
+  @Column({ name: "park_type", default: "THEME_PARK", nullable: true })
+  parkType: string; // 'THEME_PARK' | 'WATER_PARK'
+
   @Column({ type: "int", default: 0 })
   metadataRetryCount: number;
 

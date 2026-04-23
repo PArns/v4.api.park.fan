@@ -279,27 +279,19 @@ export class EntityMatcherService {
       const boostedNameSim = rawNameSim * 0.8;
       let total = boostedNameSim + countrySim + timezoneSim;
 
-      // Water Park Check for Fallback
       if (this.isWaterPark(n1) !== this.isWaterPark(n2) && rawNameSim < 0.95) {
-        total -= 0.3;
+        total -= 0.4;
       }
       return total;
     }
 
     let totalScore = nameSim + countrySim + geoSim + timezoneSim;
 
-    // 5. Water Park Check (Safety Penalty)
-    // Prevents matching "Cedar Point" with "Cedar Point Shores"
-    const isWater1 = this.isWaterPark(n1);
-    const isWater2 = this.isWaterPark(n2);
-    const isTheme1 = this.isThemePark(n1);
-    const isTheme2 = this.isThemePark(n2);
-
-    if (isWater1 !== isWater2 || isTheme1 !== isTheme2) {
-      // Cross-type mismatch (e.g., Theme Park vs Water Park)
-      if (rawNameSim < 0.95) {
-        totalScore -= 0.4; 
-      }
+    // 5. Water Park Safety Penalty
+    // Prevents matching "Cedar Point" (theme park) with "Cedar Point Shores" (water park).
+    // Only fires when name similarity alone is not conclusive (< 0.95).
+    if (this.isWaterPark(n1) !== this.isWaterPark(n2) && rawNameSim < 0.95) {
+      totalScore -= 0.4;
     }
 
     // Debug logging for close matches
@@ -315,40 +307,30 @@ export class EntityMatcherService {
   }
 
   /**
-   * Simple check if a park is a water park based on name keywords
+   * Returns true when the name unambiguously identifies a water park.
+   * Keywords are validated against the live DB: every matched park is a real water park,
+   * no false positives (e.g. "Blackpool Pleasure Beach" or "Chimelong Ocean Kingdom" don't match).
+   * Note: normalizedName has apostrophes stripped ("Wet'n'Wild" → "wetnwild").
    */
   private isWaterPark(normalizedName: string): boolean {
     const waterKeywords = [
       "waterpark",
       "water park",
       "aquatica",
-      "harbor",
-      "shores",
-      "beach",
-      "splash",
-      "typhoon",
-      "lagoon",
-      "rapids",
-      "wet",
-      "wild",
-      "aqua",
-      "ocean",
+      "typhoon lagoon",
+      "blizzard beach",
+      "volcano bay",
+      "wet n wild",
+      "wetnwild",        // Wet'n'Wild after apostrophe stripping
+      "hurricane harbor", // Six Flags water park chain
+      "splash country",
+      "water world",
+      "water kingdom",
+      "shores",          // Cedar Point Shores
+      "aquatic park",    // Caribe Aquatic Park
+      "aqua rabia",      // Aqua Rabia Qiddiya City
     ];
     return waterKeywords.some((k) => normalizedName.includes(k));
-  }
-
-  /**
-   * Check if a park is explicitly a theme park (to distinguish from water parks)
-   */
-  private isThemePark(normalizedName: string): boolean {
-    const themeKeywords = [
-      "theme park",
-      "themepark",
-      "amusement park",
-      "magic kingdom",
-      "studios",
-    ];
-    return themeKeywords.some((k) => normalizedName.includes(k));
   }
 
   /**
