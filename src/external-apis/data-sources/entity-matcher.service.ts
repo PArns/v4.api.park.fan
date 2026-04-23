@@ -240,10 +240,30 @@ export class EntityMatcherService {
       // logic: If name is very similar, we should match even without geo
       // rawNameSim * 0.8 allows a perfect name match to reach 0.8 (above 0.75 threshold)
       const boostedNameSim = rawNameSim * 0.8;
-      return boostedNameSim + countrySim + timezoneSim;
+      let total = boostedNameSim + countrySim + timezoneSim;
+
+      // Water Park Check for Fallback
+      if (this.isWaterPark(n1) !== this.isWaterPark(n2) && rawNameSim < 0.95) {
+        total -= 0.3;
+      }
+      return total;
     }
 
-    const totalScore = nameSim + countrySim + geoSim + timezoneSim;
+    let totalScore = nameSim + countrySim + geoSim + timezoneSim;
+
+    // 5. Water Park Check (Safety Penalty)
+    // Prevents matching "Cedar Point" with "Cedar Point Shores"
+    const isWater1 = this.isWaterPark(n1);
+    const isWater2 = this.isWaterPark(n2);
+    const isTheme1 = this.isThemePark(n1);
+    const isTheme2 = this.isThemePark(n2);
+
+    if (isWater1 !== isWater2 || isTheme1 !== isTheme2) {
+      // Cross-type mismatch (e.g., Theme Park vs Water Park)
+      if (rawNameSim < 0.95) {
+        totalScore -= 0.4; 
+      }
+    }
 
     // Debug logging for close matches
     if (totalScore > 0.6 && totalScore < 0.8) {
@@ -255,6 +275,43 @@ export class EntityMatcherService {
     }
 
     return totalScore;
+  }
+
+  /**
+   * Simple check if a park is a water park based on name keywords
+   */
+  private isWaterPark(normalizedName: string): boolean {
+    const waterKeywords = [
+      "waterpark",
+      "water park",
+      "aquatica",
+      "harbor",
+      "shores",
+      "beach",
+      "splash",
+      "typhoon",
+      "lagoon",
+      "rapids",
+      "wet",
+      "wild",
+      "aqua",
+      "ocean",
+    ];
+    return waterKeywords.some((k) => normalizedName.includes(k));
+  }
+
+  /**
+   * Check if a park is explicitly a theme park (to distinguish from water parks)
+   */
+  private isThemePark(normalizedName: string): boolean {
+    const themeKeywords = [
+      "theme park",
+      "themepark",
+      "amusement park",
+      "magic kingdom",
+      "studios",
+    ];
+    return themeKeywords.some((k) => normalizedName.includes(k));
   }
 
   /**
