@@ -6,6 +6,12 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added
+- **`crowdLevel` on `ParkReference.analytics.statistics`** (`discovery.service.ts`, `geo-structure.dto.ts`): The `/v1/discovery/geo`, `/v1/discovery/continents`, `/v1/discovery/continents/:continent`, and `/v1/discovery/continents/:continent/:country` endpoints now expose the park's current live crowd level inside `analytics.statistics` alongside `avgWaitTime`. Previously the only source of live crowd level on these endpoints was `currentLoad.crowdLevel`, which could be `null` even when wait-time statistics were available — causing the frontend's Popular Parks section to render wait times without a crowd badge. `analytics.statistics.crowdLevel` is now co-present with `avgWaitTime` whenever the park has a valid P50 baseline. The other discovery routes already expose live crowd level via their existing shapes: `/v1/discovery/:continent/:country` (`ParkResponseDto.analytics.statistics.crowdLevel`) and `/v1/discovery/nearby` (`analytics.crowdLevel` per park/ride).
+
+### Changed
+- **Shared crowd-level utility** (`common/utils/crowd-level.util.ts`): Extracted the P50-relative occupancy → CrowdLevel threshold ladder (very_low/low/moderate/high/very_high/extreme) into a single reusable function. `AnalyticsService.determineCrowdLevel` now delegates to it (all ~20 existing call sites unchanged), and `DiscoveryService.hydrateStructure` uses it directly. Thresholds now exist in exactly one place.
+
 ### Added 
 - **Smart Gaps: Historical Hour Reconstruction** (`docs/analytics/smart-gaps.md`): Automatically reconstructs park opening/closing hours for past days using a 15-minute sliding window and 10% attraction activity threshold (rides with waitTime >= 5 min only). Includes rounding to nearest full hour and strict exclusion of service points (bars, snacks) via name-based blacklist. 
 - **`isEstimated` flag for Calendar API**: New per-day flag in `CalendarDay` to signal reconstructed historical data. 

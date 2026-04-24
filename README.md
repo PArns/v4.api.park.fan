@@ -274,6 +274,16 @@ GET /v1/discovery/continents/:continent      # Countries in continent
                 {
                   "name": "Magic Kingdom",
                   "url": "/north-america/united-states/orlando/magic-kingdom",
+                  "status": "OPERATING",
+                  "analytics": {
+                    "statistics": {
+                      "avgWaitTime": 35,
+                      "operatingAttractions": 42,
+                      "closedAttractions": 3,
+                      "totalAttractions": 45,
+                      "crowdLevel": "moderate"
+                    }
+                  },
                   "attractions": [...]
                 }
               ]
@@ -285,6 +295,8 @@ GET /v1/discovery/continents/:continent      # Countries in continent
   ]
 }
 ```
+
+> **Note:** `analytics.statistics.crowdLevel` is co-present with `avgWaitTime` whenever the park has a valid P50 baseline. See [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) for the rating system.
 
 ---
 

@@ -34,6 +34,7 @@ import {
   getCurrentTimeInTimezone,
 } from "../common/utils/date.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
 
@@ -1765,16 +1766,8 @@ export class AnalyticsService {
    *
    * @public - Use this method from other services instead of duplicating logic
    */
-  public determineCrowdLevel(
-    occupancy: number,
-  ): "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme" {
-    // P50-relative thresholds (±10% around P50 for moderate)
-    if (occupancy <= 60) return "very_low";
-    if (occupancy <= 89) return "low";
-    if (occupancy <= 110) return "moderate"; // 90-110%: ±10% around P50
-    if (occupancy <= 150) return "high";
-    if (occupancy <= 200) return "very_high";
-    return "extreme";
+  public determineCrowdLevel(occupancy: number): CrowdLevel {
+    return determineCrowdLevel(occupancy);
   }
 
   /**

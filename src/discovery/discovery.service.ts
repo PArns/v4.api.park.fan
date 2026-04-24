@@ -10,6 +10,7 @@ import {
   TopParkSummaryDto,
 } from "./dto/country-summary.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import {
   GeoStructureDto,
   ContinentDto,
@@ -280,6 +281,10 @@ export class DiscoveryService {
                   closedAttractions:
                     stats.explicitlyClosedCount ?? stats.totalAttractions,
                   totalAttractions: stats.totalAttractions,
+                  crowdLevel:
+                    stats.crowdLevel !== null
+                      ? determineCrowdLevel(stats.crowdLevel)
+                      : undefined,
                 },
               };
 
