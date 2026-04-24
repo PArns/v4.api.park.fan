@@ -117,7 +117,9 @@ See [Caching Strategy](../architecture/caching-strategy.md) for `park_daily_stat
   - **Park**: `getP50BaselineFromCache(parkId)` → headliner P50; fallback `get90thPercentileWithConfidence(..., "park")`.
   - **Attraction**: `getAttractionP50BaselineFromCache(attractionId)`, `getBatchAttractionP50s(ids)`; fallback sliding-window P50/P90.
   - `getLoadRating(current, baseline)`, `getAttractionCrowdLevel(waitTime, baseline)` → same threshold table.
+  - `determineCrowdLevel(occupancy)` → thin wrapper around the shared utility (see below). All existing call sites (`analyticsService.determineCrowdLevel(...)`) continue to work unchanged.
   - `calculateCrowdLevelForDate(entityId, type, date, timezone)` — historical crowd level for a specific date. For `type='park'`, computes daily P50/P90 as **avg-of-per-ride-P50s** (matching `calculateP50Baseline`) and applies a **±5-minute schedule trim** (`openingTime+5min … closingTime-5min`) when a schedule entry exists. Falls back to full day (00:00–23:59) if no schedule entry exists.
+- **`common/utils/crowd-level.util.ts#determineCrowdLevel(occupancy)`**: **Single source of truth** for the occupancy → CrowdLevel threshold mapping defined in section 3. Used directly by `DiscoveryService.hydrateStructure` (populates `ParkReference.analytics.statistics.crowdLevel` in the `/v1/discovery/geo` response) and indirectly by all `AnalyticsService` consumers via the wrapper.
 - **`P50BaselineProcessor`**: Bull job (daily at 3 AM) for park and attraction P50 baselines.
 
 ---
