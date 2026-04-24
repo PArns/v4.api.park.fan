@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { CrowdLevel } from "../../common/types/crowd-level.type";
 
 /**
  * Park Reference DTO
@@ -56,6 +57,7 @@ export class ParkReferenceDto {
         avgWaitTime: 15,
         operatingAttractions: 12,
         totalAttractions: 15,
+        crowdLevel: "moderate",
       },
     },
     nullable: true,
@@ -66,6 +68,7 @@ export class ParkReferenceDto {
       operatingAttractions: number;
       closedAttractions: number;
       totalAttractions: number;
+      crowdLevel?: CrowdLevel;
     };
   };
 

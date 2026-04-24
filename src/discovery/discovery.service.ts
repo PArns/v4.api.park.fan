@@ -10,6 +10,7 @@ import {
   TopParkSummaryDto,
 } from "./dto/country-summary.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { CrowdLevel } from "../common/types/crowd-level.type";
 import {
   GeoStructureDto,
   ContinentDto,
@@ -280,6 +281,10 @@ export class DiscoveryService {
                   closedAttractions:
                     stats.explicitlyClosedCount ?? stats.totalAttractions,
                   totalAttractions: stats.totalAttractions,
+                  crowdLevel:
+                    stats.crowdLevel !== null
+                      ? this.occupancyToCrowdLevel(stats.crowdLevel)
+                      : undefined,
                 },
               };
 
@@ -541,6 +546,15 @@ export class DiscoveryService {
   async invalidateCache(): Promise<void> {
     await this.redis.del(this.CACHE_KEY);
     this.logger.log("Geo structure cache invalidated");
+  }
+
+  private occupancyToCrowdLevel(occupancy: number): CrowdLevel {
+    if (occupancy <= 60) return "very_low";
+    if (occupancy <= 89) return "low";
+    if (occupancy <= 110) return "moderate";
+    if (occupancy <= 150) return "high";
+    if (occupancy <= 200) return "very_high";
+    return "extreme";
   }
 
   /**
