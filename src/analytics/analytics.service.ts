@@ -3054,6 +3054,7 @@ export class AnalyticsService {
     const rows: Array<{
       attractionId: string;
       waitTime: number;
+      historicalWaitTime: number | null;
       attractionName: string;
       attractionSlug: string;
       parkName: string;
@@ -3099,11 +3100,22 @@ export class AnalyticsService {
         UNION
         SELECT "parkId" FROM ride_open_parks
       ),
+      historical_rides AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime" AS "historicalWaitTime"
+        FROM queue_data qd
+        WHERE qd.timestamp BETWEEN NOW() - INTERVAL '45 minutes' AND NOW() - INTERVAL '15 minutes'
+          AND qd."queueType" = 'STANDBY'
+          AND qd."waitTime" IS NOT NULL
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      ),
       latest_rides AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
           qd."waitTime",
           qd."status",
+          hr."historicalWaitTime",
           a.name                                    AS "attractionName",
           a.slug                                    AS "attractionSlug",
           p.name                                    AS "parkName",
@@ -3121,6 +3133,7 @@ export class AnalyticsService {
         JOIN parks p        ON p.id = a."parkId"
         JOIN park_status ps ON ps."parkId" = p.id
         LEFT JOIN attraction_p50_baselines apb ON apb."attractionId" = qd."attractionId"
+        LEFT JOIN historical_rides hr ON hr."attractionId" = qd."attractionId"
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
           AND qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
@@ -3161,32 +3174,43 @@ export class AnalyticsService {
       LIMIT 40
     `);
 
-    const items = rows.map((row) => ({
-      parkName: row.parkName,
-      parkSlug: row.parkSlug,
-      continent: row.continent,
-      continentSlug: row.continentSlug,
-      country: row.country,
-      countrySlug: row.countrySlug,
-      city: row.city,
-      citySlug: row.citySlug,
-      attractionName: row.attractionName,
-      attractionSlug: row.attractionSlug,
-      waitTime: Number(row.waitTime),
-      crowdLevel: this.getAttractionCrowdLevel(
-        Number(row.waitTime),
-        parseFloat(row.p50Baseline),
-      ),
-      url: buildAttractionUrl(
-        {
-          continentSlug: row.continentSlug,
-          countrySlug: row.countrySlug,
-          citySlug: row.citySlug,
-          slug: row.parkSlug,
-        },
-        { slug: row.attractionSlug },
-      ),
-    }));
+    const items = rows.map((row) => {
+      const current = Number(row.waitTime);
+      const historical =
+        row.historicalWaitTime != null ? Number(row.historicalWaitTime) : null;
+      let trend: "rising" | "falling" | "stable" | null = null;
+      if (historical !== null) {
+        const delta = current - historical;
+        trend = delta >= 5 ? "rising" : delta <= -5 ? "falling" : "stable";
+      }
+      return {
+        parkName: row.parkName,
+        parkSlug: row.parkSlug,
+        continent: row.continent,
+        continentSlug: row.continentSlug,
+        country: row.country,
+        countrySlug: row.countrySlug,
+        city: row.city,
+        citySlug: row.citySlug,
+        attractionName: row.attractionName,
+        attractionSlug: row.attractionSlug,
+        waitTime: current,
+        trend,
+        crowdLevel: this.getAttractionCrowdLevel(
+          current,
+          parseFloat(row.p50Baseline),
+        ),
+        url: buildAttractionUrl(
+          {
+            continentSlug: row.continentSlug,
+            countrySlug: row.countrySlug,
+            citySlug: row.citySlug,
+            slug: row.parkSlug,
+          },
+          { slug: row.attractionSlug },
+        ),
+      };
+    });
 
     const response = { items, generatedAt: new Date().toISOString() };
 

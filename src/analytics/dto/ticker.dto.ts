@@ -43,6 +43,14 @@ export class TickerItemDto {
   crowdLevel: CrowdLevel | null;
 
   @ApiProperty({
+    enum: ["rising", "falling", "stable"],
+    nullable: true,
+    description:
+      "Wait time trend vs ~30 min ago. null when no historical data available.",
+  })
+  trend: "rising" | "falling" | "stable" | null;
+
+  @ApiProperty({
     example:
       "/v1/parks/asia/japan/tokyo/tokyo-disneysea/attractions/soaring-fantastic-flight",
     nullable: true,
