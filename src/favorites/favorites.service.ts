@@ -85,6 +85,13 @@ export class FavoritesService {
    * @param userLocation - Optional user location for distance calculation
    * @returns Grouped favorites with full information
    */
+  private static readonly UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  private filterUuids(ids: string[]): string[] {
+    return ids.filter((id) => FavoritesService.UUID_RE.test(id));
+  }
+
   async getFavorites(
     parkIds: string[] = [],
     attractionIds: string[] = [],
@@ -92,6 +99,11 @@ export class FavoritesService {
     restaurantIds: string[] = [],
     userLocation?: GeoCoordinate,
   ): Promise<FavoritesResponseDto> {
+    parkIds = this.filterUuids(parkIds);
+    attractionIds = this.filterUuids(attractionIds);
+    showIds = this.filterUuids(showIds);
+    restaurantIds = this.filterUuids(restaurantIds);
+
     // Generate cache key from sorted IDs + location
     const cacheKey = this.buildCacheKey(
       parkIds,
