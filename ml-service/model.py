@@ -180,6 +180,11 @@ class WaitTimeModel:
         """Calculate evaluation metrics"""
         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+        # Always work with plain numpy arrays to avoid pandas/numpy index misalignment
+        # (y_val from a boolean-mask split has a scattered index that breaks division)
+        y_true = np.asarray(y_true, dtype=float)
+        y_pred = np.asarray(y_pred, dtype=float)
+
         mae = mean_absolute_error(y_true, y_pred)
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
         r2 = r2_score(y_true, y_pred)

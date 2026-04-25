@@ -577,12 +577,18 @@ def train_model(version: str = None) -> None:
 
     # 7.5 Chronological hold-out evaluation (honest out-of-time test)
     if not df_holdout.empty:
-        feature_columns = get_feature_columns()
         holdout_available = [c for c in feature_columns if c in df_holdout.columns]
         if len(holdout_available) == len(feature_columns):
-            X_holdout = df_holdout[feature_columns]
-            y_holdout = df_holdout["waitTime"]
-            holdout_metrics = model.evaluate(X_holdout, y_holdout)
+            X_holdout = df_holdout[feature_columns].copy()
+            if "parkId" in X_holdout.columns:
+                X_holdout["parkId"] = X_holdout["parkId"].astype(str)
+            if "attractionId" in X_holdout.columns:
+                X_holdout["attractionId"] = X_holdout["attractionId"].astype(str)
+            y_holdout_arr = df_holdout["waitTime"].values.astype(float)
+            h_pred = model.model.predict(X_holdout[feature_columns])
+            if h_pred.ndim == 2 and h_pred.shape[1] == 2:
+                h_pred = h_pred[:, 0]
+            holdout_metrics = model._calculate_metrics(y_holdout_arr, h_pred)
             logger.info("📊 Chronological Hold-out Metrics (last 30 days, unseen):")
             logger.info(f"   MAE:              {holdout_metrics['mae']:.2f} minutes")
             logger.info(f"   RMSE:             {holdout_metrics['rmse']:.2f} minutes")
