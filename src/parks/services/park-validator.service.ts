@@ -95,7 +95,14 @@ export class ParkValidatorService {
 
     const parksWithQtId = await this.parkRepository.find({
       where: { queueTimesEntityId: Not(IsNull()) },
-      select: ["id", "name", "city", "queueTimesEntityId", "latitude", "longitude"],
+      select: [
+        "id",
+        "name",
+        "city",
+        "queueTimesEntityId",
+        "latitude",
+        "longitude",
+      ],
     });
 
     if (parksWithQtId.length === 0) return [];
@@ -111,9 +118,15 @@ export class ParkValidatorService {
       const qtId = this.extractQueueTimesNumericId(park.queueTimesEntityId!);
       if (!qtId) {
         mismatches.push({
-          parkId: park.id, parkName: park.name, city: park.city,
-          currentQtId: park.queueTimesEntityId!, expectedQtId: null, apiParkName: "",
-          distanceKm: null, similarity: 0, reason: "Invalid QT-ID format",
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentQtId: park.queueTimesEntityId!,
+          expectedQtId: null,
+          apiParkName: "",
+          distanceKm: null,
+          similarity: 0,
+          reason: "Invalid QT-ID format",
         });
         continue;
       }
@@ -121,9 +134,15 @@ export class ParkValidatorService {
       const apiPark = apiParksById.get(qtId);
       if (!apiPark) {
         mismatches.push({
-          parkId: park.id, parkName: park.name, city: park.city,
-          currentQtId: park.queueTimesEntityId!, expectedQtId: null, apiParkName: "",
-          distanceKm: null, similarity: 0, reason: "QT-ID not found in API",
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentQtId: park.queueTimesEntityId!,
+          expectedQtId: null,
+          apiParkName: "",
+          distanceKm: null,
+          similarity: 0,
+          reason: "QT-ID not found in API",
         });
         continue;
       }
@@ -131,15 +150,25 @@ export class ParkValidatorService {
       const similarity = calculateNameSimilarity(park.name, apiPark.name);
       const distanceKm = this.getValidDistance(park, apiPark);
 
-      const isNameMismatch = similarity < 1.0 && (similarity < 0.8 || normalizeForMatching(park.name) !== normalizeForMatching(apiPark.name));
+      const isNameMismatch =
+        similarity < 1.0 &&
+        (similarity < 0.8 ||
+          normalizeForMatching(park.name) !==
+            normalizeForMatching(apiPark.name));
       const isGeoMismatch = distanceKm !== null && distanceKm > 5.0; // Increased threshold for geo mismatch
 
       if (isNameMismatch || isGeoMismatch) {
         mismatches.push({
-          parkId: park.id, parkName: park.name, city: park.city,
-          currentQtId: park.queueTimesEntityId!, expectedQtId: null,
-          apiParkName: apiPark.name, distanceKm, similarity,
-          reason: `${isNameMismatch ? "Name mismatch" : ""} ${isGeoMismatch ? "Geo mismatch" : ""}`.trim(),
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentQtId: park.queueTimesEntityId!,
+          expectedQtId: null,
+          apiParkName: apiPark.name,
+          distanceKm,
+          similarity,
+          reason:
+            `${isNameMismatch ? "Name mismatch" : ""} ${isGeoMismatch ? "Geo mismatch" : ""}`.trim(),
         });
       }
     }
@@ -147,24 +176,30 @@ export class ParkValidatorService {
   }
 
   private getValidDistance(park: any, apiPark: any): number | null {
-    if (!park.latitude || !park.longitude || !apiPark.latitude || !apiPark.longitude) return null;
-    
+    if (
+      !park.latitude ||
+      !park.longitude ||
+      !apiPark.latitude ||
+      !apiPark.longitude
+    )
+      return null;
+
     const apiLat = parseFloat(apiPark.latitude);
     const apiLng = parseFloat(apiPark.longitude);
-    
+
     let dist = calculateHaversineDistance(
-        { latitude: park.latitude, longitude: park.longitude },
-        { latitude: apiLat, longitude: apiLng },
-        "km",
+      { latitude: park.latitude, longitude: park.longitude },
+      { latitude: apiLat, longitude: apiLng },
+      "km",
     );
 
     if (dist > 1000) {
-        const flipped = calculateHaversineDistance(
-            { latitude: park.latitude, longitude: park.longitude },
-            { latitude: apiLat, longitude: -apiLng },
-            "km",
-        );
-        if (flipped < 100) return flipped;
+      const flipped = calculateHaversineDistance(
+        { latitude: park.latitude, longitude: park.longitude },
+        { latitude: apiLat, longitude: -apiLng },
+        "km",
+      );
+      if (flipped < 100) return flipped;
     }
     return dist;
   }
@@ -194,9 +229,14 @@ export class ParkValidatorService {
 
       if (!apiPark) {
         mismatches.push({
-          parkId: park.id, parkName: park.name, city: park.city,
-          currentWzId: wzId, expectedWzId: null, apiParkName: "",
-          similarity: 0, reason: "WZ-ID not found in API",
+          parkId: park.id,
+          parkName: park.name,
+          city: park.city,
+          currentWzId: wzId,
+          expectedWzId: null,
+          apiParkName: "",
+          similarity: 0,
+          reason: "WZ-ID not found in API",
         });
         continue;
       }
@@ -223,7 +263,8 @@ export class ParkValidatorService {
       const normalizedDbName = normalizeForMatching(park.name);
       const normalizedApiName = normalizeForMatching(apiPark.name);
       const isNameMismatch =
-        similarity < 1.0 && (similarity < 0.8 || normalizedDbName !== normalizedApiName);
+        similarity < 1.0 &&
+        (similarity < 0.8 || normalizedDbName !== normalizedApiName);
 
       if (isNameMismatch) {
         mismatches.push({
@@ -246,7 +287,16 @@ export class ParkValidatorService {
    */
   async findDuplicates(): Promise<DuplicatePair[]> {
     const allParks = await this.parkRepository.find({
-      select: ["id", "name", "city", "wikiEntityId", "queueTimesEntityId", "wartezeitenEntityId", "latitude", "longitude"],
+      select: [
+        "id",
+        "name",
+        "city",
+        "wikiEntityId",
+        "queueTimesEntityId",
+        "wartezeitenEntityId",
+        "latitude",
+        "longitude",
+      ],
     });
 
     const duplicates: DuplicatePair[] = [];
@@ -256,9 +306,13 @@ export class ParkValidatorService {
         const p1 = allParks[i];
         const p2 = allParks[j];
 
-        if ((p1.wikiEntityId && p1.wikiEntityId === p2.wikiEntityId) ||
-            (p1.queueTimesEntityId && p1.queueTimesEntityId === p2.queueTimesEntityId) ||
-            (p1.wartezeitenEntityId && p1.wartezeitenEntityId === p2.wartezeitenEntityId)) {
+        if (
+          (p1.wikiEntityId && p1.wikiEntityId === p2.wikiEntityId) ||
+          (p1.queueTimesEntityId &&
+            p1.queueTimesEntityId === p2.queueTimesEntityId) ||
+          (p1.wartezeitenEntityId &&
+            p1.wartezeitenEntityId === p2.wartezeitenEntityId)
+        ) {
           continue;
         }
 
@@ -293,7 +347,8 @@ export class ParkValidatorService {
             sharedEntityIds: {
               wiki: p1.wikiEntityId !== null && p2.wikiEntityId !== null,
               queueTimes:
-                p1.queueTimesEntityId !== null && p2.queueTimesEntityId !== null,
+                p1.queueTimesEntityId !== null &&
+                p2.queueTimesEntityId !== null,
               wartezeiten:
                 p1.wartezeitenEntityId !== null &&
                 p2.wartezeitenEntityId !== null,

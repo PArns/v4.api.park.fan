@@ -390,7 +390,7 @@ export class ParkMetadataProcessor {
     // This aligns with processQueueTimesOnlyPark / processWartezeitenOnlyPark logic
 
     let parkExternalId = anchor.externalId;
-    // No manual prefixing needed here as data sources (Queue-Times, Wartezeiten) 
+    // No manual prefixing needed here as data sources (Queue-Times, Wartezeiten)
     // already provide prefixed externalIds (e.g., 'qt-park-123', 'wz-456')
     // to avoid collisions with ThemeParks.wiki UUIDs.
 

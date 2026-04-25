@@ -49,7 +49,9 @@ export class ThemeParksDataSource implements IDataSource {
           // Fetch children for ride-signature matching — failures are non-fatal
           let attractions: Array<{ name: string; externalId: string }> = [];
           try {
-            const childData = await this.client.getEntityChildren(parkSummary.id);
+            const childData = await this.client.getEntityChildren(
+              parkSummary.id,
+            );
             attractions = (childData.children || [])
               .filter((c) => c.entityType === "ATTRACTION")
               .map((c) => ({ name: c.name, externalId: c.id }));

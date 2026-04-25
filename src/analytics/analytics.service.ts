@@ -3040,6 +3040,150 @@ export class AnalyticsService {
   }
 
   /**
+   * GET /v1/analytics/ticker
+   * Top 40 OPERATING attractions by wait time across all open parks.
+   * Cached 120 s in Redis (matches Cache-Control header).
+   */
+  async getTickerData(): Promise<{ items: object[]; generatedAt: string }> {
+    const cacheKey = "analytics:ticker:v1";
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    const rows: Array<{
+      attractionId: string;
+      waitTime: number;
+      attractionName: string;
+      attractionSlug: string;
+      parkName: string;
+      parkSlug: string;
+      continentSlug: string | null;
+      countrySlug: string | null;
+      citySlug: string | null;
+      p50Baseline: string;
+      isHeadliner: boolean;
+    }> = await this.queueDataRepository.query(`
+      WITH schedule_open_parks AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+          AND s."openingTime" <= NOW()
+          AND s."closingTime" > NOW()
+      ),
+      ride_open_parks AS (
+        SELECT a."parkId"
+        FROM attractions a
+        JOIN queue_data qd ON qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '2 hours'
+          AND qd."waitTime" IS NOT NULL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM schedule_entries se
+          WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_entries se
+          WHERE se."parkId" = a."parkId"
+            AND se."scheduleType" = 'CLOSED'
+            AND se.date = CURRENT_DATE
+        )
+        GROUP BY a."parkId"
+        HAVING COUNT(*) >= 3
+          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
+      ),
+      park_status AS (
+        SELECT "parkId" FROM schedule_open_parks
+        UNION
+        SELECT "parkId" FROM ride_open_parks
+      ),
+      latest_rides AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime",
+          qd."status",
+          a.name                                    AS "attractionName",
+          a.slug                                    AS "attractionSlug",
+          p.name                                    AS "parkName",
+          p.slug                                    AS "parkSlug",
+          p."continentSlug",
+          p."countrySlug",
+          p."citySlug",
+          COALESCE(apb."p50Baseline", 0)::float     AS "p50Baseline",
+          COALESCE(apb."isHeadliner", false)        AS "isHeadliner"
+        FROM queue_data qd
+        JOIN attractions a  ON a.id = qd."attractionId"
+        JOIN parks p        ON p.id = a."parkId"
+        JOIN park_status ps ON ps."parkId" = p.id
+        LEFT JOIN attraction_p50_baselines apb ON apb."attractionId" = qd."attractionId"
+        WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
+          AND qd."queueType" = 'STANDBY'
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      )
+      -- Priority buckets: 1=popular+full, 2=full, 3=popular+empty, 4=rest
+      -- "full" = waitTime >= p50 baseline (fallback threshold: 20 min when baseline unknown)
+      -- One entry per park (best by priority then waitTime) for ticker diversity
+      SELECT *
+      FROM (
+        SELECT *,
+          CASE
+            WHEN "isHeadliner" = true
+                 AND "waitTime" >= GREATEST("p50Baseline", 20) THEN 1
+            WHEN "isHeadliner" = false
+                 AND "waitTime" >= GREATEST("p50Baseline", 20) THEN 2
+            WHEN "isHeadliner" = true                          THEN 3
+            ELSE                                                    4
+          END AS "sortPriority",
+          ROW_NUMBER() OVER (
+            PARTITION BY "parkSlug"
+            ORDER BY
+              CASE
+                WHEN "isHeadliner" = true
+                     AND "waitTime" >= GREATEST("p50Baseline", 20) THEN 1
+                WHEN "isHeadliner" = false
+                     AND "waitTime" >= GREATEST("p50Baseline", 20) THEN 2
+                WHEN "isHeadliner" = true                          THEN 3
+                ELSE                                                    4
+              END ASC,
+              "waitTime" DESC
+          ) AS "parkRank"
+        FROM latest_rides
+        WHERE status = 'OPERATING'
+          AND "waitTime" > 0
+      ) ranked
+      WHERE "parkRank" = 1
+      ORDER BY "sortPriority" ASC, "waitTime" DESC
+      LIMIT 40
+    `);
+
+    const items = rows.map((row) => ({
+      parkName: row.parkName,
+      parkSlug: row.parkSlug,
+      attractionName: row.attractionName,
+      attractionSlug: row.attractionSlug,
+      waitTime: Number(row.waitTime),
+      crowdLevel: this.getAttractionCrowdLevel(
+        Number(row.waitTime),
+        parseFloat(row.p50Baseline),
+      ),
+      url: buildAttractionUrl(
+        {
+          continentSlug: row.continentSlug,
+          countrySlug: row.countrySlug,
+          citySlug: row.citySlug,
+          slug: row.parkSlug,
+        },
+        { slug: row.attractionSlug },
+      ),
+    }));
+
+    const response = { items, generatedAt: new Date().toISOString() };
+
+    await this.redis.set(cacheKey, JSON.stringify(response), "EX", 120);
+
+    return response;
+  }
+
+  /**
    * Get live geographic statistics for all continents/countries/cities
    * Cached for 5 minutes
    */

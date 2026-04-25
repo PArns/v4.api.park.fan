@@ -339,9 +339,11 @@ export class ConflictResolverService {
     if (s1.length < 2 || s2.length < 2) return 0.0;
 
     const bigrams1 = new Set();
-    for (let i = 0; i < s1.length - 1; i++) bigrams1.add(s1.substring(i, i + 2));
+    for (let i = 0; i < s1.length - 1; i++)
+      bigrams1.add(s1.substring(i, i + 2));
     const bigrams2 = new Set();
-    for (let i = 0; i < s2.length - 1; i++) bigrams2.add(s2.substring(i, i + 2));
+    for (let i = 0; i < s2.length - 1; i++)
+      bigrams2.add(s2.substring(i, i + 2));
 
     let intersect = 0;
     for (const b of bigrams1) {

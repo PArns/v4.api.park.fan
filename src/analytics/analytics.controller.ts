@@ -1,7 +1,7 @@
 import { Controller, Get, UseInterceptors } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AnalyticsService } from "./analytics.service";
-import { GlobalStatsDto, GeoLiveStatsDto } from "./dto";
+import { GlobalStatsDto, GeoLiveStatsDto, TickerResponseDto } from "./dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 @ApiTags("stats")
@@ -49,5 +49,23 @@ export class AnalyticsController {
   })
   async getGeoLiveStats(): Promise<GeoLiveStatsDto> {
     return this.analyticsService.getGeoLiveStats();
+  }
+
+  @Get("ticker")
+  @UseInterceptors(new HttpCacheInterceptor(120))
+  @ApiOperation({
+    summary: "Live wait-time ticker",
+    description:
+      "Returns the top 40 attractions sorted by current wait time across all open parks. " +
+      "Only includes OPERATING attractions with a wait time > 0. Cached for 2 minutes.",
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Sorted list of highest current wait times for the homepage ticker",
+    type: TickerResponseDto,
+  })
+  async getTicker(): Promise<TickerResponseDto> {
+    return this.analyticsService.getTickerData() as Promise<TickerResponseDto>;
   }
 }

@@ -99,7 +99,9 @@ export class EntityMatcherService {
         if (slugMatch) {
           bestMatch = slugMatch;
           bestScore = 0.95;
-          this.logger.debug(`🔗 Slug match: "${wiki.name}" ↔ "${slugMatch.name}"`);
+          this.logger.debug(
+            `🔗 Slug match: "${wiki.name}" ↔ "${slugMatch.name}"`,
+          );
         }
       }
 
@@ -121,7 +123,10 @@ export class EntityMatcherService {
           }
 
           // If they share 5+ rides or >30% of their lineup, it's a match
-          const threshold = Math.min(5, Math.ceil(wiki.attractions.length * 0.3));
+          const threshold = Math.min(
+            5,
+            Math.ceil(wiki.attractions.length * 0.3),
+          );
           if (sharedRides >= threshold && sharedRides >= 3) {
             bestMatch = qt;
             bestScore = 0.98;
@@ -321,14 +326,14 @@ export class EntityMatcherService {
       "blizzard beach",
       "volcano bay",
       "wet n wild",
-      "wetnwild",        // Wet'n'Wild after apostrophe stripping
+      "wetnwild", // Wet'n'Wild after apostrophe stripping
       "hurricane harbor", // Six Flags water park chain
       "splash country",
       "water world",
       "water kingdom",
-      "shores",          // Cedar Point Shores
-      "aquatic park",    // Caribe Aquatic Park
-      "aqua rabia",      // Aqua Rabia Qiddiya City
+      "shores", // Cedar Point Shores
+      "aquatic park", // Caribe Aquatic Park
+      "aqua rabia", // Aqua Rabia Qiddiya City
     ];
     return waterKeywords.some((k) => normalizedName.includes(k));
   }
@@ -385,9 +390,11 @@ export class EntityMatcherService {
     if (s1.length < 2 || s2.length < 2) return 0.0;
 
     const bigrams1 = new Set();
-    for (let i = 0; i < s1.length - 1; i++) bigrams1.add(s1.substring(i, i + 2));
+    for (let i = 0; i < s1.length - 1; i++)
+      bigrams1.add(s1.substring(i, i + 2));
     const bigrams2 = new Set();
-    for (let i = 0; i < s2.length - 1; i++) bigrams2.add(s2.substring(i, i + 2));
+    for (let i = 0; i < s2.length - 1; i++)
+      bigrams2.add(s2.substring(i, i + 2));
 
     let intersect = 0;
     for (const b of bigrams1) {
