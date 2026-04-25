@@ -29,6 +29,7 @@ import {
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import {
   computeBestVisitTimes,
+  currentSlotStartMs,
   ttlSecondsToNextBoundary,
 } from "../../common/utils/best-visit-times.util";
 import { subDays } from "date-fns";
@@ -422,8 +423,22 @@ export class AttractionIntegrationService {
         if (mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);
+
+          // For the current 15-min slot, substitute the actual live wait time so a
+          // spike that the ML didn't predict can't appear as a "best time".
+          const currentActualWait = dto.queues?.[0]?.waitTime;
+          const slotStartMs = currentSlotStartMs();
+          const predictionsForBestTimes =
+            currentActualWait != null
+              ? mlPredictionsRaw.map((p) =>
+                  new Date(p.predictedTime).getTime() === slotStartMs
+                    ? { ...p, predictedWaitTime: currentActualWait }
+                    : p,
+                )
+              : mlPredictionsRaw;
+
           dto.bestVisitTimes = computeBestVisitTimes(
-            mlPredictionsRaw,
+            predictionsForBestTimes,
             todayEntry?.closingTime ?? null,
           );
         }

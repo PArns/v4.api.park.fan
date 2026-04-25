@@ -720,8 +720,20 @@ export class ParkIntegrationService {
         const predsForBestVisit =
           storedPreds.length > 0 ? storedPreds : mlPreds;
         if (predsForBestVisit.length > 0) {
+          // Substitute actual live wait for current slot to avoid predicting a
+          // spike-masked slot as "best time".
+          const currentActualWait = attraction.queues?.[0]?.waitTime;
+          const slotStartMs = currentSlotStartMs();
+          const patchedPreds =
+            currentActualWait != null
+              ? predsForBestVisit.map((p) =>
+                  new Date(p.predictedTime).getTime() === slotStartMs
+                    ? { ...p, predictedWaitTime: currentActualWait }
+                    : p,
+                )
+              : predsForBestVisit;
           attraction.bestVisitTimes = computeBestVisitTimes(
-            predsForBestVisit,
+            patchedPreds,
             closingTimeIso,
           );
         }
