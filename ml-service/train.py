@@ -71,8 +71,8 @@ def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     drop_mask = (df["waitTime"] <= 5) & (df["rolling_median"] > 20)
 
     # 2. Catch extreme high outliers (API errors / data glitches)
-    # Values above 500 mins (8.3 hours) are almost certainly erroneous.
-    high_outlier_mask = df["waitTime"] > 500
+    # Values >= 400 mins (6.7 hours) are almost certainly erroneous.
+    high_outlier_mask = df["waitTime"] >= 400
 
     # 3. Catch technical heartbeats (Fake 5 min)
     # Condition: Ride reports 5 min, BUT the entire park is also at <= 5 min AND it's early.
@@ -347,8 +347,8 @@ def train_model(version: str = None) -> None:
     # temporal drift or concept shift in recent data).
     holdout_cutoff = df["timestamp"].max() - pd.Timedelta(days=30)
     holdout_mask = df["timestamp"] >= holdout_cutoff
-    df_holdout = df[holdout_mask].copy()
-    df = df[~holdout_mask].copy()
+    df_holdout = df[holdout_mask].copy().reset_index(drop=True)
+    df = df[~holdout_mask].copy().reset_index(drop=True)
     gc.collect()
     logger.info(
         f"   Chronological hold-out: {len(df_holdout):,} rows (last 30 days, >{holdout_cutoff.strftime('%Y-%m-%d')})"
