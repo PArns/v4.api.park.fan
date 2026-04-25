@@ -1065,10 +1065,8 @@ def add_time_since_park_open(
     """
     # No need for copy - adding simple column
 
-    # Initialize with 0 (unknown)
-    df["time_since_park_open_mins"] = 0.0
-
     if feature_context and "parkOpeningTimes" in feature_context:
+        df["time_since_park_open_mins"] = 0.0  # reset only when context is provided
         opening_times_map = feature_context["parkOpeningTimes"]
 
         for park_id, opening_time_str in opening_times_map.items():
@@ -1426,14 +1424,14 @@ def add_park_schedule_features(
                 & (df_merged["local_timestamp"] <= df_merged["closing_time"])
             )
 
-            df.loc[mask_open.index, "is_park_open"] = 1
+            df["is_park_open"] = mask_open.astype(int).values
 
             # Calculate time since open (vectorized)
             time_since_open = (
                 df_merged["local_timestamp"] - df_merged["opening_time"]
             ).dt.total_seconds() / 60.0
-            df.loc[mask_valid.index, "time_since_park_open_mins"] = (
-                time_since_open.clip(lower=0)
+            df["time_since_park_open_mins"] = (
+                time_since_open.where(mask_valid, 0.0).clip(lower=0).values
             )
 
         # Check for special events (fully vectorized)

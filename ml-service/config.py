@@ -70,10 +70,15 @@ class Settings(BaseSettings):
     # Reverted from 0.75 (too aggressive — destroyed short-term signal, caused R²≈0).
     OCCUPANCY_DROPOUT_RATE: float = 0.50
 
-    # Rolling Average Dropout Rate
+    # Rolling Average Dropout Rate (avg_wait_last_24h)
     # Simulates next-week predictions where avg_wait_last_24h is irrelevant.
     # Reverted from 0.65 (too aggressive — see above).
     ROLLING_AVG_DROPOUT_RATE: float = 0.40
+
+    # Short-window Rolling Average Dropout Rate (avg_wait_last_1h)
+    # Higher than ROLLING_AVG_DROPOUT_RATE because this feature had 21% importance
+    # during live analysis (too dominant; model should not rely on it for future preds).
+    ROLLING_1H_DROPOUT_RATE: float = 0.60
 
     # rolling_avg_7d Dropout Rate
     # Reverted from 0.55 (too aggressive — see above).

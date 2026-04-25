@@ -173,32 +173,39 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                 f"   Occupancy dropout: {occ_count:,} rows ({occ_rate * 100:.0f}%) → historical proxy"
             )
 
-    # --- 2. Rolling-avg dropout ---
+    # --- 2a. Rolling-avg dropout (avg_wait_last_24h) ---
     ravg_rate = cfg.ROLLING_AVG_DROPOUT_RATE
     if ravg_rate > 0:
         ravg_mask = rng.random(n) < ravg_rate
         ravg_count = int(ravg_mask.sum())
 
-        if ravg_count > 0:
-            if (
-                "avg_wait_last_24h" in df.columns
-                and "avg_wait_same_dow_4w" in df.columns
-            ):
-                df.loc[ravg_mask, "avg_wait_last_24h"] = df.loc[
-                    ravg_mask, "avg_wait_same_dow_4w"
-                ]
-
-            if "avg_wait_last_1h" in df.columns:
-                is_weekend_mask = df["is_weekend"].values == 1
-                fallback_1h = np.where(
-                    is_weekend_mask,
-                    df["rolling_avg_weekend"].values,
-                    df["rolling_avg_weekday"].values,
-                )
-                df.loc[ravg_mask, "avg_wait_last_1h"] = fallback_1h[ravg_mask]
-
+        if ravg_count > 0 and (
+            "avg_wait_last_24h" in df.columns
+            and "avg_wait_same_dow_4w" in df.columns
+        ):
+            df.loc[ravg_mask, "avg_wait_last_24h"] = df.loc[
+                ravg_mask, "avg_wait_same_dow_4w"
+            ]
             log.info(
-                f"   Rolling-avg dropout: {ravg_count:,} rows ({ravg_rate * 100:.0f}%) → DOW/weekend historical"
+                f"   Rolling-avg-24h dropout: {ravg_count:,} rows ({ravg_rate * 100:.0f}%) → DOW 4-week historical"
+            )
+
+    # --- 2b. Short-window dropout (avg_wait_last_1h) — separate rate ---
+    r1h_rate = getattr(cfg, "ROLLING_1H_DROPOUT_RATE", ravg_rate)
+    if r1h_rate > 0 and "avg_wait_last_1h" in df.columns:
+        r1h_mask = rng.random(n) < r1h_rate
+        r1h_count = int(r1h_mask.sum())
+
+        if r1h_count > 0:
+            is_weekend_mask = df["is_weekend"].values == 1
+            fallback_1h = np.where(
+                is_weekend_mask,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
+            df.loc[r1h_mask, "avg_wait_last_1h"] = fallback_1h[r1h_mask]
+            log.info(
+                f"   Rolling-avg-1h dropout: {r1h_count:,} rows ({r1h_rate * 100:.0f}%) → weekend/weekday historical"
             )
 
     # --- 3. Rolling-7d dropout ---
@@ -333,6 +340,20 @@ def train_model(version: str = None) -> None:
     df = df.dropna(subset=["waitTime"])
     gc.collect()  # Free memory from dropped rows
     logger.info(f"   Rows after cleaning: {len(df):,}")
+    logger.info("")
+
+    # 4.2 Chronological hold-out — last 30 days of data never seen during training.
+    # Gives an honest out-of-time evaluation (random weekly split cannot detect
+    # temporal drift or concept shift in recent data).
+    holdout_cutoff = df["timestamp"].max() - pd.Timedelta(days=30)
+    holdout_mask = df["timestamp"] >= holdout_cutoff
+    df_holdout = df[holdout_mask].copy()
+    df = df[~holdout_mask].copy()
+    gc.collect()
+    logger.info(
+        f"   Chronological hold-out: {len(df_holdout):,} rows (last 30 days, >{holdout_cutoff.strftime('%Y-%m-%d')})"
+    )
+    logger.info(f"   Training pool (excl. hold-out): {len(df):,} rows")
     logger.info("")
 
     # 4.5 Training Dropout — simulate the inference scenario for future predictions.
@@ -541,28 +562,42 @@ def train_model(version: str = None) -> None:
 
     model = WaitTimeModel(version)
 
-    # Prepare sample weights for training set
-    train_weights = None
-    if sample_weights is not None:
-        # Split weights same way as data
-        if train_mask is not None:
-            # Time-based split
-            train_weights = sample_weights[train_mask]
-        else:
-            # Percentage-based split
-            train_weights = sample_weights[: len(X_train)]
-
     metrics = model.train(X_train, y_train, X_val, y_val, sample_weights=train_weights)
 
     logger.info("\n" + "=" * 60)
     logger.info("✅ Training Complete!")
     logger.info(f"{'=' * 60}")
-    logger.info("\n📊 Validation Metrics:")
-    logger.info(f"   MAE:  {metrics['mae']:.2f} minutes")
-    logger.info(f"   RMSE: {metrics['rmse']:.2f} minutes")
-    logger.info(f"   MAPE: {metrics['mape']:.2f}%")
-    logger.info(f"   R²:   {metrics['r2']:.4f}")
+    logger.info("\n📊 Randomized Val-Set Metrics (shuffled weeks):")
+    logger.info(f"   MAE:              {metrics['mae']:.2f} minutes")
+    logger.info(f"   RMSE:             {metrics['rmse']:.2f} minutes")
+    logger.info(f"   MAPE:             {metrics['mape']:.2f}%")
+    logger.info(f"   MAPE (≥5 min):    {metrics.get('mape_meaningful', 0):.2f}%")
+    logger.info(f"   R²:               {metrics['r2']:.4f}")
     logger.info("")
+
+    # 7.5 Chronological hold-out evaluation (honest out-of-time test)
+    if not df_holdout.empty:
+        feature_columns = get_feature_columns()
+        holdout_available = [c for c in feature_columns if c in df_holdout.columns]
+        if len(holdout_available) == len(feature_columns):
+            X_holdout = df_holdout[feature_columns]
+            y_holdout = df_holdout["waitTime"]
+            holdout_metrics = model.evaluate(X_holdout, y_holdout)
+            logger.info("📊 Chronological Hold-out Metrics (last 30 days, unseen):")
+            logger.info(f"   MAE:              {holdout_metrics['mae']:.2f} minutes")
+            logger.info(f"   RMSE:             {holdout_metrics['rmse']:.2f} minutes")
+            logger.info(f"   MAPE:             {holdout_metrics['mape']:.2f}%")
+            logger.info(
+                f"   MAPE (≥5 min):    {holdout_metrics.get('mape_meaningful', 0):.2f}%"
+            )
+            logger.info(f"   R²:               {holdout_metrics['r2']:.4f}")
+            logger.info(f"   Samples:          {len(X_holdout):,}")
+            logger.info("")
+        else:
+            missing = set(feature_columns) - set(df_holdout.columns)
+            logger.warning(
+                f"⚠️  Hold-out eval skipped — missing features: {missing}"
+            )
 
     # 8. Feature importance
     logger.info("🔍 Top 10 Feature Importances:")

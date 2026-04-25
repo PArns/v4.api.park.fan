@@ -158,6 +158,22 @@ class WaitTimeModel:
 
         return metrics
 
+    def evaluate(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> Dict[str, float]:
+        """Run predictions on X and return metrics against y."""
+        if self.model is None:
+            raise ValueError("No model loaded. Train or load first.")
+        X = X.copy()
+        if "parkId" in X.columns:
+            X["parkId"] = X["parkId"].astype(str)
+        if "attractionId" in X.columns:
+            X["attractionId"] = X["attractionId"].astype(str)
+        y_pred = self.model.predict(X[self.feature_columns])
+        if y_pred.ndim == 2 and y_pred.shape[1] == 2:
+            y_pred = y_pred[:, 0]
+        return self._calculate_metrics(y.values, y_pred)
+
     def _calculate_metrics(
         self, y_true: np.ndarray, y_pred: np.ndarray
     ) -> Dict[str, float]:
@@ -176,10 +192,27 @@ class WaitTimeModel:
         else:
             mape = 0.0  # No valid values for MAPE calculation
 
+        # MAPE for meaningful waits only (≥5 min) — excludes very-short waits
+        # that inflate MAPE due to small denominator (e.g. 1→11 = 1000% error)
+        mask_meaningful = y_true >= 5
+        if mask_meaningful.sum() > 0:
+            mape_meaningful = (
+                np.mean(
+                    np.abs(
+                        (y_true[mask_meaningful] - y_pred[mask_meaningful])
+                        / y_true[mask_meaningful]
+                    )
+                )
+                * 100
+            )
+        else:
+            mape_meaningful = 0.0
+
         return {
             "mae": float(mae),
             "rmse": float(rmse),
             "mape": float(mape),
+            "mape_meaningful": float(mape_meaningful),
             "r2": float(r2),
         }
 
