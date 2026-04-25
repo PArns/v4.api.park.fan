@@ -3058,8 +3058,11 @@ export class AnalyticsService {
       attractionSlug: string;
       parkName: string;
       parkSlug: string;
+      continent: string;
       continentSlug: string | null;
+      country: string;
       countrySlug: string | null;
+      city: string;
       citySlug: string | null;
       p50Baseline: string;
       isHeadliner: boolean;
@@ -3105,8 +3108,11 @@ export class AnalyticsService {
           a.slug                                    AS "attractionSlug",
           p.name                                    AS "parkName",
           p.slug                                    AS "parkSlug",
+          p.continent,
           p."continentSlug",
+          p.country,
           p."countrySlug",
+          p.city,
           p."citySlug",
           COALESCE(apb."p50Baseline", 0)::float     AS "p50Baseline",
           COALESCE(apb."isHeadliner", false)        AS "isHeadliner"
@@ -3158,6 +3164,12 @@ export class AnalyticsService {
     const items = rows.map((row) => ({
       parkName: row.parkName,
       parkSlug: row.parkSlug,
+      continent: row.continent,
+      continentSlug: row.continentSlug,
+      country: row.country,
+      countrySlug: row.countrySlug,
+      city: row.city,
+      citySlug: row.citySlug,
       attractionName: row.attractionName,
       attractionSlug: row.attractionSlug,
       waitTime: Number(row.waitTime),

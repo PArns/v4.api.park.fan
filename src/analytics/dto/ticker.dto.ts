@@ -8,6 +8,24 @@ export class TickerItemDto {
   @ApiProperty({ example: "tokyo-disneysea" })
   parkSlug: string;
 
+  @ApiProperty({ example: "Asia" })
+  continent: string;
+
+  @ApiProperty({ example: "asia" })
+  continentSlug: string;
+
+  @ApiProperty({ example: "Japan" })
+  country: string;
+
+  @ApiProperty({ example: "japan" })
+  countrySlug: string;
+
+  @ApiProperty({ example: "Tokyo" })
+  city: string;
+
+  @ApiProperty({ example: "tokyo" })
+  citySlug: string;
+
   @ApiProperty({ example: "Soaring: Fantastic Flight" })
   attractionName: string;
 
