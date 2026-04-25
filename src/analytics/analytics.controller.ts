@@ -52,7 +52,7 @@ export class AnalyticsController {
   }
 
   @Get("ticker")
-  @UseInterceptors(new HttpCacheInterceptor(120))
+  @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Live wait-time ticker",
     description:

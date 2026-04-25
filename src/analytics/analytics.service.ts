@@ -3190,7 +3190,7 @@ export class AnalyticsService {
 
     const response = { items, generatedAt: new Date().toISOString() };
 
-    await this.redis.set(cacheKey, JSON.stringify(response), "EX", 120);
+    await this.redis.set(cacheKey, JSON.stringify(response), "EX", 300);
 
     return response;
   }
