@@ -110,7 +110,8 @@
       "formidable": ">=3.5.1",
       "superagent": ">=9.0.2",
       "glob": ">=11.0.0",
-      "inflight": "npm:lru-cache@11.0.2"
+      "inflight": "npm:lru-cache@11.0.2",
+      "uuid": ">=14.0.0"
     },
     "ignoredBuiltDependencies": [
       "protobufjs"
