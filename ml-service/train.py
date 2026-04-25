@@ -396,11 +396,10 @@ def train_model(version: str = None) -> None:
 
     # 5. Prepare features and target
     feature_columns = get_feature_columns()
-    X = df[feature_columns]
-    y = df["waitTime"]
 
     # 5.5. Calculate sample weights based on attraction-level accuracy (feedback loop)
     # Attractions with high MAE get higher weights to force the model to focus on them.
+    # NOTE: merge happens before X/y extraction so df stays aligned with sample_weights.
     sample_weights = None
 
     if settings.ENABLE_SAMPLE_WEIGHTS:
@@ -410,8 +409,12 @@ def train_model(version: str = None) -> None:
             accuracy_stats = fetch_attraction_accuracy()
 
             if not accuracy_stats.empty:
+                # Deduplicate so the left join never inflates row count
+                accuracy_stats = accuracy_stats.drop_duplicates(
+                    subset=["attraction_id"]
+                )
+
                 # Merge accuracy stats with our training data
-                # Default weight is 1.0
                 df = df.merge(
                     accuracy_stats[["attraction_id", "mae"]],
                     left_on="attractionId",
@@ -450,6 +453,11 @@ def train_model(version: str = None) -> None:
             sample_weights = None
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
+
+    # Extract features/target AFTER merge so indices are consistent
+    df = df.reset_index(drop=True)
+    X = df[feature_columns]
+    y = df["waitTime"]
 
     # 6. Train/Validation Split - Randomized Weekly Block Split
     # Strategy:
