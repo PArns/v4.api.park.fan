@@ -25,6 +25,8 @@ import {
   ParkStatisticsDto,
   AttractionStatisticsDto,
   GlobalStatsDto,
+  ParkStatsItemDto,
+  AttractionStatsItemDto,
 } from "./dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
@@ -2725,6 +2727,91 @@ export class AnalyticsService {
    *
    * Cached for 5 minutes.
    */
+
+  /** @see getGlobalRealtimeStats */
+  private buildParkStatsItem(
+    row: {
+      id: string;
+      name: string;
+      slug: string;
+      city: string;
+      country: string;
+      timezone: string;
+      countrySlug: string;
+      continentSlug: string;
+      citySlug: string;
+      avg_wait: number | string;
+      total_attractions: string;
+      explicitly_closed_attractions: string;
+    },
+    crowdLevel: string | null,
+  ): ParkStatsItemDto {
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      city: row.city,
+      country: row.country,
+      timezone: row.timezone,
+      countrySlug: row.countrySlug,
+      averageWaitTime: roundToNearest5Minutes(parseFloat(String(row.avg_wait))),
+      url: buildParkUrl(row),
+      totalAttractions: parseInt(row.total_attractions || "0"),
+      operatingAttractions: Math.max(
+        0,
+        parseInt(row.total_attractions || "0") -
+          parseInt(row.explicitly_closed_attractions || "0"),
+      ),
+      crowdLevel,
+    };
+  }
+
+  /** @see getGlobalRealtimeStats */
+  private buildAttractionStatsItem(
+    row: {
+      attractionId: string;
+      attractionName: string;
+      attractionSlug: string;
+      parkName: string;
+      slug: string;
+      city: string;
+      country: string;
+      countrySlug: string;
+      timezone: string;
+      waitTime: number;
+      continentSlug: string;
+      citySlug: string;
+    },
+    enrichment: {
+      crowdLevel: string | null;
+      sparkline: { timestamp: string; waitTime: number }[];
+      stats: AttractionStatisticsDto | null;
+    },
+  ): AttractionStatsItemDto {
+    return {
+      id: row.attractionId,
+      name: row.attractionName,
+      slug: row.attractionSlug,
+      parkName: row.parkName,
+      parkSlug: row.slug,
+      parkCity: row.city,
+      parkCountry: row.country,
+      parkCountrySlug: row.countrySlug,
+      parkTimezone: row.timezone,
+      waitTime: row.waitTime,
+      url: buildAttractionUrl(row, { slug: row.attractionSlug }),
+      crowdLevel: enrichment.crowdLevel,
+      sparkline: enrichment.sparkline,
+      avgWaitToday: enrichment.stats?.avgWaitToday ?? null,
+      minWaitToday: enrichment.stats?.minWaitToday ?? null,
+      peakWaitToday: enrichment.stats?.peakWaitToday ?? null,
+      peakWaitTimestamp:
+        enrichment.stats?.peakWaitTimestamp?.toISOString() ?? null,
+      typicalWaitThisHour: enrichment.stats?.typicalWaitThisHour ?? null,
+      currentVsTypical: enrichment.stats?.currentVsTypical ?? null,
+    };
+  }
+
   async getGlobalRealtimeStats(): Promise<GlobalStatsDto> {
     const cacheKey = "analytics:global_stats:v2";
     const cached = await this.redis.get(cacheKey);
@@ -2787,6 +2874,7 @@ export class AnalyticsService {
           p.slug,
           p.city,
           p.country,
+          p.timezone,
           p."continentSlug",
           p."countrySlug",
           p."citySlug",
@@ -2809,7 +2897,7 @@ export class AnalyticsService {
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
         WHERE lu.status = 'OPERATING'
-        GROUP BY p.id, p.name, p.slug, p.city, p.country, p."continentSlug", p."countrySlug", p."citySlug"
+        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug"
       )
       SELECT * FROM park_stats
     `);
@@ -2840,54 +2928,9 @@ export class AnalyticsService {
         b.avg_wait - a.avg_wait,
     );
 
-    const mostCrowdedPark =
-      openParks.length > 0
-        ? {
-            id: openParks[0].id,
-            name: openParks[0].name,
-            slug: openParks[0].slug,
-            city: openParks[0].city,
-            country: openParks[0].country,
-            countrySlug: openParks[0].countrySlug,
-            averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
-            url: buildParkUrl(openParks[0]),
-            totalAttractions: parseInt(openParks[0].total_attractions || "0"),
-            operatingAttractions: Math.max(
-              0,
-              parseInt(openParks[0].total_attractions || "0") -
-                parseInt(openParks[0].explicitly_closed_attractions || "0"),
-            ),
-          }
-        : null;
-
-    const leastCrowdedPark =
-      openParks.length > 0
-        ? {
-            id: openParks[openParks.length - 1].id,
-            name: openParks[openParks.length - 1].name,
-            slug: openParks[openParks.length - 1].slug,
-            city: openParks[openParks.length - 1].city,
-            country: openParks[openParks.length - 1].country,
-            countrySlug: openParks[openParks.length - 1].countrySlug,
-            averageWaitTime: Math.round(
-              openParks[openParks.length - 1].avg_wait,
-            ),
-            url: buildParkUrl(openParks[openParks.length - 1]),
-            totalAttractions: parseInt(
-              openParks[openParks.length - 1].total_attractions || "0",
-            ),
-            operatingAttractions: Math.max(
-              0,
-              parseInt(
-                openParks[openParks.length - 1].total_attractions || "0",
-              ) -
-                parseInt(
-                  openParks[openParks.length - 1]
-                    .explicitly_closed_attractions || "0",
-                ),
-            ),
-          }
-        : null;
+    const mostCrowdedParkRow = openParks.length > 0 ? openParks[0] : null;
+    const leastCrowdedParkRow =
+      openParks.length > 0 ? openParks[openParks.length - 1] : null;
 
     // 3. Find Longest/Shortest Wait Ride (Global)
     // IMPORTANT: Only consider rides from parks that are currently OPERATING
@@ -2956,106 +2999,41 @@ export class AnalyticsService {
         b.waitTime - a.waitTime,
     );
 
-    const longestWaitRide =
-      rideStats.length > 0
-        ? {
-            id: rideStats[0].attractionId,
-            name: rideStats[0].attractionName,
-            slug: rideStats[0].attractionSlug,
-            parkName: rideStats[0].parkName,
-            parkSlug: rideStats[0].slug,
-            parkCity: rideStats[0].city,
-            parkCountry: rideStats[0].country,
-            parkCountrySlug: rideStats[0].countrySlug,
-            waitTime: rideStats[0].waitTime,
-            url: buildAttractionUrl(rideStats[0], {
-              slug: rideStats[0].attractionSlug,
-            }),
-            crowdLevel: null,
-          }
-        : null;
-
-    const shortestWaitRide =
-      rideStats.length > 0
-        ? {
-            id: rideStats[rideStats.length - 1].attractionId,
-            name: rideStats[rideStats.length - 1].attractionName,
-            slug: rideStats[rideStats.length - 1].attractionSlug,
-            parkName: rideStats[rideStats.length - 1].parkName,
-            parkSlug: rideStats[rideStats.length - 1].slug,
-            parkCity: rideStats[rideStats.length - 1].city,
-            parkCountry: rideStats[rideStats.length - 1].country,
-            parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
-            waitTime: rideStats[rideStats.length - 1].waitTime,
-            url: buildAttractionUrl(rideStats[rideStats.length - 1], {
-              slug: rideStats[rideStats.length - 1].attractionSlug,
-            }),
-            crowdLevel: null,
-          }
-        : null;
-
-    // 4. Calculate Details for Top/Bottom Stats (Parallel & Optimized)
-    // Calculate occupancy for both parks in parallel
-    const [mostCrowdedOccupancy, leastCrowdedOccupancy] = await Promise.all([
-      mostCrowdedPark
-        ? this.calculateParkOccupancy(mostCrowdedPark.id)
-        : Promise.resolve(null),
-      leastCrowdedPark
-        ? this.calculateParkOccupancy(leastCrowdedPark.id)
-        : Promise.resolve(null),
-    ]);
-
-    const mostCrowdedParkDetails = mostCrowdedPark
-      ? {
-          ...mostCrowdedPark,
-          crowdLevel: mostCrowdedOccupancy
-            ? this.determineCrowdLevel(mostCrowdedOccupancy.current)
-            : null,
-        }
-      : null;
-
-    const leastCrowdedParkDetails = leastCrowdedPark
-      ? {
-          ...leastCrowdedPark,
-          crowdLevel: leastCrowdedOccupancy
-            ? this.determineCrowdLevel(leastCrowdedOccupancy.current)
-            : null,
-        }
-      : null;
-
-    // Build the list of rides that need crowd level + sparkline enrichment.
-    const candidateRides = [
-      longestWaitRide ? { ...longestWaitRide, parkId: rideStats[0].parkId, timezone: rideStats[0].timezone } : null,
-      shortestWaitRide ? { ...shortestWaitRide, parkId: rideStats[rideStats.length - 1].parkId, timezone: rideStats[rideStats.length - 1].timezone } : null,
-    ].filter((r): r is NonNullable<typeof r> => r !== null);
-
     const longestRaw = rideStats.length > 0 ? rideStats[0] : null;
     const shortestRaw =
       rideStats.length > 0 ? rideStats[rideStats.length - 1] : null;
 
+    // 4. Enrich all four items in one parallel round-trip.
     const [
+      mostCrowdedOccupancy,
+      leastCrowdedOccupancy,
       longestRideRating,
       shortestRideRating,
       sparklineMap,
       longestStats,
       shortestStats,
     ] = await Promise.all([
-      longestWaitRide
-        ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
-            this.getLoadRating(longestWaitRide.waitTime, baseline),
+      mostCrowdedParkRow
+        ? this.calculateParkOccupancy(mostCrowdedParkRow.id)
+        : Promise.resolve(null),
+      leastCrowdedParkRow
+        ? this.calculateParkOccupancy(leastCrowdedParkRow.id)
+        : Promise.resolve(null),
+      longestRaw
+        ? this.getBaselineForAttraction(longestRaw.attractionId).then(
+            (baseline) => this.getLoadRating(longestRaw.waitTime, baseline),
           )
         : Promise.resolve(null),
-      shortestWaitRide
-        ? this.getBaselineForAttraction(shortestWaitRide.id).then(
-            (baseline) =>
-              this.getLoadRating(shortestWaitRide.waitTime, baseline),
+      shortestRaw
+        ? this.getBaselineForAttraction(shortestRaw.attractionId).then(
+            (baseline) => this.getLoadRating(shortestRaw.waitTime, baseline),
           )
         : Promise.resolve(null),
       this.getAttractionSparklinesBatch(
-        candidateRides.map((r) => ({ id: r.id, parkId: r.parkId, timezone: r.timezone })),
+        [longestRaw, shortestRaw]
+          .filter((r): r is NonNullable<typeof r> => r !== null)
+          .map((r) => ({ id: r.attractionId, parkId: r.parkId, timezone: r.timezone })),
       ),
-      // Reuse the same code path as the attraction detail endpoint so the
-      // frontend gets identical stat fields without any duplicated logic.
       longestRaw
         ? this.getEffectiveStartTime(longestRaw.parkId, longestRaw.timezone).then(
             (startTime) =>
@@ -3078,32 +3056,38 @@ export class AnalyticsService {
         : Promise.resolve(null),
     ]);
 
-    const longestWaitRideDetails = longestWaitRide
-      ? {
-          ...longestWaitRide,
-          crowdLevel: longestRideRating?.rating ?? null,
-          sparkline: sparklineMap.get(longestWaitRide.id) ?? [],
-          avgWaitToday: longestStats?.avgWaitToday ?? null,
-          minWaitToday: longestStats?.minWaitToday ?? null,
-          peakWaitToday: longestStats?.peakWaitToday ?? null,
-          peakWaitTimestamp: longestStats?.peakWaitTimestamp?.toISOString() ?? null,
-          typicalWaitThisHour: longestStats?.typicalWaitThisHour ?? null,
-          currentVsTypical: longestStats?.currentVsTypical ?? null,
-        }
+    const mostCrowdedParkDetails = mostCrowdedParkRow
+      ? this.buildParkStatsItem(
+          mostCrowdedParkRow,
+          mostCrowdedOccupancy
+            ? this.determineCrowdLevel(mostCrowdedOccupancy.current)
+            : null,
+        )
       : null;
 
-    const shortestWaitRideDetails = shortestWaitRide
-      ? {
-          ...shortestWaitRide,
+    const leastCrowdedParkDetails = leastCrowdedParkRow
+      ? this.buildParkStatsItem(
+          leastCrowdedParkRow,
+          leastCrowdedOccupancy
+            ? this.determineCrowdLevel(leastCrowdedOccupancy.current)
+            : null,
+        )
+      : null;
+
+    const longestWaitRideDetails = longestRaw
+      ? this.buildAttractionStatsItem(longestRaw, {
+          crowdLevel: longestRideRating?.rating ?? null,
+          sparkline: sparklineMap.get(longestRaw.attractionId) ?? [],
+          stats: longestStats,
+        })
+      : null;
+
+    const shortestWaitRideDetails = shortestRaw
+      ? this.buildAttractionStatsItem(shortestRaw, {
           crowdLevel: shortestRideRating?.rating ?? null,
-          sparkline: sparklineMap.get(shortestWaitRide.id) ?? [],
-          avgWaitToday: shortestStats?.avgWaitToday ?? null,
-          minWaitToday: shortestStats?.minWaitToday ?? null,
-          peakWaitToday: shortestStats?.peakWaitToday ?? null,
-          peakWaitTimestamp: shortestStats?.peakWaitTimestamp?.toISOString() ?? null,
-          typicalWaitThisHour: shortestStats?.typicalWaitThisHour ?? null,
-          currentVsTypical: shortestStats?.currentVsTypical ?? null,
-        }
+          sparkline: sparklineMap.get(shortestRaw.attractionId) ?? [],
+          stats: shortestStats,
+        })
       : null;
 
     // Count open vs closed attractions
