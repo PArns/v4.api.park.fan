@@ -2787,6 +2787,7 @@ export class AnalyticsService {
           p.slug,
           p.city,
           p.country,
+          p.timezone,
           p."continentSlug",
           p."countrySlug",
           p."citySlug",
@@ -2809,7 +2810,7 @@ export class AnalyticsService {
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
         WHERE lu.status = 'OPERATING'
-        GROUP BY p.id, p.name, p.slug, p.city, p.country, p."continentSlug", p."countrySlug", p."citySlug"
+        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug"
       )
       SELECT * FROM park_stats
     `);
@@ -2848,6 +2849,7 @@ export class AnalyticsService {
             slug: openParks[0].slug,
             city: openParks[0].city,
             country: openParks[0].country,
+            timezone: openParks[0].timezone,
             countrySlug: openParks[0].countrySlug,
             averageWaitTime: roundToNearest5Minutes(openParks[0].avg_wait),
             url: buildParkUrl(openParks[0]),
@@ -2868,6 +2870,7 @@ export class AnalyticsService {
             slug: openParks[openParks.length - 1].slug,
             city: openParks[openParks.length - 1].city,
             country: openParks[openParks.length - 1].country,
+            timezone: openParks[openParks.length - 1].timezone,
             countrySlug: openParks[openParks.length - 1].countrySlug,
             averageWaitTime: Math.round(
               openParks[openParks.length - 1].avg_wait,

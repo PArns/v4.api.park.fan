@@ -19,6 +19,9 @@ export class ParkStatsItemDto {
   @ApiProperty({ description: "Country slug for translation" })
   countrySlug: string;
 
+  @ApiProperty({ description: "IANA timezone of the park, e.g. \"Europe/Paris\"" })
+  timezone: string;
+
   @ApiProperty({ description: "Average wait time in minutes", nullable: true })
   averageWaitTime: number;
 
