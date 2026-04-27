@@ -338,6 +338,8 @@ export class PredictionAccuracyService {
 
   /**
    * Get prediction accuracy statistics for an attraction
+   *
+   * Uses a single SQL aggregate query instead of loading all rows into memory.
    */
   async getAttractionAccuracyStats(
     attractionId: string,
@@ -351,22 +353,38 @@ export class PredictionAccuracyService {
   }> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const accuracyRecords = await this.accuracyRepository.find({
-      where: {
-        attractionId,
-        targetTime: Between(startDate, new Date()),
-        actualWaitTime: Between(5, 999), // Only include >= 5 min
-        wasUnplannedClosure: false, // Exclude unplanned closures
-      },
-    });
-
-    const comparedRecords = accuracyRecords.filter(
-      (r) => r.actualWaitTime !== null,
+    const [result] = await this.accuracyRepository.query(
+      `
+      SELECT
+        COUNT(*) AS total_predictions,
+        COUNT(CASE WHEN comparison_status = 'COMPLETED'
+                    AND actual_wait_time >= 5
+                    AND "wasUnplannedClosure" = false THEN 1 END) AS compared_predictions,
+        AVG(absolute_error)
+          FILTER (WHERE comparison_status = 'COMPLETED'
+                    AND actual_wait_time >= 5
+                    AND "wasUnplannedClosure" = false) AS mae,
+        AVG(percentage_error)
+          FILTER (WHERE comparison_status = 'COMPLETED'
+                    AND actual_wait_time >= 5
+                    AND "wasUnplannedClosure" = false
+                    AND percentage_error IS NOT NULL) AS mape,
+        SQRT(AVG(absolute_error * absolute_error)
+          FILTER (WHERE comparison_status = 'COMPLETED'
+                    AND actual_wait_time >= 5
+                    AND "wasUnplannedClosure" = false)) AS rmse
+      FROM prediction_accuracy
+      WHERE attraction_id = $1
+        AND target_time >= $2
+      `,
+      [attractionId, startDate],
     );
 
-    if (comparedRecords.length === 0) {
+    const comparedPredictions = parseInt(result.compared_predictions) || 0;
+
+    if (comparedPredictions === 0) {
       return {
-        totalPredictions: accuracyRecords.length,
+        totalPredictions: parseInt(result.total_predictions) || 0,
         comparedPredictions: 0,
         averageAbsoluteError: 0,
         averagePercentageError: 0,
@@ -374,37 +392,13 @@ export class PredictionAccuracyService {
       };
     }
 
-    // Calculate MAE (Mean Absolute Error)
-    const mae =
-      comparedRecords.reduce((sum, r) => sum + (r.absoluteError || 0), 0) /
-      comparedRecords.length;
-
-    // Calculate MAPE (Mean Absolute Percentage Error)
-    const validPercentageErrors = comparedRecords.filter(
-      (r) => r.percentageError !== null,
-    );
-    const mape =
-      validPercentageErrors.length > 0
-        ? validPercentageErrors.reduce(
-            (sum, r) => sum + (r.percentageError || 0),
-            0,
-          ) / validPercentageErrors.length
-        : 0;
-
-    // Calculate RMSE (Root Mean Square Error)
-    const squaredErrors = comparedRecords.map((r) =>
-      Math.pow(r.absoluteError || 0, 2),
-    );
-    const mse =
-      squaredErrors.reduce((sum, sq) => sum + sq, 0) / comparedRecords.length;
-    const rmse = Math.sqrt(mse);
-
     return {
-      totalPredictions: accuracyRecords.length,
-      comparedPredictions: comparedRecords.length,
-      averageAbsoluteError: Math.round(mae * 10) / 10,
-      averagePercentageError: Math.round(mape * 10) / 10,
-      rmse: Math.round(rmse * 10) / 10,
+      totalPredictions: parseInt(result.total_predictions) || 0,
+      comparedPredictions,
+      averageAbsoluteError: Math.round((parseFloat(result.mae) || 0) * 10) / 10,
+      averagePercentageError:
+        Math.round((parseFloat(result.mape) || 0) * 10) / 10,
+      rmse: Math.round((parseFloat(result.rmse) || 0) * 10) / 10,
     };
   }
 

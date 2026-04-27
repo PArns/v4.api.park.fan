@@ -23,10 +23,14 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  */
 @Entity("prediction_accuracy")
 @Unique("uq_pa_attraction_target", ["attractionId", "targetTime"])
+// Composite index for the hourly aggregate-stats query:
+//   WHERE comparison_status = 'COMPLETED' AND target_time >= $1
+// Also covers getAttractionAccuracyStats per-attraction aggregate and cleanup-old job.
+@Index("idx_pa_status_target", ["comparisonStatus", "targetTime"])
 // Removed unused/redundant indexes:
 // - @Index("idx_pa_attraction_target", ...) - redundant with unique constraint above
 // - @Index(["modelVersion", "createdAt"]) - never queried (0 scans)
-// - @Index(["targetTime"]) - covered by composite index (172 scans)
+// - @Index(["targetTime"]) - covered by composite index above
 // - @Index("idx_pa_target_actual", ...) - barely used (40 scans)
 export class PredictionAccuracy {
   @PrimaryGeneratedColumn("uuid")
