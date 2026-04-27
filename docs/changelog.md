@@ -8,6 +8,8 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ### Added
 
+- **Full statistics on `/v1/analytics/realtime`** (`analytics.service.ts`, `global-stats.dto.ts`): `longestWaitRide` and `shortestWaitRide` now expose today's full statistics — `avgWaitToday`, `minWaitToday`, `peakWaitToday`, `peakWaitTimestamp`, `typicalWaitThisHour`, `currentVsTypical` — in addition to the existing `sparkline` field. Values are fetched via `getAttractionStatistics`, the same method used by the attraction detail endpoint, so they are always consistent. Frontend no longer needs to fill these fields with `null`.
+
 - **Sparklines on `/v1/analytics/realtime`** (`analytics.service.ts`, `global-stats.dto.ts`): `longestWaitRide` and `shortestWaitRide` now include a `sparkline` field — an array of `{ timestamp, waitTime }` pairs covering today's operating window. Each ride uses its own park's timezone and schedule opening time as the window start (identical to the park controller), so rides from e.g. Tokyo and Orlando both show the correct local-day history.
 
 - **`getAttractionSparklinesBatch`** (`analytics.service.ts`): New helper on `AnalyticsService` for fetching sparklines when attractions may span multiple parks. Groups by `parkId`, calls `getEffectiveStartTime` once per park, batches `getBatchAttractionWaitTimeHistory` per group, and merges results into a single `Map<attractionId, SparklinePoint[]>`. Use this for any multi-park context (global stats, recommendations, …); use `getBatchAttractionWaitTimeHistory` directly when you already hold a shared `startTime` for a single park. See [Sparklines](analytics/sparklines.md).

@@ -3029,29 +3029,66 @@ export class AnalyticsService {
       shortestWaitRide ? { ...shortestWaitRide, parkId: rideStats[rideStats.length - 1].parkId, timezone: rideStats[rideStats.length - 1].timezone } : null,
     ].filter((r): r is NonNullable<typeof r> => r !== null);
 
-    const [longestRideRating, shortestRideRating, sparklineMap] =
-      await Promise.all([
-        longestWaitRide
-          ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
-              this.getLoadRating(longestWaitRide.waitTime, baseline),
-            )
-          : Promise.resolve(null),
-        shortestWaitRide
-          ? this.getBaselineForAttraction(shortestWaitRide.id).then(
-              (baseline) =>
-                this.getLoadRating(shortestWaitRide.waitTime, baseline),
-            )
-          : Promise.resolve(null),
-        this.getAttractionSparklinesBatch(
-          candidateRides.map((r) => ({ id: r.id, parkId: r.parkId, timezone: r.timezone })),
-        ),
-      ]);
+    const longestRaw = rideStats.length > 0 ? rideStats[0] : null;
+    const shortestRaw =
+      rideStats.length > 0 ? rideStats[rideStats.length - 1] : null;
+
+    const [
+      longestRideRating,
+      shortestRideRating,
+      sparklineMap,
+      longestStats,
+      shortestStats,
+    ] = await Promise.all([
+      longestWaitRide
+        ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
+            this.getLoadRating(longestWaitRide.waitTime, baseline),
+          )
+        : Promise.resolve(null),
+      shortestWaitRide
+        ? this.getBaselineForAttraction(shortestWaitRide.id).then(
+            (baseline) =>
+              this.getLoadRating(shortestWaitRide.waitTime, baseline),
+          )
+        : Promise.resolve(null),
+      this.getAttractionSparklinesBatch(
+        candidateRides.map((r) => ({ id: r.id, parkId: r.parkId, timezone: r.timezone })),
+      ),
+      // Reuse the same code path as the attraction detail endpoint so the
+      // frontend gets identical stat fields without any duplicated logic.
+      longestRaw
+        ? this.getEffectiveStartTime(longestRaw.parkId, longestRaw.timezone).then(
+            (startTime) =>
+              this.getAttractionStatistics(
+                longestRaw.attractionId,
+                startTime,
+                longestRaw.timezone,
+              ),
+          )
+        : Promise.resolve(null),
+      shortestRaw
+        ? this.getEffectiveStartTime(shortestRaw.parkId, shortestRaw.timezone).then(
+            (startTime) =>
+              this.getAttractionStatistics(
+                shortestRaw.attractionId,
+                startTime,
+                shortestRaw.timezone,
+              ),
+          )
+        : Promise.resolve(null),
+    ]);
 
     const longestWaitRideDetails = longestWaitRide
       ? {
           ...longestWaitRide,
           crowdLevel: longestRideRating?.rating ?? null,
           sparkline: sparklineMap.get(longestWaitRide.id) ?? [],
+          avgWaitToday: longestStats?.avgWaitToday ?? null,
+          minWaitToday: longestStats?.minWaitToday ?? null,
+          peakWaitToday: longestStats?.peakWaitToday ?? null,
+          peakWaitTimestamp: longestStats?.peakWaitTimestamp?.toISOString() ?? null,
+          typicalWaitThisHour: longestStats?.typicalWaitThisHour ?? null,
+          currentVsTypical: longestStats?.currentVsTypical ?? null,
         }
       : null;
 
@@ -3060,6 +3097,12 @@ export class AnalyticsService {
           ...shortestWaitRide,
           crowdLevel: shortestRideRating?.rating ?? null,
           sparkline: sparklineMap.get(shortestWaitRide.id) ?? [],
+          avgWaitToday: shortestStats?.avgWaitToday ?? null,
+          minWaitToday: shortestStats?.minWaitToday ?? null,
+          peakWaitToday: shortestStats?.peakWaitToday ?? null,
+          peakWaitTimestamp: shortestStats?.peakWaitTimestamp?.toISOString() ?? null,
+          typicalWaitThisHour: shortestStats?.typicalWaitThisHour ?? null,
+          currentVsTypical: shortestStats?.currentVsTypical ?? null,
         }
       : null;
 
