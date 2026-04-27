@@ -2967,6 +2967,7 @@ export class AnalyticsService {
             parkCity: rideStats[0].city,
             parkCountry: rideStats[0].country,
             parkCountrySlug: rideStats[0].countrySlug,
+            parkTimezone: rideStats[0].timezone,
             waitTime: rideStats[0].waitTime,
             url: buildAttractionUrl(rideStats[0], {
               slug: rideStats[0].attractionSlug,
@@ -2986,6 +2987,7 @@ export class AnalyticsService {
             parkCity: rideStats[rideStats.length - 1].city,
             parkCountry: rideStats[rideStats.length - 1].country,
             parkCountrySlug: rideStats[rideStats.length - 1].countrySlug,
+            parkTimezone: rideStats[rideStats.length - 1].timezone,
             waitTime: rideStats[rideStats.length - 1].waitTime,
             url: buildAttractionUrl(rideStats[rideStats.length - 1], {
               slug: rideStats[rideStats.length - 1].attractionSlug,
