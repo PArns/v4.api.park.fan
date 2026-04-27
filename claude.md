@@ -30,6 +30,7 @@
 ### 📊 Analytics & Logic
 - [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
+- [Sparklines](docs/analytics/sparklines.md) - Wait-time history for ride cards: two-layer API (`getBatchAttractionWaitTimeHistory` vs `getAttractionSparklinesBatch`), when to use which, and park-timezone handling.
 - [Data Recalculation & Correction Jobs](docs/analytics/data-recalculation.md) - Manual backfills for stats and baselines.
 - [Smart Gaps: Hours & Status Inference](docs/analytics/smart-gaps.md) - Algorithm for reconstructing historical hours and seasonal detection.
 

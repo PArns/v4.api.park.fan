@@ -7,6 +7,12 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Added
+
+- **Sparklines on `/v1/analytics/realtime`** (`analytics.service.ts`, `global-stats.dto.ts`): `longestWaitRide` and `shortestWaitRide` now include a `sparkline` field — an array of `{ timestamp, waitTime }` pairs covering today's operating window. Each ride uses its own park's timezone and schedule opening time as the window start (identical to the park controller), so rides from e.g. Tokyo and Orlando both show the correct local-day history.
+
+- **`getAttractionSparklinesBatch`** (`analytics.service.ts`): New helper on `AnalyticsService` for fetching sparklines when attractions may span multiple parks. Groups by `parkId`, calls `getEffectiveStartTime` once per park, batches `getBatchAttractionWaitTimeHistory` per group, and merges results into a single `Map<attractionId, SparklinePoint[]>`. Use this for any multi-park context (global stats, recommendations, …); use `getBatchAttractionWaitTimeHistory` directly when you already hold a shared `startTime` for a single park. See [Sparklines](analytics/sparklines.md).
+
+### Added
 - **`crowdLevel` on `ParkReference.analytics.statistics`** (`discovery.service.ts`, `geo-structure.dto.ts`): The `/v1/discovery/geo`, `/v1/discovery/continents`, `/v1/discovery/continents/:continent`, and `/v1/discovery/continents/:continent/:country` endpoints now expose the park's current live crowd level inside `analytics.statistics` alongside `avgWaitTime`. Previously the only source of live crowd level on these endpoints was `currentLoad.crowdLevel`, which could be `null` even when wait-time statistics were available — causing the frontend's Popular Parks section to render wait times without a crowd badge. `analytics.statistics.crowdLevel` is now co-present with `avgWaitTime` whenever the park has a valid P50 baseline. The other discovery routes already expose live crowd level via their existing shapes: `/v1/discovery/:continent/:country` (`ParkResponseDto.analytics.statistics.crowdLevel`) and `/v1/discovery/nearby` (`analytics.crowdLevel` per park/ride).
 
 ### Changed
