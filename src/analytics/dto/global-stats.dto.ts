@@ -67,6 +67,9 @@ export class AttractionStatsItemDto {
   @ApiProperty({ description: "Country slug for translation" })
   parkCountrySlug: string;
 
+  @ApiProperty({ description: "IANA timezone of the park, e.g. \"Europe/Paris\"" })
+  parkTimezone: string;
+
   @ApiProperty()
   waitTime: number;
 
