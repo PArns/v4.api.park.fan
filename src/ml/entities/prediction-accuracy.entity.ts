@@ -5,6 +5,7 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  Unique,
   CreateDateColumn,
 } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -21,9 +22,9 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  * this table is only used by background jobs.
  */
 @Entity("prediction_accuracy")
-// Keep only essential indexes for compareWithActuals job
-@Index("idx_pa_attraction_target", ["attractionId", "targetTime"])
-// Removed unused indexes:
+@Unique("uq_pa_attraction_target", ["attractionId", "targetTime"])
+// Removed unused/redundant indexes:
+// - @Index("idx_pa_attraction_target", ...) - redundant with unique constraint above
 // - @Index(["modelVersion", "createdAt"]) - never queried (0 scans)
 // - @Index(["targetTime"]) - covered by composite index (172 scans)
 // - @Index("idx_pa_target_actual", ...) - barely used (40 scans)

@@ -42,12 +42,19 @@ export class PredictionAccuracyService {
     accuracy.predictionTime = prediction.createdAt;
     accuracy.targetTime = prediction.predictedTime;
     accuracy.predictedWaitTime = prediction.predictedWaitTime;
-    // Will be filled later by compareWithActuals
     accuracy.modelVersion = prediction.modelVersion;
     accuracy.predictionType = prediction.predictionType;
     accuracy.features = prediction.features;
 
-    await this.accuracyRepository.save(accuracy);
+    // Upsert: one record per (attractionId, targetTime).
+    // Each prediction run re-covers the same future slots — without this,
+    // 15-min prediction cycles create ~8x duplicates per slot, inflating
+    // MAE stats and sample weights. Keep the latest prediction_time (most
+    // recent forecast is most accurate due to updated real-time features).
+    await this.accuracyRepository.upsert(accuracy as any, {
+      conflictPaths: ["attractionId", "targetTime"],
+      skipUpdateIfNoValuesChanged: false,
+    });
     // Logging handled by caller with progress updates
   }
 
