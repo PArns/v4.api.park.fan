@@ -78,18 +78,20 @@ export class PredictionAccuracyProcessor {
     try {
       const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
-      // Single SQL query to aggregate stats per attraction
-      // IMPORTANT: We filter out unplanned closures and low wait times (< 5 min)
+      // Single SQL query to aggregate stats per attraction.
+      // Only COMPLETED rows are counted — PENDING/MISSED have no actual_wait_time.
+      // We additionally filter out unplanned closures and low wait times (< 5 min)
       // to align with the ML training set and remove noise.
       const results = await this.accuracyRepository.query(
         `
-        SELECT 
+        SELECT
           attraction_id,
           COUNT(*) as total_predictions,
           COUNT(CASE WHEN actual_wait_time >= 5 AND "wasUnplannedClosure" = false THEN 1 END) as compared_predictions,
           AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND "wasUnplannedClosure" = false) as mae
         FROM prediction_accuracy
-        WHERE target_time >= $1
+        WHERE comparison_status = 'COMPLETED'
+          AND target_time >= $1
         GROUP BY attraction_id
         `,
         [ninetyDaysAgo],
