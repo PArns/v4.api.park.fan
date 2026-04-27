@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThan } from "typeorm";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
+import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Redis } from "ioredis";
@@ -20,11 +21,15 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 export class PredictionAccuracyService {
   private readonly logger = new Logger(PredictionAccuracyService.name);
 
-  private readonly TTL_ACCURACY_BADGE = 60 * 60; // 1 hour - badge doesn't change frequently
+  // aggregate-stats runs hourly → badge data changes at most once per hour.
+  // 30min TTL keeps Redis fresh within one aggregate cycle.
+  private readonly TTL_ACCURACY_BADGE = 30 * 60;
 
   constructor(
     @InjectRepository(PredictionAccuracy)
     private accuracyRepository: Repository<PredictionAccuracy>,
+    @InjectRepository(AttractionAccuracyStats)
+    private statsRepository: Repository<AttractionAccuracyStats>,
     @InjectRepository(WaitTimePrediction)
     private predictionRepository: Repository<WaitTimePrediction>,
     @InjectRepository(QueueData)
@@ -623,7 +628,12 @@ export class PredictionAccuracyService {
   }
 
   /**
-   * Get prediction accuracy with badge for display in API
+   * Get prediction accuracy with badge for display in API.
+   *
+   * 3-tier lookup:
+   *   L1 — Redis (30min TTL): avoids DB on repeated requests
+   *   L2 — attraction_accuracy_stats: pre-aggregated by hourly cron, single PK lookup
+   *   L3 — prediction_accuracy (aggregate SQL): fallback for new rides not yet aggregated
    */
   async getAttractionAccuracyWithBadge(
     attractionId: string,
@@ -639,27 +649,60 @@ export class PredictionAccuracyService {
     };
     message?: string;
   }> {
+    // L1: Redis cache
     const cacheKey = `accuracy:badge:${attractionId}:${days}d`;
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const stats = await this.getAttractionAccuracyStats(attractionId, days);
-    const badgeInfo = this.calculateAccuracyBadge(
-      stats.averageAbsoluteError,
-      stats.comparedPredictions,
-    );
+    // L2: pre-aggregated table (updated hourly by aggregate-stats cron)
+    const preAggregated = await this.statsRepository.findOne({
+      where: { attractionId },
+    });
 
-    const result = {
-      badge: badgeInfo.badge,
+    let result: {
+      badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
       last30Days: {
-        mae: stats.averageAbsoluteError,
-        mape: stats.averagePercentageError,
-        rmse: stats.rmse,
-        comparedPredictions: stats.comparedPredictions,
-        totalPredictions: stats.totalPredictions,
-      },
-      message: badgeInfo.message,
+        mae: number;
+        mape: number;
+        rmse: number;
+        comparedPredictions: number;
+        totalPredictions: number;
+      };
+      message?: string;
     };
+
+    if (preAggregated) {
+      result = {
+        badge: preAggregated.badge,
+        last30Days: {
+          mae: preAggregated.mae ?? 0,
+          mape: 0, // not stored in pre-aggregated table
+          rmse: 0, // not stored in pre-aggregated table
+          comparedPredictions: preAggregated.comparedPredictions,
+          totalPredictions: preAggregated.totalPredictions,
+        },
+        message: preAggregated.message ?? undefined,
+      };
+    } else {
+      // L3: raw aggregate SQL fallback for rides not yet in attraction_accuracy_stats
+      const stats = await this.getAttractionAccuracyStats(attractionId, days);
+      const badgeInfo = this.calculateAccuracyBadge(
+        stats.averageAbsoluteError,
+        stats.comparedPredictions,
+      );
+      result = {
+        badge: badgeInfo.badge,
+        last30Days: {
+          mae: stats.averageAbsoluteError,
+          mape: stats.averagePercentageError,
+          rmse: stats.rmse,
+          comparedPredictions: stats.comparedPredictions,
+          totalPredictions: stats.totalPredictions,
+        },
+        message: badgeInfo.message,
+      };
+    }
+
     await this.redis.set(
       cacheKey,
       JSON.stringify(result),

@@ -304,10 +304,14 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Prediction Accuracy Stats: Daily at 3am (aggregate MAE per attraction)
+    // Prediction Accuracy Stats: Hourly (aggregate MAE per attraction)
+    // compare-accuracy runs every 15min → new COMPLETED rows every 15min.
+    // Hourly aggregation keeps attraction_accuracy_stats and the Redis badge
+    // cache (30min TTL) in sync: worst-case badge staleness = 1.5h.
     const hasAggregateStatsCron = await this.hasRepeatableJob(
       this.predictionAccuracyQueue,
       "aggregate-stats-cron",
+      "0 * * * *",
     );
 
     if (!hasAggregateStatsCron) {
@@ -316,7 +320,7 @@ export class QueueSchedulerService implements OnModuleInit {
         {},
         {
           repeat: {
-            cron: "0 3 * * *", // Daily at 3am
+            cron: "0 * * * *", // Every hour
           },
           jobId: "aggregate-stats-cron",
         },
