@@ -19,7 +19,9 @@ export class ParkStatsItemDto {
   @ApiProperty({ description: "Country slug for translation" })
   countrySlug: string;
 
-  @ApiProperty({ description: "IANA timezone of the park, e.g. \"Europe/Paris\"" })
+  @ApiProperty({
+    description: 'IANA timezone of the park, e.g. "Europe/Paris"',
+  })
   timezone: string;
 
   @ApiProperty({ description: "Average wait time in minutes", nullable: true })
@@ -70,7 +72,9 @@ export class AttractionStatsItemDto {
   @ApiProperty({ description: "Country slug for translation" })
   parkCountrySlug: string;
 
-  @ApiProperty({ description: "IANA timezone of the park, e.g. \"Europe/Paris\"" })
+  @ApiProperty({
+    description: 'IANA timezone of the park, e.g. "Europe/Paris"',
+  })
   parkTimezone: string;
 
   @ApiProperty()
@@ -105,16 +109,28 @@ export class AttractionStatsItemDto {
 
   // --- Today's statistics (same fields as the attraction detail endpoint) ---
 
-  @ApiProperty({ description: "Average wait time today (minutes)", nullable: true })
+  @ApiProperty({
+    description: "Average wait time today (minutes)",
+    nullable: true,
+  })
   avgWaitToday: number | null;
 
-  @ApiProperty({ description: "Minimum wait time recorded today (minutes)", nullable: true })
+  @ApiProperty({
+    description: "Minimum wait time recorded today (minutes)",
+    nullable: true,
+  })
   minWaitToday: number | null;
 
-  @ApiProperty({ description: "Peak wait time recorded today (minutes)", nullable: true })
+  @ApiProperty({
+    description: "Peak wait time recorded today (minutes)",
+    nullable: true,
+  })
   peakWaitToday: number | null;
 
-  @ApiProperty({ description: "ISO timestamp of today's peak wait time", nullable: true })
+  @ApiProperty({
+    description: "ISO timestamp of today's peak wait time",
+    nullable: true,
+  })
   peakWaitTimestamp: string | null;
 
   // --- Bonus: trend fields ---

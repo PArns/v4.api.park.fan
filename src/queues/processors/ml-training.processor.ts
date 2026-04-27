@@ -129,17 +129,39 @@ export class MLTrainingProcessor {
         (Date.now() - startTime) / 1000,
       );
 
-      // Fetch training metrics from ML service
-      const modelInfoResponse = await axios.get(`${mlServiceUrl}/model/info`);
-      const modelInfo = modelInfoResponse.data;
+      // Wait for the new model to be loaded by all workers before reading metrics.
+      // The "completed" status is set before the sentinel file is written; workers
+      // reload lazily on the next request, so /model/info can still return the old
+      // version for a few seconds after training finishes.
+      let modelInfo: Record<string, unknown> = {};
+      for (let i = 0; i < 12; i++) {
+        const res = await axios.get(`${mlServiceUrl}/model/info`);
+        if (res.data?.version === version) {
+          modelInfo = res.data;
+          break;
+        }
+        this.logger.log(
+          `Waiting for workers to load ${version} (current: ${res.data?.version}), retry ${i + 1}/12...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
 
+      if (!modelInfo.version) {
+        this.logger.warn(
+          `Workers did not load ${version} within 60s — using last available metrics`,
+        );
+        const fallback = await axios.get(`${mlServiceUrl}/model/info`);
+        modelInfo = fallback.data;
+      }
+
+      const metricsData = (modelInfo.metrics ?? {}) as Record<string, number>;
       const metrics = {
-        mae: modelInfo.metrics?.mae || 0,
-        rmse: modelInfo.metrics?.rmse || 0,
-        mape: modelInfo.metrics?.mape || 0,
-        r2: modelInfo.metrics?.r2 || 0,
-        trainSamples: modelInfo.train_samples || 0, // From metadata root
-        valSamples: modelInfo.val_samples || 0, // From metadata root
+        mae: metricsData.mae || 0,
+        rmse: metricsData.rmse || 0,
+        mape: metricsData.mape || 0,
+        r2: metricsData.r2 || 0,
+        trainSamples: (modelInfo.train_samples as number) || 0,
+        valSamples: (modelInfo.val_samples as number) || 0,
       };
 
       // Deactivate old models
@@ -179,13 +201,9 @@ export class MLTrainingProcessor {
         trainDataEndDate,
         trainSamples: metrics.trainSamples || 0,
         validationSamples: metrics.valSamples || 0,
-        featuresUsed: modelInfo.features || [], // Use features from ML service API
-        hyperparameters: {
-          iterations: 1000,
-          learning_rate: 0.03,
-          depth: 6,
-          l2_leaf_reg: 3.0,
-        },
+        featuresUsed: (modelInfo.features as string[]) || [],
+        hyperparameters:
+          (modelInfo.hyperparameters as Record<string, unknown>) ?? {},
         isActive: true,
         notes: `Trained on ${new Date().toISOString().split("T")[0]}`,
       });
@@ -201,7 +219,9 @@ export class MLTrainingProcessor {
       this.logger.log(
         `   Samples: ${metrics.trainSamples} train, ${metrics.valSamples} validation`,
       );
-      this.logger.log(`   Features: ${modelInfo.features?.length || 0}`);
+      this.logger.log(
+        `   Features: ${(modelInfo.features as string[] | undefined)?.length || 0}`,
+      );
 
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();

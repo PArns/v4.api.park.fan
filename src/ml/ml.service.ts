@@ -1045,11 +1045,13 @@ export class MLService {
       process.env.ACCURACY_SAMPLE_RATE || "0.1", // Default: 10% sampling
     );
 
-    // ONLY record predictions for OPERATING status (park was open)
-    // This prevents recording predictions for scheduled closed periods
-    // Unplanned closures will still be detected in compareWithActuals()
+    // ONLY record hourly predictions for accuracy tracking — daily predictions
+    // span up to 365 days ahead and can't be meaningfully compared against actuals
+    // until those dates arrive, so they only inflate PENDING counts and skew coverage.
     const validPredictionsForFeedback = savedPredictions.filter(
-      (pred) => pred.status === "OPERATING" || pred.status === null,
+      (pred) =>
+        pred.predictionType === "hourly" &&
+        (pred.status === "OPERATING" || pred.status === null),
     );
 
     let recordedCount = 0;

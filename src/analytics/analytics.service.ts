@@ -1525,10 +1525,7 @@ export class AnalyticsService {
     if (attractions.length === 0) return new Map();
 
     // Group by park so we resolve startTime once per park, not once per ride.
-    const byPark = new Map<
-      string,
-      { ids: string[]; timezone: string }
-    >();
+    const byPark = new Map<string, { ids: string[]; timezone: string }>();
     for (const a of attractions) {
       if (!byPark.has(a.parkId)) {
         byPark.set(a.parkId, { ids: [], timezone: a.timezone });
@@ -3032,26 +3029,34 @@ export class AnalyticsService {
       this.getAttractionSparklinesBatch(
         [longestRaw, shortestRaw]
           .filter((r): r is NonNullable<typeof r> => r !== null)
-          .map((r) => ({ id: r.attractionId, parkId: r.parkId, timezone: r.timezone })),
+          .map((r) => ({
+            id: r.attractionId,
+            parkId: r.parkId,
+            timezone: r.timezone,
+          })),
       ),
       longestRaw
-        ? this.getEffectiveStartTime(longestRaw.parkId, longestRaw.timezone).then(
-            (startTime) =>
-              this.getAttractionStatistics(
-                longestRaw.attractionId,
-                startTime,
-                longestRaw.timezone,
-              ),
+        ? this.getEffectiveStartTime(
+            longestRaw.parkId,
+            longestRaw.timezone,
+          ).then((startTime) =>
+            this.getAttractionStatistics(
+              longestRaw.attractionId,
+              startTime,
+              longestRaw.timezone,
+            ),
           )
         : Promise.resolve(null),
       shortestRaw
-        ? this.getEffectiveStartTime(shortestRaw.parkId, shortestRaw.timezone).then(
-            (startTime) =>
-              this.getAttractionStatistics(
-                shortestRaw.attractionId,
-                startTime,
-                shortestRaw.timezone,
-              ),
+        ? this.getEffectiveStartTime(
+            shortestRaw.parkId,
+            shortestRaw.timezone,
+          ).then((startTime) =>
+            this.getAttractionStatistics(
+              shortestRaw.attractionId,
+              startTime,
+              shortestRaw.timezone,
+            ),
           )
         : Promise.resolve(null),
     ]);
@@ -3642,7 +3647,7 @@ export class AnalyticsService {
       baselineConfidence = p90Result.confidence;
 
       if (baseline === 0 || p90Result.distinctDays < 30) {
-        this.logger.warn(
+        this.logger.debug(
           `No reliable baseline for ${type} ${entityId} (baseline: ${baseline}, days: ${p90Result.distinctDays})`,
         );
       }
