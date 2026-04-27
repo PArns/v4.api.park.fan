@@ -160,6 +160,7 @@ class ModelInfoResponse(BaseModel):
     train_samples: Optional[int] = None
     val_samples: Optional[int] = None
     file_size_mb: Optional[float] = None
+    hyperparameters: Optional[dict] = None
 
 
 # Endpoints
@@ -204,6 +205,7 @@ async def get_model_info():
         train_samples=model.metadata.get("train_samples"),
         val_samples=model.metadata.get("val_samples"),
         file_size_mb=file_size_mb,
+        hyperparameters=model.metadata.get("hyperparameters"),
     )
 
 
@@ -239,7 +241,14 @@ async def reload_model():
         raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
 
 
-# Training status tracking
+# Training status — persisted to a shared file so all uvicorn workers see the
+# same state. Without this, polling /train/status from a different worker than
+# the one running the training thread returns stale data (e.g. "completed" from
+# a previous run), causing NestJS to read wrong metrics.
+_TRAINING_STATUS_FILE = os.path.join(
+    os.environ.get("MODEL_DIR", "/app/models"), "training_status.json"
+)
+
 training_status = {
     "is_training": False,
     "current_version": None,
@@ -248,6 +257,27 @@ training_status = {
     "status": "idle",
     "error": None,
 }
+
+
+def _write_training_status(status: dict) -> None:
+    try:
+        import json
+        with open(_TRAINING_STATUS_FILE, "w") as f:
+            json.dump(status, f)
+    except Exception as e:
+        logger.warning(f"Could not write training status file: {e}")
+
+
+def _read_training_status() -> dict:
+    try:
+        import json
+        with open(_TRAINING_STATUS_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return training_status
+    except Exception as e:
+        logger.warning(f"Could not read training status file: {e}")
+        return training_status
 
 
 class TrainRequest(BaseModel):
@@ -266,7 +296,9 @@ async def train_model_endpoint(request: TrainRequest):
     """
     global training_status
 
-    if training_status["is_training"]:
+    # Read shared file so we detect training started by another worker process
+    current = _read_training_status()
+    if current["is_training"]:
         raise HTTPException(status_code=409, detail="Training already in progress")
 
     # Generate version if not provided
@@ -275,6 +307,16 @@ async def train_model_endpoint(request: TrainRequest):
         now = datetime.now(timezone.utc)
         version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
 
+    # Reload Python modules to pick up any docker cp changes since last training.
+    # Workers cache sys.modules; new .py files on disk are only visible after reload.
+    import importlib
+    import sys as _sys
+    for _mod in ("config", "model", "features", "train"):
+        if _mod in _sys.modules:
+            importlib.reload(_sys.modules[_mod])
+    from config import get_settings as _gs
+    _gs.cache_clear()
+
     # Start training in background thread
     import threading
     from train import train_model
@@ -282,26 +324,29 @@ async def train_model_endpoint(request: TrainRequest):
     def training_worker():
         global training_status
         try:
-            training_status["is_training"] = True
-            training_status["current_version"] = version
-            training_status["started_at"] = datetime.now(timezone.utc).isoformat()
-            training_status["status"] = "training"
-            training_status["error"] = None
-            training_status["finished_at"] = None
+            training_status.update({
+                "is_training": True,
+                "current_version": version,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "status": "training",
+                "error": None,
+                "finished_at": None,
+            })
+            _write_training_status(training_status)
 
             logger.info(f"🤖 Starting training in background for version {version}")
             train_model(version=version)
 
-            training_status["status"] = "completed"
-            training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
-            training_status["is_training"] = False
+            training_status.update({
+                "status": "completed",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "is_training": False,
+            })
+            _write_training_status(training_status)
 
             logger.info(f"✅ Training completed for version {version}")
 
             # Write sentinel so ALL worker processes pick up the new model.
-            # Each worker calls _maybe_reload_model() on the next prediction request.
-            # This replaces the single-process `global model = new_model` pattern
-            # which only updated the worker that ran the training thread.
             _write_sentinel(version)
             logger.info(
                 f"✅ Sentinel written for {version} — all workers will reload on next request"
@@ -313,10 +358,13 @@ async def train_model_endpoint(request: TrainRequest):
             error_traceback = traceback.format_exc()
             logger.error(f"❌ Training failed: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            training_status["status"] = "failed"
-            training_status["error"] = f"{str(e)}\n\nTraceback:\n{error_traceback}"
-            training_status["finished_at"] = datetime.now(timezone.utc).isoformat()
-            training_status["is_training"] = False
+            training_status.update({
+                "status": "failed",
+                "error": f"{str(e)}\n\nTraceback:\n{error_traceback}",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "is_training": False,
+            })
+            _write_training_status(training_status)
 
     # Start background thread
     thread = threading.Thread(target=training_worker, daemon=True)
@@ -332,14 +380,15 @@ async def train_model_endpoint(request: TrainRequest):
 
 @app.get("/train/status")
 async def get_training_status():
-    """Get current training status"""
+    """Get current training status (reads shared file so all workers return consistent state)"""
+    status = _read_training_status()
     return {
-        "is_training": training_status["is_training"],
-        "current_version": training_status["current_version"],
-        "started_at": training_status["started_at"],
-        "finished_at": training_status["finished_at"],
-        "status": training_status["status"],
-        "error": training_status["error"],
+        "is_training": status["is_training"],
+        "current_version": status["current_version"],
+        "started_at": status["started_at"],
+        "finished_at": status["finished_at"],
+        "status": status["status"],
+        "error": status["error"],
     }
 
 

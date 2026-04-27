@@ -110,6 +110,8 @@ class WaitTimeModel:
             depth=settings.CATBOOST_DEPTH,
             border_count=getattr(settings, "CATBOOST_BORDER_COUNT", 254),
             l2_leaf_reg=settings.CATBOOST_L2_LEAF_REG,
+            rsm=getattr(settings, "CATBOOST_RSM", 1.0),
+            min_data_in_leaf=getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
             loss_function="RMSEWithUncertainty",
             eval_metric="RMSEWithUncertainty",
             random_seed=settings.CATBOOST_RANDOM_SEED,
@@ -153,6 +155,9 @@ class WaitTimeModel:
                 "learning_rate": settings.CATBOOST_LEARNING_RATE,
                 "depth": settings.CATBOOST_DEPTH,
                 "l2_leaf_reg": settings.CATBOOST_L2_LEAF_REG,
+                "rsm": getattr(settings, "CATBOOST_RSM", 1.0),
+                "min_data_in_leaf": getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
+                "border_count": getattr(settings, "CATBOOST_BORDER_COUNT", 254),
             },
         }
 

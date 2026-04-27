@@ -140,7 +140,8 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     """
     import numpy as np
 
-    rng = np.random.default_rng(cfg.CATBOOST_RANDOM_SEED)
+    import time as _time
+    rng = np.random.default_rng(int(_time.time()))
 
     n = len(df)
     log.info("🎲 Applying training dropout...")
@@ -226,6 +227,58 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
             log.info(
                 f"   Rolling-7d dropout: {r7d_count:,} rows ({r7d_rate * 100:.0f}%) → weekend/weekday historical"
             )
+
+    # --- 4. Holiday dropout ---
+    # On rows where is_holiday_primary=1 OR is_school_holiday_primary=1, replace
+    # rolling averages + occupancy with historical proxies at a high rate.
+    # Without this, CatBoost sees that holiday rows always have elevated rolling
+    # averages and high occupancy, so it never needs is_holiday_primary (0% importance).
+    # With this dropout the model must use the holiday flag itself for those rows.
+    h_rate = getattr(cfg, "HOLIDAY_DROPOUT_RATE", 0.0)
+    if h_rate > 0:
+        holiday_rows = (df.get("is_holiday_primary", 0) == 1) | (
+            df.get("is_school_holiday_primary", 0) == 1
+        )
+        holiday_count = int(holiday_rows.sum())
+        if holiday_count > 0:
+            h_mask = holiday_rows & (rng.random(n) < h_rate)
+            h_count = int(h_mask.sum())
+            if h_count > 0:
+                is_weekend_mask = df["is_weekend"].values == 1
+
+                for col in ("avg_wait_last_24h", "avg_wait_last_1h"):
+                    if col in df.columns:
+                        fallback = np.where(
+                            is_weekend_mask,
+                            df["rolling_avg_weekend"].values,
+                            df["rolling_avg_weekday"].values,
+                        )
+                        df.loc[h_mask, col] = fallback[h_mask]
+
+                if "rolling_avg_7d" in df.columns:
+                    fallback_7d = np.where(
+                        is_weekend_mask,
+                        df["rolling_avg_weekend"].values,
+                        df["rolling_avg_weekday"].values,
+                    )
+                    # Snapshot original r7d BEFORE overwriting — needed for occupancy ratio below
+                    orig_r7d = df["rolling_avg_7d"].values.copy()
+                    df.loc[h_mask, "rolling_avg_7d"] = fallback_7d[h_mask]
+
+                if "park_occupancy_pct" in df.columns and "rolling_avg_7d" in df.columns:
+                    proxy = np.where(
+                        is_weekend_mask,
+                        df["rolling_avg_weekend"].values,
+                        df["rolling_avg_weekday"].values,
+                    )
+                    # Use original r7d so proxy/r7d reflects true holiday vs normal ratio
+                    r7d = orig_r7d.clip(1)
+                    hist_occ = (proxy / r7d) * df["park_occupancy_pct"].values
+                    df.loc[h_mask, "park_occupancy_pct"] = hist_occ[h_mask].clip(0, 400)
+
+                log.info(
+                    f"   Holiday dropout: {h_count:,}/{holiday_count:,} holiday rows ({h_rate * 100:.0f}%) → historical proxies"
+                )
 
     return df
 
@@ -466,10 +519,11 @@ def train_model(version: str = None) -> None:
     # This ensures both training and validation sets contain data from all seasonal
     # phases (e.g., cold winter and busy spring start).
 
-    # Create a unique week identifier (Year + ISO Week)
-    df["_week_id"] = (
-        df["timestamp"].dt.year * 100 + df["timestamp"].dt.isocalendar().week
-    ).astype(int)
+    # Create a unique week identifier (ISO Year + ISO Week).
+    # Must use isocalendar().year, NOT dt.year — late-December dates fall into
+    # ISO week 1 of the next year, so dt.year=2025 + week=1 → 202501 (wrong).
+    iso = df["timestamp"].dt.isocalendar()
+    df["_week_id"] = (iso.year * 100 + iso.week).astype(int)
     unique_weeks = df["_week_id"].unique()
 
     if len(unique_weeks) < 4:
@@ -495,11 +549,15 @@ def train_model(version: str = None) -> None:
         # Blocked Split: Select 20% of weeks for validation
         import numpy as np
 
-        rng = np.random.default_rng(settings.CATBOOST_RANDOM_SEED)
+        # Use a time-based seed so each training run tests different validation weeks.
+        # A fixed seed (CATBOOST_RANDOM_SEED) would always produce the same split,
+        # preventing detection of weeks the model over-fits to.
+        import time as _time
+        split_rng = np.random.default_rng(int(_time.time()))
 
         # Shuffle weeks and pick 20%
         shuffled_weeks = unique_weeks.copy()
-        rng.shuffle(shuffled_weeks)
+        split_rng.shuffle(shuffled_weeks)
 
         val_week_count = max(1, int(len(unique_weeks) * 0.2))
         val_weeks = set(shuffled_weeks[:val_week_count])

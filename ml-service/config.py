@@ -32,6 +32,13 @@ class Settings(BaseSettings):
         254  # Increased binning for features for greater precision
     )
     CATBOOST_L2_LEAF_REG: float = 3.0
+    CATBOOST_RSM: float = (
+        0.8  # Random subspace method: use 80% of features per split to reduce
+        # overfitting; helps generalize on 71-feature space
+    )
+    CATBOOST_MIN_DATA_IN_LEAF: int = (
+        20  # Minimum samples per leaf; prevents overfitting on rare holiday rows
+    )
     CATBOOST_RANDOM_SEED: int = 42
     CATBOOST_THREAD_COUNT: int = (
         -1
@@ -83,6 +90,12 @@ class Settings(BaseSettings):
     # rolling_avg_7d Dropout Rate
     # Reverted from 0.55 (too aggressive — see above).
     ROLLING_7D_DROPOUT_RATE: float = 0.30
+
+    # Holiday dropout rate: on public-holiday rows, additionally replace rolling
+    # averages + occupancy with historical DOW proxies so the model is forced to
+    # learn is_holiday_primary / is_school_holiday_primary as independent signals
+    # rather than relying on rolling averages that already reflect holiday crowding.
+    HOLIDAY_DROPOUT_RATE: float = 0.70
 
     # Multi-Country Holiday Radius
     DEFAULT_INFLUENCE_RADIUS_KM: int = 200
