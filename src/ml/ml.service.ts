@@ -1037,17 +1037,14 @@ export class MLService {
       `Stored ${savedPredictions.length} predictions in database`,
     );
 
-    // Record predictions for accuracy tracking (feedback loop)
-    // OPTIMIZATION: Sample-based storage to reduce DB load (90% reduction)
-    // Statistical sampling is sufficient for MAE calculation
-    // ACCURACY_SAMPLE_RATE: 0.1 = 10% (1000s of samples daily = valid stats)
-    const ACCURACY_SAMPLE_RATE = parseFloat(
-      process.env.ACCURACY_SAMPLE_RATE || "0.1", // Default: 10% sampling
-    );
-
-    // ONLY record hourly predictions for accuracy tracking — daily predictions
-    // span up to 365 days ahead and can't be meaningfully compared against actuals
-    // until those dates arrive, so they only inflate PENDING counts and skew coverage.
+    // Record predictions for accuracy tracking (feedback loop).
+    // No sampling — upsert on (attractionId, targetTime) ensures each future slot
+    // is stored exactly once regardless of how many 15-min cycles cover it.
+    // Full coverage is required so every ride has data for ML sample weighting.
+    //
+    // ONLY record hourly predictions — daily predictions span up to 365 days ahead
+    // and can't be compared against actuals until those dates arrive, inflating
+    // PENDING counts and skewing coverage metrics.
     const validPredictionsForFeedback = savedPredictions.filter(
       (pred) =>
         pred.predictionType === "hourly" &&
@@ -1055,28 +1052,18 @@ export class MLService {
     );
 
     let recordedCount = 0;
-    let sampledCount = 0;
 
     if (validPredictionsForFeedback.length < savedPredictions.length) {
       this.logger.debug(
-        `Filtering: Recording ${validPredictionsForFeedback.length}/${savedPredictions.length} predictions (excluding scheduled closures)`,
+        `Filtering: Recording ${validPredictionsForFeedback.length}/${savedPredictions.length} predictions (excluding scheduled closures and daily predictions)`,
       );
     }
 
-    for (let i = 0; i < validPredictionsForFeedback.length; i++) {
-      // Apply sampling: Only record X% of predictions
-      if (Math.random() >= ACCURACY_SAMPLE_RATE) {
-        sampledCount++;
-        continue; // Skip this prediction (not in sample)
-      }
-
+    for (const prediction of validPredictionsForFeedback) {
       try {
-        await this.predictionAccuracyService.recordPrediction(
-          validPredictionsForFeedback[i],
-        );
+        await this.predictionAccuracyService.recordPrediction(prediction);
         recordedCount++;
       } catch (error) {
-        // Log error but don't fail the whole operation
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
         this.logger.warn(
@@ -1086,8 +1073,7 @@ export class MLService {
     }
 
     this.logger.verbose(
-      `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} predictions for accuracy tracking ` +
-        `(${sampledCount} filtered by ${(ACCURACY_SAMPLE_RATE * 100).toFixed(0)}% sampling)`,
+      `✅ Recorded ${recordedCount}/${validPredictionsForFeedback.length} predictions for accuracy tracking`,
     );
   }
 
