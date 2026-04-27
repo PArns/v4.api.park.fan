@@ -2873,8 +2873,10 @@ export class AnalyticsService {
           qd."status",
           a.name as "attractionName",
           a.slug as "attractionSlug",
+          p.id as "parkId",
           p.name as "parkName",
           p.slug,
+          p.timezone,
           p.city,
           p.country,
           p."continentSlug",
@@ -2966,12 +2968,14 @@ export class AnalyticsService {
         }
       : null;
 
-    // Calculate crowd levels for rides using P50 baseline, and fetch sparklines in parallel
-    const rideSparklineIds = [longestWaitRide?.id, shortestWaitRide?.id].filter(
-      (id): id is string => !!id,
-    );
+    // Calculate crowd levels and sparklines for both rides in parallel.
+    // Each ride uses getEffectiveStartTime(parkId, timezone) — identical to the
+    // park controller — so the sparkline window starts at schedule opening time
+    // (or local start-of-day as fallback), not at UTC midnight.
+    const longestRaw = rideStats.length > 0 ? rideStats[0] : null;
+    const shortestRaw = rideStats.length > 0 ? rideStats[rideStats.length - 1] : null;
 
-    const [longestRideRating, shortestRideRating, rideSparklineMap] =
+    const [longestRideRating, shortestRideRating, longestSparkline, shortestSparkline] =
       await Promise.all([
         longestWaitRide
           ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
@@ -2984,17 +2988,31 @@ export class AnalyticsService {
                 this.getLoadRating(shortestWaitRide.waitTime, baseline),
             )
           : Promise.resolve(null),
-        this.getBatchAttractionWaitTimeHistory(
-          rideSparklineIds,
-          getStartOfDayInTimezone("UTC"),
-        ),
+        longestRaw
+          ? this.getEffectiveStartTime(longestRaw.parkId, longestRaw.timezone).then(
+              (startTime) =>
+                this.getBatchAttractionWaitTimeHistory(
+                  [longestRaw.attractionId],
+                  startTime,
+                ).then((map) => map.get(longestRaw.attractionId) ?? []),
+            )
+          : Promise.resolve([]),
+        shortestRaw
+          ? this.getEffectiveStartTime(shortestRaw.parkId, shortestRaw.timezone).then(
+              (startTime) =>
+                this.getBatchAttractionWaitTimeHistory(
+                  [shortestRaw.attractionId],
+                  startTime,
+                ).then((map) => map.get(shortestRaw.attractionId) ?? []),
+            )
+          : Promise.resolve([]),
       ]);
 
     const longestWaitRideDetails = longestWaitRide
       ? {
           ...longestWaitRide,
           crowdLevel: longestRideRating?.rating ?? null,
-          sparkline: rideSparklineMap.get(longestWaitRide.id) ?? [],
+          sparkline: longestSparkline,
         }
       : null;
 
@@ -3002,7 +3020,7 @@ export class AnalyticsService {
       ? {
           ...shortestWaitRide,
           crowdLevel: shortestRideRating?.rating ?? null,
-          sparkline: rideSparklineMap.get(shortestWaitRide.id) ?? [],
+          sparkline: shortestSparkline,
         }
       : null;
 
