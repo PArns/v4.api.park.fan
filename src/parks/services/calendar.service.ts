@@ -104,7 +104,11 @@ export class CalendarService {
       allDays.sort((a, b) => a.date.localeCompare(b.date));
       const daysInRange = allDays
         .filter((d) => d.date >= fromStr && d.date <= toStr)
-        .map((d) => ({ ...d, status: d.status ?? "UNKNOWN" }));
+        .map((d) => ({
+          ...d,
+          status: d.status ?? "UNKNOWN",
+          recommendation: d.date < today ? undefined : d.recommendation,
+        }));
       const response: IntegratedCalendarResponse = {
         meta: {
           slug: park.slug,
@@ -798,15 +802,17 @@ export class CalendarService {
       isHoliday,
       isBridgeDay,
       isSchoolVacation,
-      recommendation: this.computeRecommendation(
-        crowdLevel,
-        status,
-        isHoliday,
-        isSchoolVacation,
-        isBridgeDay,
-        influencingHolidays.length,
-        weatherSummary || null,
-      ),
+      recommendation: isStrictlyPast
+        ? undefined
+        : this.computeRecommendation(
+            crowdLevel,
+            status,
+            isHoliday,
+            isSchoolVacation,
+            isBridgeDay,
+            influencingHolidays.length,
+            weatherSummary || null,
+          ),
       events: events.length > 0 ? events : undefined,
       influencingHolidays:
         influencingHolidays.length > 0 ? influencingHolidays : undefined,
