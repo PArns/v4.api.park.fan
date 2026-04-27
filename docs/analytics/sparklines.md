@@ -93,7 +93,20 @@ const sparkline = sparklineMap.get(rideId) ?? [];
 `AttractionStatsItemDto` (used in `/v1/analytics/realtime`) carries:
 
 ```typescript
+// Sparkline
 sparkline: { timestamp: string; waitTime: number }[] | null;
+
+// Today's statistics — same fields as the attraction detail endpoint
+avgWaitToday:       number | null;
+minWaitToday:       number | null;
+peakWaitToday:      number | null;
+peakWaitTimestamp:  string | null;  // ISO 8601
+
+// Trend fields
+typicalWaitThisHour: number | null;  // 2-year historical avg for this hour/weekday
+currentVsTypical:    number | null;  // % deviation (positive = busier than usual)
 ```
 
-Full attraction responses expose the same data under `statistics.history` (defined in `StatisticsDto`).
+Full attraction responses expose sparkline data under `statistics.history` and the same statistics fields under `statistics.*` (defined in `AttractionStatisticsDto`).
+
+The realtime endpoint fetches all these fields by calling `getAttractionStatistics(id, startTime, timezone)` — the exact same method used by the attraction detail endpoint — so values are always consistent.

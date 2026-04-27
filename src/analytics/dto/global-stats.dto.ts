@@ -96,6 +96,35 @@ export class AttractionStatsItemDto {
     },
   })
   sparkline: { timestamp: string; waitTime: number }[] | null;
+
+  // --- Today's statistics (same fields as the attraction detail endpoint) ---
+
+  @ApiProperty({ description: "Average wait time today (minutes)", nullable: true })
+  avgWaitToday: number | null;
+
+  @ApiProperty({ description: "Minimum wait time recorded today (minutes)", nullable: true })
+  minWaitToday: number | null;
+
+  @ApiProperty({ description: "Peak wait time recorded today (minutes)", nullable: true })
+  peakWaitToday: number | null;
+
+  @ApiProperty({ description: "ISO timestamp of today's peak wait time", nullable: true })
+  peakWaitTimestamp: string | null;
+
+  // --- Bonus: trend fields ---
+
+  @ApiProperty({
+    description: "Historical average wait for this hour and weekday (minutes)",
+    nullable: true,
+  })
+  typicalWaitThisHour: number | null;
+
+  @ApiProperty({
+    description:
+      "Percentage deviation of today's avg wait vs typical for this hour (positive = busier than usual)",
+    nullable: true,
+  })
+  currentVsTypical: number | null;
 }
 
 export class GlobalCountsDto {
