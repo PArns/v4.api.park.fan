@@ -82,6 +82,20 @@ export class AttractionStatsItemDto {
     nullable: true,
   })
   crowdLevel: string | null;
+
+  @ApiProperty({
+    description: "Historical wait time data points for sparkline visualization",
+    nullable: true,
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        timestamp: { type: "string" },
+        waitTime: { type: "number" },
+      },
+    },
+  })
+  sparkline: { timestamp: string; waitTime: number }[] | null;
 }
 
 export class GlobalCountsDto {
