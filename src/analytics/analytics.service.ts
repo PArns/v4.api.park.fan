@@ -1447,12 +1447,18 @@ export class AnalyticsService {
   }
 
   /**
-   * Get batch wait time history for today
-   * Returns simplified list of timestamp/value pairs for sparklines
-   * Only returns changed values for efficient rendering
+   * Low-level sparkline fetch for a set of attractions that all share the same
+   * startTime (i.e. they belong to the same park, or the caller has already
+   * resolved the correct window).
    *
-   * @param attractionIds - Array of attraction IDs to fetch history for
-   * @param startTime - Start time for filtering (e.g. Schedule Opening Time or Start of Day)
+   * Returns deduplicated, 5-min-rounded timestamp/waitTime pairs ordered oldest
+   * to newest. Only changed values are recorded, so the array stays small.
+   *
+   * For attractions from multiple parks (different timezones / opening times)
+   * use getAttractionSparklinesBatch instead — it resolves startTime per park.
+   *
+   * @param attractionIds - Attraction IDs to fetch history for
+   * @param startTime - Window start (e.g. result of getEffectiveStartTime)
    */
   async getBatchAttractionWaitTimeHistory(
     attractionIds: string[],
@@ -1495,6 +1501,55 @@ export class AnalyticsService {
     }
 
     return map;
+  }
+
+  /**
+   * Fetch sparklines for attractions that may span multiple parks.
+   *
+   * Each park's effective start time (schedule opening or local midnight) is
+   * resolved independently, so rides from Tokyo and Orlando both get the
+   * correct window without UTC drift.
+   *
+   * Use this for multi-park contexts (global stats, recommendations, …).
+   * For a single park, keep using getBatchAttractionWaitTimeHistory directly
+   * with the startTime you already have.
+   *
+   * @param attractions - Attractions with their parkId and timezone
+   * @returns Map of attractionId → sparkline data points
+   */
+  async getAttractionSparklinesBatch(
+    attractions: { id: string; parkId: string; timezone: string }[],
+  ): Promise<Map<string, { timestamp: string; waitTime: number }[]>> {
+    if (attractions.length === 0) return new Map();
+
+    // Group by park so we resolve startTime once per park, not once per ride.
+    const byPark = new Map<
+      string,
+      { ids: string[]; timezone: string }
+    >();
+    for (const a of attractions) {
+      if (!byPark.has(a.parkId)) {
+        byPark.set(a.parkId, { ids: [], timezone: a.timezone });
+      }
+      byPark.get(a.parkId)!.ids.push(a.id);
+    }
+
+    const results = await Promise.all(
+      [...byPark.entries()].map(([parkId, { ids, timezone }]) =>
+        this.getEffectiveStartTime(parkId, timezone).then((startTime) =>
+          this.getBatchAttractionWaitTimeHistory(ids, startTime),
+        ),
+      ),
+    );
+
+    // Merge per-park maps into one.
+    const merged = new Map<string, { timestamp: string; waitTime: number }[]>();
+    for (const partial of results) {
+      for (const [id, points] of partial) {
+        merged.set(id, points);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -2968,14 +3023,13 @@ export class AnalyticsService {
         }
       : null;
 
-    // Calculate crowd levels and sparklines for both rides in parallel.
-    // Each ride uses getEffectiveStartTime(parkId, timezone) — identical to the
-    // park controller — so the sparkline window starts at schedule opening time
-    // (or local start-of-day as fallback), not at UTC midnight.
-    const longestRaw = rideStats.length > 0 ? rideStats[0] : null;
-    const shortestRaw = rideStats.length > 0 ? rideStats[rideStats.length - 1] : null;
+    // Build the list of rides that need crowd level + sparkline enrichment.
+    const candidateRides = [
+      longestWaitRide ? { ...longestWaitRide, parkId: rideStats[0].parkId, timezone: rideStats[0].timezone } : null,
+      shortestWaitRide ? { ...shortestWaitRide, parkId: rideStats[rideStats.length - 1].parkId, timezone: rideStats[rideStats.length - 1].timezone } : null,
+    ].filter((r): r is NonNullable<typeof r> => r !== null);
 
-    const [longestRideRating, shortestRideRating, longestSparkline, shortestSparkline] =
+    const [longestRideRating, shortestRideRating, sparklineMap] =
       await Promise.all([
         longestWaitRide
           ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
@@ -2988,31 +3042,16 @@ export class AnalyticsService {
                 this.getLoadRating(shortestWaitRide.waitTime, baseline),
             )
           : Promise.resolve(null),
-        longestRaw
-          ? this.getEffectiveStartTime(longestRaw.parkId, longestRaw.timezone).then(
-              (startTime) =>
-                this.getBatchAttractionWaitTimeHistory(
-                  [longestRaw.attractionId],
-                  startTime,
-                ).then((map) => map.get(longestRaw.attractionId) ?? []),
-            )
-          : Promise.resolve([]),
-        shortestRaw
-          ? this.getEffectiveStartTime(shortestRaw.parkId, shortestRaw.timezone).then(
-              (startTime) =>
-                this.getBatchAttractionWaitTimeHistory(
-                  [shortestRaw.attractionId],
-                  startTime,
-                ).then((map) => map.get(shortestRaw.attractionId) ?? []),
-            )
-          : Promise.resolve([]),
+        this.getAttractionSparklinesBatch(
+          candidateRides.map((r) => ({ id: r.id, parkId: r.parkId, timezone: r.timezone })),
+        ),
       ]);
 
     const longestWaitRideDetails = longestWaitRide
       ? {
           ...longestWaitRide,
           crowdLevel: longestRideRating?.rating ?? null,
-          sparkline: longestSparkline,
+          sparkline: sparklineMap.get(longestWaitRide.id) ?? [],
         }
       : null;
 
@@ -3020,7 +3059,7 @@ export class AnalyticsService {
       ? {
           ...shortestWaitRide,
           crowdLevel: shortestRideRating?.rating ?? null,
-          sparkline: shortestSparkline,
+          sparkline: sparklineMap.get(shortestWaitRide.id) ?? [],
         }
       : null;
 
