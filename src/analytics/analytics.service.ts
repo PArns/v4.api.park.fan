@@ -2966,26 +2966,44 @@ export class AnalyticsService {
         }
       : null;
 
-    // Calculate crowd levels for rides using P50 baseline
-    const [longestRideRating, shortestRideRating] = await Promise.all([
-      longestWaitRide
-        ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
-            this.getLoadRating(longestWaitRide.waitTime, baseline),
-          )
-        : Promise.resolve(null),
-      shortestWaitRide
-        ? this.getBaselineForAttraction(shortestWaitRide.id).then((baseline) =>
-            this.getLoadRating(shortestWaitRide.waitTime, baseline),
-          )
-        : Promise.resolve(null),
-    ]);
+    // Calculate crowd levels for rides using P50 baseline, and fetch sparklines in parallel
+    const rideSparklineIds = [longestWaitRide?.id, shortestWaitRide?.id].filter(
+      (id): id is string => !!id,
+    );
+
+    const [longestRideRating, shortestRideRating, rideSparklineMap] =
+      await Promise.all([
+        longestWaitRide
+          ? this.getBaselineForAttraction(longestWaitRide.id).then((baseline) =>
+              this.getLoadRating(longestWaitRide.waitTime, baseline),
+            )
+          : Promise.resolve(null),
+        shortestWaitRide
+          ? this.getBaselineForAttraction(shortestWaitRide.id).then(
+              (baseline) =>
+                this.getLoadRating(shortestWaitRide.waitTime, baseline),
+            )
+          : Promise.resolve(null),
+        this.getBatchAttractionWaitTimeHistory(
+          rideSparklineIds,
+          getStartOfDayInTimezone("UTC"),
+        ),
+      ]);
 
     const longestWaitRideDetails = longestWaitRide
-      ? { ...longestWaitRide, crowdLevel: longestRideRating?.rating ?? null }
+      ? {
+          ...longestWaitRide,
+          crowdLevel: longestRideRating?.rating ?? null,
+          sparkline: rideSparklineMap.get(longestWaitRide.id) ?? [],
+        }
       : null;
 
     const shortestWaitRideDetails = shortestWaitRide
-      ? { ...shortestWaitRide, crowdLevel: shortestRideRating?.rating ?? null }
+      ? {
+          ...shortestWaitRide,
+          crowdLevel: shortestRideRating?.rating ?? null,
+          sparkline: rideSparklineMap.get(shortestWaitRide.id) ?? [],
+        }
       : null;
 
     // Count open vs closed attractions
