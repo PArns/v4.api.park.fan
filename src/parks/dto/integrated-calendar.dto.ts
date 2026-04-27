@@ -182,7 +182,8 @@ export class CalendarDay {
   influencingHolidays?: InfluencingHoliday[];
 
   @ApiProperty({
-    description: "Recommendation for visiting (score-based labels)",
+    description:
+      "Recommendation for visiting (score-based labels). Omitted for past days.",
     enum: [
       "highly_recommended",
       "recommended",
@@ -191,8 +192,9 @@ export class CalendarDay {
       "strongly_avoid",
       "closed",
     ],
+    required: false,
   })
-  recommendation:
+  recommendation?:
     | "highly_recommended"
     | "recommended"
     | "neutral"
