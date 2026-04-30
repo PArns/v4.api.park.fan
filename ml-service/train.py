@@ -198,22 +198,15 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
         r1h_count = int(r1h_mask.sum())
 
         if r1h_count > 0:
-            # Use 90d rolling average as fallback — provides seasonal smoothing without
-            # the recency bias of the 7d weekday/weekend averages (e.g. post-peak transitions).
-            if "rolling_avg_90d" in df.columns:
-                fallback_1h = df["rolling_avg_90d"].values
-                fallback_label = "90d seasonal baseline"
-            else:
-                is_weekend_mask = df["is_weekend"].values == 1
-                fallback_1h = np.where(
-                    is_weekend_mask,
-                    df["rolling_avg_weekend"].values,
-                    df["rolling_avg_weekday"].values,
-                )
-                fallback_label = "weekend/weekday 7d historical"
+            is_weekend_mask = df["is_weekend"].values == 1
+            fallback_1h = np.where(
+                is_weekend_mask,
+                df["rolling_avg_weekend"].values,
+                df["rolling_avg_weekday"].values,
+            )
             df.loc[r1h_mask, "avg_wait_last_1h"] = fallback_1h[r1h_mask]
             log.info(
-                f"   Rolling-avg-1h dropout: {r1h_count:,} rows ({r1h_rate * 100:.0f}%) → {fallback_label}"
+                f"   Rolling-avg-1h dropout: {r1h_count:,} rows ({r1h_rate * 100:.0f}%) → weekend/weekday 7d historical"
             )
 
     # --- 3. Rolling-7d dropout ---
