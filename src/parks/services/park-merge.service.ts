@@ -217,9 +217,9 @@ export class ParkMergeService {
     context: string,
   ): void {
     if (!allowedSet.has(value)) {
-      throw new Error(
-        `Disallowed SQL identifier "${value}" in ${context}`,
-      );
+      const msg = `Disallowed SQL identifier "${value}" in ${context} — add it to the allowlist if intentional`;
+      this.logger.error(msg);
+      throw new Error(msg);
     }
   }
 
