@@ -31,16 +31,20 @@ export class MLAlertService {
   }> {
     const alerts: MLAlert[] = [];
 
-    // 1. Check accuracy degradation
-    const accuracyCheck = await this.accuracyService.checkRetrainingNeeded(7);
-    if (accuracyCheck.needed) {
+    // Use a single stats fetch for all MAE/coverage checks to avoid duplicate DB queries.
+    const systemStats = await this.accuracyService.getSystemAccuracyStats(7);
+    const mae = systemStats.overall.mae;
+    const MAE_THRESHOLD = 8;
+
+    // 1. Check accuracy degradation — MAE only, independent of coverage
+    if (mae > MAE_THRESHOLD) {
       const alert = await this.createAlert({
         alertType: "accuracy_degradation",
-        severity: this.determineSeverity(accuracyCheck.metrics?.mae || 0),
+        severity: this.determineSeverity(mae),
         title: "Model Accuracy Degradation",
-        message: `MAE: ${accuracyCheck.metrics?.mae?.toFixed(1)} min (threshold: 8 min). ${accuracyCheck.reason}`,
-        metrics: accuracyCheck.metrics || null,
-        context: { reason: accuracyCheck.reason },
+        message: `MAE: ${mae.toFixed(1)} min (threshold: ${MAE_THRESHOLD} min)`,
+        metrics: systemStats.overall,
+        context: null,
       });
       if (alert) alerts.push(alert);
     } else {
@@ -73,7 +77,6 @@ export class MLAlertService {
     }
 
     // 3. Check coverage
-    const systemStats = await this.accuracyService.getSystemAccuracyStats(7);
     if (systemStats.overall.coveragePercent < 80) {
       const alert = await this.createAlert({
         alertType: "low_coverage",
