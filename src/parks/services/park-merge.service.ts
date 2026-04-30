@@ -252,14 +252,10 @@ export class ParkMergeService {
     );
 
     const winnerBySlug = new Map<string, string>(
-      winnerEntities
-        .filter((e: any) => e.slug)
-        .map((e: any) => [e.slug, e.id]),
+      winnerEntities.filter((e: any) => e.slug).map((e: any) => [e.slug, e.id]),
     );
     const winnerByName = new Map<string, string>(
-      winnerEntities
-        .filter((e: any) => e.name)
-        .map((e: any) => [e.name, e.id]),
+      winnerEntities.filter((e: any) => e.name).map((e: any) => [e.name, e.id]),
     );
 
     const collisions: { loserEntityId: string; winnerEntityId: string }[] = [];
