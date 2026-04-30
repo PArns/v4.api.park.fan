@@ -191,6 +191,38 @@ export class ParkMergeService {
     return result;
   }
 
+  private static readonly ALLOWED_TABLE_NAMES = new Set([
+    "attractions",
+    "shows",
+    "restaurants",
+    "park_daily_stats",
+    "schedule_entries",
+    "park_p50_baselines",
+    "park_occupancy",
+    "headliner_attractions",
+    "weather_data",
+  ]);
+
+  private static readonly ALLOWED_COLUMN_NAMES = new Set([
+    "parkId",
+    "attractionId",
+    "date",
+    "scheduleType",
+    "timestamp",
+  ]);
+
+  private assertAllowedIdentifier(
+    value: string,
+    allowedSet: Set<string>,
+    context: string,
+  ): void {
+    if (!allowedSet.has(value)) {
+      throw new Error(
+        `Disallowed SQL identifier "${value}" in ${context}`,
+      );
+    }
+  }
+
   /**
    * Universal entity migration (Attractions, Shows, Restaurants)
    * Handles collisions by merging time-series data and deleting the duplicate entity.
@@ -201,6 +233,12 @@ export class ParkMergeService {
     winnerId: string,
     loserId: string,
   ): Promise<number> {
+    this.assertAllowedIdentifier(
+      tableName,
+      ParkMergeService.ALLOWED_TABLE_NAMES,
+      "migrateEntities",
+    );
+
     const loserEntities = await manager.query(
       `SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`,
       [loserId],
@@ -338,6 +376,24 @@ export class ParkMergeService {
     loserId: string,
     conflictColumns: string[] | null,
   ): Promise<number> {
+    this.assertAllowedIdentifier(
+      tableName,
+      ParkMergeService.ALLOWED_TABLE_NAMES,
+      "migrateTableData tableName",
+    );
+    this.assertAllowedIdentifier(
+      idColumn,
+      ParkMergeService.ALLOWED_COLUMN_NAMES,
+      "migrateTableData idColumn",
+    );
+    conflictColumns?.forEach((col) =>
+      this.assertAllowedIdentifier(
+        col,
+        ParkMergeService.ALLOWED_COLUMN_NAMES,
+        "migrateTableData conflictColumns",
+      ),
+    );
+
     if (conflictColumns === null) {
       // Winner-authoritative: only migrate loser's data if winner has no rows at all
       const winnerRows = await manager.query(
