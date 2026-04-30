@@ -168,7 +168,11 @@ export class WaitTimesProcessor {
               if (liveData.crowdLevel != null) {
                 await this.parkRepository
                   .update(park.id, { currentCrowdLevel: liveData.crowdLevel })
-                  .catch(() => {});
+                  .catch((e) =>
+                    this.logger.warn(
+                      `Failed to update crowd level for park ${park.id}: ${e?.message ?? e}`,
+                    ),
+                  );
               }
 
               // Update Schedule from Live Data (Fallback)
@@ -189,7 +193,11 @@ export class WaitTimesProcessor {
                   }));
                   await this.parksService
                     .saveScheduleData(park.id, scheduleUpdates)
-                    .catch(() => {});
+                    .catch((e) =>
+                      this.logger.warn(
+                        `Failed to save live schedule data for park ${park.id}: ${e?.message ?? e}`,
+                      ),
+                    );
                 }
               }
 
@@ -267,7 +275,11 @@ export class WaitTimesProcessor {
                         );
                       }
                     }
-                  } catch (_e) {}
+                  } catch (e) {
+                    this.logger.warn(
+                      `Failed to process entity ${entityLiveData.externalId} (${entityLiveData.entityType}): ${(e as Error)?.message ?? e}`,
+                    );
+                  }
                 }
               }
 
@@ -328,7 +340,11 @@ export class WaitTimesProcessor {
         ]);
         const hb = await this.writeHourlyHeartbeats();
         if (hb > 0) this.logger.log(`💓 Wrote ${hb} hourly heartbeats`);
-      } catch (_e) {}
+      } catch (e) {
+        this.logger.warn(
+          `Cache warmup or heartbeat write failed: ${(e as Error)?.message ?? e}`,
+        );
+      }
     } catch (error) {
       this.logger.error("❌ Wait times sync failed", error);
       throw error;
@@ -371,8 +387,10 @@ export class WaitTimesProcessor {
         "EX",
         this.LAST_SEEN_TTL_SECONDS,
       );
-    } catch (_e) {
-      // non-critical
+    } catch (e) {
+      this.logger.debug(
+        `Failed to touch last-seen for attraction ${attractionId}: ${(e as Error)?.message ?? e}`,
+      );
     }
   }
 
@@ -503,7 +521,11 @@ export class WaitTimesProcessor {
             await this.attractionsService
               .getRepository()
               .update(internalId, { queueTimesEntityId: qtNumericId })
-              .catch(() => {});
+              .catch((e) =>
+                this.logger.warn(
+                  `Failed to update queueTimesEntityId for attraction ${internalId}: ${e?.message ?? e}`,
+                ),
+              );
           }
           if (changed) updatedCount++;
         }
@@ -572,7 +594,11 @@ export class WaitTimesProcessor {
           detectedAt: new Date(),
         });
       }
-    } catch (_e) {}
+    } catch (e) {
+      this.logger.warn(
+        `Failed to check/flag deviation for entity ${entityData.externalId}: ${(e as Error)?.message ?? e}`,
+      );
+    }
   }
 
   private async trackDowntime(
@@ -632,7 +658,11 @@ export class WaitTimesProcessor {
           await this.redis.del(downtimeStartKey);
         }
       }
-    } catch (_e) {}
+    } catch (e) {
+      this.logger.warn(
+        `Failed to track downtime for entity ${entityData.externalId}: ${(e as Error)?.message ?? e}`,
+      );
+    }
   }
 
   private async writeHourlyHeartbeats(): Promise<number> {
@@ -707,9 +737,17 @@ export class WaitTimesProcessor {
               totalHeartbeats++;
             }
           }
-        } catch (_e) {}
+        } catch (e) {
+          this.logger.warn(
+            `Failed to write heartbeats for park ${park.id}: ${(e as Error)?.message ?? e}`,
+          );
+        }
       }
-    } catch (_e) {}
+    } catch (e) {
+      this.logger.warn(
+        `writeHourlyHeartbeats failed: ${(e as Error)?.message ?? e}`,
+      );
+    }
     return totalHeartbeats;
   }
 }
