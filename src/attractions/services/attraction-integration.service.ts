@@ -617,7 +617,7 @@ export class AttractionIntegrationService {
         `
         SELECT 
           DATE(qd.timestamp AT TIME ZONE $3) as date,
-          (EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3) || ':' || LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
+          (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)::text, 2, '0') || ':' || LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
           AVG(qd."waitTime") as avg_wait,
           COUNT(*) as sample_count
