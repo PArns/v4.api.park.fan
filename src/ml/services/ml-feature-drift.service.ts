@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Between, Not } from "typeorm";
+import { Repository, Between, Not, IsNull } from "typeorm";
 import { MLFeatureStats } from "../entities/ml-feature-stats.entity";
 import { MLFeatureDrift } from "../entities/ml-feature-drift.entity";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
@@ -136,7 +136,7 @@ export class MLFeatureDriftService {
     const recentPredictions = await this.accuracyRepository.find({
       where: {
         targetTime: Between(startDate, new Date()),
-        features: Not(null), // Only predictions with features
+        features: Not(IsNull()), // Only predictions with features
       },
       take: 10000, // Sample size
     });

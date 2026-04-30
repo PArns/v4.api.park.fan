@@ -620,8 +620,7 @@ def create_prediction_features(
 
                 # Apply sinusoidal interpolation to historical fallback
                 # Min at 4am, Max at 2pm (14:00)
-                temp_min = df["temp_max"].fillna(25.0)  # Use max if min missing
-                temp_min = df["temp_min"].fillna(15.0)
+                temp_min = df["temp_min"].fillna(df["temp_max"]).fillna(15.0)
                 temp_max = df["temp_max"].fillna(25.0)
                 temp_range = temp_max - temp_min
 
@@ -1561,20 +1560,19 @@ def create_prediction_features(
                 )
 
                 # Weekday / weekend rolling averages (from DB window functions)
-                rolling_avg_weekday = (
-                    attraction_data["rolling_avg_weekday"].iloc[-1]
-                    if "rolling_avg_weekday" in attraction_data.columns
-                    and len(attraction_data) > 0
-                    and not pd.isna(attraction_data["rolling_avg_weekday"].iloc[-1])
-                    else rolling_7d
-                )
-                rolling_avg_weekend = (
-                    attraction_data["rolling_avg_weekend"].iloc[-1]
-                    if "rolling_avg_weekend" in attraction_data.columns
-                    and len(attraction_data) > 0
-                    and not pd.isna(attraction_data["rolling_avg_weekend"].iloc[-1])
-                    else rolling_7d
-                )
+                def _extract_col(col, fallback):
+                    return (
+                        attraction_data[col].iloc[-1]
+                        if col in attraction_data.columns
+                        and len(attraction_data) > 0
+                        and not pd.isna(attraction_data[col].iloc[-1])
+                        else fallback
+                    )
+
+                rolling_avg_weekday = _extract_col("rolling_avg_weekday", rolling_7d)
+                rolling_avg_weekend = _extract_col("rolling_avg_weekend", rolling_7d)
+                rolling_avg_28d = _extract_col("rolling_avg_28d", rolling_7d)
+                rolling_avg_90d = _extract_col("rolling_avg_90d", rolling_7d)
 
                 # Apply uniform features to all rows for this attraction
                 mask = df["attractionId"] == attraction_id
@@ -1585,6 +1583,8 @@ def create_prediction_features(
                 df.loc[mask, "rolling_avg_7d"] = rolling_7d
                 df.loc[mask, "rolling_avg_weekday"] = rolling_avg_weekday
                 df.loc[mask, "rolling_avg_weekend"] = rolling_avg_weekend
+                df.loc[mask, "rolling_avg_28d"] = rolling_avg_28d
+                df.loc[mask, "rolling_avg_90d"] = rolling_avg_90d
                 df.loc[mask, "trend_7d"] = trend_7d
                 df.loc[mask, "volatility_7d"] = volatility_7d
                 df.loc[mask, "volatility_weekday"] = volatility_weekday

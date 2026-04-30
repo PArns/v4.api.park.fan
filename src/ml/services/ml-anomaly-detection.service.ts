@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Between, LessThan, Not } from "typeorm";
+import { Repository, Between, LessThan, Not, IsNull } from "typeorm";
 import { MLPredictionAnomaly } from "../entities/ml-prediction-anomaly.entity";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 
@@ -39,7 +39,7 @@ export class MLAnomalyDetectionService {
     const predictions = await this.accuracyRepository.find({
       where: {
         targetTime: Between(startDate, new Date()),
-        actualWaitTime: Not(null) as any, // TypeORM type issue workaround
+        actualWaitTime: Not(IsNull()),
         comparisonStatus: "COMPLETED",
       },
       take: 10000, // Sample size
