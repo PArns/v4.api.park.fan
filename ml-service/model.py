@@ -141,6 +141,19 @@ class WaitTimeModel:
             y_pred = y_pred[:, 0]
         metrics = self._calculate_metrics(y_val, y_pred)
 
+        # Add feature importances to metrics
+        try:
+            fi_raw = self.model.get_feature_importance()
+            total = fi_raw.sum()
+            if total > 0:
+                fi_pct = {col: float(v / total * 100) for col, v in zip(self.feature_columns, fi_raw)}
+                metrics["feature_importances"] = dict(sorted(fi_pct.items(), key=lambda x: -x[1]))
+            else:
+                metrics["feature_importances"] = {}
+        except Exception as e:
+            print(f"⚠️  Could not compute feature importances: {e}")
+            metrics["feature_importances"] = {}
+
         # Store metadata
         self.metadata = {
             "version": self.version,
