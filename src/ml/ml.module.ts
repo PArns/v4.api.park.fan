@@ -18,7 +18,6 @@ import {
   ParkOccupancy,
   PredictionAccuracy,
 } from "./entities";
-import { MLAccuracyComparison } from "./entities/ml-accuracy-comparison.entity";
 import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.entity";
 import { MLFeatureStats } from "./entities/ml-feature-stats.entity";
 import { MLFeatureDrift } from "./entities/ml-feature-drift.entity";
@@ -50,7 +49,6 @@ import { BullModule } from "@nestjs/bull";
       ParkOccupancy,
       PredictionAccuracy,
       AttractionAccuracyStats,
-      MLAccuracyComparison,
       MLFeatureStats,
       MLFeatureDrift,
       MLAlert,

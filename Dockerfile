@@ -4,7 +4,7 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Install pnpm via npm (corepack fetch often fails in CI/Coolify; version must match package.json packageManager)
-RUN npm install -g pnpm@10.28.2
+RUN npm install -g pnpm@10.33.0
 
 # Retry fetches on timeout (CI/Coolify, slow networks)
 ENV PNPM_CONFIG_FETCH_RETRIES=5
@@ -221,7 +221,7 @@ FROM node:22-alpine AS production
 WORKDIR /app
 
 # Install curl for health checks and pnpm via npm (version must match package.json packageManager)
-RUN apk add --no-cache curl && npm install -g pnpm@10.28.2
+RUN apk add --no-cache curl && npm install -g pnpm@10.33.0
 
 # Retry fetches on timeout (CI/Coolify, slow networks)
 ENV PNPM_CONFIG_FETCH_RETRIES=5
