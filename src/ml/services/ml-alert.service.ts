@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, LessThan } from "typeorm";
+import { Repository, LessThan, In } from "typeorm";
 import { MLAlert } from "../entities/ml-alert.entity";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
 import { MLFeatureDriftService } from "./ml-feature-drift.service";
@@ -38,11 +38,13 @@ export class MLAlertService {
         alertType: "accuracy_degradation",
         severity: this.determineSeverity(accuracyCheck.metrics?.mae || 0),
         title: "Model Accuracy Degradation",
-        message: `MAE: ${accuracyCheck.metrics?.mae?.toFixed(1)} min (threshold: 15 min). ${accuracyCheck.reason}`,
+        message: `MAE: ${accuracyCheck.metrics?.mae?.toFixed(1)} min (threshold: 8 min). ${accuracyCheck.reason}`,
         metrics: accuracyCheck.metrics || null,
         context: { reason: accuracyCheck.reason },
       });
       if (alert) alerts.push(alert);
+    } else {
+      await this.resolveAlertIfActive("accuracy_degradation");
     }
 
     // 2. Check feature drift
@@ -66,6 +68,8 @@ export class MLAlertService {
         },
       });
       if (alert) alerts.push(alert);
+    } else {
+      await this.resolveAlertIfActive("feature_drift");
     }
 
     // 3. Check coverage
@@ -83,6 +87,8 @@ export class MLAlertService {
         },
       });
       if (alert) alerts.push(alert);
+    } else {
+      await this.resolveAlertIfActive("low_coverage");
     }
 
     this.logger.log(`Created ${alerts.length} alerts`);
@@ -203,14 +209,35 @@ export class MLAlertService {
   }
 
   /**
-   * Determine severity based on metrics
+   * Auto-resolve all active/acknowledged alerts of a given type when condition clears.
+   */
+  private async resolveAlertIfActive(
+    alertType: MLAlert["alertType"],
+  ): Promise<void> {
+    const staleAlerts = await this.alertRepository.find({
+      where: {
+        alertType,
+        status: In(["active", "acknowledged"]),
+      },
+    });
+    for (const alert of staleAlerts) {
+      alert.status = "resolved";
+      alert.resolvedAt = new Date();
+      alert.resolutionNote = "Auto-resolved: condition cleared";
+      await this.alertRepository.save(alert);
+      this.logger.log(`Auto-resolved ${alertType} alert (id: ${alert.id})`);
+    }
+  }
+
+  /**
+   * Determine severity based on MAE relative to training baseline (~4.6 min).
    */
   private determineSeverity(
     mae: number,
   ): "low" | "medium" | "high" | "critical" {
-    if (mae > 25) return "critical";
-    if (mae > 20) return "high";
-    if (mae > 15) return "medium";
+    if (mae > 15) return "critical";
+    if (mae > 10) return "high";
+    if (mae > 7) return "medium";
     return "low";
   }
 

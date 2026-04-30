@@ -159,9 +159,56 @@ class WaitTimeModel:
                 "min_data_in_leaf": getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
                 "border_count": getattr(settings, "CATBOOST_BORDER_COUNT", 254),
             },
+            "feature_stats": self._compute_feature_stats(X_train),
         }
 
         return metrics
+
+    def _compute_feature_stats(self, X_train) -> list:
+        """Compute per-feature distribution stats from training data for drift detection."""
+        categorical = set(self.categorical_features or [])
+        stats = []
+        n = len(X_train)
+
+        for col in self.feature_columns:
+            if col not in X_train.columns:
+                continue
+            values = X_train[col]
+
+            if col in categorical:
+                vc = values.value_counts().head(20)
+                stats.append({
+                    "featureName": col,
+                    "mean": 0.0,
+                    "std": 0.0,
+                    "min": 0.0,
+                    "max": 0.0,
+                    "percentile10": 0.0,
+                    "percentile50": 0.0,
+                    "percentile90": 0.0,
+                    "sampleCount": n,
+                    "featureType": "categorical",
+                    "topValues": {str(k): int(v) for k, v in vc.items()},
+                })
+            else:
+                v = values.dropna().astype(float)
+                if len(v) == 0:
+                    continue
+                stats.append({
+                    "featureName": col,
+                    "mean": float(v.mean()),
+                    "std": float(v.std()),
+                    "min": float(v.min()),
+                    "max": float(v.max()),
+                    "percentile10": float(v.quantile(0.10)),
+                    "percentile50": float(v.quantile(0.50)),
+                    "percentile90": float(v.quantile(0.90)),
+                    "sampleCount": len(v),
+                    "featureType": "numeric",
+                    "topValues": None,
+                })
+
+        return stats
 
     def evaluate(
         self, X: pd.DataFrame, y: pd.Series

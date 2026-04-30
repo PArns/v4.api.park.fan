@@ -161,6 +161,7 @@ class ModelInfoResponse(BaseModel):
     val_samples: Optional[int] = None
     file_size_mb: Optional[float] = None
     hyperparameters: Optional[dict] = None
+    featureStats: Optional[List[dict]] = None
 
 
 # Endpoints
@@ -206,6 +207,7 @@ async def get_model_info():
         val_samples=model.metadata.get("val_samples"),
         file_size_mb=file_size_mb,
         hyperparameters=model.metadata.get("hyperparameters"),
+        featureStats=model.metadata.get("feature_stats"),
     )
 
 
@@ -446,7 +448,10 @@ async def predict(request: PredictionRequest):
         # Hourly: Only hours within operating times
         # Daily: Only days when park is open (no off-season)
         predictions = filter_predictions_by_schedule(
-            predictions, request.parkIds, request.predictionType
+            predictions,
+            request.parkIds,
+            request.predictionType,
+            request.currentWaitTimes,
         )
 
         return BulkPredictionResponse(

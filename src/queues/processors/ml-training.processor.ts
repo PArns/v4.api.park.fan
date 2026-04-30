@@ -9,6 +9,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
 import axios from "axios";
 import { logJobFailure } from "../../common/utils/file-logger.util";
 
@@ -31,6 +32,7 @@ export class MLTrainingProcessor {
     private mlModelRepository: Repository<MLModel>,
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
+    private featureDriftService: MLFeatureDriftService,
   ) {}
 
   @Process("train-model")
@@ -163,6 +165,43 @@ export class MLTrainingProcessor {
         trainSamples: (modelInfo.train_samples as number) || 0,
         valSamples: (modelInfo.val_samples as number) || 0,
       };
+
+      // Store feature distribution stats for drift detection
+      const rawFeatureStats = modelInfo.featureStats as
+        | Array<Record<string, unknown>>
+        | undefined;
+      if (rawFeatureStats && rawFeatureStats.length > 0) {
+        try {
+          await this.featureDriftService.storeFeatureStats(
+            version,
+            rawFeatureStats.map((s) => ({
+              featureName: s.featureName as string,
+              mean: (s.mean as number) ?? 0,
+              std: (s.std as number) ?? 0,
+              min: (s.min as number) ?? 0,
+              max: (s.max as number) ?? 0,
+              percentile10: (s.percentile10 as number) ?? 0,
+              percentile50: (s.percentile50 as number) ?? 0,
+              percentile90: (s.percentile90 as number) ?? 0,
+              sampleCount: (s.sampleCount as number) ?? 0,
+              featureType: (s.featureType as "numeric" | "categorical") ??
+                "numeric",
+              topValues: (s.topValues as Record<string, number>) ?? undefined,
+            })),
+          );
+          this.logger.log(
+            `   Feature stats stored: ${rawFeatureStats.length} features`,
+          );
+        } catch (driftError) {
+          this.logger.warn(
+            `   Failed to store feature stats: ${driftError instanceof Error ? driftError.message : String(driftError)}`,
+          );
+        }
+      } else {
+        this.logger.warn(
+          `   No feature stats in model info — drift detection will be skipped until next training`,
+        );
+      }
 
       // Deactivate old models
       await this.mlModelRepository.update(

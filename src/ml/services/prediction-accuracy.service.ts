@@ -1816,7 +1816,7 @@ export class PredictionAccuracyService {
       const stats = await this.getSystemAccuracyStats(days);
 
       // Thresholds
-      const MAE_THRESHOLD = 15; // minutes
+      const MAE_THRESHOLD = 8; // minutes — alert when ~2× training MAE (training baseline ~4.6 min)
       const COVERAGE_THRESHOLD = 80; // percent
       const MAPE_THRESHOLD = 35; // percent
 

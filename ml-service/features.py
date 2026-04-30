@@ -659,6 +659,24 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     del _df_indexed_dow
 
+    # rolling_avg_28d / rolling_avg_90d: longer-window baselines for seasonal smoothing.
+    # Used as dropout fallback for avg_wait_last_1h (90d) and rolling_avg_7d (28d) during training,
+    # and as standalone features at inference for multi-week predictions.
+    df["rolling_avg_28d"] = (
+        df_indexed.groupby("attractionId")["waitTime"]
+        .rolling("28d", closed="left", min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+        .values
+    )
+    df["rolling_avg_90d"] = (
+        df_indexed.groupby("attractionId")["waitTime"]
+        .rolling("90d", closed="left", min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+        .values
+    )
+
     df = df.loc[original_index]
 
     # 2. Lag Features (Exact time lookups: T-24h, T-1w, etc.)
@@ -724,6 +742,8 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
         "rolling_avg_7d",
         "rolling_avg_weekday",
         "rolling_avg_weekend",
+        "rolling_avg_28d",
+        "rolling_avg_90d",
         "wait_lag_2w",
         "wait_lag_3w",
         "wait_lag_4w",
@@ -2156,6 +2176,8 @@ def get_feature_columns() -> List[str]:
         "rolling_avg_7d",
         "rolling_avg_weekday",  # 7d rolling mean – weekday only
         "rolling_avg_weekend",  # 7d rolling mean – weekend only
+        "rolling_avg_28d",   # 28d rolling mean – seasonal smoothing (multi-week dropout fallback)
+        "rolling_avg_90d",   # 90d rolling mean – long-term seasonal baseline
         "avg_wait_same_dow_4w",  # Average of last 4 same-day-of-week observations
         "wait_time_velocity",  # Rate of change (momentum)
         "trend_7d",

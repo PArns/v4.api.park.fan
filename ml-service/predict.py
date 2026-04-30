@@ -283,6 +283,18 @@ def fetch_recent_wait_times(
                 ORDER BY date, hour
                 ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
             ) as rolling_avg_weekend,
+            -- 28-day rolling average (seasonal smoothing baseline)
+            AVG(avg_wait) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 671 PRECEDING AND CURRENT ROW  -- 28 days * 24 hours = 672 rows
+            ) as rolling_avg_28d,
+            -- 90-day rolling average (long-term seasonal baseline)
+            AVG(avg_wait) OVER (
+                PARTITION BY "attractionId"
+                ORDER BY date, hour
+                ROWS BETWEEN 2159 PRECEDING AND CURRENT ROW  -- 90 days * 24 hours = 2160 rows
+            ) as rolling_avg_90d,
             -- Weekend/weekday standard deviation (for split volatility)
             STDDEV(CASE WHEN day_of_week BETWEEN 1 AND 5 THEN avg_wait END) OVER (
                 PARTITION BY "attractionId"
@@ -1686,6 +1698,10 @@ def create_prediction_features(
         df["rolling_avg_weekday"] = df.get("rolling_avg_7d", 0.0)
     if "rolling_avg_weekend" not in df.columns:
         df["rolling_avg_weekend"] = df.get("rolling_avg_7d", 0.0)
+    if "rolling_avg_28d" not in df.columns:
+        df["rolling_avg_28d"] = df.get("rolling_avg_7d", 0.0)
+    if "rolling_avg_90d" not in df.columns:
+        df["rolling_avg_90d"] = df.get("rolling_avg_7d", 0.0)
     if "avg_wait_same_dow_4w" not in df.columns:
         df["avg_wait_same_dow_4w"] = df.get("avg_wait_same_hour_last_week", 0.0)
 
