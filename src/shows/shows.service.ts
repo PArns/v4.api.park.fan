@@ -511,16 +511,13 @@ export class ShowsService {
   async findBatchCurrentStatusByShows(
     showIds: string[],
   ): Promise<Map<string, ShowLiveData | null>> {
-    const resultMap = new Map<string, ShowLiveData | null>();
-
     if (showIds.length === 0) {
-      return resultMap;
+      return new Map<string, ShowLiveData | null>();
     }
 
-    // Initialize map with null values for all shows
-    for (const showId of showIds) {
-      resultMap.set(showId, null);
-    }
+    const resultMap = new Map<string, ShowLiveData | null>(
+      showIds.map((id) => [id, null]),
+    );
 
     // Use DISTINCT ON to get latest record per showId.
     // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).

@@ -205,38 +205,64 @@ export class ParkMergeService {
       `SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`,
       [loserId],
     );
-    let count = 0;
+
+    if (loserEntities.length === 0) return 0;
+
+    const winnerEntities = await manager.query(
+      `SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`,
+      [winnerId],
+    );
+
+    const winnerBySlug = new Map<string, string>(
+      winnerEntities
+        .filter((e: any) => e.slug)
+        .map((e: any) => [e.slug, e.id]),
+    );
+    const winnerByName = new Map<string, string>(
+      winnerEntities
+        .filter((e: any) => e.name)
+        .map((e: any) => [e.name, e.id]),
+    );
+
+    const collisions: { loserEntityId: string; winnerEntityId: string }[] = [];
+    const toReparent: string[] = [];
 
     for (const entity of loserEntities) {
-      // Find potential match in winner park
-      const match = await manager.query(
-        `SELECT id FROM ${tableName} WHERE "parkId" = $1 AND (slug = $2 OR name = $3)`,
-        [winnerId, entity.slug, entity.name],
-      );
+      const matchId =
+        (entity.slug && winnerBySlug.get(entity.slug)) ||
+        (entity.name && winnerByName.get(entity.name));
 
-      if (match.length > 0) {
-        const winnerEntityId = match[0].id;
-        // Collision: Move all dependent data to winner's entity
-        await this.consolidateEntityData(
-          manager,
-          tableName,
-          winnerEntityId,
-          entity.id,
-        );
-        // Delete redundant entity
-        await manager.query(`DELETE FROM ${tableName} WHERE id = $1`, [
-          entity.id,
-        ]);
+      if (matchId) {
+        collisions.push({ loserEntityId: entity.id, winnerEntityId: matchId });
       } else {
-        // No collision: Just re-parent
-        await manager.query(
-          `UPDATE ${tableName} SET "parkId" = $1 WHERE id = $2`,
-          [winnerId, entity.id],
-        );
+        toReparent.push(entity.id);
       }
-      count++;
     }
-    return count;
+
+    for (const { loserEntityId, winnerEntityId } of collisions) {
+      await this.consolidateEntityData(
+        manager,
+        tableName,
+        winnerEntityId,
+        loserEntityId,
+      );
+    }
+
+    if (collisions.length > 0) {
+      await manager.query(
+        `DELETE FROM ${tableName} WHERE id = ANY($1::uuid[])`,
+        [collisions.map((c) => c.loserEntityId)],
+      );
+    }
+
+    if (toReparent.length > 0) {
+      await manager.query(
+        `UPDATE ${tableName} SET "parkId" = $1 WHERE id = ANY($2::uuid[])`,
+        [winnerId, toReparent],
+      );
+    }
+
+    return loserEntities.length;
   }
 
   /**
