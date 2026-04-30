@@ -308,7 +308,11 @@ export class MLService {
             "EX",
             60 * 60, // 1h: responsive to seasonal open/close, still eliminates per-prediction DB scan
           )
-          .catch(() => {});
+          .catch((e) =>
+            this.logger.debug(
+              `Redis active-attractions cache set failed: ${e?.message ?? e}`,
+            ),
+          );
       }
       const activeAttractionIds = attractionIds.filter((id) =>
         activeIdSet.has(id),

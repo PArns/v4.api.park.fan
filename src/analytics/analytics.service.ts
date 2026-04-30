@@ -1986,7 +1986,11 @@ export class AnalyticsService {
 
     await this.redis
       .set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60)
-      .catch(() => {});
+      .catch((e) =>
+        this.logger.debug(
+          `Redis analytics cache set failed for key ${cacheKey}: ${e?.message ?? e}`,
+        ),
+      );
 
     return result;
   }

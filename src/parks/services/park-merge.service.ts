@@ -455,6 +455,10 @@ export class ParkMergeService {
         const keys = await this.redis.keys(pattern);
         if (keys.length > 0) await this.redis.del(...keys);
       }
-    } catch (_e) {}
+    } catch (e) {
+      this.logger.warn(
+        `Failed to invalidate caches for park ${parkId}: ${(e as Error)?.message ?? e}`,
+      );
+    }
   }
 }

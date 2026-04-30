@@ -131,7 +131,11 @@ export class QueueDataService {
               "EX",
               this.LATEST_CACHE_TTL,
             )
-            .catch(() => {});
+            .catch((e) =>
+              this.logger.debug(
+                `Redis cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
+              ),
+            );
           return 1;
         }
       }
@@ -226,7 +230,11 @@ export class QueueDataService {
               "EX",
               this.LATEST_CACHE_TTL,
             )
-            .catch(() => {}); // non-critical
+            .catch((e) =>
+              this.logger.debug(
+                `Redis cache set failed for attraction ${attractionId} (${queueType}): ${e?.message ?? e}`,
+              ),
+            );
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -395,14 +403,22 @@ export class QueueDataService {
       if (latest) {
         await this.redis
           .set(cacheKey, JSON.stringify(latest), "EX", this.LATEST_CACHE_TTL)
-          .catch(() => {}); // non-critical
+          .catch((e) =>
+            this.logger.debug(
+              `Redis latest-cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
+            ),
+          );
         // Cache the timezone separately so save-path cache entries (which lack
         // the relation) can still perform timezone-aware date comparisons.
         const tz = (latest as any).attraction?.park?.timezone;
         if (tz) {
           await this.redis
             .set(this.attractionTimezoneCacheKey(attractionId), tz, "EX", 3600)
-            .catch(() => {});
+            .catch((e) =>
+              this.logger.debug(
+                `Redis timezone-cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
+              ),
+            );
         }
       }
     }

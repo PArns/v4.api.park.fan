@@ -131,7 +131,11 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 // fresh bestVisitTimes immediately instead of waiting for TTL expiry.
                 await this.redis
                   .del(`park:integrated:${park.id}`)
-                  .catch(() => {});
+                  .catch((e) =>
+                    this.logger.warn(
+                      `Failed to invalidate integrated cache for park ${park.id}: ${e?.message ?? e}`,
+                    ),
+                  );
               } else {
                 this.logger.debug(
                   `No hourly predictions returned for park: ${park.name}`,
