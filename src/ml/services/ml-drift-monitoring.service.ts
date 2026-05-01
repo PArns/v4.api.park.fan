@@ -79,6 +79,11 @@ export class MLDriftMonitoringService {
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.comparisonStatus = 'COMPLETED'")
       .andWhere("pa.absoluteError IS NOT NULL")
+      // Match training population: exclude unplanned closures (actualWaitTime=0,
+      // absoluteError=predictedWaitTime) and sub-5-min records not in training data.
+      // Without these, liveMae includes closure noise and inflates drift vs trainingMae.
+      .andWhere("pa.wasUnplannedClosure = :notClosed", { notClosed: false })
+      .andWhere("pa.actualWaitTime >= 5")
       .groupBy("DATE(pa.targetTime)")
       .orderBy("DATE(pa.targetTime)", "ASC")
       .getRawMany();

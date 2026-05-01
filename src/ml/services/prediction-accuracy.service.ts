@@ -1190,7 +1190,10 @@ export class PredictionAccuracyService {
       )
       .select("COUNT(*)", "matchedCount")
       .addSelect("AVG(pa.absolute_error)", "mae")
-      .addSelect("AVG(pa.percentage_error)", "mape")
+      .addSelect(
+        "AVG(CASE WHEN pa.actual_wait_time >= 10 THEN pa.percentage_error ELSE NULL END)",
+        "mape",
+      )
       .addSelect("SUM(POWER(pa.absolute_error, 2))", "sumSqError")
       .addSelect("SUM(pa.actual_wait_time)", "sumActual")
       .addSelect("SUM(POWER(pa.actual_wait_time, 2))", "sumSqActual")

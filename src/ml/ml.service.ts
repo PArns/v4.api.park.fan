@@ -280,10 +280,11 @@ export class MLService {
 
       const attractionIds = attractions.map((a) => a.id);
 
-      // 2a. Filter: Only predict for attractions with data in last 90 days
-      // This prevents generating predictions for attractions that are closed for season or invalid.
-      // Cached 6h: active attraction set changes rarely (only on seasonal open/close).
-      const activeCacheKey = `ml:active-attractions:${parkId}:90d`;
+      // 2a. Filter: Only predict for attractions with OPERATING STANDBY data in last 90 days.
+      // Requiring status=OPERATING excludes amenities (restrooms, lockers) and seasonally-closed
+      // attractions that only have CLOSED/null status records — they would generate predictions
+      // that always become wasUnplannedClosure=true, killing coverage.
+      const activeCacheKey = `ml:active-attractions:${parkId}:90d:op`;
       let activeIdSet: Set<string>;
       const cachedActiveIds = await this.redis.get(activeCacheKey);
       if (cachedActiveIds) {
@@ -299,6 +300,7 @@ export class MLService {
           .andWhere("q.queueType = :queueType", {
             queueType: QueueType.STANDBY,
           })
+          .andWhere("q.status = :status", { status: "OPERATING" })
           .getRawMany();
         activeIdSet = new Set(activeAttractions.map((a) => a.id as string));
         await this.redis
