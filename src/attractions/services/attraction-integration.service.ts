@@ -21,6 +21,10 @@ import {
   ScheduleType,
 } from "../../parks/entities/schedule-entry.entity";
 import {
+  QueueType,
+  LiveStatus,
+} from "../../external-apis/themeparks/themeparks.types";
+import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
@@ -241,9 +245,26 @@ export class AttractionIntegrationService {
       parkStatusMap.get(attraction.parkId) || "CLOSED";
 
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
-    // reported CLOSED by the source. Override to OPERATING when park is running.
+    // reported CLOSED by the source. Override to OPERATING with 0 min wait.
     if (attraction.openWithPark && parkStatus === "OPERATING") {
       dto.status = "OPERATING";
+      dto.queues = [
+        {
+          queueType: QueueType.STANDBY,
+          status: LiveStatus.OPERATING,
+          waitTime: 0,
+          state: null,
+          returnStart: null,
+          returnEnd: null,
+          price: null,
+          allocationStatus: null,
+          currentGroupStart: null,
+          currentGroupEnd: null,
+          estimatedWait: null,
+          lastUpdated: new Date().toISOString(),
+          trend: undefined,
+        },
+      ];
     }
 
     dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
