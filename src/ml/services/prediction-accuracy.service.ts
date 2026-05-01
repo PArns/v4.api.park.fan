@@ -1835,16 +1835,9 @@ export class PredictionAccuracyService {
         };
       }
 
-      if (stats.overall.coveragePercent < COVERAGE_THRESHOLD) {
-        this.logger.warn(
-          `⚠️  Retraining recommended: Coverage ${stats.overall.coveragePercent}% < ${COVERAGE_THRESHOLD}%`,
-        );
-        return {
-          needed: true,
-          reason: `low_coverage`,
-          metrics: stats.overall,
-        };
-      }
+      // Coverage intentionally excluded: low coverage means attractions without
+      // OPERATING data are being predicted (pipeline issue), not model degradation.
+      // Retraining on poor-coverage data makes the model worse, not better.
 
       if (stats.overall.mape > MAPE_THRESHOLD) {
         this.logger.warn(

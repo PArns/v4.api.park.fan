@@ -112,6 +112,8 @@ class WaitTimeModel:
             l2_leaf_reg=settings.CATBOOST_L2_LEAF_REG,
             rsm=getattr(settings, "CATBOOST_RSM", 1.0),
             min_data_in_leaf=getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
+            # RMSEWithUncertainty is required for virtual_ensembles_predict (uncertainty intervals).
+            # Huber would be more robust to wait-time outliers but lacks VirtEnsembles support in CatBoost.
             loss_function="RMSEWithUncertainty",
             eval_metric="RMSEWithUncertainty",
             random_seed=settings.CATBOOST_RANDOM_SEED,
@@ -556,8 +558,10 @@ class WaitTimeModel:
 
         # Get virtual ensemble predictions.
         # Ensure virtual_ensembles_count does not exceed actual tree count
-        tree_count = getattr(self.model, "tree_count_", 10)
-        ensembles_count = min(10, max(1, tree_count))
+        tree_count = getattr(self.model, "tree_count_", 20)
+        # 20 ensembles: diminishing returns beyond ~20; below 10 intervals are too noisy.
+        # RMSEWithUncertainty + posterior_sampling requires at least 10 for stable std.
+        ensembles_count = min(20, max(1, tree_count))
 
         virtual_preds = self.model.virtual_ensembles_predict(
             X_ordered,
