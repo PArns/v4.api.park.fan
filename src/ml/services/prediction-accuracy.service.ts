@@ -1820,7 +1820,6 @@ export class PredictionAccuracyService {
 
       // Thresholds
       const MAE_THRESHOLD = 8; // minutes — alert when ~2× training MAE (training baseline ~4.6 min)
-      const COVERAGE_THRESHOLD = 80; // percent
       const MAPE_THRESHOLD = 35; // percent
 
       // Check conditions

@@ -184,8 +184,8 @@ export class MLTrainingProcessor {
               percentile50: (s.percentile50 as number) ?? 0,
               percentile90: (s.percentile90 as number) ?? 0,
               sampleCount: (s.sampleCount as number) ?? 0,
-              featureType: (s.featureType as "numeric" | "categorical") ??
-                "numeric",
+              featureType:
+                (s.featureType as "numeric" | "categorical") ?? "numeric",
               topValues: (s.topValues as Record<string, number>) ?? undefined,
             })),
           );
