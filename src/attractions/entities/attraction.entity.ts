@@ -85,6 +85,13 @@ export class Attraction {
   @Column({ name: "season_months", type: "jsonb", nullable: true })
   seasonMonths: number[] | null;
 
+  // When true: attraction is shown as OPERATING whenever the park is OPERATING,
+  // regardless of queue data status. Use for free-flow attractions (playgrounds,
+  // water play areas, climbing structures) that have no traditional queue but
+  // are physically accessible when the park is open.
+  @Column({ name: "open_with_park", default: false })
+  openWithPark: boolean;
+
   @OneToMany(() => QueueData, (queueData) => queueData.attraction)
   queueData: QueueData[];
 

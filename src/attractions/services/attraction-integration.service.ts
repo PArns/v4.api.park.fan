@@ -239,6 +239,13 @@ export class AttractionIntegrationService {
     // --- Park status & effective status ---
     const parkStatus: "OPERATING" | "CLOSED" =
       parkStatusMap.get(attraction.parkId) || "CLOSED";
+
+    // Free-flow attractions (playgrounds, water play areas) have no queue and are
+    // reported CLOSED by the source. Override to OPERATING when park is running.
+    if (attraction.openWithPark && parkStatus === "OPERATING") {
+      dto.status = "OPERATING";
+    }
+
     dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
 
     // --- Forecasts ---
