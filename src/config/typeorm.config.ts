@@ -26,7 +26,7 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       extra: {
         max: 20, // Connection pool size
         // During build, use very short timeout to fail fast
-        connectionTimeoutMillis: isBuildTime ? 100 : 2000,
+        connectionTimeoutMillis: isBuildTime ? 100 : 15000,
       },
       // During build, don't retry connections
       retryAttempts: isBuildTime ? 0 : 3,

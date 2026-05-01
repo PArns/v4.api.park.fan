@@ -1138,6 +1138,16 @@ export class ParksService {
     toDate: string,
     timezone: string,
   ): Promise<Map<string, { openingTime: string; closingTime: string }>> {
+    const cacheKey = `park:derivedHours:${parkId}:${fromDate}:${toDate}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached !== null) {
+      const parsed: Record<
+        string,
+        { openingTime: string; closingTime: string }
+      > = JSON.parse(cached);
+      return new Map(Object.entries(parsed));
+    }
+
     const results = await this.scheduleRepository.manager.query(
       `
       WITH park_rides AS (
@@ -1192,6 +1202,16 @@ export class ParksService {
         closingTime: r.derived_close.toISOString(),
       });
     });
+
+    const todayInPark = getCurrentDateInTimezone(timezone);
+    const ttl = toDate < todayInPark ? 86400 : 300;
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(Object.fromEntries(map)),
+      "EX",
+      ttl,
+    );
+
     return map;
   }
   /**
