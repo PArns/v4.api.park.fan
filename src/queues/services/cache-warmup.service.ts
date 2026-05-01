@@ -80,7 +80,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         topParkIds,
         5,
         "StartupWarmup",
-        async (id) => this.warmupParkCache(id, true),
+        async (id) => this.warmupParkCache(id, true, true),
       );
       this.logger.log(
         `✅ Initial startup warmup complete. ${warmed} parks ready.`,
@@ -256,6 +256,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   async warmupParkCache(
     parkId: string,
     force: boolean = false,
+    includeCalendar: boolean = false,
   ): Promise<boolean> {
     try {
       const cacheKey = `park:integrated:${parkId}`;
@@ -292,7 +293,9 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // Warm up cache by calling integration service (bypass cache read if forced)
       await this.parkIntegrationService.buildIntegratedResponse(park, force);
 
-      // Calendar is warmed once per day via warmup-calendar-daily job, not every 5 min
+      if (includeCalendar) {
+        await this.warmupCalendarForPark(park);
+      }
       return true;
     } catch (error: unknown) {
       const errorMessage =
