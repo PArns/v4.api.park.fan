@@ -732,8 +732,19 @@ export class ParkIntegrationService {
                     : p,
                 )
               : predsForBestVisit;
+          // Restrict to today's predictions in park-local time. Hourly predictions
+          // span 24 h, so without this filter tomorrow's early-morning low-wait slots
+          // appear as "optimal" recommendations when no closing time is available
+          // (parks without full schedule integration, common for US parks).
+          const todayOnlyPreds = patchedPreds.filter(
+            (p) =>
+              formatInParkTimezone(
+                new Date(p.predictedTime),
+                park.timezone,
+              ) === todayInParkTz,
+          );
           attraction.bestVisitTimes = computeBestVisitTimes(
-            patchedPreds,
+            todayOnlyPreds,
             closingTimeIso,
           );
         }
