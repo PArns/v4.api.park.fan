@@ -804,8 +804,11 @@ export class SearchService implements OnModuleInit {
   ): Promise<SearchResultItemDto[]> {
     const parkIds = parks.map((p) => p.id);
 
-    // Batch fetch status from existing cache (no extra DB queries!)
-    const statusMap = await this.parksService.getBatchParkStatus(parkIds);
+    // Park status comes from a LATERAL subquery over every attraction of
+    // every park (parks.service.ts:getBatchParkStatus). It is identical
+    // for every search hitting the same parks within a short window, so
+    // we cache the result in Redis for 60s.
+    const statusMap = await this.getCachedParkStatusMap(parkIds);
 
     // Batch fetch occupancy/load
     const loadMap = await this.getBatchLoadLevels(parkIds);
@@ -871,23 +874,42 @@ export class SearchService implements OnModuleInit {
       }
     });
 
-    // 3. Batch fetch wait times, status, P50s (prefer), and P90s (fallback) for operating attractions
+    // 3. Batch fetch queue data once (single roundtrip yields both wait time
+    //    and status — previously we fetched the same data twice in parallel).
+    //    P90 is intentionally NOT fetched here: it runs a PERCENTILE_CONT over
+    //    548 days of queue_data and dominates the request on cache miss. P50
+    //    is pre-baked in a baseline table and covers the same baseline role;
+    //    attractions without a P50 fall through to the "moderate" default.
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
-    let p90Map = new Map<string, number>();
 
     if (operatingAttractionIds.length > 0) {
-      const [waitTimes, statuses, p50s, p90s] = await Promise.all([
-        this.getBatchWaitTimes(operatingAttractionIds),
-        this.getBatchAttractionStatus(operatingAttractionIds),
+      const [queueDataMap, p50s] = await Promise.all([
+        this.queueDataService.findCurrentStatusByAttractionIds(
+          operatingAttractionIds,
+        ),
         this.analyticsService.getBatchAttractionP50s(operatingAttractionIds),
-        this.analyticsService.getBatchAttractionP90s(operatingAttractionIds),
       ]);
-      waitTimesMap = waitTimes;
-      statusMap = statuses;
+
+      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
+        if (queueDataList.length === 0) continue;
+        if (queueDataList[0].status) {
+          statusMap.set(attractionId, { status: queueDataList[0].status });
+        }
+        const standbyQueue = queueDataList.find(
+          (q) => q.queueType === "STANDBY",
+        );
+        if (
+          standbyQueue &&
+          standbyQueue.waitTime !== null &&
+          standbyQueue.waitTime !== undefined
+        ) {
+          waitTimesMap.set(attractionId, standbyQueue.waitTime);
+        }
+      }
+
       p50Map = p50s;
-      p90Map = p90s;
     }
 
     return attractions.map((attraction) => {
@@ -904,10 +926,9 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
-      // P50 when available, else P90 (same as attraction detail)
-      const baseline = isParkOpen
-        ? (p50Map.get(attraction.id) ?? p90Map.get(attraction.id))
-        : undefined;
+      // P50 only (pre-baked baseline). P90 fallback is omitted on the search
+      // path for latency reasons — missing P50 falls through to "moderate".
+      const baseline = isParkOpen ? p50Map.get(attraction.id) : undefined;
 
       const load = isParkOpen
         ? this.getCrowdLevelForSearch(waitTime ?? undefined, baseline)
@@ -1082,73 +1103,6 @@ export class SearchService implements OnModuleInit {
           }
         : null,
     }));
-  }
-
-  /**
-   * Batch fetch wait times for attractions
-   */
-  private async getBatchWaitTimes(
-    attractionIds: string[],
-  ): Promise<Map<string, number>> {
-    const waitTimesMap = new Map<string, number>();
-
-    if (attractionIds.length === 0) {
-      return waitTimesMap;
-    }
-
-    try {
-      // Get current status for all attractions in one query
-      const queueDataMap =
-        await this.queueDataService.findCurrentStatusByAttractionIds(
-          attractionIds,
-        );
-
-      // Process each attraction
-      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
-        const standbyQueue = queueDataList.find(
-          (q) => q.queueType === "STANDBY",
-        );
-        if (
-          standbyQueue &&
-          standbyQueue.waitTime !== null &&
-          standbyQueue.waitTime !== undefined
-        ) {
-          waitTimesMap.set(attractionId, standbyQueue.waitTime);
-        }
-      }
-    } catch {
-      // Skip attractions without wait time data
-    }
-
-    return waitTimesMap;
-  }
-
-  /**
-   * Batch fetch attraction status from queue data
-   * Uses a single batch query instead of N individual queries.
-   */
-  private async getBatchAttractionStatus(
-    attractionIds: string[],
-  ): Promise<Map<string, { status: string }>> {
-    const statusMap = new Map<string, { status: string }>();
-
-    if (attractionIds.length === 0) return statusMap;
-
-    try {
-      const queueDataMap =
-        await this.queueDataService.findCurrentStatusByAttractionIds(
-          attractionIds,
-        );
-      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
-        if (queueDataList.length > 0 && queueDataList[0].status) {
-          statusMap.set(attractionId, { status: queueDataList[0].status });
-        }
-      }
-    } catch {
-      // Skip attractions without status data
-    }
-
-    return statusMap;
   }
 
   /**
@@ -1340,7 +1294,47 @@ export class SearchService implements OnModuleInit {
       return new Map();
     }
 
-    return this.parksService.getBatchParkStatus(Array.from(parkIds));
+    return this.getCachedParkStatusMap(Array.from(parkIds));
+  }
+
+  /**
+   * Cached wrapper around parksService.getBatchParkStatus(). The underlying
+   * query runs a LATERAL subquery over every attraction of every requested
+   * park; on the search hot path we hit it repeatedly with overlapping park
+   * sets. Per-park Redis cache (60s) collapses these to one DB call per
+   * minute per park.
+   */
+  private async getCachedParkStatusMap(
+    parkIds: string[],
+  ): Promise<Map<string, "OPERATING" | "CLOSED">> {
+    const result = new Map<string, "OPERATING" | "CLOSED">();
+    if (parkIds.length === 0) return result;
+
+    const cacheKeys = parkIds.map((id) => `search:parkstatus:${id}`);
+    const cached = await this.redis.mget(...cacheKeys);
+
+    const uncachedIds: string[] = [];
+    parkIds.forEach((id, i) => {
+      const v = cached[i];
+      if (v === "OPERATING" || v === "CLOSED") {
+        result.set(id, v);
+      } else {
+        uncachedIds.push(id);
+      }
+    });
+
+    if (uncachedIds.length === 0) return result;
+
+    const fresh = await this.parksService.getBatchParkStatus(uncachedIds);
+    const pipeline = this.redis.pipeline();
+    for (const id of uncachedIds) {
+      const status = fresh.get(id) || "CLOSED";
+      result.set(id, status);
+      pipeline.set(`search:parkstatus:${id}`, status, "EX", 60);
+    }
+    await pipeline.exec();
+
+    return result;
   }
 
   /**
