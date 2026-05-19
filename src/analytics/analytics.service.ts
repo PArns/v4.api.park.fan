@@ -319,13 +319,6 @@ export class AnalyticsService {
   async calculateParkOccupancy(parkId: string): Promise<OccupancyDto> {
     const now = new Date();
 
-    // Get park timezone for accurate date calculations
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["timezone"],
-    });
-    const timezone = park?.timezone || "UTC";
-
     // Headliner-only for current + trend (same rides as P50 baseline and peakWaitToday)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
@@ -358,24 +351,19 @@ export class AnalyticsService {
       };
     }
 
-    // Use headliner P50 baseline (golden rule: same as crowd level). Fallback to sliding-window P50.
-    // All-attractions P50 from get90thPercentileWithConfidence is dominated by 5-min rides → baseline ≈ 5 → 100% load even when park is quiet.
-    let p50Baseline = await this.getP50BaselineFromCache(parkId);
-    let confidence: "high" | "medium" | "low" = "high";
-
-    if (p50Baseline === 0) {
-      const percentiles = await this.get90thPercentileWithConfidence(
-        parkId,
-        "park",
-        timezone,
-      );
-      p50Baseline = percentiles.p50;
-      confidence = percentiles.confidence;
-    }
+    // Headliner P50 baseline lives in park_p50_baseline (populated by the
+    // daily 3 AM cron, served via getP50BaselineFromCache → Redis → DB).
+    // When the row is missing we used to fall back to a 548-day live
+    // PERCENTILE_CONT, which dominated request latency on cache miss and
+    // affected every endpoint calling this method (search, /parks list,
+    // /parks/{id}, /analytics/realtime). We now degrade gracefully to a
+    // low-confidence default instead — the next cron run fills in the row.
+    const p50Baseline = await this.getP50BaselineFromCache(parkId);
+    const confidence: "high" | "medium" | "low" = "high";
 
     if (p50Baseline === 0) {
       this.logger.warn(
-        `No P50 baseline for park ${parkId} (headliner or sliding window)`,
+        `No P50 baseline for park ${parkId} — returning low-confidence default until daily cron repopulates it`,
       );
       return {
         current: 50,
@@ -524,13 +512,6 @@ export class AnalyticsService {
    * Example: 75 = park is at 75% of typical P90 wait times
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
-    // Get park timezone for accurate hour/day-of-week calculation
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["timezone"],
-    });
-    const timezone = park?.timezone || "UTC";
-
     // Get current P50 wait time (headliner-only when available, same as calculateParkOccupancy)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
@@ -548,16 +529,9 @@ export class AnalyticsService {
       return 100;
     }
 
-    // Use headliner P50 baseline (same as calculateParkOccupancy). Fallback to sliding-window P50.
-    let p50Baseline = await this.getP50BaselineFromCache(parkId);
-    if (p50Baseline === 0) {
-      const percentiles = await this.get90thPercentileWithConfidence(
-        parkId,
-        "park",
-        timezone,
-      );
-      p50Baseline = percentiles.p50;
-    }
+    // Use headliner P50 baseline (same as calculateParkOccupancy).
+    // No live-aggregation fallback — see calculateParkOccupancy for context.
+    const p50Baseline = await this.getP50BaselineFromCache(parkId);
 
     if (p50Baseline === 0) {
       return 100;
