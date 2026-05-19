@@ -265,6 +265,16 @@ export class MLTrainingProcessor {
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();
     } catch (error) {
+      // 409 = ML service already training (e.g. previous run still in progress).
+      // Treat as a soft skip — no failure log, no BullMQ retry storm.
+      const status = (error as any)?.response?.status;
+      if (status === 409) {
+        this.logger.warn(
+          "⏭️ Training skipped — ML service already has a training run in progress",
+        );
+        return;
+      }
+
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       this.logger.error(`❌ Training failed: ${errorMessage}`);

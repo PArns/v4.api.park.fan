@@ -118,16 +118,10 @@ export class QueueDataService {
           const queueEntry = this.queueDataRepository.create(queueData);
           await this.queueDataRepository.save(queueEntry);
 
-          // Get the attraction with park for the cache
-          const savedWithRelations = await this.queueDataRepository.findOne({
-            where: { id: queueEntry.id, timestamp: queueEntry.timestamp },
-            relations: ["attraction", "attraction.park"],
-          });
-
           await this.redis
             .set(
               this.latestCacheKey(attractionId, QueueType.STANDBY),
-              JSON.stringify(savedWithRelations || queueEntry),
+              JSON.stringify(queueEntry),
               "EX",
               this.LATEST_CACHE_TTL,
             )
@@ -216,17 +210,14 @@ export class QueueDataService {
           await this.queueDataRepository.save(queueEntry);
           savedCount++;
 
-          // Get the attraction with park for the cache
-          const savedWithRelations = await this.queueDataRepository.findOne({
-            where: { id: queueEntry.id, timestamp: queueEntry.timestamp },
-            relations: ["attraction", "attraction.park"],
-          });
-
-          // Update cache so the next shouldSaveQueueData call hits Redis, not DB
+          // Update cache so the next shouldSaveQueueData call hits Redis, not DB.
+          // Scalar fields only — shouldSaveQueueData reads status/waitTime/timestamp;
+          // timezone falls back to the dedicated attractionTimezoneCacheKey written
+          // by the DB-miss path in shouldSaveQueueData.
           await this.redis
             .set(
               this.latestCacheKey(attractionId, queueType),
-              JSON.stringify(savedWithRelations || queueEntry),
+              JSON.stringify(queueEntry),
               "EX",
               this.LATEST_CACHE_TTL,
             )
