@@ -319,13 +319,6 @@ export class AnalyticsService {
   async calculateParkOccupancy(parkId: string): Promise<OccupancyDto> {
     const now = new Date();
 
-    // Get park timezone for accurate date calculations
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["timezone"],
-    });
-    const timezone = park?.timezone || "UTC";
-
     // Headliner-only for current + trend (same rides as P50 baseline and peakWaitToday)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
@@ -358,24 +351,18 @@ export class AnalyticsService {
       };
     }
 
-    // Use headliner P50 baseline (golden rule: same as crowd level). Fallback to sliding-window P50.
-    // All-attractions P50 from get90thPercentileWithConfidence is dominated by 5-min rides → baseline ≈ 5 → 100% load even when park is quiet.
-    let p50Baseline = await this.getP50BaselineFromCache(parkId);
-    let confidence: "high" | "medium" | "low" = "high";
+    // Headliner P50 baseline lives in park_p50_baseline (populated by the
+    // daily 3 AM cron, served via getP50BaselineWithConfidence → Redis →
+    // DB). When the row is missing we used to fall back to a 548-day live
+    // PERCENTILE_CONT, which dominated request latency on cache miss and
+    // affected every endpoint calling this method (search, /parks list,
+    // /parks/{id}, /analytics/realtime). We now degrade gracefully to a
+    // low-confidence default instead — the next cron run fills in the row.
+    const record = await this.getP50BaselineWithConfidence(parkId);
 
-    if (p50Baseline === 0) {
-      const percentiles = await this.get90thPercentileWithConfidence(
-        parkId,
-        "park",
-        timezone,
-      );
-      p50Baseline = percentiles.p50;
-      confidence = percentiles.confidence;
-    }
-
-    if (p50Baseline === 0) {
+    if (!record) {
       this.logger.warn(
-        `No P50 baseline for park ${parkId} (headliner or sliding window)`,
+        `No P50 baseline for park ${parkId} — returning low-confidence default until daily cron repopulates it`,
       );
       return {
         current: 50,
@@ -392,6 +379,9 @@ export class AnalyticsService {
         },
       };
     }
+
+    const p50Baseline = record.value;
+    const confidence = record.confidence;
 
     // Calculate occupancy as percentage of P50 baseline (headliner P50 when available)
     const occupancyPercentage = (currentAvgWait / p50Baseline) * 100;
@@ -524,13 +514,6 @@ export class AnalyticsService {
    * Example: 75 = park is at 75% of typical P90 wait times
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
-    // Get park timezone for accurate hour/day-of-week calculation
-    const park = await this.parkRepository.findOne({
-      where: { id: parkId },
-      select: ["timezone"],
-    });
-    const timezone = park?.timezone || "UTC";
-
     // Get current P50 wait time (headliner-only when available, same as calculateParkOccupancy)
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
@@ -548,16 +531,9 @@ export class AnalyticsService {
       return 100;
     }
 
-    // Use headliner P50 baseline (same as calculateParkOccupancy). Fallback to sliding-window P50.
-    let p50Baseline = await this.getP50BaselineFromCache(parkId);
-    if (p50Baseline === 0) {
-      const percentiles = await this.get90thPercentileWithConfidence(
-        parkId,
-        "park",
-        timezone,
-      );
-      p50Baseline = percentiles.p50;
-    }
+    // Use headliner P50 baseline (same as calculateParkOccupancy).
+    // No live-aggregation fallback — see calculateParkOccupancy for context.
+    const p50Baseline = await this.getP50BaselineFromCache(parkId);
 
     if (p50Baseline === 0) {
       return 100;
@@ -4387,9 +4363,17 @@ export class AnalyticsService {
       ["parkId"], // Conflict path
     );
 
-    // Cache in Redis (24h TTL)
+    // Cache in Redis (24h TTL). We store JSON so callers that care about
+    // confidence (calculateParkOccupancy) can read it without an extra DB
+    // hop. The plain-number reader (getP50BaselineFromCache) understands
+    // both this format and the legacy number-only format.
     const cacheKey = `park:p50:${parkId}`;
-    await this.redis.set(cacheKey, baseline.p50.toString(), "EX", 86400);
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify({ p50: baseline.p50, confidence: baseline.confidence }),
+      "EX",
+      86400,
+    );
 
     this.logger.log(
       `Saved P50 baseline for park ${parkId}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier})`,
@@ -4397,37 +4381,72 @@ export class AnalyticsService {
   }
 
   /**
-   * Get P50 baseline from cache or database
+   * Get P50 baseline value from cache or database.
+   *
+   * Returns just the numeric value. For callers that also need the
+   * confidence level (e.g. calculateParkOccupancy), use
+   * getP50BaselineWithConfidence().
    *
    * @param parkId - Park ID
    * @returns P50 baseline value (minutes)
    */
   async getP50BaselineFromCache(parkId: string): Promise<number> {
-    // Try Redis cache first
+    const record = await this.getP50BaselineWithConfidence(parkId);
+    return record ? record.value : 0;
+  }
+
+  /**
+   * Get P50 baseline value AND confidence level from cache or database.
+   *
+   * The Redis cache key (`park:p50:{parkId}`) now stores JSON containing
+   * both fields. Legacy entries written as plain numbers are still
+   * accepted (they get treated as high-confidence) and naturally phase
+   * out within the 24h TTL.
+   *
+   * @param parkId - Park ID
+   * @returns { value, confidence } or null when no baseline exists yet
+   */
+  async getP50BaselineWithConfidence(
+    parkId: string,
+  ): Promise<{ value: number; confidence: "high" | "medium" | "low" } | null> {
     const cacheKey = `park:p50:${parkId}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) {
-      return parseFloat(cached);
+      if (cached.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(cached) as {
+            p50: number;
+            confidence: "high" | "medium" | "low";
+          };
+          return { value: parsed.p50, confidence: parsed.confidence };
+        } catch {
+          // fall through to DB
+        }
+      } else {
+        const v = parseFloat(cached);
+        if (v > 0) {
+          return { value: v, confidence: "high" };
+        }
+      }
     }
 
-    // Fallback to database
     const baseline = await this.parkP50BaselineRepository.findOne({
       where: { parkId },
     });
 
     if (baseline) {
-      // Re-cache for 24h
+      const value = parseFloat(baseline.p50Baseline.toString());
+      const confidence = baseline.confidence;
       await this.redis.set(
         cacheKey,
-        baseline.p50Baseline.toString(),
+        JSON.stringify({ p50: value, confidence }),
         "EX",
         86400,
       );
-      return parseFloat(baseline.p50Baseline.toString());
+      return { value, confidence };
     }
 
-    // No baseline found - return 0 (will trigger fallback to P90)
-    return 0;
+    return null;
   }
 
   /**

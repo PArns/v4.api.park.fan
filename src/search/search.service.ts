@@ -55,6 +55,13 @@ export class SearchService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    // Fire and forget — these are CREATE…IF NOT EXISTS statements that we
+    // do not want to block container boot on. The search itself will still
+    // work without them (just slower) until they finish on a fresh DB.
+    void this.initializeFuzzySearchIndices();
+  }
+
+  private async initializeFuzzySearchIndices(): Promise<void> {
     // Initialize pg_trgm extension and indices for fuzzy search
     try {
       await this.parkRepository.query(
@@ -129,7 +136,10 @@ export class SearchService implements OnModuleInit {
   }
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
-    const { q, type } = query;
+    const { type } = query;
+    // Normalize once — trim + lowercase — so " Disney", "disney" and
+    // "DISNEY" all collapse to the same cache entry and DB query.
+    const q = (query.q ?? "").trim();
     const limit = query.limit || 5; // Use generic limit or default
 
     if (!q || q.length < 2) {
@@ -291,6 +301,7 @@ export class SearchService implements OnModuleInit {
       | "continent"
       | "country"
       | "city"
+      | "timezone"
       | "destination"
     >[]
   > {
@@ -314,35 +325,36 @@ export class SearchService implements OnModuleInit {
           "park.continent",
           "park.country",
           "park.city",
+          "park.timezone",
           "destination.id",
           "destination.name",
         ])
         .where(
           new Brackets((qb) => {
-            // 1. Exact or Like Match
-            qb.where("park.name ILIKE :query", { query: `%${query}%` })
-              .orWhere("park.city ILIKE :query")
-              .orWhere("park.country ILIKE :query")
-              .orWhere("park.continent ILIKE :query")
-              // 2. Normalized Match (ignores special chars like "-" or ".")
-              // Fixes "fly" -> "F.L.Y." and "europapark" -> "Europa-Park"
+            // All clauses below must be backed by an index to avoid a full
+            // table scan when combined via OR. Trigram operators (% and <%)
+            // and ILIKE all use the pg_trgm GIN indexes; pg_trgm is
+            // case-insensitive, so LOWER() wrapping is removed (it would
+            // defeat the index built on the raw column).
+            qb.where("park.name ILIKE :likeQuery", { likeQuery: `%${query}%` })
+              .orWhere("park.city ILIKE :likeQuery")
+              .orWhere("park.country ILIKE :likeQuery")
+              .orWhere("park.continent ILIKE :likeQuery")
+              // Normalized Match (fixes "fly" -> "F.L.Y.") — uses functional
+              // GIN trgm index on REGEXP_REPLACE(name, ...)
               .orWhere(
                 "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // 3. Phonetic Match (Double Metaphone) - handles "Phantasia" vs "Fantasia"
+              // Phonetic Match — uses functional B-tree index on dmetaphone(name)
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
-              .orWhere("dmetaphone(park.name) LIKE dmetaphone(:query) || '%'")
               .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
               .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-              // 4. Levenshtein Distance (typo tolerance)
-              .orWhere(
-                "LENGTH(park.name) <= 255 AND levenshtein(LOWER(park.name), LOWER(:query)) <= 2",
-              )
-              // 5. Fuzzy Match (Index-backed Trigram Similarity)
-              .orWhere("LOWER(park.name) % LOWER(:query)")
-              // 6. Word Similarity (Best for search-as-you-type "phan" -> "Phantasialand")
-              .orWhere("LOWER(:query) <% LOWER(park.name)");
+              // Trigram similarity / word similarity — both use the GIN trgm
+              // index. These replace the previous unindexable levenshtein()
+              // and similarity()>X checks that forced a sequential scan.
+              .orWhere("park.name % :query")
+              .orWhere(":query <% park.name");
           }),
         )
         .orderBy(
@@ -436,30 +448,23 @@ export class SearchService implements OnModuleInit {
         ])
         .where(
           new Brackets((qb) => {
-            qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
-              // Land Name Match
-              .orWhere("attraction.landName ILIKE :query")
-              // Normalized Name Match (Fixes "fly" -> "F.L.Y.")
+            // Index-only WHERE: every clause must hit a trigram, dmetaphone
+            // or functional index so the OR chain does not collapse to a
+            // sequential scan. levenshtein() and similarity()>X were removed
+            // for that reason — trigram % handles typo tolerance.
+            qb.where("attraction.name ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("attraction.landName ILIKE :likeQuery")
               .orWhere(
                 "REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // Phonetic Match
               .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
-              .orWhere(
-                "dmetaphone(attraction.name) LIKE dmetaphone(:query) || '%'",
-              )
-              // Levenshtein Distance (typo tolerance)
-              .orWhere(
-                "LENGTH(attraction.name) <= 255 AND levenshtein(LOWER(attraction.name), LOWER(:query)) <= 2",
-              )
-              // Fuzzy Matches (Index-backed Trigram Similarity)
-              .orWhere("LOWER(attraction.name) % LOWER(:query)")
-              // Word Similarity (Search-as-you-type)
-              .orWhere("LOWER(:query) <% LOWER(attraction.name)")
-              // Parent Park Location Fuzzy Matches
-              .orWhere("LOWER(park.city) % LOWER(:query)")
-              .orWhere("LOWER(park.country) % LOWER(:query)");
+              .orWhere("attraction.name % :query")
+              .orWhere(":query <% attraction.name")
+              .orWhere("park.city % :query")
+              .orWhere("park.country % :query");
           }),
         )
         .orderBy(
@@ -547,7 +552,10 @@ export class SearchService implements OnModuleInit {
       ])
       .where(
         new Brackets((qb) => {
-          qb.where("show.name ILIKE :query", { query: `%${query}%` })
+          // Index-only WHERE — see searchParks comment.
+          qb.where("show.name ILIKE :likeQuery", {
+            likeQuery: `%${query}%`,
+          })
             .orWhere(
               "REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
@@ -555,14 +563,10 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance (typo tolerance) — guard against >255 char crash
-            .orWhere(
-              "LENGTH(show.name) <= 255 AND levenshtein(LOWER(show.name), LOWER(:query)) <= 3",
-            )
-            // Fuzzy Match (trigram similarity)
-            .orWhere("similarity(LOWER(show.name), LOWER(:query)) > 0.1")
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
+            .orWhere("show.name % :query")
+            .orWhere(":query <% show.name")
+            .orWhere("park.city % :query")
+            .orWhere("park.country % :query");
         }),
       )
       .orderBy(
@@ -637,7 +641,10 @@ export class SearchService implements OnModuleInit {
       ])
       .where(
         new Brackets((qb) => {
-          qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
+          // Index-only WHERE — see searchParks comment.
+          qb.where("restaurant.name ILIKE :likeQuery", {
+            likeQuery: `%${query}%`,
+          })
             .orWhere(
               "REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
@@ -645,14 +652,10 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance (typo tolerance) — guard against >255 char crash
-            .orWhere(
-              "LENGTH(restaurant.name) <= 255 AND levenshtein(LOWER(restaurant.name), LOWER(:query)) <= 3",
-            )
-            // Fuzzy Match (trigram similarity)
-            .orWhere("similarity(LOWER(restaurant.name), LOWER(:query)) > 0.1")
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
+            .orWhere("restaurant.name % :query")
+            .orWhere(":query <% restaurant.name")
+            .orWhere("park.city % :query")
+            .orWhere("park.country % :query");
         }),
       )
       .orderBy(
@@ -675,141 +678,126 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Search distinct cities and countries
+   * Search distinct cities and countries.
+   *
+   * Previously this pulled a bag of parks with an OR over city/country and
+   * then re-matched in JS to decide which field actually hit. That meant
+   * shipping every column of N parks per query and doing the filtering
+   * twice. Now we run two narrow `SELECT DISTINCT` queries — one per match
+   * dimension — and the DB does the work.
    */
   private async searchLocations(
     query: string,
     limit: number,
   ): Promise<SearchResultItemDto[]> {
-    // We search for parks that match the location query, then aggregate distinct locations
-    // This is a bit inefficient but leverages existing indices on parks table
-    // A better approach would be to have a materialized view of locations, but distinct query works for now.
+    const [cityRows, countryRows] = await Promise.all([
+      this.parkRepository
+        .createQueryBuilder("park")
+        .select([
+          "park.continent AS continent",
+          "park.continentSlug AS continentSlug",
+          "park.country AS country",
+          "park.countrySlug AS countrySlug",
+          "park.countryCode AS countryCode",
+          "park.city AS city",
+          "park.citySlug AS citySlug",
+        ])
+        .distinct(true)
+        .where(
+          new Brackets((qb) => {
+            qb.where("park.city ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("park.city % :query")
+              .orWhere("dmetaphone(park.city) = dmetaphone(:query)");
+          }),
+        )
+        .andWhere("park.city IS NOT NULL")
+        .andWhere("park.citySlug IS NOT NULL")
+        .setParameter("query", query)
+        .limit(limit)
+        .getRawMany<{
+          continent: string;
+          continentslug: string;
+          country: string;
+          countryslug: string;
+          countrycode: string;
+          city: string;
+          cityslug: string;
+        }>(),
+      this.parkRepository
+        .createQueryBuilder("park")
+        .select([
+          "park.continent AS continent",
+          "park.continentSlug AS continentSlug",
+          "park.country AS country",
+          "park.countrySlug AS countrySlug",
+          "park.countryCode AS countryCode",
+        ])
+        .distinct(true)
+        .where(
+          new Brackets((qb) => {
+            qb.where("park.country ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("park.country % :query")
+              .orWhere("dmetaphone(park.country) = dmetaphone(:query)");
+          }),
+        )
+        .andWhere("park.country IS NOT NULL")
+        .andWhere("park.countrySlug IS NOT NULL")
+        .setParameter("query", query)
+        .limit(limit)
+        .getRawMany<{
+          continent: string;
+          continentslug: string;
+          country: string;
+          countryslug: string;
+          countrycode: string;
+        }>(),
+    ]);
 
-    const properties = [
-      "park.continent",
-      "park.continentSlug",
-      "park.country",
-      "park.countrySlug",
-      "park.countryCode",
-      "park.city",
-      "park.citySlug",
-    ];
-
-    const parks = await this.parkRepository
-      .createQueryBuilder("park")
-      .select(properties)
-      .distinct(true) // Ensure distinct rows
-      .where(
-        new Brackets((qb) => {
-          // Exact or Fuzzy on City
-          qb.where("park.city ILIKE :query", { query: `%${query}%` })
-            .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
-            // Levenshtein Distance — guard against >255 char crash
-            .orWhere(
-              "LENGTH(park.city) <= 255 AND levenshtein(LOWER(park.city), LOWER(:query)) <= 3",
-            )
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
-
-            // Exact or Fuzzy on Country
-            .orWhere("park.country ILIKE :query")
-            .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance — guard against >255 char crash
-            .orWhere(
-              "LENGTH(park.country) <= 255 AND levenshtein(LOWER(park.country), LOWER(:query)) <= 3",
-            )
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
-        }),
-      )
-      .limit(limit * 2) // Fetch more to allow for filtering after distinct logic if needed
-      .getRawMany();
-
-    // Map to result items and deduplicate based on unique location (City+Country or just Country)
     const results: SearchResultItemDto[] = [];
-    const seenLocations = new Set<string>();
+    const seen = new Set<string>();
 
-    for (const p of parks) {
-      // Check City Match
-      // Ideally we should score them, but for now if it matches query or is similar, we check
-      // For simplicity, we just return the valid locations found in the returned rows
+    for (const r of cityRows) {
+      const key = `city:${r.cityslug}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        type: "location",
+        id: key,
+        name: r.city,
+        slug: r.cityslug,
+        url: buildCityDiscoveryUrl(r.continentslug, r.countryslug, r.cityslug),
+        continent: r.continent,
+        country: r.country,
+        countryCode: r.countrycode,
+        city: r.city,
+        status: null,
+        load: null,
+      });
+    }
 
-      // Process City
-      if (p.park_city && p.park_citySlug) {
-        // Simple client-side re-check to see if this city actually matches (since OR condition returns rows matching either city OR country)
-        const cityMatch =
-          p.park_city.toLowerCase().includes(query.toLowerCase()) ||
-          this.isSimilar(p.park_city, query);
-
-        if (cityMatch) {
-          const key = `city:${p.park_citySlug}`;
-          if (!seenLocations.has(key)) {
-            seenLocations.add(key);
-            results.push({
-              type: "location",
-              id: key,
-              name: p.park_city,
-              slug: p.park_citySlug,
-              url: buildCityDiscoveryUrl(
-                p.park_continentSlug,
-                p.park_countrySlug,
-                p.park_citySlug,
-              ),
-              continent: p.park_continent,
-              country: p.park_country,
-              countryCode: p.park_countryCode,
-              city: p.park_city,
-              status: null,
-              load: null,
-            });
-          }
-        }
-      }
-
-      // Process Country
-      if (p.park_country && p.park_countrySlug) {
-        const countryMatch =
-          p.park_country.toLowerCase().includes(query.toLowerCase()) ||
-          this.isSimilar(p.park_country, query);
-
-        if (countryMatch) {
-          const key = `country:${p.park_countrySlug}`;
-          if (!seenLocations.has(key)) {
-            seenLocations.add(key);
-            results.push({
-              type: "location",
-              id: key,
-              name: p.park_country,
-              slug: p.park_countrySlug,
-              url: buildCountryDiscoveryUrl(
-                p.park_continentSlug,
-                p.park_countrySlug,
-              ),
-              continent: p.park_continent,
-              country: p.park_country,
-              countryCode: p.park_countryCode,
-              status: null,
-              load: null,
-            });
-          }
-        }
-      }
+    for (const r of countryRows) {
+      const key = `country:${r.countryslug}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        type: "location",
+        id: key,
+        name: r.country,
+        slug: r.countryslug,
+        url: buildCountryDiscoveryUrl(r.continentslug, r.countryslug),
+        continent: r.continent,
+        country: r.country,
+        countryCode: r.countrycode,
+        status: null,
+        load: null,
+      });
     }
 
     return results.slice(0, limit);
-  }
-
-  /**
-   * Helper for in-memory Similarity check (since we select many rows, we verify which field matched)
-   */
-  private isSimilar(text: string, query: string): boolean {
-    if (!text) return false;
-    // We can't easily access pg_trgm functions here without DB query, so we use a simple JS check
-    // or rely on the fact that the DB returned it.
-    // Given the DB query: WHERE city LIKE ... OR country LIKE ...
-    // If a row is returned, ONE of them matched.
-    // If we want to know WHICH one, strictly speaking we should check.
-    // For now, simple includes is OK, or we assume if it's in the row it's a candidate.
-    // Let's rely on simple includes for now to distinguish if it was the city or country that matched.
-    return text.toLowerCase().includes(query.toLowerCase());
   }
 
   /**
@@ -820,14 +808,30 @@ export class SearchService implements OnModuleInit {
   ): Promise<SearchResultItemDto[]> {
     const parkIds = parks.map((p) => p.id);
 
-    // Batch fetch status from existing cache (no extra DB queries!)
-    const statusMap = await this.parksService.getBatchParkStatus(parkIds);
+    // Park status comes from a LATERAL subquery over every attraction of
+    // every park (parks.service.ts:getBatchParkStatus). It is identical
+    // for every search hitting the same parks within a short window, so
+    // we cache the result in Redis for 60s.
+    const statusMap = await this.getCachedParkStatusMap(parkIds);
 
-    // Batch fetch occupancy/load
-    const loadMap = await this.getBatchLoadLevels(parkIds);
+    // Only run the expensive enrichments (occupancy, today's hours) for
+    // parks that are actually operating — closed parks have no load
+    // anyway and would just trigger pointless work.
+    const operatingParks = parks.filter(
+      (p) => statusMap.get(p.id) === "OPERATING",
+    );
+    const operatingIds = operatingParks.map((p) => p.id);
 
-    // Batch fetch today's operating hours
-    const hoursMap = await this.getBatchParkHours(parkIds);
+    const [loadMap, hoursMap] = await Promise.all([
+      operatingIds.length > 0
+        ? this.getBatchLoadLevels(operatingIds)
+        : Promise.resolve(new Map<string, CrowdLevel>()),
+      operatingParks.length > 0
+        ? this.getBatchParkHours(operatingParks)
+        : Promise.resolve(
+            new Map<string, { open: string; close: string; type: string }>(),
+          ),
+    ]);
 
     return parks.map((park) => ({
       type: "park" as const,
@@ -887,23 +891,42 @@ export class SearchService implements OnModuleInit {
       }
     });
 
-    // 3. Batch fetch wait times, status, P50s (prefer), and P90s (fallback) for operating attractions
+    // 3. Batch fetch queue data once (single roundtrip yields both wait time
+    //    and status — previously we fetched the same data twice in parallel).
+    //    P90 is intentionally NOT fetched here: it runs a PERCENTILE_CONT over
+    //    548 days of queue_data and dominates the request on cache miss. P50
+    //    is pre-baked in a baseline table and covers the same baseline role;
+    //    attractions without a P50 fall through to the "moderate" default.
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
-    let p90Map = new Map<string, number>();
 
     if (operatingAttractionIds.length > 0) {
-      const [waitTimes, statuses, p50s, p90s] = await Promise.all([
-        this.getBatchWaitTimes(operatingAttractionIds),
-        this.getBatchAttractionStatus(operatingAttractionIds),
+      const [queueDataMap, p50s] = await Promise.all([
+        this.queueDataService.findCurrentStatusByAttractionIds(
+          operatingAttractionIds,
+        ),
         this.analyticsService.getBatchAttractionP50s(operatingAttractionIds),
-        this.analyticsService.getBatchAttractionP90s(operatingAttractionIds),
       ]);
-      waitTimesMap = waitTimes;
-      statusMap = statuses;
+
+      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
+        if (queueDataList.length === 0) continue;
+        if (queueDataList[0].status) {
+          statusMap.set(attractionId, { status: queueDataList[0].status });
+        }
+        const standbyQueue = queueDataList.find(
+          (q) => q.queueType === "STANDBY",
+        );
+        if (
+          standbyQueue &&
+          standbyQueue.waitTime !== null &&
+          standbyQueue.waitTime !== undefined
+        ) {
+          waitTimesMap.set(attractionId, standbyQueue.waitTime);
+        }
+      }
+
       p50Map = p50s;
-      p90Map = p90s;
     }
 
     return attractions.map((attraction) => {
@@ -920,10 +943,9 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
-      // P50 when available, else P90 (same as attraction detail)
-      const baseline = isParkOpen
-        ? (p50Map.get(attraction.id) ?? p90Map.get(attraction.id))
-        : undefined;
+      // P50 only (pre-baked baseline). P90 fallback is omitted on the search
+      // path for latency reasons — missing P50 falls through to "moderate".
+      const baseline = isParkOpen ? p50Map.get(attraction.id) : undefined;
 
       const load = isParkOpen
         ? this.getCrowdLevelForSearch(waitTime ?? undefined, baseline)
@@ -1101,73 +1123,6 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Batch fetch wait times for attractions
-   */
-  private async getBatchWaitTimes(
-    attractionIds: string[],
-  ): Promise<Map<string, number>> {
-    const waitTimesMap = new Map<string, number>();
-
-    if (attractionIds.length === 0) {
-      return waitTimesMap;
-    }
-
-    try {
-      // Get current status for all attractions in one query
-      const queueDataMap =
-        await this.queueDataService.findCurrentStatusByAttractionIds(
-          attractionIds,
-        );
-
-      // Process each attraction
-      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
-        const standbyQueue = queueDataList.find(
-          (q) => q.queueType === "STANDBY",
-        );
-        if (
-          standbyQueue &&
-          standbyQueue.waitTime !== null &&
-          standbyQueue.waitTime !== undefined
-        ) {
-          waitTimesMap.set(attractionId, standbyQueue.waitTime);
-        }
-      }
-    } catch {
-      // Skip attractions without wait time data
-    }
-
-    return waitTimesMap;
-  }
-
-  /**
-   * Batch fetch attraction status from queue data
-   * Uses a single batch query instead of N individual queries.
-   */
-  private async getBatchAttractionStatus(
-    attractionIds: string[],
-  ): Promise<Map<string, { status: string }>> {
-    const statusMap = new Map<string, { status: string }>();
-
-    if (attractionIds.length === 0) return statusMap;
-
-    try {
-      const queueDataMap =
-        await this.queueDataService.findCurrentStatusByAttractionIds(
-          attractionIds,
-        );
-      for (const [attractionId, queueDataList] of queueDataMap.entries()) {
-        if (queueDataList.length > 0 && queueDataList[0].status) {
-          statusMap.set(attractionId, { status: queueDataList[0].status });
-        }
-      }
-    } catch {
-      // Skip attractions without status data
-    }
-
-    return statusMap;
-  }
-
-  /**
    * Determine attraction load level from wait time
    * REFACTORED: Delegates to AnalyticsService for consistent logic (P50 baseline when available).
    */
@@ -1194,21 +1149,20 @@ export class SearchService implements OnModuleInit {
    * Batch fetch today's operating hours for parks.
    * Uses each park's timezone for "today" (never server date).
    * Single bulk query instead of N individual queries.
+   * Accepts park objects (with timezone) directly so we don't have to
+   * re-query the parks table that the caller already loaded.
    */
   private async getBatchParkHours(
-    parkIds: string[],
+    parks: Array<{ id: string; timezone?: string | null }>,
   ): Promise<Map<string, { open: string; close: string; type: string }>> {
     const hoursMap = new Map<
       string,
       { open: string; close: string; type: string }
     >();
 
-    if (parkIds.length === 0) return hoursMap;
+    if (parks.length === 0) return hoursMap;
 
-    const parks = await this.parkRepository.find({
-      where: parkIds.map((id) => ({ id })),
-      select: ["id", "timezone"],
-    });
+    const parkIds = parks.map((p) => p.id);
 
     // Build map of parkId -> today's date string
     const parkDateMap = new Map<string, string>();
@@ -1356,7 +1310,47 @@ export class SearchService implements OnModuleInit {
       return new Map();
     }
 
-    return this.parksService.getBatchParkStatus(Array.from(parkIds));
+    return this.getCachedParkStatusMap(Array.from(parkIds));
+  }
+
+  /**
+   * Cached wrapper around parksService.getBatchParkStatus(). The underlying
+   * query runs a LATERAL subquery over every attraction of every requested
+   * park; on the search hot path we hit it repeatedly with overlapping park
+   * sets. Per-park Redis cache (60s) collapses these to one DB call per
+   * minute per park.
+   */
+  private async getCachedParkStatusMap(
+    parkIds: string[],
+  ): Promise<Map<string, "OPERATING" | "CLOSED">> {
+    const result = new Map<string, "OPERATING" | "CLOSED">();
+    if (parkIds.length === 0) return result;
+
+    const cacheKeys = parkIds.map((id) => `search:parkstatus:${id}`);
+    const cached = await this.redis.mget(...cacheKeys);
+
+    const uncachedIds: string[] = [];
+    parkIds.forEach((id, i) => {
+      const v = cached[i];
+      if (v === "OPERATING" || v === "CLOSED") {
+        result.set(id, v);
+      } else {
+        uncachedIds.push(id);
+      }
+    });
+
+    if (uncachedIds.length === 0) return result;
+
+    const fresh = await this.parksService.getBatchParkStatus(uncachedIds);
+    const pipeline = this.redis.pipeline();
+    for (const id of uncachedIds) {
+      const status = fresh.get(id) || "CLOSED";
+      result.set(id, status);
+      pipeline.set(`search:parkstatus:${id}`, status, "EX", 60);
+    }
+    await pipeline.exec();
+
+    return result;
   }
 
   /**
