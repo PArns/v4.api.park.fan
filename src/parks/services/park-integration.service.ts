@@ -738,10 +738,8 @@ export class ParkIntegrationService {
           // (parks without full schedule integration, common for US parks).
           const todayOnlyPreds = patchedPreds.filter(
             (p) =>
-              formatInParkTimezone(
-                new Date(p.predictedTime),
-                park.timezone,
-              ) === todayInParkTz,
+              formatInParkTimezone(new Date(p.predictedTime), park.timezone) ===
+              todayInParkTz,
           );
           attraction.bestVisitTimes = computeBestVisitTimes(
             todayOnlyPreds,
