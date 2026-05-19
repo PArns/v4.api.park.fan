@@ -55,6 +55,13 @@ export class SearchService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    // Fire and forget — these are CREATE…IF NOT EXISTS statements that we
+    // do not want to block container boot on. The search itself will still
+    // work without them (just slower) until they finish on a fresh DB.
+    void this.initializeFuzzySearchIndices();
+  }
+
+  private async initializeFuzzySearchIndices(): Promise<void> {
     // Initialize pg_trgm extension and indices for fuzzy search
     try {
       await this.parkRepository.query(
@@ -129,7 +136,10 @@ export class SearchService implements OnModuleInit {
   }
 
   async search(query: SearchQueryDto): Promise<SearchResultDto> {
-    const { q, type } = query;
+    const { type } = query;
+    // Normalize once — trim + lowercase — so " Disney", "disney" and
+    // "DISNEY" all collapse to the same cache entry and DB query.
+    const q = (query.q ?? "").trim();
     const limit = query.limit || 5; // Use generic limit or default
 
     if (!q || q.length < 2) {
@@ -291,6 +301,7 @@ export class SearchService implements OnModuleInit {
       | "continent"
       | "country"
       | "city"
+      | "timezone"
       | "destination"
     >[]
   > {
@@ -314,6 +325,7 @@ export class SearchService implements OnModuleInit {
           "park.continent",
           "park.country",
           "park.city",
+          "park.timezone",
           "destination.id",
           "destination.name",
         ])
@@ -666,134 +678,126 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Search distinct cities and countries
+   * Search distinct cities and countries.
+   *
+   * Previously this pulled a bag of parks with an OR over city/country and
+   * then re-matched in JS to decide which field actually hit. That meant
+   * shipping every column of N parks per query and doing the filtering
+   * twice. Now we run two narrow `SELECT DISTINCT` queries — one per match
+   * dimension — and the DB does the work.
    */
   private async searchLocations(
     query: string,
     limit: number,
   ): Promise<SearchResultItemDto[]> {
-    // We search for parks that match the location query, then aggregate distinct locations
-    // This is a bit inefficient but leverages existing indices on parks table
-    // A better approach would be to have a materialized view of locations, but distinct query works for now.
+    const [cityRows, countryRows] = await Promise.all([
+      this.parkRepository
+        .createQueryBuilder("park")
+        .select([
+          "park.continent AS continent",
+          "park.continentSlug AS continentSlug",
+          "park.country AS country",
+          "park.countrySlug AS countrySlug",
+          "park.countryCode AS countryCode",
+          "park.city AS city",
+          "park.citySlug AS citySlug",
+        ])
+        .distinct(true)
+        .where(
+          new Brackets((qb) => {
+            qb.where("park.city ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("park.city % :query")
+              .orWhere("dmetaphone(park.city) = dmetaphone(:query)");
+          }),
+        )
+        .andWhere("park.city IS NOT NULL")
+        .andWhere("park.citySlug IS NOT NULL")
+        .setParameter("query", query)
+        .limit(limit)
+        .getRawMany<{
+          continent: string;
+          continentslug: string;
+          country: string;
+          countryslug: string;
+          countrycode: string;
+          city: string;
+          cityslug: string;
+        }>(),
+      this.parkRepository
+        .createQueryBuilder("park")
+        .select([
+          "park.continent AS continent",
+          "park.continentSlug AS continentSlug",
+          "park.country AS country",
+          "park.countrySlug AS countrySlug",
+          "park.countryCode AS countryCode",
+        ])
+        .distinct(true)
+        .where(
+          new Brackets((qb) => {
+            qb.where("park.country ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("park.country % :query")
+              .orWhere("dmetaphone(park.country) = dmetaphone(:query)");
+          }),
+        )
+        .andWhere("park.country IS NOT NULL")
+        .andWhere("park.countrySlug IS NOT NULL")
+        .setParameter("query", query)
+        .limit(limit)
+        .getRawMany<{
+          continent: string;
+          continentslug: string;
+          country: string;
+          countryslug: string;
+          countrycode: string;
+        }>(),
+    ]);
 
-    const properties = [
-      "park.continent",
-      "park.continentSlug",
-      "park.country",
-      "park.countrySlug",
-      "park.countryCode",
-      "park.city",
-      "park.citySlug",
-    ];
-
-    const parks = await this.parkRepository
-      .createQueryBuilder("park")
-      .select(properties)
-      .distinct(true) // Ensure distinct rows
-      .where(
-        new Brackets((qb) => {
-          // Index-only WHERE — see searchParks comment.
-          qb.where("park.city ILIKE :likeQuery", {
-            likeQuery: `%${query}%`,
-          })
-            .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
-            .orWhere("park.city % :query")
-            .orWhere("park.country ILIKE :likeQuery")
-            .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            .orWhere("park.country % :query");
-        }),
-      )
-      .setParameter("query", query)
-      .limit(limit * 2) // Fetch more to allow for filtering after distinct logic if needed
-      .getRawMany();
-
-    // Map to result items and deduplicate based on unique location (City+Country or just Country)
     const results: SearchResultItemDto[] = [];
-    const seenLocations = new Set<string>();
+    const seen = new Set<string>();
 
-    for (const p of parks) {
-      // Check City Match
-      // Ideally we should score them, but for now if it matches query or is similar, we check
-      // For simplicity, we just return the valid locations found in the returned rows
+    for (const r of cityRows) {
+      const key = `city:${r.cityslug}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        type: "location",
+        id: key,
+        name: r.city,
+        slug: r.cityslug,
+        url: buildCityDiscoveryUrl(r.continentslug, r.countryslug, r.cityslug),
+        continent: r.continent,
+        country: r.country,
+        countryCode: r.countrycode,
+        city: r.city,
+        status: null,
+        load: null,
+      });
+    }
 
-      // Process City
-      if (p.park_city && p.park_citySlug) {
-        // Simple client-side re-check to see if this city actually matches (since OR condition returns rows matching either city OR country)
-        const cityMatch =
-          p.park_city.toLowerCase().includes(query.toLowerCase()) ||
-          this.isSimilar(p.park_city, query);
-
-        if (cityMatch) {
-          const key = `city:${p.park_citySlug}`;
-          if (!seenLocations.has(key)) {
-            seenLocations.add(key);
-            results.push({
-              type: "location",
-              id: key,
-              name: p.park_city,
-              slug: p.park_citySlug,
-              url: buildCityDiscoveryUrl(
-                p.park_continentSlug,
-                p.park_countrySlug,
-                p.park_citySlug,
-              ),
-              continent: p.park_continent,
-              country: p.park_country,
-              countryCode: p.park_countryCode,
-              city: p.park_city,
-              status: null,
-              load: null,
-            });
-          }
-        }
-      }
-
-      // Process Country
-      if (p.park_country && p.park_countrySlug) {
-        const countryMatch =
-          p.park_country.toLowerCase().includes(query.toLowerCase()) ||
-          this.isSimilar(p.park_country, query);
-
-        if (countryMatch) {
-          const key = `country:${p.park_countrySlug}`;
-          if (!seenLocations.has(key)) {
-            seenLocations.add(key);
-            results.push({
-              type: "location",
-              id: key,
-              name: p.park_country,
-              slug: p.park_countrySlug,
-              url: buildCountryDiscoveryUrl(
-                p.park_continentSlug,
-                p.park_countrySlug,
-              ),
-              continent: p.park_continent,
-              country: p.park_country,
-              countryCode: p.park_countryCode,
-              status: null,
-              load: null,
-            });
-          }
-        }
-      }
+    for (const r of countryRows) {
+      const key = `country:${r.countryslug}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        type: "location",
+        id: key,
+        name: r.country,
+        slug: r.countryslug,
+        url: buildCountryDiscoveryUrl(r.continentslug, r.countryslug),
+        continent: r.continent,
+        country: r.country,
+        countryCode: r.countrycode,
+        status: null,
+        load: null,
+      });
     }
 
     return results.slice(0, limit);
-  }
-
-  /**
-   * Helper for in-memory Similarity check (since we select many rows, we verify which field matched)
-   */
-  private isSimilar(text: string, query: string): boolean {
-    if (!text) return false;
-    // We can't easily access pg_trgm functions here without DB query, so we use a simple JS check
-    // or rely on the fact that the DB returned it.
-    // Given the DB query: WHERE city LIKE ... OR country LIKE ...
-    // If a row is returned, ONE of them matched.
-    // If we want to know WHICH one, strictly speaking we should check.
-    // For now, simple includes is OK, or we assume if it's in the row it's a candidate.
-    // Let's rely on simple includes for now to distinguish if it was the city or country that matched.
-    return text.toLowerCase().includes(query.toLowerCase());
   }
 
   /**
@@ -810,11 +814,24 @@ export class SearchService implements OnModuleInit {
     // we cache the result in Redis for 60s.
     const statusMap = await this.getCachedParkStatusMap(parkIds);
 
-    // Batch fetch occupancy/load
-    const loadMap = await this.getBatchLoadLevels(parkIds);
+    // Only run the expensive enrichments (occupancy, today's hours) for
+    // parks that are actually operating — closed parks have no load
+    // anyway and would just trigger pointless work.
+    const operatingParks = parks.filter(
+      (p) => statusMap.get(p.id) === "OPERATING",
+    );
+    const operatingIds = operatingParks.map((p) => p.id);
 
-    // Batch fetch today's operating hours
-    const hoursMap = await this.getBatchParkHours(parkIds);
+    const [loadMap, hoursMap] = await Promise.all([
+      operatingIds.length > 0
+        ? this.getBatchLoadLevels(operatingIds)
+        : Promise.resolve(new Map<string, CrowdLevel>()),
+      operatingParks.length > 0
+        ? this.getBatchParkHours(operatingParks)
+        : Promise.resolve(
+            new Map<string, { open: string; close: string; type: string }>(),
+          ),
+    ]);
 
     return parks.map((park) => ({
       type: "park" as const,
@@ -1132,21 +1149,20 @@ export class SearchService implements OnModuleInit {
    * Batch fetch today's operating hours for parks.
    * Uses each park's timezone for "today" (never server date).
    * Single bulk query instead of N individual queries.
+   * Accepts park objects (with timezone) directly so we don't have to
+   * re-query the parks table that the caller already loaded.
    */
   private async getBatchParkHours(
-    parkIds: string[],
+    parks: Array<{ id: string; timezone?: string | null }>,
   ): Promise<Map<string, { open: string; close: string; type: string }>> {
     const hoursMap = new Map<
       string,
       { open: string; close: string; type: string }
     >();
 
-    if (parkIds.length === 0) return hoursMap;
+    if (parks.length === 0) return hoursMap;
 
-    const parks = await this.parkRepository.find({
-      where: parkIds.map((id) => ({ id })),
-      select: ["id", "timezone"],
-    });
+    const parkIds = parks.map((p) => p.id);
 
     // Build map of parkId -> today's date string
     const parkDateMap = new Map<string, string>();
