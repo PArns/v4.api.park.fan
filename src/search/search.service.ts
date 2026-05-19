@@ -319,30 +319,30 @@ export class SearchService implements OnModuleInit {
         ])
         .where(
           new Brackets((qb) => {
-            // 1. Exact or Like Match
-            qb.where("park.name ILIKE :query", { query: `%${query}%` })
-              .orWhere("park.city ILIKE :query")
-              .orWhere("park.country ILIKE :query")
-              .orWhere("park.continent ILIKE :query")
-              // 2. Normalized Match (ignores special chars like "-" or ".")
-              // Fixes "fly" -> "F.L.Y." and "europapark" -> "Europa-Park"
+            // All clauses below must be backed by an index to avoid a full
+            // table scan when combined via OR. Trigram operators (% and <%)
+            // and ILIKE all use the pg_trgm GIN indexes; pg_trgm is
+            // case-insensitive, so LOWER() wrapping is removed (it would
+            // defeat the index built on the raw column).
+            qb.where("park.name ILIKE :likeQuery", { likeQuery: `%${query}%` })
+              .orWhere("park.city ILIKE :likeQuery")
+              .orWhere("park.country ILIKE :likeQuery")
+              .orWhere("park.continent ILIKE :likeQuery")
+              // Normalized Match (fixes "fly" -> "F.L.Y.") — uses functional
+              // GIN trgm index on REGEXP_REPLACE(name, ...)
               .orWhere(
                 "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // 3. Phonetic Match (Double Metaphone) - handles "Phantasia" vs "Fantasia"
+              // Phonetic Match — uses functional B-tree index on dmetaphone(name)
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
-              .orWhere("dmetaphone(park.name) LIKE dmetaphone(:query) || '%'")
               .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
               .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-              // 4. Levenshtein Distance (typo tolerance)
-              .orWhere(
-                "LENGTH(park.name) <= 255 AND levenshtein(LOWER(park.name), LOWER(:query)) <= 2",
-              )
-              // 5. Fuzzy Match (Index-backed Trigram Similarity)
-              .orWhere("LOWER(park.name) % LOWER(:query)")
-              // 6. Word Similarity (Best for search-as-you-type "phan" -> "Phantasialand")
-              .orWhere("LOWER(:query) <% LOWER(park.name)");
+              // Trigram similarity / word similarity — both use the GIN trgm
+              // index. These replace the previous unindexable levenshtein()
+              // and similarity()>X checks that forced a sequential scan.
+              .orWhere("park.name % :query")
+              .orWhere(":query <% park.name");
           }),
         )
         .orderBy(
@@ -436,30 +436,23 @@ export class SearchService implements OnModuleInit {
         ])
         .where(
           new Brackets((qb) => {
-            qb.where("attraction.name ILIKE :query", { query: `%${query}%` })
-              // Land Name Match
-              .orWhere("attraction.landName ILIKE :query")
-              // Normalized Name Match (Fixes "fly" -> "F.L.Y.")
+            // Index-only WHERE: every clause must hit a trigram, dmetaphone
+            // or functional index so the OR chain does not collapse to a
+            // sequential scan. levenshtein() and similarity()>X were removed
+            // for that reason — trigram % handles typo tolerance.
+            qb.where("attraction.name ILIKE :likeQuery", {
+              likeQuery: `%${query}%`,
+            })
+              .orWhere("attraction.landName ILIKE :likeQuery")
               .orWhere(
                 "REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
                 { normalizedQuery: `%${normalizedQuery}%` },
               )
-              // Phonetic Match
               .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
-              .orWhere(
-                "dmetaphone(attraction.name) LIKE dmetaphone(:query) || '%'",
-              )
-              // Levenshtein Distance (typo tolerance)
-              .orWhere(
-                "LENGTH(attraction.name) <= 255 AND levenshtein(LOWER(attraction.name), LOWER(:query)) <= 2",
-              )
-              // Fuzzy Matches (Index-backed Trigram Similarity)
-              .orWhere("LOWER(attraction.name) % LOWER(:query)")
-              // Word Similarity (Search-as-you-type)
-              .orWhere("LOWER(:query) <% LOWER(attraction.name)")
-              // Parent Park Location Fuzzy Matches
-              .orWhere("LOWER(park.city) % LOWER(:query)")
-              .orWhere("LOWER(park.country) % LOWER(:query)");
+              .orWhere("attraction.name % :query")
+              .orWhere(":query <% attraction.name")
+              .orWhere("park.city % :query")
+              .orWhere("park.country % :query");
           }),
         )
         .orderBy(
@@ -547,7 +540,10 @@ export class SearchService implements OnModuleInit {
       ])
       .where(
         new Brackets((qb) => {
-          qb.where("show.name ILIKE :query", { query: `%${query}%` })
+          // Index-only WHERE — see searchParks comment.
+          qb.where("show.name ILIKE :likeQuery", {
+            likeQuery: `%${query}%`,
+          })
             .orWhere(
               "REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
@@ -555,14 +551,10 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance (typo tolerance) — guard against >255 char crash
-            .orWhere(
-              "LENGTH(show.name) <= 255 AND levenshtein(LOWER(show.name), LOWER(:query)) <= 3",
-            )
-            // Fuzzy Match (trigram similarity)
-            .orWhere("similarity(LOWER(show.name), LOWER(:query)) > 0.1")
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
+            .orWhere("show.name % :query")
+            .orWhere(":query <% show.name")
+            .orWhere("park.city % :query")
+            .orWhere("park.country % :query");
         }),
       )
       .orderBy(
@@ -637,7 +629,10 @@ export class SearchService implements OnModuleInit {
       ])
       .where(
         new Brackets((qb) => {
-          qb.where("restaurant.name ILIKE :query", { query: `%${query}%` })
+          // Index-only WHERE — see searchParks comment.
+          qb.where("restaurant.name ILIKE :likeQuery", {
+            likeQuery: `%${query}%`,
+          })
             .orWhere(
               "REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
               { normalizedQuery: `%${normalizedQuery}%` },
@@ -645,14 +640,10 @@ export class SearchService implements OnModuleInit {
             .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance (typo tolerance) — guard against >255 char crash
-            .orWhere(
-              "LENGTH(restaurant.name) <= 255 AND levenshtein(LOWER(restaurant.name), LOWER(:query)) <= 3",
-            )
-            // Fuzzy Match (trigram similarity)
-            .orWhere("similarity(LOWER(restaurant.name), LOWER(:query)) > 0.1")
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.2")
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.2");
+            .orWhere("restaurant.name % :query")
+            .orWhere(":query <% restaurant.name")
+            .orWhere("park.city % :query")
+            .orWhere("park.country % :query");
         }),
       )
       .orderBy(
@@ -701,25 +692,18 @@ export class SearchService implements OnModuleInit {
       .distinct(true) // Ensure distinct rows
       .where(
         new Brackets((qb) => {
-          // Exact or Fuzzy on City
-          qb.where("park.city ILIKE :query", { query: `%${query}%` })
+          // Index-only WHERE — see searchParks comment.
+          qb.where("park.city ILIKE :likeQuery", {
+            likeQuery: `%${query}%`,
+          })
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
-            // Levenshtein Distance — guard against >255 char crash
-            .orWhere(
-              "LENGTH(park.city) <= 255 AND levenshtein(LOWER(park.city), LOWER(:query)) <= 3",
-            )
-            .orWhere("similarity(LOWER(park.city), LOWER(:query)) > 0.3")
-
-            // Exact or Fuzzy on Country
-            .orWhere("park.country ILIKE :query")
+            .orWhere("park.city % :query")
+            .orWhere("park.country ILIKE :likeQuery")
             .orWhere("dmetaphone(park.country) = dmetaphone(:query)")
-            // Levenshtein Distance — guard against >255 char crash
-            .orWhere(
-              "LENGTH(park.country) <= 255 AND levenshtein(LOWER(park.country), LOWER(:query)) <= 3",
-            )
-            .orWhere("similarity(LOWER(park.country), LOWER(:query)) > 0.3");
+            .orWhere("park.country % :query");
         }),
       )
+      .setParameter("query", query)
       .limit(limit * 2) // Fetch more to allow for filtering after distinct logic if needed
       .getRawMany();
 
