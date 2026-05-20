@@ -4480,6 +4480,185 @@ export class AnalyticsService {
    * @param parkId - Park ID
    * @param baseline - P50 baseline object
    */
+  /**
+   * Batch counterpart of `calculateAttractionP50` — runs the 548-day
+   * PERCENTILE_CONT once per *park* (GROUP BY attractionId) instead of
+   * once per attraction. The daily cron previously fired ~10k of these
+   * scans (one per attraction); this collapses it to ~50 (one per park),
+   * a >100× drop in heavy queries.
+   *
+   * Returns a Map keyed by attractionId so the cron can decide what to
+   * persist per attraction (zero-sample attractions are still included
+   * so callers can log/skip them consistently with the single-shot
+   * variant).
+   */
+  async calculateAttractionP50P90ForPark(
+    parkId: string,
+    timezone: string,
+  ): Promise<
+    Map<
+      string,
+      {
+        p50: number;
+        p90: number;
+        sampleCount: number;
+        distinctDays: number;
+        confidence: "high" | "medium" | "low";
+        isHeadliner: boolean;
+      }
+    >
+  > {
+    const SLIDING_WINDOW_DAYS = 548;
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, timezone, "yyyy-MM-dd");
+    const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
+
+    const rows = await this.queueDataRepository.query(
+      `
+      SELECT
+        qd."attractionId" AS attraction_id,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) AS p50,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) AS p90,
+        COUNT(*) AS sample_count,
+        COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) AS distinct_days
+      FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+      LEFT JOIN schedule_entries se
+        ON se."parkId" = a."parkId"
+        AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
+        AND se."attractionId" IS NULL
+      WHERE a."parkId" = $1::uuid
+        AND qd.timestamp >= $3
+        AND qd."queueType" = 'STANDBY'
+        AND qd.status = 'OPERATING'
+        AND qd."waitTime" >= 10
+        AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
+      GROUP BY qd."attractionId"
+      `,
+      [parkId, timezone, cutoff],
+    );
+
+    // Headliner lookup also batched — one query per park instead of one
+    // findOne per attraction.
+    const headliners = await this.headlinerAttractionRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    const headlinerSet = new Set(headliners.map((h) => h.attractionId));
+
+    const result = new Map<
+      string,
+      {
+        p50: number;
+        p90: number;
+        sampleCount: number;
+        distinctDays: number;
+        confidence: "high" | "medium" | "low";
+        isHeadliner: boolean;
+      }
+    >();
+    for (const row of rows) {
+      const distinctDays = parseInt(row.distinct_days, 10) || 0;
+      let confidence: "high" | "medium" | "low" = "low";
+      if (distinctDays >= 90) confidence = "high";
+      else if (distinctDays >= 30) confidence = "medium";
+      result.set(row.attraction_id, {
+        p50: row.p50 ? parseFloat(row.p50) : 0,
+        p90: row.p90 ? parseFloat(row.p90) : 0,
+        sampleCount: parseInt(row.sample_count, 10) || 0,
+        distinctDays,
+        confidence,
+        isHeadliner: headlinerSet.has(row.attraction_id),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Bulk-persist a park's worth of attraction P50/P90 baselines in two
+   * upserts (one per table) plus a pipelined Redis warmup. Replaces the
+   * per-attraction save/upsert loop on the daily cron's hot path.
+   *
+   * Rows with p50 === 0 are skipped entirely (mirrors the single-shot
+   * processor logic — sampleCount=0 means no qualifying data).
+   */
+  async saveAttractionP50P90BaselinesBatch(
+    parkId: string,
+    rows: Array<{
+      attractionId: string;
+      p50: number;
+      p90: number;
+      sampleCount: number;
+      distinctDays: number;
+      confidence: "high" | "medium" | "low";
+      isHeadliner: boolean;
+    }>,
+  ): Promise<{ p50Saved: number; p90Saved: number }> {
+    const now = new Date();
+    const p50Rows = rows
+      .filter((r) => r.p50 > 0)
+      .map((r) => ({
+        attractionId: r.attractionId,
+        parkId,
+        p50Baseline: r.p50,
+        isHeadliner: r.isHeadliner,
+        sampleCount: r.sampleCount,
+        distinctDays: r.distinctDays,
+        confidence: r.confidence,
+        calculatedAt: now,
+      }));
+    const p90Rows = rows
+      .filter((r) => r.p90 > 0)
+      .map((r) => ({
+        attractionId: r.attractionId,
+        parkId,
+        p90Baseline: r.p90,
+        isHeadliner: r.isHeadliner,
+        sampleCount: r.sampleCount,
+        distinctDays: r.distinctDays,
+        confidence: r.confidence,
+        calculatedAt: now,
+      }));
+
+    if (p50Rows.length > 0) {
+      await this.attractionP50BaselineRepository.upsert(p50Rows, [
+        "attractionId",
+      ]);
+    }
+    if (p90Rows.length > 0) {
+      await this.attractionP90BaselineRepository.upsert(p90Rows, [
+        "attractionId",
+      ]);
+    }
+
+    // Pipelined Redis warmup — single round-trip regardless of count.
+    // Skipped entirely when nothing was saved so we don't waste a
+    // pipeline object on brand-new / empty parks.
+    if (p50Rows.length > 0 || p90Rows.length > 0) {
+      const pipeline = this.redis.pipeline();
+      for (const r of p50Rows) {
+        pipeline.set(
+          `attraction:p50:${r.attractionId}`,
+          r.p50Baseline.toString(),
+          "EX",
+          86400,
+        );
+      }
+      for (const r of p90Rows) {
+        pipeline.set(
+          `attraction:p90:${r.attractionId}`,
+          r.p90Baseline.toString(),
+          "EX",
+          86400,
+        );
+      }
+      await pipeline.exec();
+    }
+
+    return { p50Saved: p50Rows.length, p90Saved: p90Rows.length };
+  }
+
   async saveAttractionP50Baseline(
     attractionId: string,
     parkId: string,

@@ -69,10 +69,19 @@ describe("AnalyticsService — P90 + hourly history", () => {
     findOne: jest.fn(),
     upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
   };
+  const attractionP50Repo = {
+    findOne: jest.fn(),
+    save: jest.fn(),
+    upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
+  };
   const attractionP90Repo = {
     findOne: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     save: jest.fn(),
+    upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
+  };
+  const headlinerRepo = {
+    find: jest.fn().mockResolvedValue([]),
   };
   const hourlyRepo = {
     upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
@@ -115,7 +124,7 @@ describe("AnalyticsService — P90 + hourly history", () => {
         { provide: getRepositoryToken(ParkDailyStats), useValue: minimalMock },
         {
           provide: getRepositoryToken(HeadlinerAttraction),
-          useValue: minimalMock,
+          useValue: headlinerRepo,
         },
         {
           provide: getRepositoryToken(ParkP50Baseline),
@@ -123,7 +132,7 @@ describe("AnalyticsService — P90 + hourly history", () => {
         },
         {
           provide: getRepositoryToken(AttractionP50Baseline),
-          useValue: minimalMock,
+          useValue: attractionP50Repo,
         },
         { provide: getRepositoryToken(ParkP90Baseline), useValue: parkP90Repo },
         {
@@ -420,6 +429,208 @@ describe("AnalyticsService — P90 + hourly history", () => {
       // Empty slot arrays preserved — the read path uses absence vs. empty
       // to distinguish "not processed yet" from "no qualifying samples".
       expect(rows[1].slots).toEqual([]);
+    });
+  });
+
+  describe("calculateAttractionP50P90ForPark — batched per-park scan", () => {
+    it("runs ONE SQL query for the whole park instead of one per attraction", async () => {
+      queueDataRepo.query.mockResolvedValueOnce([
+        {
+          attraction_id: "a1",
+          p50: "18.5",
+          p90: "42.0",
+          sample_count: "1200",
+          distinct_days: "120",
+        },
+        {
+          attraction_id: "a2",
+          p50: "8.0",
+          p90: "15.0",
+          sample_count: "30",
+          distinct_days: "10",
+        },
+      ]);
+      headlinerRepo.find.mockResolvedValueOnce([{ attractionId: "a1" }]);
+
+      const result = await service.calculateAttractionP50P90ForPark(
+        "p1",
+        "Europe/Berlin",
+      );
+
+      // Crucial perf invariant: a single GROUP BY query, not N.
+      expect(queueDataRepo.query).toHaveBeenCalledTimes(1);
+      expect(headlinerRepo.find).toHaveBeenCalledTimes(1);
+
+      expect(result.size).toBe(2);
+      expect(result.get("a1")).toEqual({
+        p50: 18.5,
+        p90: 42,
+        sampleCount: 1200,
+        distinctDays: 120,
+        confidence: "high", // ≥ 90 distinct days
+        isHeadliner: true,
+      });
+      expect(result.get("a2")).toEqual({
+        p50: 8,
+        p90: 15,
+        sampleCount: 30,
+        distinctDays: 10,
+        confidence: "low", // < 30 distinct days
+        isHeadliner: false,
+      });
+    });
+
+    it("derives confidence levels from distinctDays at the right boundaries", async () => {
+      queueDataRepo.query.mockResolvedValueOnce([
+        {
+          attraction_id: "high",
+          p50: "10",
+          p90: "20",
+          sample_count: "1",
+          distinct_days: "90",
+        },
+        {
+          attraction_id: "medium",
+          p50: "10",
+          p90: "20",
+          sample_count: "1",
+          distinct_days: "30",
+        },
+        {
+          attraction_id: "low",
+          p50: "10",
+          p90: "20",
+          sample_count: "1",
+          distinct_days: "29",
+        },
+      ]);
+
+      const result = await service.calculateAttractionP50P90ForPark(
+        "p1",
+        "UTC",
+      );
+
+      expect(result.get("high")!.confidence).toBe("high");
+      expect(result.get("medium")!.confidence).toBe("medium");
+      expect(result.get("low")!.confidence).toBe("low");
+    });
+
+    it("returns an empty map when the park has no qualifying queue data", async () => {
+      queueDataRepo.query.mockResolvedValueOnce([]);
+
+      const result = await service.calculateAttractionP50P90ForPark(
+        "empty-park",
+        "UTC",
+      );
+
+      expect(result.size).toBe(0);
+      // headliner lookup still happens (cheap) but its result is unused.
+      expect(headlinerRepo.find).toHaveBeenCalled();
+    });
+  });
+
+  describe("saveAttractionP50P90BaselinesBatch — bulk upsert + pipelined Redis", () => {
+    it("upserts P50 and P90 in two calls regardless of row count", async () => {
+      const rows = [
+        {
+          attractionId: "a1",
+          p50: 20,
+          p90: 50,
+          sampleCount: 100,
+          distinctDays: 100,
+          confidence: "high" as const,
+          isHeadliner: true,
+        },
+        {
+          attractionId: "a2",
+          p50: 10,
+          p90: 25,
+          sampleCount: 50,
+          distinctDays: 50,
+          confidence: "medium" as const,
+          isHeadliner: false,
+        },
+      ];
+
+      const summary = await service.saveAttractionP50P90BaselinesBatch(
+        "p1",
+        rows,
+      );
+
+      expect(summary).toEqual({ p50Saved: 2, p90Saved: 2 });
+      // Exactly one upsert per table, not per row.
+      expect(attractionP50Repo.upsert).toHaveBeenCalledTimes(1);
+      expect(attractionP90Repo.upsert).toHaveBeenCalledTimes(1);
+      const [p50Rows, p50Conflict] = attractionP50Repo.upsert.mock.calls[0];
+      expect(p50Rows).toHaveLength(2);
+      expect(p50Conflict).toEqual(["attractionId"]);
+    });
+
+    it("skips P50 / P90 rows with sentinel-0 baselines (insufficient data)", async () => {
+      const rows = [
+        {
+          attractionId: "a1",
+          p50: 20,
+          p90: 0, // no peak baseline yet
+          sampleCount: 50,
+          distinctDays: 50,
+          confidence: "medium" as const,
+          isHeadliner: false,
+        },
+        {
+          attractionId: "a2",
+          p50: 0, // no qualifying data at all
+          p90: 0,
+          sampleCount: 0,
+          distinctDays: 0,
+          confidence: "low" as const,
+          isHeadliner: false,
+        },
+      ];
+
+      const summary = await service.saveAttractionP50P90BaselinesBatch(
+        "p1",
+        rows,
+      );
+
+      // a1's P50 saved, neither P90 saved, a2 fully skipped.
+      expect(summary).toEqual({ p50Saved: 1, p90Saved: 0 });
+      expect(attractionP50Repo.upsert).toHaveBeenCalledTimes(1);
+      // P90 upsert never fired because no row had p90 > 0.
+      expect(attractionP90Repo.upsert).not.toHaveBeenCalled();
+    });
+
+    it("warms the Redis cache for each saved baseline in a single pipeline round-trip", async () => {
+      await service.saveAttractionP50P90BaselinesBatch("p1", [
+        {
+          attractionId: "a1",
+          p50: 20,
+          p90: 50,
+          sampleCount: 100,
+          distinctDays: 100,
+          confidence: "high",
+          isHeadliner: true,
+        },
+      ]);
+
+      // Both keys are primed (the pipeline mock applies them on exec).
+      expect(redisStore.get("attraction:p50:a1")).toBe("20");
+      expect(redisStore.get("attraction:p90:a1")).toBe("50");
+      // pipeline.exec was called exactly once — not per-row.
+      expect(redis.pipeline).toHaveBeenCalledTimes(1);
+    });
+
+    it("no-ops cleanly when given an empty array (Honolulu-style brand-new parks)", async () => {
+      const summary = await service.saveAttractionP50P90BaselinesBatch(
+        "p1",
+        [],
+      );
+
+      expect(summary).toEqual({ p50Saved: 0, p90Saved: 0 });
+      expect(attractionP50Repo.upsert).not.toHaveBeenCalled();
+      expect(attractionP90Repo.upsert).not.toHaveBeenCalled();
+      // No pipeline either — wasted Redis round-trip avoided.
+      expect(redis.pipeline).not.toHaveBeenCalled();
     });
   });
 });

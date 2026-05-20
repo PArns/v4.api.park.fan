@@ -137,52 +137,54 @@ export class P50BaselineProcessor {
       let successCount = 0;
       let failureCount = 0;
 
+      // One GROUP BY query per *park* (returning P50/P90 per attraction)
+      // replaces the previous per-attraction PERCENTILE_CONT scan. The
+      // 548-day window scan still happens, but PostgreSQL can produce
+      // results for an entire park's attractions from a single sort. A
+      // 200-park / 10k-attraction system used to fire ~10k heavy queries
+      // here every night; now it fires ~200, all of which are I/O-bound
+      // on the same hot index.
       for (const park of parks) {
-        // Fetch attractions via service (findAll() does not eager-load attractions)
-        // Use large page size to get all attractions in one query
-        const { data: attractions } =
-          await this.attractionsService.findByParkId(park.id, 1, 10000);
-
-        for (const attraction of attractions) {
-          try {
-            // Calculate P50 baseline for this attraction
-            const baseline = await this.analyticsService.calculateAttractionP50(
-              attraction.id,
-            );
-
-            if (baseline.p50 === 0) {
-              // sampleCount=0 means no qualifying data (waitTime<10 or show/walkthrough) — not a real error
-              if (baseline.sampleCount > 0) {
-                this.logger.warn(
-                  `P50 baseline is 0 for attraction ${attraction.name} (${attraction.id}) - ${baseline.sampleCount} samples but median is 0`,
-                );
-              } else {
-                this.logger.debug(
-                  `Skipping P50 for ${attraction.name} — no qualifying data (low-wait or show attraction)`,
-                );
-              }
-              failureCount++;
-              continue;
-            }
-
-            // Save to database and cache
-            await this.analyticsService.saveAttractionP50Baseline(
-              attraction.id,
+        try {
+          const perAttraction =
+            await this.analyticsService.calculateAttractionP50P90ForPark(
               park.id,
-              baseline,
+              park.timezone || "UTC",
             );
 
+          const rows = Array.from(perAttraction.entries()).map(
+            ([attractionId, baseline]) => ({
+              attractionId,
+              ...baseline,
+            }),
+          );
+
+          if (rows.length === 0) {
             this.logger.debug(
-              `✅ ${attraction.name}: ${baseline.p50}min (headliner: ${baseline.isHeadliner}, confidence: ${baseline.confidence})`,
+              `Skipping ${park.name} — no attractions with qualifying data`,
             );
-            successCount++;
-          } catch (error) {
-            this.logger.error(
-              `Failed to calculate P50 baseline for attraction ${attraction.name} (${attraction.id})`,
-              error instanceof Error ? error.stack : String(error),
-            );
-            failureCount++;
+            continue;
           }
+
+          const { p50Saved } =
+            await this.analyticsService.saveAttractionP50P90BaselinesBatch(
+              park.id,
+              rows,
+            );
+          successCount += p50Saved;
+          failureCount += rows.length - p50Saved;
+
+          this.logger.debug(
+            `✅ ${park.name}: ${p50Saved}/${rows.length} attraction baselines saved`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `Failed to calculate P50/P90 baselines for park ${park.name} (${park.id})`,
+            error instanceof Error ? error.stack : String(error),
+          );
+          // Count every attraction in the park as failed so the summary
+          // log reflects scope, not the single park-level error.
+          failureCount += 1;
         }
       }
 
