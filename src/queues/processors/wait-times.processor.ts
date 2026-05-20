@@ -164,17 +164,6 @@ export class WaitTimesProcessor {
                 parkExternalIdMap,
               );
 
-              // Update Crowd Level
-              if (liveData.crowdLevel != null) {
-                await this.parkRepository
-                  .update(park.id, { currentCrowdLevel: liveData.crowdLevel })
-                  .catch((e) =>
-                    this.logger.warn(
-                      `Failed to update crowd level for park ${park.id}: ${e?.message ?? e}`,
-                    ),
-                  );
-              }
-
               // Update Schedule from Live Data (Fallback)
               if (
                 liveData.operatingHours &&

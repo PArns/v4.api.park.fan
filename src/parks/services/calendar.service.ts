@@ -239,17 +239,16 @@ export class CalendarService {
 
     // Pre-compute predicted crowd levels for future days. Mirrors
     // calculateCrowdLevelForDate: predicted day-peak vs. P50 (median)
-    // baseline, falling back to P90 when no P50 row exists yet.
-    const [allHeadliners, p50Baseline, p90Baseline] = await Promise.all([
+    // baseline.
+    const [allHeadliners, p50Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractions(park.id),
       this.analyticsService.getP50BaselineFromCache(park.id),
-      this.analyticsService.getP90BaselineFromCache(park.id),
     ]);
     const headlinerIdSet = new Set(allHeadliners.map((h) => h.attractionId));
     const predictedCrowdLevels = this.buildPredictedCrowdLevels(
       mlPredictions.predictions,
       headlinerIdSet,
-      p50Baseline || p90Baseline,
+      p50Baseline,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -855,17 +854,10 @@ export class CalendarService {
 
     // Per-park P50 baseline (median typical wait) is the right reference
     // for per-hour predictions: 100% = predicted median matches a typical
-    // wait. Falls back to P90 for parks without a P50 row yet, then to a
-    // generic 25 min absolute reference for parks with no baseline at all.
-    let baseline = await this.analyticsService.getP50BaselineFromCache(
-      park.id,
-    );
-    if (baseline === 0) {
-      baseline = await this.analyticsService.getP90BaselineFromCache(park.id);
-    }
-    if (baseline === 0) {
-      baseline = 25;
-    }
+    // wait. Falls through to a generic 25 min absolute floor for parks
+    // with no baseline at all (brand-new park before the first cron).
+    const p50 = await this.analyticsService.getP50BaselineFromCache(park.id);
+    const baseline = p50 > 0 ? p50 : 25;
 
     // Aggregate (median)
     const result: HourlyPrediction[] = [];

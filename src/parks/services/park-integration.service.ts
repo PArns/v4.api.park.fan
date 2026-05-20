@@ -941,17 +941,10 @@ export class ParkIntegrationService {
         ]);
 
         // "Typical wait" displayed for closed parks is the median baseline
-        // (P50) — what a typical headliner wait looks like — falling back
-        // to P90 only when no P50 row exists yet. Matches the
+        // (P50) — what a typical headliner wait looks like — matching the
         // peak-vs-median crowd semantic used by every other surface.
-        let typicalWait = await this.analyticsService.getP50BaselineFromCache(
-          park.id,
-        );
-        if (typicalWait === 0) {
-          typicalWait = await this.analyticsService.getP90BaselineFromCache(
-            park.id,
-          );
-        }
+        const typicalWait =
+          await this.analyticsService.getP50BaselineFromCache(park.id);
 
         dto.analytics = {
           occupancy: {
@@ -1206,15 +1199,13 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, p50Baseline, p90Baseline] = await Promise.all([
+    const [headlinerIds, p50Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractionIds(parkId),
       this.analyticsService.getP50BaselineFromCache(parkId),
-      this.analyticsService.getP90BaselineFromCache(parkId),
     ]);
     // crowdLevel is peak-vs-median; the P50 baseline ("typical wait")
-    // is the reference. P90 stays as fallback for parks whose P50 row
-    // isn't populated yet.
-    const baselineForCrowd = p50Baseline || p90Baseline;
+    // is the reference.
+    const baselineForCrowd = p50Baseline;
 
     const datesMap = new Map<string, PredictionDto[]>();
 

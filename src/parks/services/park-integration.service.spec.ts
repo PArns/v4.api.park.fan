@@ -177,7 +177,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["headliner"]),
       );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         // Headliner predicts a 70-min wait — high.
@@ -201,7 +201,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set<string>(),
       );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         { attractionId: "a1", date: "2026-06-13", hour: 12, wait: 30 },
@@ -244,7 +244,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         {
@@ -266,7 +266,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         // Intentionally out-of-order on input.
@@ -288,7 +288,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         {

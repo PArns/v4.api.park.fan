@@ -171,14 +171,14 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
   describe("calculateParkOccupancy", () => {
     it("uses the P50 baseline when one exists (peak-vs-median)", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
-      // P90 = 50. Current park peak = 50. Should read as 100% — typical day.
+      // P50 = 50. Current park peak = 50. Should read as 100% — typical day.
       redisStore.set(
-        "park:p90:p1",
-        JSON.stringify({ p90: 50, confidence: "high" }),
+        "park:p50:p1",
+        JSON.stringify({ p50: 50, confidence: "high" }),
       );
-      parkP90Repo.findOne.mockResolvedValue({
+      parkP50Repo.findOne.mockResolvedValue({
         parkId: "p1",
-        p90Baseline: 50,
+        p50Baseline: 50,
         confidence: "high",
       });
       stubOccupancyQueries({ currentPeak: 50, activeCount: 5 });
@@ -191,33 +191,11 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(result.comparedToTypical).toBe(0);
     });
 
-    it("falls back to P90 when P50 baseline row is missing", async () => {
+    it("returns a low-confidence default when no P50 baseline exists", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
-      // P90 absent — fallback to P50 = 30. Current peak = 30 → 100%.
-      // No `park:p90:p1` cache entry, and the DB returns null.
-      parkP90Repo.findOne.mockResolvedValue(null);
-      redisStore.set(
-        "park:p50:p1",
-        JSON.stringify({ p50: 30, confidence: "medium" }),
-      );
-      parkP50Repo.findOne.mockResolvedValue({
-        parkId: "p1",
-        p50Baseline: 30,
-        confidence: "medium",
-      });
-      stubOccupancyQueries({ currentPeak: 30, activeCount: 5 });
-
-      const result = await service.calculateParkOccupancy("p1");
-
-      expect(result.current).toBe(100);
-      expect(result.baseline90thPercentile).toBe(30);
-      // Fell back to the P50 confidence, not "low" default.
-      expect(result.confidence).toBe("medium");
-    });
-
-    it("returns a low-confidence default when neither P90 nor P50 baseline exists", async () => {
-      headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
-      parkP90Repo.findOne.mockResolvedValue(null);
+      // No P50 cache entry and DB returns null → no baseline, low confidence.
+      // (P50 and P90 are written atomically by the daily cron; a missing
+      // row means the park is brand-new and both percentiles are absent.)
       parkP50Repo.findOne.mockResolvedValue(null);
       stubOccupancyQueries({ currentPeak: 40, activeCount: 5 });
 
@@ -239,16 +217,20 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(result.current).toBe(0);
       expect(result.trend).toBe("stable");
       // No baseline lookup is attempted on the no-data branch.
-      expect(parkP90Repo.findOne).not.toHaveBeenCalled();
+      expect(parkP50Repo.findOne).not.toHaveBeenCalled();
     });
 
-    it("reads 'high' (130%+) when today's peak materially outruns the typical peak", async () => {
+    it("reads 'high' (130%+) when today's peak materially outruns the typical wait", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
-      parkP90Repo.findOne.mockResolvedValue({
+      parkP50Repo.findOne.mockResolvedValue({
         parkId: "p1",
-        p90Baseline: 50,
+        p50Baseline: 50,
         confidence: "high",
       });
+      redisStore.set(
+        "park:p50:p1",
+        JSON.stringify({ p50: 50, confidence: "high" }),
+      );
       // Current peak = 70, baseline = 50 → 140% → "high" band per
       // determineCrowdLevel (111-150%).
       stubOccupancyQueries({ currentPeak: 70, activeCount: 5 });
@@ -261,20 +243,23 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(service.determineCrowdLevel(result.current)).toBe("high");
     });
 
-    it("reads 'low' (<90%) when the current peak is well below typical", async () => {
+    it("reads 'very_low' (<=60%) when the current peak is well below typical", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
-      parkP90Repo.findOne.mockResolvedValue({
+      parkP50Repo.findOne.mockResolvedValue({
         parkId: "p1",
-        p90Baseline: 50,
+        p50Baseline: 50,
         confidence: "high",
       });
+      redisStore.set(
+        "park:p50:p1",
+        JSON.stringify({ p50: 50, confidence: "high" }),
+      );
       stubOccupancyQueries({ currentPeak: 30, activeCount: 5 });
 
       const result = await service.calculateParkOccupancy("p1");
 
       expect(result.current).toBe(60);
       expect(result.comparisonStatus).toBe("lower");
-      // 60% → "very_low" by the threshold table (very_low: ≤ 60%).
       expect(service.determineCrowdLevel(result.current)).toBe("very_low");
     });
   });

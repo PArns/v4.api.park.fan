@@ -313,21 +313,17 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          // Prefer P50 baseline (median, "typical wait") and fall back to
-          // P90 only for entities without a P50 row yet. Peak-vs-median
-          // ratio: 100% = current wait matches typical, >150% = busier
-          // than typical. No live 548-day PERCENTILE_CONT fallback — that
+          // P50 baseline (median, "typical wait"). Peak-vs-median ratio:
+          // 100% = current wait matches typical, >150% = busier than
+          // typical. No live 548-day PERCENTILE_CONT fallback — that
           // was the dominant cost on attraction-detail cache misses.
-          let baseline =
+          // No P90 fallback either: both percentiles are produced from
+          // the same daily PERCENTILE_CONT scan and written atomically,
+          // so "P50 missing while P90 present" is not a real state.
+          const baseline =
             await this.analyticsService.getAttractionP50BaselineFromCache(
               attraction.id,
             );
-          if (baseline === 0) {
-            baseline =
-              await this.analyticsService.getAttractionP90BaselineFromCache(
-                attraction.id,
-              );
-          }
 
           crowdLevel =
             this.analyticsService.getAttractionCrowdLevel(wait, baseline) ||
@@ -772,14 +768,11 @@ export class AttractionIntegrationService {
       // so the ratio reads as "today's peak vs typical median" — a
       // peak-vs-median scale that calibrates against the existing threshold
       // ladder (100% = matches typical median, 150%+ = elevated, 200%+ =
-      // extreme). Replaces the previous P90-baseline + weighted-avg-of-
-      // hourly-P90s combo, which was avg-vs-peak and underreported
-      // (everything looked "low") for ordinary days.
-      const [attractionP50Baseline, attractionP90Baseline] = await Promise.all([
-        this.analyticsService.getAttractionP50BaselineFromCache(attractionId),
-        this.analyticsService.getAttractionP90BaselineFromCache(attractionId),
-      ]);
-      const attractionBaseline = attractionP50Baseline || attractionP90Baseline;
+      // extreme).
+      const attractionBaseline =
+        await this.analyticsService.getAttractionP50BaselineFromCache(
+          attractionId,
+        );
 
       // Build history entries for each day
       const history: HistoryDayDto[] = [];

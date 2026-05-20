@@ -153,19 +153,6 @@ export class Park {
   @Index()
   wartezeitenEntityId: string | null; // The UUID from Wartezeiten.app
 
-  // EXPERIMENTAL: Current crowd level from Wartezeiten.app (real-time)
-  // ⚠️ NOTE: Data quality unverified - stored for analysis/comparison only
-  // Range: 0-100 (float), updated every 5-10 minutes
-  // TODO: Compare with ML predictions before exposing in API
-  @Column({
-    name: "current_crowd_level",
-    type: "decimal",
-    precision: 5,
-    scale: 2,
-    nullable: true,
-  })
-  currentCrowdLevel: number | null;
-
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 

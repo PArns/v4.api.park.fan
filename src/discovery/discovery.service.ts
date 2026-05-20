@@ -483,7 +483,6 @@ export class DiscoveryService {
       )
       SELECT
         p.id,
-        p."current_crowd_level",
         CASE
           -- If park has schedule: Use schedule-based logic
           WHEN pws."parkId" IS NOT NULL THEN
@@ -520,9 +519,29 @@ export class DiscoveryService {
         operatingAttractions: parseInt(row.operating_conf_count || "0", 10),
         explicitlyClosedCount: parseInt(row.explicitly_closed_count || "0", 10),
         totalAttractions: parseInt(row.total_attractions || "0", 10),
-        crowdLevel: row.current_crowd_level
-          ? parseFloat(row.current_crowd_level)
-          : null,
+        crowdLevel: null,
+      });
+    }
+
+    // Hydrate crowdLevel from the shared park:occupancy:{id} cache (same
+    // values everywhere else reads from — search, favorites, location).
+    // One MGET regardless of park count; ignored entries stay null.
+    const parkIds = Array.from(stats.keys());
+    if (parkIds.length > 0) {
+      const keys = parkIds.map((id) => `park:occupancy:${id}`);
+      const cached = await this.redis.mget(...keys);
+      parkIds.forEach((id, i) => {
+        const raw = cached[i];
+        if (!raw) return;
+        try {
+          const occupancy = JSON.parse(raw) as { current?: number };
+          if (typeof occupancy.current === "number") {
+            const s = stats.get(id);
+            if (s) s.crowdLevel = occupancy.current;
+          }
+        } catch {
+          // Malformed cache entry — leave crowdLevel null.
+        }
       });
     }
 
