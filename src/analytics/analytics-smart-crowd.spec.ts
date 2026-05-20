@@ -19,6 +19,7 @@ import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("Smart Crowd Level Logic", () => {
@@ -121,6 +122,19 @@ describe("Smart Crowd Level Logic", () => {
           useValue: {
             findOne: jest.fn().mockResolvedValue(null),
             find: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: getRepositoryToken(AttractionHourlyHistory),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            find: jest.fn().mockResolvedValue([]),
+            upsert: jest.fn(),
+            createQueryBuilder: jest.fn(() => ({
+              where: jest.fn().mockReturnThis(),
+              andWhere: jest.fn().mockReturnThis(),
+              getMany: jest.fn().mockResolvedValue([]),
+            })),
           },
         },
         {

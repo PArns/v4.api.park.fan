@@ -22,6 +22,7 @@ import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -109,6 +110,8 @@ export class AnalyticsService {
     private parkP90BaselineRepository: Repository<ParkP90Baseline>,
     @InjectRepository(AttractionP90Baseline)
     private attractionP90BaselineRepository: Repository<AttractionP90Baseline>,
+    @InjectRepository(AttractionHourlyHistory)
+    private attractionHourlyHistoryRepository: Repository<AttractionHourlyHistory>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -2411,186 +2414,6 @@ export class AnalyticsService {
 
     return trendsMap;
   }
-  /**
-   * Calculate 90th percentile with confidence score
-   *
-   * Returns the P90 value along with sample count and confidence level.
-   * Use this method when you need to expose confidence to the caller.
-   *
-   * @param entityId - Park or attraction ID
-   * @param type - "park" or "attraction"
-   * @param timezone - Optional timezone (if not provided, fetched from entity)
-   * @returns Object with P90 value, sample count, distinct days, and confidence level
-   */
-  async get90thPercentileWithConfidence(
-    entityId: string,
-    type: "park" | "attraction",
-    timezone?: string,
-  ): Promise<{
-    p90: number;
-    p50: number;
-    sampleCount: number;
-    distinctDays: number;
-    confidence: "high" | "medium" | "low";
-  }> {
-    const SLIDING_WINDOW_DAYS = 548; // 1.5 years for robust seasonal coverage
-    const cacheKey = `analytics:percentile:sliding:${type}:${entityId}`;
-
-    // Try cache first
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (typeof parsed === "object" && parsed.p90 !== undefined) {
-          return parsed;
-        }
-        // Legacy cache format (just a number) - return with unknown confidence
-        return {
-          p90: parseInt(cached, 10),
-          p50: 0, // Legacy cache lacks P50
-          sampleCount: 0,
-          distinctDays: 0,
-          confidence: "low",
-        };
-      } catch {
-        // Invalid cache, continue to calculate
-      }
-    }
-
-    // Resolve timezone: if not provided, fetch from entity
-    let resolvedTimezone = timezone;
-    if (!resolvedTimezone) {
-      if (type === "park") {
-        const park = await this.parkRepository.findOne({
-          where: { id: entityId },
-          select: ["timezone"],
-        });
-        resolvedTimezone = park?.timezone || "UTC";
-      } else {
-        // For attractions, get timezone from park
-        const attraction = await this.attractionRepository.findOne({
-          where: { id: entityId },
-          relations: ["park"],
-          select: ["id"],
-        });
-        resolvedTimezone = attraction?.park?.timezone || "UTC";
-      }
-    }
-
-    // Calculate cutoff date: now - 548 days in park timezone
-    const now = new Date();
-
-    // Get current date in park timezone
-    const todayStr = formatInTimeZone(now, resolvedTimezone, "yyyy-MM-dd");
-    const today = fromZonedTime(`${todayStr}T00:00:00`, resolvedTimezone);
-    const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
-
-    // Compute P50/P90 and distinct-day count in a single DB aggregation.
-    // Previously this fetched all raw rows (~50 K+) and sorted them in JS —
-    // now Postgres does the work and returns exactly one row.
-    let aggRow: {
-      p50: string | null;
-      p90: string | null;
-      sample_count: string;
-      distinct_days: string;
-    };
-
-    if (type === "attraction") {
-      const rows = await this.queueDataRepository.query(
-        `SELECT
-           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
-           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
-           COUNT(*)::int                                               AS sample_count,
-           COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
-         FROM queue_data qd
-         WHERE qd."attractionId" = $1::uuid
-           AND qd.timestamp       >= $2
-           AND qd."waitTime"      >= 10
-           AND qd.status          = 'OPERATING'
-           AND qd."queueType"     = 'STANDBY'`,
-        [entityId, cutoff, resolvedTimezone],
-      );
-      aggRow = rows[0];
-    } else {
-      // Use avg-of-per-ride-P50s/P90s to match calculateP50Baseline.
-      // A pooled PERCENTILE_CONT across all park attractions is dominated by
-      // high-frequency low-wait rides, producing a deflated fallback baseline.
-      const rows = await this.queueDataRepository.query(
-        `SELECT
-           AVG(per_ride.p50)::numeric                  AS p50,
-           AVG(per_ride.p90)::numeric                  AS p90,
-           SUM(per_ride.sample_count)::int             AS sample_count,
-           MAX(per_ride.distinct_days)::int            AS distinct_days
-         FROM (
-           SELECT
-             qd."attractionId",
-             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS p50,
-             PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
-             COUNT(*)::int                                               AS sample_count,
-             COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $3))::int    AS distinct_days
-           FROM queue_data qd
-           INNER JOIN attractions a ON a.id = qd."attractionId"
-           WHERE a."parkId"      = $1::uuid
-             AND qd.timestamp   >= $2
-             AND qd."waitTime"  >= 10
-             AND qd.status      = 'OPERATING'
-             AND qd."queueType" = 'STANDBY'
-           GROUP BY qd."attractionId"
-         ) per_ride`,
-        [entityId, cutoff, resolvedTimezone],
-      );
-      aggRow = rows[0];
-    }
-
-    let result: {
-      p90: number;
-      p50: number;
-      sampleCount: number;
-      distinctDays: number;
-      confidence: "high" | "medium" | "low";
-    } = { p90: 0, p50: 0, sampleCount: 0, distinctDays: 0, confidence: "low" };
-
-    const sampleCount = parseInt(aggRow.sample_count, 10) || 0;
-
-    if (sampleCount > 0 && aggRow.p50 !== null && aggRow.p90 !== null) {
-      const p50 = Math.round(parseFloat(aggRow.p50));
-      const p90 = Math.round(parseFloat(aggRow.p90));
-      const uniqueDays = parseInt(aggRow.distinct_days, 10) || 0;
-
-      let confidence: "high" | "medium" | "low" = "low";
-      if (uniqueDays >= 90) {
-        confidence = "high";
-      } else if (uniqueDays >= 30) {
-        confidence = "medium";
-      }
-
-      result = { p90, p50, sampleCount, distinctDays: uniqueDays, confidence };
-
-      this.logger.debug(
-        `P90 sliding window for ${type} ${entityId}: ${p90}min from ${sampleCount} samples, ${uniqueDays} days (${SLIDING_WINDOW_DAYS}-day window, confidence: ${confidence})`,
-      );
-    } else {
-      this.logger.debug(
-        `No historical data found for ${type} ${entityId} (${SLIDING_WINDOW_DAYS}-day sliding window) - returning 0`,
-      );
-    }
-
-    // Cache result in Redis
-    // - Shorter TTL for 0 values (1 hour) or low confidence (4 hours)
-    // - Standard TTL (24 hours) for high confidence data
-    let ttl: number;
-    if (result.p90 === 0) {
-      ttl = 60 * 60; // 1 hour for no data
-    } else if (result.confidence === "low") {
-      ttl = 4 * 60 * 60; // 4 hours for low confidence
-    } else {
-      ttl = this.TTL_PERCENTILES; // 24 hours for good data
-    }
-
-    await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttl);
-
-    return result;
-  }
 
   /**
    * Calculate load rating based on current wait vs 90th percentile baseline
@@ -4829,5 +4652,186 @@ export class AnalyticsService {
     }
 
     return result;
+  }
+
+  /**
+   * Read pre-aggregated hourly history rows for an attraction across a
+   * date range. Returns a map keyed by date string ("YYYY-MM-DD") so the
+   * caller can mix-and-match with live "today" data without per-date
+   * round trips. Missing rows simply aren't in the map — callers should
+   * treat absence as "no data for that day yet" rather than "zero
+   * activity".
+   */
+  async getAttractionHourlyHistory(
+    attractionId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<Map<string, AttractionHourlyHistory>> {
+    const rows = await this.attractionHourlyHistoryRepository
+      .createQueryBuilder("h")
+      .where("h.attractionId = :attractionId", { attractionId })
+      .andWhere("h.date BETWEEN :fromDate AND :toDate", { fromDate, toDate })
+      .getMany();
+
+    const map = new Map<string, AttractionHourlyHistory>();
+    for (const row of rows) {
+      const key =
+        typeof row.date === "string"
+          ? row.date
+          : new Date(row.date).toISOString().split("T")[0];
+      map.set(key, row);
+    }
+    return map;
+  }
+
+  /**
+   * Per-park hourly rollup for a single date. One SQL pass produces
+   * {attractionId, time_slot, p90, avgWait, sampleCount} buckets for
+   * every attraction in the park — the cron processor groups these back
+   * by attractionId and persists one row per attraction.
+   *
+   * The date range is computed in park timezone (start of day → next
+   * day) so we always capture exactly one operating calendar day.
+   */
+  async computeParkHourlyHistoryForDate(
+    parkId: string,
+    date: string,
+    timezone: string,
+  ): Promise<
+    Map<
+      string,
+      Array<{
+        time_slot: string;
+        p90: number;
+        avgWait: number;
+        sampleCount: number;
+      }>
+    >
+  > {
+    const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
+    const nextDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    const rows = await this.queueDataRepository.query(
+      `
+      SELECT
+        qd."attractionId" AS attraction_id,
+        (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $4)::text, 2, '0') ||
+         ':' ||
+         LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $4) / 15) * 15)::text, 2, '0')) AS time_slot,
+        PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90,
+        AVG(qd."waitTime") AS avg_wait,
+        COUNT(*) AS sample_count
+      FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+      WHERE a."parkId" = $1::uuid
+        AND qd.timestamp >= $2
+        AND qd.timestamp < $3
+        AND qd.status = 'OPERATING'
+        AND qd."queueType" = 'STANDBY'
+        AND qd."waitTime" IS NOT NULL
+        AND qd."waitTime" >= 5
+      GROUP BY qd."attractionId", time_slot
+      HAVING COUNT(*) >= 1
+      ORDER BY qd."attractionId", time_slot
+      `,
+      [parkId, startOfDay, nextDay, timezone],
+    );
+
+    const result = new Map<
+      string,
+      Array<{
+        time_slot: string;
+        p90: number;
+        avgWait: number;
+        sampleCount: number;
+      }>
+    >();
+    for (const row of rows) {
+      const id = row.attraction_id as string;
+      let bucket = result.get(id);
+      if (!bucket) {
+        bucket = [];
+        result.set(id, bucket);
+      }
+      bucket.push({
+        time_slot: row.time_slot,
+        p90: roundToNearest5Minutes(parseFloat(row.p90)),
+        avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)),
+        sampleCount: parseInt(row.sample_count, 10) || 0,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Per-park down-count rollup for a single date. Mirrors the existing
+   * inline query inside `getAttractionHistory` — counts distinct hours
+   * with status='DOWN' per attraction. Returned as a Map<attractionId,
+   * downCount>.
+   */
+  async computeParkDownCountForDate(
+    parkId: string,
+    date: string,
+    timezone: string,
+  ): Promise<Map<string, number>> {
+    const startOfDay = fromZonedTime(`${date}T00:00:00`, timezone);
+    const nextDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    const rows = await this.queueDataRepository.query(
+      `
+      SELECT
+        qd."attractionId" AS attraction_id,
+        COUNT(DISTINCT DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $4)) AS down_count
+      FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+      WHERE a."parkId" = $1::uuid
+        AND qd.timestamp >= $2
+        AND qd.timestamp < $3
+        AND qd.status = 'DOWN'
+      GROUP BY qd."attractionId"
+      `,
+      [parkId, startOfDay, nextDay, timezone],
+    );
+
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      map.set(row.attraction_id as string, parseInt(row.down_count, 10) || 0);
+    }
+    return map;
+  }
+
+  /**
+   * Bulk-upsert hourly history rows for a single date — one round-trip
+   * regardless of how many attractions changed. Rows for attractions
+   * that produced no slots are still written with an empty array so the
+   * read path can tell "we know there was nothing" from "no row yet".
+   */
+  async saveAttractionHourlyHistoryBatch(
+    rows: Array<{
+      attractionId: string;
+      parkId: string;
+      date: string;
+      slots: Array<{
+        time_slot: string;
+        p90: number;
+        avgWait: number;
+        sampleCount: number;
+      }>;
+      downCount: number;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const now = new Date();
+    await this.attractionHourlyHistoryRepository.upsert(
+      rows.map((r) => ({
+        attractionId: r.attractionId,
+        parkId: r.parkId,
+        date: r.date,
+        slots: r.slots,
+        downCount: r.downCount,
+        calculatedAt: now,
+      })),
+      ["attractionId", "date"],
+    );
   }
 }

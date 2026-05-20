@@ -28,9 +28,6 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue, // Phase 6.2: Combined
-    @InjectQueue("attractions-metadata") private attractionsQueue: Queue, // DEPRECATED
-    @InjectQueue("shows-metadata") private showsQueue: Queue, // DEPRECATED
-    @InjectQueue("restaurants-metadata") private restaurantsQueue: Queue, // DEPRECATED
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("weather-historical")
     private weatherHistoricalQueue: Queue,
@@ -45,7 +42,9 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("ml-monitoring")
     private mlMonitoringQueue: Queue,
     @InjectQueue("stats") private statsQueue: Queue,
-    @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline
+    @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 + P90 baseline
+    @InjectQueue("attraction-hourly-history")
+    private attractionHourlyHistoryQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
   ) {}
 
@@ -580,6 +579,27 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 4 * * *", // Daily at 4am
           },
           jobId: "p50-attraction-baseline-cron",
+        },
+      );
+    }
+
+    // Attraction hourly history: daily at 4:30 AM (after attraction P50/P90
+    // baselines finish). Pre-aggregates yesterday's per-attraction 15-min
+    // slot breakdown so the history endpoint can serve a 30-day chart
+    // with one SELECT instead of 30× PERCENTILE_CONT scans.
+    const hasHourlyHistoryCron = await this.hasRepeatableJob(
+      this.attractionHourlyHistoryQueue,
+      "attraction-hourly-history-cron",
+    );
+    if (!hasHourlyHistoryCron) {
+      await this.attractionHourlyHistoryQueue.add(
+        "calculate-yesterday-hourly-history",
+        {},
+        {
+          repeat: {
+            cron: "30 4 * * *", // Daily at 4:30am
+          },
+          jobId: "attraction-hourly-history-cron",
         },
       );
     }

@@ -23,6 +23,7 @@ import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity
       AttractionP50Baseline,
       ParkP90Baseline,
       AttractionP90Baseline,
+      AttractionHourlyHistory,
     ]),
   ],
   providers: [AnalyticsService, ParkHistoricalStatsService],

@@ -6,22 +6,26 @@ import { ParksService } from "../../parks/parks.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 
 /**
- * P50 Baseline Processor
+ * P50 + P90 Baseline Processor
  *
- * Calculates and stores P50 (median) baselines for parks and attractions.
+ * Calculates and stores both the median (P50) and the peak (P90) wait-time
+ * baselines for parks and attractions. PostgreSQL produces both percentiles
+ * from a single PERCENTILE_CONT sort, so the additional P90 row is free
+ * on top of the existing P50 job.
  *
  * Strategy:
- * - Runs daily at 3am (after percentile calculation at 2am)
- * - Identifies headliner attractions using 3-tier adaptive system
- * - Calculates P50 baseline from headliners only (548-day window)
- * - Stores in database and caches in Redis
+ * - Runs daily — parks at 3 AM, attractions at 4 AM (after the
+ *   percentile-aggregates job at 2 AM).
+ * - Identifies headliner attractions via the 3-tier adaptive system.
+ * - Calculates per-headliner P50 / P90 over the 548-day sliding window.
+ * - Park baselines = avg-of-per-headliner-{P50,P90} (consistent with the
+ *   peak-vs-peak and avg-vs-avg comparisons the API surfaces).
+ * - Writes `park_p50_baselines` + `park_p90_baselines` for parks and the
+ *   matching pair for attractions; primes Redis cache for each.
  *
- * Benefits:
- * - More intuitive crowd levels (P50 = expected/typical day)
- * - Filters out low-demand attractions
- * - Adapts to parks of all sizes (major, medium, small)
- *
- * Schedule: Daily at 3am (after queue-data-aggregates update)
+ * Why both percentiles: the API surfaces crowd levels as peak-vs-peak
+ * (P90 ÷ P90 baseline). P50 is kept for legacy avg-shaped consumers and
+ * as a graceful fallback when a P90 row hasn't been calculated yet.
  */
 @Processor("p50-baseline")
 export class P50BaselineProcessor {

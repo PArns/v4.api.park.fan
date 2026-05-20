@@ -32,9 +32,6 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue, // Phase 6.2: Combined queue
-    @InjectQueue("attractions-metadata") private attractionsQueue: Queue, // DEPRECATED
-    @InjectQueue("shows-metadata") private showsQueue: Queue, // DEPRECATED
-    @InjectQueue("restaurants-metadata") private restaurantsQueue: Queue, // DEPRECATED
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,

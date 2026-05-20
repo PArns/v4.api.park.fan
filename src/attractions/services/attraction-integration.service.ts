@@ -646,70 +646,19 @@ export class AttractionIntegrationService {
         }
       }
 
-      // Single batch query for all queue data in date range
-      // Use raw SQL for efficient aggregation with timezone-aware date extraction
-      // Note: Only 1 sample needed since we only store changes (not all values)
-      // The WHERE clause uses UTC timestamps (stored in DB) compared to UTC Date objects
-      // The GROUP BY extracts dates in park timezone for correct day boundaries
-      // Round P90 and avg_wait to nearest 5 minutes in SQL for consistency
-      const queueDataResults = await this.dataSource.query(
-        `
-        SELECT 
-          DATE(qd.timestamp AT TIME ZONE $3) as date,
-          (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)::text, 2, '0') || ':' || LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
-          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
-          AVG(qd."waitTime") as avg_wait,
-          COUNT(*) as sample_count
-        FROM queue_data qd
-        WHERE qd."attractionId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.timestamp < $4
-          AND qd.status = 'OPERATING'
-          AND qd."queueType" = 'STANDBY'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $3),
-                 time_slot
-        HAVING COUNT(*) >= 1
-        ORDER BY date, time_slot
-      `,
-        [
-          attractionId,
-          startDate.toISOString(),
-          timezone,
-          endDate.toISOString(),
-        ],
-      );
+      // Hybrid data source:
+      // 1. Past days come from `attraction_hourly_history` (pre-aggregated
+      //    nightly by AttractionHourlyHistoryProcessor) — one indexed SELECT.
+      // 2. Today's still-in-progress slots are computed live against
+      //    queue_data, but only ever for one day at a time.
+      // This replaces the previous always-live PERCENTILE_CONT scan of the
+      // entire requested window, which dominated cold-cache cost on the
+      // attraction history endpoint.
+      const fromDateStr = formatInParkTimezone(startDate, timezone);
+      // History is up-to-but-not-including endDate (next-day-midnight in
+      // park tz), so the latest *date* covered is today.
+      const toDateStr = todayStr;
 
-      // Query down count separately (more efficient)
-      const downCountResults = await this.dataSource.query(
-        `
-        SELECT 
-          DATE(qd.timestamp AT TIME ZONE $3) as date,
-          COUNT(DISTINCT 
-            CASE 
-              WHEN qd.status = 'DOWN' THEN 
-                DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $3)
-              ELSE NULL
-            END
-          ) as down_count
-        FROM queue_data qd
-        WHERE qd."attractionId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.timestamp < $4
-          AND qd.status = 'DOWN'
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $3)
-      `,
-        [
-          attractionId,
-          startDate.toISOString(),
-          timezone,
-          endDate.toISOString(),
-        ],
-      );
-
-      // Group queue data by date
-      // PostgreSQL DATE() returns a string in YYYY-MM-DD format, but ensure consistency
       const queueDataByDate = new Map<
         string,
         Array<{
@@ -719,34 +668,96 @@ export class AttractionIntegrationService {
           sampleCount: number;
         }>
       >();
-      for (const row of queueDataResults) {
-        // Ensure date is in YYYY-MM-DD format (PostgreSQL DATE returns this format)
-        const dateStr =
-          typeof row.date === "string"
-            ? row.date
-            : new Date(row.date).toISOString().split("T")[0];
-        if (!queueDataByDate.has(dateStr)) {
-          queueDataByDate.set(dateStr, []);
+      const downCountMap = new Map<string, number>();
+
+      const cachedHistory =
+        await this.analyticsService.getAttractionHourlyHistory(
+          attractionId,
+          fromDateStr,
+          toDateStr,
+        );
+      for (const [dateStr, row] of cachedHistory) {
+        if (dateStr === todayStr) {
+          // Skip cached "today" — we'll recompute it live so the chart
+          // reflects the latest hour. Past days are settled and trusted.
+          continue;
         }
-        queueDataByDate.get(dateStr)!.push({
-          time_slot: row.time_slot,
-          p90: roundToNearest5Minutes(parseFloat(row.p90)), // Ensure rounding (already done in SQL, but double-check)
-          avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)), // Ensure rounding
-          sampleCount: parseInt(row.sample_count, 10) || 0,
-        });
+        queueDataByDate.set(dateStr, row.slots || []);
+        downCountMap.set(dateStr, row.downCount || 0);
       }
 
-      // Debug: Log query results
+      // Live single-day compute for today (range may end before today, in
+      // which case we skip this entirely and serve purely from the cache).
+      if (endDate.getTime() > Date.now()) {
+        const todayStart = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+        const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
 
-      // Create down count map
-      const downCountMap = new Map<string, number>();
-      for (const row of downCountResults) {
-        // Ensure date is in YYYY-MM-DD format
-        const dateStr =
-          typeof row.date === "string"
-            ? row.date
-            : new Date(row.date).toISOString().split("T")[0];
-        downCountMap.set(dateStr, parseInt(row.down_count, 10) || 0);
+        const [todayRows, todayDown] = await Promise.all([
+          this.dataSource.query(
+            `
+            SELECT
+              (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)::text, 2, '0') ||
+               ':' ||
+               LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
+              PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
+              AVG(qd."waitTime") as avg_wait,
+              COUNT(*) as sample_count
+            FROM queue_data qd
+            WHERE qd."attractionId" = $1::uuid
+              AND qd.timestamp >= $2
+              AND qd.timestamp < $4
+              AND qd.status = 'OPERATING'
+              AND qd."queueType" = 'STANDBY'
+              AND qd."waitTime" IS NOT NULL
+              AND qd."waitTime" >= 5
+            GROUP BY time_slot
+            HAVING COUNT(*) >= 1
+            ORDER BY time_slot
+            `,
+            [
+              attractionId,
+              todayStart.toISOString(),
+              timezone,
+              todayEnd.toISOString(),
+            ],
+          ),
+          this.dataSource.query(
+            `
+            SELECT
+              COUNT(DISTINCT DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $3)) as down_count
+            FROM queue_data qd
+            WHERE qd."attractionId" = $1::uuid
+              AND qd.timestamp >= $2
+              AND qd.timestamp < $4
+              AND qd.status = 'DOWN'
+            `,
+            [
+              attractionId,
+              todayStart.toISOString(),
+              timezone,
+              todayEnd.toISOString(),
+            ],
+          ),
+        ]);
+
+        const todaySlotsArr = todayRows.map(
+          (row: {
+            time_slot: string;
+            p90: string;
+            avg_wait: string;
+            sample_count: string;
+          }) => ({
+            time_slot: row.time_slot,
+            p90: roundToNearest5Minutes(parseFloat(row.p90)),
+            avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)),
+            sampleCount: parseInt(row.sample_count, 10) || 0,
+          }),
+        );
+        if (todaySlotsArr.length > 0) {
+          queueDataByDate.set(todayStr, todaySlotsArr);
+        }
+        const downCount = parseInt(todayDown[0]?.down_count || "0", 10) || 0;
+        if (downCount > 0) downCountMap.set(todayStr, downCount);
       }
 
       // Peak baseline (P90) for utilization — matches the peak-vs-peak

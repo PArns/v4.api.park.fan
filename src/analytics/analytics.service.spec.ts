@@ -19,6 +19,7 @@ import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("AnalyticsService", () => {
@@ -161,6 +162,17 @@ describe("AnalyticsService", () => {
     find: jest.fn().mockResolvedValue([]),
   };
 
+  const mockAttractionHourlyHistoryRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    upsert: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    createQueryBuilder: jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    })),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -236,6 +248,10 @@ describe("AnalyticsService", () => {
         {
           provide: getRepositoryToken(AttractionP90Baseline),
           useValue: mockAttractionP90BaselineRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionHourlyHistory),
+          useValue: mockAttractionHourlyHistoryRepository,
         },
         {
           provide: REDIS_CLIENT,

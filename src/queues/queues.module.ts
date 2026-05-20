@@ -8,9 +8,6 @@ import { QueueSchedulerService } from "./services/queue-scheduler.service";
 import { CacheWarmupService } from "./services/cache-warmup.service";
 import { ParkMetadataProcessor } from "./processors/park-metadata.processor";
 import { ChildrenMetadataProcessor } from "./processors/children-metadata.processor";
-import { AttractionsMetadataProcessor } from "./processors/attractions-metadata.processor";
-import { ShowsMetadataProcessor } from "./processors/shows-metadata.processor";
-import { RestaurantsMetadataProcessor } from "./processors/restaurants-metadata.processor";
 import { WaitTimesProcessor } from "./processors/wait-times.processor";
 import { WeatherProcessor } from "./processors/weather.processor";
 import { HolidaysProcessor } from "./processors/holidays.processor";
@@ -24,6 +21,7 @@ import { QueuePercentileProcessor } from "./processors/queue-percentile.processo
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
+import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
@@ -106,9 +104,6 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
       { name: "park-metadata" },
       { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
       { name: "entity-mappings" }, // Phase 6.6.3: Multi-source mappings
-      { name: "attractions-metadata" }, // DEPRECATED: Use children-metadata instead
-      { name: "shows-metadata" }, // DEPRECATED: Use children-metadata instead
-      { name: "restaurants-metadata" }, // DEPRECATED: Use children-metadata instead
       { name: "weather" },
       { name: "weather-historical" },
       { name: "holidays" },
@@ -120,7 +115,8 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
       { name: "wartezeiten-schedule" },
       { name: "ml-monitoring" },
       { name: "stats" },
-      { name: "p50-baseline" }, // P50 baseline calculation
+      { name: "p50-baseline" }, // P50 + P90 baseline calculation
+      { name: "attraction-hourly-history" }, // Per-day hourly rollup
       { name: "geoip-update" }, // GeoLite2-City every 48h
     ),
 
@@ -155,9 +151,6 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
     ParkMetadataProcessor,
     ChildrenMetadataProcessor, // Phase 6.2: Combined processor
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
-    AttractionsMetadataProcessor, // DEPRECATED: Keep for backward compatibility
-    ShowsMetadataProcessor, // DEPRECATED: Keep for backward compatibility
-    RestaurantsMetadataProcessor, // DEPRECATED: Keep for backward compatibility
     WaitTimesProcessor,
     WeatherProcessor,
     WeatherHistoricalProcessor,
@@ -170,7 +163,8 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
     WartezeitenScheduleProcessor,
     MLMonitoringProcessor,
     StatsProcessor,
-    P50BaselineProcessor, // P50 baseline processor
+    P50BaselineProcessor, // P50 + P90 baseline processor
+    AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     GeoipUpdateProcessor,
   ],
   exports: [BullModule], // Export for use in other modules
