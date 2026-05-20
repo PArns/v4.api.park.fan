@@ -559,7 +559,11 @@ export class AnalyticsService {
    * Example: 75 = park is at 75% of typical P90 wait times
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
-    // Same shape as calculateParkOccupancy: peak-vs-median.
+    // ML feature `park_occupancy_pct`. Kept on the simpler park-wide
+    // (avg latest ÷ park-P50) shape — not the per-ride-ratio P90 used
+    // by the user-facing crowd level. Trained models depend on this
+    // exact feature distribution; switching to per-ride ratios would
+    // require a retrain cycle.
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
       select: ["parkId", "attractionId"],

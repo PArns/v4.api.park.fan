@@ -236,7 +236,7 @@ export class LocationService {
           queueData?.status === "OPERATING"
         ) {
           const baseline =
-            p90Baselines.get(attraction.id) || p50Baselines.get(attraction.id);
+            p50Baselines.get(attraction.id) || p90Baselines.get(attraction.id);
           if (baseline && baseline > 0) {
             crowdLevel = this.analyticsService.getAttractionCrowdLevel(
               waitTime,

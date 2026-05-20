@@ -915,11 +915,9 @@ export class CalendarService {
    * for future days.
    *
    * Mirrors calculateCrowdLevelForDate: predicted P90 of headliner waits
-   * divided by the park P90 baseline (peak-vs-peak). The caller passes
-   * P90; if it's 0 (park doesn't have a P90 row yet) we degrade to P50,
-   * still apples-to-apples. The old code passed P50 for the peakLoad
-   * comparison too — that mixed perceniles and systematically inflated
-   * the peakLoad reading.
+   * divided by the park P50 (median) baseline (peak-vs-median). The
+   * caller passes P50; when it's 0 (park doesn't have a P50 row yet) we
+   * degrade to P90 as a fallback.
    */
   private buildPredictedCrowdLevels(
     predictions: PredictionDto[],

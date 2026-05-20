@@ -948,12 +948,12 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
-      // P90 (peak baseline) drives the crowd reading — peak-vs-peak so the
-      // search list matches what users see on detail pages. P50 acts as a
-      // fallback for attractions whose P90 row hasn't been computed yet;
-      // beyond that we fall through to "moderate".
+      // P50 (median baseline) drives the crowd reading — peak-vs-median
+      // so the search list matches what users see on detail pages. P90
+      // acts as a fallback for attractions whose P50 row hasn't been
+      // computed yet; beyond that we fall through to "moderate".
       const baseline = isParkOpen
-        ? p90Map.get(attraction.id) || p50Map.get(attraction.id)
+        ? p50Map.get(attraction.id) || p90Map.get(attraction.id)
         : undefined;
 
       const load = isParkOpen

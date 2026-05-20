@@ -23,9 +23,10 @@ import { AttractionsService } from "../../attractions/attractions.service";
  * - Writes `park_p50_baselines` + `park_p90_baselines` for parks and the
  *   matching pair for attractions; primes Redis cache for each.
  *
- * Why both percentiles: the API surfaces crowd levels as peak-vs-peak
- * (P90 ÷ P90 baseline). P50 is kept for legacy avg-shaped consumers and
- * as a graceful fallback when a P90 row hasn't been calculated yet.
+ * Why both percentiles: the API surfaces crowd levels as peak-vs-median
+ * (current peak ÷ P50 baseline). P90 is kept as a graceful fallback for
+ * entities that don't have a P50 row yet, and is also exposed to ML
+ * features and avg-shaped consumers.
  */
 @Processor("p50-baseline")
 export class P50BaselineProcessor {
