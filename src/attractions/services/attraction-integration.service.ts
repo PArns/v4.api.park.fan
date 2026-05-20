@@ -370,16 +370,33 @@ export class AttractionIntegrationService {
     const parkForUrl = park;
     if (park) {
       try {
-        const startTime = await this.analyticsService.getEffectiveStartTime(
-          attraction.parkId,
-          park.timezone,
-        );
-
-        // Run statistics, history, and schedule fetch in parallel
+        // Kick off the start-time lookup AND the history fetch in
+        // parallel — history doesn't depend on startTime, only the
+        // statistics call does. On a cold cache this turns a
+        // (Redis+DB)-then-(stats+history+schedule) waterfall into
+        // (Redis+DB || history || schedule) → (stats).
         const today = getStartOfDayInTimezone(park.timezone);
         const startDate = subDays(today, days);
         const startDateStr = formatInParkTimezone(startDate, park.timezone);
         const endDateStr = formatInParkTimezone(today, park.timezone);
+
+        const historyPromise = this.calculateAttractionHistory(
+          attraction.id,
+          attraction.parkId,
+          park.timezone,
+          days,
+        ).catch((err) => {
+          this.logger.warn(
+            `Failed to calculate history for attraction ${attraction.id}:`,
+            err,
+          );
+          return [] as HistoryDayDto[];
+        });
+
+        const startTime = await this.analyticsService.getEffectiveStartTime(
+          attraction.parkId,
+          park.timezone,
+        );
 
         const [statistics, history, scheduleEntries] = await Promise.all([
           this.analyticsService.getAttractionStatistics(
@@ -387,18 +404,7 @@ export class AttractionIntegrationService {
             startTime,
             park.timezone,
           ),
-          this.calculateAttractionHistory(
-            attraction.id,
-            attraction.parkId,
-            park.timezone,
-            days,
-          ).catch((err) => {
-            this.logger.warn(
-              `Failed to calculate history for attraction ${attraction.id}:`,
-              err,
-            );
-            return [] as HistoryDayDto[];
-          }),
+          historyPromise,
           this.scheduleEntryRepository
             .createQueryBuilder("schedule")
             .where("schedule.parkId = :parkId", { parkId: attraction.parkId })

@@ -85,40 +85,47 @@ export class AttractionsService {
         (child) => child.entityType === "ATTRACTION",
       );
 
+      // Pre-fetch every existing attraction for this park ONCE upfront.
+      // The old loop did 1 findOne(externalId) per attraction PLUS a
+      // separate find-all-attractions-for-park per *new* attraction to
+      // compute slug uniqueness — quadratic on first-time syncs. Now we
+      // do one SELECT and diff in memory.
+      const existingForPark = await this.attractionRepository.find({
+        where: { parkId: park.id },
+        select: ["id", "externalId", "slug"],
+      });
+      const byExternalId = new Map(
+        existingForPark.map((a) => [a.externalId, a]),
+      );
+      const usedSlugs = new Set(
+        existingForPark.map((a) => a.slug).filter((s): s is string => !!s),
+      );
+
       for (const attractionEntity of attractions) {
         const mappedData = this.themeParksMapper.mapAttraction(
           attractionEntity,
           park.id,
         );
 
-        // Check if attraction exists (by externalId)
-        const existing = await this.attractionRepository.findOne({
-          where: { externalId: mappedData.externalId },
-        });
-
+        // mappedData.externalId is optional in the type; skip rows
+        // without one — the old findOne() would have produced null too.
+        const externalId = mappedData.externalId;
+        if (!externalId) continue;
+        const existing = byExternalId.get(externalId);
         if (existing) {
-          // Update existing attraction (keep existing slug)
           await this.attractionRepository.update(existing.id, {
             name: mappedData.name,
             latitude: mappedData.latitude,
             longitude: mappedData.longitude,
           });
         } else {
-          // Generate unique slug for this park
           const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-
-          // Get all existing slugs for this park
-          const existingAttractions = await this.attractionRepository.find({
-            where: { parkId: park.id },
-            select: ["slug"],
-          });
-          const existingSlugs = existingAttractions.map((a) => a.slug);
-
-          // Generate unique slug
-          const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+          const uniqueSlug = generateUniqueSlug(
+            baseSlug,
+            Array.from(usedSlugs),
+          );
           mappedData.slug = uniqueSlug;
-
-          // Insert new attraction
+          usedSlugs.add(uniqueSlug);
           await this.attractionRepository.save(mappedData);
         }
 
@@ -429,13 +436,21 @@ export class AttractionsService {
       const data = await this.queueTimesClient.getParkQueueTimes(qtId);
       const allRides = [...data.rides, ...data.lands.flatMap((l) => l.rides)];
 
-      // Pre-fetch all existing slugs for this park to avoid N+1 queries
-      // This replaces N queries (one per ride) with a single batch query
+      // Pre-fetch every existing attraction for this park ONCE. The old
+      // path did a findOne(externalId) per ride inside upsertAttraction;
+      // for a 50-ride park that's 50 extra round-trips per sync.
       const existingAttractions = await this.attractionRepository.find({
         where: { parkId: park.id },
-        select: ["slug"],
+        select: ["id", "externalId", "slug", "queueTimesEntityId"],
       });
-      const existingSlugs = existingAttractions.map((a) => a.slug);
+      const existingSlugs = existingAttractions
+        .map((a) => a.slug)
+        .filter((s): s is string => !!s);
+      const existingByExternalId = new Map(
+        existingAttractions
+          .filter((a): a is typeof a & { externalId: string } => !!a.externalId)
+          .map((a) => [a.externalId, a]),
+      );
 
       for (const ride of allRides) {
         const externalId = `qt-ride-${ride.id}`;
@@ -444,11 +459,11 @@ export class AttractionsService {
           {
             externalId,
             name: ride.name,
-            attractionType: "ROW", // Generic type
-            queueTimesEntityId: ride.id.toString(), // Store numeric ID
-            // QT doesn't provide lat/lon in this endpoint usually
+            attractionType: "ROW",
+            queueTimesEntityId: ride.id.toString(),
           },
           existingSlugs,
+          existingByExternalId,
         );
       }
     } catch (error) {
@@ -465,24 +480,33 @@ export class AttractionsService {
     try {
       const waitTimes = await this.wartezeitenClient.getWaitTimes(wzId);
 
-      // Pre-fetch all existing slugs for this park to avoid N+1 queries
-      // This replaces N queries (one per item) with a single batch query
+      // Pre-fetch every existing attraction once — same fix as
+      // syncFromQueueTimes above. Removes N findOne(externalId) calls
+      // inside upsertAttraction.
       const existingAttractions = await this.attractionRepository.find({
         where: { parkId: park.id },
-        select: ["slug"],
+        select: ["id", "externalId", "slug"],
       });
-      const existingSlugs = existingAttractions.map((a) => a.slug);
+      const existingSlugs = existingAttractions
+        .map((a) => a.slug)
+        .filter((s): s is string => !!s);
+      const existingByExternalId = new Map(
+        existingAttractions
+          .filter((a): a is typeof a & { externalId: string } => !!a.externalId)
+          .map((a) => [a.externalId, a]),
+      );
 
       for (const item of waitTimes) {
-        const externalId = item.uuid; // WZ UUIDs are unique
+        const externalId = item.uuid;
         await this.upsertAttraction(
           park,
           {
             externalId,
             name: item.name,
-            attractionType: "ROW", // Generic type
+            attractionType: "ROW",
           },
           existingSlugs,
+          existingByExternalId,
         );
       }
     } catch (error) {
@@ -511,11 +535,16 @@ export class AttractionsService {
       queueTimesEntityId?: string;
     },
     existingSlugs?: string[],
+    existingByExternalId?: Map<string, Attraction>,
   ) {
-    // Check if attraction exists
-    const existing = await this.attractionRepository.findOne({
-      where: { externalId: data.externalId },
-    });
+    // Existence check: prefer the caller-supplied map (one batch read
+    // per park) over a per-attraction findOne(). The findOne is kept as
+    // a fallback for callers that haven't migrated to the batch form.
+    const existing = existingByExternalId
+      ? existingByExternalId.get(data.externalId)
+      : await this.attractionRepository.findOne({
+          where: { externalId: data.externalId },
+        });
 
     if (existing) {
       // Update
