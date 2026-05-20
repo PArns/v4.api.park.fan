@@ -18,6 +18,7 @@ import {
 } from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
+import { In } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { ParkValidatorService } from "../parks/services/park-validator.service";
@@ -303,13 +304,22 @@ export class AdminController {
 
     let totalDeleted = 0;
 
-    // Delete keys matching each pattern
-    for (const pattern of patterns) {
-      const keys = await this.redis.keys(pattern);
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
-        totalDeleted += keys.length;
-      }
+    // Fan out the 14 KEYS scans in parallel — they're independent and
+    // each hits a different namespace. The old loop serialised them at
+    // ~one round-trip per pattern (14 RTTs); Promise.all collapses that
+    // to a single batch wall-time.
+    const keysPerPattern = await Promise.all(
+      patterns.map((p) => this.redis.keys(p)),
+    );
+    const allKeys = keysPerPattern.flat();
+
+    // Single pipelined DEL for every key that matched — one network
+    // round-trip regardless of total key count, vs. 14× DEL before.
+    if (allKeys.length > 0) {
+      const pipeline = this.redis.pipeline();
+      for (const key of allKeys) pipeline.del(key);
+      await pipeline.exec();
+      totalDeleted = allKeys.length;
     }
 
     return {
@@ -722,14 +732,23 @@ export class AdminController {
       const mergePairs: Array<{ winnerId: string; loserId: string }> = [];
       const parkRepo = this.parkValidatorService.getParkRepository();
 
+      // Pre-fetch every park involved in any duplicate pair in a single
+      // query. The old loop did 2× findOne() per duplicate — for 10
+      // dupes that's 20 round-trips; this batch is one.
+      const allIds = Array.from(
+        new Set(
+          duplicates.flatMap((d) => [d.park1.id, d.park2.id]).filter(Boolean),
+        ),
+      );
+      const parks = allIds.length
+        ? await parkRepo.find({ where: { id: In(allIds) } })
+        : [];
+      const parkById = new Map(parks.map((p) => [p.id, p]));
+
       for (const duplicate of duplicates) {
         // Determine winner based on priority
-        const park1 = await parkRepo.findOne({
-          where: { id: duplicate.park1.id },
-        });
-        const park2 = await parkRepo.findOne({
-          where: { id: duplicate.park2.id },
-        });
+        const park1 = parkById.get(duplicate.park1.id);
+        const park2 = parkById.get(duplicate.park2.id);
 
         if (!park1 || !park2) {
           errors.push({

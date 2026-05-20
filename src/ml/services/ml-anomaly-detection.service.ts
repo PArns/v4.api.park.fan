@@ -74,6 +74,68 @@ export class MLAnomalyDetectionService {
 
     const anomalies: MLPredictionAnomaly[] = [];
 
+    // Pre-load every recently-detected anomaly that could collide with
+    // the predictions we're about to process. The old per-anomaly
+    // findOne (called up to 3× per prediction) becomes a single SELECT
+    // + an in-memory bucket lookup; 30 000 round-trips → 1 on a busy
+    // day. The window starts 1 h before the earliest predictedTime
+    // because createAnomaly's de-dup span is "predictedTime ± 1 h".
+    const earliestPredictedTime = predictions.reduce<Date>(
+      (acc, p) =>
+        !acc || p.targetTime.getTime() < acc.getTime() ? p.targetTime : acc,
+      null as unknown as Date,
+    );
+    const dedupWindowStart = new Date(
+      (earliestPredictedTime?.getTime() ?? startDate.getTime()) -
+        60 * 60 * 1000,
+    );
+    const existingAnomalies = await this.anomalyRepository.find({
+      where: { detectedAt: Between(dedupWindowStart, new Date()) },
+      select: ["attractionId", "anomalyType", "detectedAt"],
+    });
+    const recentByKey = new Map<string, Date[]>();
+    for (const ex of existingAnomalies) {
+      const key = `${ex.attractionId}:${ex.anomalyType}`;
+      let arr = recentByKey.get(key);
+      if (!arr) {
+        arr = [];
+        recentByKey.set(key, arr);
+      }
+      arr.push(ex.detectedAt);
+    }
+
+    // Helper closing over the in-memory map: replaces the per-call
+    // findOne that createAnomaly used to fire.
+    const hasRecentAnomaly = (
+      attractionId: string,
+      anomalyType: MLPredictionAnomaly["anomalyType"],
+      predictedTime: Date,
+    ): boolean => {
+      const bucket = recentByKey.get(`${attractionId}:${anomalyType}`);
+      if (!bucket) return false;
+      const windowStart = predictedTime.getTime() - 60 * 60 * 1000;
+      const now = Date.now();
+      return bucket.some((d) => {
+        const t = d.getTime();
+        return t >= windowStart && t <= now;
+      });
+    };
+
+    // Track anomalies we just created in this run so we don't double-
+    // emit within the same loop iteration (e.g. two predictions for the
+    // same attraction within an hour, both flagged extreme_value).
+    const justCreated = new Set<string>();
+    const noteCreated = (
+      attractionId: string,
+      anomalyType: MLPredictionAnomaly["anomalyType"],
+    ) => {
+      justCreated.add(`${attractionId}:${anomalyType}`);
+    };
+    const wasJustCreated = (
+      attractionId: string,
+      anomalyType: MLPredictionAnomaly["anomalyType"],
+    ): boolean => justCreated.has(`${attractionId}:${anomalyType}`);
+
     for (const pred of predictions) {
       const actualWaitTime = pred.actualWaitTime || 0;
       const absoluteError = pred.absoluteError || 0;
@@ -81,7 +143,13 @@ export class MLAnomalyDetectionService {
       // Check for extreme values
       if (
         actualWaitTime >
-        meanWaitTime + this.EXTREME_VALUE_THRESHOLD * stdWaitTime
+          meanWaitTime + this.EXTREME_VALUE_THRESHOLD * stdWaitTime &&
+        !hasRecentAnomaly(
+          pred.attractionId,
+          "extreme_value",
+          pred.targetTime,
+        ) &&
+        !wasJustCreated(pred.attractionId, "extreme_value")
       ) {
         const anomaly = await this.createAnomaly({
           attractionId: pred.attractionId,
@@ -101,11 +169,18 @@ export class MLAnomalyDetectionService {
           featureValues: pred.features || null,
           modelVersion: pred.modelVersion,
         });
-        if (anomaly) anomalies.push(anomaly);
+        if (anomaly) {
+          anomalies.push(anomaly);
+          noteCreated(pred.attractionId, "extreme_value");
+        }
       }
 
       // Check for large errors
-      if (absoluteError > this.LARGE_ERROR_THRESHOLD) {
+      if (
+        absoluteError > this.LARGE_ERROR_THRESHOLD &&
+        !hasRecentAnomaly(pred.attractionId, "large_error", pred.targetTime) &&
+        !wasJustCreated(pred.attractionId, "large_error")
+      ) {
         const anomaly = await this.createAnomaly({
           attractionId: pred.attractionId,
           anomalyType: "large_error",
@@ -124,11 +199,22 @@ export class MLAnomalyDetectionService {
           featureValues: pred.features || null,
           modelVersion: pred.modelVersion,
         });
-        if (anomaly) anomalies.push(anomaly);
+        if (anomaly) {
+          anomalies.push(anomaly);
+          noteCreated(pred.attractionId, "large_error");
+        }
       }
 
       // Check for unplanned closures
-      if (pred.wasUnplannedClosure) {
+      if (
+        pred.wasUnplannedClosure &&
+        !hasRecentAnomaly(
+          pred.attractionId,
+          "unexpected_closure",
+          pred.targetTime,
+        ) &&
+        !wasJustCreated(pred.attractionId, "unexpected_closure")
+      ) {
         const anomaly = await this.createAnomaly({
           attractionId: pred.attractionId,
           anomalyType: "unexpected_closure",
@@ -143,7 +229,10 @@ export class MLAnomalyDetectionService {
           featureValues: pred.features || null,
           modelVersion: pred.modelVersion,
         });
-        if (anomaly) anomalies.push(anomaly);
+        if (anomaly) {
+          anomalies.push(anomaly);
+          noteCreated(pred.attractionId, "unexpected_closure");
+        }
       }
     }
 
@@ -229,21 +318,11 @@ export class MLAnomalyDetectionService {
     featureValues: Record<string, unknown> | null;
     modelVersion: string;
   }): Promise<MLPredictionAnomaly | null> {
-    // Check if similar anomaly already exists (within 1 hour)
-    const oneHourAgo = new Date(data.predictedTime.getTime() - 60 * 60 * 1000);
-    const existing = await this.anomalyRepository.findOne({
-      where: {
-        attractionId: data.attractionId,
-        anomalyType: data.anomalyType,
-        detectedAt: Between(oneHourAgo, new Date()),
-      },
-    });
-
-    if (existing) {
-      // Don't create duplicate
-      return null;
-    }
-
+    // The "no duplicate within 1 h" guard is enforced by the caller
+    // (detectAnomalies) via a single batched pre-load — see
+    // `hasRecentAnomaly` / `wasJustCreated` above. createAnomaly itself
+    // is now a pure insert helper. Calling it on a duplicate would
+    // produce a real row, so callers must check first.
     const anomaly = new MLPredictionAnomaly();
     anomaly.attractionId = data.attractionId;
     anomaly.anomalyType = data.anomalyType;
