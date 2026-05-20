@@ -102,54 +102,53 @@ describe("StatsService", () => {
       expect(result!.p90WaitTime).toBe(50);
     });
 
-    it("caps a single bad-row max at 3× P90 (outlier protection)", async () => {
+    it("caps the max at 3× P90 when there are enough samples (≥20)", async () => {
       parkRepo.findOne.mockResolvedValue({ id: "p1", timezone: "UTC" });
-      // Normal day: P90 ≈ 50, but one bad row of 999.
-      queueDataQB.getMany.mockResolvedValue(
-        queueRows("UTC", [10, 20, 30, 40, 50, 999]),
-      );
       statsRepo.findOne.mockResolvedValue(null);
       statsRepo.save.mockImplementation((e) => Promise.resolve(e));
 
-      const result = await service.calculateAndStoreDailyStats(
-        "p1",
-        "2026-05-18",
-      );
-
-      // P90 of [10,20,30,40,50,999] sorted: ceil(6*0.9)-1 = 5 → 999.
-      // Wait — that means P90 = 999, and the cap is max(120, 999*3) = 2997.
-      // So a single outlier can become the P90 itself if it's the
-      // 90th-percentile sample. The cap protects against a row that's
-      // even MORE extreme than the P90. Re-shape: 7 sane rows + 1 bad.
-      queueDataQB.getMany.mockResolvedValue(
-        queueRows("UTC", [10, 20, 30, 40, 50, 60, 70, 9999]),
-      );
-      const result2 = await service.calculateAndStoreDailyStats(
-        "p1",
-        "2026-05-18",
-      );
-      // P90 of 8 sorted = sorted[7] = 9999 again — that's just the
-      // nature of small-sample P90. Use a larger sample.
+      // 50 sane samples (10..59) + 1 outlier (9999). Median ≈ 35, P90
+      // ≈ 55. Cap = max(120, 55*3) = 165. So max = min(9999, 165) = 165.
       queueDataQB.getMany.mockResolvedValue(
         queueRows(
           "UTC",
           [...Array(50).keys()].map((i) => 10 + i).concat([9999]),
         ),
       );
-      const result3 = await service.calculateAndStoreDailyStats(
+      const result = await service.calculateAndStoreDailyStats(
         "p1",
         "2026-05-18",
       );
 
-      // With 51 samples, P90 = sorted[ceil(51*0.9)-1] = sorted[45] = 55.
-      // Cap on max: min(9999, max(120, 55*3=165)) = 165. NOT 9999.
-      expect(result3!.p90WaitTime).toBeLessThan(100);
-      expect(result3!.maxWaitTime).toBeLessThanOrEqual(165);
-      expect(result3!.maxWaitTime).toBeLessThan(9999);
+      expect(result!.maxWaitTime).toBeLessThanOrEqual(165);
+      expect(result!.maxWaitTime).toBeLessThan(9999);
+    });
 
-      // Reference the unused intermediate results so the linter is happy.
-      void result;
-      void result2;
+    it("uses the 5× P50 cap for small samples (<20) where P90≈max", async () => {
+      // For a small Saisonpark with only 8 samples on a quiet day, the
+      // P90-based cap would collapse onto the outlier itself (P90 = max
+      // by nearest-rank rule). The implementation switches to a P50-
+      // based cap below 20 samples to give a stable anchor.
+      parkRepo.findOne.mockResolvedValue({ id: "p1", timezone: "UTC" });
+      statsRepo.findOne.mockResolvedValue(null);
+      statsRepo.save.mockImplementation((e) => Promise.resolve(e));
+
+      // 7 sane samples (10..70) + 1 outlier (9999). Only 8 samples.
+      // P50 of sorted [10,20,30,40,50,60,70,9999] = sorted[3] = 40.
+      // Cap = max(120, 40*5) = 200. So max = min(9999, 200) = 200.
+      queueDataQB.getMany.mockResolvedValue(
+        queueRows("UTC", [10, 20, 30, 40, 50, 60, 70, 9999]),
+      );
+
+      const result = await service.calculateAndStoreDailyStats(
+        "p1",
+        "2026-05-18",
+      );
+
+      // With the old "3× P90" cap this would have been ~30000. The new
+      // P50-anchored cap keeps it bounded.
+      expect(result!.maxWaitTime).toBeLessThanOrEqual(200);
+      expect(result!.maxWaitTime).toBeLessThan(9999);
     });
 
     it("falls back to a 120-min cap when P90 is 0 (no qualifying samples)", async () => {

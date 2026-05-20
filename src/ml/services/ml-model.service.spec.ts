@@ -192,5 +192,4 @@ describe("MLModelService", () => {
       expect(result.hours).toBe(0);
     });
   });
-
 });

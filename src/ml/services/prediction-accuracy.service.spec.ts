@@ -135,7 +135,6 @@ describe("PredictionAccuracyService", () => {
         conflictPaths: ["attractionId", "targetTime"],
       });
     });
-
   });
 
   describe("getAttractionAccuracyWithBadge — cache layers", () => {

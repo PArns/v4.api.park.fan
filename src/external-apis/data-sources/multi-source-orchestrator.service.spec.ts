@@ -239,5 +239,4 @@ describe("MultiSourceOrchestrator", () => {
       expect(result.get("a")).toBe(false);
     });
   });
-
 });

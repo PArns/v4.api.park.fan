@@ -50,64 +50,79 @@ export class P50BaselineProcessor {
       let failureCount = 0;
 
       const WINDOW_DAYS = 548;
-      for (const park of parks) {
-        try {
-          // Skip parks with no queue_data in window (reduces log noise; headliner logic would fail anyway)
-          const hasData = await this.analyticsService.parkHasQueueDataInWindow(
-            park.id,
-            WINDOW_DAYS,
-          );
-          if (!hasData) {
-            this.logger.debug(
-              `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
-            );
-            continue;
-          }
 
-          // Step 1: Identify headliners using 3-tier system
-          const headliners = await this.analyticsService.identifyHeadliners(
-            park.id,
-          );
+      // Process parks in batches of 5 — `identifyHeadliners` is a
+      // heavy 548-day PERCENTILE_CONT scan per park, so we can't
+      // fan out unbounded without saturating the DB. BATCH_SIZE=5
+      // mirrors the wait-times processor pattern (worked there too).
+      // Wall-time drops from sum(parks) sequential to
+      // ceil(parks/5) parallel batches; per-park error isolation
+      // preserved via the inner try/catch.
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < parks.length; i += BATCH_SIZE) {
+        const batch = parks.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (park) => {
+            try {
+              const hasData =
+                await this.analyticsService.parkHasQueueDataInWindow(
+                  park.id,
+                  WINDOW_DAYS,
+                );
+              if (!hasData) {
+                this.logger.debug(
+                  `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
+                );
+                return "skipped" as const;
+              }
 
-          if (headliners.length === 0) {
-            this.logger.warn(
-              `No headliners identified for park ${park.name} (${park.id})`,
-            );
-            failureCount++;
-            continue;
-          }
+              const headliners = await this.analyticsService.identifyHeadliners(
+                park.id,
+              );
 
-          // Step 2: Calculate P50 baseline from headliners
-          const baseline = await this.analyticsService.calculateP50Baseline(
-            park.id,
-            headliners,
-          );
+              if (headliners.length === 0) {
+                this.logger.warn(
+                  `No headliners identified for park ${park.name} (${park.id})`,
+                );
+                return "failed" as const;
+              }
 
-          if (baseline.p50 === 0) {
-            this.logger.warn(
-              `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
-            );
-            failureCount++;
-            continue;
-          }
+              const baseline = await this.analyticsService.calculateP50Baseline(
+                park.id,
+                headliners,
+              );
 
-          // Step 3: Save to database and cache
-          await this.analyticsService.saveP50Baselines(
-            park.id,
-            baseline,
-            headliners,
-          );
+              if (baseline.p50 === 0) {
+                this.logger.warn(
+                  `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
+                );
+                return "failed" as const;
+              }
 
-          this.logger.log(
-            `✅ ${park.name}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
-          );
-          successCount++;
-        } catch (error) {
-          this.logger.error(
-            `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
-            error instanceof Error ? error.stack : String(error),
-          );
-          failureCount++;
+              await this.analyticsService.saveP50Baselines(
+                park.id,
+                baseline,
+                headliners,
+              );
+
+              this.logger.log(
+                `✅ ${park.name}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
+              );
+              return "success" as const;
+            } catch (error) {
+              this.logger.error(
+                `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
+                error instanceof Error ? error.stack : String(error),
+              );
+              return "failed" as const;
+            }
+          }),
+        );
+
+        for (const outcome of results) {
+          if (outcome === "success") successCount++;
+          else if (outcome === "failed") failureCount++;
+          // "skipped" doesn't count toward either bucket.
         }
       }
 
