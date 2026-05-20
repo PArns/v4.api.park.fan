@@ -12,8 +12,10 @@
 A P90-vs-P90 system (the previous design) compared "the current peak" against "the 90th-percentile peak day in the last 18 months." That made almost every ordinary day read as "low" or "very_low" — only true outlier days touched the baseline. Switching the denominator to the **median wait** turns the ratio into "current peak experience vs typical wait", which lines up with how users perceive crowd levels.
 
 ### Parks (live)
-- **Baseline**: P50 of wait times over a 548-day rolling window, averaged across headliner attractions, stored in `park_p50_baselines`.
-- **Current value**: per-headliner **MAX wait in the last 20 minutes**, averaged across headliners. 20 min is short enough to reflect a queue dropping (longer windows hold onto stale peaks); with 5-min sampling that's ≈ 4 samples per ride, so the MAX is effectively the recent P90. The window auto-expands to 60 min → 240 min only when the 20-min window has no qualifying samples at all (source lag, sparse-reporting ride).
+- **Per-headliner baselines**: P50 (median wait) per attraction over a 548-day rolling window, stored in `attraction_p50_baselines`.
+- **Park occupancy**: for each headliner with a recent sample, compute `latest_wait ÷ that_ride's_P50_baseline`; the **P90 across those ratios × 100** is the occupancy percentage. A park with 9 quiet rides and 1 marquee at typical wait surfaces as "moderate" instead of being averaged away.
+- **Current value per ride**: latest reported `waitTime` within a 60-min freshness window. Latest-per-ride (not window MAX) keeps the reading responsive when a queue drops; the 60-min window is long enough to catch sparse-reporting headliners (Mario Kart, Harry Potter only emit every 10-15 min).
+- **Park-wide P50 fallback**: when per-ride baselines are unavailable (brand-new park, no `attraction_p50_baselines` rows), we degrade to a park-wide computation: average latest across reporting headliners ÷ park P50 baseline from `park_p50_baselines`.
 
 ### Parks (historical calendar)
 - **Baseline**: same P50 baseline (median).
@@ -24,14 +26,33 @@ Each attraction has its own **P50 baseline** (548-day median of that ride's wait
 - Live: `current_wait / P50_baseline`.
 - Calendar daily: `P90(slot_P90s) / P50_baseline`.
 
-### Formula (same for park and attraction)
-```typescript
-CrowdLevel% = (Current_Peak / P50_Baseline) * 100
-// Fallback when no P50 baseline row exists yet (new entities):
-CrowdLevel% = (Current_Peak / P90_Baseline) * 100
+### Formulas
+
+**Per attraction (live or calendar-current-day):**
+```
+CrowdLevel% = (Current_Wait / P50_Baseline) * 100
 ```
 
-For **single attractions** in the live view, the current wait IS the current peak (one ride, one wait at any moment), so no aggregation is needed.
+**Park live (per-headliner ratio path):**
+```
+ratios = headliners
+  .filter(h => h.latestWait >= 5min AND h.attractionP50 > 0)
+  .map(h => h.latestWait / h.attractionP50)
+CrowdLevel% = P90(ratios) * 100
+```
+
+**Park live fallback (no per-ride baselines):**
+```
+CrowdLevel% = avg(latest waits) / park_P50_baseline * 100
+```
+
+**Calendar day (historical, attraction):**
+```
+slot_P90s = attraction_hourly_history.slots[].p90 (filtered by operating hours)
+CrowdLevel% = P90(slot_P90s) / P50_Baseline * 100
+```
+
+For all formulas, **fallback** is P90 baseline when no P50 row exists yet (brand-new entities).
 
 > **API note**: the legacy field name `baseline90thPercentile` is retained for backwards compatibility but now carries the active baseline (P50 by default, P90 fallback only).
 
