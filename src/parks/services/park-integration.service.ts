@@ -943,8 +943,9 @@ export class ParkIntegrationService {
         // "Typical wait" displayed for closed parks is the median baseline
         // (P50) — what a typical headliner wait looks like — matching the
         // peak-vs-median crowd semantic used by every other surface.
-        const typicalWait =
-          await this.analyticsService.getP50BaselineFromCache(park.id);
+        const typicalWait = await this.analyticsService.getP50BaselineFromCache(
+          park.id,
+        );
 
         dto.analytics = {
           occupancy: {

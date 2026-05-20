@@ -143,7 +143,16 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       { attractionId: "h7", latest_wait: "10" }, //  10/25  = 0.4
       { attractionId: "h8", latest_wait: "20" }, //  20/25  = 0.8
     ]);
-    stubP50s({ h1: 100, h2: 70, h3: 45, h4: 40, h5: 40, h6: 35, h7: 25, h8: 25 });
+    stubP50s({
+      h1: 100,
+      h2: 70,
+      h3: 45,
+      h4: 40,
+      h5: 40,
+      h6: 35,
+      h7: 25,
+      h8: 25,
+    });
 
     const result = await (service as any).getPerHeadlinerRatios("park-x", [
       "h1",

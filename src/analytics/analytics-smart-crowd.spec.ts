@@ -164,9 +164,7 @@ describe("Smart Crowd Level Logic", () => {
     (service as any).redis = module.get(REDIS_CLIENT);
 
     // Force legacy park-wide path; per-ride-ratio path is tested elsewhere.
-    (service as any).getPerHeadlinerRatios = jest
-      .fn()
-      .mockResolvedValue(null);
+    (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue(null);
 
     // Mock getDailyAverageWaitTime to return 20
     (service as any).getDailyAverageWaitTime = jest.fn().mockResolvedValue(20);

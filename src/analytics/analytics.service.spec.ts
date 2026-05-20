@@ -267,9 +267,7 @@ describe("AnalyticsService", () => {
     // Force legacy park-wide path; per-ride-ratio path uses
     // getBatchAttractionP50s (Redis pipeline) and is exercised by
     // dedicated tests, not by this top-level suite.
-    (service as any).getPerHeadlinerRatios = jest
-      .fn()
-      .mockResolvedValue(null);
+    (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue(null);
   });
 
   it("should be defined", () => {

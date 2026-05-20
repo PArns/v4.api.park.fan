@@ -132,9 +132,7 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
     service = module.get<AnalyticsService>(AnalyticsService);
     // Force the legacy park-wide path. The per-ride-ratio path requires
     // attraction-level P50 baselines and is exercised by dedicated tests.
-    (service as any).getPerHeadlinerRatios = jest
-      .fn()
-      .mockResolvedValue(null);
+    (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue(null);
   });
 
   /**
