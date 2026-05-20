@@ -104,6 +104,23 @@ export class FavoritesService {
     showIds = this.filterUuids(showIds);
     restaurantIds = this.filterUuids(restaurantIds);
 
+    // Short-circuit: no valid input ids → empty response without any
+    // Redis or DB round-trip. The endpoint is called on every page
+    // load, including pages with no favorites at all.
+    if (
+      parkIds.length === 0 &&
+      attractionIds.length === 0 &&
+      showIds.length === 0 &&
+      restaurantIds.length === 0
+    ) {
+      return {
+        parks: [],
+        attractions: [],
+        shows: [],
+        restaurants: [],
+      };
+    }
+
     // Generate cache key from sorted IDs + location
     const cacheKey = this.buildCacheKey(
       parkIds,

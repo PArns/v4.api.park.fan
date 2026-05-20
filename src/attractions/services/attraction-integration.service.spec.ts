@@ -11,6 +11,8 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
+import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
+import { PopularityService } from "../../popularity/popularity.service";
 import { createTestAttraction } from "../../../test/fixtures/attraction.fixtures";
 
 describe("AttractionIntegrationService", () => {
@@ -35,23 +37,24 @@ describe("AttractionIntegrationService", () => {
     getEffectiveStartTime: jest.fn(),
     getAttractionCrowdLevel: jest.fn(),
     getAttractionP50BaselineFromCache: jest.fn().mockResolvedValue(0),
-    get90thPercentileWithConfidence: jest
-      .fn()
-      .mockResolvedValue({ p50: 15, p90: 25 }),
+    getAttractionP90BaselineFromCache: jest.fn().mockResolvedValue(0),
+    // Hourly history pre-aggregation reader — returns empty map by
+    // default so the history path falls back to live today-only compute.
+    getAttractionHourlyHistory: jest.fn().mockResolvedValue(new Map()),
   };
 
   const mockMLService = {
-    isHealthy: jest.fn(),
-    getAttractionPredictionsWithFallback: jest.fn(),
+    isHealthy: jest.fn().mockResolvedValue(true),
+    getAttractionPredictionsWithFallback: jest.fn().mockResolvedValue([]),
   };
 
   const mockPredictionAccuracyService = {
-    getAttractionAccuracyWithBadge: jest.fn(),
+    getAttractionAccuracyWithBadge: jest.fn().mockResolvedValue(null),
   };
 
   const mockParksService = {
-    getBatchParkStatus: jest.fn(),
-    getSchedule: jest.fn(),
+    getBatchParkStatus: jest.fn().mockResolvedValue(new Map()),
+    getSchedule: jest.fn().mockResolvedValue([]),
   };
 
   const mockParkRepository = {
@@ -63,11 +66,22 @@ describe("AttractionIntegrationService", () => {
   };
 
   const mockScheduleEntryRepository = {
-    find: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue(null),
+    createQueryBuilder: jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+      getOne: jest.fn().mockResolvedValue(null),
+    })),
   };
 
   const mockDataSource = {
-    query: jest.fn(),
+    query: jest.fn().mockResolvedValue([]),
   };
 
   beforeEach(async () => {
@@ -109,6 +123,21 @@ describe("AttractionIntegrationService", () => {
         {
           provide: DataSource,
           useValue: mockDataSource,
+        },
+        {
+          provide: ParkEnrichmentService,
+          useValue: {
+            enrichScheduleWithHolidays: jest
+              .fn()
+              .mockImplementation(async (_p, s) => s),
+          },
+        },
+        {
+          provide: PopularityService,
+          useValue: {
+            recordParkHit: jest.fn().mockResolvedValue(undefined),
+            recordAttractionHit: jest.fn().mockResolvedValue(undefined),
+          },
         },
         {
           provide: REDIS_CLIENT,
@@ -300,8 +329,13 @@ describe("AttractionIntegrationService", () => {
       mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([]);
       mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
 
-      // ML service is down
+      // ML service is down — the integration falls back via the
+      // `.catch(() => [])` on getAttractionPredictionsWithFallback, so
+      // simulate that by rejecting that call directly.
       mockMLService.isHealthy.mockResolvedValue(false);
+      mockMLService.getAttractionPredictionsWithFallback.mockRejectedValue(
+        new Error("ML down"),
+      );
 
       mockParkRepository.findOne.mockResolvedValue({
         id: "park-1",
@@ -439,10 +473,18 @@ describe("AttractionIntegrationService", () => {
         new Error("Stats failed"),
       );
 
+      // Even on the "insufficient data" path the service returns a
+      // populated last30Days struct (counts of 0). Mirror that here.
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
         {
-          badge: "none",
-          last30Days: null,
+          badge: "insufficient_data",
+          last30Days: {
+            mae: 0,
+            mape: 0,
+            rmse: 0,
+            comparedPredictions: 0,
+            totalPredictions: 0,
+          },
           message: "Insufficient data",
         },
       );

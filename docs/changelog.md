@@ -6,6 +6,44 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — Peak-vs-peak crowd level (PR #46)
+
+- **Crowd-level semantic across every user-facing surface switched from P50-vs-P50 (avg vs typical avg) to P90-vs-P90 (peak vs typical peak)** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `location.service.ts`, `search.service.ts`, `calendar.service.ts`, `ml.service.ts`). "How busy was today" is what users remember as the peak headliner experience, not the day's median — apples-to-apples math now matches that intuition. P50 stays available as a fallback for brand-new entities without a P90 row yet (still apples-to-apples, just an avg-vs-avg reading until the next cron). The threshold table (very_low / low / moderate / high / very_high / extreme) is unchanged, so the labels keep their meaning. See [P90 Crowd Levels](analytics/p90-crowd-levels.md) for the full architecture.
+
+- **Park live occupancy now reads per-headliner MAX in the last 60 min, averaged across headliners** (`analytics.service.ts:getCurrentParkPeakWait`) — the live counterpart to the 548-day P90 baseline, with the same shape on both sides of the comparison.
+
+- **Calendar `peakLoad` mixed-percentile bug fixed** (`calendar.service.ts:buildPredictedCrowdLevels`): the ML-prediction path used to divide the predicted P90 by the P50 baseline, which systematically inflated peakLoad readings. Now uses P90 baseline; peakLoad and crowdLevel are both peak-vs-peak.
+
+- **ML pipeline forwards both baselines** (`ml.service.ts`, `prediction-request.dto.ts`): the Python service now receives both `p50Baseline` and `p90Baseline` in every prediction request. Training labels in `getCrowdLevelTrainingData` switched to day-P90 ÷ P90 baseline — models recalibrate within ~1 daily cycle.
+
+- **Attraction history utilization fixed** (`attraction-integration.service.ts`): the per-day "utilization" badge on the attraction history chart used to compare the day's weighted avg wait against either P50 baseline or today's intra-day P90 — a mixed-percentile reading that drifted between days. Now uses weighted avg of hourly P90s ÷ attraction P90 baseline (peak-vs-peak), matching every other surface.
+
+### Added — P90 baseline infrastructure (PR #46)
+
+- **`park_p90_baselines`, `attraction_p90_baselines` tables** populated by the existing P50 cron at 3 AM / 4 AM. PostgreSQL produces both percentiles from one PERCENTILE_CONT sort, so the additional rows cost nothing on top of the existing P50 scan. Cached in Redis (`park:p90:{id}`, `attraction:p90:{id}`, 24 h TTL).
+
+- **Read API**: `AnalyticsService.getP90BaselineFromCache`, `getAttractionP90BaselineFromCache`, `getBatchAttractionP90Baselines` (MGET + DB hydrate + pipeline writeback). Replaces the live-aggregation `getBatchAttractionP90s` on every hot path.
+
+### Added — Pre-aggregated hourly history (PR #46)
+
+- **`attraction_hourly_history` table + `AttractionHourlyHistoryProcessor`** (daily 04:30): pre-aggregates yesterday's per-attraction 15-min-slot P90/avg/sampleCount breakdown into one JSONB blob per `(attractionId, date)`. The attraction history endpoint now reads past days from this table (one indexed SELECT) and computes only today's slots live — replaces the previous always-live PERCENTILE_CONT scan of the entire window (typically 30 days × ~96 slots = ~2,880 percentile groupings per cold hit, per attraction).
+
+### Removed (PR #46)
+
+- **`OccupancyCalculationProcessor` + `occupancy-calculation` queue + `precompute-p90-sliding-window` job**: the precompute wrote a Redis cache (`analytics:percentile:sliding:*`) that nobody reads any more — the P90 baseline lives in the new tables. ~10 k heavy queries per night eliminated; the orphaned Redis keys TTL out within 24 h of deploy.
+
+- **`AnalyticsService.get90thPercentileWithConfidence`, `get90thPercentileSlidingWindow`, `getBatchAttractionP90s`**: live 548-day PERCENTILE_CONT methods, fully replaced by the cache-table-backed read API.
+
+- **`AttractionsMetadataProcessor`, `ShowsMetadataProcessor`, `RestaurantsMetadataProcessor` + their Bull queues** (`attractions-metadata`, `shows-metadata`, `restaurants-metadata`): all three were marked `@deprecated Phase 6.2` but still instantiated by Nest. `ChildrenMetadataProcessor` has covered their work since the combined sync landed.
+
+### Performance (PR #46)
+
+- **Wait-times processor `processLandData` N+1** (`wait-times.processor.ts`): the every-5-min land-info sync did a SELECT + 2 UPDATEs per attraction (~3,000 queries per run for a 100-attraction park). Now bulk-fetches current land/queueTimesEntityId in the same SELECT used for IDs, diffs in memory, and groups UPDATEs by target land. Steady-state: 0 UPDATEs.
+
+- **`/v1/analytics/realtime` LATERAL subquery** (`analytics.service.ts:getGlobalRealtimeStats`): two correlated subqueries per park (a COUNT + a per-attraction latest-status LATERAL JOIN) replaced with a single `attraction_counts` CTE that LEFT JOINs the already-computed `latest_updates` and aggregates via FILTER. Cache-miss latency falls from seconds to ms.
+
+- **ML alert auto-resolve N+1** (`ml-alert.service.ts`): per-alert `find()` + N×`save()` replaced with one UPDATE matching the same WHERE filter.
+
 ### Added
 
 - **Full statistics on `/v1/analytics/realtime`** (`analytics.service.ts`, `global-stats.dto.ts`): `longestWaitRide` and `shortestWaitRide` now expose today's full statistics — `avgWaitToday`, `minWaitToday`, `peakWaitToday`, `peakWaitTimestamp`, `typicalWaitThisHour`, `currentVsTypical` — in addition to the existing `sparkline` field. Values are fetched via `getAttractionStatistics`, the same method used by the attraction detail endpoint, so they are always consistent. Frontend no longer needs to fill these fields with `null`.

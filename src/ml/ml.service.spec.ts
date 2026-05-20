@@ -213,6 +213,14 @@ describe("MLService", () => {
         ],
       };
 
+      // Park lookup is now done before the cache read for timezone-aware
+      // cache keys; mock both calls.
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "UTC",
+        countryCode: "US",
+        regionCode: null,
+      });
       mockRedis.get.mockResolvedValue(JSON.stringify(cachedData));
 
       const result = await service.getParkPredictions(parkId, "hourly");
@@ -304,6 +312,9 @@ describe("MLService", () => {
     });
 
     it("should filter out predictions for explicitly CLOSED days", async () => {
+      // For a seasonal park the gap filter also skips dates without an
+      // explicit OPERATING entry, so we have to mark the days we want
+      // kept as OPERATING and the day we want dropped as CLOSED.
       mockParksService.getOperatingDateRange.mockResolvedValue({
         minDate: "2026-01-01",
         maxDate: "2026-12-31",
@@ -311,8 +322,16 @@ describe("MLService", () => {
       mockParksService.isParkSeasonal.mockResolvedValue(true);
       mockScheduleEntryRepository.find.mockResolvedValue([
         {
+          date: new Date(`${today}T12:00:00Z`),
+          scheduleType: ScheduleType.OPERATING,
+        },
+        {
           date: new Date(`${tomorrow}T12:00:00Z`),
           scheduleType: ScheduleType.CLOSED,
+        },
+        {
+          date: new Date(`${nextWeek}T12:00:00Z`),
+          scheduleType: ScheduleType.OPERATING,
         },
       ]);
 
@@ -328,6 +347,9 @@ describe("MLService", () => {
     });
 
     it("should filter out predictions in seasonal gaps", async () => {
+      // Seasonal park with operating history but no explicit schedule
+      // entries for the predicted days → every prediction falls into a
+      // gap and gets skipped, so save is never called.
       mockParksService.getOperatingDateRange.mockResolvedValue({
         minDate: "2026-01-01",
         maxDate: "2026-12-31",
@@ -337,8 +359,7 @@ describe("MLService", () => {
 
       await service.storePredictions(predictions);
 
-      const saved = mockPredictionRepository.save.mock.calls[0][0];
-      expect(saved).toHaveLength(0);
+      expect(mockPredictionRepository.save).not.toHaveBeenCalled();
     });
   });
 });

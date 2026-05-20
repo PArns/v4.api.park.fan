@@ -6,22 +6,26 @@ import { ParksService } from "../../parks/parks.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 
 /**
- * P50 Baseline Processor
+ * P50 + P90 Baseline Processor
  *
- * Calculates and stores P50 (median) baselines for parks and attractions.
+ * Calculates and stores both the median (P50) and the peak (P90) wait-time
+ * baselines for parks and attractions. PostgreSQL produces both percentiles
+ * from a single PERCENTILE_CONT sort, so the additional P90 row is free
+ * on top of the existing P50 job.
  *
  * Strategy:
- * - Runs daily at 3am (after percentile calculation at 2am)
- * - Identifies headliner attractions using 3-tier adaptive system
- * - Calculates P50 baseline from headliners only (548-day window)
- * - Stores in database and caches in Redis
+ * - Runs daily — parks at 3 AM, attractions at 4 AM (after the
+ *   percentile-aggregates job at 2 AM).
+ * - Identifies headliner attractions via the 3-tier adaptive system.
+ * - Calculates per-headliner P50 / P90 over the 548-day sliding window.
+ * - Park baselines = avg-of-per-headliner-{P50,P90} (consistent with the
+ *   peak-vs-peak and avg-vs-avg comparisons the API surfaces).
+ * - Writes `park_p50_baselines` + `park_p90_baselines` for parks and the
+ *   matching pair for attractions; primes Redis cache for each.
  *
- * Benefits:
- * - More intuitive crowd levels (P50 = expected/typical day)
- * - Filters out low-demand attractions
- * - Adapts to parks of all sizes (major, medium, small)
- *
- * Schedule: Daily at 3am (after queue-data-aggregates update)
+ * Why both percentiles: the API surfaces crowd levels as peak-vs-peak
+ * (P90 ÷ P90 baseline). P50 is kept for legacy avg-shaped consumers and
+ * as a graceful fallback when a P90 row hasn't been calculated yet.
  */
 @Processor("p50-baseline")
 export class P50BaselineProcessor {
@@ -46,64 +50,79 @@ export class P50BaselineProcessor {
       let failureCount = 0;
 
       const WINDOW_DAYS = 548;
-      for (const park of parks) {
-        try {
-          // Skip parks with no queue_data in window (reduces log noise; headliner logic would fail anyway)
-          const hasData = await this.analyticsService.parkHasQueueDataInWindow(
-            park.id,
-            WINDOW_DAYS,
-          );
-          if (!hasData) {
-            this.logger.debug(
-              `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
-            );
-            continue;
-          }
 
-          // Step 1: Identify headliners using 3-tier system
-          const headliners = await this.analyticsService.identifyHeadliners(
-            park.id,
-          );
+      // Process parks in batches of 5 — `identifyHeadliners` is a
+      // heavy 548-day PERCENTILE_CONT scan per park, so we can't
+      // fan out unbounded without saturating the DB. BATCH_SIZE=5
+      // mirrors the wait-times processor pattern (worked there too).
+      // Wall-time drops from sum(parks) sequential to
+      // ceil(parks/5) parallel batches; per-park error isolation
+      // preserved via the inner try/catch.
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < parks.length; i += BATCH_SIZE) {
+        const batch = parks.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (park) => {
+            try {
+              const hasData =
+                await this.analyticsService.parkHasQueueDataInWindow(
+                  park.id,
+                  WINDOW_DAYS,
+                );
+              if (!hasData) {
+                this.logger.debug(
+                  `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
+                );
+                return "skipped" as const;
+              }
 
-          if (headliners.length === 0) {
-            this.logger.warn(
-              `No headliners identified for park ${park.name} (${park.id})`,
-            );
-            failureCount++;
-            continue;
-          }
+              const headliners = await this.analyticsService.identifyHeadliners(
+                park.id,
+              );
 
-          // Step 2: Calculate P50 baseline from headliners
-          const baseline = await this.analyticsService.calculateP50Baseline(
-            park.id,
-            headliners,
-          );
+              if (headliners.length === 0) {
+                this.logger.warn(
+                  `No headliners identified for park ${park.name} (${park.id})`,
+                );
+                return "failed" as const;
+              }
 
-          if (baseline.p50 === 0) {
-            this.logger.warn(
-              `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
-            );
-            failureCount++;
-            continue;
-          }
+              const baseline = await this.analyticsService.calculateP50Baseline(
+                park.id,
+                headliners,
+              );
 
-          // Step 3: Save to database and cache
-          await this.analyticsService.saveP50Baselines(
-            park.id,
-            baseline,
-            headliners,
-          );
+              if (baseline.p50 === 0) {
+                this.logger.warn(
+                  `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
+                );
+                return "failed" as const;
+              }
 
-          this.logger.log(
-            `✅ ${park.name}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
-          );
-          successCount++;
-        } catch (error) {
-          this.logger.error(
-            `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
-            error instanceof Error ? error.stack : String(error),
-          );
-          failureCount++;
+              await this.analyticsService.saveP50Baselines(
+                park.id,
+                baseline,
+                headliners,
+              );
+
+              this.logger.log(
+                `✅ ${park.name}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
+              );
+              return "success" as const;
+            } catch (error) {
+              this.logger.error(
+                `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
+                error instanceof Error ? error.stack : String(error),
+              );
+              return "failed" as const;
+            }
+          }),
+        );
+
+        for (const outcome of results) {
+          if (outcome === "success") successCount++;
+          else if (outcome === "failed") failureCount++;
+          // "skipped" doesn't count toward either bucket.
         }
       }
 
@@ -133,52 +152,54 @@ export class P50BaselineProcessor {
       let successCount = 0;
       let failureCount = 0;
 
+      // One GROUP BY query per *park* (returning P50/P90 per attraction)
+      // replaces the previous per-attraction PERCENTILE_CONT scan. The
+      // 548-day window scan still happens, but PostgreSQL can produce
+      // results for an entire park's attractions from a single sort. A
+      // 200-park / 10k-attraction system used to fire ~10k heavy queries
+      // here every night; now it fires ~200, all of which are I/O-bound
+      // on the same hot index.
       for (const park of parks) {
-        // Fetch attractions via service (findAll() does not eager-load attractions)
-        // Use large page size to get all attractions in one query
-        const { data: attractions } =
-          await this.attractionsService.findByParkId(park.id, 1, 10000);
-
-        for (const attraction of attractions) {
-          try {
-            // Calculate P50 baseline for this attraction
-            const baseline = await this.analyticsService.calculateAttractionP50(
-              attraction.id,
-            );
-
-            if (baseline.p50 === 0) {
-              // sampleCount=0 means no qualifying data (waitTime<10 or show/walkthrough) — not a real error
-              if (baseline.sampleCount > 0) {
-                this.logger.warn(
-                  `P50 baseline is 0 for attraction ${attraction.name} (${attraction.id}) - ${baseline.sampleCount} samples but median is 0`,
-                );
-              } else {
-                this.logger.debug(
-                  `Skipping P50 for ${attraction.name} — no qualifying data (low-wait or show attraction)`,
-                );
-              }
-              failureCount++;
-              continue;
-            }
-
-            // Save to database and cache
-            await this.analyticsService.saveAttractionP50Baseline(
-              attraction.id,
+        try {
+          const perAttraction =
+            await this.analyticsService.calculateAttractionP50P90ForPark(
               park.id,
-              baseline,
+              park.timezone || "UTC",
             );
 
+          const rows = Array.from(perAttraction.entries()).map(
+            ([attractionId, baseline]) => ({
+              attractionId,
+              ...baseline,
+            }),
+          );
+
+          if (rows.length === 0) {
             this.logger.debug(
-              `✅ ${attraction.name}: ${baseline.p50}min (headliner: ${baseline.isHeadliner}, confidence: ${baseline.confidence})`,
+              `Skipping ${park.name} — no attractions with qualifying data`,
             );
-            successCount++;
-          } catch (error) {
-            this.logger.error(
-              `Failed to calculate P50 baseline for attraction ${attraction.name} (${attraction.id})`,
-              error instanceof Error ? error.stack : String(error),
-            );
-            failureCount++;
+            continue;
           }
+
+          const { p50Saved } =
+            await this.analyticsService.saveAttractionP50P90BaselinesBatch(
+              park.id,
+              rows,
+            );
+          successCount += p50Saved;
+          failureCount += rows.length - p50Saved;
+
+          this.logger.debug(
+            `✅ ${park.name}: ${p50Saved}/${rows.length} attraction baselines saved`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `Failed to calculate P50/P90 baselines for park ${park.name} (${park.id})`,
+            error instanceof Error ? error.stack : String(error),
+          );
+          // Count every attraction in the park as failed so the summary
+          // log reflects scope, not the single park-level error.
+          failureCount += 1;
         }
       }
 

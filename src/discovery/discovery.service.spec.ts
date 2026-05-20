@@ -2,6 +2,8 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { DiscoveryService } from "./discovery.service";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Park } from "../parks/entities/park.entity";
+import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("DiscoveryService Deduplication", () => {
@@ -9,6 +11,7 @@ describe("DiscoveryService Deduplication", () => {
 
   const mockParkRepository = {
     find: jest.fn(),
+    query: jest.fn().mockResolvedValue([]),
   };
 
   const mockRedis = {
@@ -24,6 +27,25 @@ describe("DiscoveryService Deduplication", () => {
         {
           provide: getRepositoryToken(Park),
           useValue: mockParkRepository,
+        },
+        {
+          provide: getRepositoryToken(ParkDailyStats),
+          useValue: {
+            find: jest.fn().mockResolvedValue([]),
+            findOne: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: ParksService,
+          useValue: {
+            getBatchParkStatus: jest.fn().mockResolvedValue(new Map()),
+            getBatchHasOperatingSchedule: jest
+              .fn()
+              .mockResolvedValue(new Map()),
+            getBatchSchedules: jest
+              .fn()
+              .mockResolvedValue({ today: new Map(), next: new Map() }),
+          },
         },
         {
           provide: REDIS_CLIENT,

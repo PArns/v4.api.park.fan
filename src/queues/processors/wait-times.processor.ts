@@ -486,11 +486,19 @@ export class WaitTimesProcessor {
   }
 
   private async processLandData(lands: any[], park: any): Promise<number> {
-    const parkAttractions = await this.attractionsService
-      .getRepository()
-      .find({ select: ["id", "name"], where: { parkId: park.id } });
+    // Bulk-fetch current state for the park's attractions (id + the three
+    // fields we might update). In steady state nothing has changed and we
+    // emit zero UPDATEs; previously this method did 2–3 queries per
+    // attraction (a SELECT inside updateLandInfo plus two UPDATEs), so on
+    // a 100-attraction park that's ~300 queries every 5 minutes.
+    const parkAttractions = await this.attractionsService.getRepository().find({
+      select: ["id", "landName", "landExternalId", "queueTimesEntityId"],
+      where: { parkId: park.id },
+    });
     const attractionIds = parkAttractions.map((a) => a.id);
     if (attractionIds.length === 0) return 0;
+
+    const currentById = new Map(parkAttractions.map((a) => [a.id, a]));
 
     const qtMappings = await this.mappingRepository
       .createQueryBuilder("mapping")
@@ -503,34 +511,65 @@ export class WaitTimesProcessor {
       qtIdMap.set(m.externalEntityId, m.internalEntityId),
     );
 
+    // Group land-info changes per land so we can emit one UPDATE per land
+    // instead of one per attraction. Queue-Times entity-id changes are
+    // collected separately (they're unique per attraction).
+    const landUpdates = new Map<
+      string,
+      { landName: string; landExternalId: string | null; ids: string[] }
+    >();
+    const queueTimesIdUpdates: Array<{ id: string; value: string }> = [];
     let updatedCount = 0;
+
     for (const land of lands) {
       if (!land.name) continue;
+      const landExternalId = land.id?.toString() || null;
       for (const qtAttractionId of land.attractions) {
         const internalId = qtIdMap.get(qtAttractionId.toString());
-        if (internalId) {
-          const changed = await this.attractionsService.updateLandInfo(
-            internalId,
-            land.name,
-            land.id?.toString() || null,
-          );
-          const qtNumericId = this.extractQueueTimesNumericId(
-            qtAttractionId.toString(),
-          );
-          if (qtNumericId) {
-            await this.attractionsService
-              .getRepository()
-              .update(internalId, { queueTimesEntityId: qtNumericId })
-              .catch((e) =>
-                this.logger.warn(
-                  `Failed to update queueTimesEntityId for attraction ${internalId}: ${e?.message ?? e}`,
-                ),
-              );
+        if (!internalId) continue;
+        const current = currentById.get(internalId);
+        if (!current) continue;
+
+        if (
+          current.landName !== land.name ||
+          current.landExternalId !== landExternalId
+        ) {
+          const key = `${land.name}::${landExternalId ?? ""}`;
+          let bucket = landUpdates.get(key);
+          if (!bucket) {
+            bucket = { landName: land.name, landExternalId, ids: [] };
+            landUpdates.set(key, bucket);
           }
-          if (changed) updatedCount++;
+          bucket.ids.push(internalId);
+          updatedCount++;
+        }
+
+        const qtNumericId = this.extractQueueTimesNumericId(
+          qtAttractionId.toString(),
+        );
+        if (qtNumericId && current.queueTimesEntityId !== qtNumericId) {
+          queueTimesIdUpdates.push({ id: internalId, value: qtNumericId });
         }
       }
     }
+
+    const repo = this.attractionsService.getRepository();
+    for (const bucket of landUpdates.values()) {
+      await repo.update(bucket.ids, {
+        landName: bucket.landName,
+        landExternalId: bucket.landExternalId,
+      });
+    }
+    for (const u of queueTimesIdUpdates) {
+      await repo
+        .update(u.id, { queueTimesEntityId: u.value })
+        .catch((e) =>
+          this.logger.warn(
+            `Failed to update queueTimesEntityId for attraction ${u.id}: ${e?.message ?? e}`,
+          ),
+        );
+    }
+
     return updatedCount;
   }
 
@@ -615,49 +654,74 @@ export class WaitTimesProcessor {
       const currentStatus = entityData.status;
       const statusKey = `downtime:status:${attractionId}`;
       const downtimeStartKey = `downtime:start:${attractionId}`;
-      const previousStatus = await this.redis.get(statusKey);
-      await this.redis.set(statusKey, currentStatus, "EX", 3600);
-      if (
-        previousStatus === LiveStatus.OPERATING &&
-        (currentStatus === LiveStatus.DOWN ||
-          currentStatus === LiveStatus.CLOSED ||
-          currentStatus === LiveStatus.REFURBISHMENT)
-      ) {
-        if (closingTime) {
-          const msUntilClose = closingTime.getTime() - Date.now();
-          if (msUntilClose / 1000 / 60 <= 60) return;
-        }
-        await this.redis.set(
-          downtimeStartKey,
-          Date.now().toString(),
-          "EX",
-          3600,
+
+      // Read both keys we might need upfront in one MGET round-trip. The
+      // previous version did a sequential GET → SET → conditional GETs;
+      // wait-times runs this for every attraction every 5 minutes so the
+      // round-trip count matters.
+      const [previousStatus, existingStart] = await this.redis.mget(
+        statusKey,
+        downtimeStartKey,
+      );
+
+      const wasOperating = previousStatus === LiveStatus.OPERATING;
+      const wasDownish =
+        previousStatus === LiveStatus.DOWN ||
+        previousStatus === LiveStatus.CLOSED ||
+        previousStatus === LiveStatus.REFURBISHMENT;
+      const isDownish =
+        currentStatus === LiveStatus.DOWN ||
+        currentStatus === LiveStatus.CLOSED ||
+        currentStatus === LiveStatus.REFURBISHMENT;
+
+      // Skip downtime-start tracking if we're inside the last hour
+      // before close (operations are winding down — not a real outage).
+      let recordDowntimeStart = wasOperating && isDownish;
+      if (recordDowntimeStart && closingTime) {
+        const msUntilClose = closingTime.getTime() - Date.now();
+        if (msUntilClose / 1000 / 60 <= 60) recordDowntimeStart = false;
+      }
+
+      // Down → Up: still needs one extra GET for the daily counter,
+      // because we have to read-then-add (Redis lacks atomic numeric add
+      // for sums of arbitrary minute counts). We only fetch when the
+      // transition actually fires.
+      let downtimeMinutes = 0;
+      let dailyKey: string | null = null;
+      let currentTotalDaily = 0;
+      const didRecover = wasDownish && currentStatus === LiveStatus.OPERATING;
+      if (didRecover && existingStart) {
+        downtimeMinutes = Math.round(
+          (Date.now() - parseInt(existingStart)) / 60000,
         );
-      }
-      if (
-        (previousStatus === LiveStatus.DOWN ||
-          previousStatus === LiveStatus.CLOSED ||
-          previousStatus === LiveStatus.REFURBISHMENT) &&
-        currentStatus === LiveStatus.OPERATING
-      ) {
-        const startTimeStr = await this.redis.get(downtimeStartKey);
-        if (startTimeStr) {
-          const downtimeMinutes = Math.round(
-            (Date.now() - parseInt(startTimeStr)) / 60000,
+        if (downtimeMinutes > 0) {
+          dailyKey = `downtime:daily:${attractionId}:${getCurrentDateInTimezone(timezone)}`;
+          currentTotalDaily = parseInt(
+            (await this.redis.get(dailyKey)) ?? "0",
+            10,
           );
-          if (downtimeMinutes > 0) {
-            const dailyKey = `downtime:daily:${attractionId}:${getCurrentDateInTimezone(timezone)}`;
-            const currentTotal = await this.redis.get(dailyKey);
-            await this.redis.set(
-              dailyKey,
-              (parseInt(currentTotal || "0") + downtimeMinutes).toString(),
-              "EX",
-              25 * 3600,
-            );
-          }
-          await this.redis.del(downtimeStartKey);
         }
       }
+
+      // Pipeline every write — the status SET always fires plus 0-3
+      // conditional ops. One round-trip regardless of branch.
+      const pipeline = this.redis.pipeline();
+      pipeline.set(statusKey, currentStatus, "EX", 3600);
+      if (recordDowntimeStart) {
+        pipeline.set(downtimeStartKey, Date.now().toString(), "EX", 3600);
+      }
+      if (didRecover && existingStart) {
+        if (dailyKey && downtimeMinutes > 0) {
+          pipeline.set(
+            dailyKey,
+            (currentTotalDaily + downtimeMinutes).toString(),
+            "EX",
+            25 * 3600,
+          );
+        }
+        pipeline.del(downtimeStartKey);
+      }
+      await pipeline.exec();
     } catch (e) {
       this.logger.warn(
         `Failed to track downtime for entity ${entityData.externalId}: ${(e as Error)?.message ?? e}`,

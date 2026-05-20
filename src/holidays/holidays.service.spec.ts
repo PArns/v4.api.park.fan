@@ -57,8 +57,10 @@ describe("HolidaysService", () => {
       const result = await service.isHoliday(date, "DE", "NW", timezone);
 
       expect(result).toBe(true);
+      // Date column is now compared directly (the previous CAST was a
+      // workaround for a column type that no longer exists).
       expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        "CAST(holiday.date AS DATE) = :dateStr",
+        "holiday.date = :dateStr",
         { dateStr: "2023-12-26" },
       );
     });

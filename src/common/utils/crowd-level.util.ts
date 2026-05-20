@@ -1,7 +1,11 @@
 import { CrowdLevel } from "../types/crowd-level.type";
 
 /**
- * Convert a P50-relative occupancy percentage into a CrowdLevel rating.
+ * Convert a peak-relative occupancy percentage into a CrowdLevel rating.
+ *
+ * Callers should compute occupancy as today's P90 wait ÷ P90 baseline
+ * (peak-vs-peak). See `src/common/types/crowd-level.type.ts` for the
+ * full semantic + fallback story.
  *
  * Thresholds (see crowd-level.type.ts):
  * - very_low: ≤ 60%  - low: 61-89%  - moderate: 90-110%

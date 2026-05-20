@@ -56,14 +56,20 @@ export class ParkEnrichmentService {
 
     const parkIds = parks.map((p) => p.id);
 
-    // Pre-calculate context (timezone + startTime) for batch park statistics
+    // Resolve every park's `startTime` (today's effective opening) in
+    // one batched call. The previous version awaited a per-park lookup
+    // sequentially — for a 50-park /discovery hit that was 50 cache/DB
+    // round-trips in a row before the rest of the Promise.all even
+    // started.
+    const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
+      parks.map((p) => ({ id: p.id, timezone: p.timezone })),
+    );
     const context = new Map<string, { timezone: string; startTime: Date }>();
     for (const park of parks) {
-      const startTime = await this.analyticsService.getEffectiveStartTime(
-        park.id,
-        park.timezone,
-      );
-      context.set(park.id, { timezone: park.timezone, startTime });
+      context.set(park.id, {
+        timezone: park.timezone,
+        startTime: startTimeMap.get(park.id)!,
+      });
     }
 
     // Batch fetch all data in parallel (6 queries total regardless of park count)

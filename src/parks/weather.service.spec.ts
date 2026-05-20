@@ -3,6 +3,7 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { WeatherService } from "./weather.service";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
+import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("WeatherService", () => {
@@ -17,6 +18,7 @@ describe("WeatherService", () => {
   const mockWeatherDataRepository = {
     findOne: jest.fn(),
     save: jest.fn(),
+    upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
     update: jest.fn(),
     count: jest.fn(),
     createQueryBuilder: jest.fn(() => ({
@@ -56,7 +58,7 @@ describe("WeatherService", () => {
           useValue: mockParkRepository,
         },
         {
-          provide: "OpenMeteoClient",
+          provide: OpenMeteoClient,
           useValue: mockOpenMeteoClient,
         },
         {
@@ -101,7 +103,7 @@ describe("WeatherService", () => {
       );
 
       expect(result).toBe(1);
-      expect(mockWeatherDataRepository.save).toHaveBeenCalled();
+      expect(mockWeatherDataRepository.upsert).toHaveBeenCalled();
     });
   });
 

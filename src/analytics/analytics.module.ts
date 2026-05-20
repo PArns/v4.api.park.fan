@@ -21,6 +21,9 @@ import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
 import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
+import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
+import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 
 @Module({
   imports: [
@@ -38,10 +41,13 @@ import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity
       WaitTimePrediction,
       QueueDataAggregate,
       ParkDailyStats,
-      // P50 Baseline System
+      // P50/P90 Baseline System
       HeadlinerAttraction,
       ParkP50Baseline,
       AttractionP50Baseline,
+      ParkP90Baseline,
+      AttractionP90Baseline,
+      AttractionHourlyHistory,
     ]),
   ],
   providers: [AnalyticsService, ParkHistoricalStatsService],

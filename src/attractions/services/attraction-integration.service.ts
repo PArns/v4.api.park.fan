@@ -313,28 +313,29 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          let p50Baseline =
-            await this.analyticsService.getAttractionP50BaselineFromCache(
+          // Prefer P90 baseline (peak-vs-peak crowd reading) and fall back
+          // to P50 for entities that don't have a P90 row yet. No live
+          // 548-day PERCENTILE_CONT fallback — that was the dominant cost
+          // on attraction-detail cache misses.
+          let baseline =
+            await this.analyticsService.getAttractionP90BaselineFromCache(
               attraction.id,
             );
-          if (p50Baseline === 0) {
-            const percentiles =
-              await this.analyticsService.get90thPercentileWithConfidence(
+          if (baseline === 0) {
+            baseline =
+              await this.analyticsService.getAttractionP50BaselineFromCache(
                 attraction.id,
-                "attraction",
-                park?.timezone,
               );
-            p50Baseline = percentiles.p50 || percentiles.p90;
           }
 
           crowdLevel =
-            this.analyticsService.getAttractionCrowdLevel(wait, p50Baseline) ||
+            this.analyticsService.getAttractionCrowdLevel(wait, baseline) ||
             "moderate";
 
-          if (p50Baseline > 0) {
+          if (baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
               wait,
-              p50Baseline,
+              baseline,
             );
             dto.baseline = loadRating.baseline;
             dto.comparison = this.analyticsService.getComparisonText(
@@ -369,16 +370,33 @@ export class AttractionIntegrationService {
     const parkForUrl = park;
     if (park) {
       try {
-        const startTime = await this.analyticsService.getEffectiveStartTime(
-          attraction.parkId,
-          park.timezone,
-        );
-
-        // Run statistics, history, and schedule fetch in parallel
+        // Kick off the start-time lookup AND the history fetch in
+        // parallel — history doesn't depend on startTime, only the
+        // statistics call does. On a cold cache this turns a
+        // (Redis+DB)-then-(stats+history+schedule) waterfall into
+        // (Redis+DB || history || schedule) → (stats).
         const today = getStartOfDayInTimezone(park.timezone);
         const startDate = subDays(today, days);
         const startDateStr = formatInParkTimezone(startDate, park.timezone);
         const endDateStr = formatInParkTimezone(today, park.timezone);
+
+        const historyPromise = this.calculateAttractionHistory(
+          attraction.id,
+          attraction.parkId,
+          park.timezone,
+          days,
+        ).catch((err) => {
+          this.logger.warn(
+            `Failed to calculate history for attraction ${attraction.id}:`,
+            err,
+          );
+          return [] as HistoryDayDto[];
+        });
+
+        const startTime = await this.analyticsService.getEffectiveStartTime(
+          attraction.parkId,
+          park.timezone,
+        );
 
         const [statistics, history, scheduleEntries] = await Promise.all([
           this.analyticsService.getAttractionStatistics(
@@ -386,18 +404,7 @@ export class AttractionIntegrationService {
             startTime,
             park.timezone,
           ),
-          this.calculateAttractionHistory(
-            attraction.id,
-            attraction.parkId,
-            park.timezone,
-            days,
-          ).catch((err) => {
-            this.logger.warn(
-              `Failed to calculate history for attraction ${attraction.id}:`,
-              err,
-            );
-            return [] as HistoryDayDto[];
-          }),
+          historyPromise,
           this.scheduleEntryRepository
             .createQueryBuilder("schedule")
             .where("schedule.parkId = :parkId", { parkId: attraction.parkId })
@@ -645,70 +652,19 @@ export class AttractionIntegrationService {
         }
       }
 
-      // Single batch query for all queue data in date range
-      // Use raw SQL for efficient aggregation with timezone-aware date extraction
-      // Note: Only 1 sample needed since we only store changes (not all values)
-      // The WHERE clause uses UTC timestamps (stored in DB) compared to UTC Date objects
-      // The GROUP BY extracts dates in park timezone for correct day boundaries
-      // Round P90 and avg_wait to nearest 5 minutes in SQL for consistency
-      const queueDataResults = await this.dataSource.query(
-        `
-        SELECT 
-          DATE(qd.timestamp AT TIME ZONE $3) as date,
-          (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)::text, 2, '0') || ':' || LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
-          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
-          AVG(qd."waitTime") as avg_wait,
-          COUNT(*) as sample_count
-        FROM queue_data qd
-        WHERE qd."attractionId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.timestamp < $4
-          AND qd.status = 'OPERATING'
-          AND qd."queueType" = 'STANDBY'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 5
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $3),
-                 time_slot
-        HAVING COUNT(*) >= 1
-        ORDER BY date, time_slot
-      `,
-        [
-          attractionId,
-          startDate.toISOString(),
-          timezone,
-          endDate.toISOString(),
-        ],
-      );
+      // Hybrid data source:
+      // 1. Past days come from `attraction_hourly_history` (pre-aggregated
+      //    nightly by AttractionHourlyHistoryProcessor) — one indexed SELECT.
+      // 2. Today's still-in-progress slots are computed live against
+      //    queue_data, but only ever for one day at a time.
+      // This replaces the previous always-live PERCENTILE_CONT scan of the
+      // entire requested window, which dominated cold-cache cost on the
+      // attraction history endpoint.
+      const fromDateStr = formatInParkTimezone(startDate, timezone);
+      // History is up-to-but-not-including endDate (next-day-midnight in
+      // park tz), so the latest *date* covered is today.
+      const toDateStr = todayStr;
 
-      // Query down count separately (more efficient)
-      const downCountResults = await this.dataSource.query(
-        `
-        SELECT 
-          DATE(qd.timestamp AT TIME ZONE $3) as date,
-          COUNT(DISTINCT 
-            CASE 
-              WHEN qd.status = 'DOWN' THEN 
-                DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $3)
-              ELSE NULL
-            END
-          ) as down_count
-        FROM queue_data qd
-        WHERE qd."attractionId" = $1::uuid
-          AND qd.timestamp >= $2
-          AND qd.timestamp < $4
-          AND qd.status = 'DOWN'
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $3)
-      `,
-        [
-          attractionId,
-          startDate.toISOString(),
-          timezone,
-          endDate.toISOString(),
-        ],
-      );
-
-      // Group queue data by date
-      // PostgreSQL DATE() returns a string in YYYY-MM-DD format, but ensure consistency
       const queueDataByDate = new Map<
         string,
         Array<{
@@ -718,41 +674,106 @@ export class AttractionIntegrationService {
           sampleCount: number;
         }>
       >();
-      for (const row of queueDataResults) {
-        // Ensure date is in YYYY-MM-DD format (PostgreSQL DATE returns this format)
-        const dateStr =
-          typeof row.date === "string"
-            ? row.date
-            : new Date(row.date).toISOString().split("T")[0];
-        if (!queueDataByDate.has(dateStr)) {
-          queueDataByDate.set(dateStr, []);
-        }
-        queueDataByDate.get(dateStr)!.push({
-          time_slot: row.time_slot,
-          p90: roundToNearest5Minutes(parseFloat(row.p90)), // Ensure rounding (already done in SQL, but double-check)
-          avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)), // Ensure rounding
-          sampleCount: parseInt(row.sample_count, 10) || 0,
-        });
-      }
-
-      // Debug: Log query results
-
-      // Create down count map
       const downCountMap = new Map<string, number>();
-      for (const row of downCountResults) {
-        // Ensure date is in YYYY-MM-DD format
-        const dateStr =
-          typeof row.date === "string"
-            ? row.date
-            : new Date(row.date).toISOString().split("T")[0];
-        downCountMap.set(dateStr, parseInt(row.down_count, 10) || 0);
+
+      const cachedHistory =
+        await this.analyticsService.getAttractionHourlyHistory(
+          attractionId,
+          fromDateStr,
+          toDateStr,
+        );
+      for (const [dateStr, row] of cachedHistory) {
+        if (dateStr === todayStr) {
+          // Skip cached "today" — we'll recompute it live so the chart
+          // reflects the latest hour. Past days are settled and trusted.
+          continue;
+        }
+        queueDataByDate.set(dateStr, row.slots || []);
+        downCountMap.set(dateStr, row.downCount || 0);
       }
 
-      // P50 baseline for utilization (same as crowd level); use once per attraction
-      const attractionP50Baseline =
-        await this.analyticsService.getAttractionP50BaselineFromCache(
-          attractionId,
+      // Live single-day compute for today (range may end before today, in
+      // which case we skip this entirely and serve purely from the cache).
+      if (endDate.getTime() > Date.now()) {
+        const todayStart = fromZonedTime(`${todayStr}T00:00:00`, timezone);
+        const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+
+        const [todayRows, todayDown] = await Promise.all([
+          this.dataSource.query(
+            `
+            SELECT
+              (LPAD(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE $3)::text, 2, '0') ||
+               ':' ||
+               LPAD((FLOOR(EXTRACT(MINUTE FROM qd.timestamp AT TIME ZONE $3) / 15) * 15)::text, 2, '0')) as time_slot,
+              PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
+              AVG(qd."waitTime") as avg_wait,
+              COUNT(*) as sample_count
+            FROM queue_data qd
+            WHERE qd."attractionId" = $1::uuid
+              AND qd.timestamp >= $2
+              AND qd.timestamp < $4
+              AND qd.status = 'OPERATING'
+              AND qd."queueType" = 'STANDBY'
+              AND qd."waitTime" IS NOT NULL
+              AND qd."waitTime" >= 5
+            GROUP BY time_slot
+            HAVING COUNT(*) >= 1
+            ORDER BY time_slot
+            `,
+            [
+              attractionId,
+              todayStart.toISOString(),
+              timezone,
+              todayEnd.toISOString(),
+            ],
+          ),
+          this.dataSource.query(
+            `
+            SELECT
+              COUNT(DISTINCT DATE_TRUNC('hour', qd.timestamp AT TIME ZONE $3)) as down_count
+            FROM queue_data qd
+            WHERE qd."attractionId" = $1::uuid
+              AND qd.timestamp >= $2
+              AND qd.timestamp < $4
+              AND qd.status = 'DOWN'
+            `,
+            [
+              attractionId,
+              todayStart.toISOString(),
+              timezone,
+              todayEnd.toISOString(),
+            ],
+          ),
+        ]);
+
+        const todaySlotsArr = todayRows.map(
+          (row: {
+            time_slot: string;
+            p90: string;
+            avg_wait: string;
+            sample_count: string;
+          }) => ({
+            time_slot: row.time_slot,
+            p90: roundToNearest5Minutes(parseFloat(row.p90)),
+            avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait)),
+            sampleCount: parseInt(row.sample_count, 10) || 0,
+          }),
         );
+        if (todaySlotsArr.length > 0) {
+          queueDataByDate.set(todayStr, todaySlotsArr);
+        }
+        const downCount = parseInt(todayDown[0]?.down_count || "0", 10) || 0;
+        if (downCount > 0) downCountMap.set(todayStr, downCount);
+      }
+
+      // Peak baseline (P90) for utilization — matches the peak-vs-peak
+      // crowd level semantic used everywhere else. P50 is read once as a
+      // fallback for attractions without a populated P90 row.
+      const [attractionP90Baseline, attractionP50Baseline] = await Promise.all([
+        this.analyticsService.getAttractionP90BaselineFromCache(attractionId),
+        this.analyticsService.getAttractionP50BaselineFromCache(attractionId),
+      ]);
+      const attractionBaseline = attractionP90Baseline || attractionP50Baseline;
 
       // Build history entries for each day
       const history: HistoryDayDto[] = [];
@@ -771,27 +792,17 @@ export class AttractionIntegrationService {
         if (dayQueueData.length > 0) {
           const downCount = downCountMap.get(dateStr) || 0;
 
-          // Calculate daily utilization (average wait vs P90 baseline)
-          // Use weighted average (same as statistics.avgWaitToday) - each data point counts equally
+          // Daily utilization = peak-vs-peak: weighted avg of hourly P90s
+          // (the day's peak experience) compared against the attraction's
+          // 548-day P90 baseline. P50 fallback only kicks in when the P90
+          // baseline row isn't populated yet.
           let utilization: CrowdLevel | "closed" = "closed";
           if (dayQueueData.length > 0) {
-            // Calculate weighted average wait for the day
-            // Weight by sample count to match statistics.avgWaitToday calculation
             const totalSamples = dayQueueData.reduce(
               (sum, h) => sum + h.sampleCount,
               0,
             );
-            const totalAvgWait =
-              totalSamples > 0
-                ? dayQueueData.reduce(
-                    (sum, h) => sum + h.avgWait * h.sampleCount,
-                    0,
-                  ) / totalSamples
-                : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
-                  dayQueueData.length; // Fallback if sample counts missing
-
-            // Baseline: P50 when available, else average of hourly P90s for this day
-            const avgP90 =
+            const dayPeakWait =
               totalSamples > 0
                 ? dayQueueData.reduce(
                     (sum, h) => sum + h.p90 * h.sampleCount,
@@ -799,13 +810,11 @@ export class AttractionIntegrationService {
                   ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
                   dayQueueData.length;
-            const baseline =
-              attractionP50Baseline > 0 ? attractionP50Baseline : avgP90;
 
-            if (baseline > 0) {
+            if (attractionBaseline > 0) {
               utilization = this.analyticsService.getAttractionCrowdLevel(
-                totalAvgWait,
-                baseline,
+                dayPeakWait,
+                attractionBaseline,
               ) as CrowdLevel;
             } else {
               utilization = "closed";

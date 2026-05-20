@@ -18,7 +18,7 @@ export class OccupancyDto {
 
   @ApiProperty({
     description:
-      "Percentage difference from typical wait time (P50 baseline). E.g. +14 means 14% higher.",
+      "Percentage difference from typical peak (P90 baseline; P50 fallback when no P90 row exists yet). E.g. +14 means 14% higher than a typical day's peak.",
     example: 14,
   })
   comparedToTypical: number;
@@ -32,8 +32,8 @@ export class OccupancyDto {
 
   @ApiProperty({
     description:
-      "Baseline wait time used for comparison (P50 minutes). Field name retained for backward compatibility.",
-    example: 30,
+      "Baseline peak wait time used for comparison (P90 minutes; P50 fallback when no P90 row exists yet). Field name retained for backward compatibility.",
+    example: 50,
   })
   baseline90thPercentile: number;
 

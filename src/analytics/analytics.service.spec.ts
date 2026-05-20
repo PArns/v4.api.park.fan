@@ -17,6 +17,9 @@ import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
 import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
+import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
+import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
+import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("AnalyticsService", () => {
@@ -148,6 +151,28 @@ describe("AnalyticsService", () => {
     upsert: jest.fn(),
   };
 
+  const mockParkP90BaselineRepository = {
+    findOne: jest.fn().mockResolvedValue({ p90Baseline: 50 }),
+    upsert: jest.fn(),
+  };
+
+  const mockAttractionP90BaselineRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    upsert: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+  };
+
+  const mockAttractionHourlyHistoryRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    upsert: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    createQueryBuilder: jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    })),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -217,6 +242,18 @@ describe("AnalyticsService", () => {
           useValue: mockAttractionP50BaselineRepository,
         },
         {
+          provide: getRepositoryToken(ParkP90Baseline),
+          useValue: mockParkP90BaselineRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionP90Baseline),
+          useValue: mockAttractionP90BaselineRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionHourlyHistory),
+          useValue: mockAttractionHourlyHistoryRepository,
+        },
+        {
           provide: REDIS_CLIENT,
           useValue: mockRedis,
         },
@@ -253,9 +290,10 @@ describe("AnalyticsService", () => {
         { attractionId: "a1" },
       ]);
 
-      // Mock current average wait time via getCurrentSpotWaitTime
+      // Now driven by getCurrentParkPeakWait (per-headliner MAX in 60min,
+      // averaged) — the SQL returns rows shaped {attractionId, peak_wait}.
       mockQueueDataRepository.query
-        .mockResolvedValueOnce([{ attractionId: "a1", avg_wait: "30" }]) // getCurrentSpotWaitTime
+        .mockResolvedValueOnce([{ attractionId: "a1", peak_wait: "30" }])
         .mockResolvedValueOnce([]) // trend bucket 1
         .mockResolvedValueOnce([]) // trend bucket 2
         .mockResolvedValueOnce([{ operating_count: "5" }]); // getActiveAttractionsCount

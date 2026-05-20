@@ -98,6 +98,15 @@ export class PredictionRequestDto {
     required: false,
   })
   p50Baseline?: number;
+
+  @ApiProperty({
+    description:
+      "P90 (peak) baseline for crowd level calculation — primary " +
+      "baseline since the API switched to peak-vs-peak crowd readings. " +
+      "P50 stays as a fallback for parks without a populated P90 row.",
+    required: false,
+  })
+  p90Baseline?: number;
 }
 
 export class ParkPredictionRequestDto {

@@ -142,8 +142,14 @@ export class ParkMetadataProcessor {
       this.logger.log(`✅ Synced ${destinationCount} destinations`);
 
       // Step 2: Build Known Matches Map (DB-based)
+      // Project just the three entity-id columns — the full Park entity
+      // has 40+ columns plus a TSVector index column that's expensive
+      // to deserialize. The matching loop below only reads three
+      // fields.
       this.logger.log("🔒 Building ID-based match maps from DB...");
-      const dbParks = await this.parkRepository.find();
+      const dbParks = await this.parkRepository.find({
+        select: ["wikiEntityId", "queueTimesEntityId", "wartezeitenEntityId"],
+      });
 
       const wikiToQt = new Map<string, string>();
       const wikiToWz = new Map<string, string>();

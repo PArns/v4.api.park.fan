@@ -91,17 +91,32 @@ export class StatsService {
         return this.upsertStats(parkId, dateStr, null, null, null, null);
       }
 
-      // Calculate P50, P90 and Max; cap max to avoid single bad queue_data poisoning ParkDailyStats/cache
+      // Calculate P50, P90 and Max; cap max to avoid single bad queue_data
+      // poisoning ParkDailyStats/cache.
       const waitTimes = dayQueueData.map((q) => q.waitTime!);
       const p50 = this.calculatePercentile(waitTimes, 0.5);
       const p90 = this.calculatePercentile(waitTimes, 0.9);
       const rawMax = Math.max(...waitTimes);
-      // Outlier protection: one bad row (e.g. 450 instead of 45) must not feed into cache.
-      // Cap max at 3× P90 (typical peak vs typical level) or 120 min, whichever is higher but sane.
-      const max =
-        p90 > 0
-          ? Math.min(rawMax, Math.max(120, p90 * 3))
-          : Math.min(rawMax, 120);
+
+      // Outlier protection: one bad row (e.g. waitTime=450 because of an
+      // upstream parser bug) must NOT feed into the daily stats cache.
+      //
+      // With nearest-rank percentile math, P90 of small samples (< 20)
+      // collapses toward the max itself — so capping at "3× P90" gives
+      // the bad row 3× its own value as headroom, defeating the cap.
+      // We use the median × 5 in that regime (still generous, but
+      // anchored on something stable). Above 20 samples P90 is
+      // statistically meaningful and we use the original cap.
+      const MIN_SAMPLES_FOR_P90_CAP = 20;
+      let capBound: number;
+      if (waitTimes.length >= MIN_SAMPLES_FOR_P90_CAP && p90 > 0) {
+        capBound = Math.max(120, p90 * 3);
+      } else if (p50 > 0) {
+        capBound = Math.max(120, p50 * 5);
+      } else {
+        capBound = 120;
+      }
+      const max = Math.min(rawMax, capBound);
 
       return this.upsertStats(
         parkId,

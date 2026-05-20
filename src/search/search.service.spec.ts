@@ -10,6 +10,7 @@ import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { ShowsService } from "../shows/shows.service";
+import { PopularityService } from "../popularity/popularity.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("SearchService", () => {
@@ -123,7 +124,12 @@ describe("SearchService", () => {
         },
         {
           provide: AnalyticsService,
-          useValue: { getBatchAttractionP90s: jest.fn() },
+          useValue: {
+            getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
+            getBatchAttractionP90Baselines: jest
+              .fn()
+              .mockResolvedValue(new Map()),
+          },
         },
         {
           provide: QueueDataService,
@@ -137,6 +143,16 @@ describe("SearchService", () => {
         {
           provide: ShowsService,
           useValue: {},
+        },
+        {
+          provide: PopularityService,
+          useValue: {
+            recordParkHit: jest.fn(),
+            recordAttractionHit: jest.fn(),
+            recordSearchHit: jest.fn(),
+            getTopParks: jest.fn().mockResolvedValue([]),
+            getTopAttractions: jest.fn().mockResolvedValue([]),
+          },
         },
         {
           provide: REDIS_CLIENT,

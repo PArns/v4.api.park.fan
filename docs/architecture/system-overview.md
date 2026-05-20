@@ -17,7 +17,7 @@ The core backend service responsible for:
 - Serving static data (parks, attractions)
 
 **Key Modules:**
-- `Analytics`: P50 baseline calculations, crowd levels
+- `Analytics`: P50 + P90 baseline calculations, peak-vs-peak crowd levels (see [P90 Crowd Levels](../analytics/p90-crowd-levels.md))
 - `Queue Data`: Raw wait time ingestion
 - `ML`: Client for Python ML service
 - `Enrichment`: Aggregating data for responses
@@ -32,7 +32,7 @@ A lightweight FastAPI microservice dedicated to machine learning tasks.
 Primary data store.
 - **Extensions**: TimescaleDB (implied for time-series optimization).
 - **Entities**: Parks, Attractions, QueueData, Weather, Schedules.
-- **Cache tables**: Precomputed analytics (e.g. `park_p50_baselines`, `attraction_p50_baselines`, `park_daily_stats`); see [Caching Strategy](caching-strategy.md) and [Schema](../database/schema.md).
+- **Cache tables**: Precomputed analytics — `park_p50_baselines`, `park_p90_baselines`, `attraction_p50_baselines`, `attraction_p90_baselines`, `attraction_hourly_history`, `park_daily_stats`, `queue_data_aggregates`. See [Caching Strategy](caching-strategy.md) and [Schema](../database/schema.md).
 - **ORM**: TypeORM (with `synchronize: true` in dev).
 
 ### 4. Redis

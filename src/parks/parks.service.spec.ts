@@ -41,6 +41,7 @@ describe("ParksService", () => {
     })),
     manager: {
       query: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
     },
   };
 
@@ -162,18 +163,24 @@ describe("ParksService", () => {
   });
 
   describe("findBySlug", () => {
-    it("should return a park by slug", async () => {
+    // findBySlug now loads only `destination` eagerly and hydrates
+    // attractions/shows/restaurants via manager.find inside
+    // loadParkRelations — the test asserts that contract.
+    it("should return a park by slug with relations hydrated", async () => {
       const testPark = createTestPark({ slug: "test-magic-kingdom" });
-
       mockParkRepository.findOne.mockResolvedValue(testPark);
 
       const result = await service.findBySlug("test-magic-kingdom");
 
-      expect(result).toEqual(testPark);
+      expect(result?.id).toBe(testPark.id);
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "test-magic-kingdom" },
-        relations: ["destination", "attractions", "shows", "restaurants"],
+        relations: ["destination"],
       });
+      // attractions/shows/restaurants come from the entity manager
+      expect(result?.attractions).toEqual([]);
+      expect(result?.shows).toEqual([]);
+      expect(result?.restaurants).toEqual([]);
     });
 
     it("should return null if park not found", async () => {
@@ -184,7 +191,7 @@ describe("ParksService", () => {
       expect(result).toBeNull();
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "non-existent" },
-        relations: ["destination", "attractions", "shows", "restaurants"],
+        relations: ["destination"],
       });
     });
   });

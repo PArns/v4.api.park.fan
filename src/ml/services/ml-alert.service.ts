@@ -31,8 +31,14 @@ export class MLAlertService {
   }> {
     const alerts: MLAlert[] = [];
 
-    // Use a single stats fetch for all MAE/coverage checks to avoid duplicate DB queries.
-    const systemStats = await this.accuracyService.getSystemAccuracyStats(7);
+    // Both inputs are independent 7-day aggregates with no shared
+    // intermediate state — kick them off in parallel so the hourly
+    // alert cron finishes in roughly max(accuracy, drift) wall-time
+    // instead of the sum of the two.
+    const [systemStats, driftResult] = await Promise.all([
+      this.accuracyService.getSystemAccuracyStats(7),
+      this.featureDriftService.detectFeatureDrift(7),
+    ]);
     const mae = systemStats.overall.mae;
     const MAE_THRESHOLD = 8;
 
@@ -51,8 +57,7 @@ export class MLAlertService {
       await this.resolveAlertIfActive("accuracy_degradation");
     }
 
-    // 2. Check feature drift
-    const driftResult = await this.featureDriftService.detectFeatureDrift(7);
+    // 2. Check feature drift (already resolved above via Promise.all)
     const criticalDrift = driftResult.driftedFeatures.filter(
       (f) => f.status === "critical",
     );
@@ -217,18 +222,16 @@ export class MLAlertService {
   private async resolveAlertIfActive(
     alertType: MLAlert["alertType"],
   ): Promise<void> {
-    const staleAlerts = await this.alertRepository.find({
-      where: {
-        alertType,
-        status: In(["active", "acknowledged"]),
+    const result = await this.alertRepository.update(
+      { alertType, status: In(["active", "acknowledged"]) },
+      {
+        status: "resolved",
+        resolvedAt: new Date(),
+        resolutionNote: "Auto-resolved: condition cleared",
       },
-    });
-    for (const alert of staleAlerts) {
-      alert.status = "resolved";
-      alert.resolvedAt = new Date();
-      alert.resolutionNote = "Auto-resolved: condition cleared";
-      await this.alertRepository.save(alert);
-      this.logger.log(`Auto-resolved ${alertType} alert (id: ${alert.id})`);
+    );
+    if (result.affected) {
+      this.logger.log(`Auto-resolved ${result.affected} ${alertType} alert(s)`);
     }
   }
 
