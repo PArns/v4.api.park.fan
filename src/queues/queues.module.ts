@@ -115,8 +115,30 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
       { name: "wartezeiten-schedule" },
       { name: "ml-monitoring" },
       { name: "stats" },
-      { name: "p50-baseline" }, // P50 + P90 baseline calculation
-      { name: "attraction-hourly-history" }, // Per-day hourly rollup
+      {
+        // P50 + P90 baseline calculation. calculate-attraction-baselines
+        // does 113 PERCENTILE_CONT scans over 548-day queue_data — a single
+        // run takes 3-6 min. Bull's default lockDuration of 30s would
+        // wrongly mark the worker stalled mid-run, so bump it to 10 min
+        // with proportional renew interval. Same queue handles park-level
+        // and backfill jobs which are much shorter; the higher limit is
+        // harmless for them.
+        name: "p50-baseline",
+        settings: {
+          lockDuration: 600000, // 10 min
+          lockRenewTime: 300000, // renew every 5 min
+        },
+      },
+      {
+        // Hourly history backfills can iterate 30+ days × 100+ parks — same
+        // stall risk as p50-baseline. Yesterday-only cron is fast (<5s)
+        // but the backfill path needs headroom.
+        name: "attraction-hourly-history",
+        settings: {
+          lockDuration: 600000,
+          lockRenewTime: 300000,
+        },
+      },
       { name: "geoip-update" }, // GeoLite2-City every 48h
     ),
 

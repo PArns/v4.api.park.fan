@@ -252,11 +252,11 @@ export class QueueBootstrapService implements OnModuleInit {
               priority: 5,
               jobId: "bootstrap-p50-attractions",
               removeOnComplete: true,
-              delay: 60000, // Delay 1min to let park baselines finish first
+              delay: 300000, // Delay 5min: boot-rush (wait-times sync, schedules, holidays) needs to clear before this 3-6min job runs, otherwise Bull marks it stalled
             },
           );
           this.logger.log(
-            "✅ Boot: P50 attraction baselines calculation queued (delayed 1min)",
+            "✅ Boot: P50 attraction baselines calculation queued (delayed 5min)",
           );
         }
       }
