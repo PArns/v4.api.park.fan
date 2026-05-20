@@ -579,8 +579,8 @@ export class ParkIntegrationService {
           if (wait !== undefined && wait !== null) {
             // P50 baseline when available, else P90 (same as attraction detail)
             const baseline =
-              attractionP90s.get(attraction.id) ||
               attractionP50s.get(attraction.id) ||
+              attractionP90s.get(attraction.id) ||
               0;
             const { rating } = this.analyticsService.getLoadRating(
               wait,
@@ -635,8 +635,8 @@ export class ParkIntegrationService {
         if (attraction.effectiveStatus === "OPERATING") {
           const wait = attraction.queues?.[0]?.waitTime;
           const baseline =
-            attractionP90s.get(attraction.id) ||
             attractionP50s.get(attraction.id) ||
+            attractionP90s.get(attraction.id) ||
             0;
 
           if (wait !== undefined && wait !== null && baseline > 0) {

@@ -822,7 +822,7 @@ export class CalendarService {
 
     // Add hourly data if requested (uses pre-fetched list to avoid N+1 ML calls)
     if (this.shouldIncludeHourly(date, includeHourly, park.timezone)) {
-      day.hourly = this.buildHourlyPredictionsFromList(
+      day.hourly = await this.buildHourlyPredictionsFromList(
         park,
         dateStr,
         hourlyPredictionsPreFetched,
@@ -835,11 +835,11 @@ export class CalendarService {
   /**
    * Helper to build hourly predictions for a single day from a pre-fetched list
    */
-  private buildHourlyPredictionsFromList(
+  private async buildHourlyPredictionsFromList(
     park: Park,
     dateStr: string,
     allPredictions: PredictionDto[],
-  ): HourlyPrediction[] | undefined {
+  ): Promise<HourlyPrediction[] | undefined> {
     const dailyPreds = allPredictions.filter((p) =>
       p.predictedTime.startsWith(dateStr),
     );
@@ -853,6 +853,20 @@ export class CalendarService {
       hoursMap.get(hour)!.push(p);
     }
 
+    // Per-park P50 baseline (median typical wait) is the right reference
+    // for per-hour predictions: 100% = predicted median matches a typical
+    // wait. Falls back to P90 for parks without a P50 row yet, then to a
+    // generic 25 min absolute reference for parks with no baseline at all.
+    let baseline = await this.analyticsService.getP50BaselineFromCache(
+      park.id,
+    );
+    if (baseline === 0) {
+      baseline = await this.analyticsService.getP90BaselineFromCache(park.id);
+    }
+    if (baseline === 0) {
+      baseline = 25;
+    }
+
     // Aggregate (median)
     const result: HourlyPrediction[] = [];
     for (const [hour, preds] of hoursMap) {
@@ -860,10 +874,7 @@ export class CalendarService {
       waits.sort((a, b) => a - b);
       const median = waits[Math.floor(waits.length / 2)];
 
-      // Generic fallback baseline (25m) for hourly ML predictions — used
-      // when a per-park baseline isn't useful at this granularity. Not a
-      // semantic P50/P90 value, just an absolute reference.
-      const { rating } = this.analyticsService.getLoadRating(median, 25);
+      const { rating } = this.analyticsService.getLoadRating(median, baseline);
 
       result.push({
         hour: parseInt(hour, 10),
