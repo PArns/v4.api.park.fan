@@ -1,6 +1,6 @@
-# P50 Headliner Identification & Validation
+# Headliner Identification & Validation
 
-> **Context**: To calculate accurate Crowd Levels, we compare current wait times against a "Normal" (P50) baseline. This baseline is derived ONLY from "Headliner" attractions, which best represent the crowd flow.
+> **Context**: To calculate accurate Crowd Levels, we compare current wait times against a per-park baseline. Both the P50 (median) and P90 (peak) baselines are derived from "Headliner" attractions only — those best represent crowd flow. The user-facing crowd reading is peak-vs-peak (P90 ÷ P90 baseline); see [P90 Crowd Levels](p90-crowd-levels.md) for the full semantic.
 
 ## The 3-Tier Adaptive System
 
@@ -76,6 +76,5 @@ When investigating "weird" crowd levels (e.g., "Very Low" when it looks busy):
 4. **Check Schedule**: Does today have a valid `OPERATING` schedule entry?
    - `SELECT * FROM schedule_entries WHERE "parkId" = '...' AND date = CURRENT_DATE AND "scheduleType" = 'OPERATING'`
    - If missing, `calculateCrowdLevelForDate` and the wait-time history chart fall back to midnight–23:59, which includes pre-opening and post-closing data and can depress crowd levels.
-   - See [Known Issue: Pre-Opening Data](p50-crowd-levels.md#5-known-issue-pre-opening-data-deflating-crowd-levels) for background.
 
-**Attraction-level baselines:** Per-ride P50 baselines are stored in `attraction_p50_baselines` and used for ride crowd levels (load rating). See [P50 Crowd Levels](p50-crowd-levels.md).
+**Attraction-level baselines:** Per-ride P50 + P90 baselines are stored in `attraction_p50_baselines` / `attraction_p90_baselines` and used for ride crowd levels (load rating). P90 is the primary input for the user-facing reading; P50 stays as a fallback. See [P90 Crowd Levels](p90-crowd-levels.md) for the full architecture.

@@ -19,7 +19,7 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `temperature`: Numerical (Celsius)
   - `temperature_deviation`: Difference from monthly average
   - `precipitation`: Current & Last 3 Hours (accumulated)
-  - `park_occupancy_pct`: Park-wide occupancy (Current median / P50 baseline, 0–200%). Aligned with API occupancy; training uses P50 for consistency.
+  - `park_occupancy_pct`: Park-wide occupancy (current recent-peak / P90 baseline, 0–200%). P50 fallback when a park doesn't have a P90 baseline yet. Matches the API's user-facing crowd reading; training labels follow the same peak-vs-peak shape.
   - `wait_time_momentum`: Velocity of change over last 30 mins
   - `trend_7d`: Linear regression slope of last 7 days
   - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` and **capped** at `VOLATILITY_CAP_STD_MINUTES` (default 40 min) so it acts as a modifier; occupancy and time remain primary drivers.
@@ -65,11 +65,16 @@ Content-Type: application/json
 }
 ```
 
-## Alignment with API (P50 & Occupancy)
+## Alignment with API (P90 + P50 & Occupancy)
 
-- **Park occupancy** at inference comes from the NestJS API (`getCurrentOccupancy`), which uses the **P50 (headliner) baseline**. The ML service receives this as `featureContext.parkOccupancy` and uses it for `park_occupancy_pct`.
-- **Training**: `add_park_occupancy_feature` in training mode uses **P50 (median)** of historical wait times per park so the scale matches inference. Previously P90 was used; retraining is recommended after this change.
-- **Crowd level** on predictions: The API passes `p50Baseline` (per attraction or park). Python uses it for `crowdLevel` (very_low … extreme) so TypeScript and Python produce identical labels.
+The API switched its user-facing crowd-level metric from P50-vs-P50 (avg vs typical avg) to **P90-vs-P90 (peak vs typical peak)** in PR #46. The ML pipeline aligns with that change so predictions, labels and crowd-level chips all live in the same world.
+
+- **Park occupancy** at inference comes from `AnalyticsService.getCurrentOccupancy`, which now uses the **P90 (headliner) baseline** with P50 as a fallback. The ML service receives this as `featureContext.parkOccupancy` and uses it for `park_occupancy_pct` — semantically "today's recent peak experience ÷ typical-day peak".
+- **Training labels**: `getCrowdLevelTrainingData` labels each historical day with `day-P90 ÷ baseline-P90` (peak-vs-peak). When a P90 baseline isn't available the cron falls back to `day-P50 ÷ baseline-P50` so the math stays apples-to-apples.
+- **Crowd level on predictions**: the API forwards **both** `p50Baseline` and `p90Baseline` per request (`PredictionRequestDto`). Python should prefer P90 — P50 is kept for legacy/avg-shaped consumers and for periods where a P90 row hasn't been computed yet.
+- **Models retrain on the new labels at 06:00 daily**. Predictions made between the deploy and the next training cycle will still be on the old (P50-based) labels and recalibrate within ~1 cycle.
+
+See [P90 Crowd Levels](../analytics/p90-crowd-levels.md) §5 for the API-side contract.
 
 ### Historical Occupancy Profile (DOW×Hour) — Timezone Fix
 

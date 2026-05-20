@@ -18,8 +18,8 @@ Wait times are driven more by guest intent than by simple historical averages. T
 
 A critical requirement for reliable ML is that the scale of features during training matches the scale during live prediction (Inference).
 
-*   **The Baseline**: "100% Occupancy" is defined as the average of the P50 (median) wait times of all attractions in a park.
-*   **Dynamic Synchronization**: The system fetches pre-calculated `attraction_p50_baselines` from the database for both training and inference. This ensures that "High Occupancy" means exactly the same thing to the model, whether it is looking at data from 2024 or predicting for next week.
+*   **The Baseline**: "100% Occupancy" is the **P90 (peak) wait time** averaged across the park's headliner attractions — what the user perceives as "today's peak feels like a typical day's peak". P50 (median) stays available as a graceful fallback when a P90 baseline hasn't been computed yet, but no surface mixes the two percentiles in numerator and denominator.
+*   **Dynamic Synchronization**: The system fetches pre-calculated `attraction_p90_baselines` (and `attraction_p50_baselines` for the fallback) from the database for both training and inference. This keeps "High Occupancy" meaning the same thing whether the model is looking at 2024 data or predicting next week. The baselines are recalculated nightly by the same cron that already produced P50 — both percentiles fall out of a single PERCENTILE_CONT sort, so adding P90 cost nothing on top.
 
 ## 3. Advanced Weather Dynamics
 

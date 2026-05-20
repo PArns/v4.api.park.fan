@@ -59,13 +59,16 @@ Precomputed analytics are stored in dedicated tables and optionally mirrored in 
 
 | Table | Purpose |
 |-------|---------|
-| `park_p50_baselines` | Park P50 baseline (headliner attractions only); used for park occupancy/crowd level. |
-| `attraction_p50_baselines` | Per-attraction P50 baseline; used for ride crowd level. |
-| `headliner_attractions` | Which attractions were selected as headliners per park (for baseline calculation). |
-| `park_daily_stats` | Daily stats per park (P90, max wait, etc.); updated hourly for today, daily for yesterday. |
-| `queue_data_aggregates` | Precomputed hourly percentiles (P25/P50/P75/P90) per attraction for fast lookups. |
+| `park_p50_baselines` | Park P50 baseline (headliner attractions only). Avg-shaped surfaces + fallback for crowd level. |
+| `park_p90_baselines` | Park P90 (peak) baseline. **Primary** input for park crowd level (peak-vs-peak). |
+| `attraction_p50_baselines` | Per-attraction P50 baseline (avg / fallback). |
+| `attraction_p90_baselines` | Per-attraction P90 (peak) baseline. **Primary** for ride crowd level. |
+| `headliner_attractions` | Which attractions were selected as headliners per park (for baseline calculation). Also stores per-headliner `p50Wait548d` / `p90Wait548d` so park baselines are avg-of-per-headliner without a re-scan. |
+| `attraction_hourly_history` | Per-day per-attraction 15-min-slot P90/avg/sampleCount rollup (JSONB `slots` array). Read by the attraction history endpoint for past days; today is computed live against `queue_data`. |
+| `park_daily_stats` | Daily stats per park (P50/P90/max wait). Updated hourly for today, daily for yesterday. |
+| `queue_data_aggregates` | Precomputed hourly percentiles (P25/P50/P75/P90/P95/P99) per attraction. Used by ML feature engineering. |
 
-Sliding-window percentiles (548-day) are not stored in DB; they are computed and cached in Redis only.
+The P50/P90 baseline pair is recalculated nightly by the same cron (3 AM parks, 4 AM attractions) — PostgreSQL produces both percentiles in a single PERCENTILE_CONT sort. The 548-day **live** sliding-window calculation that used to back this on every cache miss was removed; missing rows mean "wait for the next cron run" rather than "scan half a billion data points now".
 
 ## Extensions
 

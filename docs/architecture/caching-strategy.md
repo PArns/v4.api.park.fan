@@ -18,13 +18,15 @@ Full JSON responses for "Integrated" DTOs (aggregating weather, schedule, attrac
 ### 2. Analytics & Statistics
 Heavy analytical queries are cached with varying TTLs based on data volatility.
 - **Keys**:
-  - `park:statistics:{parkId}` (TTL: 5 min) - Aggregated wait times, active attraction counts.
-  - `park:occupancy:{parkId}` (TTL: 5 min) - Current crowd level % calculation.
-  - `analytics:crowdlevel:park:{parkId}:{date}` (TTL: 30m for today, 6h for past) - Daily crowd level and peak load.
-  - `park:p50:{parkId}` (TTL: 24h) - Park P50 baseline from headliners (table: `park_p50_baselines`).
-  - `attraction:p50:{attractionId}` (TTL: 24h) - Attraction P50 baseline (table: `attraction_p50_baselines`).
-  - `analytics:percentile:sliding:park:{parkId}` (TTL: 24h) - 548-day sliding P90/P50 for park (fallback).
-  - `analytics:percentile:sliding:attraction:{attractionId}` (TTL: 24h) - 548-day sliding P90/P50 for attraction.
+  - `park:statistics:{parkId}` (TTL: 5 min) — Aggregated wait times, active attraction counts.
+  - `park:occupancy:{parkId}` (TTL: 5 min) — Current crowd level % calculation (peak-vs-peak).
+  - `analytics:crowdlevel:park:{parkId}:{date}` (TTL: 30 min for today, 6 h for past) — Daily crowd level and peak load.
+  - `park:p50:{parkId}` (TTL: 24 h) — Park P50 baseline from headliners (table: `park_p50_baselines`). JSON `{p50, confidence}`.
+  - `park:p90:{parkId}` (TTL: 24 h) — Park P90 baseline from headliners (table: `park_p90_baselines`). JSON `{p90, confidence}`. **Primary** baseline for crowd-level reading; P50 is the fallback.
+  - `attraction:p50:{attractionId}` (TTL: 24 h) — Per-attraction P50 baseline (table: `attraction_p50_baselines`).
+  - `attraction:p90:{attractionId}` (TTL: 24 h) — Per-attraction P90 baseline (table: `attraction_p90_baselines`). **Primary** baseline; P50 is the fallback.
+
+> **Orphaned keys** — the previous P90 sliding-window precompute used `analytics:percentile:sliding:park:{parkId}` and `analytics:percentile:sliding:attraction:{attractionId}` to cache its 548-day live aggregation. Both the precompute job and the live-aggregation method have been removed; nothing writes or reads these keys any more. Existing entries TTL out within 24 h of deploy.
 
 ### 3. Calendar Monthly Cache
 The calendar endpoint uses a per-month cache to handle various date ranges efficiently.
@@ -67,7 +69,10 @@ The `warmupTopAttractions(limit=1000)` method combines two signals:
 
 | Table | Written by | Used for |
 |-------|------------|----------|
-| `park_p50_baselines` | P50 baseline job (daily) | Park occupancy/crowd level baseline (headliner P50). |
-| `attraction_p50_baselines` | P50 baseline job (daily) | Attraction crowd level baseline. |
-| `park_daily_stats` | Stats job | Park statistics (p50/p90/max today/yesterday). |
-| `queue_data_aggregates` | Queue-percentile job | Hourly wait-time aggregates. |
+| `park_p50_baselines` | P50 baseline cron (daily 03:00) | Fallback for park crowd-level baseline + avg-shaped surfaces. |
+| `park_p90_baselines` | Same cron, populated alongside P50 | **Primary** park crowd-level baseline (peak-vs-peak). |
+| `attraction_p50_baselines` | P50 baseline cron (daily 04:00) | Fallback per-attraction baseline. |
+| `attraction_p90_baselines` | Same cron, populated alongside P50 | **Primary** per-attraction baseline. |
+| `attraction_hourly_history` | Hourly-history cron (daily 04:30) | Per-day per-attraction 15-min-slot P90/avg/sampleCount rollup; read by the attraction history endpoint for past days (today is still live). |
+| `park_daily_stats` | Stats cron (hourly today, daily yesterday) | Park statistics (p50/p90/max per day). |
+| `queue_data_aggregates` | Queue-percentile cron (daily 02:00) | Hourly wait-time aggregates (P25/P50/P75/P90/P95/P99) per attraction. |
