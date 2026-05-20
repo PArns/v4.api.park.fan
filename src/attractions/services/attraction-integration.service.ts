@@ -749,11 +749,14 @@ export class AttractionIntegrationService {
         downCountMap.set(dateStr, parseInt(row.down_count, 10) || 0);
       }
 
-      // P50 baseline for utilization (same as crowd level); use once per attraction
-      const attractionP50Baseline =
-        await this.analyticsService.getAttractionP50BaselineFromCache(
-          attractionId,
-        );
+      // Peak baseline (P90) for utilization — matches the peak-vs-peak
+      // crowd level semantic used everywhere else. P50 is read once as a
+      // fallback for attractions without a populated P90 row.
+      const [attractionP90Baseline, attractionP50Baseline] = await Promise.all([
+        this.analyticsService.getAttractionP90BaselineFromCache(attractionId),
+        this.analyticsService.getAttractionP50BaselineFromCache(attractionId),
+      ]);
+      const attractionBaseline = attractionP90Baseline || attractionP50Baseline;
 
       // Build history entries for each day
       const history: HistoryDayDto[] = [];
@@ -772,27 +775,17 @@ export class AttractionIntegrationService {
         if (dayQueueData.length > 0) {
           const downCount = downCountMap.get(dateStr) || 0;
 
-          // Calculate daily utilization (average wait vs P90 baseline)
-          // Use weighted average (same as statistics.avgWaitToday) - each data point counts equally
+          // Daily utilization = peak-vs-peak: weighted avg of hourly P90s
+          // (the day's peak experience) compared against the attraction's
+          // 548-day P90 baseline. P50 fallback only kicks in when the P90
+          // baseline row isn't populated yet.
           let utilization: CrowdLevel | "closed" = "closed";
           if (dayQueueData.length > 0) {
-            // Calculate weighted average wait for the day
-            // Weight by sample count to match statistics.avgWaitToday calculation
             const totalSamples = dayQueueData.reduce(
               (sum, h) => sum + h.sampleCount,
               0,
             );
-            const totalAvgWait =
-              totalSamples > 0
-                ? dayQueueData.reduce(
-                    (sum, h) => sum + h.avgWait * h.sampleCount,
-                    0,
-                  ) / totalSamples
-                : dayQueueData.reduce((sum, h) => sum + h.avgWait, 0) /
-                  dayQueueData.length; // Fallback if sample counts missing
-
-            // Baseline: P50 when available, else average of hourly P90s for this day
-            const avgP90 =
+            const dayPeakWait =
               totalSamples > 0
                 ? dayQueueData.reduce(
                     (sum, h) => sum + h.p90 * h.sampleCount,
@@ -800,13 +793,11 @@ export class AttractionIntegrationService {
                   ) / totalSamples
                 : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
                   dayQueueData.length;
-            const baseline =
-              attractionP50Baseline > 0 ? attractionP50Baseline : avgP90;
 
-            if (baseline > 0) {
+            if (attractionBaseline > 0) {
               utilization = this.analyticsService.getAttractionCrowdLevel(
-                totalAvgWait,
-                baseline,
+                dayPeakWait,
+                attractionBaseline,
               ) as CrowdLevel;
             } else {
               utilization = "closed";

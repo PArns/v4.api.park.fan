@@ -123,7 +123,12 @@ describe("SearchService", () => {
         },
         {
           provide: AnalyticsService,
-          useValue: { getBatchAttractionP90s: jest.fn() },
+          useValue: {
+            getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
+            getBatchAttractionP90Baselines: jest
+              .fn()
+              .mockResolvedValue(new Map()),
+          },
         },
         {
           provide: QueueDataService,

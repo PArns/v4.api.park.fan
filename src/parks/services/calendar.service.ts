@@ -860,7 +860,9 @@ export class CalendarService {
       waits.sort((a, b) => a - b);
       const median = waits[Math.floor(waits.length / 2)];
 
-      // Use a generic P50 baseline (25m) for hourly mapping
+      // Generic fallback baseline (25m) for hourly ML predictions — used
+      // when a per-park baseline isn't useful at this granularity. Not a
+      // semantic P50/P90 value, just an absolute reference.
       const { rating } = this.analyticsService.getLoadRating(median, 25);
 
       result.push({

@@ -1879,17 +1879,18 @@ export class AnalyticsService {
    * **Single Source of Truth** for crowd level calculation across all services.
    * All services should use this method instead of implementing their own logic.
    *
-   * **NEW: P50-Relative Thresholds (±10% Around Median):**
-   * Uses P50 (median) as baseline: occupancy = (current / p50) * 100
-   * - 100% = P50 = **"moderate"** baseline (expected/typical day)
-   * - very_low: ≤ 60% (≤ 0.6x P50) - Much quieter than expected
-   * - low: 61-89% (0.61-0.89x P50) - Below expected
-   * - moderate: 90-110% (0.9-1.1x P50) - Around expected baseline (±10%)
-   * - high: 111-150% (1.11-1.5x P50) - Above expected
-   * - very_high: 151-200% (1.51-2.0x P50) - Significantly above expected
-   * - extreme: > 200% (> 2.0x P50) - Exceptionally crowded
+   * **Peak-vs-peak thresholds (±10% around the typical peak):**
+   * Callers pass `(current_peak / p90_baseline) * 100`; with the P50
+   * fallback when no P90 row exists yet, the math stays apples-to-apples.
+   * - 100% = baseline = **"moderate"** (a typical day's peak)
+   * - very_low: ≤ 60% — much quieter than expected
+   * - low: 61-89% — below expected
+   * - moderate: 90-110% — around expected (±10%)
+   * - high: 111-150% — above expected
+   * - very_high: 151-200% — significantly above expected
+   * - extreme: > 200% — exceptionally crowded
    *
-   * @param occupancy - Occupancy percentage relative to P50 baseline (0-300+)
+   * @param occupancy - Occupancy percentage relative to the baseline (0-300+)
    * @returns Crowd level rating
    *
    * @public - Use this method from other services instead of duplicating logic

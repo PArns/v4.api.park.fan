@@ -959,7 +959,7 @@ export class ParkIntegrationService {
             trend: "stable",
             comparedToTypical: 0,
             comparisonStatus: "closed",
-            baseline90thPercentile: typicalWait || 0, // Typical wait (P50 when available)
+            baseline90thPercentile: typicalWait || 0, // P90 baseline (P50 fallback)
             updatedAt: new Date().toISOString(),
             breakdown: {
               currentAvgWait: 0,
