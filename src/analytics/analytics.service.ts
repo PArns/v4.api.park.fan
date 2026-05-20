@@ -336,15 +336,16 @@ export class AnalyticsService {
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
 
-    // Live "peak feel" — per-headliner MAX wait in the last 20 min, averaged.
-    // 20-min window so the crowd level reacts when a ride drops (a longer
-    // window keeps showing the old peak after queues clear). With 5-min
-    // sampling, P90 over 20 min ≈ MAX over 20 min, so we keep the simpler
-    // MAX-then-avg formulation.
+    // Live "peak feel" — latest reported waitTime per headliner within a
+    // 60-min freshness window, averaged. Using each ride's LATEST sample
+    // (not the window MAX) makes the reading responsive when queues
+    // drop: a 80→30 transition reads as ~30, not 80. The 60-min window
+    // is long enough to catch sparse-reporting headliners (some sources
+    // only emit every 10-15 min), short enough to fade old peaks once
+    // they've cleared.
     const currentPeakWait = await this.getCurrentParkPeakWait(
       parkId,
       headlinerIds.length > 0 ? headlinerIds : undefined,
-      20,
     );
 
     if (currentPeakWait === null) {
@@ -552,7 +553,6 @@ export class AnalyticsService {
     const currentPeakWait = await this.getCurrentParkPeakWait(
       parkId,
       headlinerIds.length > 0 ? headlinerIds : undefined,
-      20,
     );
 
     if (currentPeakWait === null) {
@@ -912,14 +912,20 @@ export class AnalyticsService {
   private async getCurrentParkPeakWait(
     parkId: string,
     headlinerIds?: string[],
-    windowMinutes = 20,
+    windowMinutes = 60,
     minWaitTime = this.MIN_WAIT_TIME_THRESHOLD,
   ): Promise<number | null> {
-    // Fallback chain when the requested window has no data: drop the
-    // min-wait floor to 0 first, then expand the window (20 → 60 → 240
-    // min). Covers data-source lags, sparse-reporting rides, and any
-    // window that happened to land entirely in a closed period.
-    const expandWindow = (m: number) => (m < 60 ? 60 : m < 240 ? 240 : null);
+    // For each headliner: take the latest STANDBY/OPERATING waitTime in
+    // the freshness window (default 60 min), then average across rides.
+    //
+    // "Latest reading per ride" — not MAX over window — is what makes the
+    // park reading responsive: when a queue drops 80 → 30 we see 30 (the
+    // last sample), not 80 (a stale peak from earlier in the window). The
+    // 60-min window is long enough to catch sparse-reporting headliners
+    // (e.g. Mario Kart, Harry Potter) which only emit every 10-15 min,
+    // and is auto-expanded to 240 min when nothing falls in window at all
+    // (real source outage).
+    const expandWindow = (m: number) => (m < 240 ? 240 : null);
 
     const windowAgo = new Date(Date.now() - windowMinutes * 60 * 1000);
     const useHeadliners = headlinerIds && headlinerIds.length > 0;
@@ -927,7 +933,9 @@ export class AnalyticsService {
     if (useHeadliners) {
       const perRide = await this.queueDataRepository.query(
         `
-        SELECT qd."attractionId", MAX(qd."waitTime") as peak_wait
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime" AS latest_wait
         FROM queue_data qd
         WHERE qd."attractionId" = ANY($1)
           AND qd.timestamp >= $2
@@ -935,7 +943,7 @@ export class AnalyticsService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= $3
           AND qd."queueType" = 'STANDBY'
-        GROUP BY qd."attractionId"
+        ORDER BY qd."attractionId", qd.timestamp DESC
         `,
         [headlinerIds, windowAgo, minWaitTime],
       );
@@ -955,18 +963,20 @@ export class AnalyticsService {
         return null;
       }
       const sum = perRide.reduce(
-        (acc: number, row: { peak_wait: string | number }) =>
-          acc + Number(row.peak_wait ?? 0),
+        (acc: number, row: { latest_wait: string | number }) =>
+          acc + Number(row.latest_wait ?? 0),
         0,
       );
       return Math.round(sum / perRide.length);
     }
 
-    // Fallback when no headliners: per-attraction MAX in window, then avg.
+    // Fallback when no headliners: per-attraction latest wait, then avg.
     const result = await this.queueDataRepository.query(
       `
-      WITH per_ride AS (
-        SELECT qd."attractionId", MAX(qd."waitTime") as peak_wait
+      WITH latest_per_ride AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime" AS latest_wait
         FROM queue_data qd
         JOIN attractions a ON qd."attractionId" = a.id
         WHERE a."parkId" = $1::uuid
@@ -975,9 +985,9 @@ export class AnalyticsService {
           AND qd."waitTime" IS NOT NULL
           AND qd."waitTime" >= $3
           AND qd."queueType" = 'STANDBY'
-        GROUP BY qd."attractionId"
+        ORDER BY qd."attractionId", qd.timestamp DESC
       )
-      SELECT AVG(peak_wait) as peak FROM per_ride
+      SELECT AVG(latest_wait) as peak FROM latest_per_ride
       `,
       [parkId, windowAgo, minWaitTime],
     );

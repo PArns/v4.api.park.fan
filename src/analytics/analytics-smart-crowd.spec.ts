@@ -190,10 +190,10 @@ describe("Smart Crowd Level Logic", () => {
 
   it("should calculate Smart Occupancy using only rides >= 10m when available", async () => {
     // Setup: 2 headliners report a recent MAX wait (peak in last 60 min).
-    // getCurrentParkPeakWait returns rows shaped { attractionId, peak_wait }.
+    // getCurrentParkPeakWait returns rows shaped { attractionId, latest_wait }.
     const mockData = [
-      { attractionId: "ride1", peak_wait: 60 },
-      { attractionId: "ride2", peak_wait: 40 },
+      { attractionId: "ride1", latest_wait: 60 },
+      { attractionId: "ride2", latest_wait: 40 },
     ];
 
     queueDataRepo.query.mockResolvedValueOnce(mockData); // getCurrentParkPeakWait
@@ -210,8 +210,8 @@ describe("Smart Crowd Level Logic", () => {
 
   it("should validly fallback to ALL rides if none are >= 10m", async () => {
     const mockDataFallback = [
-      { attractionId: "ride3", peak_wait: 5 },
-      { attractionId: "ride4", peak_wait: 5 },
+      { attractionId: "ride3", latest_wait: 5 },
+      { attractionId: "ride4", latest_wait: 5 },
     ];
 
     queueDataRepo.query

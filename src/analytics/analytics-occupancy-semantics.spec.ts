@@ -153,7 +153,7 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
         .mockResolvedValueOnce([]); // window 240, minWait=0
     } else {
       queueDataRepo.query.mockResolvedValueOnce([
-        { attractionId: "h1", peak_wait: String(opts.currentPeak) },
+        { attractionId: "h1", latest_wait: String(opts.currentPeak) },
       ]);
     }
     queueDataRepo.query.mockResolvedValueOnce([]); // trend bucket 1

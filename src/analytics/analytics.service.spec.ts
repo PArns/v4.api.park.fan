@@ -291,9 +291,9 @@ describe("AnalyticsService", () => {
       ]);
 
       // Now driven by getCurrentParkPeakWait (per-headliner MAX in 60min,
-      // averaged) — the SQL returns rows shaped {attractionId, peak_wait}.
+      // averaged) — the SQL returns rows shaped {attractionId, latest_wait}.
       mockQueueDataRepository.query
-        .mockResolvedValueOnce([{ attractionId: "a1", peak_wait: "30" }])
+        .mockResolvedValueOnce([{ attractionId: "a1", latest_wait: "30" }])
         .mockResolvedValueOnce([]) // trend bucket 1
         .mockResolvedValueOnce([]) // trend bucket 2
         .mockResolvedValueOnce([{ operating_count: "5" }]); // getActiveAttractionsCount
