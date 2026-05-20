@@ -2844,6 +2844,22 @@ export class AnalyticsService {
           AND qd."queueType" = 'STANDBY'
         ORDER BY qd."attractionId", qd.timestamp DESC
       ),
+      -- Pre-aggregate per-park attraction counts so park_stats can JOIN
+      -- against this CTE once instead of running two correlated subqueries
+      -- per park (a SELECT COUNT(*) + a LATERAL latest-status lookup).
+      -- The LATERAL form was the main cache-miss cost: O(parks × attractions)
+      -- correlated executions; this version is a single scan with FILTER.
+      attraction_counts AS (
+        SELECT
+          a."parkId" AS "parkId",
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (
+            WHERE lu."attractionId" IS NULL OR lu.status <> 'OPERATING'
+          )::int AS closed
+        FROM attractions a
+        LEFT JOIN latest_updates lu ON lu."attractionId" = a.id
+        GROUP BY a."parkId"
+      ),
       park_stats AS (
         SELECT
           p.id,
@@ -2857,24 +2873,13 @@ export class AnalyticsService {
           p."citySlug",
           ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY lu."waitTime")::numeric) as avg_wait,
           COUNT(*) as active_rides,
-          (SELECT COUNT(*) FROM attractions WHERE "parkId" = p.id) as total_attractions,
-            (SELECT COUNT(*)
-            FROM attractions a
-            LEFT JOIN LATERAL (
-              SELECT qd.status
-              FROM queue_data qd
-              WHERE qd."attractionId" = a.id
-                AND qd.timestamp > NOW() - INTERVAL '24 hours'
-                AND qd."queueType" = 'STANDBY'
-              ORDER BY timestamp DESC
-              LIMIT 1
-            ) latest_status ON true
-            WHERE a."parkId" = p.id AND (latest_status.status IS NULL OR latest_status.status != 'OPERATING')
-           ) as explicitly_closed_attractions
+          COALESCE(ac.total, 0) as total_attractions,
+          COALESCE(ac.closed, 0) as explicitly_closed_attractions
         FROM latest_updates lu
         JOIN parks p ON p.id = lu."parkId"
+        LEFT JOIN attraction_counts ac ON ac."parkId" = p.id
         WHERE lu.status = 'OPERATING'
-        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug"
+        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug", ac.total, ac.closed
       )
       SELECT * FROM park_stats
     `);

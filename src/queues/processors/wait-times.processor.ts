@@ -486,11 +486,19 @@ export class WaitTimesProcessor {
   }
 
   private async processLandData(lands: any[], park: any): Promise<number> {
-    const parkAttractions = await this.attractionsService
-      .getRepository()
-      .find({ select: ["id", "name"], where: { parkId: park.id } });
+    // Bulk-fetch current state for the park's attractions (id + the three
+    // fields we might update). In steady state nothing has changed and we
+    // emit zero UPDATEs; previously this method did 2–3 queries per
+    // attraction (a SELECT inside updateLandInfo plus two UPDATEs), so on
+    // a 100-attraction park that's ~300 queries every 5 minutes.
+    const parkAttractions = await this.attractionsService.getRepository().find({
+      select: ["id", "landName", "landExternalId", "queueTimesEntityId"],
+      where: { parkId: park.id },
+    });
     const attractionIds = parkAttractions.map((a) => a.id);
     if (attractionIds.length === 0) return 0;
+
+    const currentById = new Map(parkAttractions.map((a) => [a.id, a]));
 
     const qtMappings = await this.mappingRepository
       .createQueryBuilder("mapping")
@@ -503,34 +511,65 @@ export class WaitTimesProcessor {
       qtIdMap.set(m.externalEntityId, m.internalEntityId),
     );
 
+    // Group land-info changes per land so we can emit one UPDATE per land
+    // instead of one per attraction. Queue-Times entity-id changes are
+    // collected separately (they're unique per attraction).
+    const landUpdates = new Map<
+      string,
+      { landName: string; landExternalId: string | null; ids: string[] }
+    >();
+    const queueTimesIdUpdates: Array<{ id: string; value: string }> = [];
     let updatedCount = 0;
+
     for (const land of lands) {
       if (!land.name) continue;
+      const landExternalId = land.id?.toString() || null;
       for (const qtAttractionId of land.attractions) {
         const internalId = qtIdMap.get(qtAttractionId.toString());
-        if (internalId) {
-          const changed = await this.attractionsService.updateLandInfo(
-            internalId,
-            land.name,
-            land.id?.toString() || null,
-          );
-          const qtNumericId = this.extractQueueTimesNumericId(
-            qtAttractionId.toString(),
-          );
-          if (qtNumericId) {
-            await this.attractionsService
-              .getRepository()
-              .update(internalId, { queueTimesEntityId: qtNumericId })
-              .catch((e) =>
-                this.logger.warn(
-                  `Failed to update queueTimesEntityId for attraction ${internalId}: ${e?.message ?? e}`,
-                ),
-              );
+        if (!internalId) continue;
+        const current = currentById.get(internalId);
+        if (!current) continue;
+
+        if (
+          current.landName !== land.name ||
+          current.landExternalId !== landExternalId
+        ) {
+          const key = `${land.name}::${landExternalId ?? ""}`;
+          let bucket = landUpdates.get(key);
+          if (!bucket) {
+            bucket = { landName: land.name, landExternalId, ids: [] };
+            landUpdates.set(key, bucket);
           }
-          if (changed) updatedCount++;
+          bucket.ids.push(internalId);
+          updatedCount++;
+        }
+
+        const qtNumericId = this.extractQueueTimesNumericId(
+          qtAttractionId.toString(),
+        );
+        if (qtNumericId && current.queueTimesEntityId !== qtNumericId) {
+          queueTimesIdUpdates.push({ id: internalId, value: qtNumericId });
         }
       }
     }
+
+    const repo = this.attractionsService.getRepository();
+    for (const bucket of landUpdates.values()) {
+      await repo.update(bucket.ids, {
+        landName: bucket.landName,
+        landExternalId: bucket.landExternalId,
+      });
+    }
+    for (const u of queueTimesIdUpdates) {
+      await repo
+        .update(u.id, { queueTimesEntityId: u.value })
+        .catch((e) =>
+          this.logger.warn(
+            `Failed to update queueTimesEntityId for attraction ${u.id}: ${e?.message ?? e}`,
+          ),
+        );
+    }
+
     return updatedCount;
   }
 

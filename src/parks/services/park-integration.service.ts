@@ -463,10 +463,12 @@ export class ParkIntegrationService {
         park.timezone,
       );
 
-      // Batch fetch P50s (prefer) and P90s (fallback), then deviation, stats, history, trends, headliners
+      // Batch fetch P50s (only; the previous P90 fallback ran a 548-day
+      // PERCENTILE_CONT over all attractionIds even when most already had a
+      // P50 baseline — pure waste). When a P50 is missing the crowd level
+      // simply defaults to 0/no-rating until the daily P50 cron backfills.
       const [
         attractionP50s,
-        attractionP90s,
         deviationMap,
         attractionStatsMap,
         attractionHistoryMap,
@@ -475,7 +477,6 @@ export class ParkIntegrationService {
         storedPredictionsMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP50s(attractionIds),
-        this.analyticsService.getBatchAttractionP90s(attractionIds),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(
           attractionIds,
@@ -575,10 +576,7 @@ export class ParkIntegrationService {
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
             // P50 baseline when available, else P90 (same as attraction detail)
-            const baseline =
-              attractionP50s.get(attraction.id) ||
-              attractionP90s.get(attraction.id) ||
-              0;
+            const baseline = attractionP50s.get(attraction.id) || 0;
             const { rating } = this.analyticsService.getLoadRating(
               wait,
               baseline,
@@ -631,10 +629,7 @@ export class ParkIntegrationService {
         // Determine Baseline and Comparison using AnalyticsService (P50 when available)
         if (attraction.effectiveStatus === "OPERATING") {
           const wait = attraction.queues?.[0]?.waitTime;
-          const baseline =
-            attractionP50s.get(attraction.id) ||
-            attractionP90s.get(attraction.id) ||
-            0;
+          const baseline = attractionP50s.get(attraction.id) || 0;
 
           if (wait !== undefined && wait !== null && baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
@@ -937,19 +932,13 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // Typical wait for display: use P50 baseline (headliner) when available, else P90 sliding window (same as operating parks).
-        let typicalWait = await this.analyticsService.getP50BaselineFromCache(
+        // Typical wait for display: read the headliner P50 baseline. The
+        // previous live-aggregation fallback (548-day PERCENTILE_CONT) was
+        // dominant cost on cache miss; we now degrade to 0 and rely on the
+        // daily P50 cron to backfill the row.
+        const typicalWait = await this.analyticsService.getP50BaselineFromCache(
           park.id,
         );
-        if (typicalWait === 0) {
-          const p90Result =
-            await this.analyticsService.get90thPercentileWithConfidence(
-              park.id,
-              "park",
-              park.timezone,
-            );
-          typicalWait = p90Result.p50 || p90Result.p90;
-        }
 
         dto.analytics = {
           occupancy: {
