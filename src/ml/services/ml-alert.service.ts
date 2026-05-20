@@ -217,18 +217,16 @@ export class MLAlertService {
   private async resolveAlertIfActive(
     alertType: MLAlert["alertType"],
   ): Promise<void> {
-    const staleAlerts = await this.alertRepository.find({
-      where: {
-        alertType,
-        status: In(["active", "acknowledged"]),
+    const result = await this.alertRepository.update(
+      { alertType, status: In(["active", "acknowledged"]) },
+      {
+        status: "resolved",
+        resolvedAt: new Date(),
+        resolutionNote: "Auto-resolved: condition cleared",
       },
-    });
-    for (const alert of staleAlerts) {
-      alert.status = "resolved";
-      alert.resolvedAt = new Date();
-      alert.resolutionNote = "Auto-resolved: condition cleared";
-      await this.alertRepository.save(alert);
-      this.logger.log(`Auto-resolved ${alertType} alert (id: ${alert.id})`);
+    );
+    if (result.affected) {
+      this.logger.log(`Auto-resolved ${result.affected} ${alertType} alert(s)`);
     }
   }
 
