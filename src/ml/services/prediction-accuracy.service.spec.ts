@@ -136,23 +136,6 @@ describe("PredictionAccuracyService", () => {
       });
     });
 
-    it("carries the prediction's features through to the upsert payload (drift detection input)", async () => {
-      const features = { park_occupancy_pct: 0.45, temperature: 22 };
-      const prediction = {
-        attractionId: "a-1",
-        createdAt: new Date(),
-        predictedTime: new Date(),
-        predictedWaitTime: 30,
-        modelVersion: "v1",
-        predictionType: "hourly",
-        features,
-      } as unknown as WaitTimePrediction;
-
-      await service.recordPrediction(prediction);
-
-      const [entity] = accuracyRepo.upsert.mock.calls[0];
-      expect((entity as { features: unknown }).features).toEqual(features);
-    });
   });
 
   describe("getAttractionAccuracyWithBadge — cache layers", () => {

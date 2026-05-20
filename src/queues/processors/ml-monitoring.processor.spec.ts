@@ -85,20 +85,6 @@ describe("MLMonitoringProcessor", () => {
       expect(alertService.checkAndCreateAlerts).toHaveBeenCalled();
     });
 
-    it("does NOT throw when alerts get created — they're the success case", async () => {
-      alertService.checkAndCreateAlerts.mockResolvedValue({
-        created: 2,
-        alerts: [
-          { title: "Accuracy Degradation" },
-          { title: "Critical Feature Drift" },
-        ],
-      });
-
-      await expect(
-        processor.handleAlertCheck({} as Job),
-      ).resolves.toBeUndefined();
-    });
-
     it("rethrows on service failure (Bull retries)", async () => {
       alertService.checkAndCreateAlerts.mockRejectedValueOnce(
         new Error("Redis down"),

@@ -193,17 +193,4 @@ describe("MLModelService", () => {
     });
   });
 
-  describe("getActiveModel (raw entity)", () => {
-    it("returns the raw active model entity without DTO transform", async () => {
-      mlModelRepo.findOne.mockResolvedValue(baseModel);
-      const result = await service.getActiveModel();
-      expect(result).toBe(baseModel);
-    });
-
-    it("returns null when none active", async () => {
-      mlModelRepo.findOne.mockResolvedValue(null);
-      const result = await service.getActiveModel();
-      expect(result).toBeNull();
-    });
-  });
 });

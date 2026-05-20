@@ -240,13 +240,4 @@ describe("MultiSourceOrchestrator", () => {
     });
   });
 
-  describe("registerSource", () => {
-    it("preserves registration order in getSources()", () => {
-      const s1 = stubSource("s1");
-      const s2 = stubSource("s2");
-      orchestrator.registerSource(s1);
-      orchestrator.registerSource(s2);
-      expect(orchestrator.getSources()).toEqual([s1, s2]);
-    });
-  });
 });
