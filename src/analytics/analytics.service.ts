@@ -325,22 +325,24 @@ export class AnalyticsService {
   async calculateParkOccupancy(parkId: string): Promise<OccupancyDto> {
     const now = new Date();
 
-    // Headliner-only for current + trend (same rides as P50 baseline and peakWaitToday)
+    // Headliner-only for current + trend (same rides as the P90 baseline so
+    // the live "peak feel" stays apples-to-apples with the 548-day reference).
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
       select: ["parkId", "attractionId"],
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
 
-    // Get current "Spot" P50 wait time (Latest snapshot) – headliner-only when available
-    const currentAvgWait = await this.getCurrentSpotWaitTime(
+    // Live "peak feel" — per-headliner MAX wait in the last 60 min, averaged.
+    // P90-based crowd levels everywhere are what users actually perceive
+    // ("how bad was the headliner queue right now?") rather than the
+    // park-wide median wait which is dominated by low-demand rides.
+    const currentPeakWait = await this.getCurrentParkPeakWait(
       parkId,
-      0.5,
-      this.MIN_WAIT_TIME_THRESHOLD,
       headlinerIds.length > 0 ? headlinerIds : undefined,
     );
 
-    if (currentAvgWait === null) {
+    if (currentPeakWait === null) {
       return {
         current: 0,
         trend: "stable",
@@ -357,18 +359,33 @@ export class AnalyticsService {
       };
     }
 
-    // Headliner P50 baseline lives in park_p50_baseline (populated by the
-    // daily 3 AM cron, served via getP50BaselineWithConfidence → Redis →
-    // DB). When the row is missing we used to fall back to a 548-day live
-    // PERCENTILE_CONT, which dominated request latency on cache miss and
-    // affected every endpoint calling this method (search, /parks list,
-    // /parks/{id}, /analytics/realtime). We now degrade gracefully to a
-    // low-confidence default instead — the next cron run fills in the row.
-    const record = await this.getP50BaselineWithConfidence(parkId);
+    // Headliner P90 baseline lives in park_p90_baselines (populated daily
+    // alongside the P50 baseline). When missing — brand-new park before
+    // the next cron — we degrade to the P50 baseline rather than running
+    // a 548-day live PERCENTILE_CONT, then to a low-confidence default.
+    // This keeps the comparison meaningful (peak-vs-peak) when the cache
+    // is warm and avoids hot-path slow queries when it isn't.
+    let baseline = await this.getP90BaselineFromCache(parkId);
+    let baselineKind: "p90" | "p50" = "p90";
+    let confidence: "high" | "medium" | "low" = "low";
 
-    if (!record) {
+    if (baseline === 0) {
+      const p50Record = await this.getP50BaselineWithConfidence(parkId);
+      if (p50Record) {
+        baseline = p50Record.value;
+        baselineKind = "p50";
+        confidence = p50Record.confidence;
+      }
+    } else {
+      const row = await this.parkP90BaselineRepository.findOne({
+        where: { parkId },
+      });
+      confidence = row?.confidence || "low";
+    }
+
+    if (baseline === 0) {
       this.logger.warn(
-        `No P50 baseline for park ${parkId} — returning low-confidence default until daily cron repopulates it`,
+        `No P90/P50 baseline for park ${parkId} — returning low-confidence default until daily cron repopulates it`,
       );
       return {
         current: 50,
@@ -379,18 +396,16 @@ export class AnalyticsService {
         confidence: "low",
         updatedAt: now.toISOString(),
         breakdown: {
-          currentAvgWait: roundToNearest5Minutes(currentAvgWait),
+          currentAvgWait: roundToNearest5Minutes(currentPeakWait),
           typicalAvgWait: 0,
           activeAttractions: 0,
         },
       };
     }
 
-    const p50Baseline = record.value;
-    const confidence = record.confidence;
-
-    // Calculate occupancy as percentage of P50 baseline (headliner P50 when available)
-    const occupancyPercentage = (currentAvgWait / p50Baseline) * 100;
+    // Occupancy = recent peak / typical peak × 100. Reads as "today's peak
+    // headliner experience vs. a typical day's peak", 100% = normal.
+    const occupancyPercentage = (currentPeakWait / baseline) * 100;
 
     // Calculate Park Trend (Hybrid Logic) – headliner-only, Durchschnitt pro Headliner dann / Anzahl
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -478,12 +493,12 @@ export class AnalyticsService {
 
     let trend: "up" | "down" | "stable" = "stable";
     if (avgLastHour !== null) {
-      trend = this.computeTrend(currentAvgWait, avgLastHour, avgPrevHour);
+      trend = this.computeTrend(currentPeakWait, avgLastHour, avgPrevHour);
     }
 
-    // Calculate comparison to typical (P50 baseline) as percentage difference
-    const diff = currentAvgWait - p50Baseline;
-    const comparedToTypical = (diff / p50Baseline) * 100;
+    // Comparison to typical peak — percentage difference vs baseline.
+    const diff = currentPeakWait - baseline;
+    const comparedToTypical = (diff / baseline) * 100;
 
     // Determine status based on percentage difference
     let comparisonStatus: "higher" | "lower" | "typical" = "typical";
@@ -491,18 +506,19 @@ export class AnalyticsService {
       // >10% difference
       comparisonStatus = comparedToTypical > 0 ? "higher" : "lower";
     }
+    void baselineKind; // kept for potential debug surface; not exposed in DTO
 
     return {
       current: Math.round(occupancyPercentage),
       trend,
-      comparedToTypical: Math.round(comparedToTypical), // Returning % difference now
+      comparedToTypical: Math.round(comparedToTypical),
       comparisonStatus,
-      baseline90thPercentile: Math.round(p50Baseline), // P50 baseline (headliner when available)
+      baseline90thPercentile: Math.round(baseline),
       confidence,
       updatedAt: now.toISOString(),
       breakdown: {
-        currentAvgWait: roundToNearest5Minutes(currentAvgWait),
-        typicalAvgWait: roundToNearest5Minutes(p50Baseline),
+        currentAvgWait: roundToNearest5Minutes(currentPeakWait),
+        typicalAvgWait: roundToNearest5Minutes(baseline),
         activeAttractions: await this.getActiveAttractionsCount(parkId),
       },
     };
@@ -520,34 +536,32 @@ export class AnalyticsService {
    * Example: 75 = park is at 75% of typical P90 wait times
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
-    // Get current P50 wait time (headliner-only when available, same as calculateParkOccupancy)
+    // Same shape as calculateParkOccupancy: peak-vs-peak comparison.
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
       select: ["parkId", "attractionId"],
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
-    const currentAvgWait = await this.getCurrentSpotWaitTime(
+    const currentPeakWait = await this.getCurrentParkPeakWait(
       parkId,
-      0.5,
-      this.MIN_WAIT_TIME_THRESHOLD,
       headlinerIds.length > 0 ? headlinerIds : undefined,
     );
 
-    if (currentAvgWait === null) {
+    if (currentPeakWait === null) {
       return 100;
     }
 
-    // Use headliner P50 baseline (same as calculateParkOccupancy).
-    // No live-aggregation fallback — see calculateParkOccupancy for context.
-    const p50Baseline = await this.getP50BaselineFromCache(parkId);
-
-    if (p50Baseline === 0) {
+    // P90 baseline first, fall back to P50 only when P90 is not yet
+    // populated (brand-new park before the next cron).
+    let baseline = await this.getP90BaselineFromCache(parkId);
+    if (baseline === 0) {
+      baseline = await this.getP50BaselineFromCache(parkId);
+    }
+    if (baseline === 0) {
       return 100;
     }
 
-    // Calculate occupancy as percentage of P50 baseline
-    const occupancyPercentage = (currentAvgWait / p50Baseline) * 100;
-
+    const occupancyPercentage = (currentPeakWait / baseline) * 100;
     return Math.round(Math.min(occupancyPercentage, 200));
   }
 
@@ -873,6 +887,84 @@ export class AnalyticsService {
       return this.getCurrentSpotWaitTime(parkId, percentile, 0);
     }
     return row?.pWait ? Math.round(parseFloat(row.pWait)) : null;
+  }
+
+  /**
+   * Current park "peak feel" — avg-across-headliners of (per-headliner MAX
+   * wait in the last `windowMinutes`). This is the live-side counterpart
+   * to the 548-day P90 baseline: same shape (peak-oriented, headliner-only,
+   * per-ride then averaged) but a small recent window. With samples every
+   * ~5 min, MAX in a 60-min window holds ~12 data points so it effectively
+   * tracks the 90-100th percentile of the recent slice — what the user
+   * would describe as "the longest wait at the headliners right now".
+   *
+   * Comparison `currentPeak / p90Baseline` stays apples-to-apples (peak
+   * vs. peak), 100%-centred, identical scale to the calendar day metric.
+   */
+  private async getCurrentParkPeakWait(
+    parkId: string,
+    headlinerIds?: string[],
+    windowMinutes = 60,
+    minWaitTime = this.MIN_WAIT_TIME_THRESHOLD,
+  ): Promise<number | null> {
+    const windowAgo = new Date(Date.now() - windowMinutes * 60 * 1000);
+    const useHeadliners = headlinerIds && headlinerIds.length > 0;
+
+    if (useHeadliners) {
+      const perRide = await this.queueDataRepository.query(
+        `
+        SELECT qd."attractionId", MAX(qd."waitTime") as peak_wait
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1)
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" >= $3
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY qd."attractionId"
+        `,
+        [headlinerIds, windowAgo, minWaitTime],
+      );
+      if (perRide.length === 0) {
+        if (minWaitTime > 0) {
+          return this.getCurrentParkPeakWait(
+            parkId,
+            headlinerIds,
+            windowMinutes,
+            0,
+          );
+        }
+        return null;
+      }
+      const sum = perRide.reduce(
+        (acc: number, row: { peak_wait: string | number }) =>
+          acc + Number(row.peak_wait ?? 0),
+        0,
+      );
+      return Math.round(sum / perRide.length);
+    }
+
+    // Fallback when no headliners: per-attraction MAX in window, then avg.
+    const result = await this.queueDataRepository.query(
+      `
+      WITH per_ride AS (
+        SELECT qd."attractionId", MAX(qd."waitTime") as peak_wait
+        FROM queue_data qd
+        JOIN attractions a ON qd."attractionId" = a.id
+        WHERE a."parkId" = $1::uuid
+          AND qd.timestamp >= $2
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" IS NOT NULL
+          AND qd."waitTime" >= $3
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY qd."attractionId"
+      )
+      SELECT AVG(peak_wait) as peak FROM per_ride
+      `,
+      [parkId, windowAgo, minWaitTime],
+    );
+    const peak = result[0]?.peak;
+    return peak ? Math.round(parseFloat(peak)) : null;
   }
 
   /**
@@ -2319,168 +2411,6 @@ export class AnalyticsService {
     return trendsMap;
   }
   /**
-   * Get 90th percentile baselines for multiple attractions in a single batched query
-   * OPTIMIZED: Uses single SQL query with IN clause instead of N individual queries
-   * Used for calculating relative crowd levels (badges) in lists
-   * UPDATED: Uses unified 548-day Static P90 (consistent with get90thPercentileWithConfidence)
-   */
-  async getBatchAttractionP90s(
-    attractionIds: string[],
-  ): Promise<Map<string, number>> {
-    const resultMap = new Map<string, number>();
-
-    if (attractionIds.length === 0) {
-      return resultMap;
-    }
-
-    // 1. Use same Redis key as get90thPercentileWithConfidence so both share one cache
-    const cacheKeyMap = new Map<string, string>();
-    attractionIds.forEach((id) => {
-      const key = `analytics:percentile:sliding:attraction:${id}`;
-      cacheKeyMap.set(id, key);
-    });
-
-    const keysToCheck = attractionIds
-      .map((id) => cacheKeyMap.get(id))
-      .filter((k) => !!k) as string[];
-
-    // 2. Batched cache check
-    let cachedValues: (string | null)[] = [];
-    if (keysToCheck.length > 0) {
-      cachedValues = await this.redis.mget(...keysToCheck);
-    }
-
-    const uncachedIds: string[] = [];
-
-    // Map existing cache values
-    let cacheIndex = 0;
-    attractionIds.forEach((id) => {
-      const key = cacheKeyMap.get(id);
-      if (!key) return;
-
-      const valueStr = cachedValues[cacheIndex];
-      cacheIndex++;
-
-      if (valueStr !== null) {
-        // Cache stores the full object {p90, sampleCount, ...}
-        try {
-          const parsed = JSON.parse(valueStr);
-          resultMap.set(id, parsed.p90 || 0);
-        } catch (_e) {
-          // If not JSON (legacy cache?), try parsing as number or ignore
-          resultMap.set(id, parseFloat(valueStr) || 0);
-        }
-      } else {
-        uncachedIds.push(id);
-      }
-    });
-
-    if (uncachedIds.length === 0) {
-      return resultMap;
-    }
-
-    // 3. Batched DB Query for uncached (Unified 548-day sliding window; include P50 for shared cache shape)
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 548); // 1.5 years
-
-    const dbResults = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select('qd."attractionId"', "attractionId")
-      .addSelect(
-        'PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")',
-        "p50",
-      )
-      .addSelect(
-        'PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")',
-        "p90",
-      )
-      .addSelect("COUNT(DISTINCT DATE(qd.timestamp))", "distinctDays")
-      .addSelect("COUNT(*)", "sampleCount")
-      .where("qd.attractionId IN (:...ids)", { ids: uncachedIds })
-      .andWhere("qd.timestamp >= :cutoff", { cutoff })
-      .andWhere("qd.status = 'OPERATING'")
-      .andWhere("qd.queueType = 'STANDBY'")
-      .groupBy('qd."attractionId"')
-      .getRawMany();
-
-    // 4. Store in Map and Cache (same shape as get90thPercentileWithConfidence so both share cache)
-    if (dbResults.length > 0) {
-      const pipeline = this.redis.pipeline();
-
-      dbResults.forEach((res) => {
-        const id = res.attractionId;
-        const p50 = Math.round(parseFloat(res.p50));
-        const p90 = Math.round(parseFloat(res.p90));
-        const sampleCount = parseInt(res.sampleCount, 10);
-        const distinctDays = parseInt(res.distinctDays, 10);
-
-        let confidence: "high" | "medium" | "low" = "low";
-        if (distinctDays >= 90) confidence = "high";
-        else if (distinctDays >= 30) confidence = "medium";
-
-        const resultObj = {
-          p90,
-          p50,
-          sampleCount,
-          distinctDays,
-          confidence,
-        };
-        resultMap.set(id, p90);
-
-        const key = cacheKeyMap.get(id);
-        if (key) {
-          pipeline.set(key, JSON.stringify(resultObj), "EX", 24 * 60 * 60);
-        }
-      });
-
-      await pipeline.exec();
-    }
-
-    return resultMap;
-  }
-
-  /**
-   * Calculate 90th percentile from sliding window of last 548 days (1.5 years)
-   *
-   * Uses a 548-day sliding window without filtering by hour/weekday.
-   * This provides a consistent baseline for both parks and attractions.
-   *
-   * **Key Features:**
-   * - 548-day sliding window (covers 1.5 seasonal cycles for robustness)
-   * - No hour/weekday filtering (uses all operating data)
-   * - Only includes OPERATING status data (excludes closed days)
-   * - Works without schedule data (many parks don't have schedules)
-   * - Correctly handles park timezone for date calculations
-   *
-   * **Confidence Levels:**
-   * - high: >= 90 days of data
-   * - medium: 30-89 days of data
-   * - low: < 30 days of data
-   *
-   * **Timezone Handling:**
-   * - Cutoff date (now - 548 days) is calculated in park timezone
-   * - Converted to UTC for database query
-   * - Ensures accurate sliding window regardless of server timezone
-   *
-   * @param entityId - Park or attraction ID
-   * @param type - "park" or "attraction"
-   * @param timezone - Optional timezone (if not provided, fetched from entity)
-   * @returns Object with P90 value, sample count, and confidence level
-   */
-  async get90thPercentileSlidingWindow(
-    entityId: string,
-    type: "park" | "attraction",
-    timezone?: string,
-  ): Promise<number> {
-    const result = await this.get90thPercentileWithConfidence(
-      entityId,
-      type,
-      timezone,
-    );
-    return result.p90;
-  }
-
-  /**
    * Calculate 90th percentile with confidence score
    *
    * Returns the P90 value along with sample count and confidence level.
@@ -3519,22 +3449,23 @@ export class AnalyticsService {
   }
 
   /**
-   * Get attraction crowd level from wait time and baseline (P50 when available, else P90).
-   * Same thresholds as park (determineCrowdLevel). Callers should pass getAttractionP50BaselineFromCache
-   * or getBatchAttractionP50s with P90 fallback.
+   * Map an attraction's current wait time to a crowd level rating against
+   * its peak baseline (P90). The baseline argument should be the 548-day
+   * per-attraction P90 — what a typical day's peak wait looks like — so
+   * the resulting percentage stays apples-to-apples (peak-vs-peak) and
+   * 100% reads as "normal peak-day". Callers should pass
+   * getAttractionP90BaselineFromCache, falling back to P50 only when no
+   * P90 row exists yet.
    */
   public getAttractionCrowdLevel(
     waitTime: number | undefined,
-    p90: number | undefined, // baseline (P50 or P90), param name kept for compatibility
+    baseline: number | undefined,
   ): CrowdLevel | null {
     if (!waitTime || waitTime === 0) return null;
-
-    // Use P50 baseline when available (same thresholds as park). Parameter name kept for backward compatibility.
-    if (p90 && p90 > 0) {
-      const occupancy = (waitTime / p90) * 100;
+    if (baseline && baseline > 0) {
+      const occupancy = (waitTime / baseline) * 100;
       return this.determineCrowdLevel(occupancy);
     }
-
     return null;
   }
 
@@ -3600,47 +3531,50 @@ export class AnalyticsService {
       }
     }
 
-    // Step 1: Try to get P50 baseline (new system)
+    // Resolve the peak-vs-peak baseline: prefer P90 (matches the new
+    // user-facing semantic — "today's peak vs typical peak"), fall back
+    // to P50 only when no P90 row has been calculated yet. The previous
+    // live 548-day PERCENTILE_CONT fallback is gone: it was the hottest
+    // path on calendar cache misses; the daily cron now populates both
+    // tables and missing rows mean "no baseline yet" rather than "go scan
+    // half a billion data points".
     let baseline = 0;
-    let baselineType: "p50" | "p90" = "p50";
+    let baselineType: "p50" | "p90" = "p90";
     let baselineConfidence: "high" | "medium" | "low" = "low";
 
     if (type === "park") {
-      const p50Baseline = await this.getP50BaselineFromCache(entityId);
-      if (p50Baseline > 0) {
-        baseline = p50Baseline;
-        const p50Record = await this.parkP50BaselineRepository.findOne({
+      baseline = await this.getP90BaselineFromCache(entityId);
+      if (baseline > 0) {
+        const rec = await this.parkP90BaselineRepository.findOne({
           where: { parkId: entityId },
         });
-        baselineConfidence = p50Record?.confidence || "low";
+        baselineConfidence = rec?.confidence || "low";
+      } else {
+        baseline = await this.getP50BaselineFromCache(entityId);
+        if (baseline > 0) {
+          baselineType = "p50";
+          const rec = await this.parkP50BaselineRepository.findOne({
+            where: { parkId: entityId },
+          });
+          baselineConfidence = rec?.confidence || "low";
+        }
       }
     } else {
-      const p50Baseline =
-        await this.getAttractionP50BaselineFromCache(entityId);
-      if (p50Baseline > 0) {
-        baseline = p50Baseline;
-        const p50Record = await this.attractionP50BaselineRepository.findOne({
+      baseline = await this.getAttractionP90BaselineFromCache(entityId);
+      if (baseline > 0) {
+        const rec = await this.attractionP90BaselineRepository.findOne({
           where: { attractionId: entityId },
         });
-        baselineConfidence = p50Record?.confidence || "low";
-      }
-    }
-
-    if (baseline === 0) {
-      // Fallback: sliding-window P50 then P90
-      const p90Result = await this.get90thPercentileWithConfidence(
-        entityId,
-        type,
-        timezone,
-      );
-      baseline = p90Result.p50 || p90Result.p90;
-      baselineType = "p90";
-      baselineConfidence = p90Result.confidence;
-
-      if (baseline === 0 || p90Result.distinctDays < 30) {
-        this.logger.debug(
-          `No reliable baseline for ${type} ${entityId} (baseline: ${baseline}, days: ${p90Result.distinctDays})`,
-        );
+        baselineConfidence = rec?.confidence || "low";
+      } else {
+        baseline = await this.getAttractionP50BaselineFromCache(entityId);
+        if (baseline > 0) {
+          baselineType = "p50";
+          const rec = await this.attractionP50BaselineRepository.findOne({
+            where: { attractionId: entityId },
+          });
+          baselineConfidence = rec?.confidence || "low";
+        }
       }
     }
 
@@ -3757,65 +3691,32 @@ export class AnalyticsService {
       }
     }
 
-    // Calculate result
+    // crowdLevel is now P90-based ("today's peak vs typical peak"),
+    // matching what users perceive as "how busy that day was". When the
+    // P90 baseline is unavailable and we fell back to P50 we instead
+    // compute P50-vs-P50 — still apples-to-apples, just an avg-vs-avg
+    // crowd reading until the P90 cron fills in the row.
     let percentage = 0;
     let crowdLevel: CrowdLevel = "very_low";
-    let peakPercentage = 0;
-    let peakCrowdLevel: CrowdLevel = "very_low";
     const hasData = dailyStats.p50 !== null && dailyStats.count > 0;
+    const dailyValue = baselineType === "p90" ? dailyStats.p90 : dailyStats.p50;
 
-    // Calculate P90 baseline if needed
-    let p90Baseline = 0;
-    if (hasData) {
-      if (type === "park") {
-        const headliners = await this.headlinerAttractionRepository.find({
-          where: { parkId: entityId },
-        });
-        const validHeadliners = headliners.filter(
-          (h) => Number(h.p90Wait548d) > 0,
-        );
-        p90Baseline =
-          validHeadliners.length > 0
-            ? validHeadliners.reduce(
-                (sum, h) => sum + Number(h.p90Wait548d),
-                0,
-              ) / validHeadliners.length
-            : 0;
-      } else {
-        const attraction = await this.attractionRepository.findOne({
-          where: { id: entityId },
-        });
-        if (attraction) {
-          const stats = await this.get90thPercentileWithConfidence(
-            entityId,
-            "attraction",
-            "UTC",
-          );
-          p90Baseline = stats.p90;
-        }
-      }
-    }
-
-    if (hasData && baseline > 0) {
-      percentage = Math.round((dailyStats.p50! / baseline) * 100);
+    if (hasData && baseline > 0 && dailyValue !== null) {
+      percentage = Math.round((dailyValue / baseline) * 100);
       crowdLevel = this.determineCrowdLevel(percentage);
     } else if (hasData) {
-      // No baseline available - use moderate as default
       crowdLevel = "moderate";
       percentage = 100;
     }
 
-    if (hasData && p90Baseline > 0 && dailyStats.p90 !== null) {
-      peakPercentage = Math.round((dailyStats.p90! / p90Baseline) * 100);
-      peakCrowdLevel = this.determineCrowdLevel(peakPercentage);
-    } else if (hasData) {
-      peakCrowdLevel = crowdLevel;
-    }
-
+    // peakCrowdLevel kept in the response shape for backwards compatibility
+    // with any caller that still reads it (it used to mean "P90-based"
+    // crowd; now crowdLevel itself is P90-based so they're identical when
+    // the P90 baseline is present).
     const response = {
       percentage,
       crowdLevel,
-      peakCrowdLevel, // NEW: P90-based crowd level
+      peakCrowdLevel: crowdLevel,
       hasData,
       confidence: baselineConfidence,
       avgWaitTime: dailyStats.p50
@@ -3824,9 +3725,9 @@ export class AnalyticsService {
       p90WaitTime: dailyStats.p90
         ? roundToNearest5Minutes(dailyStats.p90)
         : null,
-      p90Baseline: baseline, // Keep field name for backward compatibility
-      actualP90Baseline: p90Baseline,
-      baselineType, // NEW: Indicates which baseline was used
+      p90Baseline: baseline,
+      actualP90Baseline: baseline,
+      baselineType,
       sampleCount: dailyStats.count,
       isToday,
     };
@@ -3867,48 +3768,71 @@ export class AnalyticsService {
       confidence: "high" | "medium" | "low";
     }>
   > {
-    // Prefer P50 baseline (park: headliner P50, attraction: per-ride P50), else sliding-window P50/P90
+    // ML training labels follow the same peak-vs-peak semantic as the
+    // user-facing crowd level: P90 baseline first, P50 only when no P90
+    // row exists yet (will recalibrate within ~1 cron cycle). The old
+    // 548-day live PERCENTILE_CONT fallback is gone — training jobs
+    // request thousands of days per park and shouldn't trigger expensive
+    // hot-path computation.
     let baseline = 0;
     let confidence: "high" | "medium" | "low" = "low";
     if (type === "park") {
-      baseline = await this.getP50BaselineFromCache(entityId);
+      baseline = await this.getP90BaselineFromCache(entityId);
       if (baseline > 0) {
-        const rec = await this.parkP50BaselineRepository.findOne({
+        const rec = await this.parkP90BaselineRepository.findOne({
           where: { parkId: entityId },
         });
         confidence = rec?.confidence || "low";
+      } else {
+        baseline = await this.getP50BaselineFromCache(entityId);
+        if (baseline > 0) {
+          const rec = await this.parkP50BaselineRepository.findOne({
+            where: { parkId: entityId },
+          });
+          confidence = rec?.confidence || "low";
+        }
       }
     } else {
-      baseline = await this.getAttractionP50BaselineFromCache(entityId);
+      baseline = await this.getAttractionP90BaselineFromCache(entityId);
       if (baseline > 0) {
-        const rec = await this.attractionP50BaselineRepository.findOne({
+        const rec = await this.attractionP90BaselineRepository.findOne({
           where: { attractionId: entityId },
         });
         confidence = rec?.confidence || "low";
+      } else {
+        baseline = await this.getAttractionP50BaselineFromCache(entityId);
+        if (baseline > 0) {
+          const rec = await this.attractionP50BaselineRepository.findOne({
+            where: { attractionId: entityId },
+          });
+          confidence = rec?.confidence || "low";
+        }
       }
-    }
-    if (baseline === 0) {
-      const p90Result = await this.get90thPercentileWithConfidence(
-        entityId,
-        type,
-        timezone,
-      );
-      baseline = p90Result.p50 || p90Result.p90;
-      confidence = p90Result.confidence;
     }
 
     // Query daily aggregates
     const startDate = fromZonedTime(`${fromDate}T00:00:00`, timezone);
     const endDate = fromZonedTime(`${toDate}T23:59:59`, timezone);
 
-    let dailyData: Array<{ date: string; avgWait: number; dayOfWeek: number }>;
+    // Each day's "value" is its P90 (peak-of-day) so the % stays
+    // apples-to-apples with the P90 baseline. `avgWaitTime` in the
+    // response is still the P50 (kept under that name for backwards
+    // compatibility with downstream ML feature consumers); the model
+    // sees both the label percentage AND the underlying wait stats.
+    let dailyData: Array<{
+      date: string;
+      avgWait: number;
+      peakWait: number;
+      dayOfWeek: number;
+    }>;
 
     if (type === "attraction") {
       dailyData = await this.queueDataRepository.query(
         `
-        SELECT 
+        SELECT
           DATE(qd.timestamp AT TIME ZONE $2) as date,
-          AVG(qd."waitTime") as "avgWait",
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "avgWait",
+          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as "peakWait",
           EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
         FROM queue_data qd
         JOIN attractions a ON a.id = qd."attractionId"
@@ -3935,7 +3859,8 @@ export class AnalyticsService {
         `
         SELECT
           DATE(qd.timestamp AT TIME ZONE $2) as date,
-          AVG(qd."waitTime") as "avgWait",
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "avgWait",
+          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as "peakWait",
           EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
         FROM queue_data qd
         INNER JOIN attractions a ON qd."attractionId" = a.id
@@ -3961,8 +3886,9 @@ export class AnalyticsService {
 
     return dailyData.map((row) => {
       const avgWait = parseFloat(String(row.avgWait));
+      const peakWait = parseFloat(String(row.peakWait || row.avgWait));
       const percentage =
-        baseline > 0 ? Math.round((avgWait / baseline) * 100) : 50;
+        baseline > 0 ? Math.round((peakWait / baseline) * 100) : 50;
 
       return {
         date:
@@ -4542,20 +4468,17 @@ export class AnalyticsService {
   }
 
   /**
-   * Get baseline for an attraction (P50 from cache when available, else sliding-window P50/P90).
-   * Used by compareParks and any single-attraction load rating when timezone is not at hand.
+   * Get the peak baseline (P90) for an attraction, falling back to P50
+   * when no P90 row has been calculated yet. Used by compareParks and
+   * single-attraction load ratings; matches the new user-facing semantic
+   * (peak-vs-peak crowd reading) and never triggers a live 548-day scan.
    */
   private async getBaselineForAttraction(
     attractionId: string,
   ): Promise<number> {
-    const p50 = await this.getAttractionP50BaselineFromCache(attractionId);
-    if (p50 > 0) return p50;
-    const fallback = await this.get90thPercentileWithConfidence(
-      attractionId,
-      "attraction",
-      "UTC",
-    );
-    return fallback.p50 || fallback.p90;
+    const p90 = await this.getAttractionP90BaselineFromCache(attractionId);
+    if (p90 > 0) return p90;
+    return this.getAttractionP50BaselineFromCache(attractionId);
   }
 
   /**

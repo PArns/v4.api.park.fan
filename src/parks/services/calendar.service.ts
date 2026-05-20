@@ -237,17 +237,19 @@ export class CalendarService {
       ),
     );
 
-    // Pre-compute predicted crowd levels for future days using headliner median / P50 baseline
-    // (mirrors calculateCrowdLevelForDate logic for historical days)
-    const [allHeadliners, p50Baseline] = await Promise.all([
+    // Pre-compute predicted crowd levels for future days. Mirrors
+    // calculateCrowdLevelForDate: predicted day-P90 vs. P90 baseline
+    // (peak-vs-peak), falling back to P50 when no P90 row exists yet.
+    const [allHeadliners, p90Baseline, p50Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractions(park.id),
+      this.analyticsService.getP90BaselineFromCache(park.id),
       this.analyticsService.getP50BaselineFromCache(park.id),
     ]);
     const headlinerIdSet = new Set(allHeadliners.map((h) => h.attractionId));
     const predictedCrowdLevels = this.buildPredictedCrowdLevels(
       mlPredictions.predictions,
       headlinerIdSet,
-      p50Baseline,
+      p90Baseline || p50Baseline,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -896,15 +898,20 @@ export class CalendarService {
   }
 
   /**
-   * Aggregate per-attraction ML predictions into a date → CrowdLevel map for future days.
+   * Aggregate per-attraction ML predictions into a date → CrowdLevel map
+   * for future days.
    *
-   * Mirrors calculateCrowdLevelForDate: median of headliner wait times / park P50 baseline.
-   * Falls back to all attractions if no headliners are defined.
+   * Mirrors calculateCrowdLevelForDate: predicted P90 of headliner waits
+   * divided by the park P90 baseline (peak-vs-peak). The caller passes
+   * P90; if it's 0 (park doesn't have a P90 row yet) we degrade to P50,
+   * still apples-to-apples. The old code passed P50 for the peakLoad
+   * comparison too — that mixed perceniles and systematically inflated
+   * the peakLoad reading.
    */
   private buildPredictedCrowdLevels(
     predictions: PredictionDto[],
     headlinerIdSet: Set<string>,
-    p50Baseline: number,
+    baseline: number,
   ): Map<string, { crowdLevel: CrowdLevel; peakLoad: CrowdLevel }> {
     const result = new Map<
       string,
@@ -929,26 +936,17 @@ export class CalendarService {
 
       if (headliners.length === 0) continue;
 
-      // Logic identical to calculateCrowdLevelForDate:
-      // a) Median wait time
+      // Predicted day P90 (the peak of headliner-predicted waits) is the
+      // signal we compare to the baseline. crowdLevel and peakLoad are
+      // now both peak-vs-peak — they're effectively the same value here
+      // because there's no separate "average" view of a predicted day.
       const waits = headliners.map((p) => p.predictedWaitTime);
       waits.sort((a, b) => a - b);
-      const medianWait = waits[Math.floor(waits.length / 2)];
+      const p90Idx = Math.min(waits.length - 1, Math.floor(waits.length * 0.9));
+      const p90Wait = waits[p90Idx];
 
-      // b) P90 Peak Load proxy (simplification: 90th percentile of predicted waits)
-      const p90Wait = waits[Math.floor(waits.length * 0.9)];
-
-      // c) Map to crowd level using P50 baseline
-      const { rating: crowdLevel } = this.analyticsService.getLoadRating(
-        medianWait,
-        p50Baseline,
-      );
-      const { rating: peakLoad } = this.analyticsService.getLoadRating(
-        p90Wait,
-        p50Baseline,
-      );
-
-      result.set(date, { crowdLevel, peakLoad });
+      const { rating } = this.analyticsService.getLoadRating(p90Wait, baseline);
+      result.set(date, { crowdLevel: rating, peakLoad: rating });
     }
 
     return result;

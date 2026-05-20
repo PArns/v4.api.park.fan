@@ -463,11 +463,12 @@ export class ParkIntegrationService {
         park.timezone,
       );
 
-      // Batch fetch P50s (only; the previous P90 fallback ran a 548-day
-      // PERCENTILE_CONT over all attractionIds even when most already had a
-      // P50 baseline — pure waste). When a P50 is missing the crowd level
-      // simply defaults to 0/no-rating until the daily P50 cron backfills.
+      // Batch fetch the per-attraction peak baseline (P90) for crowd-level
+      // rendering, plus P50 as a graceful fallback for attractions that
+      // don't have a P90 row yet. Both reads hit Redis/DB only, never the
+      // 548-day live PERCENTILE_CONT the old getBatchAttractionP90s ran.
       const [
+        attractionP90s,
         attractionP50s,
         deviationMap,
         attractionStatsMap,
@@ -476,6 +477,7 @@ export class ParkIntegrationService {
         headlinerIds,
         storedPredictionsMap,
       ] = await Promise.all([
+        this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
         this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(
@@ -576,7 +578,10 @@ export class ParkIntegrationService {
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
             // P50 baseline when available, else P90 (same as attraction detail)
-            const baseline = attractionP50s.get(attraction.id) || 0;
+            const baseline =
+              attractionP90s.get(attraction.id) ||
+              attractionP50s.get(attraction.id) ||
+              0;
             const { rating } = this.analyticsService.getLoadRating(
               wait,
               baseline,
@@ -629,7 +634,10 @@ export class ParkIntegrationService {
         // Determine Baseline and Comparison using AnalyticsService (P50 when available)
         if (attraction.effectiveStatus === "OPERATING") {
           const wait = attraction.queues?.[0]?.waitTime;
-          const baseline = attractionP50s.get(attraction.id) || 0;
+          const baseline =
+            attractionP90s.get(attraction.id) ||
+            attractionP50s.get(attraction.id) ||
+            0;
 
           if (wait !== undefined && wait !== null && baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
@@ -932,13 +940,18 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // Typical wait for display: read the headliner P50 baseline. The
-        // previous live-aggregation fallback (548-day PERCENTILE_CONT) was
-        // dominant cost on cache miss; we now degrade to 0 and rely on the
-        // daily P50 cron to backfill the row.
-        const typicalWait = await this.analyticsService.getP50BaselineFromCache(
+        // "Typical wait" displayed for closed parks is the peak baseline
+        // (P90) — what a typical day's headliner peak looks like — falling
+        // back to P50 only when no P90 row exists yet. Matches the
+        // peak-vs-peak crowd semantic used by every other surface.
+        let typicalWait = await this.analyticsService.getP90BaselineFromCache(
           park.id,
         );
+        if (typicalWait === 0) {
+          typicalWait = await this.analyticsService.getP50BaselineFromCache(
+            park.id,
+          );
+        }
 
         dto.analytics = {
           occupancy: {
@@ -1193,10 +1206,15 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, p50Baseline] = await Promise.all([
+    const [headlinerIds, p90Baseline, p50Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractionIds(parkId),
+      this.analyticsService.getP90BaselineFromCache(parkId),
       this.analyticsService.getP50BaselineFromCache(parkId),
     ]);
+    // crowdLevel is peak-vs-peak; the P90 baseline matches the day-of
+    // peak metric the ML stack predicts. P50 stays as fallback for parks
+    // whose P90 row isn't populated yet.
+    const baselineForCrowd = p90Baseline || p50Baseline;
 
     const datesMap = new Map<string, PredictionDto[]>();
 
@@ -1230,19 +1248,24 @@ export class ParkIntegrationService {
       let avgWaitTime: number | undefined;
 
       if (waits.length > 0) {
+        // P90 of predicted waits — matches the peak-vs-peak crowd metric
+        // (and the existing peakLoad in calendar). For small N (typically
+        // <10 headliners), index Math.floor(n*0.9) gives an effective P90.
         const sorted = [...waits].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        const median =
-          sorted.length % 2 === 0
-            ? (sorted[mid - 1] + sorted[mid]) / 2
-            : sorted[mid];
+        const p90Idx = Math.min(
+          sorted.length - 1,
+          Math.floor(sorted.length * 0.9),
+        );
+        const predictedPeak = sorted[p90Idx];
 
         avgWaitTime = Math.round(
           waits.reduce((s, w) => s + w, 0) / waits.length,
         );
 
         const pct =
-          p50Baseline > 0 ? Math.round((median / p50Baseline) * 100) : 100;
+          baselineForCrowd > 0
+            ? Math.round((predictedPeak / baselineForCrowd) * 100)
+            : 100;
         crowdLevel = this.analyticsService.determineCrowdLevel(pct);
       } else {
         crowdLevel = "moderate";

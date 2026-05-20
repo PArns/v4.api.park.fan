@@ -21,7 +21,6 @@ import { PredictionGeneratorProcessor } from "./processors/prediction-generator.
 import { ParkEnrichmentProcessor } from "./processors/park-enrichment.processor";
 import { EntityMappingsProcessor } from "./processors/entity-mappings.processor";
 import { QueuePercentileProcessor } from "./processors/queue-percentile.processor";
-import { OccupancyCalculationProcessor } from "./processors/occupancy-calculation.processor";
 import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.processor";
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
@@ -110,7 +109,6 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
       { name: "attractions-metadata" }, // DEPRECATED: Use children-metadata instead
       { name: "shows-metadata" }, // DEPRECATED: Use children-metadata instead
       { name: "restaurants-metadata" }, // DEPRECATED: Use children-metadata instead
-      { name: "occupancy-calculation" },
       { name: "weather" },
       { name: "weather-historical" },
       { name: "holidays" },
@@ -169,7 +167,6 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
     PredictionGeneratorProcessor,
     ParkEnrichmentProcessor,
     QueuePercentileProcessor,
-    OccupancyCalculationProcessor,
     WartezeitenScheduleProcessor,
     MLMonitoringProcessor,
     StatsProcessor,

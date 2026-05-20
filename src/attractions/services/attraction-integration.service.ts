@@ -313,28 +313,29 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          let p50Baseline =
-            await this.analyticsService.getAttractionP50BaselineFromCache(
+          // Prefer P90 baseline (peak-vs-peak crowd reading) and fall back
+          // to P50 for entities that don't have a P90 row yet. No live
+          // 548-day PERCENTILE_CONT fallback — that was the dominant cost
+          // on attraction-detail cache misses.
+          let baseline =
+            await this.analyticsService.getAttractionP90BaselineFromCache(
               attraction.id,
             );
-          if (p50Baseline === 0) {
-            const percentiles =
-              await this.analyticsService.get90thPercentileWithConfidence(
+          if (baseline === 0) {
+            baseline =
+              await this.analyticsService.getAttractionP50BaselineFromCache(
                 attraction.id,
-                "attraction",
-                park?.timezone,
               );
-            p50Baseline = percentiles.p50 || percentiles.p90;
           }
 
           crowdLevel =
-            this.analyticsService.getAttractionCrowdLevel(wait, p50Baseline) ||
+            this.analyticsService.getAttractionCrowdLevel(wait, baseline) ||
             "moderate";
 
-          if (p50Baseline > 0) {
+          if (baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
               wait,
-              p50Baseline,
+              baseline,
             );
             dto.baseline = loadRating.baseline;
             dto.comparison = this.analyticsService.getComparisonText(

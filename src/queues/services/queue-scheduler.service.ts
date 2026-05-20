@@ -18,7 +18,6 @@ import { Queue } from "bull";
  * - ml-predictions: Every 15 minutes (fresh crowd/wait predictions)
  * - ml-training: Daily at 6am (retrain model with new data)
  * - prediction-accuracy: Every hour (compare predictions with actuals)
- * - occupancy-calculation: Every 15 minutes (placeholder for Phase 5)
  * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
  */
 @Injectable()
@@ -32,7 +31,6 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("attractions-metadata") private attractionsQueue: Queue, // DEPRECATED
     @InjectQueue("shows-metadata") private showsQueue: Queue, // DEPRECATED
     @InjectQueue("restaurants-metadata") private restaurantsQueue: Queue, // DEPRECATED
-    @InjectQueue("occupancy-calculation") private occupancyQueue: Queue,
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("weather-historical")
     private weatherHistoricalQueue: Queue,

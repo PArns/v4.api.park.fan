@@ -17,6 +17,8 @@ import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
 import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
+import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
+import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("Smart Crowd Level Logic", () => {
@@ -109,6 +111,19 @@ describe("Smart Crowd Level Logic", () => {
           useValue: { findOne: jest.fn().mockResolvedValue(null) },
         },
         {
+          provide: getRepositoryToken(ParkP90Baseline),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ p90Baseline: 50 }),
+          },
+        },
+        {
+          provide: getRepositoryToken(AttractionP90Baseline),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            find: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
           provide: REDIS_CLIENT,
           useValue: {
             get: jest.fn(),
@@ -137,60 +152,61 @@ describe("Smart Crowd Level Logic", () => {
     // Mock getDailyAverageWaitTime to return 20
     (service as any).getDailyAverageWaitTime = jest.fn().mockResolvedValue(20);
 
-    // Mock getBatchAttractionP90s
-    service.getBatchAttractionP90s = jest
+    // Mock getBatchAttractionP90Baselines (cache-backed; replaces the old
+    // live-aggregation getBatchAttractionP90s).
+    service.getBatchAttractionP90Baselines = jest
       .fn()
       .mockImplementation(async (ids) => {
         const map = new Map();
-        ids.forEach((id: string) => map.set(id, 60)); // Default P90 = 60 mins
+        ids.forEach((id: string) => map.set(id, 60));
         return map;
       });
+
+    // Park-level baseline lookups: P90 first (50), P50 fallback (30).
+    // calculateParkOccupancy now reads P90 then P50.
+    service.getP90BaselineFromCache = jest.fn().mockResolvedValue(50);
+    service.getP50BaselineFromCache = jest.fn().mockResolvedValue(30);
 
     // Mock detectTrend
     (service as any).detectTrend = jest.fn().mockResolvedValue("stable");
   });
 
   it("should calculate Smart Occupancy using only rides >= 10m when available", async () => {
-    // Setup: 2 rides >= 10m, 2 rides < 10m
+    // Setup: 2 headliners report a recent MAX wait (peak in last 60 min).
+    // getCurrentParkPeakWait returns rows shaped { attractionId, peak_wait }.
     const mockData = [
-      { attractionId: "ride1", avg_wait: 45 }, // >= 10
-      { attractionId: "ride2", avg_wait: 30 }, // >= 10
+      { attractionId: "ride1", peak_wait: 60 },
+      { attractionId: "ride2", peak_wait: 40 },
     ];
 
-    queueDataRepo.query.mockResolvedValueOnce(mockData); // for getCurrentSpotWaitTime
-    queueDataRepo.query.mockResolvedValueOnce([]); // for trends bucket 1
-    queueDataRepo.query.mockResolvedValueOnce([]); // for trends bucket 2
+    queueDataRepo.query.mockResolvedValueOnce(mockData); // getCurrentParkPeakWait
+    queueDataRepo.query.mockResolvedValueOnce([]); // trends bucket 1
+    queueDataRepo.query.mockResolvedValueOnce([]); // trends bucket 2
 
     const result = await service.calculateParkOccupancy("park1");
 
-    // Expectation:
-    // Only ride1 and ride2 used.
-    // Sum Current: 45 + 30 = 75. Avg = 37.5. Round(37.5) = 38.
-    // Baseline is mocked at 30
-    // Occupancy: (38 / 30) * 100 = 126.66... -> 127%
-
-    expect(result.current).toBe(127);
+    // Park-peak avg = (60 + 40) / 2 = 50.
+    // P90 baseline mocked at 50.
+    // Occupancy = (50 / 50) * 100 = 100 (= a typical day's peak).
+    expect(result.current).toBe(100);
   });
 
   it("should validly fallback to ALL rides if none are >= 10m", async () => {
-    // Setup: All rides < 10m
     const mockDataFallback = [
-      { attractionId: "ride3", avg_wait: 5 },
-      { attractionId: "ride4", avg_wait: 5 },
+      { attractionId: "ride3", peak_wait: 5 },
+      { attractionId: "ride4", peak_wait: 5 },
     ];
 
     queueDataRepo.query
-      .mockResolvedValueOnce([]) // 1st call: getCurrentSpotWaitTime with threshold 10
-      .mockResolvedValueOnce(mockDataFallback) // 2nd call: getCurrentSpotWaitTime fallback with threshold 0
-      .mockResolvedValue([]); // 3rd+ calls: trends bucket 1, bucket 2, active count...
+      .mockResolvedValueOnce([]) // 1st call: peak query with threshold 10
+      .mockResolvedValueOnce(mockDataFallback) // 2nd: threshold=0 retry
+      .mockResolvedValue([]); // trends + active count
 
     const result = await service.calculateParkOccupancy("park1");
 
-    // Expectation:
-    // Fallback used. Avg wait = 5. Baseline = 30.
-    // Occupancy: (5 / 30) * 100 = 16.66% -> 17%
-
-    expect(result.current).toBe(17);
+    // Avg peak = 5. P90 baseline = 50.
+    // Occupancy = (5 / 50) * 100 = 10%.
+    expect(result.current).toBe(10);
   });
 
   it("should explicitly filter STANDBY queues in the query", async () => {

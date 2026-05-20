@@ -427,32 +427,38 @@ export class MLService {
         liveStatus,
       );
 
-      // 4b. Fetch P50 baseline for crowd level calculation
-      // This ensures TypeScript and Python ML service produce identical crowd levels
+      // 4b. Fetch both P50 (median / "typical avg") and P90 (peak)
+      // baselines so the Python ML service can align its crowd-level
+      // computation with whichever metric the caller needs. The API now
+      // emits peak-vs-peak crowd readings by default but P50 stays
+      // available for avg-shaped consumers and as a fallback when P90
+      // hasn't been computed yet.
       let p50Baseline: number | undefined;
+      let p90Baseline: number | undefined;
       try {
-        p50Baseline =
-          await this.analyticsService.getP50BaselineFromCache(parkId);
-        if (p50Baseline === 0) {
-          p50Baseline = undefined; // Let Python fallback to rolling_avg_7d
-        }
+        const [p50, p90] = await Promise.all([
+          this.analyticsService.getP50BaselineFromCache(parkId),
+          this.analyticsService.getP90BaselineFromCache(parkId),
+        ]);
+        p50Baseline = p50 || undefined;
+        p90Baseline = p90 || undefined;
       } catch (error) {
         this.logger.warn(
-          `Failed to fetch P50 baseline for park ${parkId}: ${error}`,
+          `Failed to fetch baselines for park ${parkId}: ${error}`,
         );
-        p50Baseline = undefined; // Graceful degradation
       }
 
       // 5. Call ML Service via POST (Bulk Prediction)
       const payload: PredictionRequestDto = {
         attractionIds: activeAttractionIds,
-        parkIds: activeAttractionIds.map(() => parkId), // Same length as activeAttractionIds
+        parkIds: activeAttractionIds.map(() => parkId),
         predictionType,
-        weatherForecast, // Empty array if failed or no coords
+        weatherForecast,
         currentWaitTimes,
-        recentWaitTimes, // ~30 mins ago
-        featureContext, // Phase 2: Real-time context features
-        p50Baseline, // NEW: P50 baseline for crowd level alignment
+        recentWaitTimes,
+        featureContext,
+        p50Baseline,
+        p90Baseline,
       };
 
       const response = await this.mlClient.post<BulkPredictionResponseDto>(

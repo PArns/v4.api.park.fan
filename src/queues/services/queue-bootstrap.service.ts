@@ -35,7 +35,6 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("attractions-metadata") private attractionsQueue: Queue, // DEPRECATED
     @InjectQueue("shows-metadata") private showsQueue: Queue, // DEPRECATED
     @InjectQueue("restaurants-metadata") private restaurantsQueue: Queue, // DEPRECATED
-    @InjectQueue("occupancy-calculation") private occupancyQueue: Queue,
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
@@ -201,32 +200,9 @@ export class QueueBootstrapService implements OnModuleInit {
         },
       );
 
-      // Trigger P90 sliding window pre-aggregation
-      // This pre-computes P90 values for all parks and attractions
-      // Benefits: Faster crowd level calculations, reduced Redis cache misses
-      const p90JobActive = await this.isJobActiveOrWaiting(
-        this.occupancyQueue,
-        "precompute-p90-sliding-window",
-      );
-
-      if (!p90JobActive) {
-        await this.occupancyQueue.add(
-          "precompute-p90-sliding-window",
-          {},
-          {
-            priority: 3,
-            jobId: "bootstrap-p90-precompute",
-            removeOnComplete: true,
-          },
-        );
-        this.logger.log(
-          "✅ Boot: P90/P50 sliding window pre-aggregation queued",
-        );
-      } else {
-        this.logger.debug(
-          "⏭️  Boot: P90 pre-aggregation already running, skipping",
-        );
-      }
+      // P90 pre-aggregation removed — the daily P50 baseline cron now
+      // computes P90 alongside P50 (single 548-day scan), so the
+      // occupancy-calculation precompute job was pure duplicate work.
     } catch (e) {
       this.logger.warn(`Failed to trigger ML/analytics jobs: ${e}`);
     }
@@ -349,7 +325,6 @@ export class QueueBootstrapService implements OnModuleInit {
       { name: "wait-times", queue: this.waitTimesQueue },
       { name: "park-metadata", queue: this.parkMetadataQueue },
       { name: "children-metadata", queue: this.childrenQueue }, // Phase 6.2: Combined
-      { name: "occupancy-calculation", queue: this.occupancyQueue },
       { name: "weather", queue: this.weatherQueue },
       { name: "holidays", queue: this.holidaysQueue },
       { name: "ml-training", queue: this.mlTrainingQueue },

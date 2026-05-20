@@ -175,15 +175,16 @@ export class LocationService {
 
     const attractionIds = attractions.map((a) => a.id);
 
-    // Batch: fetch all independent data in parallel. P90 lookup removed —
-    // it ran a 548-day PERCENTILE_CONT for every attraction even though the
-    // P50 baseline is sufficient for the crowd-level calculation below.
+    // P90 baselines (cache-backed; daily-cron populated) drive the
+    // peak-vs-peak crowd reading. P50 is fetched alongside as a fallback
+    // for attractions that don't have a P90 row yet.
     const [
       statusMap,
       startTime,
       todaySchedule,
       nextSchedule,
       latestQueueData,
+      p90Baselines,
       p50Baselines,
       analyticsMap,
       parkHasOperatingSchedule,
@@ -193,6 +194,7 @@ export class LocationService {
       this.parksService.getTodaySchedule(parkId).catch(() => []),
       this.parksService.getNextSchedule(parkId).catch(() => null),
       this.getLatestQueueData(attractionIds),
+      this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
       this.analyticsService.getBatchAttractionP50s(attractionIds),
       this.analyticsService.getBatchAttractionPercentilesToday(attractionIds),
       this.parksService.hasOperatingSchedule(parkId),
@@ -233,7 +235,8 @@ export class LocationService {
           waitTime !== undefined &&
           queueData?.status === "OPERATING"
         ) {
-          const baseline = p50Baselines.get(attraction.id);
+          const baseline =
+            p90Baselines.get(attraction.id) || p50Baselines.get(attraction.id);
           if (baseline && baseline > 0) {
             crowdLevel = this.analyticsService.getAttractionCrowdLevel(
               waitTime,

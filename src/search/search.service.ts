@@ -900,14 +900,19 @@ export class SearchService implements OnModuleInit {
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
+    let p90Map = new Map<string, number>();
 
     if (operatingAttractionIds.length > 0) {
-      const [queueDataMap, p50s] = await Promise.all([
+      const [queueDataMap, p90s, p50s] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(
+          operatingAttractionIds,
+        ),
+        this.analyticsService.getBatchAttractionP90Baselines(
           operatingAttractionIds,
         ),
         this.analyticsService.getBatchAttractionP50s(operatingAttractionIds),
       ]);
+      p90Map = p90s;
 
       for (const [attractionId, queueDataList] of queueDataMap.entries()) {
         if (queueDataList.length === 0) continue;
@@ -943,9 +948,13 @@ export class SearchService implements OnModuleInit {
         ? waitTimesMap.get(attraction.id) || null
         : null;
 
-      // P50 only (pre-baked baseline). P90 fallback is omitted on the search
-      // path for latency reasons — missing P50 falls through to "moderate".
-      const baseline = isParkOpen ? p50Map.get(attraction.id) : undefined;
+      // P90 (peak baseline) drives the crowd reading — peak-vs-peak so the
+      // search list matches what users see on detail pages. P50 acts as a
+      // fallback for attractions whose P90 row hasn't been computed yet;
+      // beyond that we fall through to "moderate".
+      const baseline = isParkOpen
+        ? p90Map.get(attraction.id) || p50Map.get(attraction.id)
+        : undefined;
 
       const load = isParkOpen
         ? this.getCrowdLevelForSearch(waitTime ?? undefined, baseline)
