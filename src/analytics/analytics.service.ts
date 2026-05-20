@@ -20,6 +20,8 @@ import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { HeadlinerAttraction } from "./entities/headliner-attraction.entity";
 import { ParkP50Baseline } from "./entities/park-p50-baseline.entity";
 import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity";
+import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
+import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -103,6 +105,10 @@ export class AnalyticsService {
     private parkP50BaselineRepository: Repository<ParkP50Baseline>,
     @InjectRepository(AttractionP50Baseline)
     private attractionP50BaselineRepository: Repository<AttractionP50Baseline>,
+    @InjectRepository(ParkP90Baseline)
+    private parkP90BaselineRepository: Repository<ParkP90Baseline>,
+    @InjectRepository(AttractionP90Baseline)
+    private attractionP90BaselineRepository: Repository<AttractionP90Baseline>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -4262,6 +4268,7 @@ export class AnalyticsService {
     headliners: HeadlinerAttraction[],
   ): Promise<{
     p50: number;
+    p90: number;
     sampleCount: number;
     distinctDays: number;
     confidence: "high" | "medium" | "low";
@@ -4270,6 +4277,7 @@ export class AnalyticsService {
     if (headliners.length === 0) {
       return {
         p50: 0,
+        p90: 0,
         sampleCount: 0,
         distinctDays: 0,
         confidence: "low",
@@ -4294,6 +4302,24 @@ export class AnalyticsService {
               100,
           ) / 100
         : 0;
+
+    // P90 uses the same per-headliner-average approach. headliner_attractions
+    // already has p90Wait548d populated alongside p50Wait548d so this is free.
+    const validP90Headliners = headliners.filter(
+      (h) => Number(h.p90Wait548d) > 0,
+    );
+    const p90 =
+      validP90Headliners.length > 0
+        ? Math.round(
+            (validP90Headliners.reduce(
+              (sum, h) => sum + Number(h.p90Wait548d),
+              0,
+            ) /
+              validP90Headliners.length) *
+              100,
+          ) / 100
+        : 0;
+
     const sampleCount = validHeadliners.reduce(
       (sum, h) => sum + (h.sampleCount || 0),
       0,
@@ -4318,11 +4344,12 @@ export class AnalyticsService {
       "tier3";
 
     this.logger.log(
-      `Calculated P50 baseline for park ${parkId}: ${p50}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
+      `Calculated P50/P90 baselines for park ${parkId}: P50=${p50}min P90=${p90}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
     );
 
     return {
       p50,
+      p90,
       sampleCount,
       distinctDays,
       confidence,
@@ -4341,6 +4368,7 @@ export class AnalyticsService {
     parkId: string,
     baseline: {
       p50: number;
+      p90: number;
       sampleCount: number;
       distinctDays: number;
       confidence: "high" | "medium" | "low";
@@ -4352,7 +4380,6 @@ export class AnalyticsService {
     await this.headlinerAttractionRepository.delete({ parkId });
     await this.headlinerAttractionRepository.save(headliners);
 
-    // Save park P50 baseline
     // Save park P50 baseline (Upsert to prevent duplicate key errors)
     await this.parkP50BaselineRepository.upsert(
       {
@@ -4368,6 +4395,25 @@ export class AnalyticsService {
       ["parkId"], // Conflict path
     );
 
+    // Save park P90 baseline alongside (only when we actually have one to
+    // store — otherwise leave the row absent so callers fall back to "no
+    // peak baseline" rather than treating 0 as a real value).
+    if (baseline.p90 > 0) {
+      await this.parkP90BaselineRepository.upsert(
+        {
+          parkId,
+          p90Baseline: baseline.p90,
+          headlinerCount: headliners.length,
+          tier: baseline.tier,
+          sampleCount: baseline.sampleCount,
+          distinctDays: baseline.distinctDays,
+          confidence: baseline.confidence,
+          calculatedAt: new Date(),
+        },
+        ["parkId"],
+      );
+    }
+
     // Cache in Redis (24h TTL). We store JSON so callers that care about
     // confidence (calculateParkOccupancy) can read it without an extra DB
     // hop. The plain-number reader (getP50BaselineFromCache) understands
@@ -4380,8 +4426,17 @@ export class AnalyticsService {
       86400,
     );
 
+    if (baseline.p90 > 0) {
+      await this.redis.set(
+        `park:p90:${parkId}`,
+        JSON.stringify({ p90: baseline.p90, confidence: baseline.confidence }),
+        "EX",
+        86400,
+      );
+    }
+
     this.logger.log(
-      `Saved P50 baseline for park ${parkId}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier})`,
+      `Saved P50/P90 baselines for park ${parkId}: P50=${baseline.p50}min P90=${baseline.p90}min (${headliners.length} headliners, tier: ${baseline.tier})`,
     );
   }
 
@@ -4575,6 +4630,7 @@ export class AnalyticsService {
    */
   async calculateAttractionP50(attractionId: string): Promise<{
     p50: number;
+    p90: number;
     sampleCount: number;
     distinctDays: number;
     confidence: "high" | "medium" | "low";
@@ -4592,6 +4648,7 @@ export class AnalyticsService {
     if (!attraction) {
       return {
         p50: 0,
+        p90: 0,
         sampleCount: 0,
         distinctDays: 0,
         confidence: "low",
@@ -4607,11 +4664,14 @@ export class AnalyticsService {
     const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
     const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
 
-    // Query P50 for this attraction
+    // Query both percentiles in the same 548-day scan. PostgreSQL computes
+    // PERCENTILE_CONT(0.5) and PERCENTILE_CONT(0.9) in a single sort, so
+    // adding P90 here is essentially free vs. the prior P50-only query.
     const result = await this.queueDataRepository.query(
       `
       SELECT
         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p50,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime")::numeric, 2) as p90,
         COUNT(*) as sample_count,
         COUNT(DISTINCT DATE(qd.timestamp AT TIME ZONE $2)) as distinct_days
       FROM queue_data qd
@@ -4631,6 +4691,7 @@ export class AnalyticsService {
     );
 
     const p50 = result[0]?.p50 ? parseFloat(result[0].p50) : 0;
+    const p90 = result[0]?.p90 ? parseFloat(result[0].p90) : 0;
     const sampleCount = result[0]?.sample_count
       ? parseInt(result[0].sample_count, 10)
       : 0;
@@ -4652,11 +4713,12 @@ export class AnalyticsService {
     });
 
     this.logger.log(
-      `Calculated P50 baseline for attraction ${attractionId}: ${p50}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, headliner: ${!!headliner})`,
+      `Calculated P50/P90 baselines for attraction ${attractionId}: P50=${p50}min P90=${p90}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, headliner: ${!!headliner})`,
     );
 
     return {
       p50,
+      p90,
       sampleCount,
       distinctDays,
       confidence,
@@ -4676,13 +4738,14 @@ export class AnalyticsService {
     parkId: string,
     baseline: {
       p50: number;
+      p90: number;
       sampleCount: number;
       distinctDays: number;
       confidence: "high" | "medium" | "low";
       isHeadliner: boolean;
     },
   ): Promise<void> {
-    // Save to database
+    // Save P50 row
     await this.attractionP50BaselineRepository.save({
       attractionId,
       parkId,
@@ -4694,12 +4757,153 @@ export class AnalyticsService {
       calculatedAt: new Date(),
     });
 
+    // Save P90 row alongside (only when we have a real P90 value). A
+    // missing row signals "no peak baseline yet" so callers know to
+    // degrade gracefully rather than treat 0 as "peak = 0min".
+    if (baseline.p90 > 0) {
+      await this.attractionP90BaselineRepository.save({
+        attractionId,
+        parkId,
+        p90Baseline: baseline.p90,
+        isHeadliner: baseline.isHeadliner,
+        sampleCount: baseline.sampleCount,
+        distinctDays: baseline.distinctDays,
+        confidence: baseline.confidence,
+        calculatedAt: new Date(),
+      });
+    }
+
     // Cache in Redis (24h TTL)
-    const cacheKey = `attraction:p50:${attractionId}`;
-    await this.redis.set(cacheKey, baseline.p50.toString(), "EX", 86400);
+    await this.redis.set(
+      `attraction:p50:${attractionId}`,
+      baseline.p50.toString(),
+      "EX",
+      86400,
+    );
+    if (baseline.p90 > 0) {
+      await this.redis.set(
+        `attraction:p90:${attractionId}`,
+        baseline.p90.toString(),
+        "EX",
+        86400,
+      );
+    }
 
     this.logger.log(
-      `Saved P50 baseline for attraction ${attractionId}: ${baseline.p50}min`,
+      `Saved P50/P90 baselines for attraction ${attractionId}: P50=${baseline.p50}min P90=${baseline.p90}min`,
     );
+  }
+
+  /**
+   * Park P90 baseline read API — mirrors getP50BaselineFromCache. Returns
+   * 0 when no baseline exists yet (e.g. brand-new park before the next
+   * cron run); callers must treat that as "no peak baseline" rather than
+   * a real value.
+   */
+  async getP90BaselineFromCache(parkId: string): Promise<number> {
+    const cacheKey = `park:p90:${parkId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      if (cached.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(cached) as { p90: number };
+          if (parsed.p90 > 0) return parsed.p90;
+        } catch {
+          // fall through to DB
+        }
+      } else {
+        const v = parseFloat(cached);
+        if (v > 0) return v;
+      }
+    }
+
+    const row = await this.parkP90BaselineRepository.findOne({
+      where: { parkId },
+    });
+    if (!row) return 0;
+
+    const value = parseFloat(row.p90Baseline.toString());
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify({ p90: value, confidence: row.confidence }),
+      "EX",
+      86400,
+    );
+    return value;
+  }
+
+  /**
+   * Per-attraction P90 baseline read API. Cache-first, falls back to DB
+   * and re-populates the cache. Returns 0 when no baseline exists.
+   */
+  async getAttractionP90BaselineFromCache(
+    attractionId: string,
+  ): Promise<number> {
+    const cacheKey = `attraction:p90:${attractionId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      const v = parseFloat(cached);
+      if (v > 0) return v;
+    }
+
+    const row = await this.attractionP90BaselineRepository.findOne({
+      where: { attractionId },
+    });
+    if (!row) return 0;
+
+    const value = parseFloat(row.p90Baseline.toString());
+    await this.redis.set(cacheKey, value.toString(), "EX", 86400);
+    return value;
+  }
+
+  /**
+   * Batch lookup for attraction P90 baselines. Uses Redis MGET first,
+   * then hydrates missing entries from the DB and writes them back to
+   * the cache. Replaces the old getBatchAttractionP90s which ran a
+   * 548-day PERCENTILE_CONT live for the whole batch on every call.
+   */
+  async getBatchAttractionP90Baselines(
+    attractionIds: string[],
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (attractionIds.length === 0) return result;
+
+    const keys = attractionIds.map((id) => `attraction:p90:${id}`);
+    const cached = await this.redis.mget(...keys);
+
+    const missing: string[] = [];
+    for (let i = 0; i < attractionIds.length; i++) {
+      const raw = cached[i];
+      if (raw) {
+        const v = parseFloat(raw);
+        if (v > 0) {
+          result.set(attractionIds[i], v);
+          continue;
+        }
+      }
+      missing.push(attractionIds[i]);
+    }
+
+    if (missing.length > 0) {
+      const rows = await this.attractionP90BaselineRepository.find({
+        where: { attractionId: In(missing) },
+      });
+      const pipeline = this.redis.pipeline();
+      for (const row of rows) {
+        const value = parseFloat(row.p90Baseline.toString());
+        if (value > 0) {
+          result.set(row.attractionId, value);
+          pipeline.set(
+            `attraction:p90:${row.attractionId}`,
+            value.toString(),
+            "EX",
+            86400,
+          );
+        }
+      }
+      await pipeline.exec();
+    }
+
+    return result;
   }
 }
