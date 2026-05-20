@@ -313,17 +313,18 @@ export class AttractionIntegrationService {
       const wait = dto.queues?.[0]?.waitTime;
       if (wait !== undefined && wait !== null) {
         try {
-          // Prefer P90 baseline (peak-vs-peak crowd reading) and fall back
-          // to P50 for entities that don't have a P90 row yet. No live
-          // 548-day PERCENTILE_CONT fallback — that was the dominant cost
-          // on attraction-detail cache misses.
+          // Prefer P50 baseline (median, "typical wait") and fall back to
+          // P90 only for entities without a P50 row yet. Peak-vs-median
+          // ratio: 100% = current wait matches typical, >150% = busier
+          // than typical. No live 548-day PERCENTILE_CONT fallback — that
+          // was the dominant cost on attraction-detail cache misses.
           let baseline =
-            await this.analyticsService.getAttractionP90BaselineFromCache(
+            await this.analyticsService.getAttractionP50BaselineFromCache(
               attraction.id,
             );
           if (baseline === 0) {
             baseline =
-              await this.analyticsService.getAttractionP50BaselineFromCache(
+              await this.analyticsService.getAttractionP90BaselineFromCache(
                 attraction.id,
               );
           }
@@ -766,14 +767,19 @@ export class AttractionIntegrationService {
         if (downCount > 0) downCountMap.set(todayStr, downCount);
       }
 
-      // Peak baseline (P90) for utilization — matches the peak-vs-peak
-      // crowd level semantic used everywhere else. P50 is read once as a
-      // fallback for attractions without a populated P90 row.
-      const [attractionP90Baseline, attractionP50Baseline] = await Promise.all([
-        this.analyticsService.getAttractionP90BaselineFromCache(attractionId),
+      // Median baseline (P50) for utilization — typical-day reference.
+      // Per-day reading is the day's MAX hourly P90 (the day's actual peak),
+      // so the ratio reads as "today's peak vs typical median" — a
+      // peak-vs-median scale that calibrates against the existing threshold
+      // ladder (100% = matches typical median, 150%+ = elevated, 200%+ =
+      // extreme). Replaces the previous P90-baseline + weighted-avg-of-
+      // hourly-P90s combo, which was avg-vs-peak and underreported
+      // (everything looked "low") for ordinary days.
+      const [attractionP50Baseline, attractionP90Baseline] = await Promise.all([
         this.analyticsService.getAttractionP50BaselineFromCache(attractionId),
+        this.analyticsService.getAttractionP90BaselineFromCache(attractionId),
       ]);
-      const attractionBaseline = attractionP90Baseline || attractionP50Baseline;
+      const attractionBaseline = attractionP50Baseline || attractionP90Baseline;
 
       // Build history entries for each day
       const history: HistoryDayDto[] = [];
@@ -792,53 +798,10 @@ export class AttractionIntegrationService {
         if (dayQueueData.length > 0) {
           const downCount = downCountMap.get(dateStr) || 0;
 
-          // Daily utilization = peak-vs-peak: weighted avg of hourly P90s
-          // (the day's peak experience) compared against the attraction's
-          // 548-day P90 baseline. P50 fallback only kicks in when the P90
-          // baseline row isn't populated yet.
-          let utilization: CrowdLevel | "closed" = "closed";
-          if (dayQueueData.length > 0) {
-            const totalSamples = dayQueueData.reduce(
-              (sum, h) => sum + h.sampleCount,
-              0,
-            );
-            const dayPeakWait =
-              totalSamples > 0
-                ? dayQueueData.reduce(
-                    (sum, h) => sum + h.p90 * h.sampleCount,
-                    0,
-                  ) / totalSamples
-                : dayQueueData.reduce((sum, h) => sum + h.p90, 0) /
-                  dayQueueData.length;
-
-            if (attractionBaseline > 0) {
-              utilization = this.analyticsService.getAttractionCrowdLevel(
-                dayPeakWait,
-                attractionBaseline,
-              ) as CrowdLevel;
-            } else {
-              utilization = "closed";
-            }
-          }
-
-          // Build hourly P90 array (only for hours within operating hours)
-          const hourlyP90: Array<{ hour: string; value: number }> = [];
-          const hourDataMap = new Map<
-            string,
-            { p90: number; avgWait: number; sampleCount: number }
-          >();
-
-          // Create map of existing hour data
-          for (const hourData of dayQueueData) {
-            hourDataMap.set(hourData.time_slot, {
-              p90: hourData.p90,
-              avgWait: hourData.avgWait,
-              sampleCount: hourData.sampleCount,
-            });
-          }
-
-          // Extract opening and closing hours from schedule if available
-          // Round times to nearest 5 minutes (0, 5, 10, 15, 20, etc.)
+          // Extract opening and closing hours from schedule if available.
+          // Done up-front so the same operating-hours filter applies both
+          // to the daily utilization (peak-vs-median ratio) and the
+          // hourly chart array below.
           let openingTimeSlot: string | null = null;
           let closingTimeSlot: string | null = null;
           let openingHourVal: number | null = null;
@@ -870,6 +833,53 @@ export class AttractionIntegrationService {
             }
             closingTimeSlot = `${finalCH.toString().padStart(2, "0")}:${finalCM.toString().padStart(2, "0")}`;
             closingHourVal = finalCH;
+          }
+
+          // Slots within operating hours (drops off-hour outlier samples
+          // that would otherwise distort the day's peak statistic).
+          const inHoursSlots = dayQueueData.filter((h) => {
+            if (openingTimeSlot && h.time_slot < openingTimeSlot) return false;
+            if (closingTimeSlot && h.time_slot > closingTimeSlot) return false;
+            return true;
+          });
+
+          // Daily utilization = peak-vs-median: P90 of in-hours slot P90s
+          // (the day's representative peak hour, robust against a single
+          // outlier slot) ÷ attraction P50 baseline. Reads as "how did
+          // today's peak compare to a typical wait" — a busy day's peak
+          // hits >150% (threshold "high"+); a quiet day sits around
+          // 60-90% ("very_low" / "low").
+          let utilization: CrowdLevel | "closed" = "closed";
+          if (inHoursSlots.length > 0 && attractionBaseline > 0) {
+            const p90Values = inHoursSlots
+              .map((h) => h.p90)
+              .sort((a, b) => a - b);
+            const idx = (p90Values.length - 1) * 0.9;
+            const lo = Math.floor(idx);
+            const hi = Math.ceil(idx);
+            const dayPeakWait =
+              p90Values[lo] * (1 - (idx - lo)) + p90Values[hi] * (idx - lo);
+
+            utilization = this.analyticsService.getAttractionCrowdLevel(
+              dayPeakWait,
+              attractionBaseline,
+            ) as CrowdLevel;
+          }
+
+          // Build hourly P90 array (only for hours within operating hours)
+          const hourlyP90: Array<{ hour: string; value: number }> = [];
+          const hourDataMap = new Map<
+            string,
+            { p90: number; avgWait: number; sampleCount: number }
+          >();
+
+          // Create map of existing hour data
+          for (const hourData of dayQueueData) {
+            hourDataMap.set(hourData.time_slot, {
+              p90: hourData.p90,
+              avgWait: hourData.avgWait,
+              sampleCount: hourData.sampleCount,
+            });
           }
 
           // Add all existing hour data

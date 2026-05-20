@@ -28,7 +28,7 @@
 - [Weather](docs/architecture/weather.md) - Open-Meteo sync (16-day forecast), park timezone handling, why parks may have empty weather (missing coordinates).
 
 ### 📊 Analytics & Logic
-- [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md) - The core logic for crowd calculations.
+- [Crowd Levels](docs/analytics/crowd-levels.md) - The core logic for crowd calculations.
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
 - [Sparklines](docs/analytics/sparklines.md) - Wait-time history for ride cards: two-layer API (`getBatchAttractionWaitTimeHistory` vs `getAttractionSparklinesBatch`), when to use which, and park-timezone handling.
 - [Data Recalculation & Correction Jobs](docs/analytics/data-recalculation.md) - Manual backfills for stats and baselines.
@@ -99,13 +99,14 @@ ml-service/            # 🐍 Python CatBoost Service
 - `synchronize: true` is ON in development.
 - Entity changes immediately alter the DB schema.
 
-### 3. Unified Crowd Levels (P50 Baseline)
+### 3. Unified Crowd Levels (Peak-vs-Median)
 
-- **Detailed Guide**: [P50 Crowd Levels](docs/analytics/p50-crowd-levels.md)
-- **Baseline**: Static P50 (Median) of **Headliner Attractions** (548-day window); attractions use per-ride P50 from `attraction_p50_baselines`.
-- **Current**: Median wait time of operating attractions (park) or current wait (attraction).
-- **Formula**: `(current / p50) * 100` (100% = Normal Day).
-- **Never** mix P90 with P50 logic.
+- **Detailed Guide**: [Crowd Levels](docs/analytics/crowd-levels.md)
+- **Baseline**: Static P50 (median, "typical wait") of **Headliner Attractions** (548-day window); attractions use per-ride P50 from `attraction_p50_baselines`. P90 baselines exist as a fallback for brand-new entities without a P50 row yet.
+- **Current (live)**: P90-ish wait — per-headliner MAX in last **20 min** averaged across headliners (window auto-expands 20 → 60 → 240 min if no data).
+- **Current (calendar daily)**: **P90 of in-hours slot P90s** for that date from `attraction_hourly_history`.
+- **Formula**: `(current_peak / p50_baseline) * 100` (100% = current peak matches typical wait, >150% = busy day).
+- **Never** mix P90 baseline with P50 logic on the same surface.
 
 ---
 

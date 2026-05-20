@@ -296,7 +296,7 @@ GET /v1/discovery/continents/:continent      # Countries in continent
 }
 ```
 
-> **Note:** `analytics.statistics.crowdLevel` is co-present with `avgWaitTime` whenever the park has a valid P90 baseline (with P50 as fallback). See [P90 Crowd Levels](docs/analytics/p90-crowd-levels.md) for the rating system.
+> **Note:** `analytics.statistics.crowdLevel` is co-present with `avgWaitTime` whenever the park has a valid P90 baseline (with P50 as fallback). See [Crowd Levels](docs/analytics/crowd-levels.md) for the rating system.
 
 ---
 

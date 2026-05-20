@@ -29,7 +29,7 @@ Short guide for frequent problems and how to fix them.
 
 **Fix**: Ensure the API uses `getP90BaselineFromCache(parkId)` for park occupancy (headliner P90 with P50 fallback). No manual fix needed if code is correct; if you see 100% on a quiet day, check that the P50/P90 baseline cron has run (`p50-park-baseline-cron` at 03:00) and `park_p90_baselines` has a sane row for that park.
 
-**See**: [P90 Crowd Levels](../analytics/p90-crowd-levels.md), [Caching Strategy](../architecture/caching-strategy.md).
+**See**: [Crowd Levels](../analytics/crowd-levels.md), [Caching Strategy](../architecture/caching-strategy.md).
 
 ---
 

@@ -110,15 +110,16 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       predictionType: "daily" as const,
     }));
 
-  describe("crowd level math (peak-vs-peak)", () => {
-    it("uses the P90 baseline as the crowd-level denominator when present", async () => {
+  describe("crowd level math (peak-vs-median)", () => {
+    it("uses the P50 baseline as the crowd-level denominator when present", async () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      // P90 baseline = 50; predicted P90 of [30, 50, 70] (sorted) at
-      // index floor(3*0.9)=2 → 70. 70/50 = 140% → "high".
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(50);
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(20);
+      // P50 baseline = 50 (typical median wait); predicted P90 of
+      // [30, 50, 70] (sorted) at index floor(3*0.9)=2 → 70. 70/50 = 140%
+      // → "high" (predicted peak materially above typical median).
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(80);
 
       const predictions = buildPredictions([
         { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 30 },
@@ -129,19 +130,19 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
       expect(day.crowdLevel).toBe("high");
-      // P50 cache call is irrelevant when P90 exists — but it's still
+      // P90 cache call is irrelevant when P50 exists — but it's still
       // read in parallel, no extra round-trip wasted.
       expect(day.date).toBe("2026-06-13");
     });
 
-    it("falls back to the P50 baseline when no P90 row exists yet", async () => {
+    it("falls back to the P90 baseline when no P50 row exists yet", async () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      // P90 = 0 (missing). P50 = 30 → fallback. Predicted P90 = 30 →
+      // P50 = 0 (missing). P90 = 30 → fallback. Predicted P90 = 30 →
       // 30/30 = 100% → "moderate".
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(0);
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(30);
+      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(0);
+      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(30);
 
       const predictions = buildPredictions([
         { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 30 },

@@ -176,10 +176,13 @@ describe("Smart Crowd Level Logic", () => {
         return map;
       });
 
-    // Park-level baseline lookups: P90 first (50), P50 fallback (30).
-    // calculateParkOccupancy now reads P90 then P50.
-    service.getP90BaselineFromCache = jest.fn().mockResolvedValue(50);
-    service.getP50BaselineFromCache = jest.fn().mockResolvedValue(30);
+    // Park-level baseline lookups: P50 first (median, primary), P90 only
+    // as fallback. calculateParkOccupancy reads P50 then P90.
+    service.getP50BaselineFromCache = jest.fn().mockResolvedValue(50);
+    service.getP90BaselineFromCache = jest.fn().mockResolvedValue(70);
+    (service as any).getP50BaselineWithConfidence = jest
+      .fn()
+      .mockResolvedValue({ value: 50, confidence: "high" });
 
     // Mock detectTrend
     (service as any).detectTrend = jest.fn().mockResolvedValue("stable");
@@ -200,8 +203,8 @@ describe("Smart Crowd Level Logic", () => {
     const result = await service.calculateParkOccupancy("park1");
 
     // Park-peak avg = (60 + 40) / 2 = 50.
-    // P90 baseline mocked at 50.
-    // Occupancy = (50 / 50) * 100 = 100 (= a typical day's peak).
+    // P50 baseline mocked at 50 (typical median wait).
+    // Occupancy = (50 / 50) * 100 = 100 (= current peak matches typical).
     expect(result.current).toBe(100);
   });
 
@@ -218,7 +221,7 @@ describe("Smart Crowd Level Logic", () => {
 
     const result = await service.calculateParkOccupancy("park1");
 
-    // Avg peak = 5. P90 baseline = 50.
+    // Avg peak = 5. P50 baseline = 50.
     // Occupancy = (5 / 50) * 100 = 10%.
     expect(result.current).toBe(10);
   });

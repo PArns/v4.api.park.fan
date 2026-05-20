@@ -940,15 +940,15 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
-        // "Typical wait" displayed for closed parks is the peak baseline
-        // (P90) — what a typical day's headliner peak looks like — falling
-        // back to P50 only when no P90 row exists yet. Matches the
-        // peak-vs-peak crowd semantic used by every other surface.
-        let typicalWait = await this.analyticsService.getP90BaselineFromCache(
+        // "Typical wait" displayed for closed parks is the median baseline
+        // (P50) — what a typical headliner wait looks like — falling back
+        // to P90 only when no P50 row exists yet. Matches the
+        // peak-vs-median crowd semantic used by every other surface.
+        let typicalWait = await this.analyticsService.getP50BaselineFromCache(
           park.id,
         );
         if (typicalWait === 0) {
-          typicalWait = await this.analyticsService.getP50BaselineFromCache(
+          typicalWait = await this.analyticsService.getP90BaselineFromCache(
             park.id,
           );
         }
@@ -1206,15 +1206,15 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, p90Baseline, p50Baseline] = await Promise.all([
+    const [headlinerIds, p50Baseline, p90Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractionIds(parkId),
-      this.analyticsService.getP90BaselineFromCache(parkId),
       this.analyticsService.getP50BaselineFromCache(parkId),
+      this.analyticsService.getP90BaselineFromCache(parkId),
     ]);
-    // crowdLevel is peak-vs-peak; the P90 baseline matches the day-of
-    // peak metric the ML stack predicts. P50 stays as fallback for parks
-    // whose P90 row isn't populated yet.
-    const baselineForCrowd = p90Baseline || p50Baseline;
+    // crowdLevel is peak-vs-median; the P50 baseline ("typical wait")
+    // is the reference. P90 stays as fallback for parks whose P50 row
+    // isn't populated yet.
+    const baselineForCrowd = p50Baseline || p90Baseline;
 
     const datesMap = new Map<string, PredictionDto[]>();
 

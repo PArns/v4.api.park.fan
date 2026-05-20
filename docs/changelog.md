@@ -6,7 +6,15 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
-### Changed — Peak-vs-peak crowd level (PR #46)
+### Changed — Peak-vs-median crowd level (corrects PR #46)
+
+- **Crowd-level semantic switched again — now peak-vs-median** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `calendar.service.ts`). Baseline is now **P50** (median, "typical wait") instead of P90; current value is **P90 of a short window** (20 min live, P90-of-slot-P90s for calendar days). The previous P90-vs-P90 design (PR #46) was mathematically apples-to-apples but methodologically off: P90 baseline is "an exceptionally busy day in the last 18 months", so most days landed in "very_low" / "low" because they didn't touch that ceiling. Peak-vs-median reads 100% when the current peak matches a typical wait, 150%+ when the queue is materially above typical — matches user intuition. Threshold ladder is unchanged. See [Crowd Levels](analytics/crowd-levels.md) for the full design.
+- **Live park current value**: window shrunk from 60 min to **20 min** (`getCurrentParkPeakWait`). With 5-min sampling that's ~4 samples per ride, so the MAX-then-avg reads as a recent P90. Window auto-expands to 60 → 240 min only when the 20-min window has no qualifying data (source lag, sparse-reporting ride).
+- **Calendar daily value**: from "weighted avg of hourly P90s" to **P90 of in-hours slot P90s** (`attraction-integration.service.ts`). MAX would be too fragile against single outlier slots; P90 is robust and still represents the day's actual peak hour. Filters slots by the park's opening/closing schedule so off-hours samples don't pollute the reading.
+- **`attraction_hourly_history` backfill expanded** from rolling 7 days to the full data window (2025-12-24 onward). Before the backfill, days without a row were misinterpreted as "Ganztägig geschlossen" by the frontend even when raw `queue_data` had operating samples. The backfill jobs are idempotent and re-runnable per date range.
+- **`p90-crowd-levels.md` → `crowd-levels.md`** (rename + rewrite). The new doc describes the corrected peak-vs-median architecture; the P90 baseline tables and Redis keys are retained as the fallback path.
+
+### Changed — Peak-vs-peak crowd level (PR #46, since corrected)
 
 - **Crowd-level semantic across every user-facing surface switched from P50-vs-P50 (avg vs typical avg) to P90-vs-P90 (peak vs typical peak)** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `location.service.ts`, `search.service.ts`, `calendar.service.ts`, `ml.service.ts`). "How busy was today" is what users remember as the peak headliner experience, not the day's median — apples-to-apples math now matches that intuition. P50 stays available as a fallback for brand-new entities without a P90 row yet (still apples-to-apples, just an avg-vs-avg reading until the next cron). The threshold table (very_low / low / moderate / high / very_high / extreme) is unchanged, so the labels keep their meaning. See [P90 Crowd Levels](analytics/p90-crowd-levels.md) for the full architecture.
 

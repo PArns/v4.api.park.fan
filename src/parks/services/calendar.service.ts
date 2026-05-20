@@ -238,18 +238,18 @@ export class CalendarService {
     );
 
     // Pre-compute predicted crowd levels for future days. Mirrors
-    // calculateCrowdLevelForDate: predicted day-P90 vs. P90 baseline
-    // (peak-vs-peak), falling back to P50 when no P90 row exists yet.
-    const [allHeadliners, p90Baseline, p50Baseline] = await Promise.all([
+    // calculateCrowdLevelForDate: predicted day-peak vs. P50 (median)
+    // baseline, falling back to P90 when no P50 row exists yet.
+    const [allHeadliners, p50Baseline, p90Baseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractions(park.id),
-      this.analyticsService.getP90BaselineFromCache(park.id),
       this.analyticsService.getP50BaselineFromCache(park.id),
+      this.analyticsService.getP90BaselineFromCache(park.id),
     ]);
     const headlinerIdSet = new Set(allHeadliners.map((h) => h.attractionId));
     const predictedCrowdLevels = this.buildPredictedCrowdLevels(
       mlPredictions.predictions,
       headlinerIdSet,
-      p90Baseline || p50Baseline,
+      p50Baseline || p90Baseline,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -938,10 +938,11 @@ export class CalendarService {
 
       if (headliners.length === 0) continue;
 
-      // Predicted day P90 (the peak of headliner-predicted waits) is the
-      // signal we compare to the baseline. crowdLevel and peakLoad are
-      // now both peak-vs-peak — they're effectively the same value here
-      // because there's no separate "average" view of a predicted day.
+      // Predicted day P90 (the peak of headliner-predicted waits) divided
+      // by the P50 baseline (median). Reads as "tomorrow's predicted peak
+      // vs a typical-day wait" — same semantic as the past-day calendar
+      // entries. crowdLevel and peakLoad coincide here (one signal per
+      // predicted day; there's no separate "average" predicted view).
       const waits = headliners.map((p) => p.predictedWaitTime);
       waits.sort((a, b) => a - b);
       const p90Idx = Math.min(waits.length - 1, Math.floor(waits.length * 0.9));

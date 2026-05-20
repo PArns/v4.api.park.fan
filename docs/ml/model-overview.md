@@ -74,7 +74,7 @@ The API switched its user-facing crowd-level metric from P50-vs-P50 (avg vs typi
 - **Crowd level on predictions**: the API forwards **both** `p50Baseline` and `p90Baseline` per request (`PredictionRequestDto`). Python should prefer P90 — P50 is kept for legacy/avg-shaped consumers and for periods where a P90 row hasn't been computed yet.
 - **Models retrain on the new labels at 06:00 daily**. Predictions made between the deploy and the next training cycle will still be on the old (P50-based) labels and recalibrate within ~1 cycle.
 
-See [P90 Crowd Levels](../analytics/p90-crowd-levels.md) §5 for the API-side contract.
+See [Crowd Levels](../analytics/crowd-levels.md) §5 for the API-side contract.
 
 ### Historical Occupancy Profile (DOW×Hour) — Timezone Fix
 

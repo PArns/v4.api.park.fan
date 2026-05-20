@@ -36,7 +36,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
  *   - Thresholds: 100% = moderate (not "high" — sanity check on the
  *     ±10% moderate band).
  */
-describe("AnalyticsService — peak-vs-peak occupancy semantics", () => {
+describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
   let service: AnalyticsService;
 
   const redisStore = new Map<string, string>();
@@ -142,11 +142,20 @@ describe("AnalyticsService — peak-vs-peak occupancy semantics", () => {
     activeCount?: number;
   }) {
     queueDataRepo.query.mockReset();
-    queueDataRepo.query.mockResolvedValueOnce(
-      opts.currentPeak == null
-        ? []
-        : [{ attractionId: "h1", peak_wait: String(opts.currentPeak) }],
-    );
+    if (opts.currentPeak == null) {
+      // No data at any threshold/window expansion — the peak fn recurses
+      // through minWaitTime fallback and window expansion (20 → 60 → 240)
+      // so feed it empty arrays for every retry.
+      queueDataRepo.query
+        .mockResolvedValueOnce([]) // window 20, minWait=10
+        .mockResolvedValueOnce([]) // window 20, minWait=0
+        .mockResolvedValueOnce([]) // window 60, minWait=0
+        .mockResolvedValueOnce([]); // window 240, minWait=0
+    } else {
+      queueDataRepo.query.mockResolvedValueOnce([
+        { attractionId: "h1", peak_wait: String(opts.currentPeak) },
+      ]);
+    }
     queueDataRepo.query.mockResolvedValueOnce([]); // trend bucket 1
     queueDataRepo.query.mockResolvedValueOnce([]); // trend bucket 2
     queueDataRepo.query.mockResolvedValueOnce([
@@ -155,7 +164,7 @@ describe("AnalyticsService — peak-vs-peak occupancy semantics", () => {
   }
 
   describe("calculateParkOccupancy", () => {
-    it("uses the P90 baseline when one exists (peak-vs-peak)", async () => {
+    it("uses the P50 baseline when one exists (peak-vs-median)", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
       // P90 = 50. Current park peak = 50. Should read as 100% — typical day.
       redisStore.set(
@@ -177,7 +186,7 @@ describe("AnalyticsService — peak-vs-peak occupancy semantics", () => {
       expect(result.comparedToTypical).toBe(0);
     });
 
-    it("falls back to P50 when P90 baseline row is missing", async () => {
+    it("falls back to P90 when P50 baseline row is missing", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
       // P90 absent — fallback to P50 = 30. Current peak = 30 → 100%.
       // No `park:p90:p1` cache entry, and the DB returns null.
