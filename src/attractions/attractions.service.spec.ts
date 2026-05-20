@@ -4,6 +4,8 @@ import { Repository } from "typeorm";
 import { AttractionsService } from "./attractions.service";
 import { Attraction } from "./entities/attraction.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
+import { QueueTimesClient } from "../external-apis/queue-times/queue-times.client";
+import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
 import { createTestAttraction } from "../../test/fixtures/attraction.fixtures";
@@ -19,6 +21,7 @@ describe("AttractionsService", () => {
     save: jest.fn(),
     update: jest.fn(),
     count: jest.fn(),
+    findAndCount: jest.fn().mockResolvedValue([[], 0]),
     createQueryBuilder: jest.fn(() => ({
       leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
@@ -55,6 +58,23 @@ describe("AttractionsService", () => {
         {
           provide: ThemeParksClient,
           useValue: mockThemeParksClient,
+        },
+        {
+          provide: QueueTimesClient,
+          useValue: {
+            getParks: jest.fn().mockResolvedValue([]),
+            getParkQueueTimes: jest
+              .fn()
+              .mockResolvedValue({ lands: [], rides: [] }),
+          },
+        },
+        {
+          provide: WartezeitenClient,
+          useValue: {
+            getParks: jest.fn().mockResolvedValue([]),
+            getWaitTimes: jest.fn().mockResolvedValue([]),
+            getOpeningTimes: jest.fn().mockResolvedValue([]),
+          },
         },
         {
           provide: ThemeParksMapper,
@@ -136,27 +156,37 @@ describe("AttractionsService", () => {
   });
 
   describe("findByParkId", () => {
-    it("should return attractions for a given park", async () => {
+    // findByParkId now returns a {data, total} pagination shape via
+    // findAndCount, not a raw array via find().
+    it("should return paginated attractions for a given park", async () => {
       const parkId = "park-123";
       const testAttractions = [
         createTestAttraction(parkId, { name: "Attraction 1" }),
         createTestAttraction(parkId, { name: "Attraction 2" }),
       ];
 
-      mockAttractionRepository.find.mockResolvedValue(testAttractions);
+      mockAttractionRepository.findAndCount.mockResolvedValue([
+        testAttractions,
+        2,
+      ]);
 
       const result = await service.findByParkId(parkId);
 
-      expect(result).toEqual(testAttractions);
-      expect(mockAttractionRepository.find).toHaveBeenCalled();
+      expect(result).toEqual({ data: testAttractions, total: 2 });
+      expect(mockAttractionRepository.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { parkId },
+          order: { name: "ASC" },
+        }),
+      );
     });
 
-    it("should return empty array if park has no attractions", async () => {
-      mockAttractionRepository.find.mockResolvedValue([]);
+    it("should return empty data when park has no attractions", async () => {
+      mockAttractionRepository.findAndCount.mockResolvedValue([[], 0]);
 
       const result = await service.findByParkId("empty-park");
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ data: [], total: 0 });
     });
   });
 

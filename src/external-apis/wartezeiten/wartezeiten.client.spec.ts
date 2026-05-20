@@ -1,5 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { WartezeitenClient } from "./wartezeiten.client";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import axios from "axios";
 
 // Mock axios
@@ -27,7 +28,20 @@ describe("WartezeitenClient", () => {
     mockedAxios.create = jest.fn().mockReturnValue(mockAxiosInstance);
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [WartezeitenClient],
+      providers: [
+        WartezeitenClient,
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue("OK"),
+            setex: jest.fn().mockResolvedValue("OK"),
+            del: jest.fn().mockResolvedValue(1),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+          },
+        },
+      ],
     }).compile();
 
     client = module.get<WartezeitenClient>(WartezeitenClient);
