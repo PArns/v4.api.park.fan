@@ -405,12 +405,17 @@ export class OpenMeteoClient {
           ].join(","),
           forecast_minutely_15: steps,
           current: [
+            "temperature_2m",
+            "apparent_temperature",
+            "relative_humidity_2m",
             "precipitation",
             "weather_code",
             "is_day",
             "wind_speed_10m",
             "wind_gusts_10m",
           ].join(","),
+          daily: ["temperature_2m_max", "temperature_2m_min"].join(","),
+          forecast_days: 1,
           timezone: "auto",
         },
       });
@@ -477,7 +482,7 @@ export class OpenMeteoClient {
   private transformNowcastResponse(
     data: OpenMeteoResponse,
   ): MinutelyNowcastResponse {
-    const { minutely_15: m, current } = data;
+    const { minutely_15: m, current, daily } = data;
 
     if (!m || !m.time) {
       throw new Error("Invalid Open-Meteo response: missing minutely_15 data");
@@ -492,11 +497,21 @@ export class OpenMeteoClient {
       windGusts: m.wind_gusts_10m?.[index] ?? null,
     }));
 
+    // `daily` is requested with forecast_days=1 → exactly one entry for today.
+    const todayMax = daily?.temperature_2m_max?.[0] ?? null;
+    const todayMin = daily?.temperature_2m_min?.[0] ?? null;
+
     return {
       steps,
       current: current
         ? {
             time: current.time,
+            temperature: current.temperature_2m ?? null,
+            apparentTemperature: current.apparent_temperature ?? null,
+            humidity:
+              current.relative_humidity_2m != null
+                ? Math.round(current.relative_humidity_2m)
+                : null,
             precipitation: current.precipitation ?? null,
             weatherCode: current.weather_code ?? null,
             isDay: current.is_day != null ? current.is_day === 1 : null,
@@ -504,6 +519,7 @@ export class OpenMeteoClient {
             windGusts: current.wind_gusts_10m ?? null,
           }
         : null,
+      daily: { temperatureMax: todayMax, temperatureMin: todayMin },
     };
   }
 
@@ -631,6 +647,12 @@ export interface NowcastStep {
 
 export interface NowcastCurrent {
   time: string;
+  /** Air temperature in °C. */
+  temperature: number | null;
+  /** "Feels like" temperature in °C. */
+  apparentTemperature: number | null;
+  /** Relative humidity 0-100 (rounded to whole percent). */
+  humidity: number | null;
   precipitation: number | null;
   weatherCode: number | null;
   isDay: boolean | null;
@@ -638,7 +660,14 @@ export interface NowcastCurrent {
   windGusts: number | null;
 }
 
+/** Daily summary for "today" in the park's local timezone. */
+export interface NowcastDaily {
+  temperatureMax: number | null;
+  temperatureMin: number | null;
+}
+
 export interface MinutelyNowcastResponse {
   steps: NowcastStep[];
   current: NowcastCurrent | null;
+  daily: NowcastDaily;
 }

@@ -50,14 +50,29 @@ export interface ParkNowcast {
 
   /** Whether the park was raining at `observedAt`. */
   currentlyRaining: boolean;
+  /** Air temperature in °C at `observedAt`. */
+  currentTemperatureC: number | null;
+  /** "Feels like" temperature in °C at `observedAt` (combines wind chill / humidity). */
+  currentApparentTemperatureC: number | null;
+  /** Relative humidity 0-100 (whole percent) at `observedAt`. */
+  currentHumidity: number | null;
   /** Precipitation in mm for the slot containing `observedAt`. */
   currentPrecipitationMm: number | null;
-  /** WMO weather code for the slot containing `observedAt`. */
+  /** WMO weather code for the slot containing `observedAt`. Use this to pick a weather icon. */
   currentWeatherCode: number | null;
+  /** Whether it is daytime at `observedAt`. Drives day/night icon variants. */
+  isDay: boolean | null;
   /** Sustained wind speed in km/h at `observedAt`. */
   currentWindSpeedKmh: number | null;
   /** Wind gusts in km/h at `observedAt`. */
   currentWindGustsKmh: number | null;
+
+  // ---- Today's daily summary --------------------------------------------
+
+  /** Forecast high for "today" in the park's local timezone, in °C. */
+  temperatureMaxC: number | null;
+  /** Forecast low for "today" in the park's local timezone, in °C. */
+  temperatureMinC: number | null;
 
   // ---- Absolute event timestamps (stable across the cache window) -------
 
@@ -304,13 +319,19 @@ export class WeatherService {
         fetchedMs + this.NOWCAST_CACHE_TTL * 1000,
       ).toISOString(),
       currentlyRaining,
+      currentTemperatureC: raw.current?.temperature ?? null,
+      currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
+      currentHumidity: raw.current?.humidity ?? null,
       currentPrecipitationMm: currentSlot?.precipitation ?? null,
       currentWeatherCode:
         currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
+      isDay: raw.current?.isDay ?? null,
       currentWindSpeedKmh:
         currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
       currentWindGustsKmh:
         currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
+      temperatureMaxC: raw.daily?.temperatureMax ?? null,
+      temperatureMinC: raw.daily?.temperatureMin ?? null,
       rainStartsAt,
       rainStartsIntensityMm,
       rainStartsIntensity,
