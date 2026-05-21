@@ -30,61 +30,65 @@ export type RainIntensity = "light" | "moderate" | "heavy";
 
 export interface ParkNowcast {
   /**
-   * ISO timestamp when the upstream forecast was last fetched. Clients
-   * can use this as the "data freshness" indicator. Stable for the
-   * lifetime of a cache entry.
+   * ISO timestamp when the upstream forecast was last fetched. Acts as
+   * the data-freshness indicator and as the reference time for every
+   * `current*` field below. Stable for the lifetime of a cache entry.
    */
   observedAt: string;
   /**
-   * ISO timestamp at which the cached upstream forecast expires and a
-   * fresh fetch will be performed (= `observedAt` + 15 min). Clients
-   * render this as the "next update" time.
+   * ISO timestamp at which the cached forecast expires and a fresh
+   * fetch will be performed (= `observedAt` + 15 min). Clients render
+   * this as the "next update" time.
    */
   nextUpdateAt: string;
-  /** Whether the park currently has rain above the threshold. */
+
+  // ---- Snapshot at `observedAt` -----------------------------------------
+  // All `current*` fields describe the state at the moment the upstream
+  // forecast was fetched (`observedAt`), not the moment a cached
+  // response is read. Clients that need true real-time state can derive
+  // it from the absolute event timestamps below or from `steps`.
+
+  /** Whether the park was raining at `observedAt`. */
   currentlyRaining: boolean;
-  /** Precipitation in mm for the current 15-min slot. */
+  /** Precipitation in mm for the slot containing `observedAt`. */
   currentPrecipitationMm: number | null;
-  /** WMO weather code for the current slot. */
+  /** WMO weather code for the slot containing `observedAt`. */
   currentWeatherCode: number | null;
-  /** ISO timestamp when rain is next expected to start (null if already raining or no rain in window). */
+  /** Sustained wind speed in km/h at `observedAt`. */
+  currentWindSpeedKmh: number | null;
+  /** Wind gusts in km/h at `observedAt`. */
+  currentWindGustsKmh: number | null;
+
+  // ---- Absolute event timestamps (stable across the cache window) -------
+
+  /** ISO timestamp when rain is next expected to start. Null if already raining at `observedAt` or no rain in the window. */
   rainStartsAt: string | null;
-  /** Precipitation in mm for the first rainy slot (when rain starts). */
+  /** Precipitation in mm for the first rainy slot (intensity at start). */
   rainStartsIntensityMm: number | null;
   /** Qualitative bucket for the starting rain intensity. */
   rainStartsIntensity: RainIntensity | null;
-  /** ISO timestamp when rain is expected to stop (null if no rain in window or rain continues beyond window). */
+  /** ISO timestamp when rain is expected to stop. Null if no rain or rain continues beyond the window. */
   rainEndsAt: string | null;
-  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99), null if none in window. */
+
+  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window. */
   thunderstormAt: string | null;
-  /** ISO timestamp of the next hail slot (WMO 96/99), null if none in window. */
+  /** ISO timestamp when the thunderstorm block is expected to clear. Null if none in window or it continues beyond the window. */
+  thunderstormEndsAt: string | null;
+
+  /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window. */
   hailAt: string | null;
-  /**
-   * ISO timestamp of the next slot with storm-force wind gusts
-   * (≥ 75 km/h, Beaufort 9 / "strong gale"), null if none in window.
-   */
+  /** ISO timestamp when the hail block is expected to clear. Null if none in window or it continues beyond the window. */
+  hailEndsAt: string | null;
+
+  /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window. */
   stormAt: string | null;
-  /** Current sustained wind speed in km/h. */
-  currentWindSpeedKmh: number | null;
-  /** Current wind gusts in km/h. */
-  currentWindGustsKmh: number | null;
+  /** ISO timestamp when storm-force wind gusts are expected to die down. Null if none in window or they continue beyond the window. */
+  stormEndsAt: string | null;
+
   /** Peak wind gust forecasted within the nowcast window, in km/h. */
   peakWindGustsKmh: number | null;
   /** Raw 15-min forecast series for clients that want to render their own chart. */
   steps: NowcastStep[];
-}
-
-/**
- * Internal Redis cache entry for the nowcast endpoint. We cache the raw
- * upstream response plus the fetch metadata so that `deriveNowcastAlert`
- * can re-run on every request — that keeps "current" fields and
- * timestamps accurate even when a cached entry is served minutes after
- * it was written.
- */
-interface NowcastCacheEntry {
-  raw: MinutelyNowcastResponse;
-  fetchedAt: string; // ISO
-  timezone: string;
 }
 
 @Injectable()
@@ -127,15 +131,17 @@ export class WeatherService {
    * Get short-term nowcast alert for a park.
    *
    * Returns an actionable summary derived from Open-Meteo's `minutely_15`
-   * forecast: whether it is currently raining, when rain is expected to
-   * start/stop, and whether a thunderstorm / hail / storm is imminent.
+   * forecast: whether it was raining at fetch time, when rain is
+   * expected to start/stop, and whether a thunderstorm / hail / storm
+   * is imminent (with a matching ends-time).
    *
-   * Cache strategy: the **raw upstream payload** is cached per-park for
-   * 15 minutes (matches the upstream data resolution). The alert is
-   * re-derived from that raw payload on every request so that "current"
-   * fields and `currentlyRaining` always reflect the actual wall-clock
-   * time — never a stale snapshot taken when the cache was first
-   * populated.
+   * Cache strategy: the entire derived response is cached per-park for
+   * 15 minutes (matches Open-Meteo's data resolution). This is safe
+   * because every "event" field is an absolute ISO timestamp that does
+   * not drift with wall-clock time, and `current*` snapshot fields are
+   * explicitly defined as "the state at `observedAt`" — not "right
+   * now". Clients that need the live state can compute it from the
+   * absolute timestamps or from `steps[]`.
    *
    * @param parkId - Park ID
    * @returns Nowcast result, or `null` if coordinates are missing
@@ -143,17 +149,10 @@ export class WeatherService {
   async getNowcast(parkId: string): Promise<ParkNowcast | null> {
     const cacheKey = `weather:nowcast:park:${parkId}`;
 
-    // Cache hit → re-derive from the cached raw payload against current "now".
+    // Cache hit → the cached response is the response. No re-derive.
     try {
       const cachedStr = await this.redis.get(cacheKey);
-      if (cachedStr) {
-        const entry: NowcastCacheEntry = JSON.parse(cachedStr);
-        return this.deriveNowcastAlert(
-          entry.raw,
-          entry.timezone,
-          entry.fetchedAt,
-        );
-      }
+      if (cachedStr) return JSON.parse(cachedStr) as ParkNowcast;
     } catch (err) {
       this.logger.warn(`Redis cache error: ${err}`);
     }
@@ -185,14 +184,16 @@ export class WeatherService {
       return null;
     }
 
-    const timezone = park.timezone || "UTC";
-    const fetchedAt = new Date().toISOString();
-    const entry: NowcastCacheEntry = { raw, fetchedAt, timezone };
+    const result = this.deriveNowcastAlert(
+      raw,
+      park.timezone || "UTC",
+      new Date().toISOString(),
+    );
 
     try {
       await this.redis.set(
         cacheKey,
-        JSON.stringify(entry),
+        JSON.stringify(result),
         "EX",
         this.NOWCAST_CACHE_TTL,
       );
@@ -200,23 +201,26 @@ export class WeatherService {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
 
-    return this.deriveNowcastAlert(raw, timezone, fetchedAt);
+    return result;
   }
 
   /**
    * Derive an actionable nowcast alert from the raw 15-min step series.
-   * The first step whose window contains "now" is treated as the current
-   * condition. `fetchedAt` reflects when the upstream forecast was
-   * obtained (used for `observedAt` / `nextUpdateAt`); everything else
-   * is computed against the actual wall-clock time of this call.
+   *
+   * `fetchedAt` is the single time reference for everything in the
+   * returned object: the slot containing `fetchedAt` is treated as
+   * "current", and all event lookups (rainStartsAt, rainEndsAt, …)
+   * search the steps that are still future relative to `fetchedAt`.
+   * That makes the response immutable for the cache TTL — no field
+   * changes meaning depending on when it is read.
    */
   private deriveNowcastAlert(
     raw: MinutelyNowcastResponse,
     timezone: string,
     fetchedAt: string,
   ): ParkNowcast {
-    const now = new Date();
     const SLOT_MS = 15 * 60 * 1000;
+    const fetchedMs = new Date(fetchedAt).getTime();
 
     const steps = raw.steps.map((s) => ({
       ...s,
@@ -235,11 +239,11 @@ export class WeatherService {
     const isStorm = (s: NowcastStep) =>
       (s.windGusts ?? 0) >= WeatherService.STORM_GUST_KMH;
 
-    const future = steps.filter((s) => s.timeMs + SLOT_MS > now.getTime());
+    const future = steps.filter((s) => s.timeMs + SLOT_MS > fetchedMs);
 
-    // The "current" slot is the one whose 15-min window contains `now`.
+    // The "current" slot is the one whose 15-min window contains `fetchedAt`.
     const currentSlot = steps.find(
-      (s) => s.timeMs <= now.getTime() && now.getTime() < s.timeMs + SLOT_MS,
+      (s) => s.timeMs <= fetchedMs && fetchedMs < s.timeMs + SLOT_MS,
     );
 
     const currentlyRaining = currentSlot ? isRain(currentSlot) : false;
@@ -268,23 +272,31 @@ export class WeatherService {
       }
     }
 
-    const thunderSlot = future.find((s) => isThunder(s));
-    const thunderstormAt = thunderSlot
-      ? new Date(thunderSlot.timeMs).toISOString()
-      : null;
+    /**
+     * For thunderstorm/hail/storm: find the first matching slot and then
+     * the first non-matching slot after it within the same window so we
+     * can show "starts at X, ends at Y".
+     */
+    const findBlock = (
+      predicate: (s: NowcastStep & { timeMs: number }) => boolean,
+    ): { startAt: string | null; endsAt: string | null } => {
+      const start = future.find(predicate);
+      if (!start) return { startAt: null, endsAt: null };
+      const end = future.find((s) => s.timeMs > start.timeMs && !predicate(s));
+      return {
+        startAt: new Date(start.timeMs).toISOString(),
+        endsAt: end ? new Date(end.timeMs).toISOString() : null,
+      };
+    };
 
-    const hailSlot = future.find((s) => isHail(s));
-    const hailAt = hailSlot ? new Date(hailSlot.timeMs).toISOString() : null;
-
-    const stormSlot = future.find((s) => isStorm(s));
-    const stormAt = stormSlot ? new Date(stormSlot.timeMs).toISOString() : null;
+    const thunder = findBlock(isThunder);
+    const hail = findBlock(isHail);
+    const storm = findBlock(isStorm);
 
     const peakWindGustsKmh = future.reduce<number | null>((max, s) => {
       if (s.windGusts == null) return max;
       return max == null || s.windGusts > max ? s.windGusts : max;
     }, null);
-
-    const fetchedMs = new Date(fetchedAt).getTime();
 
     return {
       observedAt: new Date(fetchedMs).toISOString(),
@@ -295,17 +307,20 @@ export class WeatherService {
       currentPrecipitationMm: currentSlot?.precipitation ?? null,
       currentWeatherCode:
         currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
-      rainStartsAt,
-      rainStartsIntensityMm,
-      rainStartsIntensity,
-      rainEndsAt,
-      thunderstormAt,
-      hailAt,
-      stormAt,
       currentWindSpeedKmh:
         currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
       currentWindGustsKmh:
         currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
+      rainStartsAt,
+      rainStartsIntensityMm,
+      rainStartsIntensity,
+      rainEndsAt,
+      thunderstormAt: thunder.startAt,
+      thunderstormEndsAt: thunder.endsAt,
+      hailAt: hail.startAt,
+      hailEndsAt: hail.endsAt,
+      stormAt: storm.startAt,
+      stormEndsAt: storm.endsAt,
       peakWindGustsKmh,
       steps: steps.map(({ timeMs: _ignored, ...rest }) => rest),
     };

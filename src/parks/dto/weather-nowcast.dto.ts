@@ -71,20 +71,27 @@ export class WeatherNowcastDto {
   })
   nextUpdateAt: string;
 
-  @ApiProperty({ description: "True if rain is currently falling" })
+  @ApiProperty({
+    description:
+      "Whether it was raining at `observedAt`. Snapshot value — not recomputed against wall-clock time. Use the absolute event timestamps below for the live picture.",
+  })
   currentlyRaining: boolean;
 
   @ApiProperty({
-    description: "Precipitation in mm for the current 15-min slot",
+    description:
+      "Precipitation in mm for the 15-min slot containing `observedAt`",
     nullable: true,
   })
   currentPrecipitationMm: number | null;
 
-  @ApiProperty({ description: "Current WMO weather code", nullable: true })
+  @ApiProperty({
+    description: "WMO weather code for the slot containing `observedAt`",
+    nullable: true,
+  })
   currentWeatherCode: number | null;
 
   @ApiProperty({
-    description: "Human-readable description of the current weather",
+    description: "Human-readable description of the weather at `observedAt`",
     nullable: true,
   })
   currentWeatherDescription: string | null;
@@ -131,10 +138,24 @@ export class WeatherNowcastDto {
 
   @ApiProperty({
     description:
+      "ISO timestamp when the thunderstorm block is expected to clear. Null if none in the window or the block continues beyond the window.",
+    nullable: true,
+  })
+  thunderstormEndsAt: string | null;
+
+  @ApiProperty({
+    description:
       "ISO timestamp of the next hail slot (WMO 96/99 - thunderstorm with hail). Null if no hail in the forecast window.",
     nullable: true,
   })
   hailAt: string | null;
+
+  @ApiProperty({
+    description:
+      "ISO timestamp when the hail block is expected to clear. Null if none in the window or the block continues beyond the window.",
+    nullable: true,
+  })
+  hailEndsAt: string | null;
 
   @ApiProperty({
     description:
@@ -144,13 +165,20 @@ export class WeatherNowcastDto {
   stormAt: string | null;
 
   @ApiProperty({
-    description: "Current sustained wind speed (km/h)",
+    description:
+      "ISO timestamp when storm-force wind gusts are expected to die down. Null if none in the window or they continue beyond the window.",
+    nullable: true,
+  })
+  stormEndsAt: string | null;
+
+  @ApiProperty({
+    description: "Sustained wind speed at `observedAt` (km/h)",
     nullable: true,
   })
   currentWindSpeedKmh: number | null;
 
   @ApiProperty({
-    description: "Current wind gusts (km/h)",
+    description: "Wind gusts at `observedAt` (km/h)",
     nullable: true,
   })
   currentWindGustsKmh: number | null;
@@ -195,8 +223,11 @@ export class WeatherNowcastDto {
     dto.rainStartsIntensity = nowcast.rainStartsIntensity;
     dto.rainEndsAt = nowcast.rainEndsAt;
     dto.thunderstormAt = nowcast.thunderstormAt;
+    dto.thunderstormEndsAt = nowcast.thunderstormEndsAt;
     dto.hailAt = nowcast.hailAt;
+    dto.hailEndsAt = nowcast.hailEndsAt;
     dto.stormAt = nowcast.stormAt;
+    dto.stormEndsAt = nowcast.stormEndsAt;
     dto.currentWindSpeedKmh = nowcast.currentWindSpeedKmh;
     dto.currentWindGustsKmh = nowcast.currentWindGustsKmh;
     dto.peakWindGustsKmh = nowcast.peakWindGustsKmh;

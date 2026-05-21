@@ -243,19 +243,20 @@ describe("WeatherService", () => {
       expect(result).toBeNull();
     });
 
-    it("serves a cached entry without re-fetching from upstream", async () => {
-      mockRedis.get.mockResolvedValueOnce(
-        JSON.stringify({
-          raw: buildNowcast([0.0, 0.5, 0.0]),
-          fetchedAt: NOW.toISOString(),
-          timezone: "UTC",
-        }),
-      );
+    it("serves a cached ParkNowcast verbatim without re-fetching", async () => {
+      const cached: Partial<Awaited<ReturnType<typeof service.getNowcast>>> = {
+        observedAt: NOW.toISOString(),
+        nextUpdateAt: new Date(NOW.getTime() + 15 * 60 * 1000).toISOString(),
+        currentlyRaining: true,
+        currentPrecipitationMm: 0.7,
+        rainEndsAt: new Date(NOW.getTime() + 30 * 60 * 1000).toISOString(),
+      };
+      mockRedis.get.mockResolvedValueOnce(JSON.stringify(cached));
 
       const result = await service.getNowcast(PARK_ID);
 
-      expect(result).not.toBeNull();
-      expect(result!.observedAt).toBe(NOW.toISOString());
+      // Whole cached object is returned as-is.
+      expect(result).toEqual(cached);
       // Upstream + park lookup are skipped on cache hits.
       expect(mockOpenMeteoClient.getMinutelyNowcast).not.toHaveBeenCalled();
       expect(mockParkRepository.findOne).not.toHaveBeenCalled();
@@ -349,9 +350,10 @@ describe("WeatherService", () => {
       expect(result!.rainEndsAt).toBeNull();
     });
 
-    it("detects an upcoming thunderstorm via WMO codes 95/96/99", async () => {
+    it("detects an upcoming thunderstorm via WMO codes 95/96/99 with a clear-time", async () => {
+      // Slot 3 = thunderstorm, slot 4 = thunderstorm continues, slot 5 = clear.
       mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
-        buildNowcast([0.0, 0.0, 0.0, 0.0], [0, 0, 0, 95]),
+        buildNowcast([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0, 0, 0, 95, 95, 0]),
       );
 
       const result = await service.getNowcast(PARK_ID);
@@ -359,23 +361,45 @@ describe("WeatherService", () => {
       expect(result!.thunderstormAt).toBe(
         new Date(NOW.getTime() + 45 * 60 * 1000).toISOString(),
       );
-      // Code 95 is thunderstorm WITHOUT hail → hailAt stays null.
+      expect(result!.thunderstormEndsAt).toBe(
+        new Date(NOW.getTime() + 75 * 60 * 1000).toISOString(),
+      );
+      // Code 95 is thunderstorm WITHOUT hail → hail fields stay null.
       expect(result!.hailAt).toBeNull();
+      expect(result!.hailEndsAt).toBeNull();
     });
 
-    it("flags hail separately when WMO code 96 is present", async () => {
+    it("flags hail separately when WMO code 96 is present, with a clear-time", async () => {
+      // Slot 2 = hail (code 96), slot 3 = clear.
       mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
         buildNowcast([0.0, 0.0, 0.0, 0.0], [0, 0, 96, 0]),
       );
 
       const result = await service.getNowcast(PARK_ID);
 
-      const expected = new Date(NOW.getTime() + 30 * 60 * 1000).toISOString();
-      expect(result!.thunderstormAt).toBe(expected);
-      expect(result!.hailAt).toBe(expected);
+      const start = new Date(NOW.getTime() + 30 * 60 * 1000).toISOString();
+      const end = new Date(NOW.getTime() + 45 * 60 * 1000).toISOString();
+      expect(result!.thunderstormAt).toBe(start);
+      expect(result!.thunderstormEndsAt).toBe(end);
+      expect(result!.hailAt).toBe(start);
+      expect(result!.hailEndsAt).toBe(end);
     });
 
-    it("flags a storm when forecast wind gusts reach the 75 km/h threshold", async () => {
+    it("leaves thunderstormEndsAt null when the thunderstorm continues past the window", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0, 0.0, 0.0], [0, 0, 95]),
+      );
+
+      const result = await service.getNowcast(PARK_ID);
+
+      expect(result!.thunderstormAt).toBe(
+        new Date(NOW.getTime() + 30 * 60 * 1000).toISOString(),
+      );
+      expect(result!.thunderstormEndsAt).toBeNull();
+    });
+
+    it("flags a storm when wind gusts reach 75 km/h, with a clear-time when they die down", async () => {
+      // Slot 2 = 80 km/h gust → storm; slot 3 = 60 km/h → calm again.
       mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
         buildNowcast([0.0, 0.0, 0.0, 0.0], undefined, [10, 20, 80, 60]),
       );
@@ -384,6 +408,9 @@ describe("WeatherService", () => {
 
       expect(result!.stormAt).toBe(
         new Date(NOW.getTime() + 30 * 60 * 1000).toISOString(),
+      );
+      expect(result!.stormEndsAt).toBe(
+        new Date(NOW.getTime() + 45 * 60 * 1000).toISOString(),
       );
       expect(result!.currentWindGustsKmh).toBe(10);
       expect(result!.peakWindGustsKmh).toBe(80);
@@ -397,6 +424,7 @@ describe("WeatherService", () => {
       const result = await service.getNowcast(PARK_ID);
 
       expect(result!.stormAt).toBeNull();
+      expect(result!.stormEndsAt).toBeNull();
       expect(result!.peakWindGustsKmh).toBe(70);
     });
 
@@ -414,74 +442,36 @@ describe("WeatherService", () => {
     });
 
     it(
-      "keeps observedAt/nextUpdateAt stable and absolute rain timestamps unchanged " +
-        "when the same cache entry is served minutes later",
+      "returns a fully stable response across the cache window — every " +
+        "field is either an absolute timestamp or a snapshot at observedAt, " +
+        "so two reads minutes apart are identical",
       async () => {
-        // Forecast: dry now, rain at +30 min for 15 min.
+        // Forecast: dry at fetch, rain at +30 min for 15 min, then dry.
         const raw = buildNowcast([0.0, 0.0, 0.8, 0.0]);
-        mockRedis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(
-          JSON.stringify({
-            raw,
-            fetchedAt: NOW.toISOString(),
-            timezone: "UTC",
-          }),
-        );
         mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(raw);
 
+        // First call (cache miss) → derives + populates the cache.
         const first = await service.getNowcast(PARK_ID);
+        const cachedJson = mockRedis.set.mock.calls[0][1] as string;
 
-        // 10 minutes pass; cache still valid.
+        // 10 min later: same cache entry is replayed.
         jest.setSystemTime(new Date(NOW.getTime() + 10 * 60 * 1000));
+        mockRedis.get.mockResolvedValueOnce(cachedJson);
 
         const second = await service.getNowcast(PARK_ID);
 
-        // Freshness markers + absolute event timestamps are identical
-        // because they describe absolute moments in time, not relative
-        // offsets. Clients compute "in X min" from these themselves.
-        expect(second!.observedAt).toBe(first!.observedAt);
-        expect(second!.nextUpdateAt).toBe(first!.nextUpdateAt);
-        expect(second!.rainStartsAt).toBe(first!.rainStartsAt);
-        expect(second!.rainEndsAt).toBe(first!.rainEndsAt);
+        // The whole object is byte-for-byte identical. No field silently
+        // drifts as wall-clock time moves forward within the cache TTL.
+        expect(second).toEqual(first);
       },
     );
 
-    it(
-      "recomputes 'current' fields on every request so they reflect actual " +
-        "wall-clock time even on a cache hit (no stale currentlyRaining)",
-      async () => {
-        // Slot 0 (T+0..T+15) is dry; slot 1 (T+15..T+30) is wet.
-        // A request at T+0 must report currentlyRaining=false;
-        // a request at T+20 (cache hit) must report currentlyRaining=true.
-        const raw = buildNowcast([0.0, 0.8, 0.0]);
-        mockRedis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(
-          JSON.stringify({
-            raw,
-            fetchedAt: NOW.toISOString(),
-            timezone: "UTC",
-          }),
-        );
-        mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(raw);
+    it("caches the fully derived ParkNowcast with a 15-minute TTL", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0, 0.5, 0.0]),
+      );
 
-        const atFetch = await service.getNowcast(PARK_ID);
-        expect(atFetch!.currentlyRaining).toBe(false);
-        expect(atFetch!.currentPrecipitationMm).toBe(0);
-
-        // Advance 20 min — now inside slot 1, but the cache entry is the same.
-        jest.setSystemTime(new Date(NOW.getTime() + 20 * 60 * 1000));
-
-        const later = await service.getNowcast(PARK_ID);
-        expect(later!.currentlyRaining).toBe(true);
-        expect(later!.currentPrecipitationMm).toBe(0.8);
-        // rainStartsAt was in the past now → re-derived as null (we're inside the rain).
-        expect(later!.rainStartsAt).toBeNull();
-      },
-    );
-
-    it("caches the raw upstream payload with a 15-minute TTL (not the derived alert)", async () => {
-      const raw = buildNowcast([0.0, 0.5, 0.0]);
-      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(raw);
-
-      await service.getNowcast(PARK_ID);
+      const result = await service.getNowcast(PARK_ID);
 
       expect(mockRedis.set).toHaveBeenCalledWith(
         `weather:nowcast:park:${PARK_ID}`,
@@ -490,13 +480,8 @@ describe("WeatherService", () => {
         15 * 60,
       );
       const stored = JSON.parse(mockRedis.set.mock.calls[0][1]);
-      // Cache entry must be the raw + metadata, not the derived alert,
-      // so that the alert can be recomputed against current "now" on each hit.
-      expect(stored).toHaveProperty("raw");
-      expect(stored).toHaveProperty("fetchedAt", NOW.toISOString());
-      expect(stored).toHaveProperty("timezone", "UTC");
-      expect(stored).not.toHaveProperty("currentlyRaining");
-      expect(stored).not.toHaveProperty("rainEndsAt");
+      // The stored payload IS the response — no derivation happens on a hit.
+      expect(stored).toEqual(result);
     });
   });
 
