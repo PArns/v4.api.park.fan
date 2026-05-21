@@ -78,6 +78,28 @@ export class WeatherNowcastDto {
   currentlyRaining: boolean;
 
   @ApiProperty({
+    description: "Air temperature in °C at `observedAt`",
+    nullable: true,
+    example: 15.4,
+  })
+  currentTemperatureC: number | null;
+
+  @ApiProperty({
+    description:
+      "'Feels like' temperature in °C at `observedAt` (factors in wind chill / humidity)",
+    nullable: true,
+    example: 13.1,
+  })
+  currentApparentTemperatureC: number | null;
+
+  @ApiProperty({
+    description: "Relative humidity 0-100 (whole percent) at `observedAt`",
+    nullable: true,
+    example: 78,
+  })
+  currentHumidity: number | null;
+
+  @ApiProperty({
     description:
       "Precipitation in mm for the 15-min slot containing `observedAt`",
     nullable: true,
@@ -85,7 +107,8 @@ export class WeatherNowcastDto {
   currentPrecipitationMm: number | null;
 
   @ApiProperty({
-    description: "WMO weather code for the slot containing `observedAt`",
+    description:
+      "WMO weather code for the slot containing `observedAt`. Use this to pick a weather icon.",
     nullable: true,
   })
   currentWeatherCode: number | null;
@@ -95,6 +118,27 @@ export class WeatherNowcastDto {
     nullable: true,
   })
   currentWeatherDescription: string | null;
+
+  @ApiProperty({
+    description:
+      "Whether it is daytime at `observedAt`. Drives day/night icon variants.",
+    nullable: true,
+  })
+  isDay: boolean | null;
+
+  @ApiProperty({
+    description: "Forecast high for today (park's local timezone), in °C",
+    nullable: true,
+    example: 14,
+  })
+  temperatureMaxC: number | null;
+
+  @ApiProperty({
+    description: "Forecast low for today (park's local timezone), in °C",
+    nullable: true,
+    example: 8,
+  })
+  temperatureMinC: number | null;
 
   @ApiProperty({
     description:
@@ -212,12 +256,18 @@ export class WeatherNowcastDto {
     dto.observedAt = nowcast.observedAt;
     dto.nextUpdateAt = nowcast.nextUpdateAt;
     dto.currentlyRaining = nowcast.currentlyRaining;
+    dto.currentTemperatureC = nowcast.currentTemperatureC;
+    dto.currentApparentTemperatureC = nowcast.currentApparentTemperatureC;
+    dto.currentHumidity = nowcast.currentHumidity;
     dto.currentPrecipitationMm = nowcast.currentPrecipitationMm;
     dto.currentWeatherCode = nowcast.currentWeatherCode;
     dto.currentWeatherDescription =
       nowcast.currentWeatherCode != null
         ? getWeatherDescription(nowcast.currentWeatherCode)
         : null;
+    dto.isDay = nowcast.isDay;
+    dto.temperatureMaxC = nowcast.temperatureMaxC;
+    dto.temperatureMinC = nowcast.temperatureMinC;
     dto.rainStartsAt = nowcast.rainStartsAt;
     dto.rainStartsIntensityMm = nowcast.rainStartsIntensityMm;
     dto.rainStartsIntensity = nowcast.rainStartsIntensity;

@@ -168,10 +168,20 @@ describe("WeatherService", () => {
     // `precip` is the mm value for each consecutive 15-min slot.
     // `codes` is an optional matching array of WMO codes (defaults to 0).
     // `gusts` is an optional matching array of wind gusts in km/h (defaults to 10).
+    // `opts` lets individual tests override the `current` snapshot and the
+    // `daily` summary (temperature / humidity / day-night / min-max).
     const buildNowcast = (
       precip: number[],
       codes?: number[],
       gusts?: number[],
+      opts: {
+        temperature?: number | null;
+        apparentTemperature?: number | null;
+        humidity?: number | null;
+        isDay?: boolean | null;
+        temperatureMax?: number | null;
+        temperatureMin?: number | null;
+      } = {},
     ) => {
       const steps = precip.map((p, i) => {
         const t = new Date(NOW.getTime() + i * 15 * 60 * 1000);
@@ -187,15 +197,26 @@ describe("WeatherService", () => {
           windGusts: gusts?.[i] ?? 10,
         };
       });
+      // `pick` honours an explicit `null` override (distinct from "not provided").
+      const pick = <T>(key: keyof typeof opts, fallback: T): T | null =>
+        key in opts ? ((opts[key] as T | null) ?? null) : fallback;
+
       return {
         steps,
         current: {
           time: steps[0].time,
+          temperature: pick("temperature", 15.4),
+          apparentTemperature: pick("apparentTemperature", 13.1),
+          humidity: pick("humidity", 78),
           precipitation: precip[0],
           weatherCode: codes?.[0] ?? 0,
-          isDay: true,
+          isDay: pick("isDay", true),
           windSpeed: 10,
           windGusts: gusts?.[0] ?? 10,
+        },
+        daily: {
+          temperatureMax: pick("temperatureMax", 14),
+          temperatureMin: pick("temperatureMin", 8),
         },
       };
     };
@@ -482,6 +503,68 @@ describe("WeatherService", () => {
       const stored = JSON.parse(mockRedis.set.mock.calls[0][1]);
       // The stored payload IS the response — no derivation happens on a hit.
       expect(stored).toEqual(result);
+    });
+
+    it("exposes the current temperature / feels-like / humidity snapshot", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0, 0.0, 0.0], undefined, undefined, {
+          temperature: 15.4,
+          apparentTemperature: 13.1,
+          humidity: 78,
+        }),
+      );
+
+      const result = await service.getNowcast(PARK_ID);
+
+      expect(result!.currentTemperatureC).toBe(15.4);
+      expect(result!.currentApparentTemperatureC).toBe(13.1);
+      expect(result!.currentHumidity).toBe(78);
+    });
+
+    it("exposes today's daily min / max temperature for the park", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0], undefined, undefined, {
+          temperatureMax: 14,
+          temperatureMin: 8,
+        }),
+      );
+
+      const result = await service.getNowcast(PARK_ID);
+
+      expect(result!.temperatureMaxC).toBe(14);
+      expect(result!.temperatureMinC).toBe(8);
+    });
+
+    it("exposes isDay so clients can pick day/night icon variants", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0], undefined, undefined, { isDay: false }),
+      );
+
+      const result = await service.getNowcast(PARK_ID);
+
+      expect(result!.isDay).toBe(false);
+    });
+
+    it("propagates null temperature / humidity when upstream omits them", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0.0], undefined, undefined, {
+          temperature: null,
+          apparentTemperature: null,
+          humidity: null,
+          isDay: null,
+          temperatureMax: null,
+          temperatureMin: null,
+        }),
+      );
+
+      const result = await service.getNowcast(PARK_ID);
+
+      expect(result!.currentTemperatureC).toBeNull();
+      expect(result!.currentApparentTemperatureC).toBeNull();
+      expect(result!.currentHumidity).toBeNull();
+      expect(result!.isDay).toBeNull();
+      expect(result!.temperatureMaxC).toBeNull();
+      expect(result!.temperatureMinC).toBeNull();
     });
   });
 
