@@ -12,20 +12,37 @@ import * as crypto from "crypto";
 /**
  * HTTP Cache Interceptor
  *
- * Adds HTTP caching headers to responses for improved client-side caching.
- * Implements:
- * - Cache-Control headers with configurable TTL
- * - ETag generation for conditional requests
- * - Vary header for content negotiation
+ * Sets the cache headers honoured by Cloudflare and browsers.
+ *
+ * - `Cache-Control` carries the BROWSER TTL (`max-age`) plus an
+ *   `s-maxage` mirror so caches that do not understand
+ *   `CDN-Cache-Control` (most plain HTTP caches) still pick up the CDN
+ *   intent.
+ * - `CDN-Cache-Control` carries the CDN TTL when it differs from the
+ *   browser TTL. Cloudflare reads this header in preference to
+ *   `Cache-Control`, browsers ignore it. This lets us cache long on
+ *   the edge (low origin load) while keeping a short browser cache
+ *   (fresh data after a reload).
+ * - `ETag` is set so Cloudflare and clients can short-circuit identical
+ *   bodies with a 304.
  *
  * Usage:
- * @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes
+ *   @UseInterceptors(new HttpCacheInterceptor(900))
+ *     → browser & CDN both cache 15 min
+ *   @UseInterceptors(new HttpCacheInterceptor(60, 900))
+ *     → browser caches 1 min, CDN caches 15 min
  */
 @Injectable()
 export class HttpCacheInterceptor implements NestInterceptor {
   constructor(
-    private readonly maxAge: number = 300, // Default 5 minutes
-    private readonly sMaxAge?: number, // CDN cache (optional)
+    /** Browser cache TTL in seconds. */
+    private readonly maxAge: number = 300,
+    /**
+     * CDN cache TTL in seconds. Defaults to `maxAge` (= no browser/CDN
+     * split). Pass a longer value to let Cloudflare cache aggressively
+     * while keeping browsers on a shorter TTL.
+     */
+    private readonly sMaxAge?: number,
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -34,40 +51,47 @@ export class HttpCacheInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
-        // Generate ETag from response data
         const etag = this.generateETag(data);
 
-        // Check if client has cached version (If-None-Match)
-        const clientETag = request.headers["if-none-match"];
-        if (clientETag === etag) {
-          response.status(304); // Not Modified
+        // Short-circuit if the client already has this exact body.
+        if (request.headers["if-none-match"] === etag) {
+          response.status(304);
           return;
         }
 
-        // Set cache headers
-        // Include s-maxage for Cloudflare CDN caching
-        // For live data endpoints (2 min), use shorter stale-while-revalidate
-        const staleWhileRevalidate =
-          this.maxAge <= 120 ? this.maxAge : this.maxAge * 2;
-        const cacheControl = this.sMaxAge
-          ? `public, max-age=${this.maxAge}, s-maxage=${this.sMaxAge}, stale-while-revalidate=${staleWhileRevalidate}`
-          : `public, max-age=${this.maxAge}, s-maxage=${this.maxAge}, stale-while-revalidate=${staleWhileRevalidate}`;
+        const cdnMaxAge = this.sMaxAge ?? this.maxAge;
+        // stale-while-revalidate doubles the TTL for forecast-like
+        // endpoints (>2 min) so Cloudflare can serve stale-but-known
+        // content while it asynchronously refreshes from origin.
+        const swr = this.maxAge <= 120 ? this.maxAge : this.maxAge * 2;
 
-        response.setHeader("Cache-Control", cacheControl);
+        // Browser-facing header. We keep `s-maxage` here too so any
+        // non-Cloudflare cache (Varnish, nginx, …) still sees a CDN TTL.
+        response.setHeader(
+          "Cache-Control",
+          `public, max-age=${this.maxAge}, s-maxage=${cdnMaxAge}, stale-while-revalidate=${swr}`,
+        );
+
+        // Only emit the Cloudflare-specific header when it actually
+        // adds information (browser/CDN split). Otherwise it would just
+        // duplicate Cache-Control.
+        if (this.sMaxAge != null && this.sMaxAge !== this.maxAge) {
+          response.setHeader(
+            "CDN-Cache-Control",
+            `public, max-age=${cdnMaxAge}, stale-while-revalidate=${swr}`,
+          );
+        }
+
         response.setHeader("ETag", etag);
-        response.setHeader("Vary", "Accept");
-
-        // Add Last-Modified for additional caching strategy
-        response.setHeader("Last-Modified", new Date().toUTCString());
       }),
     );
   }
 
   /**
-   * Generate ETag from response data
-   * Uses MD5 hash of stringified JSON for fast computation
+   * Strong ETag from the JSON body. MD5 is sufficient because we use
+   * the hash for cache identity, not security.
    */
-  private generateETag(data: any): string {
+  private generateETag(data: unknown): string {
     const hash = crypto
       .createHash("md5")
       .update(JSON.stringify(data))
