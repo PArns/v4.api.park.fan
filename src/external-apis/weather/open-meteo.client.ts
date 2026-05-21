@@ -400,9 +400,17 @@ export class OpenMeteoClient {
             "precipitation",
             "precipitation_probability",
             "weather_code",
+            "wind_speed_10m",
+            "wind_gusts_10m",
           ].join(","),
           forecast_minutely_15: steps,
-          current: ["precipitation", "weather_code", "is_day"].join(","),
+          current: [
+            "precipitation",
+            "weather_code",
+            "is_day",
+            "wind_speed_10m",
+            "wind_gusts_10m",
+          ].join(","),
           timezone: "auto",
         },
       });
@@ -480,6 +488,8 @@ export class OpenMeteoClient {
       precipitation: m.precipitation?.[index] ?? null,
       precipitationProbability: m.precipitation_probability?.[index] ?? null,
       weatherCode: m.weather_code?.[index] ?? null,
+      windSpeed: m.wind_speed_10m?.[index] ?? null,
+      windGusts: m.wind_gusts_10m?.[index] ?? null,
     }));
 
     return {
@@ -490,6 +500,8 @@ export class OpenMeteoClient {
             precipitation: current.precipitation ?? null,
             weatherCode: current.weather_code ?? null,
             isDay: current.is_day != null ? current.is_day === 1 : null,
+            windSpeed: current.wind_speed_10m ?? null,
+            windGusts: current.wind_gusts_10m ?? null,
           }
         : null,
     };
@@ -532,6 +544,7 @@ interface OpenMeteoResponse {
     relative_humidity_2m?: number | null;
     weather_code?: number | null;
     wind_speed_10m?: number | null;
+    wind_gusts_10m?: number | null;
     is_day?: number | null; // 0 or 1
     precipitation?: number | null;
   };
@@ -540,6 +553,8 @@ interface OpenMeteoResponse {
     precipitation?: (number | null)[];
     precipitation_probability?: (number | null)[];
     weather_code?: (number | null)[];
+    wind_speed_10m?: (number | null)[];
+    wind_gusts_10m?: (number | null)[];
   };
   daily: {
     time: string[];
@@ -610,6 +625,8 @@ export interface NowcastStep {
   precipitation: number | null; // mm in this 15-min slot
   precipitationProbability: number | null; // 0-100
   weatherCode: number | null; // WMO code
+  windSpeed: number | null; // km/h, sustained
+  windGusts: number | null; // km/h, gusts
 }
 
 export interface NowcastCurrent {
@@ -617,6 +634,8 @@ export interface NowcastCurrent {
   precipitation: number | null;
   weatherCode: number | null;
   isDay: boolean | null;
+  windSpeed: number | null;
+  windGusts: number | null;
 }
 
 export interface MinutelyNowcastResponse {

@@ -25,9 +25,17 @@ import { fromZonedTime } from "date-fns-tz";
  *
  * Handles weather data storage and retrieval.
  */
+/** Qualitative rain intensity bucket derived from mm-per-15-min. */
+export type RainIntensity = "light" | "moderate" | "heavy";
+
 export interface ParkNowcast {
   /** ISO timestamp when this nowcast snapshot was computed. */
   observedAt: string;
+  /**
+   * ISO timestamp at which this snapshot expires and a fresh upstream fetch
+   * is performed. Clients can display this as the next update time.
+   */
+  nextUpdateAt: string;
   /** Whether the park currently has rain above the threshold. */
   currentlyRaining: boolean;
   /** Precipitation in mm for the current 15-min slot. */
@@ -37,12 +45,31 @@ export interface ParkNowcast {
   /** ISO timestamp when rain is next expected to start (null if already raining or no rain in window). */
   rainStartsAt: string | null;
   rainStartsInMinutes: number | null;
+  /** Precipitation in mm for the first rainy slot (when rain starts). */
+  rainStartsIntensityMm: number | null;
+  /** Qualitative bucket for the starting rain intensity. */
+  rainStartsIntensity: RainIntensity | null;
   /** ISO timestamp when rain is expected to stop (null if no rain in window or rain continues beyond window). */
   rainEndsAt: string | null;
   rainEndsInMinutes: number | null;
   /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99), null if none in window. */
   thunderstormAt: string | null;
   thunderstormInMinutes: number | null;
+  /** ISO timestamp of the next hail slot (WMO 96/99), null if none in window. */
+  hailAt: string | null;
+  hailInMinutes: number | null;
+  /**
+   * ISO timestamp of the next slot with storm-force wind gusts
+   * (≥ 75 km/h, Beaufort 9 / "strong gale"), null if none in window.
+   */
+  stormAt: string | null;
+  stormInMinutes: number | null;
+  /** Current sustained wind speed in km/h. */
+  currentWindSpeedKmh: number | null;
+  /** Current wind gusts in km/h. */
+  currentWindGustsKmh: number | null;
+  /** Peak wind gust forecasted within the nowcast window, in km/h. */
+  peakWindGustsKmh: number | null;
   /** Raw 15-min forecast series for clients that want to render their own chart. */
   steps: NowcastStep[];
 }
@@ -56,8 +83,23 @@ export class WeatherService {
 
   /** Precipitation threshold (mm per 15-min slot) considered "raining". */
   private static readonly RAIN_THRESHOLD_MM = 0.1;
-  /** WMO codes representing thunderstorms. */
+  /**
+   * Rain intensity buckets in mm per 15-min slot. Derived from the standard
+   * meteorological mm/h thresholds (light < 2.5, moderate < 7.6, heavy ≥ 7.6)
+   * divided by 4 to match a 15-min window.
+   */
+  private static readonly RAIN_INTENSITY_MODERATE_MM = 2.5 / 4; // 0.625 mm / 15 min
+  private static readonly RAIN_INTENSITY_HEAVY_MM = 7.6 / 4; // 1.9 mm / 15 min
+  /** WMO codes representing thunderstorms (95 = no hail, 96/99 = with hail). */
   private static readonly THUNDERSTORM_CODES = new Set([95, 96, 99]);
+  /** WMO codes representing hail (subset of thunderstorms). */
+  private static readonly HAIL_CODES = new Set([96, 99]);
+  /**
+   * Wind-gust threshold (km/h) that triggers a storm alert.
+   * 75 km/h ≈ Beaufort 9 ("strong gale") — most outdoor rides close well
+   * below this, so this is a conservative ceiling.
+   */
+  private static readonly STORM_GUST_KMH = 75;
 
   constructor(
     @InjectRepository(WeatherData)
@@ -157,6 +199,10 @@ export class WeatherService {
     const isThunder = (s: NowcastStep) =>
       s.weatherCode != null &&
       WeatherService.THUNDERSTORM_CODES.has(s.weatherCode);
+    const isHail = (s: NowcastStep) =>
+      s.weatherCode != null && WeatherService.HAIL_CODES.has(s.weatherCode);
+    const isStorm = (s: NowcastStep) =>
+      (s.windGusts ?? 0) >= WeatherService.STORM_GUST_KMH;
 
     const future = steps.filter((s) => s.timeMs + SLOT_MS > now.getTime());
 
@@ -169,6 +215,8 @@ export class WeatherService {
 
     let rainStartsAt: string | null = null;
     let rainEndsAt: string | null = null;
+    let rainStartsIntensityMm: number | null = null;
+    let rainStartsIntensity: RainIntensity | null = null;
 
     if (currentlyRaining) {
       // Find first future slot that is dry.
@@ -179,6 +227,8 @@ export class WeatherService {
       const rainy = future.find((s) => isRain(s));
       if (rainy) {
         rainStartsAt = new Date(rainy.timeMs).toISOString();
+        rainStartsIntensityMm = rainy.precipitation ?? null;
+        rainStartsIntensity = this.classifyRainIntensity(rainy.precipitation);
         // And when it stops again (first dry slot after rainy).
         const dryAgain = future.find(
           (s) => s.timeMs > rainy.timeMs && !isRain(s),
@@ -192,6 +242,17 @@ export class WeatherService {
       ? new Date(thunderSlot.timeMs).toISOString()
       : null;
 
+    const hailSlot = future.find((s) => isHail(s));
+    const hailAt = hailSlot ? new Date(hailSlot.timeMs).toISOString() : null;
+
+    const stormSlot = future.find((s) => isStorm(s));
+    const stormAt = stormSlot ? new Date(stormSlot.timeMs).toISOString() : null;
+
+    const peakWindGustsKmh = future.reduce<number | null>((max, s) => {
+      if (s.windGusts == null) return max;
+      return max == null || s.windGusts > max ? s.windGusts : max;
+    }, null);
+
     const minutesUntil = (iso: string | null): number | null =>
       iso == null
         ? null
@@ -202,18 +263,52 @@ export class WeatherService {
 
     return {
       observedAt: now.toISOString(),
+      nextUpdateAt: new Date(
+        now.getTime() + this.NOWCAST_CACHE_TTL * 1000,
+      ).toISOString(),
       currentlyRaining,
       currentPrecipitationMm: currentSlot?.precipitation ?? null,
       currentWeatherCode:
         currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
       rainStartsAt,
       rainStartsInMinutes: minutesUntil(rainStartsAt),
+      rainStartsIntensityMm,
+      rainStartsIntensity,
       rainEndsAt,
       rainEndsInMinutes: minutesUntil(rainEndsAt),
       thunderstormAt,
       thunderstormInMinutes: minutesUntil(thunderstormAt),
+      hailAt,
+      hailInMinutes: minutesUntil(hailAt),
+      stormAt,
+      stormInMinutes: minutesUntil(stormAt),
+      currentWindSpeedKmh:
+        currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
+      currentWindGustsKmh:
+        currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
+      peakWindGustsKmh,
       steps: steps.map(({ timeMs: _ignored, ...rest }) => rest),
     };
+  }
+
+  /**
+   * Map a 15-min-slot precipitation amount to a qualitative bucket.
+   * Returns `null` when below the rain threshold.
+   */
+  private classifyRainIntensity(
+    precipitationMm: number | null | undefined,
+  ): RainIntensity | null {
+    if (
+      precipitationMm == null ||
+      precipitationMm < WeatherService.RAIN_THRESHOLD_MM
+    ) {
+      return null;
+    }
+    if (precipitationMm >= WeatherService.RAIN_INTENSITY_HEAVY_MM)
+      return "heavy";
+    if (precipitationMm >= WeatherService.RAIN_INTENSITY_MODERATE_MM)
+      return "moderate";
+    return "light";
   }
 
   /**

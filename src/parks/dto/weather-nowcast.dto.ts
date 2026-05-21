@@ -30,6 +30,18 @@ export class NowcastStepDto {
     nullable: true,
   })
   weatherCode: number | null;
+
+  @ApiProperty({
+    description: "Sustained wind speed in this slot (km/h)",
+    nullable: true,
+  })
+  windSpeed: number | null;
+
+  @ApiProperty({
+    description: "Wind gusts in this slot (km/h)",
+    nullable: true,
+  })
+  windGusts: number | null;
 }
 
 export class WeatherNowcastDto {
@@ -50,6 +62,13 @@ export class WeatherNowcastDto {
     example: "2026-05-21T13:58:12.000Z",
   })
   observedAt: string;
+
+  @ApiProperty({
+    description:
+      "ISO timestamp when the next nowcast refresh is expected (observedAt + cache TTL of 15 minutes). Clients can show this as the next update time.",
+    example: "2026-05-21T14:13:12.000Z",
+  })
+  nextUpdateAt: string;
 
   @ApiProperty({ description: "True if rain is currently falling" })
   currentlyRaining: boolean;
@@ -86,6 +105,23 @@ export class WeatherNowcastDto {
 
   @ApiProperty({
     description:
+      "Forecast precipitation in mm for the first rainy 15-min slot. Indicates how heavy rain will be when it starts.",
+    nullable: true,
+    example: 0.8,
+  })
+  rainStartsIntensityMm: number | null;
+
+  @ApiProperty({
+    description:
+      "Qualitative rain intensity bucket for the first rainy slot (light < 0.625 mm, moderate < 1.9 mm, heavy ≥ 1.9 mm per 15 min).",
+    nullable: true,
+    enum: ["light", "moderate", "heavy"],
+    example: "moderate",
+  })
+  rainStartsIntensity: "light" | "moderate" | "heavy" | null;
+
+  @ApiProperty({
+    description:
       "ISO timestamp when rain is expected to stop. Null if no rain in window or rain continues beyond the forecast window.",
     nullable: true,
     example: "2026-05-21T14:45:00.000Z",
@@ -114,6 +150,51 @@ export class WeatherNowcastDto {
 
   @ApiProperty({
     description:
+      "ISO timestamp of the next hail slot (WMO 96/99 - thunderstorm with hail). Null if no hail in the forecast window.",
+    nullable: true,
+  })
+  hailAt: string | null;
+
+  @ApiProperty({
+    description: "Minutes from now until next hail slot",
+    nullable: true,
+  })
+  hailInMinutes: number | null;
+
+  @ApiProperty({
+    description:
+      "ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in the forecast window.",
+    nullable: true,
+  })
+  stormAt: string | null;
+
+  @ApiProperty({
+    description: "Minutes from now until storm-force wind gusts begin",
+    nullable: true,
+  })
+  stormInMinutes: number | null;
+
+  @ApiProperty({
+    description: "Current sustained wind speed (km/h)",
+    nullable: true,
+  })
+  currentWindSpeedKmh: number | null;
+
+  @ApiProperty({
+    description: "Current wind gusts (km/h)",
+    nullable: true,
+  })
+  currentWindGustsKmh: number | null;
+
+  @ApiProperty({
+    description:
+      "Peak wind gust forecasted within the nowcast window (km/h). Useful for indicating expected wind strength.",
+    nullable: true,
+  })
+  peakWindGustsKmh: number | null;
+
+  @ApiProperty({
+    description:
       "Raw 15-min forecast series (next ~6h). Useful for clients rendering their own chart.",
     type: [NowcastStepDto],
   })
@@ -132,6 +213,7 @@ export class WeatherNowcastDto {
     const dto = new WeatherNowcastDto();
     dto.park = park;
     dto.observedAt = nowcast.observedAt;
+    dto.nextUpdateAt = nowcast.nextUpdateAt;
     dto.currentlyRaining = nowcast.currentlyRaining;
     dto.currentPrecipitationMm = nowcast.currentPrecipitationMm;
     dto.currentWeatherCode = nowcast.currentWeatherCode;
@@ -141,15 +223,26 @@ export class WeatherNowcastDto {
         : null;
     dto.rainStartsAt = nowcast.rainStartsAt;
     dto.rainStartsInMinutes = nowcast.rainStartsInMinutes;
+    dto.rainStartsIntensityMm = nowcast.rainStartsIntensityMm;
+    dto.rainStartsIntensity = nowcast.rainStartsIntensity;
     dto.rainEndsAt = nowcast.rainEndsAt;
     dto.rainEndsInMinutes = nowcast.rainEndsInMinutes;
     dto.thunderstormAt = nowcast.thunderstormAt;
     dto.thunderstormInMinutes = nowcast.thunderstormInMinutes;
+    dto.hailAt = nowcast.hailAt;
+    dto.hailInMinutes = nowcast.hailInMinutes;
+    dto.stormAt = nowcast.stormAt;
+    dto.stormInMinutes = nowcast.stormInMinutes;
+    dto.currentWindSpeedKmh = nowcast.currentWindSpeedKmh;
+    dto.currentWindGustsKmh = nowcast.currentWindGustsKmh;
+    dto.peakWindGustsKmh = nowcast.peakWindGustsKmh;
     dto.steps = nowcast.steps.map((s) => ({
       time: s.time,
       precipitation: s.precipitation,
       precipitationProbability: s.precipitationProbability,
       weatherCode: s.weatherCode,
+      windSpeed: s.windSpeed,
+      windGusts: s.windGusts,
     }));
     dto.attribution = OPEN_METEO_ATTRIBUTION;
     return dto;
