@@ -38,6 +38,8 @@ import { ParkQueryDto } from "./dto/park-query.dto";
 import { ParkDailyPredictionDto } from "./dto/park-daily-prediction.dto";
 import { WeatherResponseDto } from "./dto/weather-response.dto";
 import { WeatherItemDto } from "./dto/weather-item.dto";
+import { WeatherNowcastDto } from "./dto/weather-nowcast.dto";
+import { OPEN_METEO_ATTRIBUTION } from "./dto/weather-attribution.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
 import { IntegratedCalendarResponse } from "./dto/integrated-calendar.dto";
@@ -527,6 +529,78 @@ export class ParksController {
   }
 
   /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/weather/nowcast
+   *
+   * Returns a short-term precipitation/thunderstorm nowcast for a park,
+   * derived from Open-Meteo's 15-min minutely_15 forecast.
+   *
+   * Use this endpoint to drive in-park live warnings such as
+   * "Rain in 17 min, ending around 14:45".
+   *
+   * Cache TTL: 15 minutes (matches the upstream data resolution).
+   */
+  @Get(":continent/:country/:city/:parkSlug/weather/nowcast")
+  @UseInterceptors(new HttpCacheInterceptor(15 * 60)) // 15 minutes
+  @ApiOperation({
+    summary: "Get short-term weather nowcast (geo)",
+    description:
+      "Returns a precipitation and thunderstorm nowcast for a park (15-min resolution, ~6h window). " +
+      "Designed for live in-park alerts ('rain in X min, ending in Y min'). " +
+      "Cache TTL: 15 minutes (HTTP + Redis).",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "bruhl" })
+  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiResponse({
+    status: 200,
+    description: "Nowcast data",
+    type: WeatherNowcastDto,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  @ApiResponse({
+    status: 503,
+    description: "Nowcast unavailable (missing coordinates or upstream error)",
+  })
+  async getWeatherNowcastByGeographicPath(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+  ): Promise<WeatherNowcastDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const nowcast = await this.weatherService.getNowcast(park.id);
+
+    if (!nowcast) {
+      throw new NotFoundException(
+        `Nowcast unavailable for park "${parkSlug}" (missing coordinates or upstream error)`,
+      );
+    }
+
+    return WeatherNowcastDto.fromNowcast(
+      {
+        id: park.id,
+        name: park.name,
+        slug: park.slug,
+        timezone: park.timezone,
+      },
+      nowcast,
+    );
+  }
+
+  /**
    * GET /v1/parks/:continent/:country/:city/:parkSlug/weather
    *
    * Returns weather data for a park within a date range via geographic path.
@@ -634,6 +708,7 @@ export class ParksController {
         timezone: park.timezone,
       },
       weather: weatherData.map((w) => WeatherItemDto.fromEntity(w)),
+      attribution: OPEN_METEO_ATTRIBUTION,
     };
   }
 
@@ -1310,6 +1385,7 @@ export class ParksController {
         timezone: park.timezone,
       },
       weather: forecastData.map((w) => WeatherItemDto.fromEntity(w)),
+      attribution: OPEN_METEO_ATTRIBUTION,
     };
   }
 
