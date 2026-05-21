@@ -58,14 +58,15 @@ export class WeatherNowcastDto {
   park: { id: string; name: string; slug: string; timezone: string };
 
   @ApiProperty({
-    description: "ISO timestamp when this nowcast was computed",
+    description:
+      "ISO timestamp when the upstream forecast was last fetched. Acts as the data-freshness indicator.",
     example: "2026-05-21T13:58:12.000Z",
   })
   observedAt: string;
 
   @ApiProperty({
     description:
-      "ISO timestamp when the next nowcast refresh is expected (observedAt + cache TTL of 15 minutes). Clients can show this as the next update time.",
+      "ISO timestamp when the next nowcast refresh is expected (observedAt + cache TTL of 15 minutes).",
     example: "2026-05-21T14:13:12.000Z",
   })
   nextUpdateAt: string;
@@ -97,13 +98,6 @@ export class WeatherNowcastDto {
   rainStartsAt: string | null;
 
   @ApiProperty({
-    description: "Minutes from now until rain starts",
-    nullable: true,
-    example: 17,
-  })
-  rainStartsInMinutes: number | null;
-
-  @ApiProperty({
     description:
       "Forecast precipitation in mm for the first rainy 15-min slot. Indicates how heavy rain will be when it starts.",
     nullable: true,
@@ -129,24 +123,11 @@ export class WeatherNowcastDto {
   rainEndsAt: string | null;
 
   @ApiProperty({
-    description: "Minutes from now until rain ends",
-    nullable: true,
-    example: 47,
-  })
-  rainEndsInMinutes: number | null;
-
-  @ApiProperty({
     description:
       "ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in the forecast window.",
     nullable: true,
   })
   thunderstormAt: string | null;
-
-  @ApiProperty({
-    description: "Minutes from now until next thunderstorm slot",
-    nullable: true,
-  })
-  thunderstormInMinutes: number | null;
 
   @ApiProperty({
     description:
@@ -156,23 +137,11 @@ export class WeatherNowcastDto {
   hailAt: string | null;
 
   @ApiProperty({
-    description: "Minutes from now until next hail slot",
-    nullable: true,
-  })
-  hailInMinutes: number | null;
-
-  @ApiProperty({
     description:
       "ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in the forecast window.",
     nullable: true,
   })
   stormAt: string | null;
-
-  @ApiProperty({
-    description: "Minutes from now until storm-force wind gusts begin",
-    nullable: true,
-  })
-  stormInMinutes: number | null;
 
   @ApiProperty({
     description: "Current sustained wind speed (km/h)",
@@ -222,17 +191,12 @@ export class WeatherNowcastDto {
         ? getWeatherDescription(nowcast.currentWeatherCode)
         : null;
     dto.rainStartsAt = nowcast.rainStartsAt;
-    dto.rainStartsInMinutes = nowcast.rainStartsInMinutes;
     dto.rainStartsIntensityMm = nowcast.rainStartsIntensityMm;
     dto.rainStartsIntensity = nowcast.rainStartsIntensity;
     dto.rainEndsAt = nowcast.rainEndsAt;
-    dto.rainEndsInMinutes = nowcast.rainEndsInMinutes;
     dto.thunderstormAt = nowcast.thunderstormAt;
-    dto.thunderstormInMinutes = nowcast.thunderstormInMinutes;
     dto.hailAt = nowcast.hailAt;
-    dto.hailInMinutes = nowcast.hailInMinutes;
     dto.stormAt = nowcast.stormAt;
-    dto.stormInMinutes = nowcast.stormInMinutes;
     dto.currentWindSpeedKmh = nowcast.currentWindSpeedKmh;
     dto.currentWindGustsKmh = nowcast.currentWindGustsKmh;
     dto.peakWindGustsKmh = nowcast.peakWindGustsKmh;

@@ -29,11 +29,16 @@ import { fromZonedTime } from "date-fns-tz";
 export type RainIntensity = "light" | "moderate" | "heavy";
 
 export interface ParkNowcast {
-  /** ISO timestamp when this nowcast snapshot was computed. */
+  /**
+   * ISO timestamp when the upstream forecast was last fetched. Clients
+   * can use this as the "data freshness" indicator. Stable for the
+   * lifetime of a cache entry.
+   */
   observedAt: string;
   /**
-   * ISO timestamp at which this snapshot expires and a fresh upstream fetch
-   * is performed. Clients can display this as the next update time.
+   * ISO timestamp at which the cached upstream forecast expires and a
+   * fresh fetch will be performed (= `observedAt` + 15 min). Clients
+   * render this as the "next update" time.
    */
   nextUpdateAt: string;
   /** Whether the park currently has rain above the threshold. */
@@ -44,26 +49,21 @@ export interface ParkNowcast {
   currentWeatherCode: number | null;
   /** ISO timestamp when rain is next expected to start (null if already raining or no rain in window). */
   rainStartsAt: string | null;
-  rainStartsInMinutes: number | null;
   /** Precipitation in mm for the first rainy slot (when rain starts). */
   rainStartsIntensityMm: number | null;
   /** Qualitative bucket for the starting rain intensity. */
   rainStartsIntensity: RainIntensity | null;
   /** ISO timestamp when rain is expected to stop (null if no rain in window or rain continues beyond window). */
   rainEndsAt: string | null;
-  rainEndsInMinutes: number | null;
   /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99), null if none in window. */
   thunderstormAt: string | null;
-  thunderstormInMinutes: number | null;
   /** ISO timestamp of the next hail slot (WMO 96/99), null if none in window. */
   hailAt: string | null;
-  hailInMinutes: number | null;
   /**
    * ISO timestamp of the next slot with storm-force wind gusts
    * (≥ 75 km/h, Beaufort 9 / "strong gale"), null if none in window.
    */
   stormAt: string | null;
-  stormInMinutes: number | null;
   /** Current sustained wind speed in km/h. */
   currentWindSpeedKmh: number | null;
   /** Current wind gusts in km/h. */
@@ -72,6 +72,19 @@ export interface ParkNowcast {
   peakWindGustsKmh: number | null;
   /** Raw 15-min forecast series for clients that want to render their own chart. */
   steps: NowcastStep[];
+}
+
+/**
+ * Internal Redis cache entry for the nowcast endpoint. We cache the raw
+ * upstream response plus the fetch metadata so that `deriveNowcastAlert`
+ * can re-run on every request — that keeps "current" fields and
+ * timestamps accurate even when a cached entry is served minutes after
+ * it was written.
+ */
+interface NowcastCacheEntry {
+  raw: MinutelyNowcastResponse;
+  fetchedAt: string; // ISO
+  timezone: string;
 }
 
 @Injectable()
@@ -115,10 +128,14 @@ export class WeatherService {
    *
    * Returns an actionable summary derived from Open-Meteo's `minutely_15`
    * forecast: whether it is currently raining, when rain is expected to
-   * start/stop, and whether a thunderstorm is imminent. Used by mobile
-   * clients to warn users in the park.
+   * start/stop, and whether a thunderstorm / hail / storm is imminent.
    *
-   * Cached per-park for 15 minutes (matches the data resolution).
+   * Cache strategy: the **raw upstream payload** is cached per-park for
+   * 15 minutes (matches the upstream data resolution). The alert is
+   * re-derived from that raw payload on every request so that "current"
+   * fields and `currentlyRaining` always reflect the actual wall-clock
+   * time — never a stale snapshot taken when the cache was first
+   * populated.
    *
    * @param parkId - Park ID
    * @returns Nowcast result, or `null` if coordinates are missing
@@ -126,9 +143,17 @@ export class WeatherService {
   async getNowcast(parkId: string): Promise<ParkNowcast | null> {
     const cacheKey = `weather:nowcast:park:${parkId}`;
 
+    // Cache hit → re-derive from the cached raw payload against current "now".
     try {
-      const cached = await this.redis.get(cacheKey);
-      if (cached) return JSON.parse(cached);
+      const cachedStr = await this.redis.get(cacheKey);
+      if (cachedStr) {
+        const entry: NowcastCacheEntry = JSON.parse(cachedStr);
+        return this.deriveNowcastAlert(
+          entry.raw,
+          entry.timezone,
+          entry.fetchedAt,
+        );
+      }
     } catch (err) {
       this.logger.warn(`Redis cache error: ${err}`);
     }
@@ -160,12 +185,14 @@ export class WeatherService {
       return null;
     }
 
-    const result = this.deriveNowcastAlert(raw, park.timezone || "UTC");
+    const timezone = park.timezone || "UTC";
+    const fetchedAt = new Date().toISOString();
+    const entry: NowcastCacheEntry = { raw, fetchedAt, timezone };
 
     try {
       await this.redis.set(
         cacheKey,
-        JSON.stringify(result),
+        JSON.stringify(entry),
         "EX",
         this.NOWCAST_CACHE_TTL,
       );
@@ -173,16 +200,20 @@ export class WeatherService {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
 
-    return result;
+    return this.deriveNowcastAlert(raw, timezone, fetchedAt);
   }
 
   /**
    * Derive an actionable nowcast alert from the raw 15-min step series.
-   * The first step at or before "now" is treated as the current condition.
+   * The first step whose window contains "now" is treated as the current
+   * condition. `fetchedAt` reflects when the upstream forecast was
+   * obtained (used for `observedAt` / `nextUpdateAt`); everything else
+   * is computed against the actual wall-clock time of this call.
    */
   private deriveNowcastAlert(
     raw: MinutelyNowcastResponse,
     timezone: string,
+    fetchedAt: string,
   ): ParkNowcast {
     const now = new Date();
     const SLOT_MS = 15 * 60 * 1000;
@@ -253,35 +284,24 @@ export class WeatherService {
       return max == null || s.windGusts > max ? s.windGusts : max;
     }, null);
 
-    const minutesUntil = (iso: string | null): number | null =>
-      iso == null
-        ? null
-        : Math.max(
-            0,
-            Math.round((new Date(iso).getTime() - now.getTime()) / 60000),
-          );
+    const fetchedMs = new Date(fetchedAt).getTime();
 
     return {
-      observedAt: now.toISOString(),
+      observedAt: new Date(fetchedMs).toISOString(),
       nextUpdateAt: new Date(
-        now.getTime() + this.NOWCAST_CACHE_TTL * 1000,
+        fetchedMs + this.NOWCAST_CACHE_TTL * 1000,
       ).toISOString(),
       currentlyRaining,
       currentPrecipitationMm: currentSlot?.precipitation ?? null,
       currentWeatherCode:
         currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
       rainStartsAt,
-      rainStartsInMinutes: minutesUntil(rainStartsAt),
       rainStartsIntensityMm,
       rainStartsIntensity,
       rainEndsAt,
-      rainEndsInMinutes: minutesUntil(rainEndsAt),
       thunderstormAt,
-      thunderstormInMinutes: minutesUntil(thunderstormAt),
       hailAt,
-      hailInMinutes: minutesUntil(hailAt),
       stormAt,
-      stormInMinutes: minutesUntil(stormAt),
       currentWindSpeedKmh:
         currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
       currentWindGustsKmh:
