@@ -8,6 +8,8 @@ import { Park } from "./entities/park.entity";
 import {
   CurrentConditions,
   DailyWeather,
+  MinutelyNowcastResponse,
+  NowcastStep,
   OpenMeteoClient,
 } from "../external-apis/weather/open-meteo.client";
 import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
@@ -23,11 +25,39 @@ import { fromZonedTime } from "date-fns-tz";
  *
  * Handles weather data storage and retrieval.
  */
+export interface ParkNowcast {
+  /** ISO timestamp when this nowcast snapshot was computed. */
+  observedAt: string;
+  /** Whether the park currently has rain above the threshold. */
+  currentlyRaining: boolean;
+  /** Precipitation in mm for the current 15-min slot. */
+  currentPrecipitationMm: number | null;
+  /** WMO weather code for the current slot. */
+  currentWeatherCode: number | null;
+  /** ISO timestamp when rain is next expected to start (null if already raining or no rain in window). */
+  rainStartsAt: string | null;
+  rainStartsInMinutes: number | null;
+  /** ISO timestamp when rain is expected to stop (null if no rain in window or rain continues beyond window). */
+  rainEndsAt: string | null;
+  rainEndsInMinutes: number | null;
+  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99), null if none in window. */
+  thunderstormAt: string | null;
+  thunderstormInMinutes: number | null;
+  /** Raw 15-min forecast series for clients that want to render their own chart. */
+  steps: NowcastStep[];
+}
+
 @Injectable()
 export class WeatherService {
   private readonly logger = new Logger(WeatherService.name);
   private readonly CACHE_TTL_SECONDS = 2 * 60 * 60; // 2 hours (weather sync runs every 12h)
   private readonly HOURLY_CACHE_TTL = 60 * 60; // 1 hour
+  private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
+
+  /** Precipitation threshold (mm per 15-min slot) considered "raining". */
+  private static readonly RAIN_THRESHOLD_MM = 0.1;
+  /** WMO codes representing thunderstorms. */
+  private static readonly THUNDERSTORM_CODES = new Set([95, 96, 99]);
 
   constructor(
     @InjectRepository(WeatherData)
@@ -37,6 +67,191 @@ export class WeatherService {
     private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * Get short-term nowcast alert for a park.
+   *
+   * Returns an actionable summary derived from Open-Meteo's `minutely_15`
+   * forecast: whether it is currently raining, when rain is expected to
+   * start/stop, and whether a thunderstorm is imminent. Used by mobile
+   * clients to warn users in the park.
+   *
+   * Cached per-park for 15 minutes (matches the data resolution).
+   *
+   * @param parkId - Park ID
+   * @returns Nowcast result, or `null` if coordinates are missing
+   */
+  async getNowcast(parkId: string): Promise<ParkNowcast | null> {
+    const cacheKey = `weather:nowcast:park:${parkId}`;
+
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch (err) {
+      this.logger.warn(`Redis cache error: ${err}`);
+    }
+
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["latitude", "longitude", "timezone"],
+    });
+
+    if (!park || park.latitude == null || park.longitude == null) {
+      this.logger.warn(
+        `Cannot fetch nowcast for park ${parkId}: Missing coordinates`,
+      );
+      return null;
+    }
+
+    let raw: MinutelyNowcastResponse;
+    try {
+      raw = await this.openMeteoClient.getMinutelyNowcast(
+        park.latitude,
+        park.longitude,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to fetch nowcast for park ${parkId}: ${errorMessage}`,
+      );
+      return null;
+    }
+
+    const result = this.deriveNowcastAlert(raw, park.timezone || "UTC");
+
+    try {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(result),
+        "EX",
+        this.NOWCAST_CACHE_TTL,
+      );
+    } catch (err) {
+      this.logger.warn(`Failed to cache nowcast response: ${err}`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Derive an actionable nowcast alert from the raw 15-min step series.
+   * The first step at or before "now" is treated as the current condition.
+   */
+  private deriveNowcastAlert(
+    raw: MinutelyNowcastResponse,
+    timezone: string,
+  ): ParkNowcast {
+    const now = new Date();
+    const SLOT_MS = 15 * 60 * 1000;
+
+    const steps = raw.steps.map((s) => ({
+      ...s,
+      // Open-Meteo returns naive local-time strings ("2026-05-21T14:00"); treat
+      // them as instants in the park's timezone for correct cross-timezone math.
+      timeMs: this.parseLocalIso(s.time, timezone),
+    }));
+
+    const isRain = (s: NowcastStep) =>
+      (s.precipitation ?? 0) >= WeatherService.RAIN_THRESHOLD_MM;
+    const isThunder = (s: NowcastStep) =>
+      s.weatherCode != null &&
+      WeatherService.THUNDERSTORM_CODES.has(s.weatherCode);
+
+    const future = steps.filter((s) => s.timeMs + SLOT_MS > now.getTime());
+
+    // The "current" slot is the one whose 15-min window contains `now`.
+    const currentSlot = steps.find(
+      (s) => s.timeMs <= now.getTime() && now.getTime() < s.timeMs + SLOT_MS,
+    );
+
+    const currentlyRaining = currentSlot ? isRain(currentSlot) : false;
+
+    let rainStartsAt: string | null = null;
+    let rainEndsAt: string | null = null;
+
+    if (currentlyRaining) {
+      // Find first future slot that is dry.
+      const dry = future.find((s) => !isRain(s));
+      rainEndsAt = dry ? new Date(dry.timeMs).toISOString() : null;
+    } else {
+      // Find first future slot that has rain.
+      const rainy = future.find((s) => isRain(s));
+      if (rainy) {
+        rainStartsAt = new Date(rainy.timeMs).toISOString();
+        // And when it stops again (first dry slot after rainy).
+        const dryAgain = future.find(
+          (s) => s.timeMs > rainy.timeMs && !isRain(s),
+        );
+        rainEndsAt = dryAgain ? new Date(dryAgain.timeMs).toISOString() : null;
+      }
+    }
+
+    const thunderSlot = future.find((s) => isThunder(s));
+    const thunderstormAt = thunderSlot
+      ? new Date(thunderSlot.timeMs).toISOString()
+      : null;
+
+    const minutesUntil = (iso: string | null): number | null =>
+      iso == null
+        ? null
+        : Math.max(
+            0,
+            Math.round((new Date(iso).getTime() - now.getTime()) / 60000),
+          );
+
+    return {
+      observedAt: now.toISOString(),
+      currentlyRaining,
+      currentPrecipitationMm: currentSlot?.precipitation ?? null,
+      currentWeatherCode:
+        currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
+      rainStartsAt,
+      rainStartsInMinutes: minutesUntil(rainStartsAt),
+      rainEndsAt,
+      rainEndsInMinutes: minutesUntil(rainEndsAt),
+      thunderstormAt,
+      thunderstormInMinutes: minutesUntil(thunderstormAt),
+      steps: steps.map(({ timeMs: _ignored, ...rest }) => rest),
+    };
+  }
+
+  /**
+   * Open-Meteo returns naive local timestamps like "2026-05-21T14:00".
+   * Convert them to absolute epoch ms in the given IANA timezone.
+   */
+  private parseLocalIso(local: string, timezone: string): number {
+    // Use Intl to figure out the UTC offset that applies to `local` in `timezone`.
+    // We construct a UTC instant from the literal, then ask: at that instant, what
+    // wall-clock time does the zone show? The difference is the offset to subtract.
+    const asUtc = new Date(`${local}Z`).getTime();
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const parts = dtf
+      .formatToParts(new Date(asUtc))
+      .reduce<Record<string, string>>((acc, p) => {
+        if (p.type !== "literal") acc[p.type] = p.value;
+        return acc;
+      }, {});
+    const wallMs = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour) === 24 ? 0 : Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const offsetMs = wallMs - asUtc;
+    return asUtc - offsetMs;
+  }
 
   /**
    * Get hourly weather forecast for a park

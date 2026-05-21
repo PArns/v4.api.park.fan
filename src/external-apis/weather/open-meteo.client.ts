@@ -362,6 +362,72 @@ export class OpenMeteoClient {
   }
 
   /**
+   * Fetch minutely (15-min resolution) nowcast for a location.
+   *
+   * Returns precipitation in 15-minute steps for the next few hours.
+   * Used to derive short-term alerts ("rain starts in X min, ends in Y min").
+   *
+   * The result is cached for a short period (5 min) since nowcast data updates
+   * roughly every 15 min on the Open-Meteo side.
+   *
+   * @param latitude - Location latitude
+   * @param longitude - Location longitude
+   * @param steps - Number of 15-min steps (default 24 = 6 hours)
+   * @returns Minutely nowcast data
+   */
+  async getMinutelyNowcast(
+    latitude: number,
+    longitude: number,
+    steps: number = 24,
+  ): Promise<MinutelyNowcastResponse> {
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    const cacheKey = `weather:nowcast:${latR}:${lonR}:${steps}`;
+
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {
+      // Cache miss is fine
+    }
+
+    try {
+      const data = await this.requestWithRetry<OpenMeteoResponse>("/forecast", {
+        params: {
+          latitude,
+          longitude,
+          minutely_15: [
+            "precipitation",
+            "precipitation_probability",
+            "weather_code",
+          ].join(","),
+          forecast_minutely_15: steps,
+          current: ["precipitation", "weather_code", "is_day"].join(","),
+          timezone: "auto",
+        },
+      });
+
+      const result = this.transformNowcastResponse(data);
+
+      try {
+        await this.redis.set(cacheKey, JSON.stringify(result), "EX", 300); // 5 min TTL
+      } catch {
+        // Cache write failure is non-critical
+      }
+
+      return result;
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to fetch nowcast data: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new Error(`Open-Meteo API error: ${errorMessage}`);
+    }
+  }
+
+  /**
    * Transform Open-Meteo API response to our format
    */
   private transformResponse(data: OpenMeteoResponse): DailyWeatherResponse {
@@ -398,6 +464,35 @@ export class OpenMeteoClient {
       : null;
 
     return { days, current: currentConditions };
+  }
+
+  private transformNowcastResponse(
+    data: OpenMeteoResponse,
+  ): MinutelyNowcastResponse {
+    const { minutely_15: m, current } = data;
+
+    if (!m || !m.time) {
+      throw new Error("Invalid Open-Meteo response: missing minutely_15 data");
+    }
+
+    const steps: NowcastStep[] = m.time.map((time, index) => ({
+      time,
+      precipitation: m.precipitation?.[index] ?? null,
+      precipitationProbability: m.precipitation_probability?.[index] ?? null,
+      weatherCode: m.weather_code?.[index] ?? null,
+    }));
+
+    return {
+      steps,
+      current: current
+        ? {
+            time: current.time,
+            precipitation: current.precipitation ?? null,
+            weatherCode: current.weather_code ?? null,
+            isDay: current.is_day != null ? current.is_day === 1 : null,
+          }
+        : null,
+    };
   }
 
   private transformHourlyResponse(
@@ -438,6 +533,13 @@ interface OpenMeteoResponse {
     weather_code?: number | null;
     wind_speed_10m?: number | null;
     is_day?: number | null; // 0 or 1
+    precipitation?: number | null;
+  };
+  minutely_15?: {
+    time: string[];
+    precipitation?: (number | null)[];
+    precipitation_probability?: (number | null)[];
+    weather_code?: (number | null)[];
   };
   daily: {
     time: string[];
@@ -501,4 +603,23 @@ export interface HourlyWeather {
 
 export interface HourlyWeatherResponse {
   hours: HourlyWeather[];
+}
+
+export interface NowcastStep {
+  time: string; // ISO 8601 — start of the 15-min interval, in park's local timezone
+  precipitation: number | null; // mm in this 15-min slot
+  precipitationProbability: number | null; // 0-100
+  weatherCode: number | null; // WMO code
+}
+
+export interface NowcastCurrent {
+  time: string;
+  precipitation: number | null;
+  weatherCode: number | null;
+  isDay: boolean | null;
+}
+
+export interface MinutelyNowcastResponse {
+  steps: NowcastStep[];
+  current: NowcastCurrent | null;
 }

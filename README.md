@@ -554,6 +554,7 @@ This project aggregates data from multiple sources:
 - **[Queue-Times.com](https://queue-times.com/)** — Real-time wait time data
 - **[ThemeParks.wiki](https://themeparks.wiki/)** — Comprehensive park information and live data
 - **[Wartezeiten.app](https://www.wartezeiten.app/)** — Wait times, crowd levels, and opening hours enrichment
+- **[Open-Meteo.com](https://open-meteo.com/)** — Weather forecasts, current conditions, and historical weather data (Weather data by [Open-Meteo.com](https://open-meteo.com/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); built on open data from DWD, ECMWF, NOAA, Météo-France and other national weather services)
 
 Special thanks to these services for making real-time theme park data accessible.
 
