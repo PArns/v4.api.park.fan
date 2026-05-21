@@ -358,14 +358,14 @@ describe("WeatherService", () => {
 
       const result = await service.getNowcast(PARK_ID);
 
-      expect(result!.thunderstormAt).toBe(
+      expect(result!.thunderstormStartsAt).toBe(
         new Date(NOW.getTime() + 45 * 60 * 1000).toISOString(),
       );
       expect(result!.thunderstormEndsAt).toBe(
         new Date(NOW.getTime() + 75 * 60 * 1000).toISOString(),
       );
       // Code 95 is thunderstorm WITHOUT hail → hail fields stay null.
-      expect(result!.hailAt).toBeNull();
+      expect(result!.hailStartsAt).toBeNull();
       expect(result!.hailEndsAt).toBeNull();
     });
 
@@ -379,9 +379,9 @@ describe("WeatherService", () => {
 
       const start = new Date(NOW.getTime() + 30 * 60 * 1000).toISOString();
       const end = new Date(NOW.getTime() + 45 * 60 * 1000).toISOString();
-      expect(result!.thunderstormAt).toBe(start);
+      expect(result!.thunderstormStartsAt).toBe(start);
       expect(result!.thunderstormEndsAt).toBe(end);
-      expect(result!.hailAt).toBe(start);
+      expect(result!.hailStartsAt).toBe(start);
       expect(result!.hailEndsAt).toBe(end);
     });
 
@@ -392,7 +392,7 @@ describe("WeatherService", () => {
 
       const result = await service.getNowcast(PARK_ID);
 
-      expect(result!.thunderstormAt).toBe(
+      expect(result!.thunderstormStartsAt).toBe(
         new Date(NOW.getTime() + 30 * 60 * 1000).toISOString(),
       );
       expect(result!.thunderstormEndsAt).toBeNull();
@@ -406,7 +406,7 @@ describe("WeatherService", () => {
 
       const result = await service.getNowcast(PARK_ID);
 
-      expect(result!.stormAt).toBe(
+      expect(result!.stormStartsAt).toBe(
         new Date(NOW.getTime() + 30 * 60 * 1000).toISOString(),
       );
       expect(result!.stormEndsAt).toBe(
@@ -423,7 +423,7 @@ describe("WeatherService", () => {
 
       const result = await service.getNowcast(PARK_ID);
 
-      expect(result!.stormAt).toBeNull();
+      expect(result!.stormStartsAt).toBeNull();
       expect(result!.stormEndsAt).toBeNull();
       expect(result!.peakWindGustsKmh).toBe(70);
     });

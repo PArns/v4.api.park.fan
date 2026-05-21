@@ -71,17 +71,17 @@ export interface ParkNowcast {
   rainEndsAt: string | null;
 
   /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window. */
-  thunderstormAt: string | null;
+  thunderstormStartsAt: string | null;
   /** ISO timestamp when the thunderstorm block is expected to clear. Null if none in window or it continues beyond the window. */
   thunderstormEndsAt: string | null;
 
   /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window. */
-  hailAt: string | null;
+  hailStartsAt: string | null;
   /** ISO timestamp when the hail block is expected to clear. Null if none in window or it continues beyond the window. */
   hailEndsAt: string | null;
 
   /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window. */
-  stormAt: string | null;
+  stormStartsAt: string | null;
   /** ISO timestamp when storm-force wind gusts are expected to die down. Null if none in window or they continue beyond the window. */
   stormEndsAt: string | null;
 
@@ -279,12 +279,12 @@ export class WeatherService {
      */
     const findBlock = (
       predicate: (s: NowcastStep & { timeMs: number }) => boolean,
-    ): { startAt: string | null; endsAt: string | null } => {
+    ): { startsAt: string | null; endsAt: string | null } => {
       const start = future.find(predicate);
-      if (!start) return { startAt: null, endsAt: null };
+      if (!start) return { startsAt: null, endsAt: null };
       const end = future.find((s) => s.timeMs > start.timeMs && !predicate(s));
       return {
-        startAt: new Date(start.timeMs).toISOString(),
+        startsAt: new Date(start.timeMs).toISOString(),
         endsAt: end ? new Date(end.timeMs).toISOString() : null,
       };
     };
@@ -315,11 +315,11 @@ export class WeatherService {
       rainStartsIntensityMm,
       rainStartsIntensity,
       rainEndsAt,
-      thunderstormAt: thunder.startAt,
+      thunderstormStartsAt: thunder.startsAt,
       thunderstormEndsAt: thunder.endsAt,
-      hailAt: hail.startAt,
+      hailStartsAt: hail.startsAt,
       hailEndsAt: hail.endsAt,
-      stormAt: storm.startAt,
+      stormStartsAt: storm.startsAt,
       stormEndsAt: storm.endsAt,
       peakWindGustsKmh,
       steps: steps.map(({ timeMs: _ignored, ...rest }) => rest),

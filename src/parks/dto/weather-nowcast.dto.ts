@@ -134,7 +134,7 @@ export class WeatherNowcastDto {
       "ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in the forecast window.",
     nullable: true,
   })
-  thunderstormAt: string | null;
+  thunderstormStartsAt: string | null;
 
   @ApiProperty({
     description:
@@ -148,7 +148,7 @@ export class WeatherNowcastDto {
       "ISO timestamp of the next hail slot (WMO 96/99 - thunderstorm with hail). Null if no hail in the forecast window.",
     nullable: true,
   })
-  hailAt: string | null;
+  hailStartsAt: string | null;
 
   @ApiProperty({
     description:
@@ -162,7 +162,7 @@ export class WeatherNowcastDto {
       "ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in the forecast window.",
     nullable: true,
   })
-  stormAt: string | null;
+  stormStartsAt: string | null;
 
   @ApiProperty({
     description:
@@ -222,11 +222,11 @@ export class WeatherNowcastDto {
     dto.rainStartsIntensityMm = nowcast.rainStartsIntensityMm;
     dto.rainStartsIntensity = nowcast.rainStartsIntensity;
     dto.rainEndsAt = nowcast.rainEndsAt;
-    dto.thunderstormAt = nowcast.thunderstormAt;
+    dto.thunderstormStartsAt = nowcast.thunderstormStartsAt;
     dto.thunderstormEndsAt = nowcast.thunderstormEndsAt;
-    dto.hailAt = nowcast.hailAt;
+    dto.hailStartsAt = nowcast.hailStartsAt;
     dto.hailEndsAt = nowcast.hailEndsAt;
-    dto.stormAt = nowcast.stormAt;
+    dto.stormStartsAt = nowcast.stormStartsAt;
     dto.stormEndsAt = nowcast.stormEndsAt;
     dto.currentWindSpeedKmh = nowcast.currentWindSpeedKmh;
     dto.currentWindGustsKmh = nowcast.currentWindGustsKmh;
