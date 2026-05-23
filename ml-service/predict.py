@@ -1872,7 +1872,10 @@ def predict_wait_times(
         uncertainty_results = model.predict_with_uncertainty(df_inference)
         predictions = uncertainty_results["predictions"]
         uncertainties = uncertainty_results["uncertainty"]
-        use_uncertainty = True
+        # A zero-width band means the model has no real uncertainty (e.g. a
+        # Quantile model, or a collapsed VirtEnsembles) → don't derive a
+        # (falsely high) model-confidence from it; use time-based confidence.
+        use_uncertainty = bool(np.nanmax(uncertainties) > 1e-6) if len(uncertainties) else False
     except Exception as e:
         # Fallback to regular predictions if uncertainty estimation fails
         # Reduced logging - only log if it's a real issue

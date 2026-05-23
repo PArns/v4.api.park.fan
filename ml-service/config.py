@@ -44,6 +44,22 @@ class Settings(BaseSettings):
         -1
     )  # -1 = use all available CPU cores, 0 = use CPU count
     CATBOOST_TASK_TYPE: str = "CPU"  # "CPU" or "GPU" (if GPU available)
+    # Loss function. Default RMSEWithUncertainty (predicts the conditional mean +
+    # VirtEnsembles uncertainty). Set to e.g. "Quantile:alpha=0.7" to predict an
+    # upper conditional quantile instead — directly lifts the under-predicted busy
+    # tail (the model regresses busy days to the mean). Quantile disables the
+    # (empirically near-zero) VirtEnsembles uncertainty. Env-gated so the nightly
+    # cron is unaffected unless explicitly overridden.
+    # Production default = "q0.8w": predict the upper conditional quantile to fix
+    # the busy-tail under-prediction (champion RMSE bias was −15 min on busy days;
+    # α=0.8 → −4). Quantile has no VirtEnsembles uncertainty (the old intervals were
+    # collapsed to ~0.17 min anyway). Override to "RMSEWithUncertainty" to revert.
+    CATBOOST_LOSS_FUNCTION: str = "Quantile:alpha=0.8"
+    CATBOOST_POSTERIOR_SAMPLING: bool = True  # only used for RMSEWithUncertainty
+    # Busyness weighting: down-weight the ~72% quiet rows / up-weight busy rows so
+    # the loss attends to the under-fit busy tail. Improves overall calibration on
+    # top of the quantile lift (q0.7w/q0.8w had the best holdout MAE). Default ON.
+    CATBOOST_BUSY_WEIGHT: bool = True
 
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2

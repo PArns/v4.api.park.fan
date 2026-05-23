@@ -507,6 +507,23 @@ def train_model(version: str = None) -> None:
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
 
+    # Busyness weighting (env-gated, default OFF). The data is ~72% quiet rows
+    # (<20 min) so the loss is dominated by them and the busy tail is under-fit.
+    # Down-weight quiet rows / up-weight busy rows. Local `_np` avoids the
+    # function-local-numpy shadowing trap.
+    if getattr(settings, "CATBOOST_BUSY_WEIGHT", False):
+        import numpy as _np
+
+        w = df["waitTime"].values.astype(float)
+        busy_factor = _np.clip((w / 20.0) ** 0.5, 0.4, 2.5)
+        sample_weights = (
+            busy_factor if sample_weights is None else sample_weights * busy_factor
+        )
+        logger.info(
+            "   Busyness weighting ON: factor %.2f-%.2f (quiet↓ busy↑)"
+            % (busy_factor.min(), busy_factor.max())
+        )
+
     # Extract features/target AFTER merge so indices are consistent
     df = df.reset_index(drop=True)
     X = df[feature_columns]

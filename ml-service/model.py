@@ -104,6 +104,18 @@ class WaitTimeModel:
 
         training_start = time.time()
 
+        # Loss / uncertainty config (env-gated, default unchanged). A Quantile
+        # loss predicts an upper conditional quantile to lift the under-predicted
+        # busy tail; it cannot use VirtEnsembles posterior sampling.
+        _loss_fn = getattr(settings, "CATBOOST_LOSS_FUNCTION", "RMSEWithUncertainty")
+        _posterior = getattr(settings, "CATBOOST_POSTERIOR_SAMPLING", True)
+        if _loss_fn.startswith("Quantile") or _loss_fn in ("MAE", "Huber"):
+            _eval_metric = _loss_fn if _loss_fn.startswith("Quantile") else "MAE"
+            _posterior = False
+        else:
+            _eval_metric = _loss_fn
+        print(f"   Loss: {_loss_fn} | eval: {_eval_metric} | posterior: {_posterior}")
+
         self.model = CatBoostRegressor(
             iterations=settings.CATBOOST_ITERATIONS,
             learning_rate=settings.CATBOOST_LEARNING_RATE,
@@ -112,12 +124,10 @@ class WaitTimeModel:
             l2_leaf_reg=settings.CATBOOST_L2_LEAF_REG,
             rsm=getattr(settings, "CATBOOST_RSM", 1.0),
             min_data_in_leaf=getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
-            # RMSEWithUncertainty is required for virtual_ensembles_predict (uncertainty intervals).
-            # Huber would be more robust to wait-time outliers but lacks VirtEnsembles support in CatBoost.
-            loss_function="RMSEWithUncertainty",
-            eval_metric="RMSEWithUncertainty",
+            loss_function=_loss_fn,
+            eval_metric=_eval_metric,
             random_seed=settings.CATBOOST_RANDOM_SEED,
-            posterior_sampling=True,  # Enable virtual ensembles for uncertainty
+            posterior_sampling=_posterior,  # VirtEnsembles (off for Quantile loss)
             thread_count=thread_count,  # Use all CPU cores for parallel training
             task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
             verbose=100,
@@ -538,6 +548,26 @@ class WaitTimeModel:
         """
         if self.model is None:
             raise ValueError("Model not loaded. Call load() first.")
+
+        # Quantile (and other non-RMSEWithUncertainty) models have no
+        # VirtEnsembles posterior — return point predictions with zero
+        # uncertainty. (The old VirtEnsembles intervals were collapsed to
+        # ~0.17 min anyway, so no usable signal is lost; callers detect the
+        # zero-width band and fall back to time-based confidence.)
+        loss_fn = ""
+        try:
+            loss_fn = str(self.model.get_all_params().get("loss_function", ""))
+        except Exception:
+            pass
+        if not loss_fn.startswith("RMSEWithUncertainty"):
+            preds = self.predict(X)
+            zeros = np.zeros_like(preds)
+            return {
+                "predictions": preds,
+                "lower_bound": preds,
+                "upper_bound": preds,
+                "uncertainty": zeros,
+            }
 
         # Explicit copy to avoid SettingWithCopyWarning on incoming slice
         X = X.copy()
