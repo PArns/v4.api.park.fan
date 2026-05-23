@@ -8,12 +8,17 @@ ml-service endpoint shape so the NestJS side can consume it the same way.
 
 from __future__ import annotations
 
+import faulthandler
 import json
 import logging
 import os
 import threading
 import warnings
 from datetime import datetime, timezone
+
+# Dump a (C-level) traceback of all threads on a fatal signal (SIGSEGV/SIGABRT/…),
+# so a "silent" native crash in torch/dataloader leaves a trace instead of a bare exit.
+faulthandler.enable()
 
 # Silence benign, high-volume third-party warnings so the CI-mode logs stay clean.
 # Set at import (before any torch/neuralforecast fork) so dataloader workers inherit
@@ -96,6 +101,9 @@ def _run_training(version: str) -> None:
     start → restart loop). A spawned subprocess is a clean process, so the workers
     fork safely and the cores actually get used. Status is shared via the file.
     """
+    import traceback
+
+    faulthandler.enable()
     import forecast
     import db
 
@@ -117,12 +125,13 @@ def _run_training(version: str) -> None:
             "info": info, "error": None,
         })
         logger.info("Training + forecast complete: %s", info)
-    except Exception as e:  # noqa: BLE001
-        import traceback
-        logger.error("Training failed: %s", e)
+    except BaseException as e:  # noqa: BLE001 — catch everything incl. SystemExit/KeyboardInterrupt
+        tb = traceback.format_exc()
+        logger.error("Training failed: %s\n%s", e, tb)  # full stacktrace to the log
+        traceback.print_exc()  # also to stderr (Coolify log)
         _write_status({
             "is_training": False, "status": "failed", "version": version,
-            "error": f"{e}\n{traceback.format_exc()}",
+            "error": f"{e}\n{tb}",
         })
 
 
@@ -141,12 +150,15 @@ def train(req: TrainRequest):
         proc = ctx.Process(target=_run_training, args=(version,), name=f"nf-train-{version}")
         proc.start()
         proc.join()
-        # If the child died without writing a terminal status (e.g. OOM-killed),
-        # clear the lock so the next /train isn't blocked.
-        if proc.exitcode not in (0, None) and _read_status().get("is_training"):
+        logger.info("training subprocess %s exited with code %s", version, proc.exitcode)
+        # If the child ended without writing a terminal status — a silent native
+        # crash (segfault/abort) or even a clean exit() that skipped our handlers —
+        # mark it failed so the lock clears and the failure is visible.
+        st = _read_status()
+        if st.get("is_training") and st.get("version") == version:
             _write_status({
                 "is_training": False, "status": "failed", "version": version,
-                "error": f"training subprocess exited with code {proc.exitcode}",
+                "error": f"training subprocess ended without completing (exit code {proc.exitcode})",
             })
 
     threading.Thread(target=_spawn_and_reap, daemon=True).start()
