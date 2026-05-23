@@ -103,6 +103,9 @@ services:
     # PyTorch training is memory-heavy; cap so an nf train can never OOM the host
     # or starve ml-service. Do NOT trigger nf /train during ml-service's 06:00 cron.
     mem_limit: 10g
+    # DataLoader workers pass batches via /dev/shm; Docker's 64 MB default gets a
+    # SIGKILL (-9) on the worker shared-memory tensors. Give it real headroom.
+    shm_size: 2gb
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

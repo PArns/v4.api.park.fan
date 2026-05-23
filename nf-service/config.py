@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     NF_PROGRESS_BAR: bool = False
     # Dataloader workers. Training was dataloader-bound (~3% CPU on a 16-core host —
     # compute idle waiting for single-threaded windowing). Parallel workers feed the
-    # batches so the cores are actually used. 0 = main-thread loading (old behavior).
-    NF_NUM_WORKERS: int = 8
+    # batches so the cores are actually used. 0 = main-thread loading. Needs enough
+    # /dev/shm (see compose shm_size); 4 balances throughput vs shared-mem footprint.
+    NF_NUM_WORKERS: int = 4
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
