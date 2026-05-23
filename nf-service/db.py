@@ -237,17 +237,18 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
                       created_at     = now()
         """
     )
-    n = 0
+    params = [
+        {"aid": str(r.attraction_id), "td": r.target_date,
+         "pp": float(r.predicted_peak), "ver": version}
+        for r in rows.itertuples(index=False)
+    ]
     with _engine.begin() as c:
         c.execute(ddl)
-        for r in rows.itertuples(index=False):
-            c.execute(
-                upsert,
-                {"aid": str(r.attraction_id), "td": r.target_date,
-                 "pp": float(r.predicted_peak), "ver": version},
-            )
-            n += 1
-    return n
+        # Bulk executemany in chunks (a forecast can be ~250k rows across all parks;
+        # one execute() per row would be a quarter-million round-trips).
+        for i in range(0, len(params), 5000):
+            c.execute(upsert, params[i : i + 5000])
+    return len(params)
 
 
 def build_future_frame(

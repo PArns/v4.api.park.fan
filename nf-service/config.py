@@ -26,7 +26,9 @@ class Settings(BaseSettings):
 
     # --- Model config ---
     NF_HORIZON: int = 90        # forecast horizon (days); extend to 365 once stable
-    NF_INPUT_SIZE: int = 365    # context window (days)
+    # Context window (days). Kept at ~90 to match the ~150d of daily history we
+    # actually have — 365 would be almost all start-padding (see challenger doc).
+    NF_INPUT_SIZE: int = 90
     NF_MAX_STEPS: int = 500     # PoC training steps (tune up later)
     NF_HIDDEN_SIZE: int = 64
     NF_LEARNING_RATE: float = 1e-3
