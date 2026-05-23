@@ -12,7 +12,14 @@ import json
 import logging
 import os
 import threading
+import warnings
 from datetime import datetime, timezone
+
+# Silence benign, high-volume third-party warnings so the CI-mode logs stay clean.
+# Set at import (before any torch/neuralforecast fork) so dataloader workers inherit
+# the filters on Linux. These are deprecation/internal notices, not actionable here.
+warnings.filterwarnings("ignore", message=r".*TypedStorage is deprecated.*")
+warnings.filterwarnings("ignore", message=r".*removed from hparams because it cannot be pickled.*")
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
