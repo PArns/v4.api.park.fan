@@ -50,7 +50,7 @@ def _epoch_log_callback():
 def _build_models():
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
-    from neuralforecast.models import TFT, NHITS
+    from neuralforecast.models import TFT
     from neuralforecast.losses.pytorch import DistributionLoss
 
     # CI mode (default): no tqdm progress bar (Coolify can't render its TUI); emit
@@ -82,10 +82,11 @@ def _build_models():
         dataloader_kwargs=dl_kwargs,
         **trainer_kw,
     )
+    # TFT only — it's the model under evaluation; NHITS was an unused baseline whose
+    # training just doubled time + memory. (Re-add if a baseline is needed later.)
     return [
         TFT(**common, hidden_size=settings.NF_HIDDEN_SIZE,
             learning_rate=settings.NF_LEARNING_RATE),
-        NHITS(**common, learning_rate=settings.NF_LEARNING_RATE),
     ]
 
 
