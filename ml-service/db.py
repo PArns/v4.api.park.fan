@@ -545,7 +545,7 @@ _historical_occupancy_cache_ttl = 3600  # 1 hour in seconds
 
 
 def fetch_historical_park_occupancy(
-    park_ids: List[str], lookback_weeks: int = 8
+    park_ids: List[str], lookback_weeks: int = 8, end_time=None
 ) -> Dict:
     """
     Fetch historical park occupancy by (day-of-week, hour) for future prediction rows.
@@ -562,7 +562,7 @@ def fetch_historical_park_occupancy(
     if not park_ids:
         return {}
 
-    cache_key = f"hist_occ:{','.join(sorted(park_ids))}:{lookback_weeks}"
+    cache_key = f"hist_occ:{','.join(sorted(park_ids))}:{lookback_weeks}:{end_time}"
 
     # Check cache
     if cache_key in _historical_occupancy_cache:
@@ -584,6 +584,7 @@ def fetch_historical_park_occupancy(
             JOIN attractions a ON qd."attractionId" = a.id
             WHERE a."parkId"::text = ANY(:park_ids)
               AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
+              AND (CAST(:end_time AS timestamptz) IS NULL OR qd.timestamp < :end_time)
               AND qd."waitTime" >= 10
               AND qd.status = 'OPERATING'
               AND qd."queueType" = 'STANDBY'
@@ -652,6 +653,7 @@ def fetch_historical_park_occupancy(
                 {
                     "park_ids": park_ids,
                     "lookback_days": lookback_days,
+                    "end_time": end_time,
                 },
             )
             rows = result.fetchall()

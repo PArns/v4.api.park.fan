@@ -189,7 +189,9 @@ _recent_wait_times_cache_ttl = 120  # 2 minutes
 
 
 def fetch_recent_wait_times(
-    attraction_ids: List[str], lookback_days: int = 730
+    attraction_ids: List[str],
+    lookback_days: int = 730,
+    end_time: Optional[datetime] = None,
 ) -> pd.DataFrame:
     """
     Fetch recent wait times aggregated by day for historical features
@@ -210,7 +212,7 @@ def fetch_recent_wait_times(
         return pd.DataFrame()
 
     # Create cache key from sorted attraction IDs
-    cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}"
+    cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}:{end_time}"
 
     # Check cache
     if cache_key in _recent_wait_times_cache:
@@ -242,6 +244,7 @@ def fetch_recent_wait_times(
                 AND se."attractionId" IS NULL
             WHERE qd."attractionId"::text = ANY(:attraction_ids)
                 AND qd.timestamp >= NOW() - :lookback_days * INTERVAL '1 day'
+                AND (CAST(:end_time AS timestamptz) IS NULL OR qd.timestamp < :end_time)
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
                 AND qd.status = 'OPERATING'
@@ -317,6 +320,7 @@ def fetch_recent_wait_times(
             {
                 "attraction_ids": attraction_ids,
                 "lookback_days": lookback_days,
+                "end_time": end_time,
             },
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
@@ -423,7 +427,7 @@ def create_prediction_features(
     from db import fetch_historical_park_occupancy
 
     unique_park_ids = list(set(park_ids))
-    hist_occ = fetch_historical_park_occupancy(unique_park_ids)
+    hist_occ = fetch_historical_park_occupancy(unique_park_ids, end_time=base_time)
     if feature_context is not None:
         feature_context = dict(feature_context)  # don't mutate caller's dict
         feature_context["historicalOccupancy"] = hist_occ
@@ -1335,7 +1339,9 @@ def create_prediction_features(
     # Historical features (most important!)
     # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB
     # This avoids expensive Python calculations for every attraction
-    recent_data = fetch_recent_wait_times(attraction_ids, lookback_days=730)
+    recent_data = fetch_recent_wait_times(
+        attraction_ids, lookback_days=730, end_time=base_time
+    )
 
     # Initialize with defaults (0.0 to match training fallback)
     df["avg_wait_last_24h"] = 0.0
