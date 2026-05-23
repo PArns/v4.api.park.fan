@@ -48,6 +48,13 @@ def _build_models():
         scaler_type="robust",  # required by NeuralForecast when using exog
         loss=DistributionLoss(distribution="StudentT", level=settings.levels),
         max_steps=settings.NF_MAX_STEPS,
+        # THE memory lever: windows per batch. NeuralForecast's default is large, and
+        # TFT attention over input_size × windows_batch_size × hidden spiked >14g at
+        # fit start → OOM, independent of series count (the hourly PoC with 128 ran
+        # fine). Keep it small; this is what actually fixes the OOM.
+        batch_size=settings.NF_BATCH_SIZE,
+        windows_batch_size=settings.NF_WINDOWS_BATCH_SIZE,
+        inference_windows_batch_size=settings.NF_WINDOWS_BATCH_SIZE,
         # Our daily history is short (~5 months) with gaps, so some attraction
         # series are shorter than input_size. Pad them instead of dropping/erroring.
         start_padding_enabled=True,

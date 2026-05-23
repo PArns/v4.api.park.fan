@@ -42,9 +42,14 @@ class Settings(BaseSettings):
     # runs in its own process. On the full panel these OOM-killed the fit; per chunk
     # they're fine. 0 = single-thread loading.
     NF_NUM_WORKERS: int = 4
-    # Parks per training chunk. The full ~2759-series panel OOMs (>14g) at fit start;
-    # ~10 parks/chunk (~250 series) keeps each fit ~1-2g and lets the workers run.
+    # Parks per training chunk. Combined with the small windows_batch_size this keeps
+    # each fit comfortably in memory; also lets the dataloader workers run.
     NF_PARK_CHUNK_SIZE: int = 10
+    # Windows/series per training batch — THE memory lever. NeuralForecast's default
+    # is large and made TFT attention spike >14g at fit start (OOM, independent of
+    # series count). The hourly PoC ran fine at 128. Keep small.
+    NF_WINDOWS_BATCH_SIZE: int = 128
+    NF_BATCH_SIZE: int = 16
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
