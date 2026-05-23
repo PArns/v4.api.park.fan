@@ -102,6 +102,7 @@ services:
     container_name: parkfan_nf_service
     restart: unless-stopped
     shm_size: 2gb # DataLoader workers pass batches via /dev/shm (64MB default → SIGKILL)
+    mem_limit: 14g # host-safe ceiling; full-panel TFT needs >10g at dataset build
     ports:
       - "8001:8000"
     environment:

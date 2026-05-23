@@ -100,9 +100,12 @@ services:
         condition: service_healthy
     networks:
       - parkfan-network
-    # PyTorch training is memory-heavy; cap so an nf train can never OOM the host
-    # or starve ml-service. Do NOT trigger nf /train during ml-service's 06:00 cron.
-    mem_limit: 10g
+    # PyTorch training is memory-heavy. 14g is the host-safe ceiling: host=28g,
+    # ml-service ~8.5g + postgres ~5.3g committed → ~14g free, so a higher cap risks
+    # a HOST OOM that would kill the API. Training the full ~2758-series panel needs
+    # >10g at dataset build. NEVER trigger nf /train during ml-service's 06:00 cron
+    # (its spike + this would exceed 28g).
+    mem_limit: 14g
     # DataLoader workers pass batches via /dev/shm; Docker's 64 MB default gets a
     # SIGKILL (-9) on the worker shared-memory tensors. Give it real headroom.
     shm_size: 2gb
