@@ -4,28 +4,34 @@
  * Standard 6-level crowd rating used across all park and attraction
  * endpoints.
  *
- * **Semantic (since the P90 switch):**
+ * **Semantic — daily vs live boundary:**
  *
- * Crowd readings are now **peak-vs-peak** — current/today's P90 wait
- * divided by the 548-day P90 baseline. The previous implementation used
- * P50-vs-P50 (avg-vs-avg) which underweighted the peak waits users
- * actually remember (the headliner at 14:00 on a busy Saturday).
+ * Two regimes coexist. Daily/historical aggregates compare a day's peak to
+ * a **typical day's peak**; point-in-time/live signals are
+ * **ratio-vs-P50**. They are never mixed on a single surface.
+ * See docs/analytics/crowd-level-typical-day-peak.md for the full story.
  *
- * - **Park live occupancy:** avg-of-per-headliner-MAX in the last 60 min
- *   ÷ park P90 baseline (headliner-only). The 60-min window keeps the
- *   reading responsive while still being statistically meaningful with
- *   ~12 samples per ride.
- * - **Calendar daily crowd level:** today's P90 wait ÷ park P90 baseline.
- * - **Attraction crowd level:** current wait ÷ per-attraction P90
- *   baseline.
+ * - **Calendar daily crowd level:** a day's value is the **AVG across
+ *   headliner rides** of each ride's daily P90 (peak-of-day, every
+ *   headliner contributing equally — NOT a percentile across rides). The
+ *   denominator is the **typical-day-peak baseline** = the median over
+ *   operating days of that same day value (548-day window, headliner-only).
+ *   100% reads as "a statistically typical day" (= moderate); busy seasons
+ *   (Wintertraum, Easter) reach very_high/extreme. The pooled P90 baseline
+ *   is NOT used — it's inflated by the busiest season and compresses the
+ *   top. Future/predicted days use the same baseline (AVG of predicted
+ *   headliner waits ÷ typical-day-peak).
+ * - **Park live occupancy (ratio-vs-P50):** current short-window peak
+ *   ÷ park P50 baseline (headliner-only). Also consumed as an ML feature
+ *   (getCurrentOccupancy). Deliberately NOT changing.
+ * - **Calendar "today" cell (ratio-vs-P50):** uses the live signal,
+ *   because today is an incomplete day.
+ * - **Hourly within-a-day predictions (ratio-vs-P50):** per-hour median
+ *   ÷ park P50 baseline.
  *
- * Both numerator and denominator are P90 — apples-to-apples, 100%
- * reads as "typical day's peak".
- *
- * **Fallback:** When a P90 baseline isn't yet populated (brand-new
- * entity before the next 3 AM / 4 AM cron), the API falls back to the
- * P50 baseline + P50-shaped numerator. Still apples-to-apples, just an
- * avg-vs-avg reading until P90 fills in.
+ * **No calendar fallback:** the typical-day-peak is written atomically with
+ * P50/P90 (park_p50_baselines.typicalDayPeak + Redis), so a missing value
+ * means the park has no baseline at all (brand-new) → neutral default.
  *
  * **Thresholds (see determineCrowdLevel):**
  * - very_low: ≤ 60%   - low: 61-89%      - moderate: 90-110%

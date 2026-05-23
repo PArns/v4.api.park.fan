@@ -94,19 +94,21 @@ export class PredictionRequestDto {
   };
 
   @ApiProperty({
-    description: "P50 (median) baseline for crowd level calculation",
+    description:
+      "P50 (median) baseline. Used for the park-occupancy ML feature and " +
+      "as the crowd-level fallback when the typical-day-peak is absent.",
     required: false,
   })
   p50Baseline?: number;
 
   @ApiProperty({
     description:
-      "P90 (peak) baseline for crowd level calculation — primary " +
-      "baseline since the API switched to peak-vs-peak crowd readings. " +
-      "P50 stays as a fallback for parks without a populated P90 row.",
+      "Typical-day-peak baseline (median over days of the AVG-of-headliner " +
+      "daily P90) — the primary crowd-level reference so 100% = a typical " +
+      "day = moderate, matching the calendar. Falls back to p50Baseline.",
     required: false,
   })
-  p90Baseline?: number;
+  typicalDayPeakBaseline?: number;
 }
 
 export class ParkPredictionRequestDto {

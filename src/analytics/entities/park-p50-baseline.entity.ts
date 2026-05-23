@@ -32,6 +32,14 @@ export class ParkP50Baseline {
   @Column({ type: "decimal", precision: 10, scale: 2 })
   p50Baseline: number; // P50 (median) wait time in minutes
 
+  // Typical-day-peak baseline: median over operating days of the day value
+  // (AVG across headliners of each ride's daily P90). This is the reference
+  // the calendar divides a day's peak by, so 100% = a typical day = moderate.
+  // Written atomically with p50/p90 by the daily cron. Nullable so existing
+  // rows survive the rollout until the next cron run fills it.
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
+  typicalDayPeak: number | null;
+
   @Column({ type: "int" })
   headlinerCount: number; // Number of headliners used
 

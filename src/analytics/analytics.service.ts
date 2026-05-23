@@ -3465,30 +3465,44 @@ export class AnalyticsService {
       }
     }
 
-    // Resolve baseline: prefer P50 (median, "typical-day wait") for the
-    // peak-vs-median ratio. P90 stays as a hard fallback for brand-new
-    // entities without a P50 row yet. Live 548-day PERCENTILE_CONT
-    // fallback was removed in PR #46; the daily cron populates both
-    // tables and missing rows mean "no baseline yet".
+    // Resolve baseline. For parks the calendar reads "a day's peak ÷ a
+    // typical day's peak": numerator = AVG-across-headliners of the per-ride
+    // day-P90, denominator = the typical-day-peak baseline (median over days
+    // of that same quantity). 100% = a typical day = moderate; busy seasons
+    // (Wintertraum, Easter) reach very_high/extreme. The pooled P90 baseline
+    // is NOT used here because it's inflated by the busiest season and
+    // compresses the top. No P90/P50 fallback: the typical-day-peak is
+    // written atomically with P50/P90, so a missing value means the park has
+    // no baseline at all (brand-new) → the no-baseline default below applies.
     let baseline = 0;
-    const baselineType = "p50";
+    let baselineType: "typical_day" | "p90" | "p50" = "typical_day";
     let baselineConfidence: "high" | "medium" | "low" = "low";
 
     if (type === "park") {
-      baseline = await this.getP50BaselineFromCache(entityId);
+      baseline = await this.getTypicalDayPeakFromCache(entityId);
       if (baseline > 0) {
         const rec = await this.parkP50BaselineRepository.findOne({
           where: { parkId: entityId },
+          select: ["confidence"],
         });
         baselineConfidence = rec?.confidence || "low";
       }
     } else {
-      baseline = await this.getAttractionP50BaselineFromCache(entityId);
+      baseline = await this.getAttractionP90BaselineFromCache(entityId);
       if (baseline > 0) {
-        const rec = await this.attractionP50BaselineRepository.findOne({
+        const rec = await this.attractionP90BaselineRepository.findOne({
           where: { attractionId: entityId },
         });
         baselineConfidence = rec?.confidence || "low";
+      } else {
+        baseline = await this.getAttractionP50BaselineFromCache(entityId);
+        baselineType = "p50";
+        if (baseline > 0) {
+          const rec = await this.attractionP50BaselineRepository.findOne({
+            where: { attractionId: entityId },
+          });
+          baselineConfidence = rec?.confidence || "low";
+        }
       }
     }
 
@@ -3566,18 +3580,18 @@ export class AnalyticsService {
 
       if (targetAttractionIds.length > 0) {
         // For each ride: compute its own P50 / P90 over the day. Then
-        // - AVG(p50) — "typical wait that day across rides", used for
-        //   `avgWaitTime` display.
-        // - PERCENTILE_CONT(0.9) of the per-ride P90s — the day's actual
-        //   peak hour across the busiest rides. Matches the calendar-
-        //   daily metric (P90 of slot-P90s) so the per-day crowd rating
-        //   on this endpoint and the calendar list agree. AVG(p90)
-        //   alone is "average busy hour", which under-reports peak.
+        // aggregate AVG across rides for both — every headliner counts
+        // equally, exactly like the P50/P90 park baselines
+        // (avg-of-per-headliner-percentile). This keeps the day value
+        // apples-to-apples with the baseline it's divided by:
+        // - AVG(p50) — "typical wait that day across headliners" (avgWaitTime).
+        // - AVG(p90) — the day's peak across headliners; ÷ the P90 baseline
+        //   gives peak-vs-peak (100% = a typical day's peak).
         const result = await this.queueDataRepository.query(
           `
           SELECT
             ROUND(AVG(per_ride.p50)::numeric, 2)   as p50,
-            ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY per_ride.p90)::numeric, 2) as p90,
+            ROUND(AVG(per_ride.p90)::numeric, 2)   as p90,
             SUM(per_ride.cnt)::integer              as count
           FROM (
             SELECT
@@ -3609,16 +3623,16 @@ export class AnalyticsService {
       }
     }
 
-    // crowdLevel is peak-vs-median: today's P90 (the day's representative
-    // peak wait) ÷ P50 baseline (typical median). 100% = today's peak
-    // matched a typical wait, >150% = noticeably busier than typical.
-    // When we fell back to P90 baseline (no P50 row yet) the comparison
-    // becomes peak-vs-peak — less intuitive but still apples-to-apples
-    // until the daily cron fills in the P50 row.
+    // crowdLevel: the day's peak ÷ the typical day's peak. 100% = this
+    // day's peak matched a typical day's peak, >150% = noticeably busier
+    // than typical. The numerator is the day's AVG-of-per-headliner-P90
+    // for both the typical-day-peak and the P90-baseline fallback; only the
+    // brand-new P50 fallback uses the P50 (median) numerator so that
+    // comparison stays apples-to-apples (median-vs-median).
     let percentage = 0;
     let crowdLevel: CrowdLevel = "very_low";
     const hasData = dailyStats.p50 !== null && dailyStats.count > 0;
-    const dailyValue = dailyStats.p90;
+    const dailyValue = baselineType === "p50" ? dailyStats.p50 : dailyStats.p90;
 
     if (hasData && baseline > 0 && dailyValue !== null) {
       percentage = Math.round((dailyValue / baseline) * 100);
@@ -4096,6 +4110,7 @@ export class AnalyticsService {
   ): Promise<{
     p50: number;
     p90: number;
+    typicalDayPeak: number;
     sampleCount: number;
     distinctDays: number;
     confidence: "high" | "medium" | "low";
@@ -4105,6 +4120,7 @@ export class AnalyticsService {
       return {
         p50: 0,
         p90: 0,
+        typicalDayPeak: 0,
         sampleCount: 0,
         distinctDays: 0,
         confidence: "low",
@@ -4170,18 +4186,119 @@ export class AnalyticsService {
       headliners.find((h) => h.tier === "tier2")?.tier ||
       "tier3";
 
+    // Typical-day-peak: computed together with P50/P90 (same headliner set,
+    // same window) so the three are always written atomically — the calendar
+    // never needs to fall back to P90/P50.
+    const typicalDayPeak = await this.calculateTypicalDayPeak(
+      parkId,
+      headliners.map((h) => h.attractionId),
+    );
+
     this.logger.log(
-      `Calculated P50/P90 baselines for park ${parkId}: P50=${p50}min P90=${p90}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
+      `Calculated baselines for park ${parkId}: P50=${p50}min P90=${p90}min typical-day-peak=${typicalDayPeak}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
     );
 
     return {
       p50,
       p90,
+      typicalDayPeak,
       sampleCount,
       distinctDays,
       confidence,
       tier,
     };
+  }
+
+  /**
+   * Typical-day-peak baseline = median over operating days (548-day window)
+   * of the day value (AVG across headliners of each ride's daily P90).
+   *
+   * This is the reference the calendar divides a day's peak by, so that
+   * 100% = a typical day's peak = `moderate`. The pooled P90 baseline is a
+   * poor reference for "is this day busier than typical" because it is
+   * inflated by the busiest season (which lives inside its own 548-day
+   * window) and therefore compresses the top — even peak-season days can't
+   * exceed it by much. The median-of-daily-peaks centers a typical day at
+   * 100% and lets genuinely busy days (Wintertraum, Easter) reach
+   * very_high/extreme. Headliner-only. Returns 0 when no qualifying data.
+   */
+  async calculateTypicalDayPeak(
+    parkId: string,
+    headlinerIds: string[],
+  ): Promise<number> {
+    if (headlinerIds.length === 0) return 0;
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["timezone"],
+    });
+    const timezone = park?.timezone || "UTC";
+    const cutoff = subDays(new Date(), 548);
+    const rows = await this.queueDataRepository.query(
+      `
+      WITH per_ride_day AS (
+        SELECT DATE(qd.timestamp AT TIME ZONE $2) AS d,
+               qd."attractionId",
+               PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS p90
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1::uuid[])
+          AND qd.timestamp >= $3
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" >= 10
+          AND qd."queueType" = 'STANDBY'
+        GROUP BY 1, 2
+      ),
+      daily AS (
+        SELECT d, AVG(p90) AS day_val FROM per_ride_day GROUP BY d
+      )
+      SELECT ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY day_val)::numeric, 2) AS typical_day_peak
+      FROM daily
+      `,
+      [headlinerIds, timezone, cutoff],
+    );
+    return rows[0]?.typical_day_peak ? parseFloat(rows[0].typical_day_peak) : 0;
+  }
+
+  /**
+   * Cache the park typical-day-peak baseline (Redis only — no schema change;
+   * recomputed by the daily cron). 2-day TTL so a single missed cron run
+   * still leaves a usable value; callers fall back to the P90 baseline when
+   * it's absent.
+   */
+  async cacheTypicalDayPeak(parkId: string, value: number): Promise<void> {
+    if (value > 0) {
+      await this.redis.set(
+        `park:typicalpeak:${parkId}`,
+        value.toString(),
+        "EX",
+        86400 * 2,
+      );
+    }
+  }
+
+  /**
+   * Read the park typical-day-peak baseline (Redis, then the
+   * park_p50_baselines.typicalDayPeak column). Returns 0 when absent — which
+   * only happens for a park with no baseline at all (brand-new), in which
+   * case the caller falls through to the no-baseline default. Written
+   * atomically with P50/P90, so there is no separate fallback path.
+   */
+  async getTypicalDayPeakFromCache(parkId: string): Promise<number> {
+    const cached = await this.redis.get(`park:typicalpeak:${parkId}`);
+    if (cached !== null && cached !== "") {
+      return parseFloat(cached);
+    }
+    const row = await this.parkP50BaselineRepository.findOne({
+      where: { parkId },
+      select: ["typicalDayPeak"],
+    });
+    const value =
+      row?.typicalDayPeak != null
+        ? parseFloat(row.typicalDayPeak.toString())
+        : 0;
+    if (value > 0) {
+      await this.cacheTypicalDayPeak(parkId, value);
+    }
+    return value;
   }
 
   /**
@@ -4196,6 +4313,7 @@ export class AnalyticsService {
     baseline: {
       p50: number;
       p90: number;
+      typicalDayPeak: number;
       sampleCount: number;
       distinctDays: number;
       confidence: "high" | "medium" | "low";
@@ -4207,11 +4325,15 @@ export class AnalyticsService {
     await this.headlinerAttractionRepository.delete({ parkId });
     await this.headlinerAttractionRepository.save(headliners);
 
-    // Save park P50 baseline (Upsert to prevent duplicate key errors)
+    // Save park P50 baseline + typical-day-peak (Upsert to prevent duplicate
+    // key errors). typicalDayPeak is the calendar reference, written
+    // atomically here with P50 so the calendar never needs a fallback.
     await this.parkP50BaselineRepository.upsert(
       {
         parkId,
         p50Baseline: baseline.p50,
+        typicalDayPeak:
+          baseline.typicalDayPeak > 0 ? baseline.typicalDayPeak : null,
         headlinerCount: headliners.length,
         tier: baseline.tier,
         sampleCount: baseline.sampleCount,
@@ -4262,8 +4384,11 @@ export class AnalyticsService {
       );
     }
 
+    // Cache the typical-day-peak (calendar reference) with the same lifecycle.
+    await this.cacheTypicalDayPeak(parkId, baseline.typicalDayPeak);
+
     this.logger.log(
-      `Saved P50/P90 baselines for park ${parkId}: P50=${baseline.p50}min P90=${baseline.p90}min (${headliners.length} headliners, tier: ${baseline.tier})`,
+      `Saved baselines for park ${parkId}: P50=${baseline.p50}min P90=${baseline.p90}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier})`,
     );
   }
 

@@ -29,6 +29,7 @@
 
 ### 📊 Analytics & Logic
 - [Crowd Levels](docs/analytics/crowd-levels.md) - The core logic for crowd calculations.
+- [Typical-Day-Peak Baseline](docs/analytics/crowd-level-typical-day-peak.md) - Calendar crowd calibration: a day's peak ÷ a typical day's peak (median of daily peaks). Why P90/P50 and pooled-P90 fail; ML alignment; deploy steps.
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
 - [Sparklines](docs/analytics/sparklines.md) - Wait-time history for ride cards: two-layer API (`getBatchAttractionWaitTimeHistory` vs `getAttractionSparklinesBatch`), when to use which, and park-timezone handling.
 - [Data Recalculation & Correction Jobs](docs/analytics/data-recalculation.md) - Manual backfills for stats and baselines.
@@ -99,14 +100,15 @@ ml-service/            # 🐍 Python CatBoost Service
 - `synchronize: true` is ON in development.
 - Entity changes immediately alter the DB schema.
 
-### 3. Unified Crowd Levels (Peak-vs-Median)
+### 3. Unified Crowd Levels (Typical-Day-Peak Daily / Ratio-vs-P50 Live)
 
-- **Detailed Guide**: [Crowd Levels](docs/analytics/crowd-levels.md)
-- **Baseline**: Static P50 (median, "typical wait") of **Headliner Attractions** (548-day window); attractions use per-ride P50 from `attraction_p50_baselines`. P90 baselines exist as a fallback for brand-new entities without a P50 row yet.
-- **Current (live)**: P90-ish wait — per-headliner MAX in last **20 min** averaged across headliners (window auto-expands 20 → 60 → 240 min if no data).
-- **Current (calendar daily)**: **P90 of in-hours slot P90s** for that date from `attraction_hourly_history`.
-- **Formula**: `(current_peak / p50_baseline) * 100` (100% = current peak matches typical wait, >150% = busy day).
-- **Never** mix P90 baseline with P50 logic on the same surface.
+- **Detailed Guide**: [Typical-Day-Peak](docs/analytics/crowd-level-typical-day-peak.md) · [Crowd Levels](docs/analytics/crowd-levels.md)
+- **Boundary**: daily/historical aggregates compare a day's peak to a **typical day's peak**; point-in-time/live signals use **ratio-vs-P50**. Never mix the two on one surface.
+- **Calendar daily**: a day's value = **AVG across headliner rides** of each ride's daily P90; denominator = **typical-day-peak baseline** = the **median over operating days** of that same day value (548-day window, headliner-only). Future/predicted days use the same baseline (AVG of predicted headliner waits ÷ typical-day-peak).
+  - **Formula**: `(day_value / typical_day_peak) * 100` — 100% = a statistically typical day = `moderate`; busy seasons (Wintertraum, Easter, promos) correctly read high/very_high/extreme. The pooled P90 baseline is NOT used (it's inflated by the busiest season and compresses the top).
+- **Live overview / `getCurrentOccupancy` (ratio-vs-P50)**: current short-window peak ÷ park P50 baseline. Also an ML feature. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
+  - **Formula**: `(current_peak / p50_baseline) * 100`.
+- **No calendar fallback**: typical-day-peak is written atomically with P50/P90 (`park_p50_baselines.typicalDayPeak` + Redis), so a missing value means no baseline at all → neutral default. P50 stays load-bearing (live + ML feature); P90 is computed for free but no longer a calendar reference.
 
 ---
 

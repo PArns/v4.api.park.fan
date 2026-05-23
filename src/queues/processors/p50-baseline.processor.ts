@@ -18,15 +18,21 @@ import { AttractionsService } from "../../attractions/attractions.service";
  *   percentile-aggregates job at 2 AM).
  * - Identifies headliner attractions via the 3-tier adaptive system.
  * - Calculates per-headliner P50 / P90 over the 548-day sliding window.
- * - Park baselines = avg-of-per-headliner-{P50,P90} (consistent with the
- *   peak-vs-peak and avg-vs-avg comparisons the API surfaces).
- * - Writes `park_p50_baselines` + `park_p90_baselines` for parks and the
- *   matching pair for attractions; primes Redis cache for each.
+ * - Park baselines = avg-of-per-headliner-{P50,P90}, plus the
+ *   **typical-day-peak** (median over operating days of the AVG-of-per-
+ *   headliner daily P90) computed in the same pass and stored atomically.
+ * - Writes `park_p50_baselines` (incl. the `typicalDayPeak` column) +
+ *   `park_p90_baselines` for parks and the matching pair for attractions;
+ *   primes Redis cache for each.
  *
- * Why both percentiles: the API surfaces crowd levels as peak-vs-median
- * (current peak ÷ P50 baseline). P90 is kept as a graceful fallback for
- * entities that don't have a P50 row yet, and is also exposed to ML
- * features and avg-shaped consumers.
+ * Crowd-level regimes the API surfaces:
+ * - Calendar/daily: a day's AVG-of-per-headliner-P90 ÷ the **typical-day-
+ *   peak** baseline (100% = a typical day = moderate). See
+ *   docs/analytics/crowd-level-typical-day-peak.md.
+ * - Live overview / getCurrentOccupancy and hourly predictions: ratio-vs-P50
+ *   (current peak ÷ P50 baseline). P50 also feeds the ML occupancy feature.
+ * P90 is computed for free (carries confidence/metadata) but is no longer
+ * the calendar reference.
  */
 @Processor("p50-baseline")
 export class P50BaselineProcessor {
@@ -107,7 +113,7 @@ export class P50BaselineProcessor {
               );
 
               this.logger.log(
-                `✅ ${park.name}: ${baseline.p50}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
+                `✅ ${park.name}: P50=${baseline.p50}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
               );
               return "success" as const;
             } catch (error) {
@@ -262,7 +268,7 @@ export class P50BaselineProcessor {
         return;
       }
 
-      // Save to database and cache
+      // Save to database and cache (P50/P90 + typical-day-peak atomically)
       await this.analyticsService.saveP50Baselines(
         parkId,
         baseline,
@@ -270,7 +276,7 @@ export class P50BaselineProcessor {
       );
 
       this.logger.log(
-        `✅ Backfilled P50 baseline for park ${parkId}: ${baseline.p50}min (${headliners.length} headliners)`,
+        `✅ Backfilled baseline for park ${parkId}: P50=${baseline.p50}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners)`,
       );
     } catch (error) {
       const errorMessage =

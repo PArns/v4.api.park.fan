@@ -427,21 +427,20 @@ export class MLService {
         liveStatus,
       );
 
-      // 4b. Fetch both P50 (median / "typical avg") and P90 (peak)
-      // baselines so the Python ML service can align its crowd-level
-      // computation with whichever metric the caller needs. The API now
-      // emits peak-vs-peak crowd readings by default but P50 stays
-      // available for avg-shaped consumers and as a fallback when P90
-      // hasn't been computed yet.
+      // 4b. Fetch the typical-day-peak baseline (primary crowd-level
+      // reference, so the ML service's crowd levels match the calendar:
+      // 100% = a typical day = moderate) and the P50 baseline (kept for the
+      // park-occupancy feature and as the crowd-level fallback). The old
+      // p90Baseline was never read by the Python service, so it's dropped.
       let p50Baseline: number | undefined;
-      let p90Baseline: number | undefined;
+      let typicalDayPeakBaseline: number | undefined;
       try {
-        const [p50, p90] = await Promise.all([
+        const [p50, typicalPeak] = await Promise.all([
           this.analyticsService.getP50BaselineFromCache(parkId),
-          this.analyticsService.getP90BaselineFromCache(parkId),
+          this.analyticsService.getTypicalDayPeakFromCache(parkId),
         ]);
         p50Baseline = p50 || undefined;
-        p90Baseline = p90 || undefined;
+        typicalDayPeakBaseline = typicalPeak || undefined;
       } catch (error) {
         this.logger.warn(
           `Failed to fetch baselines for park ${parkId}: ${error}`,
@@ -458,7 +457,7 @@ export class MLService {
         recentWaitTimes,
         featureContext,
         p50Baseline,
-        p90Baseline,
+        typicalDayPeakBaseline,
       };
 
       const response = await this.mlClient.post<BulkPredictionResponseDto>(

@@ -238,17 +238,20 @@ export class CalendarService {
     );
 
     // Pre-compute predicted crowd levels for future days. Mirrors
-    // calculateCrowdLevelForDate: predicted day-peak vs. P50 (median)
-    // baseline.
-    const [allHeadliners, p50Baseline] = await Promise.all([
+    // calculateCrowdLevelForDate: predicted headliner waits (AVG across
+    // headliners) ÷ the typical-day-peak baseline (median of daily peaks),
+    // so 100% = a typical day. No fallback — the typical-day-peak is written
+    // atomically with the park baseline; when absent (brand-new park) the
+    // load rating defaults to moderate.
+    const [allHeadliners, predictedBaseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractions(park.id),
-      this.analyticsService.getP50BaselineFromCache(park.id),
+      this.analyticsService.getTypicalDayPeakFromCache(park.id),
     ]);
     const headlinerIdSet = new Set(allHeadliners.map((h) => h.attractionId));
     const predictedCrowdLevels = this.buildPredictedCrowdLevels(
       mlPredictions.predictions,
       headlinerIdSet,
-      p50Baseline,
+      predictedBaseline,
     );
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
@@ -906,10 +909,15 @@ export class CalendarService {
    * Aggregate per-attraction ML predictions into a date → CrowdLevel map
    * for future days.
    *
-   * Mirrors calculateCrowdLevelForDate: predicted P90 of headliner waits
-   * divided by the park P50 (median) baseline (peak-vs-median). The
-   * caller passes P50; when it's 0 (park doesn't have a P50 row yet) we
-   * degrade to P90 as a fallback.
+   * Mirrors calculateCrowdLevelForDate (peak-vs-peak): the predicted
+   * headliner waits for the day, averaged across headliners, divided by
+   * the park P90 baseline. The caller passes the P90 baseline (or the P50
+   * baseline as a fallback when no P90 row exists yet).
+   *
+   * Known limitation: ML emits a single smoothed value per attraction per
+   * day (not a real intra-day peak), so future days read more
+   * conservatively than completed days. Improving this is an ML-accuracy
+   * task, not a crowd-level-formula one.
    */
   private buildPredictedCrowdLevels(
     predictions: PredictionDto[],
@@ -939,17 +947,16 @@ export class CalendarService {
 
       if (headliners.length === 0) continue;
 
-      // Predicted day P90 (the peak of headliner-predicted waits) divided
-      // by the P50 baseline (median). Reads as "tomorrow's predicted peak
-      // vs a typical-day wait" — same semantic as the past-day calendar
-      // entries. crowdLevel and peakLoad coincide here (one signal per
-      // predicted day; there's no separate "average" predicted view).
+      // Predicted headliner waits averaged across headliners (every
+      // headliner counts equally — same cross-ride aggregation as the
+      // past-day numerator and the P90 baseline) ÷ the P90 baseline.
+      // Reads as "tomorrow's predicted level vs a typical day's peak".
+      // crowdLevel and peakLoad coincide here (one signal per predicted
+      // day; there's no separate "average" predicted view).
       const waits = headliners.map((p) => p.predictedWaitTime);
-      waits.sort((a, b) => a - b);
-      const p90Idx = Math.min(waits.length - 1, Math.floor(waits.length * 0.9));
-      const p90Wait = waits[p90Idx];
+      const avgWait = waits.reduce((sum, w) => sum + w, 0) / waits.length;
 
-      const { rating } = this.analyticsService.getLoadRating(p90Wait, baseline);
+      const { rating } = this.analyticsService.getLoadRating(avgWait, baseline);
       result.set(date, { crowdLevel: rating, peakLoad: rating });
     }
 

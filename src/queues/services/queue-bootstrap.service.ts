@@ -215,11 +215,26 @@ export class QueueBootstrapService implements OnModuleInit {
         latestP50 &&
         Date.now() - latestP50.updatedAt.getTime() < 12 * 60 * 60 * 1000;
 
-      if (isP50Fresh) {
+      // Force a recompute (in batches — the job processes parks in groups of
+      // 5) when the typical-day-peak baseline hasn't been populated yet, even
+      // if P50 is fresh. This handles the rollout of the typical-day-peak
+      // column: existing park_p50_baselines rows have it NULL until the first
+      // recompute fills it. Raw query avoids injecting the park-P50 repo here.
+      const typicalRows = await this.parkRepository.query(
+        `SELECT 1 FROM park_p50_baselines WHERE "typicalDayPeak" IS NOT NULL LIMIT 1`,
+      );
+      const needsTypicalDayPeak = typicalRows.length === 0;
+
+      if (isP50Fresh && !needsTypicalDayPeak) {
         this.logger.log(
           `✅ P50 Baselines are fresh (from ${latestP50.updatedAt.toISOString()}). Skipping initial calculation.`,
         );
       } else {
+        if (needsTypicalDayPeak) {
+          this.logger.log(
+            "🔁 typical-day-peak baseline missing — forcing batched park-baseline recompute (post-deploy backfill).",
+          );
+        }
         const p50ParkJobActive = await this.isJobActiveOrWaiting(
           this.p50BaselineQueue,
           "calculate-park-baselines",

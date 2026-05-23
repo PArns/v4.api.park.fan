@@ -1809,7 +1809,8 @@ def predict_wait_times(
     current_wait_times: Optional[Dict[str, int]] = None,
     recent_wait_times: Optional[Dict[str, int]] = None,
     feature_context: Optional[Dict[str, Any]] = None,
-    p50_baseline: Optional[float] = None,  # NEW: P50 baseline for crowd level
+    p50_baseline: Optional[float] = None,  # P50 baseline (crowd-level fallback)
+    typical_day_peak_baseline: Optional[float] = None,  # primary crowd-level ref
 ) -> List[Dict[str, Any]]:
     """
     Predict wait times for attractions
@@ -1918,18 +1919,19 @@ def predict_wait_times(
         # Combined confidence (weighted average)
         confidence = 0.6 * time_confidence + 0.4 * model_confidence
 
-        # Calculate crowd level based on predicted wait time vs P50 baseline
-        # P50 BASELINE SYSTEM:
-        # - Uses P50 (median) from TypeScript service (passed via API)
-        # - Replaces internal rolling_avg_7d calculation
-        # - Ensures TypeScript and Python produce IDENTICAL crowd levels
+        # Calculate crowd level based on predicted wait time vs the
+        # TYPICAL-DAY-PEAK baseline, so the ML service's crowd levels match
+        # the calendar (100% = a typical day = moderate).
         #
         # Fallback chain (graceful degradation):
-        #   1. P50 baseline from API (preferred)
-        #   2. rolling_avg_7d from features (legacy)
-        #   3. Default 30 min (safeguard)
-        if p50_baseline is not None and p50_baseline > 0:
-            baseline = p50_baseline  # Use P50 baseline from TypeScript
+        #   1. typical-day-peak baseline from API (primary — matches calendar)
+        #   2. P50 baseline from API (when typical-day-peak absent)
+        #   3. rolling_avg_7d from features (legacy)
+        #   4. Default 30 min (safeguard)
+        if typical_day_peak_baseline is not None and typical_day_peak_baseline > 0:
+            baseline = typical_day_peak_baseline
+        elif p50_baseline is not None and p50_baseline > 0:
+            baseline = p50_baseline
         else:
             # Fallback to rolling_avg_7d during migration period
             baseline = row.get("rolling_avg_7d", 30.0)
@@ -1939,10 +1941,8 @@ def predict_wait_times(
         else:
             ratio = 1.0  # Default if no baseline
 
-        # Categorize crowd level using P50-RELATIVE THRESHOLDS
-        # MUST MATCH TypeScript determineCrowdLevel() EXACTLY!
-        # TypeScript: 60, 89, 110, 150, 200
-        # P50 (100%) = "moderate" (expected/typical baseline)
+        # Categorize crowd level using the SAME thresholds as the TypeScript
+        # determineCrowdLevel(): 60, 89, 110, 150, 200. 100% = "moderate".
         occupancy_pct = ratio * 100
         if occupancy_pct <= 60:
             crowd_level = "very_low"
