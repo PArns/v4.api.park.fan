@@ -95,6 +95,37 @@ services:
       retries: 3
       start_period: 40s
 
+  nf-service:
+    build:
+      context: ./nf-service
+      dockerfile: Dockerfile
+    container_name: parkfan_nf_service
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: parkfan
+      DB_USER: parkfan
+      DB_PASSWORD: parkfan_dev_password
+      MODEL_DIR: /app/models
+      NF_PARK_IDS: ${NF_PARK_IDS:-}
+    volumes:
+      - nf-models:/app/models
+      - ./nf-service:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   api:
     build:
       context: .
@@ -113,6 +144,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       ML_SERVICE_URL: http://ml-service:8000
+      NF_SERVICE_URL: http://nf-service:8000
       BULL_PREFIX: parkfan
       NODE_ENV: development
     volumes:
@@ -139,6 +171,8 @@ volumes:
   redisdata:
     driver: local
   ml-models:
+    driver: local
+  nf-models:
     driver: local
 
 networks:

@@ -1,0 +1,123 @@
+"""NeuralForecast service — FastAPI app.
+
+Parallel/experimental forecaster for the far-future daily-peak surface, using
+holidays/calendar as known-future covariates (TFT/NHITS). Batch-oriented:
+train nightly, predict the horizon, expose the cached forecast. Mirrors the
+ml-service endpoint shape so the NestJS side can consume it the same way.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from config import get_settings
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nf.main")
+settings = get_settings()
+
+app = FastAPI(title="Park Fan NeuralForecast Service", version="0.1.0")
+
+_STATUS_FILE = os.path.join(settings.MODEL_DIR, "nf_training_status.json")
+_FORECAST_FILE = os.path.join(settings.MODEL_DIR, "nf_forecast.parquet")
+
+
+def _write_status(status: dict) -> None:
+    os.makedirs(settings.MODEL_DIR, exist_ok=True)
+    with open(_STATUS_FILE, "w") as f:
+        json.dump(status, f)
+
+
+def _read_status() -> dict:
+    try:
+        with open(_STATUS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"is_training": False, "status": "idle", "version": None, "error": None}
+
+
+class TrainRequest(BaseModel):
+    version: str | None = None
+
+
+@app.get("/health")
+def health():
+    model_exists = os.path.exists(os.path.join(settings.MODEL_DIR, "nf_daily"))
+    return {
+        "status": "healthy",
+        "model_trained": model_exists,
+        "park_scope": settings.park_ids or "all",
+        "horizon": settings.NF_HORIZON,
+    }
+
+
+@app.get("/train/status")
+def train_status():
+    return _read_status()
+
+
+@app.post("/train")
+def train(req: TrainRequest):
+    if _read_status().get("is_training"):
+        raise HTTPException(status_code=409, detail="Training already in progress")
+    version = req.version or f"nf{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+
+    def worker():
+        import forecast
+
+        _write_status({
+            "is_training": True, "status": "training", "version": version,
+            "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
+        })
+        try:
+            info = forecast.train(version)
+            _write_status({
+                "is_training": False, "status": "completed", "version": version,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "info": info, "error": None,
+            })
+            logger.info("Training complete: %s", info)
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            logger.error("Training failed: %s", e)
+            _write_status({
+                "is_training": False, "status": "failed", "version": version,
+                "error": f"{e}\n{traceback.format_exc()}",
+            })
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"status": "training_started", "version": version}
+
+
+@app.post("/forecast")
+def run_forecast():
+    """Run prediction with the trained model and cache the daily forecast."""
+    import forecast
+
+    try:
+        y_hat = forecast.predict()
+        y_hat.to_parquet(_FORECAST_FILE)
+        return {"status": "ok", "rows": int(len(y_hat)), "cached_at": _FORECAST_FILE}
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        logger.error("Forecast failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
+
+
+@app.get("/forecast/latest")
+def latest_forecast(unique_id: str | None = None):
+    import pandas as pd
+
+    if not os.path.exists(_FORECAST_FILE):
+        raise HTTPException(status_code=404, detail="No cached forecast yet")
+    df = pd.read_parquet(_FORECAST_FILE)
+    if unique_id:
+        df = df[df["unique_id"] == unique_id]
+    return json.loads(df.to_json(orient="records", date_format="iso"))

@@ -1,0 +1,24 @@
+# FastAPI & Server
+fastapi==0.127.0
+uvicorn[standard]==0.39.0
+pydantic==2.12.5
+pydantic-settings==2.11.0
+
+# Neural forecasting (Nixtla). Pulls PyTorch + Lightning.
+# torch CPU wheel is installed separately in the Dockerfile (from the cpu index)
+# so we don't drag in the multi-GB CUDA build.
+neuralforecast==3.1.8
+
+# Data
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==17.0.0
+
+# Database (same pattern as ml-service)
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Utilities
+python-dateutil==2.9.0.post0
+pytz==2025.2
+psutil==6.1.1

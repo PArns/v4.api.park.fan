@@ -78,6 +78,42 @@ services:
       - "coolify.version=1.0.0"
       - "coolify.type=service"
 
+  nf-service:
+    build:
+      context: ./nf-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_DATABASE:-parkfan}
+      DB_USER: ${DB_USERNAME:-parkfan}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MODEL_DIR: /app/models
+      NF_PARK_IDS: ${NF_PARK_IDS:-}
+    volumes:
+      - /data/parkfan/nf-models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    # PyTorch training is memory-heavy; cap so an nf train can never OOM the host
+    # or starve ml-service. Do NOT trigger nf /train during ml-service's 06:00 cron.
+    mem_limit: 10g
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "coolify.managed=true"
+      - "coolify.version=1.0.0"
+      - "coolify.type=service"
+
   api:
     build:
       context: .
@@ -89,6 +125,7 @@ services:
       - DB_HOST=postgres
       - REDIS_HOST=redis
       - ML_SERVICE_URL=http://ml-service:8000
+      - NF_SERVICE_URL=http://nf-service:8000
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
       # Always use volume path so .env cannot override with ./data/... (which is not mounted)

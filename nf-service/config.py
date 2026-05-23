@@ -1,0 +1,48 @@
+"""Settings for the NeuralForecast service. Reuses the same DB_* env vars as
+ml-service so it can point at the same Postgres without extra config."""
+
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    # Database (same names as ml-service)
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str = "parkfan"
+    DB_PASSWORD: str = ""
+    DB_NAME: str = "parkfan"
+
+    MODEL_DIR: str = "/app/models"
+
+    # --- Forecast scope (PoC: one park, daily-peak) ---
+    # Comma-separated park UUIDs to include. Empty = all parks (full panel).
+    NF_PARK_IDS: str = ""
+    # Daily-peak target percentile (matches the calendar peak-vs-peak contract).
+    NF_TARGET_PERCENTILE: float = 0.9
+    # Minimum wait filter (aligns with ml-service training rules).
+    NF_MIN_WAIT: int = 5
+    NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
+
+    # --- Model config ---
+    NF_HORIZON: int = 90        # forecast horizon (days); extend to 365 once stable
+    NF_INPUT_SIZE: int = 365    # context window (days)
+    NF_MAX_STEPS: int = 500     # PoC training steps (tune up later)
+    NF_HIDDEN_SIZE: int = 64
+    NF_LEARNING_RATE: float = 1e-3
+    NF_LEVELS: str = "80,90"    # prediction-interval levels
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def park_ids(self) -> list[str]:
+        return [p.strip() for p in self.NF_PARK_IDS.split(",") if p.strip()]
+
+    @property
+    def levels(self) -> list[int]:
+        return [int(x) for x in self.NF_LEVELS.split(",") if x.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
