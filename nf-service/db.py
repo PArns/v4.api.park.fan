@@ -9,6 +9,9 @@ Timezone rule (repo-wide): every `ds` is a PARK-LOCAL day, never UTC.
 
 from __future__ import annotations
 
+import logging
+import time
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -16,6 +19,7 @@ from sqlalchemy import create_engine, text
 from config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("nf.db")
 
 
 def get_engine():
@@ -99,46 +103,23 @@ def fetch_holidays(countries: list[str]) -> pd.DataFrame:
     return df
 
 
-def _holiday_sets(meta_row, holidays: pd.DataFrame):
-    """Return (local_dates, neighbor_dates, school_dates, bridge_dates) sets for
-    one attraction's park, using its country/region + influencing regions."""
-    country, region = meta_row["country"], meta_row["region"]
-    influencing = meta_row.get("influencing") or []
-    if isinstance(influencing, str):
-        import json
-
-        try:
-            influencing = json.loads(influencing)
-        except Exception:
-            influencing = []
-    neigh = {(d.get("countryCode"), d.get("regionCode")) for d in influencing}
-
-    def _norm(r):
-        return (r or "").split("-")[-1] or None
-
-    h = holidays
-    local_mask = (h["country"] == country) & (
-        h["region"].isna() | (h["region"].apply(_norm) == _norm(region))
-    )
-    local = h[local_mask]
-    local_public = set(local[local["holiday_type"].isin(["public", "bank"])]["date"])
-    school = set(local[local["holiday_type"] == "school"]["date"])
-    bridge = set(local[local["holiday_type"] == "bridge"]["date"])
-
-    neigh_mask = h.apply(
-        lambda r: (r["country"], _norm(r["region"])) in neigh
-        or (r["country"], None) in neigh,
-        axis=1,
-    )
-    neighbor = set(h[neigh_mask & h["holiday_type"].isin(["public", "school"])]["date"])
-    return local_public, neighbor, school, bridge
+def _norm_region(r):
+    return (r or "").split("-")[-1] or None
 
 
 def add_calendar_covariates(
     df: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame
 ) -> pd.DataFrame:
-    """Add the futr_exog columns to a (unique_id, ds) frame — works for both the
-    historical panel and the future forecast frame."""
+    """Add the futr_exog columns to a (unique_id, ds) frame (historical panel or
+    future frame).
+
+    Holiday flags are computed PER PARK (memoised by holiday signature) with
+    vectorised isin — not per attraction with a row-wise apply over the whole
+    holidays table. The old per-attraction path was O(attractions × holidays) and
+    took >20 min on the ~2755-series all-parks panel; parks ≪ attractions and most
+    share a signature, so this is orders of magnitude faster.
+    """
+    t0 = time.time()
     df = df.copy()
     ds = df["ds"]
     dow = ds.dt.dayofweek
@@ -152,8 +133,6 @@ def add_calendar_covariates(
     df["season_code"] = (month % 12 // 3).astype(int)  # 0=winter..3=fall
     df["is_peak_season"] = month.isin([6, 7, 8, 12]).astype(int)
 
-    # Holiday flags per attraction (vectorised per unique_id via its park sets).
-    meta_by_id = meta.set_index("unique_id")
     for col in (
         "is_holiday_primary",
         "is_holiday_neighbor",
@@ -162,23 +141,75 @@ def add_calendar_covariates(
     ):
         df[col] = 0
 
-    for uid, g in df.groupby("unique_id"):
-        if uid not in meta_by_id.index:
-            continue
-        local_public, neighbor, school, bridge = _holiday_sets(
-            meta_by_id.loc[uid], holidays
-        )
-        d = g["ds"].dt.normalize()
-        df.loc[g.index, "is_holiday_primary"] = d.isin(local_public).astype(int).values
-        df.loc[g.index, "is_holiday_neighbor"] = d.isin(neighbor).astype(int).values
-        df.loc[g.index, "is_school_holiday"] = d.isin(school).astype(int).values
-        df.loc[g.index, "is_bridge_day"] = d.isin(bridge).astype(int).values
+    n_parks = 0
+    if not holidays.empty and "park_id" in meta.columns:
+        # Prepare holiday helpers ONCE (was recomputed for every attraction).
+        h = holidays.copy()
+        h["region_norm"] = h["region"].map(_norm_region)
+        h["cr"] = list(zip(h["country"], h["region_norm"]))
+        h_pub_or_school = h["holiday_type"].isin(["public", "school"])
+
+        meta_by_id = meta.drop_duplicates("unique_id").set_index("unique_id")
+        df["_park"] = df["unique_id"].map(meta_by_id["park_id"].to_dict())
+        park_rep = meta.drop_duplicates("park_id").set_index("park_id")
+
+        cache: dict = {}  # signature -> (local_public, neighbor, school, bridge)
+
+        def _sets_for_park(pid):
+            row = park_rep.loc[pid]
+            country, region = row["country"], row["region"]
+            influencing = row.get("influencing") or []
+            if isinstance(influencing, str):
+                import json
+
+                try:
+                    influencing = json.loads(influencing)
+                except Exception:
+                    influencing = []
+            neigh = {(d.get("countryCode"), d.get("regionCode")) for d in influencing}
+            countries_wide = {c for (c, r) in neigh if r is None}
+            sig = (country, region, frozenset(neigh))
+            if sig in cache:
+                return cache[sig]
+            rn = _norm_region(region)
+            local = h[(h["country"] == country) & (h["region"].isna() | (h["region_norm"] == rn))]
+            local_public = set(local[local["holiday_type"].isin(["public", "bank"])]["date"])
+            school = set(local[local["holiday_type"] == "school"]["date"])
+            bridge = set(local[local["holiday_type"] == "bridge"]["date"])
+            # Neighbor: vectorised — (country,region_norm) in neigh OR country specified region-wide.
+            nmask = h["cr"].isin(neigh) | h["country"].isin(countries_wide)
+            neighbor = set(h[nmask & h_pub_or_school]["date"])
+            cache[sig] = (local_public, neighbor, school, bridge)
+            return cache[sig]
+
+        groups = df.groupby("_park").groups
+        total = len(groups)
+        for pid, idx in groups.items():
+            if pid not in park_rep.index:
+                continue
+            lp, nb, sc, br = _sets_for_park(pid)
+            d = df.loc[idx, "ds"].dt.normalize()
+            df.loc[idx, "is_holiday_primary"] = d.isin(lp).astype(int).values
+            df.loc[idx, "is_holiday_neighbor"] = d.isin(nb).astype(int).values
+            df.loc[idx, "is_school_holiday"] = d.isin(sc).astype(int).values
+            df.loc[idx, "is_bridge_day"] = d.isin(br).astype(int).values
+            n_parks += 1
+            if n_parks % 50 == 0:
+                logger.info(
+                    "  calendar covariates: %d/%d parks (%d sigs, %.1fs)",
+                    n_parks, total, len(cache), time.time() - t0,
+                )
+        df = df.drop(columns=["_park"])
 
     df["holiday_count_total"] = (
         df["is_holiday_primary"]
         + df["is_holiday_neighbor"]
         + df["is_school_holiday"]
         + df["is_bridge_day"]
+    )
+    logger.info(
+        "calendar covariates done: %d parks, %d rows in %.1fs",
+        n_parks, len(df), time.time() - t0,
     )
     return df
 

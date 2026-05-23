@@ -70,20 +70,29 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     the PoC). The nightly job trains + forecasts + persists in a single pass anyway,
     so a save→load split buys nothing and only reintroduces that bug.
     """
+    import time
     from neuralforecast import NeuralForecast
 
+    t0 = time.time()
     logger.info("Building panel…")
     panel, meta, holidays = build_panel()
     logger.info(
-        "Panel: %d rows, %d series, %s..%s",
+        "Panel: %d rows, %d series, %s..%s (%.1fs)",
         len(panel), panel["unique_id"].nunique(),
-        panel["ds"].min().date(), panel["ds"].max().date(),
+        panel["ds"].min().date(), panel["ds"].max().date(), time.time() - t0,
     )
 
     cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
     nf = NeuralForecast(models=_build_models(), freq="D")
+    t_fit = time.time()
+    logger.info("Fitting %d model(s)…", len(nf.models))
     nf.fit(df=panel[cols])
+    logger.info("Fit done in %.1fs", time.time() - t_fit)
 
+    t_pred = time.time()
     futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
     y_hat = nf.predict(df=panel[cols], futr_df=futr)
+    logger.info(
+        "Forecast done in %.1fs (total %.1fs)", time.time() - t_pred, time.time() - t0,
+    )
     return y_hat.reset_index() if y_hat.index.name else y_hat
