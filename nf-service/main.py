@@ -141,27 +141,10 @@ def train(req: TrainRequest):
         raise HTTPException(status_code=409, detail="Training already in progress")
     version = req.version or f"nf{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-    import multiprocessing as mp
-
-    def _spawn_and_reap():
-        # Non-daemon Process so it may spawn DataLoader worker children; a daemon
-        # thread joins it to reap (no zombie) without blocking shutdown.
-        ctx = mp.get_context("spawn")
-        proc = ctx.Process(target=_run_training, args=(version,), name=f"nf-train-{version}")
-        proc.start()
-        proc.join()
-        logger.info("training subprocess %s exited with code %s", version, proc.exitcode)
-        # If the child ended without writing a terminal status — a silent native
-        # crash (segfault/abort) or even a clean exit() that skipped our handlers —
-        # mark it failed so the lock clears and the failure is visible.
-        st = _read_status()
-        if st.get("is_training") and st.get("version") == version:
-            _write_status({
-                "is_training": False, "status": "failed", "version": version,
-                "error": f"training subprocess ended without completing (exit code {proc.exitcode})",
-            })
-
-    threading.Thread(target=_spawn_and_reap, daemon=True).start()
+    # In-thread training (NOT a subprocess): with NF_NUM_WORKERS=0 there are no
+    # DataLoader child processes to isolate, and the spawned subprocess variant was
+    # itself getting OOM-killed (-9) at fit start where in-thread training ran fine.
+    threading.Thread(target=_run_training, args=(version,), daemon=True).start()
     return {"status": "training_started", "version": version}
 
 
