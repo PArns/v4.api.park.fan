@@ -92,59 +92,33 @@ def train_status():
     return _read_status()
 
 
-def _run_training(version: str) -> None:
-    """Module-level training entry, run in a SPAWNED SUBPROCESS (see /train).
-
-    Why a subprocess and not a thread: the DataLoader's worker processes
-    (NF_NUM_WORKERS) fork from whatever process calls fit(). Forking from the
-    threaded uvicorn worker killed the container (clean exit 0 right at DataLoader
-    start → restart loop). A spawned subprocess is a clean process, so the workers
-    fork safely and the cores actually get used. Status is shared via the file.
-    """
-    import traceback
-
-    faulthandler.enable()
-    import forecast
-    import db
-
-    _write_status({
-        "is_training": True, "status": "training", "version": version,
-        "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
-    })
-    try:
-        # Train + forecast in one process (no save — see train_and_forecast),
-        # then cache + persist the forward forecast for the scoreboard.
-        y_hat = forecast.train_and_forecast(version)
-        y_hat.to_parquet(_FORECAST_FILE)
-        tcol = _tft_column(list(y_hat.columns))
-        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
-        info = {"rows": int(len(y_hat)), "persisted": int(persisted)}
-        _write_status({
-            "is_training": False, "status": "completed", "version": version,
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-            "info": info, "error": None,
-        })
-        logger.info("Training + forecast complete: %s", info)
-    except BaseException as e:  # noqa: BLE001 — catch everything incl. SystemExit/KeyboardInterrupt
-        tb = traceback.format_exc()
-        logger.error("Training failed: %s\n%s", e, tb)  # full stacktrace to the log
-        traceback.print_exc()  # also to stderr (Coolify log)
-        _write_status({
-            "is_training": False, "status": "failed", "version": version,
-            "error": f"{e}\n{tb}",
-        })
-
-
 @app.post("/train")
 def train(req: TrainRequest):
     if _read_status().get("is_training"):
         raise HTTPException(status_code=409, detail="Training already in progress")
     version = req.version or f"nf{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-    # In-thread training (NOT a subprocess): with NF_NUM_WORKERS=0 there are no
-    # DataLoader child processes to isolate, and the spawned subprocess variant was
-    # itself getting OOM-killed (-9) at fit start where in-thread training ran fine.
-    threading.Thread(target=_run_training, args=(version,), daemon=True).start()
+    import subprocess
+    import sys
+
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_runner.py")
+
+    def _launch():
+        # Run training as its OWN OS process (not a uvicorn thread). Keeps uvicorn
+        # responsive, lets DataLoader workers fork from a clean process, and means an
+        # OOM kills only the runner — uvicorn survives. A daemon thread waits on it
+        # and clears a stale lock if the runner is killed without a terminal status.
+        proc = subprocess.Popen([sys.executable, runner, version])
+        proc.wait()
+        logger.info("train_runner %s exited with code %s", version, proc.returncode)
+        st = _read_status()
+        if st.get("is_training") and st.get("version") == version:
+            _write_status({
+                "is_training": False, "status": "failed", "version": version,
+                "error": f"train_runner exited {proc.returncode} without completing (likely OOM-killed)",
+            })
+
+    threading.Thread(target=_launch, daemon=True).start()
     return {"status": "training_started", "version": version}
 
 

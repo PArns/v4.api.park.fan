@@ -33,6 +33,15 @@ def get_engine():
 _engine = get_engine()
 
 
+def fetch_park_ids() -> list[str]:
+    """All park UUIDs (as text) that have attractions — used to chunk the panel for
+    iterative training so each fit stays within memory."""
+    sql = text('SELECT DISTINCT "parkId"::text AS pid FROM attractions WHERE "parkId" IS NOT NULL ORDER BY 1')
+    with _engine.connect() as c:
+        df = pd.read_sql(sql, c)
+    return df["pid"].tolist()
+
+
 def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
     """One row per attraction in scope: timezone, country/region, influencing
     regions (JSON). queue_data has no parkId, so attractions carry the link."""

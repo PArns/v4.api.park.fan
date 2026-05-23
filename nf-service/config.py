@@ -37,11 +37,14 @@ class Settings(BaseSettings):
     # bar — its carriage-return TUI is unreadable in Coolify's log viewer. We emit
     # plain per-epoch log lines instead. Set True locally for the live TUI.
     NF_PROGRESS_BAR: bool = False
-    # Dataloader workers. Parallel workers would feed batches faster, BUT on the full
-    # ~2758-series panel they OOM-kill the training subprocess (-9) at the DataLoader
-    # shared-memory step regardless of /dev/shm — too many windows × workers. Default
-    # 0 (main-thread loading) is the reliable path; raise only with a scoped park set.
-    NF_NUM_WORKERS: int = 0
+    # Dataloader workers for multi-core data loading. Viable again now that training
+    # is CHUNKED (small per-chunk panel keeps the shared-memory footprint bounded) and
+    # runs in its own process. On the full panel these OOM-killed the fit; per chunk
+    # they're fine. 0 = single-thread loading.
+    NF_NUM_WORKERS: int = 4
+    # Parks per training chunk. The full ~2759-series panel OOMs (>14g) at fit start;
+    # ~10 parks/chunk (~250 series) keeps each fit ~1-2g and lets the workers run.
+    NF_PARK_CHUNK_SIZE: int = 10
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

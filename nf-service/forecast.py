@@ -62,12 +62,12 @@ def _build_models():
     ]
 
 
-def build_panel():
-    """Returns (panel_with_covariates, meta, holidays)."""
-    park_ids = settings.park_ids
+def build_panel(park_ids: list[str]):
+    """Returns (panel_with_covariates, meta, holidays) for the given parks. Empty
+    frames if the parks have no data in the window (caller skips the chunk)."""
     panel = db.fetch_daily_peak_panel(park_ids)
     if panel.empty:
-        raise RuntimeError("Empty panel — check NF_PARK_IDS / data window.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     meta = db.fetch_attraction_meta(park_ids)
     countries = sorted({c for c in meta["country"].dropna().unique()})
     # include influencing countries
@@ -81,36 +81,52 @@ def build_panel():
 
 
 def train_and_forecast(version: str) -> pd.DataFrame:
-    """Fit + predict in ONE process and return the forward forecast.
+    """Train + forecast ITERATIVELY over park chunks, returning the concatenated
+    forward forecast.
 
-    Deliberately does NOT nf.save(): NeuralForecast's save() deep-copies the model
-    incl. the DistributionLoss, which raises with the StudentT loss (confirmed in
-    the PoC). The nightly job trains + forecasts + persists in a single pass anyway,
-    so a save→load split buys nothing and only reintroduces that bug.
+    Why chunked: the full ~2759-series panel spikes >14g at fit start and gets
+    OOM-killed (cgroup oom_kill, memory.peak hit the cap). Training ~NF_PARK_CHUNK_SIZE
+    parks at a time bounds the per-fit footprint to ~1-2g, which fits comfortably AND
+    makes parallel dataloader workers (NF_NUM_WORKERS) viable again. Each chunk trains
+    its own TFT — fine for per-attraction forecasting (own history + calendar drive it).
+    No nf.save() (the DistributionLoss deep-copy save bug); fit+predict per chunk.
     """
     import time
+    import gc
     from neuralforecast import NeuralForecast
 
     t0 = time.time()
-    logger.info("Building panel…")
-    panel, meta, holidays = build_panel()
+    park_ids = settings.park_ids or db.fetch_park_ids()
+    size = max(1, settings.NF_PARK_CHUNK_SIZE)
+    chunks = [park_ids[i:i + size] for i in range(0, len(park_ids), size)]
     logger.info(
-        "Panel: %d rows, %d series, %s..%s (%.1fs)",
-        len(panel), panel["unique_id"].nunique(),
-        panel["ds"].min().date(), panel["ds"].max().date(), time.time() - t0,
+        "Iterative training: %d parks in %d chunk(s) of %d (workers=%d)",
+        len(park_ids), len(chunks), size, settings.NF_NUM_WORKERS,
     )
 
     cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
-    nf = NeuralForecast(models=_build_models(), freq="D")
-    t_fit = time.time()
-    logger.info("Fitting %d model(s)…", len(nf.models))
-    nf.fit(df=panel[cols])
-    logger.info("Fit done in %.1fs", time.time() - t_fit)
+    parts = []
+    for ci, chunk in enumerate(chunks, 1):
+        tc = time.time()
+        panel, meta, holidays = build_panel(chunk)
+        if panel.empty:
+            logger.info("chunk %d/%d: no data, skip", ci, len(chunks))
+            continue
+        nf = NeuralForecast(models=_build_models(), freq="D")
+        nf.fit(df=panel[cols])
+        futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
+        yh = nf.predict(df=panel[cols], futr_df=futr)
+        parts.append(yh.reset_index() if yh.index.name else yh)
+        logger.info(
+            "chunk %d/%d done: %d series, %d rows (%.1fs, total %.1fs)",
+            ci, len(chunks), panel["unique_id"].nunique(), len(parts[-1]),
+            time.time() - tc, time.time() - t0,
+        )
+        del nf, panel, futr, meta, holidays
+        gc.collect()
 
-    t_pred = time.time()
-    futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
-    y_hat = nf.predict(df=panel[cols], futr_df=futr)
-    logger.info(
-        "Forecast done in %.1fs (total %.1fs)", time.time() - t_pred, time.time() - t0,
-    )
-    return y_hat.reset_index() if y_hat.index.name else y_hat
+    if not parts:
+        raise RuntimeError("No chunk produced a forecast — check data / park scope.")
+    out = pd.concat(parts, ignore_index=True)
+    logger.info("All chunks done: %d forecast rows in %.1fs", len(out), time.time() - t0)
+    return out
