@@ -274,15 +274,17 @@ def _write_training_status(status: dict) -> None:
 
 
 def _read_training_status() -> dict:
+    # Always merge onto the default keys so a partial/legacy status file can never
+    # cause a KeyError downstream (e.g. /train/status 500 if "current_version" is absent).
     try:
         import json
         with open(_TRAINING_STATUS_FILE) as f:
-            return json.load(f)
+            return {**training_status, **json.load(f)}
     except FileNotFoundError:
-        return training_status
+        return dict(training_status)
     except Exception as e:
         logger.warning(f"Could not read training status file: {e}")
-        return training_status
+        return dict(training_status)
 
 
 class TrainRequest(BaseModel):
@@ -388,12 +390,12 @@ async def get_training_status():
     """Get current training status (reads shared file so all workers return consistent state)"""
     status = _read_training_status()
     return {
-        "is_training": status["is_training"],
-        "current_version": status["current_version"],
-        "started_at": status["started_at"],
-        "finished_at": status["finished_at"],
-        "status": status["status"],
-        "error": status["error"],
+        "is_training": status.get("is_training", False),
+        "current_version": status.get("current_version"),
+        "started_at": status.get("started_at"),
+        "finished_at": status.get("finished_at"),
+        "status": status.get("status", "idle"),
+        "error": status.get("error"),
     }
 
 
