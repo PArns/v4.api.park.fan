@@ -87,43 +87,69 @@ def train_status():
     return _read_status()
 
 
+def _run_training(version: str) -> None:
+    """Module-level training entry, run in a SPAWNED SUBPROCESS (see /train).
+
+    Why a subprocess and not a thread: the DataLoader's worker processes
+    (NF_NUM_WORKERS) fork from whatever process calls fit(). Forking from the
+    threaded uvicorn worker killed the container (clean exit 0 right at DataLoader
+    start → restart loop). A spawned subprocess is a clean process, so the workers
+    fork safely and the cores actually get used. Status is shared via the file.
+    """
+    import forecast
+    import db
+
+    _write_status({
+        "is_training": True, "status": "training", "version": version,
+        "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
+    })
+    try:
+        # Train + forecast in one process (no save — see train_and_forecast),
+        # then cache + persist the forward forecast for the scoreboard.
+        y_hat = forecast.train_and_forecast(version)
+        y_hat.to_parquet(_FORECAST_FILE)
+        tcol = _tft_column(list(y_hat.columns))
+        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
+        info = {"rows": int(len(y_hat)), "persisted": int(persisted)}
+        _write_status({
+            "is_training": False, "status": "completed", "version": version,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "info": info, "error": None,
+        })
+        logger.info("Training + forecast complete: %s", info)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        logger.error("Training failed: %s", e)
+        _write_status({
+            "is_training": False, "status": "failed", "version": version,
+            "error": f"{e}\n{traceback.format_exc()}",
+        })
+
+
 @app.post("/train")
 def train(req: TrainRequest):
     if _read_status().get("is_training"):
         raise HTTPException(status_code=409, detail="Training already in progress")
     version = req.version or f"nf{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-    def worker():
-        import forecast
-        import db
+    import multiprocessing as mp
 
-        _write_status({
-            "is_training": True, "status": "training", "version": version,
-            "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
-        })
-        try:
-            # Train + forecast in one process (no save — see train_and_forecast),
-            # then cache + persist the forward forecast for the scoreboard.
-            y_hat = forecast.train_and_forecast(version)
-            y_hat.to_parquet(_FORECAST_FILE)
-            tcol = _tft_column(list(y_hat.columns))
-            persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
-            info = {"rows": int(len(y_hat)), "persisted": int(persisted)}
-            _write_status({
-                "is_training": False, "status": "completed", "version": version,
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "info": info, "error": None,
-            })
-            logger.info("Training + forecast complete: %s", info)
-        except Exception as e:  # noqa: BLE001
-            import traceback
-            logger.error("Training failed: %s", e)
+    def _spawn_and_reap():
+        # Non-daemon Process so it may spawn DataLoader worker children; a daemon
+        # thread joins it to reap (no zombie) without blocking shutdown.
+        ctx = mp.get_context("spawn")
+        proc = ctx.Process(target=_run_training, args=(version,), name=f"nf-train-{version}")
+        proc.start()
+        proc.join()
+        # If the child died without writing a terminal status (e.g. OOM-killed),
+        # clear the lock so the next /train isn't blocked.
+        if proc.exitcode not in (0, None) and _read_status().get("is_training"):
             _write_status({
                 "is_training": False, "status": "failed", "version": version,
-                "error": f"{e}\n{traceback.format_exc()}",
+                "error": f"training subprocess exited with code {proc.exitcode}",
             })
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_spawn_and_reap, daemon=True).start()
     return {"status": "training_started", "version": version}
 
 
