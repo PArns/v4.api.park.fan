@@ -46,6 +46,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
+    @InjectQueue("nf-training") private nfTrainingQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -277,6 +278,45 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 7 * * *", // Daily at 7am
           },
           jobId: "ml-model-cleanup-cron",
+        },
+      );
+    }
+
+    // TFT (NeuralForecast) training: Daily at 7:30am — AFTER the CatBoost 06:00
+    // train (+ its ~20min run) so the two training spikes never overlap on the
+    // shared host. Trains TFT, then forecasts + persists forward records.
+    const hasNfTrainingCron = await this.hasRepeatableJob(
+      this.nfTrainingQueue,
+      "nf-training-cron",
+    );
+
+    if (!hasNfTrainingCron) {
+      await this.nfTrainingQueue.add(
+        "train-nf",
+        {},
+        {
+          repeat: { cron: "30 7 * * *" }, // Daily at 7:30am (after CatBoost)
+          jobId: "nf-training-cron",
+          attempts: 1, // long job + overlap-guarded; never retry-stack a 2nd train
+        },
+      );
+    }
+
+    // Model comparison scoreboard: Daily at 8:30am — after both models have made
+    // their forward forecasts. Scores matured target days (TFT vs CatBoost vs actuals).
+    const hasNfScoreCron = await this.hasRepeatableJob(
+      this.nfTrainingQueue,
+      "nf-score-comparison-cron",
+    );
+
+    if (!hasNfScoreCron) {
+      await this.nfTrainingQueue.add(
+        "score-comparison",
+        {},
+        {
+          repeat: { cron: "30 8 * * *" }, // Daily at 8:30am
+          jobId: "nf-score-comparison-cron",
+          attempts: 1, // idempotent upsert by (targetDate, model) — no retry needed
         },
       );
     }

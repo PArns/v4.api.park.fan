@@ -96,15 +96,39 @@ def train(req: TrainRequest):
     return {"status": "training_started", "version": version}
 
 
+def _tft_column(cols: list[str]) -> str | None:
+    """Pick TFT's central forecast column (NeuralForecast emits 'TFT' or 'TFT-median'
+    plus '-lo-/-hi-' quantile bands)."""
+    for c in cols:
+        if c in ("TFT", "TFT-median"):
+            return c
+    for c in cols:
+        if c.startswith("TFT") and "-lo-" not in c and "-hi-" not in c:
+            return c
+    return None
+
+
 @app.post("/forecast")
 def run_forecast():
-    """Run prediction with the trained model and cache the daily forecast."""
+    """Run prediction with the trained model, cache it, and persist the forward
+    daily-peak forecast to tft_forecasts for the CatBoost comparison scoreboard."""
+    import db
     import forecast
 
     try:
         y_hat = forecast.predict()
         y_hat.to_parquet(_FORECAST_FILE)
-        return {"status": "ok", "rows": int(len(y_hat)), "cached_at": _FORECAST_FILE}
+        persisted = 0
+        tcol = _tft_column(list(y_hat.columns))
+        if tcol:
+            version = _read_status().get("version") or "unknown"
+            persisted = db.persist_forecast(y_hat, version, tcol)
+        return {
+            "status": "ok",
+            "rows": int(len(y_hat)),
+            "persisted": persisted,
+            "cached_at": _FORECAST_FILE,
+        }
     except Exception as e:  # noqa: BLE001
         import traceback
         logger.error("Forecast failed: %s", e)

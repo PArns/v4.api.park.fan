@@ -199,6 +199,57 @@ FUTR_EXOG = [
 ]
 
 
+def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
+    """Store the forward daily-peak forecast so it can be scored against actuals
+    once each target date passes (the forward-scoreboard vs CatBoost).
+
+    One row per (attraction, target_date, forecast_date=today). Re-running on the
+    same day overwrites that day's forecast; past forecast_dates are immutable, so
+    the genuine forward record (made before the target) is preserved for scoring.
+    """
+    rows = yhat[["unique_id", "ds", value_col]].copy()
+    rows = rows.rename(columns={"unique_id": "attraction_id", "ds": "target_date"})
+    rows["target_date"] = pd.to_datetime(rows["target_date"]).dt.date
+    rows["predicted_peak"] = rows[value_col].astype(float).clip(lower=0)
+
+    ddl = text(
+        """
+        CREATE TABLE IF NOT EXISTS tft_forecasts (
+            attraction_id   uuid NOT NULL,
+            target_date     date NOT NULL,
+            forecast_date   date NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')::date,
+            predicted_peak  double precision NOT NULL,
+            model_version   text,
+            created_at      timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (attraction_id, target_date, forecast_date)
+        )
+        """
+    )
+    upsert = text(
+        """
+        INSERT INTO tft_forecasts
+            (attraction_id, target_date, forecast_date, predicted_peak, model_version)
+        VALUES
+            (:aid, :td, (now() AT TIME ZONE 'UTC')::date, :pp, :ver)
+        ON CONFLICT (attraction_id, target_date, forecast_date)
+        DO UPDATE SET predicted_peak = EXCLUDED.predicted_peak,
+                      model_version  = EXCLUDED.model_version,
+                      created_at     = now()
+        """
+    )
+    n = 0
+    with _engine.begin() as c:
+        c.execute(ddl)
+        for r in rows.itertuples(index=False):
+            c.execute(
+                upsert,
+                {"aid": str(r.attraction_id), "td": r.target_date,
+                 "pp": float(r.predicted_peak), "ver": version},
+            )
+            n += 1
+    return n
+
+
 def build_future_frame(
     panel: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame, horizon: int
 ) -> pd.DataFrame:

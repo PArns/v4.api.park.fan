@@ -23,6 +23,7 @@ import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
+import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
@@ -57,6 +58,7 @@ import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stat
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { AttractionP50Baseline } from "../analytics/entities/attraction-p50-baseline.entity";
 import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-baseline.entity";
+import { ModelComparison } from "../ml/entities/model-comparison.entity";
 
 @Module({
   imports: [
@@ -73,6 +75,7 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
       PredictionAccuracy,
       AttractionP50Baseline,
       AttractionP90Baseline,
+      ModelComparison,
     ]),
     // Register Bull queues with Redis connection
     BullModule.forRootAsync({
@@ -140,6 +143,7 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
         },
       },
       { name: "geoip-update" }, // GeoLite2-City every 48h
+      { name: "nf-training" }, // TFT train+forecast + TFT-vs-CatBoost scoreboard
     ),
 
     // Feature modules for processors
@@ -188,6 +192,7 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     GeoipUpdateProcessor,
+    NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
   ],
   exports: [BullModule], // Export for use in other modules
 })
