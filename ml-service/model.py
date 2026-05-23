@@ -130,6 +130,7 @@ class WaitTimeModel:
             posterior_sampling=_posterior,  # VirtEnsembles (off for Quantile loss)
             thread_count=thread_count,  # Use all CPU cores for parallel training
             task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
+            used_ram_limit=(getattr(settings, "CATBOOST_USED_RAM_LIMIT", "") or None),
             verbose=100,
             early_stopping_rounds=100,
         )

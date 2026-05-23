@@ -26,8 +26,11 @@ EXPOSE 8000
 
 # Run FastAPI with uvicorn (production mode)
 # --no-access-log: Suppress HTTP request logs (GET /health spam)
-# --workers 4: Run 4 worker processes for better parallelism
+# --workers 2: 2 worker processes. Lowered from 4 — the service is internal
+#   (NestJS calls it, not high-QPS public), and 4 serving baselines stacked on a
+#   training spike + the bootstrap predict burst OOM-killed the 28 GiB host. 2
+#   workers halves the serving-side memory floor while keeping request parallelism.
 # --timeout-keep-alive 120: Increase keep-alive timeout to prevent connection resets
 # --timeout-graceful-shutdown 30: Allow time for graceful shutdown
 # Application logs (logger.info) are still shown
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--workers", "4", "--timeout-keep-alive", "120", "--timeout-graceful-shutdown", "30"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--workers", "2", "--timeout-keep-alive", "120", "--timeout-graceful-shutdown", "30"]
