@@ -62,7 +62,14 @@ def build_panel():
     return panel, meta, holidays
 
 
-def train(version: str) -> dict:
+def train_and_forecast(version: str) -> pd.DataFrame:
+    """Fit + predict in ONE process and return the forward forecast.
+
+    Deliberately does NOT nf.save(): NeuralForecast's save() deep-copies the model
+    incl. the DistributionLoss, which raises with the StudentT loss (confirmed in
+    the PoC). The nightly job trains + forecasts + persists in a single pass anyway,
+    so a save→load split buys nothing and only reintroduces that bug.
+    """
     from neuralforecast import NeuralForecast
 
     logger.info("Building panel…")
@@ -73,28 +80,10 @@ def train(version: str) -> dict:
         panel["ds"].min().date(), panel["ds"].max().date(),
     )
 
+    cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
     nf = NeuralForecast(models=_build_models(), freq="D")
-    nf.fit(df=panel[["unique_id", "ds", "y"] + db.FUTR_EXOG])
+    nf.fit(df=panel[cols])
 
-    os.makedirs(settings.MODEL_DIR, exist_ok=True)
-    nf.save(path=_MODEL_PATH, overwrite=True, save_dataset=False)
-
-    return {
-        "version": version,
-        "series": int(panel["unique_id"].nunique()),
-        "rows": int(len(panel)),
-        "horizon": settings.NF_HORIZON,
-    }
-
-
-def predict() -> pd.DataFrame:
-    from neuralforecast import NeuralForecast
-
-    panel, meta, holidays = build_panel()
-    nf = NeuralForecast.load(path=_MODEL_PATH)
     futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
-    y_hat = nf.predict(
-        df=panel[["unique_id", "ds", "y"] + db.FUTR_EXOG],
-        futr_df=futr,
-    )
+    y_hat = nf.predict(df=panel[cols], futr_df=futr)
     return y_hat.reset_index() if y_hat.index.name else y_hat

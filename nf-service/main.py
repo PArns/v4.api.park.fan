@@ -71,19 +71,26 @@ def train(req: TrainRequest):
 
     def worker():
         import forecast
+        import db
 
         _write_status({
             "is_training": True, "status": "training", "version": version,
             "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
         })
         try:
-            info = forecast.train(version)
+            # Train + forecast in one process (no save — see train_and_forecast),
+            # then cache + persist the forward forecast for the scoreboard.
+            y_hat = forecast.train_and_forecast(version)
+            y_hat.to_parquet(_FORECAST_FILE)
+            tcol = _tft_column(list(y_hat.columns))
+            persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
+            info = {"rows": int(len(y_hat)), "persisted": int(persisted)}
             _write_status({
                 "is_training": False, "status": "completed", "version": version,
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "info": info, "error": None,
             })
-            logger.info("Training complete: %s", info)
+            logger.info("Training + forecast complete: %s", info)
         except Exception as e:  # noqa: BLE001
             import traceback
             logger.error("Training failed: %s", e)
@@ -110,25 +117,23 @@ def _tft_column(cols: list[str]) -> str | None:
 
 @app.post("/forecast")
 def run_forecast():
-    """Run prediction with the trained model, cache it, and persist the forward
-    daily-peak forecast to tft_forecasts for the CatBoost comparison scoreboard."""
-    import db
-    import forecast
+    """Re-persist the latest cached forecast to tft_forecasts (idempotent upsert).
 
+    Training is done by /train, which trains + forecasts + persists in one process
+    (the model is intentionally not saved — see forecast.train_and_forecast). This
+    endpoint therefore serves the cached forecast rather than reloading a model;
+    call /train to refresh it."""
+    import db
+    import pandas as pd
+
+    if not os.path.exists(_FORECAST_FILE):
+        raise HTTPException(status_code=404, detail="No forecast yet — run /train first")
     try:
-        y_hat = forecast.predict()
-        y_hat.to_parquet(_FORECAST_FILE)
-        persisted = 0
+        y_hat = pd.read_parquet(_FORECAST_FILE)
         tcol = _tft_column(list(y_hat.columns))
-        if tcol:
-            version = _read_status().get("version") or "unknown"
-            persisted = db.persist_forecast(y_hat, version, tcol)
-        return {
-            "status": "ok",
-            "rows": int(len(y_hat)),
-            "persisted": persisted,
-            "cached_at": _FORECAST_FILE,
-        }
+        version = _read_status().get("version") or "unknown"
+        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
+        return {"status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted)}
     except Exception as e:  # noqa: BLE001
         import traceback
         logger.error("Forecast failed: %s", e)
