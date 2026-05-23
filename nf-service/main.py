@@ -47,6 +47,23 @@ class TrainRequest(BaseModel):
     version: str | None = None
 
 
+@app.on_event("startup")
+def _reset_stale_training_lock():
+    """A fresh process means no training is actually running, so an is_training=true
+    left in the status file is stale (e.g. a redeploy killed a training mid-run) and
+    would wrongly 409 the next /train. Clear it on startup."""
+    st = _read_status()
+    if st.get("is_training"):
+        logger.warning(
+            "Resetting stale is_training lock (version=%s) left by an interrupted run",
+            st.get("version"),
+        )
+        _write_status({
+            "is_training": False, "status": "idle", "version": st.get("version"),
+            "error": "reset on startup (previous run interrupted)",
+        })
+
+
 @app.get("/health")
 def health():
     model_exists = os.path.exists(os.path.join(settings.MODEL_DIR, "nf_daily"))

@@ -20,11 +20,54 @@ settings = get_settings()
 _MODEL_PATH = os.path.join(settings.MODEL_DIR, "nf_daily")
 
 
+def _epoch_log_callback():
+    """A plain-text per-epoch logger for CI mode (no tqdm TUI). Returns None if the
+    Lightning Callback base can't be imported (then we just run without it)."""
+    try:
+        try:
+            from lightning.pytorch.callbacks import Callback
+        except Exception:
+            from pytorch_lightning.callbacks import Callback
+    except Exception:
+        return None
+
+    class _EpochLog(Callback):
+        def on_train_epoch_end(self, trainer, pl_module):
+            m = trainer.callback_metrics
+            loss = m.get("train_loss") or m.get("train_loss_epoch") or m.get("train_loss_step")
+            try:
+                loss = float(loss)
+            except Exception:
+                loss = float("nan")
+            logger.info(
+                "  fit progress: epoch %d (step %d) train_loss=%.3f",
+                trainer.current_epoch, trainer.global_step, loss,
+            )
+
+    return _EpochLog()
+
+
 def _build_models():
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
     from neuralforecast.models import TFT, NHITS
     from neuralforecast.losses.pytorch import DistributionLoss
+
+    # CI mode (default): no tqdm progress bar (Coolify can't render its TUI); emit
+    # plain per-epoch log lines instead.
+    trainer_kw = {"enable_progress_bar": settings.NF_PROGRESS_BAR}
+    if not settings.NF_PROGRESS_BAR:
+        cb = _epoch_log_callback()
+        if cb is not None:
+            trainer_kw["callbacks"] = [cb]
+
+    # Parallel dataloader so CPU-bound fit isn't starved by single-threaded windowing.
+    dl_kwargs = {}
+    if settings.NF_NUM_WORKERS > 0:
+        dl_kwargs = {
+            "num_workers": settings.NF_NUM_WORKERS,
+            "persistent_workers": True,
+        }
 
     common = dict(
         h=settings.NF_HORIZON,
@@ -36,6 +79,8 @@ def _build_models():
         # Our daily history is short (~5 months) with gaps, so some attraction
         # series are shorter than input_size. Pad them instead of dropping/erroring.
         start_padding_enabled=True,
+        dataloader_kwargs=dl_kwargs,
+        **trainer_kw,
     )
     return [
         TFT(**common, hidden_size=settings.NF_HIDDEN_SIZE,

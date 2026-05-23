@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     NF_HIDDEN_SIZE: int = 64
     NF_LEARNING_RATE: float = 1e-3
     NF_LEVELS: str = "80,90"    # prediction-interval levels
+    # CI mode: when False (default), disable the interactive tqdm/Lightning progress
+    # bar — its carriage-return TUI is unreadable in Coolify's log viewer. We emit
+    # plain per-epoch log lines instead. Set True locally for the live TUI.
+    NF_PROGRESS_BAR: bool = False
+    # Dataloader workers. Training was dataloader-bound (~3% CPU on a 16-core host —
+    # compute idle waiting for single-threaded windowing). Parallel workers feed the
+    # batches so the cores are actually used. 0 = main-thread loading (old behavior).
+    NF_NUM_WORKERS: int = 8
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
