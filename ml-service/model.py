@@ -508,15 +508,10 @@ class WaitTimeModel:
                     default_val = defaults.get(col, 0.0)
                 X.loc[:, col] = default_val
 
-        # Check for extra columns (warn but don't fail)
-        extra_cols = set(X.columns) - set(model_features)
-        if extra_cols:
-            import warnings
-
-            warnings.warn(
-                f"Extra columns in DataFrame (will be ignored): {sorted(extra_cols)}",
-                UserWarning,
-            )
+        # Non-feature columns (timestamp, status, date_local, attractionName, …) are
+        # ALWAYS present on the inference frame and are dropped by selecting
+        # model_features below. No warning: the extras are expected on every predict
+        # call, not actionable, and previously spammed stderr on the hot path.
 
         # Ensure columns are in correct order (CatBoost is sensitive to order)
         # Use model's feature order (from training)
