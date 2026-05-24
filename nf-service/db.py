@@ -116,10 +116,12 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
     """Daily weather per (park, local day) for the weather futr_exog. Historical rows
     are retained (365d back) and the forecast reaches 16 days, so this covers both the
     training panel and the h=14 future frame. One row per (parkId, date) by PK."""
-    where = 'WHERE "parkId" = ANY(:pids)' if park_ids else ""
+    # weather_data."parkId" is uuid in the DB; the panel's park key is text (meta
+    # casts ::text). Cast both sides so the join keys line up and ANY() type-matches.
+    where = 'WHERE "parkId"::text = ANY(:pids)' if park_ids else ""
     sql = text(
         f"""
-        SELECT "parkId" AS park_id, date AS ds,
+        SELECT "parkId"::text AS park_id, date AS ds,
                "temperatureMax"::float AS temp_max,
                "precipitationSum"::float AS precip_mm,
                "windSpeedMax"::float AS wind_max
