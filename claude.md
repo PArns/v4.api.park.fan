@@ -40,6 +40,7 @@
 - [Performance Optimizations](docs/ml/performance-optimizations.md) - ML service caching, query optimization, and vectorization (60-90% faster).
 - [Prediction Quality Issues](docs/ml/prediction-quality-issues.md) - Known bugs and fixes (5-min prediction bug, weekend underprediction, feature importance analysis).
 - [Training Roadmap](docs/ml/training-roadmap.md) - Next training steps, UNKNOWN park data strategy, known issues and fix plans.
+- [Busy-day Prediction Challenger](docs/ml/busy-day-prediction-challenger.md) - Living experiment: fixing busy/holiday future under-prediction (feature-forcing, sample-weighting, quantile/uncertainty levers). Champion/challenger log.
 
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.

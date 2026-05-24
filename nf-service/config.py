@@ -25,11 +25,13 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    # Forecast horizon (days). 30, not 90: a training window needs input_size + h real
-    # points; with ~150d of gappy per-series history, h=90 left many series (whole
-    # chunks!) with no valid windows → skipped → lost coverage. h=30 lets far more
-    # series train, still covers the near-term days that mature/score soon.
-    NF_HORIZON: int = 30
+    # Forecast horizon (days). 14, not 30/90: bounded by the WEATHER forecast horizon —
+    # Open-Meteo gives 16 days, so beyond ~14 the weather futr_exog would be all-NaN
+    # (filled → noise). 14 also maximises trainable series (each window needs
+    # input_size + h real points; our per-series daily history is short + gappy) and
+    # covers the high-value near-term the calendar/scoreboard consume. CatBoost still
+    # serves the long horizon.
+    NF_HORIZON: int = 14
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
     NF_INPUT_SIZE: int = 90

@@ -138,11 +138,11 @@ def _build_static_df(meta: pd.DataFrame, panel: pd.DataFrame):
 
 
 def build_panel(park_ids: list[str]):
-    """Returns (panel_with_covariates, meta, holidays) for the given parks. Empty
-    frames if the parks have no data in the window (caller skips the chunk)."""
+    """Returns (panel_with_covariates, meta, holidays, weather) for the given parks.
+    Empty frames if the parks have no data in the window (caller skips the chunk)."""
     panel = db.fetch_daily_peak_panel(park_ids)
     if panel.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     meta = db.fetch_attraction_meta(park_ids)
     countries = sorted({c for c in meta["country"].dropna().unique()})
     # include influencing countries
@@ -151,8 +151,9 @@ def build_panel(park_ids: list[str]):
         countries += [d.get("countryCode") for d in items if d.get("countryCode")]
     countries = sorted(set(countries))
     holidays = db.fetch_holidays(countries)
-    panel = db.add_calendar_covariates(panel, meta, holidays)
-    return panel, meta, holidays
+    weather = db.fetch_weather(park_ids)
+    panel = db.add_calendar_covariates(panel, meta, holidays, weather)
+    return panel, meta, holidays, weather
 
 
 def train_and_forecast(version: str) -> pd.DataFrame:
@@ -184,7 +185,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     skipped = 0
     for ci, chunk in enumerate(chunks, 1):
         tc = time.time()
-        panel, meta, holidays = build_panel(chunk)
+        panel, meta, holidays, weather = build_panel(chunk)
         if panel.empty:
             logger.info("chunk %d/%d: no data, skip", ci, len(chunks))
             continue
@@ -198,7 +199,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
                 models=_build_models(ci, len(chunks), stat_exog), freq="D"
             )
             nf.fit(df=panel[cols], static_df=static_df)
-            futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
+            futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON, weather)
             # static_df must be passed to predict too (else: "static exogenous
             # variables not found in input dataset"); None when static is off.
             yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)

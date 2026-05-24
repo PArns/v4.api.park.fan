@@ -52,7 +52,8 @@ def main():
         items = inf if isinstance(inf, list) else []
         countries += [d.get("countryCode") for d in items if d.get("countryCode")]
     hol = db.fetch_holidays(sorted(set(countries)))
-    panel = db.add_calendar_covariates(panel, meta, hol)
+    wx = db.fetch_weather(park_ids)
+    panel = db.add_calendar_covariates(panel, meta, hol, wx)
     cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
     print(f"panel rows={len(panel)} series={panel['unique_id'].nunique()}", flush=True)
 
@@ -68,7 +69,7 @@ def main():
         futr = nf.make_future_dataframe(df=panel[cols])
     except TypeError:
         futr = nf.make_future_dataframe()
-    futr = db.add_calendar_covariates(futr, meta, hol)
+    futr = db.add_calendar_covariates(futr, meta, hol, wx)
     yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
     yh = yh.reset_index() if yh.index.name else yh
     tcol = next((x for x in yh.columns if x in ("TFT", "TFT-median")), None) or next(

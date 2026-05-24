@@ -112,15 +112,40 @@ def fetch_holidays(countries: list[str]) -> pd.DataFrame:
     return df
 
 
+def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
+    """Daily weather per (park, local day) for the weather futr_exog. Historical rows
+    are retained (365d back) and the forecast reaches 16 days, so this covers both the
+    training panel and the h=14 future frame. One row per (parkId, date) by PK."""
+    where = 'WHERE "parkId" = ANY(:pids)' if park_ids else ""
+    sql = text(
+        f"""
+        SELECT "parkId" AS park_id, date AS ds,
+               "temperatureMax"::float AS temp_max,
+               "precipitationSum"::float AS precip_mm,
+               "windSpeedMax"::float AS wind_max
+        FROM weather_data {where}
+        """
+    )
+    with _engine.connect() as c:
+        df = pd.read_sql(sql, c, params={"pids": park_ids} if park_ids else {})
+    if df.empty:
+        return df
+    df["ds"] = pd.to_datetime(df["ds"]).dt.normalize()
+    df["is_wet"] = (df["precip_mm"].fillna(0) >= 1.0).astype(int)
+    return df.drop_duplicates(["park_id", "ds"])
+
+
 def _norm_region(r):
     return (r or "").split("-")[-1] or None
 
 
 def add_calendar_covariates(
-    df: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame
+    df: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame,
+    weather: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Add the futr_exog columns to a (unique_id, ds) frame (historical panel or
-    future frame).
+    future frame): calendar (incl. day-of-week one-hot), holiday flags + distance,
+    and weather. All known-future within the h=14 horizon.
 
     Holiday flags are computed PER PARK (memoised by holiday signature) with
     vectorised isin — not per attraction with a row-wise apply over the whole
@@ -141,6 +166,11 @@ def add_calendar_covariates(
     month = ds.dt.month
     df["season_code"] = (month % 12 // 3).astype(int)  # 0=winter..3=fall
     df["is_peak_season"] = month.isin([6, 7, 8, 12]).astype(int)
+    # Day-of-week ONE-HOT: theme-park dow effect is step-like (Sa-peak), not smoothly
+    # cyclical — explicit per-day columns help the model learn the jump directly
+    # (sin/cos kept too; TFT's variable selection handles the redundancy).
+    for k in range(7):
+        df[f"dow_{k}"] = (dow == k).astype(int)
 
     for col in (
         "is_holiday_primary",
@@ -149,17 +179,26 @@ def add_calendar_covariates(
         "is_bridge_day",
     ):
         df[col] = 0
+    # Holiday-distance defaults (capped at 30d). Filled per park inside the loop.
+    df["days_until_holiday"] = 30.0
+    df["days_since_holiday"] = 30.0
+
+    # Per-series → park map (used by both the holiday loop and the weather merge), so
+    # weather still attaches even when there are no holidays for the scope.
+    df["_park"] = None
+    meta_by_id = None
+    if "park_id" in meta.columns:
+        meta_by_id = meta.drop_duplicates("unique_id").set_index("unique_id")
+        df["_park"] = df["unique_id"].map(meta_by_id["park_id"].to_dict())
 
     n_parks = 0
-    if not holidays.empty and "park_id" in meta.columns:
+    if not holidays.empty and meta_by_id is not None:
         # Prepare holiday helpers ONCE (was recomputed for every attraction).
         h = holidays.copy()
         h["region_norm"] = h["region"].map(_norm_region)
         h["cr"] = list(zip(h["country"], h["region_norm"]))
         h_pub_or_school = h["holiday_type"].isin(["public", "school"])
 
-        meta_by_id = meta.drop_duplicates("unique_id").set_index("unique_id")
-        df["_park"] = df["unique_id"].map(meta_by_id["park_id"].to_dict())
         park_rep = meta.drop_duplicates("park_id").set_index("park_id")
 
         cache: dict = {}  # signature -> (local_public, neighbor, school, bridge)
@@ -202,13 +241,28 @@ def add_calendar_covariates(
             df.loc[idx, "is_holiday_neighbor"] = d.isin(nb).astype(int).values
             df.loc[idx, "is_school_holiday"] = d.isin(sc).astype(int).values
             df.loc[idx, "is_bridge_day"] = d.isin(br).astype(int).values
+            # Distance to nearest PUBLIC holiday (forward/backward), capped at 30d.
+            # searchsorted on the sorted holiday array — vectorised, ~O(n log h).
+            if lp:
+                hol_sorted = np.sort(np.array(list(lp), dtype="datetime64[ns]"))
+                dv = d.values.astype("datetime64[ns]")
+                day = np.timedelta64(1, "D")
+                until = np.full(len(dv), 30.0)
+                pos = np.searchsorted(hol_sorted, dv, side="left")
+                hasn = pos < len(hol_sorted)
+                until[hasn] = (hol_sorted[pos[hasn]] - dv[hasn]) / day
+                since = np.full(len(dv), 30.0)
+                pos2 = np.searchsorted(hol_sorted, dv, side="right") - 1
+                hasp = pos2 >= 0
+                since[hasp] = (dv[hasp] - hol_sorted[pos2[hasp]]) / day
+                df.loc[idx, "days_until_holiday"] = np.clip(until, 0, 30)
+                df.loc[idx, "days_since_holiday"] = np.clip(since, 0, 30)
             n_parks += 1
             if n_parks % 50 == 0:
                 logger.info(
                     "  calendar covariates: %d/%d parks (%d sigs, %.1fs)",
                     n_parks, total, len(cache), time.time() - t0,
                 )
-        df = df.drop(columns=["_park"])
 
     df["holiday_count_total"] = (
         df["is_holiday_primary"]
@@ -216,6 +270,25 @@ def add_calendar_covariates(
         + df["is_school_holiday"]
         + df["is_bridge_day"]
     )
+
+    # --- Weather futr_exog (temp / precip / wind + derived is_wet) ---
+    wcols = ["temp_max", "precip_mm", "wind_max", "is_wet"]
+    for col in wcols:
+        df[col] = np.nan
+    if weather is not None and not weather.empty and df["_park"].notna().any():
+        w = weather.drop_duplicates(["park_id", "ds"]).set_index(["park_id", "ds"])
+        key = pd.MultiIndex.from_arrays([df["_park"], df["ds"].dt.normalize()])
+        for col in wcols:
+            df[col] = w[col].reindex(key).to_numpy()
+    # Fill gaps per park first (don't bleed one park's climate into another), then a
+    # global-median fallback, then sane constants for parks with no weather at all.
+    for col, const in (("temp_max", 15.0), ("precip_mm", 0.0), ("wind_max", 10.0)):
+        df[col] = df.groupby("_park")[col].transform(lambda s: s.fillna(s.median()))
+        df[col] = df[col].fillna(df[col].median()).fillna(const)
+    df["is_wet"] = df["is_wet"].fillna(0).astype(int)
+
+    if "_park" in df.columns:
+        df = df.drop(columns=["_park"])
     logger.info(
         "calendar covariates done: %d parks, %d rows in %.1fs",
         n_parks, len(df), time.time() - t0,
@@ -224,11 +297,15 @@ def add_calendar_covariates(
 
 
 FUTR_EXOG = [
+    # holidays
     "is_holiday_primary",
     "is_holiday_neighbor",
     "is_school_holiday",
     "is_bridge_day",
     "holiday_count_total",
+    "days_until_holiday",
+    "days_since_holiday",
+    # calendar
     "is_weekend",
     "dow_sin",
     "dow_cos",
@@ -236,6 +313,19 @@ FUTR_EXOG = [
     "doy_cos",
     "season_code",
     "is_peak_season",
+    # day-of-week one-hot
+    "dow_0",
+    "dow_1",
+    "dow_2",
+    "dow_3",
+    "dow_4",
+    "dow_5",
+    "dow_6",
+    # weather
+    "temp_max",
+    "precip_mm",
+    "wind_max",
+    "is_wet",
 ]
 
 
@@ -292,7 +382,8 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
 
 
 def build_future_frame(
-    panel: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame, horizon: int
+    panel: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame, horizon: int,
+    weather: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Exactly `horizon` future daily rows per unique_id with all FUTR_EXOG
     columns filled (NeuralForecast requires futr_df = h rows/series)."""
@@ -302,4 +393,4 @@ def build_future_frame(
         future_ds = pd.date_range(last + pd.Timedelta(days=1), periods=horizon, freq="D")
         rows.append(pd.DataFrame({"unique_id": uid, "ds": future_ds}))
     fut = pd.concat(rows, ignore_index=True)
-    return add_calendar_covariates(fut, meta, holidays)
+    return add_calendar_covariates(fut, meta, holidays, weather)
