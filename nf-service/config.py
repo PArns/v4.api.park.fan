@@ -25,14 +25,15 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    # Forecast horizon (days) = 14, chosen to FIT the data. Per-headliner daily
-    # history is short + gappy (median 72 operating-day points, p25=36; input_size is
-    # already 90 > median). A training window needs ~h real horizon points, so coverage
-    # falls fast with h: 93% of series have >=14 points (trainable) but only 79% have
-    # >=30. h=14 maximises trainable series + windows and targets the high-value
-    # near-term (where TFT is strongest); CatBoost serves the long horizon. (Also
-    # within the 16-day weather forecast, but that's a bonus, not the reason.)
-    NF_HORIZON: int = 14
+    # Forecast horizon (days) = 30: TFT serves the calendar's near-term daily crowd
+    # levels (days 1-30); CatBoost serves day 31-365 + intraday. 30 is a product call
+    # (a month of calendar coverage) traded against data-fit: per-headliner history is
+    # short + gappy (median 72 operating-day points, p25=36), so a window needing ~h
+    # real horizon points trains 79% of series at h=30 vs 93% at h=14. Validated by the
+    # headliner backtest before wiring (accuracy at h=30 must stay close to the h=14
+    # baseline of MAE 11.1). Re-evaluate as history accumulates — the ceiling on h
+    # rises with more seasonal coverage.
+    NF_HORIZON: int = 30
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
     NF_INPUT_SIZE: int = 90

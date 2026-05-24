@@ -96,14 +96,12 @@ def main():
     def bias(a, p):
         return float((p - a).mean())
 
-    from neuralforecast.losses.pytorch import DistributionLoss, QuantileLoss
+    from neuralforecast.losses.pytorch import DistributionLoss
 
-    # Sweep the loss in ONE run (same panel/seed env) so the alpha choice is clean.
+    # studentt is the settled loss (quantile sweep rejected it). This run measures the
+    # CURRENT NF_HORIZON (=30 for the calendar-serving gate) on the matured holdout.
     configs = [
         ("studentt", DistributionLoss(distribution="StudentT", level=forecast.settings.levels)),
-        ("q0.7", QuantileLoss(q=0.7)),
-        ("q0.8", QuantileLoss(q=0.8)),
-        ("q0.9", QuantileLoss(q=0.9)),
     ]
     print("=== HEADLINERS: TFT (per loss) vs CatBoost vs actual daily P90 ===", flush=True)
     for label, lossobj in configs:
