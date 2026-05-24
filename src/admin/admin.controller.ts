@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   HttpCode,
   HttpStatus,
@@ -24,6 +25,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { ParkValidatorService } from "../parks/services/park-validator.service";
 import { ParkRepairService } from "../parks/services/park-repair.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
+import { SystemHealthService } from "./system-health.service";
 
 /**
  * Admin Controller
@@ -53,7 +55,27 @@ export class AdminController {
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
     private readonly parkMergeService: ParkMergeService,
+    private readonly systemHealth: SystemHealthService,
   ) {}
+
+  /**
+   * System health dashboard data.
+   *
+   * Aggregates host (CPU/RAM/disk), Postgres, Redis, and both ML services —
+   * CatBoost (ml-service) + TFT (nf-service): training status/progress + model
+   * quality + the TFT-vs-CatBoost scoreboard. One JSON for a monitoring UI.
+   */
+  @Get("system-health")
+  @ApiOperation({
+    summary: "System health + ML training/quality dashboard",
+    description:
+      "Host (CPU/RAM/disk), Postgres, Redis stats + CatBoost & TFT training status/" +
+      "progress, model quality, and the TFT-vs-CatBoost comparison scoreboard.",
+  })
+  @ApiResponse({ status: 200, description: "Aggregated system + ML health" })
+  async getSystemHealth(): Promise<Record<string, unknown>> {
+    return this.systemHealth.getHealth();
+  }
 
   /**
    * Manually trigger holiday sync

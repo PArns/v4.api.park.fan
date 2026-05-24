@@ -3,6 +3,7 @@ import { BullModule } from "@nestjs/bull";
 import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
 import { AdminController } from "./admin.controller";
+import { SystemHealthService } from "./system-health.service";
 
 @Module({
   imports: [
@@ -18,5 +19,6 @@ import { AdminController } from "./admin.controller";
     BullModule.registerQueue({ name: "analytics" }),
   ],
   controllers: [AdminController],
+  providers: [SystemHealthService],
 })
 export class AdminModule {}
