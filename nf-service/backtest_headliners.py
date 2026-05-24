@@ -60,25 +60,7 @@ def main():
     # Static covariates (country/region) — measure the lift vs the no-static baseline.
     static_df, stat_exog = forecast._build_static_df(meta, panel)
     print(f"static_exog={stat_exog} static_rows={0 if static_df is None else len(static_df)}", flush=True)
-    nf = NeuralForecast(models=forecast._build_models(1, 1, stat_exog), freq="D")
-    nf.fit(df=panel[cols], static_df=static_df)
-    # Let NeuralForecast define the exact (unique_id, ds) future combos it expects
-    # (build_future_frame's per-series-last construction mismatched gappy series),
-    # then attach the futr_exog covariates.
-    try:
-        futr = nf.make_future_dataframe(df=panel[cols])
-    except TypeError:
-        futr = nf.make_future_dataframe()
-    futr = db.add_calendar_covariates(futr, meta, hol, wx)
-    yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
-    yh = yh.reset_index() if yh.index.name else yh
-    tcol = next((x for x in yh.columns if x in ("TFT", "TFT-median")), None) or next(
-        x for x in yh.columns if x.startswith("TFT") and "-lo-" not in x and "-hi-" not in x
-    )
-    yh["aid"] = yh["unique_id"].astype(str)
-    yh["d"] = pd.to_datetime(yh["ds"]).dt.date
-    tft = yh[["aid", "d", tcol]].rename(columns={tcol: "tft"})
-
+    # Model-independent frames fetched once (realised actuals + CatBoost forward preds).
     act = _q(
         """
         SELECT qd."attractionId"::text aid,
@@ -108,24 +90,55 @@ def main():
     act["d"] = pd.to_datetime(act["d"]).dt.date
     cat["d"] = pd.to_datetime(cat["d"]).dt.date
 
-    m = act.merge(tft, on=["aid", "d"], how="inner").merge(cat, on=["aid", "d"], how="inner")
-    print(f"matched headliner-days={len(m)}  attractions={m['aid'].nunique()}", flush=True)
-
     def mae(a, p):
         return float(np.abs(p - a).mean())
 
     def bias(a, p):
         return float((p - a).mean())
 
-    print("=== HEADLINERS: TFT vs CatBoost vs actual daily P90 ===", flush=True)
-    print("ALL       n=%-5d TFT MAE=%5.1f bias=%+5.1f | CatBoost MAE=%5.1f bias=%+5.1f"
-          % (len(m), mae(m.y, m.tft), bias(m.y, m.tft), mae(m.y, m.cb), bias(m.y, m.cb)), flush=True)
-    for lbl, mk in [("quiet<40", m.y < 40), ("busy>=40", m.y >= 40), ("busy>=70", m.y >= 70)]:
-        sub = m[mk]
-        if len(sub):
-            print("%-9s n=%-5d TFT MAE=%5.1f bias=%+5.1f | CatBoost MAE=%5.1f bias=%+5.1f"
-                  % (lbl, len(sub), mae(sub.y, sub.tft), bias(sub.y, sub.tft),
-                     mae(sub.y, sub.cb), bias(sub.y, sub.cb)), flush=True)
+    from neuralforecast.losses.pytorch import DistributionLoss, QuantileLoss
+
+    # Sweep the loss in ONE run (same panel/seed env) so the alpha choice is clean.
+    configs = [
+        ("studentt", DistributionLoss(distribution="StudentT", level=forecast.settings.levels)),
+        ("q0.7", QuantileLoss(q=0.7)),
+        ("q0.8", QuantileLoss(q=0.8)),
+        ("q0.9", QuantileLoss(q=0.9)),
+    ]
+    print("=== HEADLINERS: TFT (per loss) vs CatBoost vs actual daily P90 ===", flush=True)
+    for label, lossobj in configs:
+        nf = NeuralForecast(
+            models=forecast._build_models(1, 1, stat_exog, loss=lossobj), freq="D"
+        )
+        nf.fit(df=panel[cols], static_df=static_df)
+        # NeuralForecast defines the exact (unique_id, ds) future combos it expects
+        # (build_future_frame's per-series-last construction mismatched gappy series);
+        # then attach the futr_exog covariates.
+        try:
+            futr = nf.make_future_dataframe(df=panel[cols])
+        except TypeError:
+            futr = nf.make_future_dataframe()
+        futr = db.add_calendar_covariates(futr, meta, hol, wx)
+        yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
+        yh = yh.reset_index() if yh.index.name else yh
+        tcol = next((x for x in yh.columns if x in ("TFT", "TFT-median")), None) or next(
+            x for x in yh.columns if x.startswith("TFT") and "-lo-" not in x and "-hi-" not in x
+        )
+        yh["aid"] = yh["unique_id"].astype(str)
+        yh["d"] = pd.to_datetime(yh["ds"]).dt.date
+        tft = yh[["aid", "d", tcol]].rename(columns={tcol: "tft"})
+        m = act.merge(tft, on=["aid", "d"], how="inner").merge(cat, on=["aid", "d"], how="inner")
+        print("--- loss=%-9s matched=%d attractions=%d ---"
+              % (label, len(m), m["aid"].nunique()), flush=True)
+        print("  ALL       n=%-5d TFT MAE=%5.1f bias=%+5.1f | CatBoost MAE=%5.1f bias=%+5.1f"
+              % (len(m), mae(m.y, m.tft), bias(m.y, m.tft), mae(m.y, m.cb), bias(m.y, m.cb)),
+              flush=True)
+        for lbl, mk in [("quiet<40", m.y < 40), ("busy>=40", m.y >= 40), ("busy>=70", m.y >= 70)]:
+            sub = m[mk]
+            if len(sub):
+                print("  %-9s n=%-5d TFT MAE=%5.1f bias=%+5.1f | CatBoost MAE=%5.1f bias=%+5.1f"
+                      % (lbl, len(sub), mae(sub.y, sub.tft), bias(sub.y, sub.tft),
+                         mae(sub.y, sub.cb), bias(sub.y, sub.cb)), flush=True)
 
 
 if __name__ == "__main__":

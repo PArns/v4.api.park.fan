@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     # static features don't affect windowing).
     NF_USE_STATIC: bool = True
 
+    # Loss for the daily-peak TFT. "quantile" predicts an upper conditional quantile
+    # (NF_QUANTILE) directly — the CatBoost q0.8 analog. The OOS backtest showed TFT
+    # still UNDER-reads busy days (bias ~−8 at ≥40, ~−12 at ≥70 min); a quantile loss
+    # targets exactly that tail. "studentt" = the prior DistributionLoss (median +
+    # 80/90 intervals). Env-gated so alpha can be tuned without a code change.
+    NF_LOSS: str = "quantile"
+    NF_QUANTILE: float = 0.8
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

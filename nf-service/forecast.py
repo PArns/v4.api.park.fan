@@ -67,11 +67,20 @@ def _epoch_log_callback(chunk_idx: int, n_chunks: int):
     return _Progress()
 
 
-def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None):
+def _build_loss():
+    """The configured loss. Quantile (upper conditional quantile, CatBoost-q0.8
+    analog) by default; StudentT distribution otherwise."""
+    from neuralforecast.losses.pytorch import DistributionLoss, QuantileLoss
+
+    if settings.NF_LOSS == "quantile":
+        return QuantileLoss(q=settings.NF_QUANTILE)
+    return DistributionLoss(distribution="StudentT", level=settings.levels)
+
+
+def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None, loss=None):
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
     from neuralforecast.models import TFT
-    from neuralforecast.losses.pytorch import DistributionLoss
 
     # CI mode (default): no tqdm progress bar (Coolify can't render its TUI), and mute
     # Lightning's param-summary table — our progress callback + phase logs are enough.
@@ -97,7 +106,7 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None):
         input_size=settings.NF_INPUT_SIZE,
         futr_exog_list=db.FUTR_EXOG,
         scaler_type="robust",  # required by NeuralForecast when using exog
-        loss=DistributionLoss(distribution="StudentT", level=settings.levels),
+        loss=loss if loss is not None else _build_loss(),
         max_steps=settings.NF_MAX_STEPS,
         # THE memory lever: windows per batch. NeuralForecast's default is large, and
         # TFT attention over input_size × windows_batch_size × hidden spiked >14g at
