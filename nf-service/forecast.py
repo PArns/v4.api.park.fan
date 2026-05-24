@@ -20,18 +20,49 @@ settings = get_settings()
 _MODEL_PATH = os.path.join(settings.MODEL_DIR, "nf_daily")
 
 
+def _epoch_log_callback():
+    """Plain per-epoch progress for CI mode (no tqdm TUI). Imported from
+    pytorch_lightning — the SAME package neuralforecast's Trainer uses (the logs say
+    `pytorch_lightning.utilities…`) — so the Callback type matches and is accepted.
+    (The earlier crash that I blamed on this callback was actually the OOM; with that
+    fixed the callback is safe.) Returns None if unavailable → training still runs."""
+    try:
+        from pytorch_lightning.callbacks import Callback
+    except Exception:
+        try:
+            from lightning.pytorch.callbacks import Callback
+        except Exception:
+            return None
+
+    class _EpochLog(Callback):
+        def on_train_epoch_end(self, trainer, pl_module):
+            m = trainer.callback_metrics
+            loss = m.get("train_loss") or m.get("train_loss_epoch") or m.get("train_loss_step")
+            try:
+                loss = float(loss)
+            except Exception:
+                loss = float("nan")
+            logger.info(
+                "  fit: epoch %d, step %d, train_loss=%.3f",
+                trainer.current_epoch, trainer.global_step, loss,
+            )
+
+    return _EpochLog()
+
+
 def _build_models():
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
     from neuralforecast.models import TFT
     from neuralforecast.losses.pytorch import DistributionLoss
 
-    # CI mode (default): no tqdm progress bar (Coolify can't render its TUI).
-    # NOTE: do NOT inject a custom Lightning callback here — a Callback subclass from
-    # `lightning.pytorch` is incompatible with neuralforecast's `pytorch_lightning`
-    # Trainer and crashed fit at start (the runs that died at "Modules in train mode",
-    # at ~49MB — not OOM). Phase-timing logs (Panel/covariates/Fit done) give progress.
+    # CI mode (default): no tqdm progress bar (Coolify can't render its TUI). Instead
+    # a Lightning callback logs plain per-epoch progress lines.
     trainer_kw = {"enable_progress_bar": settings.NF_PROGRESS_BAR}
+    if not settings.NF_PROGRESS_BAR:
+        _cb = _epoch_log_callback()
+        if _cb is not None:
+            trainer_kw["callbacks"] = [_cb]
 
     # Parallel dataloader so CPU-bound fit isn't starved by single-threaded windowing.
     dl_kwargs = {}
