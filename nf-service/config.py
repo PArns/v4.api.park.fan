@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # series count). The hourly PoC ran fine at 128. Keep small.
     NF_WINDOWS_BATCH_SIZE: int = 128
     NF_BATCH_SIZE: int = 16
+    # Static (per-series) covariates for the TFT static encoder — the #1 lever per
+    # the TFT paper (static-var selection ↑ accuracy). Feeds country/region (encoded)
+    # as stat_exog. Default OFF until validated on a scoped run (no production risk;
+    # static features don't affect windowing/coverage). Flip to True to enable.
+    NF_USE_STATIC: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -47,11 +47,27 @@ def _epoch_log_callback(chunk_idx: int, n_chunks: int):
                 "progress: chunk %d/%d, step %d/%d (%.0f%% total) loss=%.3f",
                 chunk_idx, n_chunks, step, mx, overall, loss,
             )
+            # Also persist a small progress file so /train/status (and the admin
+            # system-health endpoint) can surface the live % in a UI.
+            try:
+                import json
+                import os
+                import time as _t
+                prog = {
+                    "chunk": chunk_idx, "n_chunks": n_chunks,
+                    "step": step, "max_steps": mx, "pct": round(overall, 1),
+                    "loss": round(loss, 3) if loss == loss else None,
+                    "updated_at": _t.time(),
+                }
+                with open(os.path.join(settings.MODEL_DIR, "nf_progress.json"), "w") as f:
+                    json.dump(prog, f)
+            except Exception:
+                pass
 
     return _Progress()
 
 
-def _build_models(chunk_idx: int = 1, n_chunks: int = 1):
+def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None):
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
     from neuralforecast.models import TFT
@@ -96,12 +112,29 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1):
         dataloader_kwargs=dl_kwargs,
         **trainer_kw,
     )
+    if stat_exog:
+        common["stat_exog_list"] = stat_exog
     # TFT only — it's the model under evaluation; NHITS was an unused baseline whose
     # training just doubled time + memory. (Re-add if a baseline is needed later.)
     return [
         TFT(**common, hidden_size=settings.NF_HIDDEN_SIZE,
             learning_rate=settings.NF_LEARNING_RATE),
     ]
+
+
+def _build_static_df(meta: pd.DataFrame, panel: pd.DataFrame):
+    """Static per-series covariates for the TFT static encoder: country/region as
+    integer codes (categorical embeddings). Only for series present in the panel."""
+    if meta.empty:
+        return None, None
+    sdf = meta[["unique_id", "country", "region"]].drop_duplicates("unique_id").copy()
+    sdf["unique_id"] = sdf["unique_id"].astype(str)
+    sdf = sdf[sdf["unique_id"].isin(panel["unique_id"].astype(str).unique())]
+    if sdf.empty:
+        return None, None
+    sdf["country_code"] = pd.factorize(sdf["country"].fillna("NA"))[0]
+    sdf["region_code"] = pd.factorize(sdf["region"].fillna("NA"))[0]
+    return sdf[["unique_id", "country_code", "region_code"]], ["country_code", "region_code"]
 
 
 def build_panel(park_ids: list[str]):
@@ -158,8 +191,13 @@ def train_and_forecast(version: str) -> pd.DataFrame:
         # One bad chunk (e.g. all series too short → NeuralForecast "No windows
         # available for training") must not abort the whole run — skip it, keep going.
         try:
-            nf = NeuralForecast(models=_build_models(ci, len(chunks)), freq="D")
-            nf.fit(df=panel[cols])
+            static_df, stat_exog = (None, None)
+            if settings.NF_USE_STATIC:
+                static_df, stat_exog = _build_static_df(meta, panel)
+            nf = NeuralForecast(
+                models=_build_models(ci, len(chunks), stat_exog), freq="D"
+            )
+            nf.fit(df=panel[cols], static_df=static_df)
             futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
             yh = nf.predict(df=panel[cols], futr_df=futr)
             parts.append(yh.reset_index() if yh.index.name else yh)

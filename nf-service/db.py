@@ -48,7 +48,7 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
     where = "WHERE a.\"parkId\"::text = ANY(:pids)" if park_ids else ""
     sql = text(
         f"""
-        SELECT a.id AS unique_id, a."parkId" AS park_id,
+        SELECT a.id::text AS unique_id, a."parkId"::text AS park_id,
                p.timezone, p."countryCode" AS country, p."regionCode" AS region,
                p."influencingRegions" AS influencing
         FROM attractions a

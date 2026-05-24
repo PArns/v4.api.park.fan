@@ -94,7 +94,16 @@ def health():
 
 @app.get("/train/status")
 def train_status():
-    return _read_status()
+    st = _read_status()
+    # While training, merge the live progress (chunk/step/% + loss) the forecast
+    # callback writes, so a UI / the admin system-health endpoint can show the %.
+    if st.get("is_training"):
+        try:
+            with open(os.path.join(settings.MODEL_DIR, "nf_progress.json")) as f:
+                st["progress"] = json.load(f)
+        except Exception:
+            pass
+    return st
 
 
 @app.post("/train")
