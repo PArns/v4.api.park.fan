@@ -20,12 +20,10 @@ settings = get_settings()
 _MODEL_PATH = os.path.join(settings.MODEL_DIR, "nf_daily")
 
 
-def _epoch_log_callback():
-    """Plain per-epoch progress for CI mode (no tqdm TUI). Imported from
-    pytorch_lightning — the SAME package neuralforecast's Trainer uses (the logs say
-    `pytorch_lightning.utilities…`) — so the Callback type matches and is accepted.
-    (The earlier crash that I blamed on this callback was actually the OOM; with that
-    fixed the callback is safe.) Returns None if unavailable → training still runs."""
+def _epoch_log_callback(chunk_idx: int, n_chunks: int):
+    """Plain per-epoch progress for CI mode (no tqdm TUI), with an OVERALL % across
+    all chunks. Imported from pytorch_lightning (the package neuralforecast's Trainer
+    uses) so the Callback type matches. Returns None if unavailable → training runs."""
     try:
         from pytorch_lightning.callbacks import Callback
     except Exception:
@@ -34,8 +32,11 @@ def _epoch_log_callback():
         except Exception:
             return None
 
-    class _EpochLog(Callback):
+    class _Progress(Callback):
         def on_train_epoch_end(self, trainer, pl_module):
+            step = int(trainer.global_step)
+            mx = int(trainer.max_steps) if trainer.max_steps and trainer.max_steps > 0 else 1
+            overall = ((chunk_idx - 1) * mx + min(step, mx)) * 100.0 / (max(n_chunks, 1) * mx)
             m = trainer.callback_metrics
             loss = m.get("train_loss") or m.get("train_loss_epoch") or m.get("train_loss_step")
             try:
@@ -43,24 +44,27 @@ def _epoch_log_callback():
             except Exception:
                 loss = float("nan")
             logger.info(
-                "  fit: epoch %d, step %d, train_loss=%.3f",
-                trainer.current_epoch, trainer.global_step, loss,
+                "progress: chunk %d/%d, step %d/%d (%.0f%% total) loss=%.3f",
+                chunk_idx, n_chunks, step, mx, overall, loss,
             )
 
-    return _EpochLog()
+    return _Progress()
 
 
-def _build_models():
+def _build_models(chunk_idx: int = 1, n_chunks: int = 1):
     # Imported lazily so the module loads even before torch is present (e.g. for
     # /health on a half-built image).
     from neuralforecast.models import TFT
     from neuralforecast.losses.pytorch import DistributionLoss
 
-    # CI mode (default): no tqdm progress bar (Coolify can't render its TUI). Instead
-    # a Lightning callback logs plain per-epoch progress lines.
-    trainer_kw = {"enable_progress_bar": settings.NF_PROGRESS_BAR}
+    # CI mode (default): no tqdm progress bar (Coolify can't render its TUI), and mute
+    # Lightning's param-summary table — our progress callback + phase logs are enough.
+    trainer_kw = {
+        "enable_progress_bar": settings.NF_PROGRESS_BAR,
+        "enable_model_summary": False,
+    }
     if not settings.NF_PROGRESS_BAR:
-        _cb = _epoch_log_callback()
+        _cb = _epoch_log_callback(chunk_idx, n_chunks)
         if _cb is not None:
             trainer_kw["callbacks"] = [_cb]
 
@@ -154,7 +158,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
         # One bad chunk (e.g. all series too short → NeuralForecast "No windows
         # available for training") must not abort the whole run — skip it, keep going.
         try:
-            nf = NeuralForecast(models=_build_models(), freq="D")
+            nf = NeuralForecast(models=_build_models(ci, len(chunks)), freq="D")
             nf.fit(df=panel[cols])
             futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
             yh = nf.predict(df=panel[cols], futr_df=futr)

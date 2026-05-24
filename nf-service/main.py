@@ -32,6 +32,11 @@ from pydantic import BaseModel
 from config import get_settings
 
 logging.basicConfig(level=logging.INFO)
+# Mute Lightning's INFO chatter (Seed set / GPU available / TPU / per-step lines) so
+# the logs show only our own progress + phase lines. Our nf.* loggers stay at INFO.
+logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+logging.getLogger("lightning_fabric").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch").setLevel(logging.WARNING)
 logger = logging.getLogger("nf.main")
 settings = get_settings()
 
