@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # Prediction Configuration
     HOURLY_PREDICTIONS: int = 24  # Next 24 hours (internal use)
     DAILY_PREDICTIONS: int = 365  # Next 365 days (1 year)
+    # Daily prediction = PEAK, not a single 14:00 value. We predict these peak-window
+    # hours per day and collapse to the per-day MAX (≈ the daily P90 peak that the
+    # calendar's typical-day-peak baseline uses). A single 14:00 value systematically
+    # under-read the peak (backtest: bias −13..−45 on busy headliner days). Comma list.
+    DAILY_PEAK_HOURS: str = "12,14,16"
 
     # Volatility feature cap (7d std in minutes). Values above this are capped so
     # volatility_7d doesn't dominate feature importance; occupancy/time stay primary.

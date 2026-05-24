@@ -361,12 +361,18 @@ def generate_future_timestamps(
             for i in range(settings.HOURLY_PREDICTIONS * 4)
         ]
     elif prediction_type == "daily":
-        # Next 14 days (at 14:00 each day, typical peak time)
+        # Predict several peak-window hours per day; predict_wait_times collapses them
+        # to the per-day MAX = a daily-PEAK proxy (≈ P90, matching the calendar's
+        # typical-day-peak baseline). A single 14:00 value under-read the peak.
+        hours = [int(h) for h in str(settings.DAILY_PEAK_HOURS).split(",") if h.strip()]
+        if not hours:
+            hours = [14]
         return [
             (base_time + timedelta(days=i)).replace(
-                hour=14, minute=0, second=0, microsecond=0
+                hour=h, minute=0, second=0, microsecond=0
             )
             for i in range(1, settings.DAILY_PREDICTIONS + 1)
+            for h in hours
         ]
     else:
         raise ValueError(f"Unknown prediction_type: {prediction_type}")
@@ -2009,6 +2015,18 @@ def predict_wait_times(
                 results[-1]["trend"] = "decreasing"
             else:
                 results[-1]["trend"] = "stable"
+
+    # Daily = PEAK: we predicted several peak-window hours/day → collapse to one row
+    # per (attraction, day) = the MAX predicted wait (peak proxy ≈ P90), so the daily
+    # value matches the typical-day-peak baseline the calendar uses (not the lower
+    # 14:00 value, which under-read the peak by 13-45 min on busy headliner days).
+    if prediction_type == "daily" and results:
+        best: Dict[Any, Dict[str, Any]] = {}
+        for r in results:
+            key = (r["attractionId"], r["predictedTime"][:10])  # (attraction, YYYY-MM-DD)
+            if key not in best or r["predictedWaitTime"] > best[key]["predictedWaitTime"]:
+                best[key] = r
+        results = list(best.values())
 
     # NOTE: CLOSED/UNKNOWN rows were excluded before inference (no ML call for closed days).
     # Schedule filtering will be applied after this function returns.
