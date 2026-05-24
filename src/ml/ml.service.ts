@@ -755,8 +755,9 @@ export class MLService {
     }
 
     try {
-      // Fetch daily predictions (full dataset, no limit)
-      const response = await this.getParkPredictions(parkId, "daily");
+      // Serving path: TFT near-term (≤30d headliners) merged over CatBoost long tail,
+      // same source as the calendar so the two views' crowd levels agree.
+      const response = await this.getServingDailyPredictions(parkId);
 
       // Cache for 24 hours
       await this.redis.set(
@@ -781,6 +782,104 @@ export class MLService {
         modelVersion: "unavailable",
       };
     }
+  }
+
+  /**
+   * Near-term daily forecast from the TFT (nf-service), HEADLINERS ONLY — the
+   * scope the TFT backtest validated (~2x better than CatBoost on busy days).
+   * Reads the freshest forward forecast per (attraction, day) from tft_forecasts,
+   * for the next `days` park-local days, with a 3-day staleness guard so a stalled
+   * nf-service falls back to CatBoost instead of serving old forecasts. Returned as
+   * PredictionDto so it drops straight into the calendar/yearly crowd-level path
+   * (which recompute crowdLevel from predictedWaitTime; the placeholder fields here
+   * are not read). Cached per park-day (TFT only changes on the nightly run).
+   */
+  async getTftDailyPredictions(
+    parkId: string,
+    days = 30,
+  ): Promise<PredictionDto[]> {
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "timezone"],
+    });
+    if (!park) return [];
+    const today = getCurrentDateInTimezone(park.timezone);
+
+    const cacheKey = `ml:tft-daily:${parkId}:${days}:${today}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as PredictionDto[];
+
+    // Freshest forward forecast per (attraction, target_date); headliners of THIS
+    // park; within the horizon; not stale. ::text casts avoid uuid=text mismatches.
+    const rows: Array<{ attractionId: string; targetDate: string; peak: string }> =
+      await this.attractionRepository.query(
+        `
+        SELECT DISTINCT ON (f.attraction_id, f.target_date)
+          f.attraction_id::text   AS "attractionId",
+          f.target_date::text      AS "targetDate",
+          f.predicted_peak::float  AS peak
+        FROM tft_forecasts f
+        JOIN headliner_attractions h
+          ON h."attractionId" = f.attraction_id AND h."parkId"::text = $1
+        WHERE f.target_date >= $2::date
+          AND f.target_date <  ($2::date + $3::int)
+          AND f.forecast_date >= ($2::date - 3)
+        ORDER BY f.attraction_id, f.target_date, f.forecast_date DESC
+        `,
+        [parkId, today, days],
+      );
+
+    const preds: PredictionDto[] = rows.map((r) => ({
+      attractionId: r.attractionId,
+      predictedTime: `${r.targetDate}T12:00:00`,
+      predictedWaitTime: Math.max(0, Math.round(Number(r.peak))),
+      predictionType: "daily",
+      confidence: 0.7,
+      crowdLevel: "moderate", // placeholder — consumers recompute from predictedWaitTime
+      baseline: 0,
+      modelVersion: "tft",
+    }));
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(preds), "EX", this.TTL_DAILY_PREDICTIONS)
+      .catch(() => undefined);
+    return preds;
+  }
+
+  /**
+   * Daily predictions for SERVING the calendar / yearly view: TFT for the near
+   * term (days 1-`tftDays`, headliners — where TFT clearly beats CatBoost), CatBoost
+   * for the long tail (TFT can't reach a yearly horizon from short history) and for
+   * any (attraction, day) TFT doesn't cover. Keeps the calendar and yearly views on
+   * the SAME source. NOT used by the prediction-generator writer (which must persist
+   * pure CatBoost into wait_time_predictions so the TFT-vs-CatBoost scoreboard stays
+   * fair) — that path keeps calling getParkPredictions("daily") directly.
+   */
+  async getServingDailyPredictions(
+    parkId: string,
+    tftDays = 30,
+  ): Promise<BulkPredictionResponseDto> {
+    const base = await this.getParkPredictions(parkId, "daily");
+    let tft: PredictionDto[] = [];
+    try {
+      tft = await this.getTftDailyPredictions(parkId, tftDays);
+    } catch (e: unknown) {
+      this.logger.warn(
+        `TFT daily merge skipped for ${parkId}: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+    if (tft.length === 0) return base;
+
+    const key = (p: PredictionDto) =>
+      `${p.attractionId}|${p.predictedTime.slice(0, 10)}`;
+    const tftKeys = new Set(tft.map(key));
+    const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
+    const merged = [...tft, ...farCatboost];
+    return {
+      predictions: merged,
+      count: merged.length,
+      modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
+    };
   }
 
   /**

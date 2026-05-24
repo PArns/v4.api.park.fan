@@ -152,7 +152,9 @@ export class CalendarService {
           );
           return [];
         }),
-      this.mlService.getParkPredictions(park.id, "daily").catch((err) => {
+      // Serving path: TFT for the near-term (≤30d headliners), CatBoost for the
+      // long tail. Calendar + yearly share this so their crowd levels agree.
+      this.mlService.getServingDailyPredictions(park.id).catch((err) => {
         this.logger.warn(
           `ML predictions unavailable for ${park.slug}: ${err.message}`,
         );

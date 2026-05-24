@@ -230,6 +230,70 @@ describe("MLService", () => {
     });
   });
 
+  describe("getServingDailyPredictions (TFT near-term merge)", () => {
+    const parkId = "park-123";
+    const mkPred = (aid: string, date: string, wait: number, model: string) =>
+      ({
+        attractionId: aid,
+        predictedTime: `${date}T12:00:00`,
+        predictedWaitTime: wait,
+        predictionType: "daily",
+        confidence: 0.7,
+        crowdLevel: "moderate",
+        baseline: 0,
+        modelVersion: model,
+      }) as any;
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it("overrides CatBoost with TFT for covered (attraction,date), keeps CatBoost for the rest", async () => {
+      const near = "2026-05-25";
+      const far = "2026-08-01";
+      jest.spyOn(service, "getParkPredictions").mockResolvedValue({
+        predictions: [
+          mkPred("attr-1", near, 20, "catboost"),
+          mkPred("attr-1", far, 25, "catboost"),
+          mkPred("attr-2", near, 99, "catboost"),
+        ],
+        count: 3,
+        modelVersion: "catboost-v1",
+      } as any);
+      jest
+        .spyOn(service, "getTftDailyPredictions")
+        .mockResolvedValue([mkPred("attr-1", near, 45, "tft")]);
+
+      const res = await service.getServingDailyPredictions(parkId, 30);
+      const byKey = new Map(
+        res.predictions.map((p) => [
+          `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
+          p,
+        ]),
+      );
+      // attr-1 near → TFT (45), not CatBoost (20)
+      expect(byKey.get(`attr-1|${near}`)?.predictedWaitTime).toBe(45);
+      expect(byKey.get(`attr-1|${near}`)?.modelVersion).toBe("tft");
+      // attr-1 far + non-headliner attr-2 near → CatBoost untouched
+      expect(byKey.get(`attr-1|${far}`)?.predictedWaitTime).toBe(25);
+      expect(byKey.get(`attr-2|${near}`)?.predictedWaitTime).toBe(99);
+      expect(res.count).toBe(3);
+      expect(res.modelVersion).toContain("tft30");
+    });
+
+    it("falls back to pure CatBoost when TFT has no forecasts", async () => {
+      jest.spyOn(service, "getParkPredictions").mockResolvedValue({
+        predictions: [mkPred("attr-1", "2026-05-25", 20, "catboost")],
+        count: 1,
+        modelVersion: "catboost-v1",
+      } as any);
+      jest.spyOn(service, "getTftDailyPredictions").mockResolvedValue([]);
+
+      const res = await service.getServingDailyPredictions(parkId, 30);
+      expect(res.predictions).toHaveLength(1);
+      expect(res.predictions[0].predictedWaitTime).toBe(20);
+      expect(res.modelVersion).toBe("catboost-v1");
+    });
+  });
+
   describe("storePredictions", () => {
     const parkId = "park-1";
     const attractionId = "attr-1";
