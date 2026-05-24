@@ -56,9 +56,10 @@ class Settings(BaseSettings):
     NF_BATCH_SIZE: int = 16
     # Static (per-series) covariates for the TFT static encoder — the #1 lever per
     # the TFT paper (static-var selection ↑ accuracy). Feeds country/region (encoded)
-    # as stat_exog. Default OFF until validated on a scoped run (no production risk;
-    # static features don't affect windowing/coverage). Flip to True to enable.
-    NF_USE_STATIC: bool = False
+    # as stat_exog. Enabled: the headliner backtest showed TFT already beats CatBoost
+    # on the daily peak; static covariates are the next lever (no coverage risk —
+    # static features don't affect windowing).
+    NF_USE_STATIC: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
