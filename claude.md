@@ -41,6 +41,7 @@
 - [Prediction Quality Issues](docs/ml/prediction-quality-issues.md) - Known bugs and fixes (5-min prediction bug, weekend underprediction, feature importance analysis).
 - [Training Roadmap](docs/ml/training-roadmap.md) - Next training steps, UNKNOWN park data strategy, known issues and fix plans.
 - [Busy-day Prediction Challenger](docs/ml/busy-day-prediction-challenger.md) - Living experiment: fixing busy/holiday future under-prediction (feature-forcing, sample-weighting, quantile/uncertainty levers). Champion/challenger log.
+- [TFT vs CatBoost — daily forecast split](docs/ml/neuralforecast-tft-evaluation.md) - **PRODUCTION SPLIT (2026-05-24)**: TFT (nf-service) serves the near-term daily calendar (≤30d, headliners; ~2× better on busy peaks); CatBoost serves far-daily (31–365) + intraday 15-min slots. Loss=studentt (quantile + weather/holiday-dist/dow covariates measured & rejected). **Re-evaluate every few weeks** (next ~2026-06-14) as history grows. See the doc's "FINAL DECISION" section.
 
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
@@ -106,6 +107,7 @@ ml-service/            # 🐍 Python CatBoost Service
 - **Detailed Guide**: [Typical-Day-Peak](docs/analytics/crowd-level-typical-day-peak.md) · [Crowd Levels](docs/analytics/crowd-levels.md)
 - **Boundary**: daily/historical aggregates compare a day's peak to a **typical day's peak**; point-in-time/live signals use **ratio-vs-P50**. Never mix the two on one surface.
 - **Calendar daily**: a day's value = **AVG across headliner rides** of each ride's daily P90; denominator = **typical-day-peak baseline** = the **median over operating days** of that same day value (548-day window, headliner-only). Future/predicted days use the same baseline (AVG of predicted headliner waits ÷ typical-day-peak).
+  - **Predicted-wait source (2026-05-24)**: those predicted headliner waits come from **TFT for days 1–30** (nf-service, ~2× better on busy peaks), **CatBoost for days 31–365** — merged in `MLService.getServingDailyPredictions` (serving only; the writer stays pure CatBoost). See [TFT vs CatBoost split](docs/ml/neuralforecast-tft-evaluation.md).
   - **Formula**: `(day_value / typical_day_peak) * 100` — 100% = a statistically typical day = `moderate`; busy seasons (Wintertraum, Easter, promos) correctly read high/very_high/extreme. The pooled P90 baseline is NOT used (it's inflated by the busiest season and compresses the top).
 - **Live overview / `getCurrentOccupancy` (ratio-vs-P50)**: current short-window peak ÷ park P50 baseline. Also an ML feature. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
   - **Formula**: `(current_peak / p50_baseline) * 100`.
