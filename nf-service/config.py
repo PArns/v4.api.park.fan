@@ -25,12 +25,13 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    # Forecast horizon (days). 14, not 30/90: bounded by the WEATHER forecast horizon —
-    # Open-Meteo gives 16 days, so beyond ~14 the weather futr_exog would be all-NaN
-    # (filled → noise). 14 also maximises trainable series (each window needs
-    # input_size + h real points; our per-series daily history is short + gappy) and
-    # covers the high-value near-term the calendar/scoreboard consume. CatBoost still
-    # serves the long horizon.
+    # Forecast horizon (days) = 14, chosen to FIT the data. Per-headliner daily
+    # history is short + gappy (median 72 operating-day points, p25=36; input_size is
+    # already 90 > median). A training window needs ~h real horizon points, so coverage
+    # falls fast with h: 93% of series have >=14 points (trainable) but only 79% have
+    # >=30. h=14 maximises trainable series + windows and targets the high-value
+    # near-term (where TFT is strongest); CatBoost serves the long horizon. (Also
+    # within the 16-day weather forecast, but that's a bonus, not the reason.)
     NF_HORIZON: int = 14
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
@@ -63,12 +64,14 @@ class Settings(BaseSettings):
     # static features don't affect windowing).
     NF_USE_STATIC: bool = True
 
-    # Loss for the daily-peak TFT. "quantile" predicts an upper conditional quantile
-    # (NF_QUANTILE) directly — the CatBoost q0.8 analog. The OOS backtest showed TFT
-    # still UNDER-reads busy days (bias ~−8 at ≥40, ~−12 at ≥70 min); a quantile loss
-    # targets exactly that tail. "studentt" = the prior DistributionLoss (median +
-    # 80/90 intervals). Env-gated so alpha can be tuned without a code change.
-    NF_LOSS: str = "quantile"
+    # Loss for the daily-peak TFT. "studentt" (DistributionLoss, median + 80/90
+    # intervals) is the production default. "quantile" (upper conditional quantile,
+    # CatBoost-q0.8 analog) was tested via the headliner sweep and REJECTED: TFT's busy
+    # bias is only ~−8 (CatBoost's is −29), so a high quantile over-steers — it lifts
+    # busy but over-inflates the dominant quiet bucket, so ALL MAE rises monotonically
+    # (studentt 11.1 → q0.7 13.0 → q0.8 15.6 → q0.9 24.9) AND it would regress the
+    # calendar typical-day-peak calibration (quiet days read too high). Env-gated.
+    NF_LOSS: str = "studentt"
     NF_QUANTILE: float = 0.8
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
