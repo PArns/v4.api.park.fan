@@ -147,5 +147,8 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     if not parts:
         raise RuntimeError("No chunk produced a forecast — check data / park scope.")
     out = pd.concat(parts, ignore_index=True)
+    # unique_id can carry Python UUID objects from the DB → pyarrow/to_parquet can't
+    # serialize them. Force str (also what persist_forecast expects).
+    out["unique_id"] = out["unique_id"].astype(str)
     logger.info("All chunks done: %d forecast rows in %.1fs", len(out), time.time() - t0)
     return out

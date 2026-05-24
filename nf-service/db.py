@@ -71,7 +71,7 @@ def fetch_daily_peak_panel(park_ids: list[str]) -> pd.DataFrame:
     where_park = "AND a.\"parkId\"::text = ANY(:pids)" if park_ids else ""
     sql = text(
         f"""
-        SELECT qd."attractionId" AS unique_id,
+        SELECT qd."attractionId"::text AS unique_id,
                DATE(qd.timestamp AT TIME ZONE p.timezone) AS ds,
                PERCENTILE_CONT({pct}) WITHIN GROUP (ORDER BY qd."waitTime") AS y,
                COUNT(*) AS n
