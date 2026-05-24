@@ -113,24 +113,36 @@ def train_and_forecast(version: str) -> pd.DataFrame:
 
     cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
     parts = []
+    skipped = 0
     for ci, chunk in enumerate(chunks, 1):
         tc = time.time()
         panel, meta, holidays = build_panel(chunk)
         if panel.empty:
             logger.info("chunk %d/%d: no data, skip", ci, len(chunks))
             continue
-        nf = NeuralForecast(models=_build_models(), freq="D")
-        nf.fit(df=panel[cols])
-        futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
-        yh = nf.predict(df=panel[cols], futr_df=futr)
-        parts.append(yh.reset_index() if yh.index.name else yh)
-        logger.info(
-            "chunk %d/%d done: %d series, %d rows (%.1fs, total %.1fs)",
-            ci, len(chunks), panel["unique_id"].nunique(), len(parts[-1]),
-            time.time() - tc, time.time() - t0,
-        )
-        del nf, panel, futr, meta, holidays
-        gc.collect()
+        # One bad chunk (e.g. all series too short → NeuralForecast "No windows
+        # available for training") must not abort the whole run — skip it, keep going.
+        try:
+            nf = NeuralForecast(models=_build_models(), freq="D")
+            nf.fit(df=panel[cols])
+            futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
+            yh = nf.predict(df=panel[cols], futr_df=futr)
+            parts.append(yh.reset_index() if yh.index.name else yh)
+            logger.info(
+                "chunk %d/%d done: %d series, %d rows (%.1fs, total %.1fs)",
+                ci, len(chunks), panel["unique_id"].nunique(), len(parts[-1]),
+                time.time() - tc, time.time() - t0,
+            )
+        except Exception as e:  # noqa: BLE001
+            skipped += 1
+            logger.warning(
+                "chunk %d/%d (%d series) skipped: %s",
+                ci, len(chunks), panel["unique_id"].nunique(), e,
+            )
+        finally:
+            gc.collect()
+
+    logger.info("Chunks: %d ok, %d skipped", len(parts), skipped)
 
     if not parts:
         raise RuntimeError("No chunk produced a forecast — check data / park scope.")
