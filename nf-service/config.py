@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    NF_HORIZON: int = 90        # forecast horizon (days); extend to 365 once stable
+    # Forecast horizon (days). 30, not 90: a training window needs input_size + h real
+    # points; with ~150d of gappy per-series history, h=90 left many series (whole
+    # chunks!) with no valid windows → skipped → lost coverage. h=30 lets far more
+    # series train, still covers the near-term days that mature/score soon.
+    NF_HORIZON: int = 30
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
     NF_INPUT_SIZE: int = 90
