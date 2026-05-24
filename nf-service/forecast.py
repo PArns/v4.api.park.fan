@@ -199,7 +199,9 @@ def train_and_forecast(version: str) -> pd.DataFrame:
             )
             nf.fit(df=panel[cols], static_df=static_df)
             futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON)
-            yh = nf.predict(df=panel[cols], futr_df=futr)
+            # static_df must be passed to predict too (else: "static exogenous
+            # variables not found in input dataset"); None when static is off.
+            yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
             parts.append(yh.reset_index() if yh.index.name else yh)
             logger.info(
                 "chunk %d/%d done: %d series, %d rows (%.1fs, total %.1fs)",

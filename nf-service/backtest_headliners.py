@@ -69,7 +69,7 @@ def main():
     except TypeError:
         futr = nf.make_future_dataframe()
     futr = db.add_calendar_covariates(futr, meta, hol)
-    yh = nf.predict(df=panel[cols], futr_df=futr)
+    yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
     yh = yh.reset_index() if yh.index.name else yh
     tcol = next((x for x in yh.columns if x in ("TFT", "TFT-median")), None) or next(
         x for x in yh.columns if x.startswith("TFT") and "-lo-" not in x and "-hi-" not in x
