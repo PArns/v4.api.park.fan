@@ -78,6 +78,39 @@ export class AdminController {
   }
 
   /**
+   * Bull queue job counts per queue.
+   */
+  @Get("queue-status")
+  @ApiOperation({ summary: "Bull queue job counts per queue" })
+  @ApiResponse({
+    status: 200,
+    description: "Active/pending/failed/delayed counts per queue",
+  })
+  async getQueueStatus(): Promise<Record<string, unknown>> {
+    const queues = [
+      { name: "wait-times", queue: this.waitTimesQueue },
+      { name: "park-metadata", queue: this.parkMetadataQueue },
+      { name: "ml-training", queue: this.mlTrainingQueue },
+      { name: "prediction-accuracy", queue: this.accuracyQueue },
+      { name: "analytics", queue: this.analyticsQueue },
+      { name: "holidays", queue: this.holidaysQueue },
+      { name: "park-enrichment", queue: this.parkEnrichmentQueue },
+      { name: "children-metadata", queue: this.childrenQueue },
+    ];
+    const results = await Promise.all(
+      queues.map(async ({ name, queue }) => ({
+        name,
+        active: await queue.getActiveCount(),
+        pending: await queue.getWaitingCount(),
+        failed: await queue.getFailedCount(),
+        delayed: await queue.getDelayedCount(),
+        completed: await queue.getCompletedCount(),
+      })),
+    );
+    return { timestamp: new Date().toISOString(), queues: results };
+  }
+
+  /**
    * Manually trigger holiday sync
    *
    * Forces a complete resync of all holidays from Nager.Date API.
