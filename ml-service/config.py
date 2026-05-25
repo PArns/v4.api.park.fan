@@ -44,11 +44,15 @@ class Settings(BaseSettings):
         -1
     )  # -1 = use all available CPU cores, 0 = use CPU count
     CATBOOST_TASK_TYPE: str = "CPU"  # "CPU" or "GPU" (if GPU available)
-    # Hard cap on RAM the CatBoost trainer may use (e.g. "14gb"). The host is 28 GiB
-    # shared with postgres (~5g) + the uvicorn workers + the bootstrap predict burst;
-    # an uncapped train spiked to ~19 GiB and once OOM-killed the box. Capping bounds
-    # the training spike (CatBoost streams/spills instead of OOMing). Empty = unlimited.
-    CATBOOST_USED_RAM_LIMIT: str = "14gb"
+    # Hard cap on RAM the CatBoost trainer may use. Training now runs as an isolated
+    # subprocess (see main.py), so an OOM kill only tears down that process. Budget:
+    #   container mem_limit 20g
+    #   - 2 uvicorn workers  ~4g (serving)
+    #   - subprocess Python + data  ~5g
+    #   - CatBoost this limit  ~8g
+    #   headroom  ~3g
+    # Empty = unlimited (unsafe on this host).
+    CATBOOST_USED_RAM_LIMIT: str = "8gb"
     # Loss function. Default RMSEWithUncertainty (predicts the conditional mean +
     # VirtEnsembles uncertainty). Set to e.g. "Quantile:alpha=0.7" to predict an
     # upper conditional quantile instead — directly lifts the under-predicted busy

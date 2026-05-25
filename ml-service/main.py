@@ -8,6 +8,9 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import os
+import subprocess
+import sys
+import threading
 
 from model import WaitTimeModel
 from predict import predict_wait_times, predict_for_park
@@ -314,67 +317,61 @@ async def train_model_endpoint(request: TrainRequest):
         now = datetime.now(timezone.utc)
         version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
 
-    # Reload Python modules to pick up any docker cp changes since last training.
-    # Workers cache sys.modules; new .py files on disk are only visible after reload.
-    import importlib
-    import sys as _sys
-    for _mod in ("config", "model", "features", "train"):
-        if _mod in _sys.modules:
-            importlib.reload(_sys.modules[_mod])
-    from config import get_settings as _gs
-    _gs.cache_clear()
+    # Path to the isolated training entry point (same directory as this file)
+    _train_standalone = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_standalone.py")
 
-    # Start training in background thread
-    import threading
-    from train import train_model
-
-    def training_worker():
+    def training_monitor():
+        """Daemon thread: marks training started, launches subprocess, recovers on OOM kill."""
         global training_status
+        started_at = datetime.now(timezone.utc).isoformat()
+
+        # Mark in-progress immediately so concurrent /train calls get 409
+        initial = {
+            "is_training": True,
+            "current_version": version,
+            "started_at": started_at,
+            "status": "training",
+            "error": None,
+            "finished_at": None,
+        }
+        training_status.update(initial)
+        _write_training_status(initial)
+
+        logger.info(f"🤖 Launching training subprocess for version {version}")
         try:
-            training_status.update({
-                "is_training": True,
-                "current_version": version,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "status": "training",
-                "error": None,
-                "finished_at": None,
-            })
-            _write_training_status(training_status)
-
-            logger.info(f"🤖 Starting training in background for version {version}")
-            train_model(version=version)
-
-            training_status.update({
-                "status": "completed",
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "is_training": False,
-            })
-            _write_training_status(training_status)
-
-            logger.info(f"✅ Training completed for version {version}")
-
-            # Write sentinel so ALL worker processes pick up the new model.
-            _write_sentinel(version)
-            logger.info(
-                f"✅ Sentinel written for {version} — all workers will reload on next request"
+            # Subprocess gets a fresh Python interpreter — no module-cache issues,
+            # and an OOM kill only tears down this process, not the uvicorn workers.
+            proc = subprocess.Popen(
+                [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE, _SENTINEL_FILE],
+                cwd=os.path.dirname(_train_standalone),
             )
-
+            exit_code = proc.wait()
         except Exception as e:
-            import traceback
+            exit_code = -1
+            logger.error(f"❌ Failed to launch training subprocess: {e}")
 
-            error_traceback = traceback.format_exc()
-            logger.error(f"❌ Training failed: {e}")
-            logger.error(f"Full traceback:\n{error_traceback}")
-            training_status.update({
-                "status": "failed",
-                "error": f"{str(e)}\n\nTraceback:\n{error_traceback}",
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "is_training": False,
-            })
-            _write_training_status(training_status)
+        if exit_code != 0:
+            # If subprocess was SIGKILL'd (OOM) it couldn't write a terminal status.
+            current = _read_training_status()
+            if current.get("is_training"):
+                failed = {
+                    **current,
+                    "is_training": False,
+                    "status": "failed",
+                    "error": (
+                        f"Training subprocess killed (exit code {exit_code}). "
+                        "Likely OOM — check container memory and CATBOOST_USED_RAM_LIMIT."
+                    ),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+                training_status.update(failed)
+                _write_training_status(failed)
+            logger.error(f"❌ Training subprocess for {version} killed (exit {exit_code})")
+        else:
+            logger.info(f"✅ Training subprocess for {version} exited cleanly")
+            training_status.update(_read_training_status())
 
-    # Start background thread
-    thread = threading.Thread(target=training_worker, daemon=True)
+    thread = threading.Thread(target=training_monitor, daemon=True)
     thread.start()
 
     return {

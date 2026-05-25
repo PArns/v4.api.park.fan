@@ -67,6 +67,11 @@ services:
         condition: service_healthy
     networks:
       - parkfan-network
+    # Training runs as an isolated subprocess (not a uvicorn thread) so an OOM kill
+    # only tears down the subprocess. Budget: 2 workers ~4g + subprocess peak ~13g
+    # (Python/data ~5g + CatBoost 8g limit) + headroom = 20g ceiling.
+    # NF and CatBoost don't overlap (NF: 03:00–05:30 UTC, CatBoost: 06:00 UTC).
+    mem_limit: 20g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
