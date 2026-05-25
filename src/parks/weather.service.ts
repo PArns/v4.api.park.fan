@@ -58,6 +58,8 @@ export interface ParkNowcast {
   currentHumidity: number | null;
   /** Precipitation in mm for the slot containing `observedAt`. */
   currentPrecipitationMm: number | null;
+  /** Qualitative bucket for the rain falling right now, classified from `currentPrecipitationMm`. Null when not raining. Unlike `rainStartsIntensity` this is populated during active rain. */
+  currentRainIntensity: RainIntensity | null;
   /** WMO weather code for the slot containing `observedAt`. Use this to pick a weather icon. */
   currentWeatherCode: number | null;
   /** Whether it is daytime at `observedAt`. Drives day/night icon variants. */
@@ -323,6 +325,9 @@ export class WeatherService {
       currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
       currentHumidity: raw.current?.humidity ?? null,
       currentPrecipitationMm: currentSlot?.precipitation ?? null,
+      currentRainIntensity: this.classifyRainIntensity(
+        currentSlot?.precipitation,
+      ),
       currentWeatherCode:
         currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
       isDay: raw.current?.isDay ?? null,

@@ -108,6 +108,15 @@ export class WeatherNowcastDto {
 
   @ApiProperty({
     description:
+      "Qualitative intensity of the rain falling right now, classified from `currentPrecipitationMm` (light < 0.625 mm, moderate < 1.9 mm, heavy ≥ 1.9 mm per 15 min). Null when not currently raining. Unlike `rainStartsIntensity`, this is populated during active rain.",
+    nullable: true,
+    enum: ["light", "moderate", "heavy"],
+    example: "moderate",
+  })
+  currentRainIntensity: "light" | "moderate" | "heavy" | null;
+
+  @ApiProperty({
+    description:
       "WMO weather code for the slot containing `observedAt`. Use this to pick a weather icon.",
     nullable: true,
   })
@@ -260,6 +269,7 @@ export class WeatherNowcastDto {
     dto.currentApparentTemperatureC = nowcast.currentApparentTemperatureC;
     dto.currentHumidity = nowcast.currentHumidity;
     dto.currentPrecipitationMm = nowcast.currentPrecipitationMm;
+    dto.currentRainIntensity = nowcast.currentRainIntensity;
     dto.currentWeatherCode = nowcast.currentWeatherCode;
     dto.currentWeatherDescription =
       nowcast.currentWeatherCode != null
