@@ -66,8 +66,14 @@ export interface ParkNowcast {
   isDay: boolean | null;
   /** Sustained wind speed in km/h at `observedAt`. */
   currentWindSpeedKmh: number | null;
+  /** Wind direction in degrees (0-360, the direction the wind blows FROM) at `observedAt`. */
+  currentWindDirectionDeg: number | null;
   /** Wind gusts in km/h at `observedAt`. */
   currentWindGustsKmh: number | null;
+  /** Snowfall in cm for the slot containing `observedAt`. */
+  currentSnowfallCm: number | null;
+  /** Horizontal visibility in metres at `observedAt`. Low values indicate fog/haze. */
+  currentVisibilityM: number | null;
 
   // ---- Today's daily summary --------------------------------------------
 
@@ -333,8 +339,11 @@ export class WeatherService {
       isDay: raw.current?.isDay ?? null,
       currentWindSpeedKmh:
         currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
+      currentWindDirectionDeg: currentSlot?.windDirection ?? null,
       currentWindGustsKmh:
         currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
+      currentSnowfallCm: currentSlot?.snowfall ?? null,
+      currentVisibilityM: currentSlot?.visibility ?? null,
       temperatureMaxC: raw.daily?.temperatureMax ?? null,
       temperatureMinC: raw.daily?.temperatureMin ?? null,
       rainStartsAt,

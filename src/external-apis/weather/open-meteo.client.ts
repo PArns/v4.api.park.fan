@@ -399,9 +399,12 @@ export class OpenMeteoClient {
           minutely_15: [
             "precipitation",
             "precipitation_probability",
+            "snowfall",
             "weather_code",
             "wind_speed_10m",
+            "wind_direction_10m",
             "wind_gusts_10m",
+            "visibility",
           ].join(","),
           forecast_minutely_15: steps,
           current: [
@@ -492,9 +495,12 @@ export class OpenMeteoClient {
       time,
       precipitation: m.precipitation?.[index] ?? null,
       precipitationProbability: m.precipitation_probability?.[index] ?? null,
+      snowfall: m.snowfall?.[index] ?? null,
       weatherCode: m.weather_code?.[index] ?? null,
       windSpeed: m.wind_speed_10m?.[index] ?? null,
+      windDirection: m.wind_direction_10m?.[index] ?? null,
       windGusts: m.wind_gusts_10m?.[index] ?? null,
+      visibility: m.visibility?.[index] ?? null,
     }));
 
     // `daily` is requested with forecast_days=1 → exactly one entry for today.
@@ -568,9 +574,12 @@ interface OpenMeteoResponse {
     time: string[];
     precipitation?: (number | null)[];
     precipitation_probability?: (number | null)[];
+    snowfall?: (number | null)[];
     weather_code?: (number | null)[];
     wind_speed_10m?: (number | null)[];
+    wind_direction_10m?: (number | null)[];
     wind_gusts_10m?: (number | null)[];
+    visibility?: (number | null)[];
   };
   daily: {
     time: string[];
@@ -640,9 +649,12 @@ export interface NowcastStep {
   time: string; // ISO 8601 — start of the 15-min interval, in park's local timezone
   precipitation: number | null; // mm in this 15-min slot
   precipitationProbability: number | null; // 0-100
+  snowfall: number | null; // cm in this 15-min slot
   weatherCode: number | null; // WMO code
   windSpeed: number | null; // km/h, sustained
+  windDirection: number | null; // degrees (0-360, direction wind comes FROM)
   windGusts: number | null; // km/h, gusts
+  visibility: number | null; // meters
 }
 
 export interface NowcastCurrent {

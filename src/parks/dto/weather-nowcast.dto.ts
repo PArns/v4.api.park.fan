@@ -26,6 +26,12 @@ export class NowcastStepDto {
   precipitationProbability: number | null;
 
   @ApiProperty({
+    description: "Snowfall in this 15-min slot (cm)",
+    nullable: true,
+  })
+  snowfall: number | null;
+
+  @ApiProperty({
     description: "WMO weather code for this slot",
     nullable: true,
   })
@@ -38,10 +44,23 @@ export class NowcastStepDto {
   windSpeed: number | null;
 
   @ApiProperty({
+    description:
+      "Wind direction in this slot (degrees, 0-360, direction the wind comes FROM)",
+    nullable: true,
+  })
+  windDirection: number | null;
+
+  @ApiProperty({
     description: "Wind gusts in this slot (km/h)",
     nullable: true,
   })
   windGusts: number | null;
+
+  @ApiProperty({
+    description: "Horizontal visibility in this slot (metres)",
+    nullable: true,
+  })
+  visibility: number | null;
 }
 
 export class WeatherNowcastDto {
@@ -231,10 +250,33 @@ export class WeatherNowcastDto {
   currentWindSpeedKmh: number | null;
 
   @ApiProperty({
+    description:
+      "Wind direction at `observedAt` (degrees, 0-360, the direction the wind blows FROM). Drives a wind compass.",
+    nullable: true,
+    example: 225,
+  })
+  currentWindDirectionDeg: number | null;
+
+  @ApiProperty({
     description: "Wind gusts at `observedAt` (km/h)",
     nullable: true,
   })
   currentWindGustsKmh: number | null;
+
+  @ApiProperty({
+    description:
+      "Snowfall in cm for the 15-min slot containing `observedAt`. Distinguishes snow from rain.",
+    nullable: true,
+  })
+  currentSnowfallCm: number | null;
+
+  @ApiProperty({
+    description:
+      "Horizontal visibility in metres at `observedAt`. Low values (< ~1000 m) indicate fog/haze.",
+    nullable: true,
+    example: 24140,
+  })
+  currentVisibilityM: number | null;
 
   @ApiProperty({
     description:
@@ -289,15 +331,21 @@ export class WeatherNowcastDto {
     dto.stormStartsAt = nowcast.stormStartsAt;
     dto.stormEndsAt = nowcast.stormEndsAt;
     dto.currentWindSpeedKmh = nowcast.currentWindSpeedKmh;
+    dto.currentWindDirectionDeg = nowcast.currentWindDirectionDeg;
     dto.currentWindGustsKmh = nowcast.currentWindGustsKmh;
+    dto.currentSnowfallCm = nowcast.currentSnowfallCm;
+    dto.currentVisibilityM = nowcast.currentVisibilityM;
     dto.peakWindGustsKmh = nowcast.peakWindGustsKmh;
     dto.steps = nowcast.steps.map((s) => ({
       time: s.time,
       precipitation: s.precipitation,
       precipitationProbability: s.precipitationProbability,
+      snowfall: s.snowfall,
       weatherCode: s.weatherCode,
       windSpeed: s.windSpeed,
+      windDirection: s.windDirection,
       windGusts: s.windGusts,
+      visibility: s.visibility,
     }));
     dto.attribution = OPEN_METEO_ATTRIBUTION;
     return dto;
