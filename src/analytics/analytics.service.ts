@@ -2837,6 +2837,7 @@ export class AnalyticsService {
         JOIN park_status ps ON ps."parkId" = p.id
         WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
           AND qd."waitTime" >= 10
+          AND qd."waitTime" <= 360
         ORDER BY qd."attractionId", qd.timestamp DESC
       )
       SELECT *

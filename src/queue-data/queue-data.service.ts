@@ -163,7 +163,15 @@ export class QueueDataService {
         case QueueType.SINGLE_RIDER:
         case QueueType.PAID_STANDBY:
           if ("waitTime" in queueInfo) {
-            queueData.waitTime = queueInfo.waitTime;
+            const raw = queueInfo.waitTime;
+            if (typeof raw === "number" && raw > 360) {
+              this.logger.warn(
+                `Discarding implausible wait time ${raw} min for attraction ${attractionId}`,
+              );
+              // Leave queueData.waitTime unset (null) — status change still saved
+            } else {
+              queueData.waitTime = raw;
+            }
           }
           break;
 
