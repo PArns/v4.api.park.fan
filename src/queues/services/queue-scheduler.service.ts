@@ -282,11 +282,9 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // TFT (NeuralForecast) training: Daily at 04:00 UTC — runs before CatBoost
-    // (06:00 UTC). NF takes ~2.5h, finishes ~06:30; CatBoost starts at 06:00 so
-    // the tail of NF (forecasting, ~3.8GB) briefly overlaps with CatBoost's early
-    // data-fetch phase (low memory) — safe on the 28GB host.
-    // Trains TFT, then forecasts + persists forward records.
+    // TFT (NeuralForecast) training: Daily at 03:00 UTC — safely before CatBoost
+    // (06:00 UTC). NF takes ~2.5h → finishes ~05:30, leaving a ~30min gap before
+    // CatBoost starts. No memory overlap on the shared 28GB host.
     const hasNfTrainingCron = await this.hasRepeatableJob(
       this.nfTrainingQueue,
       "nf-training-cron",
@@ -297,15 +295,15 @@ export class QueueSchedulerService implements OnModuleInit {
         "train-nf",
         {},
         {
-          repeat: { cron: "0 4 * * *" }, // Daily at 04:00 UTC (before CatBoost)
+          repeat: { cron: "0 3 * * *" }, // Daily at 03:00 UTC (before CatBoost at 06:00)
           jobId: "nf-training-cron",
           attempts: 1, // long job + overlap-guarded; never retry-stack a 2nd train
         },
       );
     }
 
-    // Model comparison scoreboard: Daily at 7:30am — after both NF (~06:30) and
-    // CatBoost (~07:00) have made their forward forecasts.
+    // Model comparison scoreboard: Daily at 7:00am UTC — after NF (~05:30) and
+    // CatBoost (~06:15) have both completed their forward forecasts.
     const hasNfScoreCron = await this.hasRepeatableJob(
       this.nfTrainingQueue,
       "nf-score-comparison-cron",
@@ -316,7 +314,7 @@ export class QueueSchedulerService implements OnModuleInit {
         "score-comparison",
         {},
         {
-          repeat: { cron: "30 7 * * *" }, // Daily at 7:30am UTC
+          repeat: { cron: "0 7 * * *" }, // Daily at 07:00 UTC
           jobId: "nf-score-comparison-cron",
           attempts: 1, // idempotent upsert by (targetDate, model) — no retry needed
         },
