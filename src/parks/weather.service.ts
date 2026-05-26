@@ -36,9 +36,10 @@ export interface ParkNowcast {
    */
   observedAt: string;
   /**
-   * ISO timestamp at which the cached forecast expires and a fresh
-   * fetch will be performed (= `observedAt` + 15 min). Clients render
-   * this as the "next update" time.
+   * ISO timestamp at which the cached forecast expires and a fresh fetch will
+   * be performed. Aligned to the next 15-min slot boundary at or after
+   * `observedAt` + ~30 min (slots are on full :00/:15/:30/:45 marks), and the
+   * cache TTL matches it. Clients render this as the "next update" time.
    */
   nextUpdateAt: string;
 
@@ -93,17 +94,17 @@ export interface ParkNowcast {
   /** ISO timestamp when rain is expected to stop. Null if no rain or rain continues beyond the window. */
   rainEndsAt: string | null;
 
-  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window. */
+  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window, or null if already ongoing now (then see thunderstormEndsAt). */
   thunderstormStartsAt: string | null;
   /** ISO timestamp when the thunderstorm block is expected to clear. Null if none in window or it continues beyond the window. */
   thunderstormEndsAt: string | null;
 
-  /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window. */
+  /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window, or null if already ongoing now (then see hailEndsAt). */
   hailStartsAt: string | null;
   /** ISO timestamp when the hail block is expected to clear. Null if none in window or it continues beyond the window. */
   hailEndsAt: string | null;
 
-  /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window. */
+  /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window, or null if already ongoing now (then see stormEndsAt). */
   stormStartsAt: string | null;
   /** ISO timestamp when storm-force wind gusts are expected to die down. Null if none in window or they continue beyond the window. */
   stormEndsAt: string | null;
@@ -123,7 +124,7 @@ export class WeatherService {
   // Open-Meteo quota. Jitter spreads expiry so all parks don't refetch at once.
   private readonly HOURLY_CACHE_TTL = 6 * 60 * 60; // 6 hours
   private readonly HOURLY_CACHE_JITTER = 60 * 60; // up to +1h random spread
-  private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
+  private readonly NOWCAST_CACHE_TTL = 30 * 60; // 30 minutes
 
   /** Precipitation threshold (mm per 15-min slot) considered "raining". */
   private static readonly RAIN_THRESHOLD_MM = 0.1;
@@ -163,12 +164,14 @@ export class WeatherService {
    * is imminent (with a matching ends-time).
    *
    * Cache strategy: the entire derived response is cached per-park for
-   * 15 minutes (matches Open-Meteo's data resolution). This is safe
+   * 30 minutes to keep upstream request volume low (Open-Meteo refreshes
+   * ~every 15 min, so this is ~half the upstream cadence). This is safe
    * because every "event" field is an absolute ISO timestamp that does
    * not drift with wall-clock time, and `current*` snapshot fields are
    * explicitly defined as "the state at `observedAt`" — not "right
-   * now". Clients that need the live state can compute it from the
-   * absolute timestamps or from `steps[]`.
+   * now". `nextUpdateAt` tells clients when fresh data is due, and clients
+   * that need the live state can compute it from the absolute timestamps
+   * or from `steps[]`.
    *
    * @param parkId - Park ID
    * @returns Nowcast result, or `null` if coordinates are missing
@@ -218,12 +221,15 @@ export class WeatherService {
     );
 
     try {
-      await this.redis.set(
-        cacheKey,
-        JSON.stringify(result),
-        "EX",
-        this.NOWCAST_CACHE_TTL,
+      // Expire the cache exactly at the (slot-aligned) nextUpdateAt so the
+      // client's "next update" time matches when we actually refetch.
+      const ttlSeconds = Math.max(
+        60,
+        Math.round(
+          (new Date(result.nextUpdateAt).getTime() - Date.now()) / 1000,
+        ),
       );
+      await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttlSeconds);
     } catch (err) {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
@@ -268,12 +274,21 @@ export class WeatherService {
 
     const future = steps.filter((s) => s.timeMs + SLOT_MS > fetchedMs);
 
-    // The "current" slot is the one whose 15-min window contains `fetchedAt`.
-    const currentSlot = steps.find(
-      (s) => s.timeMs <= fetchedMs && fetchedMs < s.timeMs + SLOT_MS,
-    );
+    // Snapshot reflects "now": prefer the slot whose 15-min window contains
+    // `fetchedAt`, but if that slot is missing or a field is null, fall through
+    // to the next slot that has data. `future` already starts at the current
+    // slot (its window still includes now), so the first non-null entry per
+    // field is exactly "current slot, else next slot".
+    const pickSlotValue = <K extends keyof NowcastStep>(
+      key: K,
+    ): NowcastStep[K] | null => {
+      const hit = future.find((s) => s[key] != null);
+      return hit ? hit[key] : null;
+    };
 
-    const currentlyRaining = currentSlot ? isRain(currentSlot) : false;
+    const currentPrecipitationMm = pickSlotValue("precipitation");
+    const currentlyRaining =
+      (currentPrecipitationMm ?? 0) >= WeatherService.RAIN_THRESHOLD_MM;
 
     let rainStartsAt: string | null = null;
     let rainEndsAt: string | null = null;
@@ -300,13 +315,31 @@ export class WeatherService {
     }
 
     /**
-     * For thunderstorm/hail/storm: find the first matching slot and then
-     * the first non-matching slot after it within the same window so we
-     * can show "starts at X, ends at Y".
+     * For thunderstorm/hail/storm: report the upcoming block as "starts at X,
+     * ends at Y". If the hazard is already happening in the current slot it is
+     * ongoing — startsAt is null (mirrors rain) and we only report when it
+     * clears, so startsAt is never a past timestamp.
+     *
+     * The current slot is the earliest non-expired slot whose window contains
+     * `fetchedAt`. If the earliest slot starts in the future (a gap), there is
+     * no current slot and the first match is a genuine future start.
      */
+    const currentSlot =
+      future.length > 0 && future[0].timeMs <= fetchedMs
+        ? future[0]
+        : undefined;
+
     const findBlock = (
       predicate: (s: NowcastStep & { timeMs: number }) => boolean,
     ): { startsAt: string | null; endsAt: string | null } => {
+      if (currentSlot && predicate(currentSlot)) {
+        // Ongoing now → no future start; report when it clears.
+        const end = future.find((s) => !predicate(s));
+        return {
+          startsAt: null,
+          endsAt: end ? new Date(end.timeMs).toISOString() : null,
+        };
+      }
       const start = future.find(predicate);
       if (!start) return { startsAt: null, endsAt: null };
       const end = future.find((s) => s.timeMs > start.timeMs && !predicate(s));
@@ -325,29 +358,34 @@ export class WeatherService {
       return max == null || s.windGusts > max ? s.windGusts : max;
     }, null);
 
+    // Align "next update" to the 15-min slot grid: slots are on full
+    // :00/:15/:30/:45 boundaries (in any whole-/quarter-hour-offset zone these
+    // map to the same UTC grid), so round the cache horizon up to the next grid
+    // point. Clients then poll exactly when a fresh slot is available. The
+    // per-park cache TTL in getNowcast is derived from this same timestamp.
+    const nextUpdateMs =
+      Math.ceil((fetchedMs + this.NOWCAST_CACHE_TTL * 1000) / SLOT_MS) *
+      SLOT_MS;
+
     return {
       observedAt: new Date(fetchedMs).toISOString(),
-      nextUpdateAt: new Date(
-        fetchedMs + this.NOWCAST_CACHE_TTL * 1000,
-      ).toISOString(),
+      nextUpdateAt: new Date(nextUpdateMs).toISOString(),
       currentlyRaining,
       currentTemperatureC: raw.current?.temperature ?? null,
       currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
       currentHumidity: raw.current?.humidity ?? null,
-      currentPrecipitationMm: currentSlot?.precipitation ?? null,
-      currentRainIntensity: this.classifyRainIntensity(
-        currentSlot?.precipitation,
-      ),
+      currentPrecipitationMm,
+      currentRainIntensity: this.classifyRainIntensity(currentPrecipitationMm),
       currentWeatherCode:
-        currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
+        pickSlotValue("weatherCode") ?? raw.current?.weatherCode ?? null,
       isDay: raw.current?.isDay ?? null,
       currentWindSpeedKmh:
-        currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
-      currentWindDirectionDeg: currentSlot?.windDirection ?? null,
+        pickSlotValue("windSpeed") ?? raw.current?.windSpeed ?? null,
+      currentWindDirectionDeg: pickSlotValue("windDirection"),
       currentWindGustsKmh:
-        currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
-      currentSnowfallCm: currentSlot?.snowfall ?? null,
-      currentVisibilityM: currentSlot?.visibility ?? null,
+        pickSlotValue("windGusts") ?? raw.current?.windGusts ?? null,
+      currentSnowfallCm: pickSlotValue("snowfall"),
+      currentVisibilityM: pickSlotValue("visibility"),
       temperatureMaxC: raw.daily?.temperatureMax ?? null,
       temperatureMinC: raw.daily?.temperatureMin ?? null,
       rainStartsAt,
