@@ -36,9 +36,10 @@ export interface ParkNowcast {
    */
   observedAt: string;
   /**
-   * ISO timestamp at which the cached forecast expires and a fresh
-   * fetch will be performed (= `observedAt` + 15 min). Clients render
-   * this as the "next update" time.
+   * ISO timestamp at which the cached forecast expires and a fresh fetch will
+   * be performed. Aligned to the next 15-min slot boundary at or after
+   * `observedAt` + ~30 min (slots are on full :00/:15/:30/:45 marks), and the
+   * cache TTL matches it. Clients render this as the "next update" time.
    */
   nextUpdateAt: string;
 
@@ -220,12 +221,15 @@ export class WeatherService {
     );
 
     try {
-      await this.redis.set(
-        cacheKey,
-        JSON.stringify(result),
-        "EX",
-        this.NOWCAST_CACHE_TTL,
+      // Expire the cache exactly at the (slot-aligned) nextUpdateAt so the
+      // client's "next update" time matches when we actually refetch.
+      const ttlSeconds = Math.max(
+        60,
+        Math.round(
+          (new Date(result.nextUpdateAt).getTime() - Date.now()) / 1000,
+        ),
       );
+      await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttlSeconds);
     } catch (err) {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
@@ -354,11 +358,18 @@ export class WeatherService {
       return max == null || s.windGusts > max ? s.windGusts : max;
     }, null);
 
+    // Align "next update" to the 15-min slot grid: slots are on full
+    // :00/:15/:30/:45 boundaries (in any whole-/quarter-hour-offset zone these
+    // map to the same UTC grid), so round the cache horizon up to the next grid
+    // point. Clients then poll exactly when a fresh slot is available. The
+    // per-park cache TTL in getNowcast is derived from this same timestamp.
+    const nextUpdateMs =
+      Math.ceil((fetchedMs + this.NOWCAST_CACHE_TTL * 1000) / SLOT_MS) *
+      SLOT_MS;
+
     return {
       observedAt: new Date(fetchedMs).toISOString(),
-      nextUpdateAt: new Date(
-        fetchedMs + this.NOWCAST_CACHE_TTL * 1000,
-      ).toISOString(),
+      nextUpdateAt: new Date(nextUpdateMs).toISOString(),
       currentlyRaining,
       currentTemperatureC: raw.current?.temperature ?? null,
       currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
