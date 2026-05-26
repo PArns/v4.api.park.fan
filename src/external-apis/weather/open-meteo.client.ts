@@ -30,6 +30,10 @@ export class OpenMeteoClient {
   private readonly baseUrl = "https://api.open-meteo.com/v1";
   // Redis key for distributed rate limiting
   private readonly BLOCKED_KEY = "ratelimit:openmeteo:blocked";
+  // Circuit breaker: opened when 5xx/network failures exhaust their retries, so
+  // callers fail fast during an upstream outage instead of each burning retries.
+  private readonly CIRCUIT_KEY = "ratelimit:openmeteo:circuit";
+  private readonly CIRCUIT_COOLDOWN = 30; // seconds the circuit stays open
   // Hourly forecast is stable across hours; nowcast covers real-time. Refresh
   // every ~6h with jitter to respect the quota and avoid synchronized expiry.
   private readonly CACHE_TTL = 6 * 60 * 60; // 6 hours
@@ -86,9 +90,12 @@ export class OpenMeteoClient {
     retries = 3,
     delay = 1000,
   ): Promise<T> {
-    // Check Global Redis Block before making request
-    // Only log on first attempt (retries === 3) to avoid duplicate logs
-    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
+    // Check global rate-limit block and circuit breaker before making a request
+    // (both fail fast). Only log on the first attempt (retries === 3).
+    const [blockedUntil, circuitOpen] = await this.redis.mget(
+      this.BLOCKED_KEY,
+      this.CIRCUIT_KEY,
+    );
     if (blockedUntil) {
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
       const nextRetrySeconds = ttl > 0 ? ttl : 0;
@@ -102,6 +109,15 @@ export class OpenMeteoClient {
       }
       // CRITICAL: Throw error BEFORE any API call to prevent extending the lock
       throw new Error(`Open-Meteo API: Global Rate Limit (blocked)`);
+    }
+    if (circuitOpen) {
+      if (retries === 3) {
+        const ttl = await this.redis.ttl(this.CIRCUIT_KEY);
+        this.logger.warn(
+          `⚡ Open-Meteo circuit open (upstream degraded). Failing fast for ${ttl > 0 ? ttl : 0}s.`,
+        );
+      }
+      throw new Error(`Open-Meteo API: circuit open (upstream degraded)`);
     }
 
     try {
@@ -155,11 +171,11 @@ export class OpenMeteoClient {
       }
 
       // Handle Network Errors (ECONNRESET, etc.)
-      if (
+      const isNetworkError =
         error.code === "ECONNRESET" ||
         error.code === "ETIMEDOUT" ||
-        error.code === "ENOTFOUND"
-      ) {
+        error.code === "ENOTFOUND";
+      if (isNetworkError) {
         if (retries > 0) {
           this.logger.warn(
             `Open-Meteo Network Error (${error.code}). Retrying in ${delay}ms...`,
@@ -167,6 +183,24 @@ export class OpenMeteoClient {
           await new Promise((resolve) => setTimeout(resolve, delay));
           return this.requestWithRetry<T>(url, config, retries - 1, delay * 2);
         }
+      }
+
+      // Reaching here means retries are exhausted (or the error was
+      // non-retryable). If a 5xx or network failure burned through all retries
+      // the upstream is degraded → open the circuit so concurrent/subsequent
+      // callers fail fast instead of each retrying. Auto-closes after cooldown.
+      const isServerError =
+        axios.isAxiosError(error) &&
+        error.response != null &&
+        error.response.status >= 500 &&
+        error.response.status < 600;
+      if (isServerError || isNetworkError) {
+        await this.redis
+          .set(this.CIRCUIT_KEY, "true", "EX", this.CIRCUIT_COOLDOWN)
+          .catch(() => {});
+        this.logger.warn(
+          `⚡ Open-Meteo circuit opened for ${this.CIRCUIT_COOLDOWN}s after repeated upstream failures`,
+        );
       }
 
       throw error;
@@ -250,53 +284,6 @@ export class OpenMeteoClient {
         throw new Error(`Open-Meteo API error: ${errorMessage}`);
       }
     });
-  }
-
-  /**
-   * Fetch historical weather data
-   *
-   * @param latitude - Location latitude
-   * @param longitude - Location longitude
-   * @param startDate - Start date (YYYY-MM-DD)
-   * @param endDate - End date (YYYY-MM-DD)
-   * @returns Historical daily weather data
-   */
-  async getHistoricalWeather(
-    latitude: number,
-    longitude: number,
-    startDate: string,
-    endDate: string,
-  ): Promise<DailyWeatherResponse> {
-    try {
-      const data = await this.requestWithRetry<OpenMeteoResponse>("/archive", {
-        params: {
-          latitude,
-          longitude,
-          start_date: startDate,
-          end_date: endDate,
-          daily: [
-            "temperature_2m_max",
-            "temperature_2m_min",
-            "precipitation_sum",
-            "rain_sum",
-            "snowfall_sum",
-            "weathercode",
-            "windspeed_10m_max",
-          ].join(","),
-          timezone: "auto",
-        },
-      });
-
-      return this.transformResponse(data);
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Failed to fetch historical weather data: ${errorMessage}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-      throw new Error(`Open-Meteo API error: ${errorMessage}`);
-    }
   }
 
   async getHourlyForecast(
