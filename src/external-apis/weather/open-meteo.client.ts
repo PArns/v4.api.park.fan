@@ -34,6 +34,13 @@ export class OpenMeteoClient {
   // every ~6h with jitter to respect the quota and avoid synchronized expiry.
   private readonly CACHE_TTL = 6 * 60 * 60; // 6 hours
   private readonly CACHE_TTL_JITTER = 60 * 60; // up to +1h random spread
+  // Nowcast data updates ~every 15 min upstream and is served per-park from a
+  // dedicated 15-min cache, so the client cache matches that cadence.
+  private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
+  // Neutral browser-like User-Agent. The default "axios/x" UA is an obvious bot
+  // signature that can get the shared free-tier IP rate-limited/blocked.
+  private readonly USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
   constructor(
     private readonly configService: ConfigService,
@@ -42,6 +49,9 @@ export class OpenMeteoClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 20000, // 20 seconds (increased to reduce timeout errors)
+      headers: {
+        "User-Agent": this.USER_AGENT,
+      },
     });
   }
 
@@ -367,8 +377,8 @@ export class OpenMeteoClient {
    * Returns precipitation in 15-minute steps for the next few hours.
    * Used to derive short-term alerts ("rain starts in X min, ends in Y min").
    *
-   * The result is cached for a short period (5 min) since nowcast data updates
-   * roughly every 15 min on the Open-Meteo side.
+   * The result is cached for 15 min, matching Open-Meteo's upstream update
+   * cadence and the per-park nowcast cache.
    *
    * @param latitude - Location latitude
    * @param longitude - Location longitude
@@ -426,7 +436,12 @@ export class OpenMeteoClient {
       const result = this.transformNowcastResponse(data);
 
       try {
-        await this.redis.set(cacheKey, JSON.stringify(result), "EX", 300); // 5 min TTL
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          this.NOWCAST_CACHE_TTL,
+        );
       } catch {
         // Cache write failure is non-critical
       }
