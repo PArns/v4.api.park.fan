@@ -36,10 +36,11 @@ export interface ParkNowcast {
    */
   observedAt: string;
   /**
-   * ISO timestamp at which the cached forecast expires and a fresh fetch will
-   * be performed. Aligned to the next 15-min slot boundary at or after
-   * `observedAt` + ~30 min (slots are on full :00/:15/:30/:45 marks), and the
-   * cache TTL matches it. Clients render this as the "next update" time.
+   * ISO timestamp the client should poll at next: the next 15-min slot boundary
+   * (full :00/:15/:30/:45 marks), computed from read time. Clients render this
+   * as the "next update" time and refresh ~every 15 min. Independent of how
+   * long the server caches upstream data (which may be longer), so the same
+   * snapshot can be served across more than one client poll.
    */
   nextUpdateAt: string;
 
@@ -163,15 +164,15 @@ export class WeatherService {
    * expected to start/stop, and whether a thunderstorm / hail / storm
    * is imminent (with a matching ends-time).
    *
-   * Cache strategy: the entire derived response is cached per-park for
-   * 30 minutes to keep upstream request volume low (Open-Meteo refreshes
-   * ~every 15 min, so this is ~half the upstream cadence). This is safe
-   * because every "event" field is an absolute ISO timestamp that does
-   * not drift with wall-clock time, and `current*` snapshot fields are
-   * explicitly defined as "the state at `observedAt`" — not "right
-   * now". `nextUpdateAt` tells clients when fresh data is due, and clients
-   * that need the live state can compute it from the absolute timestamps
-   * or from `steps[]`.
+   * Cache strategy: the derived response is cached per-park for 30 min to keep
+   * upstream request volume low (Open-Meteo refreshes ~every 15 min, so this is
+   * ~half the upstream cadence). The client still polls every 15 min — on a
+   * cache hit we recompute `nextUpdateAt` from read time, so the client refresh
+   * cadence is decoupled from the upstream fetch cadence. This is safe because
+   * every "event" field is an absolute ISO timestamp that does not drift with
+   * wall-clock time, and `current*` snapshot fields are explicitly defined as
+   * "the state at `observedAt`" — not "right now"; clients that need the live
+   * state can compute it from the absolute timestamps or from `steps[]`.
    *
    * @param parkId - Park ID
    * @returns Nowcast result, or `null` if coordinates are missing
@@ -179,10 +180,16 @@ export class WeatherService {
   async getNowcast(parkId: string): Promise<ParkNowcast | null> {
     const cacheKey = `weather:nowcast:park:${parkId}`;
 
-    // Cache hit → the cached response is the response. No re-derive.
+    // Cache hit → return the cached snapshot, but refresh nextUpdateAt from the
+    // current time so the client keeps polling every 15 min (at the next slot
+    // boundary) even while we keep serving the same upstream data.
     try {
       const cachedStr = await this.redis.get(cacheKey);
-      if (cachedStr) return JSON.parse(cachedStr) as ParkNowcast;
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr) as ParkNowcast;
+        cached.nextUpdateAt = this.nextSlotBoundaryIso(Date.now());
+        return cached;
+      }
     } catch (err) {
       this.logger.warn(`Redis cache error: ${err}`);
     }
@@ -221,15 +228,15 @@ export class WeatherService {
     );
 
     try {
-      // Expire the cache exactly at the (slot-aligned) nextUpdateAt so the
-      // client's "next update" time matches when we actually refetch.
-      const ttlSeconds = Math.max(
-        60,
-        Math.round(
-          (new Date(result.nextUpdateAt).getTime() - Date.now()) / 1000,
-        ),
+      // Upstream cadence: cache for ~30 min to keep request volume low. This is
+      // independent of nextUpdateAt (the client polls every 15 min); the next
+      // 15-min poll after this expires triggers the refetch.
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(result),
+        "EX",
+        this.NOWCAST_CACHE_TTL,
       );
-      await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttlSeconds);
     } catch (err) {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
@@ -358,18 +365,13 @@ export class WeatherService {
       return max == null || s.windGusts > max ? s.windGusts : max;
     }, null);
 
-    // Align "next update" to the 15-min slot grid: slots are on full
-    // :00/:15/:30/:45 boundaries (in any whole-/quarter-hour-offset zone these
-    // map to the same UTC grid), so round the cache horizon up to the next grid
-    // point. Clients then poll exactly when a fresh slot is available. The
-    // per-park cache TTL in getNowcast is derived from this same timestamp.
-    const nextUpdateMs =
-      Math.ceil((fetchedMs + this.NOWCAST_CACHE_TTL * 1000) / SLOT_MS) *
-      SLOT_MS;
-
     return {
       observedAt: new Date(fetchedMs).toISOString(),
-      nextUpdateAt: new Date(nextUpdateMs).toISOString(),
+      // Client polls at the next 15-min slot boundary (slots are on full
+      // :00/:15/:30/:45 marks). This is the *client* cadence and is independent
+      // of how long we cache upstream data — getNowcast recomputes it from read
+      // time on cache hits so it never goes stale.
+      nextUpdateAt: this.nextSlotBoundaryIso(fetchedMs),
       currentlyRaining,
       currentTemperatureC: raw.current?.temperature ?? null,
       currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
@@ -401,6 +403,16 @@ export class WeatherService {
       peakWindGustsKmh,
       steps: steps.map(({ timeMs: _ignored, ...rest }) => rest),
     };
+  }
+
+  /**
+   * Next 15-min slot boundary (UTC grid, = full :00/:15/:30/:45 in any
+   * whole-/quarter-hour-offset zone) strictly after `fromMs`, as an ISO string.
+   * Drives the client's poll cadence.
+   */
+  private nextSlotBoundaryIso(fromMs: number): string {
+    const slot = 15 * 60 * 1000;
+    return new Date((Math.floor(fromMs / slot) + 1) * slot).toISOString();
   }
 
   /**
