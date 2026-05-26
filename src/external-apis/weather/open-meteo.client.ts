@@ -30,7 +30,10 @@ export class OpenMeteoClient {
   private readonly baseUrl = "https://api.open-meteo.com/v1";
   // Redis key for distributed rate limiting
   private readonly BLOCKED_KEY = "ratelimit:openmeteo:blocked";
-  private readonly CACHE_TTL = 3600; // 1 hour
+  // Hourly forecast is stable across hours; nowcast covers real-time. Refresh
+  // every ~6h with jitter to respect the quota and avoid synchronized expiry.
+  private readonly CACHE_TTL = 6 * 60 * 60; // 6 hours
+  private readonly CACHE_TTL_JITTER = 60 * 60; // up to +1h random spread
 
   constructor(
     private readonly configService: ConfigService,
@@ -299,14 +302,11 @@ export class OpenMeteoClient {
 
       const result = this.transformHourlyResponse(data);
 
-      // Cache the successful result
+      // Cache the successful result (jittered TTL to avoid synchronized expiry)
       try {
-        await this.redis.set(
-          cacheKey,
-          JSON.stringify(result),
-          "EX",
-          this.CACHE_TTL,
-        );
+        const ttl =
+          this.CACHE_TTL + Math.floor(Math.random() * this.CACHE_TTL_JITTER);
+        await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttl);
       } catch (err: any) {
         this.logger.warn(`Failed to cache weather response: ${err.message}`);
       }

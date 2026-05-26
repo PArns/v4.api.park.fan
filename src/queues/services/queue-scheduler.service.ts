@@ -180,11 +180,13 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Weather current-only sync: Every hour (live conditions for today)
+    // Weather current-only sync: Every 6 hours (live conditions for today).
+    // Real-time conditions are served by the nowcast (15-min cache), so the DB
+    // "current" record only needs periodic refresh — this respects the quota.
     const hasWeatherCurrentCron = await this.hasRepeatableJob(
       this.weatherQueue,
       "weather-current-cron",
-      "0 * * * *",
+      "0 */6 * * *",
     );
 
     if (!hasWeatherCurrentCron) {
@@ -192,7 +194,7 @@ export class QueueSchedulerService implements OnModuleInit {
         "fetch-weather",
         { currentOnly: true },
         {
-          repeat: { cron: "0 * * * *" },
+          repeat: { cron: "0 */6 * * *" },
           jobId: "weather-current-cron",
         },
       );

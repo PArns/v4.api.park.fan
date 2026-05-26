@@ -79,7 +79,11 @@ export class SystemHealthService {
       cpu: {
         cores,
         model: os.cpus()?.[0]?.model?.trim(),
-        load: { "1m": +l1.toFixed(2), "5m": +l5.toFixed(2), "15m": +l15.toFixed(2) },
+        load: {
+          "1m": +l1.toFixed(2),
+          "5m": +l5.toFixed(2),
+          "15m": +l15.toFixed(2),
+        },
         loadPct: cores ? +((l1 / cores) * 100).toFixed(0) : null,
       },
       memory: {
@@ -109,7 +113,9 @@ export class SystemHealthService {
       activeQueries: Number(r.active),
       maxConnections: Number(r.max_connections),
       connectionsPct: r.max_connections
-        ? +((Number(r.connections) / Number(r.max_connections)) * 100).toFixed(1)
+        ? +((Number(r.connections) / Number(r.max_connections)) * 100).toFixed(
+            1,
+          )
         : null,
       dbSizeGB: +(Number(r.db_size_bytes) / GB).toFixed(2),
       cacheHitPct: r.cache_hit_pct != null ? Number(r.cache_hit_pct) : null,
@@ -136,13 +142,14 @@ export class SystemHealthService {
     }
     return {
       status: "connected",
-      usedMemoryMB: +((Number(map["used_memory"] ?? 0)) / 1024 / 1024).toFixed(1),
-      maxMemoryMB: +((Number(map["maxmemory"] ?? 0)) / 1024 / 1024).toFixed(1) || null,
+      usedMemoryMB: +(Number(map["used_memory"] ?? 0) / 1024 / 1024).toFixed(1),
+      maxMemoryMB:
+        +(Number(map["maxmemory"] ?? 0) / 1024 / 1024).toFixed(1) || null,
       connectedClients: Number(map["connected_clients"] ?? 0),
       keys,
       hitRatePct:
         hits + misses > 0 ? +((hits / (hits + misses)) * 100).toFixed(1) : null,
-      uptimeHours: +(((Number(map["uptime_in_seconds"] ?? 0)) / 3600)).toFixed(1),
+      uptimeHours: +(Number(map["uptime_in_seconds"] ?? 0) / 3600).toFixed(1),
     };
   }
 

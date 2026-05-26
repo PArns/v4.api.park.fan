@@ -34,6 +34,22 @@ export class WeatherProcessor {
   @Process("fetch-weather")
   async handleSyncWeather(job: Job<{ currentOnly?: boolean }>): Promise<void> {
     const currentOnly = job.data?.currentOnly === true;
+    const syncType = currentOnly ? "current" : "full";
+    const doneKey = `weather:sync:done:${syncType}`;
+
+    // Idempotency guard: skip if a sync of this type already completed within
+    // its interval. A crash mid-sync leaves the marker unset, so Bull's
+    // stalled-job recovery re-runs it on restart; but a crash AFTER completion
+    // finds the marker and skips — no redundant Open-Meteo calls.
+    const alreadyDone = await this.redis.get(doneKey);
+    if (alreadyDone) {
+      const ttl = await this.redis.ttl(doneKey);
+      this.logger.log(
+        `⏭️  Skipping ${syncType} weather sync — already completed at ${alreadyDone} (next eligible in ${ttl}s).`,
+      );
+      return;
+    }
+
     this.logger.log(
       currentOnly
         ? "🌤️  Starting weather sync (current + live conditions only)..."
@@ -149,6 +165,12 @@ export class WeatherProcessor {
       this.logger.log(
         `✅ Weather sync complete! Saved ${totalCurrent} current, ${totalForecast} forecast records`,
       );
+
+      // Mark this sync type as done. TTL sits just under the cron interval
+      // (full=12h, current=6h) so the next scheduled run always proceeds, but a
+      // restart in between skips the redundant re-sync.
+      const doneTtl = currentOnly ? 5 * 60 * 60 : 11 * 60 * 60;
+      await this.redis.set(doneKey, new Date().toISOString(), "EX", doneTtl);
     } catch (error: unknown) {
       this.logger.error("❌ Weather sync failed", error);
       throw error;
