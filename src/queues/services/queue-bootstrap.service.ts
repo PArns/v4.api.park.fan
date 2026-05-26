@@ -154,36 +154,10 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     }
 
-    // 4. Trigger Holiday Sync (Holidays change infrequently, but we need initial data)
-    // This fetches both Public (Nager) and School (OpenHolidays) data
-    const holidayJobActive = await this.isJobActiveOrWaiting(
-      this.holidaysQueue,
-      "fetch-holidays",
-    );
-
-    if (!holidayJobActive) {
-      // Remove stale job first if any (completed/failed)
-      const existingJob = await this.holidaysQueue.getJob("bootstrap-holidays");
-      if (existingJob) {
-        await existingJob.remove().catch(() => {});
-      }
-
-      await this.holidaysQueue.add(
-        "fetch-holidays",
-        {},
-        {
-          priority: 5,
-          jobId: "bootstrap-holidays",
-          removeOnComplete: true,
-        },
-      );
-      this.logger.log("✅ Boot: Holiday sync job queued");
-    } else {
-      this.logger.debug("⏭️  Boot: Holiday sync job already running, skipping");
-    }
-
-    // NOTE: Holidays sync is now triggered AFTER park metadata completes
-    // (from park-metadata.processor.ts) to ensure all parks have country data
+    // 4. Holidays are NOT synced on boot — the monthly cron is the single
+    // scheduled source, and a holiday sync is also triggered after a
+    // park-metadata sync (park-metadata.processor.ts) so new park countries
+    // get covered once their country data exists.
 
     // Trigger ML-related bootstrap jobs
     try {
