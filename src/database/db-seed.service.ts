@@ -48,8 +48,6 @@ export class DbSeedService implements OnModuleInit {
     private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata")
     private childrenMetadataQueue: Queue,
-    @InjectQueue("weather")
-    private weatherQueue: Queue,
     @InjectQueue("holidays")
     private holidaysQueue: Queue,
     @InjectQueue("wait-times")
@@ -120,21 +118,12 @@ export class DbSeedService implements OnModuleInit {
       this.logger.log(`✅ Holidays: ${checks.holidayCount} found`);
     }
 
-    // 3. Weather (important for predictions)
-    if (checks.needsWeather) {
-      this.logger.log("❌ Weather: Missing or stale");
-      jobsToQueue.push({
-        name: "Weather",
-        priority: 8,
-        fn: async () => {
-          await this.weatherQueue.add("fetch-weather", {}, { priority: 8 });
-        },
-      });
-    } else {
-      this.logger.log(
-        `✅ Weather: ${checks.weatherCount} records (latest: ${checks.latestWeatherDate?.toString().split("T")[0] || "N/A"})`,
-      );
-    }
+    // 3. Weather — intentionally NOT seeded on boot. The scheduled cron is the
+    // single source of weather syncs (full every 12h, current every 6h), so a
+    // (re)start never triggers an Open-Meteo fetch.
+    this.logger.log(
+      `🌤️  Weather: ${checks.weatherCount} records (latest: ${checks.latestWeatherDate?.toString().split("T")[0] || "N/A"}) — boot sync disabled, handled by cron`,
+    );
 
     // 4. Wait Times (initial data collection)
     if (checks.needsWaitTimes) {
@@ -224,7 +213,6 @@ export class DbSeedService implements OnModuleInit {
     parkCount: number;
     needsHolidays: boolean;
     holidayCount: number;
-    needsWeather: boolean;
     weatherCount: number;
     latestWeatherDate: Date | null;
     needsWaitTimes: boolean;
@@ -249,24 +237,13 @@ export class DbSeedService implements OnModuleInit {
     });
     const needsHolidays = holidayCount === 0 || futureHolidays < 100; // Arbitrary threshold
 
-    // Check Weather (should have future forecasts)
+    // Check Weather (informational only — never seeded on boot)
     const weatherCount = await this.weatherRepository.count();
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const futureWeather = await this.weatherRepository.count({
-      where: {
-        date: MoreThan(tomorrow),
-      },
-    });
-
     const latestWeather = await this.weatherRepository.findOne({
       where: {},
       order: { date: "DESC" },
       select: ["date"],
     });
-
-    const needsWeather = weatherCount === 0 || futureWeather === 0;
 
     // Check Wait Times (should have data from last 24h)
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -302,7 +279,6 @@ export class DbSeedService implements OnModuleInit {
       parkCount,
       needsHolidays,
       holidayCount,
-      needsWeather,
       weatherCount,
       latestWeatherDate: latestWeather?.date || null,
       needsWaitTimes,
