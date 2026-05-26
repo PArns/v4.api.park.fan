@@ -93,17 +93,17 @@ export interface ParkNowcast {
   /** ISO timestamp when rain is expected to stop. Null if no rain or rain continues beyond the window. */
   rainEndsAt: string | null;
 
-  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window. */
+  /** ISO timestamp of the next thunderstorm slot (WMO 95/96/99). Null if none in window, or null if already ongoing now (then see thunderstormEndsAt). */
   thunderstormStartsAt: string | null;
   /** ISO timestamp when the thunderstorm block is expected to clear. Null if none in window or it continues beyond the window. */
   thunderstormEndsAt: string | null;
 
-  /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window. */
+  /** ISO timestamp of the next hail slot (WMO 96/99). Null if no hail in window, or null if already ongoing now (then see hailEndsAt). */
   hailStartsAt: string | null;
   /** ISO timestamp when the hail block is expected to clear. Null if none in window or it continues beyond the window. */
   hailEndsAt: string | null;
 
-  /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window. */
+  /** ISO timestamp of the next slot with storm-force wind gusts (≥ 75 km/h, Beaufort 9). Null if none in window, or null if already ongoing now (then see stormEndsAt). */
   stormStartsAt: string | null;
   /** ISO timestamp when storm-force wind gusts are expected to die down. Null if none in window or they continue beyond the window. */
   stormEndsAt: string | null;
@@ -311,13 +311,31 @@ export class WeatherService {
     }
 
     /**
-     * For thunderstorm/hail/storm: find the first matching slot and then
-     * the first non-matching slot after it within the same window so we
-     * can show "starts at X, ends at Y".
+     * For thunderstorm/hail/storm: report the upcoming block as "starts at X,
+     * ends at Y". If the hazard is already happening in the current slot it is
+     * ongoing — startsAt is null (mirrors rain) and we only report when it
+     * clears, so startsAt is never a past timestamp.
+     *
+     * The current slot is the earliest non-expired slot whose window contains
+     * `fetchedAt`. If the earliest slot starts in the future (a gap), there is
+     * no current slot and the first match is a genuine future start.
      */
+    const currentSlot =
+      future.length > 0 && future[0].timeMs <= fetchedMs
+        ? future[0]
+        : undefined;
+
     const findBlock = (
       predicate: (s: NowcastStep & { timeMs: number }) => boolean,
     ): { startsAt: string | null; endsAt: string | null } => {
+      if (currentSlot && predicate(currentSlot)) {
+        // Ongoing now → no future start; report when it clears.
+        const end = future.find((s) => !predicate(s));
+        return {
+          startsAt: null,
+          endsAt: end ? new Date(end.timeMs).toISOString() : null,
+        };
+      }
       const start = future.find(predicate);
       if (!start) return { startsAt: null, endsAt: null };
       const end = future.find((s) => s.timeMs > start.timeMs && !predicate(s));
