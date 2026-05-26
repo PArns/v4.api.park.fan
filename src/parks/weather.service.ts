@@ -118,7 +118,11 @@ export interface ParkNowcast {
 export class WeatherService {
   private readonly logger = new Logger(WeatherService.name);
   private readonly CACHE_TTL_SECONDS = 2 * 60 * 60; // 2 hours (weather sync runs every 12h)
-  private readonly HOURLY_CACHE_TTL = 60 * 60; // 1 hour
+  // Hourly forecast barely shifts hour-to-hour and live conditions are served
+  // by the nowcast (15-min cache), so we refresh only every ~6h to respect the
+  // Open-Meteo quota. Jitter spreads expiry so all parks don't refetch at once.
+  private readonly HOURLY_CACHE_TTL = 6 * 60 * 60; // 6 hours
+  private readonly HOURLY_CACHE_JITTER = 60 * 60; // up to +1h random spread
   private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
 
   /** Precipitation threshold (mm per 15-min slot) considered "raining". */
@@ -469,12 +473,15 @@ export class WeatherService {
         }),
       );
 
-      // Cache result
+      // Cache result (jittered TTL so parks don't all expire in the same minute)
+      const ttl =
+        this.HOURLY_CACHE_TTL +
+        Math.floor(Math.random() * this.HOURLY_CACHE_JITTER);
       await this.redis.set(
         cacheKey,
         JSON.stringify(mappedForecast),
         "EX",
-        this.HOURLY_CACHE_TTL,
+        ttl,
       );
 
       return mappedForecast;
