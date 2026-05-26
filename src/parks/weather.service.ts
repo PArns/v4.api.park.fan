@@ -477,12 +477,7 @@ export class WeatherService {
       const ttl =
         this.HOURLY_CACHE_TTL +
         Math.floor(Math.random() * this.HOURLY_CACHE_JITTER);
-      await this.redis.set(
-        cacheKey,
-        JSON.stringify(mappedForecast),
-        "EX",
-        ttl,
-      );
+      await this.redis.set(cacheKey, JSON.stringify(mappedForecast), "EX", ttl);
 
       return mappedForecast;
     } catch (error) {
