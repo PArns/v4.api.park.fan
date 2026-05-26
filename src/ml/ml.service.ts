@@ -811,9 +811,12 @@ export class MLService {
 
     // Freshest forward forecast per (attraction, target_date); headliners of THIS
     // park; within the horizon; not stale. ::text casts avoid uuid=text mismatches.
-    const rows: Array<{ attractionId: string; targetDate: string; peak: string }> =
-      await this.attractionRepository.query(
-        `
+    const rows: Array<{
+      attractionId: string;
+      targetDate: string;
+      peak: string;
+    }> = await this.attractionRepository.query(
+      `
         SELECT DISTINCT ON (f.attraction_id, f.target_date)
           f.attraction_id::text   AS "attractionId",
           f.target_date::text      AS "targetDate",
@@ -826,8 +829,8 @@ export class MLService {
           AND f.forecast_date >= ($2::date - 3)
         ORDER BY f.attraction_id, f.target_date, f.forecast_date DESC
         `,
-        [parkId, today, days],
-      );
+      [parkId, today, days],
+    );
 
     const preds: PredictionDto[] = rows.map((r) => ({
       attractionId: r.attractionId,

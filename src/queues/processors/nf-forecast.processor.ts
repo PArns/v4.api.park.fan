@@ -29,16 +29,21 @@ export class NfForecastProcessor {
   ) {}
 
   @Process("train-nf")
-  async handleTrainNf(_job: Job): Promise<{ status: string; version?: string }> {
+  async handleTrainNf(
+    _job: Job,
+  ): Promise<{ status: string; version?: string }> {
     this.logger.log(`🧠 Triggering TFT training via ${NF_URL}/train`);
     try {
       // Overlap guard: a TFT train can run up to ~90 min. If one is still in
       // flight (long run, manual trigger, or a re-fire), skip rather than stack a
       // second training on the shared host. nf-service also rejects with 409.
-      const pre = (await axios.get(`${NF_URL}/train/status`, { timeout: 15000 }))
-        .data;
+      const pre = (
+        await axios.get(`${NF_URL}/train/status`, { timeout: 15000 })
+      ).data;
       if (pre?.is_training) {
-        this.logger.warn("TFT training already in progress — skipping this run.");
+        this.logger.warn(
+          "TFT training already in progress — skipping this run.",
+        );
         return { status: "skipped" };
       }
 
@@ -47,7 +52,9 @@ export class NfForecastProcessor {
         start = await axios.post(`${NF_URL}/train`, {}, { timeout: 30000 });
       } catch (e: any) {
         if (e?.response?.status === 409) {
-          this.logger.warn("TFT training already in progress (409) — skipping.");
+          this.logger.warn(
+            "TFT training already in progress (409) — skipping.",
+          );
           return { status: "skipped" };
         }
         throw e;
@@ -62,8 +69,9 @@ export class NfForecastProcessor {
       while (attempts < maxAttempts) {
         await new Promise((r) => setTimeout(r, pollSeconds * 1000));
         attempts++;
-        const st = (await axios.get(`${NF_URL}/train/status`, { timeout: 15000 }))
-          .data;
+        const st = (
+          await axios.get(`${NF_URL}/train/status`, { timeout: 15000 })
+        ).data;
         if (st.status === "completed") {
           this.logger.log(`✅ TFT training completed: ${st.version}`);
           break;
@@ -78,7 +86,11 @@ export class NfForecastProcessor {
 
       // Forecast + persist forward records for the scoreboard.
       this.logger.log("Running TFT forecast (persists tft_forecasts)…");
-      const fc = await axios.post(`${NF_URL}/forecast`, {}, { timeout: 300000 });
+      const fc = await axios.post(
+        `${NF_URL}/forecast`,
+        {},
+        { timeout: 300000 },
+      );
       this.logger.log(
         `✅ TFT forecast cached: ${fc.data?.rows} rows, ${fc.data?.persisted} persisted`,
       );
