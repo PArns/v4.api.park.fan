@@ -40,7 +40,6 @@ export class ParkMetadataProcessor {
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
     private parkRepository: Repository<Park>,
-    @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
@@ -306,10 +305,10 @@ export class ParkMetadataProcessor {
       this.logger.log("🎢 Triggering children metadata sync...");
       await this.childrenQueue.add("fetch-all-children", {}, { priority: 2 });
 
-      // Step 12: Trigger weather sync
-      await this.weatherQueue.add("fetch-weather", {}, { priority: 2 });
+      // Weather is intentionally NOT triggered here — the scheduled cron (full
+      // every 12h, current every 6h) is the single source of weather syncs.
 
-      // Step 13: Validate parks (warnings only, no auto-fix)
+      // Step 12: Validate parks (warnings only, no auto-fix)
       await this.validateParksAfterSync();
     } catch (error) {
       this.logger.error("❌ Park metadata sync failed", error);
