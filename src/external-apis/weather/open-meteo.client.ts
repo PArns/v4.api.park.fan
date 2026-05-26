@@ -38,9 +38,10 @@ export class OpenMeteoClient {
   // every ~6h with jitter to respect the quota and avoid synchronized expiry.
   private readonly CACHE_TTL = 6 * 60 * 60; // 6 hours
   private readonly CACHE_TTL_JITTER = 60 * 60; // up to +1h random spread
-  // Nowcast data updates ~every 15 min upstream and is served per-park from a
-  // dedicated 15-min cache, so the client cache matches that cadence.
-  private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
+  // Nowcast is served per-park from a dedicated 30-min cache; the client cache
+  // matches it to keep upstream request volume low (~half Open-Meteo's ~15-min
+  // refresh cadence).
+  private readonly NOWCAST_CACHE_TTL = 30 * 60; // 30 minutes
   // Neutral browser-like User-Agent. The default "axios/x" UA is an obvious bot
   // signature that can get the shared free-tier IP rate-limited/blocked.
   private readonly USER_AGENT =

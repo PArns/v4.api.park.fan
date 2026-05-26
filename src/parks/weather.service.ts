@@ -123,7 +123,7 @@ export class WeatherService {
   // Open-Meteo quota. Jitter spreads expiry so all parks don't refetch at once.
   private readonly HOURLY_CACHE_TTL = 6 * 60 * 60; // 6 hours
   private readonly HOURLY_CACHE_JITTER = 60 * 60; // up to +1h random spread
-  private readonly NOWCAST_CACHE_TTL = 15 * 60; // 15 minutes
+  private readonly NOWCAST_CACHE_TTL = 30 * 60; // 30 minutes
 
   /** Precipitation threshold (mm per 15-min slot) considered "raining". */
   private static readonly RAIN_THRESHOLD_MM = 0.1;
@@ -163,12 +163,14 @@ export class WeatherService {
    * is imminent (with a matching ends-time).
    *
    * Cache strategy: the entire derived response is cached per-park for
-   * 15 minutes (matches Open-Meteo's data resolution). This is safe
+   * 30 minutes to keep upstream request volume low (Open-Meteo refreshes
+   * ~every 15 min, so this is ~half the upstream cadence). This is safe
    * because every "event" field is an absolute ISO timestamp that does
    * not drift with wall-clock time, and `current*` snapshot fields are
    * explicitly defined as "the state at `observedAt`" — not "right
-   * now". Clients that need the live state can compute it from the
-   * absolute timestamps or from `steps[]`.
+   * now". `nextUpdateAt` tells clients when fresh data is due, and clients
+   * that need the live state can compute it from the absolute timestamps
+   * or from `steps[]`.
    *
    * @param parkId - Park ID
    * @returns Nowcast result, or `null` if coordinates are missing
@@ -268,12 +270,21 @@ export class WeatherService {
 
     const future = steps.filter((s) => s.timeMs + SLOT_MS > fetchedMs);
 
-    // The "current" slot is the one whose 15-min window contains `fetchedAt`.
-    const currentSlot = steps.find(
-      (s) => s.timeMs <= fetchedMs && fetchedMs < s.timeMs + SLOT_MS,
-    );
+    // Snapshot reflects "now": prefer the slot whose 15-min window contains
+    // `fetchedAt`, but if that slot is missing or a field is null, fall through
+    // to the next slot that has data. `future` already starts at the current
+    // slot (its window still includes now), so the first non-null entry per
+    // field is exactly "current slot, else next slot".
+    const pickSlotValue = <K extends keyof NowcastStep>(
+      key: K,
+    ): NowcastStep[K] | null => {
+      const hit = future.find((s) => s[key] != null);
+      return hit ? hit[key] : null;
+    };
 
-    const currentlyRaining = currentSlot ? isRain(currentSlot) : false;
+    const currentPrecipitationMm = pickSlotValue("precipitation");
+    const currentlyRaining =
+      (currentPrecipitationMm ?? 0) >= WeatherService.RAIN_THRESHOLD_MM;
 
     let rainStartsAt: string | null = null;
     let rainEndsAt: string | null = null;
@@ -334,20 +345,18 @@ export class WeatherService {
       currentTemperatureC: raw.current?.temperature ?? null,
       currentApparentTemperatureC: raw.current?.apparentTemperature ?? null,
       currentHumidity: raw.current?.humidity ?? null,
-      currentPrecipitationMm: currentSlot?.precipitation ?? null,
-      currentRainIntensity: this.classifyRainIntensity(
-        currentSlot?.precipitation,
-      ),
+      currentPrecipitationMm,
+      currentRainIntensity: this.classifyRainIntensity(currentPrecipitationMm),
       currentWeatherCode:
-        currentSlot?.weatherCode ?? raw.current?.weatherCode ?? null,
+        pickSlotValue("weatherCode") ?? raw.current?.weatherCode ?? null,
       isDay: raw.current?.isDay ?? null,
       currentWindSpeedKmh:
-        currentSlot?.windSpeed ?? raw.current?.windSpeed ?? null,
-      currentWindDirectionDeg: currentSlot?.windDirection ?? null,
+        pickSlotValue("windSpeed") ?? raw.current?.windSpeed ?? null,
+      currentWindDirectionDeg: pickSlotValue("windDirection"),
       currentWindGustsKmh:
-        currentSlot?.windGusts ?? raw.current?.windGusts ?? null,
-      currentSnowfallCm: currentSlot?.snowfall ?? null,
-      currentVisibilityM: currentSlot?.visibility ?? null,
+        pickSlotValue("windGusts") ?? raw.current?.windGusts ?? null,
+      currentSnowfallCm: pickSlotValue("snowfall"),
+      currentVisibilityM: pickSlotValue("visibility"),
       temperatureMaxC: raw.daily?.temperatureMax ?? null,
       temperatureMinC: raw.daily?.temperatureMin ?? null,
       rainStartsAt,
