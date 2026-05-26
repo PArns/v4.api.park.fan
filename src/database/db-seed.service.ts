@@ -48,8 +48,6 @@ export class DbSeedService implements OnModuleInit {
     private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata")
     private childrenMetadataQueue: Queue,
-    @InjectQueue("holidays")
-    private holidaysQueue: Queue,
     @InjectQueue("wait-times")
     private waitTimesQueue: Queue,
     @InjectQueue("ml-training")
@@ -104,19 +102,12 @@ export class DbSeedService implements OnModuleInit {
       this.logger.log(`✅ Parks: ${checks.parkCount} found`);
     }
 
-    // 2. Holidays (critical for ML)
-    if (checks.needsHolidays) {
-      this.logger.log("❌ Holidays: Missing or incomplete");
-      jobsToQueue.push({
-        name: "Holidays",
-        priority: 7,
-        fn: async () => {
-          await this.holidaysQueue.add("fetch-holidays", {}, { priority: 7 });
-        },
-      });
-    } else {
-      this.logger.log(`✅ Holidays: ${checks.holidayCount} found`);
-    }
+    // 2. Holidays — intentionally NOT seeded on boot. The scheduled cron
+    // (monthly) is the single source of holiday syncs; new park countries are
+    // covered by the holiday sync triggered after a park-metadata sync.
+    this.logger.log(
+      `🎉 Holidays: ${checks.holidayCount} found — boot sync disabled, handled by cron`,
+    );
 
     // 3. Weather — intentionally NOT seeded on boot. The scheduled cron is the
     // single source of weather syncs (full every 12h, current every 6h), so a
@@ -211,7 +202,6 @@ export class DbSeedService implements OnModuleInit {
   private async performDataChecks(): Promise<{
     needsParks: boolean;
     parkCount: number;
-    needsHolidays: boolean;
     holidayCount: number;
     weatherCount: number;
     latestWeatherDate: Date | null;
@@ -227,15 +217,8 @@ export class DbSeedService implements OnModuleInit {
     const parkCount = await this.parkRepository.count();
     const needsParks = parkCount === 0;
 
-    // Check Holidays (need current + next year for predictions)
-    const currentYear = new Date().getFullYear();
+    // Check Holidays (informational only — never seeded on boot)
     const holidayCount = await this.holidayRepository.count();
-    const futureHolidays = await this.holidayRepository.count({
-      where: {
-        date: MoreThan(new Date(`${currentYear}-01-01`)),
-      },
-    });
-    const needsHolidays = holidayCount === 0 || futureHolidays < 100; // Arbitrary threshold
 
     // Check Weather (informational only — never seeded on boot)
     const weatherCount = await this.weatherRepository.count();
@@ -277,7 +260,6 @@ export class DbSeedService implements OnModuleInit {
     return {
       needsParks,
       parkCount,
-      needsHolidays,
       holidayCount,
       weatherCount,
       latestWeatherDate: latestWeather?.date || null,
