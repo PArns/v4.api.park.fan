@@ -79,6 +79,35 @@ export class OpenMeteoClient {
   }
 
   /**
+   * Summarise an upstream error for logging: a few diagnostic response headers
+   * plus a truncated body. Lets us tell, when a 5xx happens, whether it came
+   * from Open-Meteo or an intermediate proxy/CDN and whether it's a disguised
+   * throttle (e.g. a Retry-After header) rather than a genuine outage.
+   */
+  private describeUpstreamError(error: unknown): string {
+    if (!axios.isAxiosError(error) || !error.response) {
+      return `code=${(error as any)?.code ?? "unknown"}`;
+    }
+    const res = error.response;
+    const h = (res.headers ?? {}) as Record<string, string>;
+    const headers = {
+      server: h["server"],
+      via: h["via"],
+      "cf-ray": h["cf-ray"],
+      "retry-after": h["retry-after"],
+      age: h["age"],
+    };
+    let body: string;
+    try {
+      body = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
+    } catch {
+      body = "<unserializable>";
+    }
+    if (body && body.length > 300) body = `${body.slice(0, 300)}…`;
+    return `headers=${JSON.stringify(headers)} body=${body}`;
+  }
+
+  /**
    * Execute request with retry logic for 429s and 5xx errors
    *
    * IMPORTANT: This method checks for blocks before making requests to prevent
@@ -157,7 +186,7 @@ export class OpenMeteoClient {
         if (status >= 500 && status < 600) {
           if (retries > 0) {
             this.logger.warn(
-              `Open-Meteo Server Error (${status}). Retrying in ${delay}ms...`,
+              `Open-Meteo Server Error (${status}). ${this.describeUpstreamError(error)}. Retrying in ${delay}ms...`,
             );
             await new Promise((resolve) => setTimeout(resolve, delay));
             return this.requestWithRetry<T>(
@@ -199,7 +228,7 @@ export class OpenMeteoClient {
           .set(this.CIRCUIT_KEY, "true", "EX", this.CIRCUIT_COOLDOWN)
           .catch(() => {});
         this.logger.warn(
-          `⚡ Open-Meteo circuit opened for ${this.CIRCUIT_COOLDOWN}s after repeated upstream failures`,
+          `⚡ Open-Meteo circuit opened for ${this.CIRCUIT_COOLDOWN}s after repeated upstream failures. ${this.describeUpstreamError(error)}`,
         );
       }
 
