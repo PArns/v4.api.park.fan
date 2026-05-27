@@ -4,6 +4,7 @@ import { Repository } from "typeorm";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { MLModel } from "../entities/ml-model.entity";
 import { MLDriftDto, DailyAccuracyDto } from "../dto/ml-drift.dto";
+import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 
 /**
  * ML Drift Monitoring Service
@@ -80,10 +81,15 @@ export class MLDriftMonitoringService {
       .andWhere("pa.comparisonStatus = 'COMPLETED'")
       .andWhere("pa.absoluteError IS NOT NULL")
       // Match training population: exclude unplanned closures (actualWaitTime=0,
-      // absoluteError=predictedWaitTime) and sub-5-min records not in training data.
-      // Without these, liveMae includes closure noise and inflates drift vs trainingMae.
+      // absoluteError=predictedWaitTime), sub-5-min records and implausible
+      // data-source sentinels (> MAX_PLAUSIBLE_WAIT_TIME) — none are in the
+      // training data. Without these, liveMae includes closure/sentinel noise
+      // and inflates drift vs trainingMae.
       .andWhere("pa.wasUnplannedClosure = :notClosed", { notClosed: false })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .groupBy("DATE(pa.targetTime)")
       .orderBy("DATE(pa.targetTime)", "ASC")
       .getRawMany();

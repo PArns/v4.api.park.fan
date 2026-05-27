@@ -7,6 +7,7 @@ import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 
 /**
  * PredictionAccuracyService
@@ -359,25 +360,29 @@ export class PredictionAccuracyService {
         COUNT(*) AS total_predictions,
         COUNT(CASE WHEN comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
+                    AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false THEN 1 END) AS compared_predictions,
         AVG(absolute_error)
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
+                    AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false) AS mae,
         AVG(percentage_error)
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
+                    AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false
                     AND percentage_error IS NOT NULL) AS mape,
         SQRT(AVG(absolute_error * absolute_error)
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
+                    AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false)) AS rmse
       FROM prediction_accuracy
       WHERE attraction_id = $1
         AND target_time >= $2
       `,
-      [attractionId, startDate],
+      [attractionId, startDate, MAX_PLAUSIBLE_WAIT_TIME],
     );
 
     const comparedPredictions = parseInt(result.compared_predictions) || 0;
@@ -757,14 +762,14 @@ export class PredictionAccuracyService {
         SELECT 
           attraction_id as "attractionId",
           COUNT(*) as "totalPredictions",
-          COUNT(CASE WHEN actual_wait_time >= 5 AND "wasUnplannedClosure" = false THEN 1 END) as "comparedPredictions",
-          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND "wasUnplannedClosure" = false), 0) as "mae"
+          COUNT(CASE WHEN actual_wait_time >= 5 AND actual_wait_time <= $3 AND "wasUnplannedClosure" = false THEN 1 END) as "comparedPredictions",
+          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $3 AND "wasUnplannedClosure" = false), 0) as "mae"
         FROM prediction_accuracy
         WHERE attraction_id = ANY($1)
           AND target_time >= $2
         GROUP BY attraction_id
         `,
-        [attractionIds, startDate],
+        [attractionIds, startDate, MAX_PLAUSIBLE_WAIT_TIME],
       );
 
       // Process results
@@ -1202,6 +1207,9 @@ export class PredictionAccuracyService {
       .andWhere(
         '(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND (se."scheduleType" IS NULL OR se."scheduleType" != \'CLOSED\')))',
       )
+      .andWhere("pa.actual_wait_time <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false') // Exclude random closures
       .getRawOne();
     const matchedCount = parseInt(statsResult.matchedCount || "0", 10);
@@ -1348,6 +1356,9 @@ export class PredictionAccuracyService {
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("pa.attractionId")
       .addGroupBy("a.name")
@@ -1402,11 +1413,14 @@ export class PredictionAccuracyService {
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "totalCount")
       .addSelect(
-        'COUNT(CASE WHEN pa.actualWaitTime >= 5 AND pa."wasUnplannedClosure" = false THEN 1 END)',
+        'COUNT(CASE WHEN pa.actualWaitTime >= 5 AND pa.actualWaitTime <= :maxWait AND pa."wasUnplannedClosure" = false THEN 1 END)',
         "matchedCount",
       )
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("DATE(pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("date", "DESC")
@@ -1456,6 +1470,9 @@ export class PredictionAccuracyService {
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("hour", "ASC")
@@ -1500,6 +1517,9 @@ export class PredictionAccuracyService {
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false')
       .groupBy("EXTRACT(DOW FROM pa.targetTime AT TIME ZONE 'UTC')")
       .orderBy("day_of_week", "ASC")
@@ -1725,6 +1745,9 @@ export class PredictionAccuracyService {
       .andWhere("pa.targetTime >= :startDate", { startDate })
       .andWhere("pa.targetTime <= :endDate", { endDate: new Date() })
       .andWhere("pa.actualWaitTime >= 5")
+      .andWhere("pa.actualWaitTime <= :maxWait", {
+        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
+      })
       .andWhere('pa."wasUnplannedClosure" = false')
       .select([
         "pa.id",

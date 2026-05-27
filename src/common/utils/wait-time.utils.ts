@@ -5,6 +5,20 @@
  */
 
 /**
+ * Upper bound for a plausible real wait time, in minutes. Values above this are
+ * treated as data-source sentinels (e.g. 700, 999, 1000) that some feeds emit
+ * for "closed / unavailable" rather than real queue lengths. The longest real
+ * wait observed in queue_data is 360 min, with a clean gap up to ~420 where the
+ * sentinels start, so 400 safely keeps every genuine value and drops the junk.
+ * Used to stop sentinels from inflating accuracy/MAE aggregates.
+ *
+ * Kept in sync with the ML training set: ml-service/train.py remove_anomalies()
+ * drops waitTime >= 400 as erroneous, so the live accuracy/drift population
+ * matches the population the model was trained on.
+ */
+export const MAX_PLAUSIBLE_WAIT_TIME = 400;
+
+/**
  * Round wait time to nearest 5 minutes for UX consistency
  *
  * Theme parks typically display wait times in 5-minute increments.

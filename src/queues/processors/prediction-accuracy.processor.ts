@@ -8,6 +8,7 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { AttractionAccuracyStats } from "../../ml/entities/attraction-accuracy-stats.entity";
 import { PredictionAccuracy } from "../../ml/entities/prediction-accuracy.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 
 /**
  * Prediction Accuracy Processor
@@ -80,21 +81,22 @@ export class PredictionAccuracyProcessor {
 
       // Single SQL query to aggregate stats per attraction.
       // Only COMPLETED rows are counted — PENDING/MISSED have no actual_wait_time.
-      // We additionally filter out unplanned closures and low wait times (< 5 min)
-      // to align with the ML training set and remove noise.
+      // We additionally filter out unplanned closures, low wait times (< 5 min)
+      // and implausible data-source sentinels (> MAX_PLAUSIBLE_WAIT_TIME) to
+      // align with the ML training set and remove noise.
       const results = await this.accuracyRepository.query(
         `
         SELECT
           attraction_id,
           COUNT(*) as total_predictions,
-          COUNT(CASE WHEN actual_wait_time >= 5 AND "wasUnplannedClosure" = false THEN 1 END) as compared_predictions,
-          AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND "wasUnplannedClosure" = false) as mae
+          COUNT(CASE WHEN actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false THEN 1 END) as compared_predictions,
+          AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as mae
         FROM prediction_accuracy
         WHERE comparison_status = 'COMPLETED'
           AND target_time >= $1
         GROUP BY attraction_id
         `,
-        [ninetyDaysAgo],
+        [ninetyDaysAgo, MAX_PLAUSIBLE_WAIT_TIME],
       );
 
       let upsertCount = 0;
