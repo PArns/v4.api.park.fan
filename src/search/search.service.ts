@@ -29,11 +29,22 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
 import { PopularityService } from "../popularity/popularity.service";
+import { createWriteStream, mkdirSync, WriteStream } from "fs";
+import { dirname } from "path";
 
 @Injectable()
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
+
+  // Slow-search diagnostics: searches whose total time meets/exceeds this
+  // threshold (ms) get one JSON line appended to a dedicated log file. The
+  // write is buffered and fire-and-forget so it never blocks the response.
+  private readonly slowSearchThresholdMs =
+    Number(process.env.SLOW_SEARCH_THRESHOLD_MS) || 300;
+  private readonly slowSearchLogPath =
+    process.env.SLOW_SEARCH_LOG_PATH || "logs/slow-search.log";
+  private slowSearchStream?: WriteStream | null;
 
   constructor(
     @InjectRepository(Park)
@@ -172,69 +183,147 @@ export class SearchService implements OnModuleInit {
         ? type
         : ["park", "attraction", "show", "restaurant", "location"];
 
+    // Phase timing — measures where a query spends its time so we can tell
+    // whether a slow request is the fuzzy SQL search or the downstream
+    // enrichment. Negligible overhead; only slow searches (>= threshold) are
+    // written to the slow-search log below.
+    const phaseStart = Date.now();
+    const timings: Record<string, number> = {};
+    const timed = async <T>(label: string, work: Promise<T>): Promise<T> => {
+      const start = Date.now();
+      try {
+        return await work;
+      } finally {
+        timings[label] = Date.now() - start;
+      }
+    };
+
     // Step 1: Run all search queries in parallel
     const [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
       await Promise.all([
         searchTypes.includes("park")
-          ? this.searchParks(q, limit)
+          ? timed("searchParks", this.searchParks(q, limit))
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchParks>>),
         searchTypes.includes("attraction")
-          ? this.searchAttractions(q, limit)
+          ? timed("searchAttractions", this.searchAttractions(q, limit))
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchAttractions>>,
             ),
         searchTypes.includes("show")
-          ? this.searchShows(q, limit)
+          ? timed("searchShows", this.searchShows(q, limit))
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchShows>>),
         searchTypes.includes("restaurant")
-          ? this.searchRestaurants(q, limit)
+          ? timed("searchRestaurants", this.searchRestaurants(q, limit))
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchRestaurants>>,
             ),
         searchTypes.includes("location")
-          ? this.searchLocations(q, limit)
+          ? timed("searchLocations", this.searchLocations(q, limit))
           : Promise.resolve([] as SearchResultItemDto[]),
       ]);
 
-    // Step 2: Enrich all result sets in parallel
+    // Step 2: Rank + deduplicate the RAW matches BEFORE enrichment, so the
+    // expensive per-entity work (wait times, baselines, occupancy, hours,
+    // show times) only runs for the items we actually return — not for
+    // duplicates that get dropped afterwards. Park status drives the
+    // OPERATING-first ordering; it's cached (60s) and loading it here also
+    // warms the cache the enrichment step reads.
+    type Candidate =
+      | { type: "park"; entity: (typeof rawParks)[number] }
+      | { type: "attraction"; entity: (typeof rawAttractions)[number] }
+      | { type: "show"; entity: (typeof rawShows)[number] }
+      | { type: "restaurant"; entity: (typeof rawRestaurants)[number] };
+
+    const candidates: Candidate[] = [
+      ...rawParks.map((entity) => ({ type: "park" as const, entity })),
+      ...rawAttractions.map((entity) => ({
+        type: "attraction" as const,
+        entity,
+      })),
+      ...rawShows.map((entity) => ({ type: "show" as const, entity })),
+      ...rawRestaurants.map((entity) => ({
+        type: "restaurant" as const,
+        entity,
+      })),
+    ];
+
+    // For ranking/dedup the "parent park" is the park itself for park hits,
+    // and the related park for attractions/shows/restaurants.
+    const parentParkIdOf = (c: Candidate): string =>
+      c.type === "park" ? c.entity.id : c.entity.park?.id ?? c.entity.id;
+
+    // Preload park status (cached) once for the OPERATING-first ranking.
+    const rankParkIds = Array.from(
+      new Set(candidates.map((c) => parentParkIdOf(c))),
+    );
+    const rankStatusMap = await timed(
+      "rankParkStatus",
+      this.getCachedParkStatusMap(rankParkIds),
+    );
+
+    // Stable OPERATING-first sort, then dedup by type + name + parent park.
+    // Each category is already bounded by the per-type `limit` applied in the
+    // SQL queries above (default 5, max 20), so no extra global cap is needed.
+    const seen = new Set<string>();
+    const survivingParks: typeof rawParks = [];
+    const survivingAttractions: typeof rawAttractions = [];
+    const survivingShows: typeof rawShows = [];
+    const survivingRestaurants: typeof rawRestaurants = [];
+    const dedupedCandidates: Candidate[] = [];
+
+    candidates
+      .map((c, index) => ({ c, index }))
+      .sort((a, b) => {
+        const aOp = rankStatusMap.get(parentParkIdOf(a.c)) === "OPERATING";
+        const bOp = rankStatusMap.get(parentParkIdOf(b.c)) === "OPERATING";
+        if (aOp && !bOp) return -1;
+        if (!aOp && bOp) return 1;
+        return a.index - b.index;
+      })
+      .forEach(({ c }) => {
+        const key = `${c.type}:${c.entity.name
+          .toLowerCase()
+          .trim()}:${parentParkIdOf(c)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        dedupedCandidates.push(c);
+        if (c.type === "park") survivingParks.push(c.entity);
+        else if (c.type === "attraction") survivingAttractions.push(c.entity);
+        else if (c.type === "show") survivingShows.push(c.entity);
+        else survivingRestaurants.push(c.entity);
+      });
+
+    // Step 3: Enrich ONLY the deduplicated survivors, grouped by type.
     const [
       enrichedParks,
       enrichedAttractions,
       enrichedShows,
       enrichedRestaurants,
-    ] = await Promise.all([
-      this.enrichParkResults(rawParks as unknown as Park[]),
-      this.enrichAttractionResults(rawAttractions),
-      this.enrichShowResults(rawShows),
-      this.enrichRestaurantResults(rawRestaurants),
-    ]);
+    ] = await timed(
+      "enrich",
+      Promise.all([
+        this.enrichParkResults(survivingParks as unknown as Park[]),
+        this.enrichAttractionResults(survivingAttractions),
+        this.enrichShowResults(survivingShows),
+        this.enrichRestaurantResults(survivingRestaurants),
+      ]),
+    );
 
-    // Step 3: Deduplicate results by name and parent park
-    // This prevents showing the same attraction twice if it exists under different IDs (e.g. from multiple sources)
+    // Reassemble enriched DTOs in the ranked/deduplicated order.
+    const enrichedByTypeId: Record<
+      Candidate["type"],
+      Map<string, SearchResultItemDto>
+    > = {
+      park: new Map(enrichedParks.map((r) => [r.id, r])),
+      attraction: new Map(enrichedAttractions.map((r) => [r.id, r])),
+      show: new Map(enrichedShows.map((r) => [r.id, r])),
+      restaurant: new Map(enrichedRestaurants.map((r) => [r.id, r])),
+    };
+
     const deduplicatedResults: SearchResultItemDto[] = [];
-    const seen = new Set<string>();
-
-    // Priority sort: OPERATING entities first, then others
-    const allEnriched = [
-      ...enrichedParks,
-      ...enrichedAttractions,
-      ...enrichedShows,
-      ...enrichedRestaurants,
-    ].sort((a, b) => {
-      if (a.status === "OPERATING" && b.status !== "OPERATING") return -1;
-      if (a.status !== "OPERATING" && b.status === "OPERATING") return 1;
-      return 0;
-    });
-
-    for (const res of allEnriched) {
-      // Key: name + parentParkId (if available) + type
-      const parentId = res.parentPark?.id || res.id;
-      const key = `${res.type}:${res.name.toLowerCase().trim()}:${parentId}`;
-
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduplicatedResults.push(res);
-      }
+    for (const c of dedupedCandidates) {
+      const dto = enrichedByTypeId[c.type].get(c.entity.id);
+      if (dto) deduplicatedResults.push(dto);
     }
 
     const results: SearchResultItemDto[] = [
@@ -269,6 +358,19 @@ export class SearchService implements OnModuleInit {
       counts,
     };
 
+    const totalMs = Date.now() - phaseStart;
+    if (totalMs >= this.slowSearchThresholdMs) {
+      this.logSlowSearch({
+        ts: new Date().toISOString(),
+        query: q,
+        types: typeKey,
+        totalMs,
+        ...timings,
+        candidates: candidates.length,
+        returned: deduplicatedResults.length,
+      });
+    }
+
     // Cache for 5 minutes
     await this.redis.set(
       cacheKey,
@@ -278,6 +380,37 @@ export class SearchService implements OnModuleInit {
     );
 
     return response;
+  }
+
+  /**
+   * Lazily open (and memoize) the append stream for the slow-search log.
+   * Returns null if the file can't be opened so logging never throws on the
+   * request path. Stream writes are buffered, so this is non-blocking.
+   */
+  private getSlowSearchStream(): WriteStream | null {
+    if (this.slowSearchStream !== undefined) return this.slowSearchStream;
+    try {
+      mkdirSync(dirname(this.slowSearchLogPath), { recursive: true });
+      const stream = createWriteStream(this.slowSearchLogPath, { flags: "a" });
+      stream.on("error", (err) =>
+        this.logger.warn(`slow-search log write failed: ${err}`),
+      );
+      this.slowSearchStream = stream;
+    } catch (err) {
+      this.logger.warn(`slow-search log init failed: ${err}`);
+      this.slowSearchStream = null;
+    }
+    return this.slowSearchStream;
+  }
+
+  /**
+   * Append one JSON line describing a slow search. Fire-and-forget: the
+   * buffered stream write returns immediately and never blocks the response.
+   */
+  private logSlowSearch(entry: Record<string, unknown>): void {
+    const stream = this.getSlowSearchStream();
+    if (!stream) return;
+    stream.write(`${JSON.stringify(entry)}\n`);
   }
 
   /**
@@ -893,10 +1026,11 @@ export class SearchService implements OnModuleInit {
 
     // 3. Batch fetch queue data once (single roundtrip yields both wait time
     //    and status — previously we fetched the same data twice in parallel).
-    //    P90 is intentionally NOT fetched here: it runs a PERCENTILE_CONT over
-    //    548 days of queue_data and dominates the request on cache miss. P50
-    //    is pre-baked in a baseline table and covers the same baseline role;
-    //    attractions without a P50 fall through to the "moderate" default.
+    //    P50 and P90 are both read from pre-baked baseline tables (+ Redis),
+    //    NOT the live PERCENTILE_CONT over 548 days of queue_data. P50 is the
+    //    primary baseline for the crowd reading; P90 is the fallback when an
+    //    attraction has no P50 row yet, after which we fall through to the
+    //    "moderate" default.
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
