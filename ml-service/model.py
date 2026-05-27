@@ -33,6 +33,9 @@ class WaitTimeModel:
         self.categorical_features = get_categorical_features()
         # Model-specific feature columns (set after load, for backward compatibility)
         self.model_feature_columns: Optional[List[str]] = None
+        # Missing-feature sets already warned about, so the backward-compat fill
+        # logs once per model load instead of on every (hot-path) predict call.
+        self._warned_missing_sets: set = set()
 
     def get_model_path(self) -> str:
         """Get path to model file"""
@@ -481,18 +484,24 @@ class WaitTimeModel:
         missing_cols = set(model_features) - set(X.columns)
         if missing_cols:
             defaults = self._get_default_feature_values()
-            # Reduced logging - only log critical missing features
-            critical_missing = [
-                col for col in missing_cols if col in ["parkId", "attractionId"]
-            ]
-            if critical_missing:
-                print(
-                    f"⚠️  CRITICAL: Missing required features: {critical_missing}. Predictions may be inaccurate."
+            # Log once per unique missing-set per model load (predict is a hot path —
+            # the same fill repeats on every call and previously spammed the logs).
+            # Include the feature NAMES so the train/inference mismatch is diagnosable.
+            set_key = frozenset(missing_cols)
+            if set_key not in self._warned_missing_sets:
+                self._warned_missing_sets.add(set_key)
+                names = ", ".join(sorted(missing_cols))
+                critical_missing = sorted(
+                    col for col in missing_cols if col in ["parkId", "attractionId"]
                 )
-            else:
-                # Only log summary for non-critical missing features
+                if critical_missing:
+                    print(
+                        f"⚠️  CRITICAL: Missing required features {critical_missing} — "
+                        "predictions may be inaccurate."
+                    )
                 print(
-                    f"⚠️  Filling {len(missing_cols)} missing features with defaults (backward compatibility)"
+                    f"⚠️  Model {self.version}: filling {len(missing_cols)} missing "
+                    f"features with defaults (backward compatibility): {names}"
                 )
 
             for col in sorted(missing_cols):
