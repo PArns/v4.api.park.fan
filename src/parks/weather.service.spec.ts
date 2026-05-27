@@ -487,18 +487,20 @@ describe("WeatherService", () => {
       },
     );
 
-    it("caches the fully derived ParkNowcast with a 15-minute TTL", async () => {
+    it("caches the fully derived ParkNowcast with a 30-minute TTL", async () => {
       mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
         buildNowcast([0.0, 0.5, 0.0]),
       );
 
       const result = await service.getNowcast(PARK_ID);
 
+      // Upstream cache cadence is 30 min (~half Open-Meteo's ~15 min refresh);
+      // decoupled from the client's 15 min poll via on-read nextUpdateAt.
       expect(mockRedis.set).toHaveBeenCalledWith(
         `weather:nowcast:park:${PARK_ID}`,
         expect.any(String),
         "EX",
-        15 * 60,
+        30 * 60,
       );
       const stored = JSON.parse(mockRedis.set.mock.calls[0][1]);
       // The stored payload IS the response — no derivation happens on a hit.
