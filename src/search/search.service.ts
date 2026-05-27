@@ -80,6 +80,7 @@ export class SearchService implements OnModuleInit {
   private static readonly INDEX_KEY_SHOWS = "search:index:v1:shows";
   private static readonly INDEX_KEY_RESTAURANTS = "search:index:v1:restaurants";
   private static readonly INDEX_TTL = 7200; // 2h — warmup refreshes every ~5 min anyway
+  private static readonly PARK_STATUS_CACHE_TTL = 5 * 60; // 5 min — matches warmup cadence
 
   private parkIndex: ParkIndexData[] = [];
   private attractionIndex: AttractionIndexEntry[] = [];
@@ -1562,8 +1563,10 @@ export class SearchService implements OnModuleInit {
    * Cached wrapper around parksService.getBatchParkStatus(). The underlying
    * query runs a LATERAL subquery over every attraction of every requested
    * park; on the search hot path we hit it repeatedly with overlapping park
-   * sets. Per-park Redis cache (60s) collapses these to one DB call per
-   * minute per park.
+   * sets. Per-park Redis cache collapses these to one DB call per TTL window
+   * per park. The TTL matches the warmup cadence so the keys pre-warmed in
+   * warmupSearch() stay warm across the whole cycle; the trade-off is that the
+   * status shown in search results can lag a park open/close by up to the TTL.
    */
   private async getCachedParkStatusMap(
     parkIds: string[],
@@ -1591,7 +1594,12 @@ export class SearchService implements OnModuleInit {
     for (const id of uncachedIds) {
       const status = fresh.get(id) || "CLOSED";
       result.set(id, status);
-      pipeline.set(`search:parkstatus:${id}`, status, "EX", 60);
+      pipeline.set(
+        `search:parkstatus:${id}`,
+        status,
+        "EX",
+        SearchService.PARK_STATUS_CACHE_TTL,
+      );
     }
     await pipeline.exec();
 
@@ -2090,6 +2098,16 @@ export class SearchService implements OnModuleInit {
   async warmupSearch(): Promise<void> {
     try {
       await this.refreshSearchIndex();
+
+      // Pre-warm the per-park status cache for every park so the first search
+      // after boot doesn't pay the cold getBatchParkStatus() cost in the
+      // rankParkStatus phase. With the 5-min TTL matching the warmup cadence,
+      // these keys stay warm across the whole cycle.
+      if (this.parkIndex.length > 0) {
+        await this.getCachedParkStatusMap(
+          this.parkIndex.map((p) => p.id),
+        ).catch(() => {});
+      }
 
       const [parks, popularParkIds] = await Promise.all([
         this.parkRepository.find({ select: ["id", "name", "city", "country"] }),
