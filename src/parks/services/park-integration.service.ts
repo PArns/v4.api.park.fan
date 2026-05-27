@@ -108,6 +108,7 @@ export class ParkIntegrationService {
   async buildIntegratedResponse(
     park: Park,
     skipCache: boolean = false,
+    countHit: boolean = true,
   ): Promise<ParkWithAttractionsDto> {
     // Guard: relations must be loaded by the caller (use findByGeographicPathWithRelations)
     if (
@@ -123,8 +124,11 @@ export class ParkIntegrationService {
     // Try cache first (unless skipped)
     const cacheKey = `park:integrated:${park.id}`;
 
-    // Track popularity hit (background)
-    this.popularityService.recordParkHit(park.id).catch(() => {});
+    // Track popularity hit (background). Skipped for system rebuilds
+    // (cache warmup / background refresh) so the ranking reflects real demand.
+    if (countHit) {
+      this.popularityService.recordParkHit(park.id).catch(() => {});
+    }
 
     if (!skipCache) {
       const cached = await this.redis.get(cacheKey);
@@ -1092,8 +1096,9 @@ export class ParkIntegrationService {
     const cacheKey = `park:integrated:${park.id}`;
     await this.redis.del(cacheKey);
 
-    // Rebuild will automatically cache the result
-    await this.buildIntegratedResponse(park);
+    // Rebuild will automatically cache the result. Don't count this as a
+    // popularity hit — the triggering user request was already counted.
+    await this.buildIntegratedResponse(park, false, false);
   }
 
   /**

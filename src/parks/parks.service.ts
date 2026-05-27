@@ -616,6 +616,17 @@ export class ParksService {
   }
 
   /**
+   * Finds multiple parks by internal ID (order not guaranteed).
+   */
+  async findByIds(ids: string[]): Promise<Park[]> {
+    if (ids.length === 0) return [];
+    return this.parkRepository.find({
+      where: { id: In(ids) },
+      relations: ["destination"],
+    });
+  }
+
+  /**
    * Finds all parks
    */
   async findAll(): Promise<Park[]> {

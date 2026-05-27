@@ -7,6 +7,7 @@ import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
+import { PopularityService } from "../popularity/popularity.service";
 import {
   calculateHaversineDistance,
   sortByDistance,
@@ -46,6 +47,7 @@ export class LocationService {
     private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
+    private readonly popularityService: PopularityService,
   ) {}
 
   /**
@@ -83,6 +85,9 @@ export class LocationService {
       );
       const ridesData = await this.findRidesInPark(nearbyPark.id, userLocation);
 
+      // Count toward popularity so prewarm prioritizes this park.
+      void this.popularityService.recordParkHit(nearbyPark.id);
+
       return {
         type: "in_park",
         userLocation: {
@@ -97,6 +102,11 @@ export class LocationService {
         `User is outside all parks, finding nearest ${limit} parks`,
       );
       const parksData = await this.findNearbyParks(userLocation, limit);
+
+      // Count returned parks toward popularity so prewarm prioritizes them.
+      void this.popularityService.recordParkHits(
+        parksData.parks.map((p) => p.id),
+      );
 
       return {
         type: "nearby_parks",

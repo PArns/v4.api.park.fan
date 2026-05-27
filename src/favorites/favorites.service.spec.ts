@@ -12,6 +12,7 @@ import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { PopularityService } from "../popularity/popularity.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
@@ -60,6 +61,10 @@ describe("FavoritesService", () => {
     getParkStatistics: jest.fn().mockResolvedValue(null),
     determineCrowdLevel: jest.fn().mockReturnValue("moderate"),
   };
+  const popularityService = {
+    recordParkHit: jest.fn().mockResolvedValue(undefined),
+    recordParkHits: jest.fn().mockResolvedValue(undefined),
+  };
 
   const redisStore = new Map<string, string>();
   const redis = {
@@ -100,6 +105,7 @@ describe("FavoritesService", () => {
         { provide: RestaurantsService, useValue: restaurantsService },
         { provide: QueueDataService, useValue: queueDataService },
         { provide: AnalyticsService, useValue: analyticsService },
+        { provide: PopularityService, useValue: popularityService },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
     }).compile();

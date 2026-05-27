@@ -141,6 +141,25 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Popularity decay: once per day (midnight) so the prewarm ranking tracks
+    // recent demand (~1-2 week window) instead of all-time request totals.
+    const hasPopularityDecayCron = await this.hasRepeatableJob(
+      this.parkMetadataQueue,
+      "popularity-decay-cron",
+    );
+    if (!hasPopularityDecayCron) {
+      await this.parkMetadataQueue.add(
+        "decay-popularity",
+        {},
+        {
+          repeat: {
+            cron: "0 0 * * *", // Daily at midnight
+          },
+          jobId: "popularity-decay-cron",
+        },
+      );
+    }
+
     // Phase 6.2: Combined Children Metadata (Attractions + Shows + Restaurants)
     // Daily at 4am (replaces 3 separate jobs at 4am, 4:30am, 5am)
     // This reduces API requests by 67% (105 instead of 315)

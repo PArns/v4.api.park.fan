@@ -13,10 +13,16 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 describe("PopularityService", () => {
   let service: PopularityService;
 
+  const pipeline = {
+    zunionstore: jest.fn().mockReturnThis(),
+    zremrangebyscore: jest.fn().mockReturnThis(),
+    exec: jest.fn().mockResolvedValue([]),
+  };
   const redis = {
     zincrby: jest.fn().mockResolvedValue(1),
     zrevrange: jest.fn(),
     del: jest.fn().mockResolvedValue(2),
+    pipeline: jest.fn(() => pipeline),
   };
 
   beforeEach(async () => {
@@ -113,6 +119,40 @@ describe("PopularityService", () => {
       redis.zrevrange.mockRejectedValueOnce(new Error("Redis down"));
       const result = await service.getTopAttractions();
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("applyDecay", () => {
+    it("scales each set by the decay factor and prunes faded entries", async () => {
+      await service.applyDecay();
+
+      // One decay op per ranking set (parks + attractions).
+      expect(pipeline.zunionstore).toHaveBeenCalledWith(
+        "popularity:parks",
+        1,
+        "popularity:parks",
+        "WEIGHTS",
+        0.9,
+      );
+      expect(pipeline.zunionstore).toHaveBeenCalledWith(
+        "popularity:attractions",
+        1,
+        "popularity:attractions",
+        "WEIGHTS",
+        0.9,
+      );
+      // Entries below half a hit are removed (exclusive lower bound).
+      expect(pipeline.zremrangebyscore).toHaveBeenCalledWith(
+        "popularity:parks",
+        "-inf",
+        "(0.5",
+      );
+      expect(pipeline.exec).toHaveBeenCalledTimes(2);
+    });
+
+    it("swallows Redis errors silently", async () => {
+      pipeline.exec.mockRejectedValueOnce(new Error("Redis down"));
+      await expect(service.applyDecay()).resolves.toBeUndefined();
     });
   });
 
