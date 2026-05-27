@@ -15,6 +15,7 @@ import { generateSlug } from "../../common/utils/slug.util";
 import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources/config/wartezeiten-only-parks";
 import { ParkValidatorService } from "../../parks/services/park-validator.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
+import { PopularityService } from "../../popularity/popularity.service";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -36,6 +37,7 @@ export class ParkMetadataProcessor {
     private orchestrator: MultiSourceOrchestrator,
     private parkValidatorService: ParkValidatorService,
     private cacheWarmupService: CacheWarmupService,
+    private popularityService: PopularityService,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
@@ -128,6 +130,15 @@ export class ParkMetadataProcessor {
   @Process("warmup-calendar-daily")
   async handleWarmupCalendarDaily(_job: Job): Promise<void> {
     await this.cacheWarmupService.warmupCalendarForAllParks();
+  }
+
+  /**
+   * Apply daily time-decay to the popularity rankings so the prewarm tracks
+   * recent demand (~1-2 week window) instead of all-time totals.
+   */
+  @Process("decay-popularity")
+  async handleDecayPopularity(_job: Job): Promise<void> {
+    await this.popularityService.applyDecay();
   }
 
   @Process("sync-all-parks")
