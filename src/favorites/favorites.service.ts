@@ -15,6 +15,7 @@ import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { PopularityService } from "../popularity/popularity.service";
 import {
   FavoritesResponseDto,
   AttractionWithDistanceDto,
@@ -67,6 +68,7 @@ export class FavoritesService {
     private readonly restaurantsService: RestaurantsService,
     private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
+    private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -364,6 +366,9 @@ export class FavoritesService {
     if (parks.length === 0) {
       return [];
     }
+
+    // Count favorite parks toward popularity so prewarm prioritizes them.
+    void this.popularityService.recordParkHits(parks.map((p) => p.id));
 
     // --- Fast path: read from prewarmed park:integrated cache (single MGET) ---
     const cacheKeys = parks.map((p) => `park:integrated:${p.id}`);

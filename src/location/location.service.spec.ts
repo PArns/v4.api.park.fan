@@ -6,6 +6,7 @@ import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
+import { PopularityService } from "../popularity/popularity.service";
 
 /**
  * Coverage for the public surface of LocationService — the "where am I,
@@ -54,6 +55,10 @@ describe("LocationService", () => {
     getNextSchedule: jest.fn().mockResolvedValue(null),
     hasOperatingSchedule: jest.fn().mockResolvedValue(false),
   };
+  const popularityService = {
+    recordParkHit: jest.fn().mockResolvedValue(undefined),
+    recordParkHits: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -66,6 +71,7 @@ describe("LocationService", () => {
         { provide: QueueDataService, useValue: queueDataService },
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: ParksService, useValue: parksService },
+        { provide: PopularityService, useValue: popularityService },
       ],
     }).compile();
 

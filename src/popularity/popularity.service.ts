@@ -33,6 +33,23 @@ export class PopularityService {
   }
 
   /**
+   * Record hits for multiple parks in a single round-trip.
+   * Used by endpoints that serve several parks at once (favorites, nearby).
+   */
+  async recordParkHits(parkIds: string[]): Promise<void> {
+    if (parkIds.length === 0) return;
+    try {
+      const pipeline = this.redis.pipeline();
+      for (const id of parkIds) {
+        pipeline.zincrby(this.PARK_POPULARITY_KEY, 1, id);
+      }
+      await pipeline.exec();
+    } catch (err) {
+      this.logger.debug(`Failed to record park hits: ${err}`);
+    }
+  }
+
+  /**
    * Record a hit for an attraction
    */
   async recordAttractionHit(attractionId: string): Promise<void> {

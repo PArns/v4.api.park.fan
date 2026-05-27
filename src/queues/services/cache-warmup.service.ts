@@ -75,12 +75,17 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const topParkIds = await this.popularityService.getTopParks(20);
       if (topParkIds.length === 0) return;
 
-      this.logger.log(`🔥 Warming up top ${topParkIds.length} parks...`);
+      this.logger.log(
+        `🔥 Warming up top ${topParkIds.length} parks (priority, high concurrency)...`,
+      );
+      // Priority warmup: higher concurrency and no inter-batch delay so the
+      // most-requested parks are hot as fast as possible after boot.
       const warmed = await this.processBatch(
         topParkIds,
-        5,
+        10,
         "StartupWarmup",
         async (id) => this.warmupParkCache(id, true, true),
+        0,
       );
       this.logger.log(
         `✅ Initial startup warmup complete. ${warmed} parks ready.`,
@@ -99,6 +104,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     batchSize: number,
     label: string,
     processFn: (item: T) => Promise<boolean>,
+    delayMs: number = 1000,
   ): Promise<number> {
     let successCount = 0;
 
@@ -125,8 +131,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       }
 
       // Delay between batches
-      if (i + batchSize < items.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (delayMs > 0 && i + batchSize < items.length) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
 
@@ -290,8 +296,13 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         return false;
       }
 
-      // Warm up cache by calling integration service (bypass cache read if forced)
-      await this.parkIntegrationService.buildIntegratedResponse(park, force);
+      // Warm up cache by calling integration service (bypass cache read if forced).
+      // countHit=false: warmup must not pollute the popularity ranking.
+      await this.parkIntegrationService.buildIntegratedResponse(
+        park,
+        force,
+        false,
+      );
 
       if (includeCalendar) {
         await this.warmupCalendarForPark(park);
