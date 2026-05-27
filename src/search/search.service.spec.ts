@@ -198,8 +198,20 @@ describe("SearchService", () => {
     it("deduplicates same-named attractions under the same park and only enriches survivors", async () => {
       const parkRef = park();
       attractionQB.getMany.mockResolvedValueOnce([
-        { id: "a1", name: "Taron", slug: "taron", landName: null, park: parkRef },
-        { id: "a2", name: "Taron", slug: "taron", landName: null, park: parkRef },
+        {
+          id: "a1",
+          name: "Taron",
+          slug: "taron",
+          landName: null,
+          park: parkRef,
+        },
+        {
+          id: "a2",
+          name: "Taron",
+          slug: "taron",
+          landName: null,
+          park: parkRef,
+        },
       ]);
       mockParksService.getBatchParkStatus.mockResolvedValue(
         new Map([["p1", "OPERATING"]]),
@@ -237,6 +249,126 @@ describe("SearchService", () => {
       expect(result.results[0].id).toBe("pOpen");
       expect(result.results[0].status).toBe("OPERATING");
       expect(result.results[1].id).toBe("pClosed");
+    });
+  });
+
+  describe("in-process index search", () => {
+    const attraction = (overrides: Record<string, unknown> = {}) => ({
+      id: "a1",
+      name: "Taron",
+      slug: "taron",
+      landName: null,
+      park: park(),
+      ...overrides,
+    });
+
+    // refreshSearchIndex() loads every entity type via its repository's
+    // getMany() and flips indexReady=true, so subsequent search() calls take
+    // the in-process path instead of issuing per-query DB calls.
+    async function primeIndex(opts: {
+      parks?: unknown[];
+      attractions?: unknown[];
+      shows?: unknown[];
+      restaurants?: unknown[];
+    }) {
+      parkQB.getMany.mockResolvedValueOnce(opts.parks ?? []);
+      attractionQB.getMany.mockResolvedValueOnce(opts.attractions ?? []);
+      showQB.getMany.mockResolvedValueOnce(opts.shows ?? []);
+      restaurantQB.getMany.mockResolvedValueOnce(opts.restaurants ?? []);
+      await service.refreshSearchIndex();
+    }
+
+    it("matches attractions from the in-process index without per-query DB calls", async () => {
+      await primeIndex({ attractions: [attraction()] });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+      attractionQB.getMany.mockClear();
+
+      const result = await service.search({ q: "taron", type: ["attraction"] });
+
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].id).toBe("a1");
+      // No attraction query builder calls on the search path — served from index.
+      expect(attractionQB.getMany).not.toHaveBeenCalled();
+    });
+
+    it("tolerates typos via trigram similarity", async () => {
+      await primeIndex({
+        attractions: [
+          attraction({
+            id: "sm",
+            name: "Space Mountain",
+            slug: "space-mountain",
+          }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+
+      const result = await service.search({
+        q: "space mountian",
+        type: ["attraction"],
+      });
+
+      expect(result.results.map((r) => r.id)).toContain("sm");
+    });
+
+    it("finds normalized matches like 'fly' for 'F.L.Y.'", async () => {
+      await primeIndex({
+        attractions: [attraction({ id: "fly", name: "F.L.Y.", slug: "fly" })],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+
+      const result = await service.search({ q: "fly", type: ["attraction"] });
+
+      expect(result.results.map((r) => r.id)).toContain("fly");
+    });
+
+    it("ranks exact park name above fuzzy park matches in-process", async () => {
+      await primeIndex({
+        parks: [
+          park({ id: "gardaland", name: "Gardaland", slug: "gardaland" }),
+          park({
+            id: "phantasialand",
+            name: "Phantasialand",
+            slug: "phantasialand",
+          }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["gardaland", "OPERATING"],
+          ["phantasialand", "OPERATING"],
+        ]),
+      );
+
+      const result = await service.search({
+        q: "phantasialand",
+        type: ["park"],
+      });
+
+      // Exact name match (tier 0) must come first; Gardaland (sim 0.20) is
+      // below the 0.3 trigram threshold and must not appear at all.
+      expect(result.results[0].id).toBe("phantasialand");
+      expect(result.results.map((r) => r.id)).not.toContain("gardaland");
+    });
+
+    it("derives location results from the park index", async () => {
+      await primeIndex({
+        parks: [park({ id: "p1", city: "Orlando", citySlug: "orlando" })],
+      });
+
+      const result = await service.search({
+        q: "orlando",
+        type: ["location"],
+      });
+
+      expect(result.results.some((r) => r.type === "location")).toBe(true);
+      expect(result.results.some((r) => r.name === "Orlando")).toBe(true);
     });
   });
 });

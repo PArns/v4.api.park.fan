@@ -75,15 +75,18 @@ export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
 
+  private static readonly INDEX_KEY_PARKS = "search:index:v1:parks";
   private static readonly INDEX_KEY_ATTRACTIONS = "search:index:v1:attractions";
   private static readonly INDEX_KEY_SHOWS = "search:index:v1:shows";
   private static readonly INDEX_KEY_RESTAURANTS = "search:index:v1:restaurants";
   private static readonly INDEX_TTL = 7200; // 2h — warmup refreshes every ~5 min anyway
 
+  private parkIndex: ParkIndexData[] = [];
   private attractionIndex: AttractionIndexEntry[] = [];
   private showIndex: ShowIndexEntry[] = [];
   private restaurantIndex: RestaurantIndexEntry[] = [];
   private topAttractionIdSet = new Set<string>();
+  private topParkIdSet = new Set<string>();
   private indexReady = false;
 
   // Slow-search diagnostics: searches whose total time meets/exceeds this
@@ -254,7 +257,16 @@ export class SearchService implements OnModuleInit {
     const [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
       await Promise.all([
         searchTypes.includes("park")
-          ? timed("searchParks", this.searchParks(q, limit))
+          ? timed(
+              "searchParks",
+              this.indexReady
+                ? Promise.resolve(
+                    this.searchParksInProcess(q, limit) as unknown as Awaited<
+                      ReturnType<typeof this.searchParks>
+                    >,
+                  )
+                : this.searchParks(q, limit),
+            )
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchParks>>),
         searchTypes.includes("attraction")
           ? timed(
@@ -284,9 +296,7 @@ export class SearchService implements OnModuleInit {
                   )
                 : this.searchShows(q, limit),
             )
-          : Promise.resolve(
-              [] as Awaited<ReturnType<typeof this.searchShows>>,
-            ),
+          : Promise.resolve([] as Awaited<ReturnType<typeof this.searchShows>>),
         searchTypes.includes("restaurant")
           ? timed(
               "searchRestaurants",
@@ -305,7 +315,12 @@ export class SearchService implements OnModuleInit {
               [] as Awaited<ReturnType<typeof this.searchRestaurants>>,
             ),
         searchTypes.includes("location")
-          ? timed("searchLocations", this.searchLocations(q, limit))
+          ? timed(
+              "searchLocations",
+              this.indexReady
+                ? Promise.resolve(this.searchLocationsInProcess(q, limit))
+                : this.searchLocations(q, limit),
+            )
           : Promise.resolve([] as SearchResultItemDto[]),
       ]);
 
@@ -337,7 +352,7 @@ export class SearchService implements OnModuleInit {
     // For ranking/dedup the "parent park" is the park itself for park hits,
     // and the related park for attractions/shows/restaurants.
     const parentParkIdOf = (c: Candidate): string =>
-      c.type === "park" ? c.entity.id : c.entity.park?.id ?? c.entity.id;
+      c.type === "park" ? c.entity.id : (c.entity.park?.id ?? c.entity.id);
 
     // Preload park status (cached) once for the OPERATING-first ranking.
     const rankParkIds = Array.from(
@@ -1590,46 +1605,74 @@ export class SearchService implements OnModuleInit {
 
   private async loadSearchIndex(): Promise<void> {
     try {
-      const [attrRaw, showRaw, restRaw] = await this.redis.mget(
+      const [parkRaw, attrRaw, showRaw, restRaw] = await this.redis.mget(
+        SearchService.INDEX_KEY_PARKS,
         SearchService.INDEX_KEY_ATTRACTIONS,
         SearchService.INDEX_KEY_SHOWS,
         SearchService.INDEX_KEY_RESTAURANTS,
       );
-      if (attrRaw && showRaw && restRaw) {
+      if (parkRaw && attrRaw && showRaw && restRaw) {
+        this.parkIndex = JSON.parse(parkRaw) as ParkIndexData[];
         this.attractionIndex = JSON.parse(attrRaw) as AttractionIndexEntry[];
         this.showIndex = JSON.parse(showRaw) as ShowIndexEntry[];
         this.restaurantIndex = JSON.parse(restRaw) as RestaurantIndexEntry[];
+        const [topParkIds, topAttractionIds] = await Promise.all([
+          this.popularityService.getTopParks(20),
+          this.popularityService.getTopAttractions(50),
+        ]);
+        this.topParkIdSet = new Set(topParkIds);
+        this.topAttractionIdSet = new Set(topAttractionIds);
         this.indexReady = true;
         this.logger.log(
-          `✅ Search index loaded from Redis (${this.attractionIndex.length} attractions, ` +
-            `${this.showIndex.length} shows, ${this.restaurantIndex.length} restaurants)`,
+          `✅ Search index loaded from Redis (${this.parkIndex.length} parks, ` +
+            `${this.attractionIndex.length} attractions, ${this.showIndex.length} shows, ` +
+            `${this.restaurantIndex.length} restaurants)`,
         );
         return;
       }
       await this.refreshSearchIndex();
     } catch (err) {
-      this.logger.warn("Search index load from Redis failed, falling back to DB", err);
+      this.logger.warn(
+        "Search index load from Redis failed, falling back to DB",
+        err,
+      );
       await this.refreshSearchIndex().catch(() => {});
     }
   }
 
   async refreshSearchIndex(): Promise<void> {
     try {
-      const [attractions, shows, restaurants, topAttractionIds] =
-        await Promise.all([
-          this.loadAttractionIndexFromDb(),
-          this.loadShowIndexFromDb(),
-          this.loadRestaurantIndexFromDb(),
-          this.popularityService.getTopAttractions(50),
-        ]);
+      const [
+        parks,
+        attractions,
+        shows,
+        restaurants,
+        topParkIds,
+        topAttractionIds,
+      ] = await Promise.all([
+        this.loadParkIndexFromDb(),
+        this.loadAttractionIndexFromDb(),
+        this.loadShowIndexFromDb(),
+        this.loadRestaurantIndexFromDb(),
+        this.popularityService.getTopParks(20),
+        this.popularityService.getTopAttractions(50),
+      ]);
 
+      this.parkIndex = parks;
       this.attractionIndex = attractions;
       this.showIndex = shows;
       this.restaurantIndex = restaurants;
+      this.topParkIdSet = new Set(topParkIds);
       this.topAttractionIdSet = new Set(topAttractionIds);
       this.indexReady = true;
 
       const pipeline = this.redis.pipeline();
+      pipeline.set(
+        SearchService.INDEX_KEY_PARKS,
+        JSON.stringify(parks),
+        "EX",
+        SearchService.INDEX_TTL,
+      );
       pipeline.set(
         SearchService.INDEX_KEY_ATTRACTIONS,
         JSON.stringify(attractions),
@@ -1651,12 +1694,37 @@ export class SearchService implements OnModuleInit {
       await pipeline.exec();
 
       this.logger.log(
-        `✅ Search index refreshed from DB → Redis (${attractions.length} attractions, ` +
-          `${shows.length} shows, ${restaurants.length} restaurants)`,
+        `✅ Search index refreshed from DB → Redis (${parks.length} parks, ` +
+          `${attractions.length} attractions, ${shows.length} shows, ` +
+          `${restaurants.length} restaurants)`,
       );
     } catch (err) {
       this.logger.warn("Search index refresh failed", err);
     }
+  }
+
+  private async loadParkIndexFromDb(): Promise<ParkIndexData[]> {
+    const rows = await this.parkRepository
+      .createQueryBuilder("park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.latitude",
+        "park.longitude",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.countryCode",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .getMany();
+    return rows.map((p) => this.mapParkForIndex(p));
   }
 
   private mapParkForIndex(park: Park): ParkIndexData {
@@ -1781,13 +1849,18 @@ export class SearchService implements OnModuleInit {
   }
 
   // ---------------------------------------------------------------------------
-  // Trigram similarity (mirrors pg_trgm: pads with two spaces, 3-char grams)
+  // Trigram similarity — mirrors pg_trgm: lowercase, split on non-alphanumeric,
+  // pad each word with 2 leading + 1 trailing space, then Jaccard over the
+  // trigram sets (shared / union), matching Postgres' 0.3 `%` threshold.
   // ---------------------------------------------------------------------------
 
   private buildTrigrams(s: string): Set<string> {
-    const padded = `  ${s}  `;
     const t = new Set<string>();
-    for (let i = 0; i < padded.length - 2; i++) t.add(padded.slice(i, i + 3));
+    for (const word of s.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (!word) continue;
+      const padded = `  ${word} `;
+      for (let i = 0; i < padded.length - 2; i++) t.add(padded.slice(i, i + 3));
+    }
     return t;
   }
 
@@ -1795,9 +1868,10 @@ export class SearchService implements OnModuleInit {
     if (!a || !b) return 0;
     const at = this.buildTrigrams(a);
     const bt = this.buildTrigrams(b);
+    if (at.size === 0 || bt.size === 0) return 0;
     let shared = 0;
     for (const t of at) if (bt.has(t)) shared++;
-    return (2 * shared) / (at.size + bt.size);
+    return shared / (at.size + bt.size - shared);
   }
 
   private scoreEntry(
@@ -1813,12 +1887,12 @@ export class SearchService implements OnModuleInit {
 
     if (nameLower === qLower) return { matches: true, tier: 0, sim };
     if (qNorm && nameNorm === qNorm) return { matches: true, tier: 1, sim };
-    if (nameLower.startsWith(qLower))
-      return { matches: true, tier: 2, sim };
+    if (nameLower.startsWith(qLower)) return { matches: true, tier: 2, sim };
     if (nameLower.split(/\s+/).some((w) => w.startsWith(qLower)))
       return { matches: true, tier: 2, sim };
     if (nameLower.includes(qLower)) return { matches: true, tier: 3, sim };
-    if (qNorm && nameNorm.includes(qNorm)) return { matches: true, tier: 4, sim };
+    if (qNorm && nameNorm.includes(qNorm))
+      return { matches: true, tier: 4, sim };
     if (extra && extra.toLowerCase().includes(qLower))
       return { matches: true, tier: 5, sim };
     if (sim >= 0.3) return { matches: true, tier: 6, sim };
@@ -1838,7 +1912,11 @@ export class SearchService implements OnModuleInit {
       const r = this.scoreEntry(entry.name, entry.landName, q, qNorm, qLower);
       if (r.matches) {
         const popular = this.topAttractionIdSet.has(entry.id);
-        scored.push({ entry, tier: popular && r.tier > 2 ? 3 : r.tier, sim: r.sim });
+        scored.push({
+          entry,
+          tier: popular && r.tier > 2 ? 3 : r.tier,
+          sim: r.sim,
+        });
       }
     }
     scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
@@ -1872,6 +1950,133 @@ export class SearchService implements OnModuleInit {
     }
     scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
     return scored.slice(0, limit).map((s) => s.entry);
+  }
+
+  /**
+   * Mirrors the searchParks() ranking CASE: matches on name / normalized name /
+   * city / country / continent / trigram, and assigns the same priority tiers
+   * (0 exact name, 1 normalized exact, 2 prefix, 3 popularity, 4 exact city,
+   * 5 other). dmetaphone is approximated by the trigram threshold.
+   */
+  private searchParksInProcess(q: string, limit: number): ParkIndexData[] {
+    const qLower = q.toLowerCase();
+    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    type Scored = { entry: ParkIndexData; tier: number; sim: number };
+    const scored: Scored[] = [];
+
+    for (const park of this.parkIndex) {
+      const nameLower = park.name.toLowerCase();
+      const nameNorm = park.name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const cityLower = (park.city || "").toLowerCase();
+      const countryLower = (park.country || "").toLowerCase();
+      const continentLower = (park.continent || "").toLowerCase();
+      const sim = this.trgmSim(nameLower, qLower);
+
+      const matches =
+        nameLower.includes(qLower) ||
+        (qNorm.length > 0 && nameNorm.includes(qNorm)) ||
+        cityLower.includes(qLower) ||
+        countryLower.includes(qLower) ||
+        continentLower.includes(qLower) ||
+        sim >= 0.3;
+      if (!matches) continue;
+
+      let tier: number;
+      if (nameLower === qLower) tier = 0;
+      else if (qNorm.length > 0 && nameNorm === qNorm) tier = 1;
+      else if (nameLower.startsWith(qLower)) tier = 2;
+      else if (cityLower === qLower) tier = 4;
+      else tier = 5;
+
+      // Popularity boost ranks before city-exact/other (CASE order), but not
+      // before an exact/normalized/prefix name hit.
+      if (tier > 2 && this.topParkIdSet.has(park.id)) tier = 3;
+
+      scored.push({ entry: park, tier, sim });
+    }
+
+    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    return scored.slice(0, limit).map((s) => s.entry);
+  }
+
+  /**
+   * Mirrors searchLocations(): derives distinct cities and countries from the
+   * park index whose city/country matches the query (substring or trigram).
+   */
+  private searchLocationsInProcess(
+    q: string,
+    limit: number,
+  ): SearchResultItemDto[] {
+    const qLower = q.toLowerCase();
+
+    type CityHit = { park: ParkIndexData; sim: number };
+    const cityHits: CityHit[] = [];
+    const countryHits: CityHit[] = [];
+    const seenCity = new Set<string>();
+    const seenCountry = new Set<string>();
+
+    for (const park of this.parkIndex) {
+      if (park.city && park.citySlug && !seenCity.has(park.citySlug)) {
+        const cityLower = park.city.toLowerCase();
+        const sim = this.trgmSim(cityLower, qLower);
+        if (cityLower.includes(qLower) || sim >= 0.3) {
+          seenCity.add(park.citySlug);
+          cityHits.push({ park, sim });
+        }
+      }
+      if (
+        park.country &&
+        park.countrySlug &&
+        !seenCountry.has(park.countrySlug)
+      ) {
+        const countryLower = park.country.toLowerCase();
+        const sim = this.trgmSim(countryLower, qLower);
+        if (countryLower.includes(qLower) || sim >= 0.3) {
+          seenCountry.add(park.countrySlug);
+          countryHits.push({ park, sim });
+        }
+      }
+    }
+
+    cityHits.sort((a, b) => b.sim - a.sim);
+    countryHits.sort((a, b) => b.sim - a.sim);
+
+    const results: SearchResultItemDto[] = [];
+    for (const { park } of cityHits.slice(0, limit)) {
+      results.push({
+        type: "location",
+        id: `city:${park.citySlug}`,
+        name: park.city,
+        slug: park.citySlug,
+        url: buildCityDiscoveryUrl(
+          park.continentSlug,
+          park.countrySlug,
+          park.citySlug,
+        ),
+        continent: park.continent,
+        country: park.country,
+        countryCode: park.countryCode,
+        city: park.city,
+        status: null,
+        load: null,
+      });
+    }
+    for (const { park } of countryHits.slice(0, limit)) {
+      results.push({
+        type: "location",
+        id: `country:${park.countrySlug}`,
+        name: park.country,
+        slug: park.countrySlug,
+        url: buildCountryDiscoveryUrl(park.continentSlug, park.countrySlug),
+        continent: park.continent,
+        country: park.country,
+        countryCode: park.countryCode,
+        status: null,
+        load: null,
+      });
+    }
+
+    return results.slice(0, limit);
   }
 
   // ---------------------------------------------------------------------------
