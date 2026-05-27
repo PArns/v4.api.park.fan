@@ -75,6 +75,30 @@ export class PopularityService {
   }
 
   /**
+   * Get top N popular parks with their request counts (descending).
+   */
+  async getTopParksWithScores(
+    limit: number = 50,
+  ): Promise<Array<{ id: string; requests: number }>> {
+    try {
+      const flat = await this.redis.zrevrange(
+        this.PARK_POPULARITY_KEY,
+        0,
+        limit - 1,
+        "WITHSCORES",
+      );
+      const result: Array<{ id: string; requests: number }> = [];
+      for (let i = 0; i < flat.length; i += 2) {
+        result.push({ id: flat[i], requests: Number(flat[i + 1]) });
+      }
+      return result;
+    } catch (err) {
+      this.logger.warn(`Failed to fetch top parks with scores: ${err}`);
+      return [];
+    }
+  }
+
+  /**
    * Get top N popular attractions
    */
   async getTopAttractions(limit: number = 200): Promise<string[]> {

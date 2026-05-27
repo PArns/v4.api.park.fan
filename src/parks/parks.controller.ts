@@ -7,6 +7,8 @@ import {
   Inject,
   UseInterceptors,
   Res,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -33,6 +35,7 @@ import { MLService } from "../ml/ml.service";
 import { PredictionAccuracyService } from "../ml/services/prediction-accuracy.service";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { ParkResponseDto } from "./dto/park-response.dto";
+import { PopularParkDto } from "./dto/popular-park.dto";
 import { ParkWithAttractionsDto } from "./dto/park-with-attractions.dto";
 import { ParkQueryDto } from "./dto/park-query.dto";
 import { ParkDailyPredictionDto } from "./dto/park-daily-prediction.dto";
@@ -50,6 +53,7 @@ import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-resp
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { Park } from "./entities/park.entity";
 import { ScheduleType } from "./entities/schedule-entry.entity";
+import { PopularityService } from "../popularity/popularity.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
@@ -87,6 +91,7 @@ export class ParksController {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
+    private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -197,6 +202,56 @@ export class ParksController {
         city: !park.city,
       },
     }));
+  }
+
+  /**
+   * GET /v1/parks/popular
+   *
+   * Returns the most-requested parks. The ranking is driven by real traffic
+   * (park detail, favorites and nearby endpoints) and mirrors the signal the
+   * cache prewarm uses to prioritize parks.
+   */
+  @Get("popular")
+  @UseInterceptors(new HttpCacheInterceptor(60))
+  @ApiOperation({
+    summary: "Get most-requested parks",
+    description:
+      "Returns parks ranked by tracked request volume. Reflects the same " +
+      "popularity signal used to prioritize cache prewarming.",
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    description: "Max number of parks to return (1-100, default 20)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Ranked list of popular parks",
+    type: [PopularParkDto],
+  })
+  async getPopularParks(
+    @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ): Promise<PopularParkDto[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const ranked =
+      await this.popularityService.getTopParksWithScores(safeLimit);
+    if (ranked.length === 0) {
+      return [];
+    }
+
+    const parks = await this.parksService.findByIds(ranked.map((r) => r.id));
+    const parkById = new Map(parks.map((p) => [p.id, p]));
+
+    const result: PopularParkDto[] = [];
+    for (const entry of ranked) {
+      const park = parkById.get(entry.id);
+      if (park) {
+        result.push(
+          PopularParkDto.fromEntity(park, result.length + 1, entry.requests),
+        );
+      }
+    }
+    return result;
   }
 
   /**
