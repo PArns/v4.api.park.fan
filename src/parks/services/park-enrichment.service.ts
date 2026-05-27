@@ -111,29 +111,53 @@ export class ParkEnrichmentService {
   private async getBatchSchoolHolidayStatus(
     parks: Park[],
   ): Promise<Map<string, boolean>> {
-    const results = await Promise.all(
-      parks.map(async (park) => {
-        if (!park.countryCode) return { id: park.id, isSchoolHoliday: false };
-        try {
-          const now = new Date();
-          const isSchoolHoliday =
-            await this.holidaysService.isEffectiveSchoolHoliday(
-              now,
-              park.countryCode,
-              park.regionCode,
-              park.timezone,
+    // The school-holiday result depends only on (countryCode, regionCode,
+    // timezone) for a given instant — not on the park itself. Parks in the
+    // same region would otherwise each re-run the identical lookup chain, so
+    // we resolve every distinct combination once and fan the result back out.
+    const now = new Date();
+    const keyFor = (park: Park): string =>
+      `${park.countryCode}|${park.regionCode ?? ""}|${park.timezone ?? "UTC"}`;
+
+    const lookups = new Map<string, Promise<boolean>>();
+    for (const park of parks) {
+      if (!park.countryCode) continue;
+      const key = keyFor(park);
+      if (lookups.has(key)) continue;
+      lookups.set(
+        key,
+        this.holidaysService
+          .isEffectiveSchoolHoliday(
+            now,
+            park.countryCode,
+            park.regionCode,
+            park.timezone,
+          )
+          .catch((error) => {
+            this.logger.warn(
+              `Failed to check school holiday for ${park.name}: ${error}`,
             );
-          return { id: park.id, isSchoolHoliday };
-        } catch (error) {
-          this.logger.warn(
-            `Failed to check school holiday for ${park.name}: ${error}`,
-          );
-          return { id: park.id, isSchoolHoliday: false };
-        }
+            return false;
+          }),
+      );
+    }
+
+    const resolved = new Map<string, boolean>();
+    await Promise.all(
+      Array.from(lookups.entries()).map(async ([key, promise]) => {
+        resolved.set(key, await promise);
       }),
     );
 
-    return new Map(results.map((r) => [r.id, r.isSchoolHoliday]));
+    const result = new Map<string, boolean>();
+    for (const park of parks) {
+      result.set(
+        park.id,
+        park.countryCode ? (resolved.get(keyFor(park)) ?? false) : false,
+      );
+    }
+
+    return result;
   }
 
   /**
