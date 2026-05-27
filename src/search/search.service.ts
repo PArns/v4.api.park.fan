@@ -34,6 +34,10 @@ import { PopularityService } from "../popularity/popularity.service";
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
+  // Hard cap on enriched entity results (parks/attractions/shows/restaurants
+  // combined) returned per query. Bounds the expensive enrichment step;
+  // location suggestions are appended separately and not counted here.
+  private readonly MAX_RESULTS = 5;
 
   constructor(
     @InjectRepository(Park)
@@ -234,10 +238,6 @@ export class SearchService implements OnModuleInit {
 
     // Stable OPERATING-first sort, then dedup by type + name + parent park.
     const seen = new Set<string>();
-    const survivingParks: typeof rawParks = [];
-    const survivingAttractions: typeof rawAttractions = [];
-    const survivingShows: typeof rawShows = [];
-    const survivingRestaurants: typeof rawRestaurants = [];
     const dedupedCandidates: Candidate[] = [];
 
     candidates
@@ -256,13 +256,24 @@ export class SearchService implements OnModuleInit {
         if (seen.has(key)) return;
         seen.add(key);
         dedupedCandidates.push(c);
-        if (c.type === "park") survivingParks.push(c.entity);
-        else if (c.type === "attraction") survivingAttractions.push(c.entity);
-        else if (c.type === "show") survivingShows.push(c.entity);
-        else survivingRestaurants.push(c.entity);
       });
 
-    // Step 3: Enrich ONLY the deduplicated survivors, grouped by type.
+    // Apply the global cap BEFORE enrichment so the expensive per-entity work
+    // only runs for the items we actually return.
+    const cappedCandidates = dedupedCandidates.slice(0, this.MAX_RESULTS);
+
+    const survivingParks: typeof rawParks = [];
+    const survivingAttractions: typeof rawAttractions = [];
+    const survivingShows: typeof rawShows = [];
+    const survivingRestaurants: typeof rawRestaurants = [];
+    for (const c of cappedCandidates) {
+      if (c.type === "park") survivingParks.push(c.entity);
+      else if (c.type === "attraction") survivingAttractions.push(c.entity);
+      else if (c.type === "show") survivingShows.push(c.entity);
+      else survivingRestaurants.push(c.entity);
+    }
+
+    // Step 3: Enrich ONLY the capped survivors, grouped by type.
     const [
       enrichedParks,
       enrichedAttractions,
@@ -287,7 +298,7 @@ export class SearchService implements OnModuleInit {
     };
 
     const deduplicatedResults: SearchResultItemDto[] = [];
-    for (const c of dedupedCandidates) {
+    for (const c of cappedCandidates) {
       const dto = enrichedByTypeId[c.type].get(c.entity.id);
       if (dto) deduplicatedResults.push(dto);
     }
@@ -948,10 +959,11 @@ export class SearchService implements OnModuleInit {
 
     // 3. Batch fetch queue data once (single roundtrip yields both wait time
     //    and status — previously we fetched the same data twice in parallel).
-    //    P90 is intentionally NOT fetched here: it runs a PERCENTILE_CONT over
-    //    548 days of queue_data and dominates the request on cache miss. P50
-    //    is pre-baked in a baseline table and covers the same baseline role;
-    //    attractions without a P50 fall through to the "moderate" default.
+    //    P50 and P90 are both read from pre-baked baseline tables (+ Redis),
+    //    NOT the live PERCENTILE_CONT over 548 days of queue_data. P50 is the
+    //    primary baseline for the crowd reading; P90 is the fallback when an
+    //    attraction has no P50 row yet, after which we fall through to the
+    //    "moderate" default.
     let waitTimesMap = new Map<string, number>();
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
