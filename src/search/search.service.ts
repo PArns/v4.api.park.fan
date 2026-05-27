@@ -183,9 +183,10 @@ export class SearchService implements OnModuleInit {
         ? type
         : ["park", "attraction", "show", "restaurant", "location"];
 
-    // Phase timing (debug only) — measures where a query spends its time so
-    // we can tell whether a slow request is the fuzzy SQL search or the
-    // downstream enrichment. Negligible overhead; logged at debug level.
+    // Phase timing — measures where a query spends its time so we can tell
+    // whether a slow request is the fuzzy SQL search or the downstream
+    // enrichment. Negligible overhead; only slow searches (>= threshold) are
+    // written to the slow-search log below.
     const phaseStart = Date.now();
     const timings: Record<string, number> = {};
     const timed = async <T>(label: string, work: Promise<T>): Promise<T> => {
