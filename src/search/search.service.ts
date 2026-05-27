@@ -29,11 +29,22 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
 import { PopularityService } from "../popularity/popularity.service";
+import { createWriteStream, mkdirSync, WriteStream } from "fs";
+import { dirname } from "path";
 
 @Injectable()
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
+
+  // Slow-search diagnostics: searches whose total time meets/exceeds this
+  // threshold (ms) get one JSON line appended to a dedicated log file. The
+  // write is buffered and fire-and-forget so it never blocks the response.
+  private readonly slowSearchThresholdMs =
+    Number(process.env.SLOW_SEARCH_THRESHOLD_MS) || 300;
+  private readonly slowSearchLogPath =
+    process.env.SLOW_SEARCH_LOG_PATH || "logs/slow-search.log";
+  private slowSearchStream?: WriteStream | null;
 
   constructor(
     @InjectRepository(Park)
@@ -172,27 +183,41 @@ export class SearchService implements OnModuleInit {
         ? type
         : ["park", "attraction", "show", "restaurant", "location"];
 
+    // Phase timing (debug only) — measures where a query spends its time so
+    // we can tell whether a slow request is the fuzzy SQL search or the
+    // downstream enrichment. Negligible overhead; logged at debug level.
+    const phaseStart = Date.now();
+    const timings: Record<string, number> = {};
+    const timed = async <T>(label: string, work: Promise<T>): Promise<T> => {
+      const start = Date.now();
+      try {
+        return await work;
+      } finally {
+        timings[label] = Date.now() - start;
+      }
+    };
+
     // Step 1: Run all search queries in parallel
     const [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
       await Promise.all([
         searchTypes.includes("park")
-          ? this.searchParks(q, limit)
+          ? timed("searchParks", this.searchParks(q, limit))
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchParks>>),
         searchTypes.includes("attraction")
-          ? this.searchAttractions(q, limit)
+          ? timed("searchAttractions", this.searchAttractions(q, limit))
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchAttractions>>,
             ),
         searchTypes.includes("show")
-          ? this.searchShows(q, limit)
+          ? timed("searchShows", this.searchShows(q, limit))
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchShows>>),
         searchTypes.includes("restaurant")
-          ? this.searchRestaurants(q, limit)
+          ? timed("searchRestaurants", this.searchRestaurants(q, limit))
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchRestaurants>>,
             ),
         searchTypes.includes("location")
-          ? this.searchLocations(q, limit)
+          ? timed("searchLocations", this.searchLocations(q, limit))
           : Promise.resolve([] as SearchResultItemDto[]),
       ]);
 
@@ -230,7 +255,10 @@ export class SearchService implements OnModuleInit {
     const rankParkIds = Array.from(
       new Set(candidates.map((c) => parentParkIdOf(c))),
     );
-    const rankStatusMap = await this.getCachedParkStatusMap(rankParkIds);
+    const rankStatusMap = await timed(
+      "rankParkStatus",
+      this.getCachedParkStatusMap(rankParkIds),
+    );
 
     // Stable OPERATING-first sort, then dedup by type + name + parent park.
     // Each category is already bounded by the per-type `limit` applied in the
@@ -270,12 +298,15 @@ export class SearchService implements OnModuleInit {
       enrichedAttractions,
       enrichedShows,
       enrichedRestaurants,
-    ] = await Promise.all([
-      this.enrichParkResults(survivingParks as unknown as Park[]),
-      this.enrichAttractionResults(survivingAttractions),
-      this.enrichShowResults(survivingShows),
-      this.enrichRestaurantResults(survivingRestaurants),
-    ]);
+    ] = await timed(
+      "enrich",
+      Promise.all([
+        this.enrichParkResults(survivingParks as unknown as Park[]),
+        this.enrichAttractionResults(survivingAttractions),
+        this.enrichShowResults(survivingShows),
+        this.enrichRestaurantResults(survivingRestaurants),
+      ]),
+    );
 
     // Reassemble enriched DTOs in the ranked/deduplicated order.
     const enrichedByTypeId: Record<
@@ -326,6 +357,19 @@ export class SearchService implements OnModuleInit {
       counts,
     };
 
+    const totalMs = Date.now() - phaseStart;
+    if (totalMs >= this.slowSearchThresholdMs) {
+      this.logSlowSearch({
+        ts: new Date().toISOString(),
+        query: q,
+        types: typeKey,
+        totalMs,
+        ...timings,
+        candidates: candidates.length,
+        returned: deduplicatedResults.length,
+      });
+    }
+
     // Cache for 5 minutes
     await this.redis.set(
       cacheKey,
@@ -335,6 +379,37 @@ export class SearchService implements OnModuleInit {
     );
 
     return response;
+  }
+
+  /**
+   * Lazily open (and memoize) the append stream for the slow-search log.
+   * Returns null if the file can't be opened so logging never throws on the
+   * request path. Stream writes are buffered, so this is non-blocking.
+   */
+  private getSlowSearchStream(): WriteStream | null {
+    if (this.slowSearchStream !== undefined) return this.slowSearchStream;
+    try {
+      mkdirSync(dirname(this.slowSearchLogPath), { recursive: true });
+      const stream = createWriteStream(this.slowSearchLogPath, { flags: "a" });
+      stream.on("error", (err) =>
+        this.logger.warn(`slow-search log write failed: ${err}`),
+      );
+      this.slowSearchStream = stream;
+    } catch (err) {
+      this.logger.warn(`slow-search log init failed: ${err}`);
+      this.slowSearchStream = null;
+    }
+    return this.slowSearchStream;
+  }
+
+  /**
+   * Append one JSON line describing a slow search. Fire-and-forget: the
+   * buffered stream write returns immediately and never blocks the response.
+   */
+  private logSlowSearch(entry: Record<string, unknown>): void {
+    const stream = this.getSlowSearchStream();
+    if (!stream) return;
+    stream.write(`${JSON.stringify(entry)}\n`);
   }
 
   /**
