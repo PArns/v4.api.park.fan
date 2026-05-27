@@ -196,45 +196,100 @@ export class SearchService implements OnModuleInit {
           : Promise.resolve([] as SearchResultItemDto[]),
       ]);
 
-    // Step 2: Enrich all result sets in parallel
+    // Step 2: Rank + deduplicate the RAW matches BEFORE enrichment, so the
+    // expensive per-entity work (wait times, baselines, occupancy, hours,
+    // show times) only runs for the items we actually return — not for
+    // duplicates that get dropped afterwards. Park status drives the
+    // OPERATING-first ordering; it's cached (60s) and loading it here also
+    // warms the cache the enrichment step reads.
+    type Candidate =
+      | { type: "park"; entity: (typeof rawParks)[number] }
+      | { type: "attraction"; entity: (typeof rawAttractions)[number] }
+      | { type: "show"; entity: (typeof rawShows)[number] }
+      | { type: "restaurant"; entity: (typeof rawRestaurants)[number] };
+
+    const candidates: Candidate[] = [
+      ...rawParks.map((entity) => ({ type: "park" as const, entity })),
+      ...rawAttractions.map((entity) => ({
+        type: "attraction" as const,
+        entity,
+      })),
+      ...rawShows.map((entity) => ({ type: "show" as const, entity })),
+      ...rawRestaurants.map((entity) => ({
+        type: "restaurant" as const,
+        entity,
+      })),
+    ];
+
+    // For ranking/dedup the "parent park" is the park itself for park hits,
+    // and the related park for attractions/shows/restaurants.
+    const parentParkIdOf = (c: Candidate): string =>
+      c.type === "park" ? c.entity.id : c.entity.park?.id ?? c.entity.id;
+
+    // Preload park status (cached) once for the OPERATING-first ranking.
+    const rankParkIds = Array.from(
+      new Set(candidates.map((c) => parentParkIdOf(c))),
+    );
+    const rankStatusMap = await this.getCachedParkStatusMap(rankParkIds);
+
+    // Stable OPERATING-first sort, then dedup by type + name + parent park.
+    const seen = new Set<string>();
+    const survivingParks: typeof rawParks = [];
+    const survivingAttractions: typeof rawAttractions = [];
+    const survivingShows: typeof rawShows = [];
+    const survivingRestaurants: typeof rawRestaurants = [];
+    const dedupedCandidates: Candidate[] = [];
+
+    candidates
+      .map((c, index) => ({ c, index }))
+      .sort((a, b) => {
+        const aOp = rankStatusMap.get(parentParkIdOf(a.c)) === "OPERATING";
+        const bOp = rankStatusMap.get(parentParkIdOf(b.c)) === "OPERATING";
+        if (aOp && !bOp) return -1;
+        if (!aOp && bOp) return 1;
+        return a.index - b.index;
+      })
+      .forEach(({ c }) => {
+        const key = `${c.type}:${c.entity.name
+          .toLowerCase()
+          .trim()}:${parentParkIdOf(c)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        dedupedCandidates.push(c);
+        if (c.type === "park") survivingParks.push(c.entity);
+        else if (c.type === "attraction") survivingAttractions.push(c.entity);
+        else if (c.type === "show") survivingShows.push(c.entity);
+        else survivingRestaurants.push(c.entity);
+      });
+
+    // Step 3: Enrich ONLY the deduplicated survivors, grouped by type.
     const [
       enrichedParks,
       enrichedAttractions,
       enrichedShows,
       enrichedRestaurants,
     ] = await Promise.all([
-      this.enrichParkResults(rawParks as unknown as Park[]),
-      this.enrichAttractionResults(rawAttractions),
-      this.enrichShowResults(rawShows),
-      this.enrichRestaurantResults(rawRestaurants),
+      this.enrichParkResults(survivingParks as unknown as Park[]),
+      this.enrichAttractionResults(survivingAttractions),
+      this.enrichShowResults(survivingShows),
+      this.enrichRestaurantResults(survivingRestaurants),
     ]);
 
-    // Step 3: Deduplicate results by name and parent park
-    // This prevents showing the same attraction twice if it exists under different IDs (e.g. from multiple sources)
+    // Reassemble enriched DTOs in the ranked/deduplicated order.
+    const enrichedByTypeId: Record<
+      Candidate["type"],
+      Map<string, SearchResultItemDto>
+    > = {
+      park: new Map(enrichedParks.map((r) => [r.id, r])),
+      attraction: new Map(enrichedAttractions.map((r) => [r.id, r])),
+      show: new Map(enrichedShows.map((r) => [r.id, r])),
+      restaurant: new Map(enrichedRestaurants.map((r) => [r.id, r])),
+    };
+
     const deduplicatedResults: SearchResultItemDto[] = [];
-    const seen = new Set<string>();
-
-    // Priority sort: OPERATING entities first, then others
-    const allEnriched = [
-      ...enrichedParks,
-      ...enrichedAttractions,
-      ...enrichedShows,
-      ...enrichedRestaurants,
-    ].sort((a, b) => {
-      if (a.status === "OPERATING" && b.status !== "OPERATING") return -1;
-      if (a.status !== "OPERATING" && b.status === "OPERATING") return 1;
-      return 0;
-    });
-
-    for (const res of allEnriched) {
-      // Key: name + parentParkId (if available) + type
-      const parentId = res.parentPark?.id || res.id;
-      const key = `${res.type}:${res.name.toLowerCase().trim()}:${parentId}`;
-
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduplicatedResults.push(res);
-      }
+    for (const c of dedupedCandidates) {
+      const dto = enrichedByTypeId[c.type].get(c.entity.id);
+      if (dto) deduplicatedResults.push(dto);
     }
 
     const results: SearchResultItemDto[] = [
