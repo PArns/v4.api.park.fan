@@ -34,10 +34,6 @@ import { PopularityService } from "../popularity/popularity.service";
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
-  // Hard cap on enriched entity results (parks/attractions/shows/restaurants
-  // combined) returned per query. Bounds the expensive enrichment step;
-  // location suggestions are appended separately and not counted here.
-  private readonly MAX_RESULTS = 5;
 
   constructor(
     @InjectRepository(Park)
@@ -237,7 +233,13 @@ export class SearchService implements OnModuleInit {
     const rankStatusMap = await this.getCachedParkStatusMap(rankParkIds);
 
     // Stable OPERATING-first sort, then dedup by type + name + parent park.
+    // Each category is already bounded by the per-type `limit` applied in the
+    // SQL queries above (default 5, max 20), so no extra global cap is needed.
     const seen = new Set<string>();
+    const survivingParks: typeof rawParks = [];
+    const survivingAttractions: typeof rawAttractions = [];
+    const survivingShows: typeof rawShows = [];
+    const survivingRestaurants: typeof rawRestaurants = [];
     const dedupedCandidates: Candidate[] = [];
 
     candidates
@@ -256,24 +258,13 @@ export class SearchService implements OnModuleInit {
         if (seen.has(key)) return;
         seen.add(key);
         dedupedCandidates.push(c);
+        if (c.type === "park") survivingParks.push(c.entity);
+        else if (c.type === "attraction") survivingAttractions.push(c.entity);
+        else if (c.type === "show") survivingShows.push(c.entity);
+        else survivingRestaurants.push(c.entity);
       });
 
-    // Apply the global cap BEFORE enrichment so the expensive per-entity work
-    // only runs for the items we actually return.
-    const cappedCandidates = dedupedCandidates.slice(0, this.MAX_RESULTS);
-
-    const survivingParks: typeof rawParks = [];
-    const survivingAttractions: typeof rawAttractions = [];
-    const survivingShows: typeof rawShows = [];
-    const survivingRestaurants: typeof rawRestaurants = [];
-    for (const c of cappedCandidates) {
-      if (c.type === "park") survivingParks.push(c.entity);
-      else if (c.type === "attraction") survivingAttractions.push(c.entity);
-      else if (c.type === "show") survivingShows.push(c.entity);
-      else survivingRestaurants.push(c.entity);
-    }
-
-    // Step 3: Enrich ONLY the capped survivors, grouped by type.
+    // Step 3: Enrich ONLY the deduplicated survivors, grouped by type.
     const [
       enrichedParks,
       enrichedAttractions,
@@ -298,7 +289,7 @@ export class SearchService implements OnModuleInit {
     };
 
     const deduplicatedResults: SearchResultItemDto[] = [];
-    for (const c of cappedCandidates) {
+    for (const c of dedupedCandidates) {
       const dto = enrichedByTypeId[c.type].get(c.entity.id);
       if (dto) deduplicatedResults.push(dto);
     }
