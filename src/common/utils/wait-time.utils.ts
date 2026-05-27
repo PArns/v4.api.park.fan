@@ -14,7 +14,9 @@
  *
  * Kept in sync with the ML training set: ml-service/train.py remove_anomalies()
  * drops waitTime >= 400 as erroneous, so the live accuracy/drift population
- * matches the population the model was trained on.
+ * matches the population the model was trained on. (Filters here keep <= 400
+ * while training drops >= 400, so the value exactly 400 differs by one row —
+ * irrelevant in practice: the real data has a gap between 360 and 420.)
  */
 export const MAX_PLAUSIBLE_WAIT_TIME = 400;
 

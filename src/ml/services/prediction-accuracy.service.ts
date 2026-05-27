@@ -426,7 +426,9 @@ export class PredictionAccuracyService {
     const comparisons = await this.accuracyRepository.find({
       where: {
         attractionId,
-        actualWaitTime: Between(0, 999), // Only show comparisons with actual data
+        // Upper bound drops data-source sentinels (700/999/1000) so the
+        // comparison list shows real waits, not "closed/unavailable" codes.
+        actualWaitTime: Between(0, MAX_PLAUSIBLE_WAIT_TIME),
       },
       order: {
         targetTime: "DESC",
@@ -1647,7 +1649,7 @@ export class PredictionAccuracyService {
     const accuracyRecords = await this.accuracyRepository.find({
       where: {
         targetTime: Between(startDate, new Date()),
-        actualWaitTime: Between(5, 999),
+        actualWaitTime: Between(5, MAX_PLAUSIBLE_WAIT_TIME),
         wasUnplannedClosure: false,
       },
       relations: ["attraction"],
