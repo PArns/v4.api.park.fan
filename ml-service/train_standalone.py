@@ -8,11 +8,16 @@ Usage (internal — called by main.py):
     python train_standalone.py <version> <status_file> <sentinel_file>
 """
 
+import faulthandler
 import sys
 import os
 import json
 import logging
 from datetime import datetime, timezone
+
+# Dump a C-level traceback of all threads on a fatal signal (SIGSEGV/SIGABRT/…),
+# so a native crash in CatBoost/numpy leaves a trace instead of a bare exit code.
+faulthandler.enable()
 
 # Ensure the ml-service package root is on the path regardless of cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

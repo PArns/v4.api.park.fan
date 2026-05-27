@@ -85,6 +85,27 @@ def _maybe_reload_model() -> None:
 async def startup_event():
     """Load model on startup - queries database for active model"""
     global model
+
+    # A fresh process means no training is actually running, so an is_training=true
+    # left in the status file is stale (a redeploy/worker-recycle killed the training
+    # mid-run before its monitor thread could write a terminal status) and would
+    # wrongly 409 every future /train. Clear it on startup — mirrors nf-service.
+    _stale = _read_training_status()
+    if _stale.get("is_training"):
+        logger.warning(
+            f"Resetting stale is_training lock (version={_stale.get('current_version')}) "
+            "left by an interrupted run"
+        )
+        reset = {
+            **_stale,
+            "is_training": False,
+            "status": "failed",
+            "error": "reset on startup (previous run interrupted)",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+        training_status.update(reset)
+        _write_training_status(reset)
+
     try:
         # Query database for active model version
         model_version = fetch_active_model_version()
