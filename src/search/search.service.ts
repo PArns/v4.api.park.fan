@@ -32,10 +32,59 @@ import { PopularityService } from "../popularity/popularity.service";
 import { createWriteStream, mkdirSync, WriteStream } from "fs";
 import { dirname } from "path";
 
+interface ParkIndexData {
+  id: string;
+  slug: string;
+  name: string;
+  latitude: number | null;
+  longitude: number | null;
+  continentSlug: string;
+  countrySlug: string;
+  countryCode: string;
+  citySlug: string;
+  continent: string;
+  country: string;
+  city: string;
+  destination: { id: string; name: string } | null;
+}
+
+interface AttractionIndexEntry {
+  id: string;
+  slug: string;
+  name: string;
+  landName: string | null;
+  park?: ParkIndexData | null;
+}
+
+interface ShowIndexEntry {
+  id: string;
+  slug: string;
+  name: string;
+  park?: ParkIndexData | null;
+}
+
+interface RestaurantIndexEntry {
+  id: string;
+  slug: string;
+  name: string;
+  park?: ParkIndexData | null;
+}
+
 @Injectable()
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly CACHE_TTL = 300; // 5 minutes
+
+  private static readonly INDEX_KEY_ATTRACTIONS = "search:index:v1:attractions";
+  private static readonly INDEX_KEY_SHOWS = "search:index:v1:shows";
+  private static readonly INDEX_KEY_RESTAURANTS = "search:index:v1:restaurants";
+  private static readonly INDEX_TTL = 7200; // 2h — warmup refreshes every ~5 min anyway
+
+  private attractionIndex: AttractionIndexEntry[] = [];
+  private showIndex: ShowIndexEntry[] = [];
+  private restaurantIndex: RestaurantIndexEntry[] = [];
+  private topAttractionIdSet = new Set<string>();
+  private indexReady = false;
 
   // Slow-search diagnostics: searches whose total time meets/exceeds this
   // threshold (ms) get one JSON line appended to a dedicated log file. The
@@ -70,6 +119,9 @@ export class SearchService implements OnModuleInit {
     // do not want to block container boot on. The search itself will still
     // work without them (just slower) until they finish on a fresh DB.
     void this.initializeFuzzySearchIndices();
+    // Load the entity index from Redis (or DB if Redis cold) so in-process
+    // search is available before the first warmup cycle fires.
+    void this.loadSearchIndex();
   }
 
   private async initializeFuzzySearchIndices(): Promise<void> {
@@ -205,15 +257,50 @@ export class SearchService implements OnModuleInit {
           ? timed("searchParks", this.searchParks(q, limit))
           : Promise.resolve([] as Awaited<ReturnType<typeof this.searchParks>>),
         searchTypes.includes("attraction")
-          ? timed("searchAttractions", this.searchAttractions(q, limit))
+          ? timed(
+              "searchAttractions",
+              this.indexReady
+                ? Promise.resolve(
+                    this.searchAttractionsInProcess(
+                      q,
+                      limit,
+                    ) as unknown as Awaited<
+                      ReturnType<typeof this.searchAttractions>
+                    >,
+                  )
+                : this.searchAttractions(q, limit),
+            )
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchAttractions>>,
             ),
         searchTypes.includes("show")
-          ? timed("searchShows", this.searchShows(q, limit))
-          : Promise.resolve([] as Awaited<ReturnType<typeof this.searchShows>>),
+          ? timed(
+              "searchShows",
+              this.indexReady
+                ? Promise.resolve(
+                    this.searchShowsInProcess(q, limit) as unknown as Awaited<
+                      ReturnType<typeof this.searchShows>
+                    >,
+                  )
+                : this.searchShows(q, limit),
+            )
+          : Promise.resolve(
+              [] as Awaited<ReturnType<typeof this.searchShows>>,
+            ),
         searchTypes.includes("restaurant")
-          ? timed("searchRestaurants", this.searchRestaurants(q, limit))
+          ? timed(
+              "searchRestaurants",
+              this.indexReady
+                ? Promise.resolve(
+                    this.searchRestaurantsInProcess(
+                      q,
+                      limit,
+                    ) as unknown as Awaited<
+                      ReturnType<typeof this.searchRestaurants>
+                    >,
+                  )
+                : this.searchRestaurants(q, limit),
+            )
           : Promise.resolve(
               [] as Awaited<ReturnType<typeof this.searchRestaurants>>,
             ),
@@ -1496,6 +1583,299 @@ export class SearchService implements OnModuleInit {
     return result;
   }
 
+  // ---------------------------------------------------------------------------
+  // In-process search index — Redis as canonical store, in-process array as
+  // deserialized mirror for zero-latency fuzzy matching.
+  // ---------------------------------------------------------------------------
+
+  private async loadSearchIndex(): Promise<void> {
+    try {
+      const [attrRaw, showRaw, restRaw] = await this.redis.mget(
+        SearchService.INDEX_KEY_ATTRACTIONS,
+        SearchService.INDEX_KEY_SHOWS,
+        SearchService.INDEX_KEY_RESTAURANTS,
+      );
+      if (attrRaw && showRaw && restRaw) {
+        this.attractionIndex = JSON.parse(attrRaw) as AttractionIndexEntry[];
+        this.showIndex = JSON.parse(showRaw) as ShowIndexEntry[];
+        this.restaurantIndex = JSON.parse(restRaw) as RestaurantIndexEntry[];
+        this.indexReady = true;
+        this.logger.log(
+          `✅ Search index loaded from Redis (${this.attractionIndex.length} attractions, ` +
+            `${this.showIndex.length} shows, ${this.restaurantIndex.length} restaurants)`,
+        );
+        return;
+      }
+      await this.refreshSearchIndex();
+    } catch (err) {
+      this.logger.warn("Search index load from Redis failed, falling back to DB", err);
+      await this.refreshSearchIndex().catch(() => {});
+    }
+  }
+
+  async refreshSearchIndex(): Promise<void> {
+    try {
+      const [attractions, shows, restaurants, topAttractionIds] =
+        await Promise.all([
+          this.loadAttractionIndexFromDb(),
+          this.loadShowIndexFromDb(),
+          this.loadRestaurantIndexFromDb(),
+          this.popularityService.getTopAttractions(50),
+        ]);
+
+      this.attractionIndex = attractions;
+      this.showIndex = shows;
+      this.restaurantIndex = restaurants;
+      this.topAttractionIdSet = new Set(topAttractionIds);
+      this.indexReady = true;
+
+      const pipeline = this.redis.pipeline();
+      pipeline.set(
+        SearchService.INDEX_KEY_ATTRACTIONS,
+        JSON.stringify(attractions),
+        "EX",
+        SearchService.INDEX_TTL,
+      );
+      pipeline.set(
+        SearchService.INDEX_KEY_SHOWS,
+        JSON.stringify(shows),
+        "EX",
+        SearchService.INDEX_TTL,
+      );
+      pipeline.set(
+        SearchService.INDEX_KEY_RESTAURANTS,
+        JSON.stringify(restaurants),
+        "EX",
+        SearchService.INDEX_TTL,
+      );
+      await pipeline.exec();
+
+      this.logger.log(
+        `✅ Search index refreshed from DB → Redis (${attractions.length} attractions, ` +
+          `${shows.length} shows, ${restaurants.length} restaurants)`,
+      );
+    } catch (err) {
+      this.logger.warn("Search index refresh failed", err);
+    }
+  }
+
+  private mapParkForIndex(park: Park): ParkIndexData {
+    return {
+      id: park.id,
+      slug: park.slug,
+      name: park.name,
+      latitude: park.latitude ?? null,
+      longitude: park.longitude ?? null,
+      continentSlug: park.continentSlug,
+      countrySlug: park.countrySlug,
+      countryCode: park.countryCode,
+      citySlug: park.citySlug,
+      continent: park.continent,
+      country: park.country,
+      city: park.city,
+      destination: park.destination
+        ? { id: park.destination.id, name: park.destination.name }
+        : null,
+    };
+  }
+
+  private async loadAttractionIndexFromDb(): Promise<AttractionIndexEntry[]> {
+    const rows = await this.attractionRepository
+      .createQueryBuilder("attraction")
+      .leftJoinAndSelect("attraction.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "attraction.id",
+        "attraction.slug",
+        "attraction.name",
+        "attraction.landName",
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.latitude",
+        "park.longitude",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.countryCode",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .getMany();
+    return rows.map((a) => ({
+      id: a.id,
+      slug: a.slug,
+      name: a.name,
+      landName: a.landName ?? null,
+      park: a.park ? this.mapParkForIndex(a.park) : null,
+    }));
+  }
+
+  private async loadShowIndexFromDb(): Promise<ShowIndexEntry[]> {
+    const rows = await this.showRepository
+      .createQueryBuilder("show")
+      .leftJoinAndSelect("show.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "show.id",
+        "show.slug",
+        "show.name",
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.latitude",
+        "park.longitude",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.countryCode",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .getMany();
+    return rows.map((s) => ({
+      id: s.id,
+      slug: s.slug,
+      name: s.name,
+      park: s.park ? this.mapParkForIndex(s.park) : null,
+    }));
+  }
+
+  private async loadRestaurantIndexFromDb(): Promise<RestaurantIndexEntry[]> {
+    const rows = await this.restaurantRepository
+      .createQueryBuilder("restaurant")
+      .leftJoinAndSelect("restaurant.park", "park")
+      .leftJoinAndSelect("park.destination", "destination")
+      .select([
+        "restaurant.id",
+        "restaurant.slug",
+        "restaurant.name",
+        "park.id",
+        "park.slug",
+        "park.name",
+        "park.latitude",
+        "park.longitude",
+        "park.continentSlug",
+        "park.countrySlug",
+        "park.countryCode",
+        "park.citySlug",
+        "park.continent",
+        "park.country",
+        "park.city",
+        "destination.id",
+        "destination.name",
+      ])
+      .getMany();
+    return rows.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      name: r.name,
+      park: r.park ? this.mapParkForIndex(r.park) : null,
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Trigram similarity (mirrors pg_trgm: pads with two spaces, 3-char grams)
+  // ---------------------------------------------------------------------------
+
+  private buildTrigrams(s: string): Set<string> {
+    const padded = `  ${s}  `;
+    const t = new Set<string>();
+    for (let i = 0; i < padded.length - 2; i++) t.add(padded.slice(i, i + 3));
+    return t;
+  }
+
+  private trgmSim(a: string, b: string): number {
+    if (!a || !b) return 0;
+    const at = this.buildTrigrams(a);
+    const bt = this.buildTrigrams(b);
+    let shared = 0;
+    for (const t of at) if (bt.has(t)) shared++;
+    return (2 * shared) / (at.size + bt.size);
+  }
+
+  private scoreEntry(
+    name: string,
+    extra: string | null | undefined,
+    q: string,
+    qNorm: string,
+    qLower: string,
+  ): { matches: boolean; tier: number; sim: number } {
+    const nameLower = name.toLowerCase();
+    const nameNorm = name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const sim = this.trgmSim(nameLower, qLower);
+
+    if (nameLower === qLower) return { matches: true, tier: 0, sim };
+    if (qNorm && nameNorm === qNorm) return { matches: true, tier: 1, sim };
+    if (nameLower.startsWith(qLower))
+      return { matches: true, tier: 2, sim };
+    if (nameLower.split(/\s+/).some((w) => w.startsWith(qLower)))
+      return { matches: true, tier: 2, sim };
+    if (nameLower.includes(qLower)) return { matches: true, tier: 3, sim };
+    if (qNorm && nameNorm.includes(qNorm)) return { matches: true, tier: 4, sim };
+    if (extra && extra.toLowerCase().includes(qLower))
+      return { matches: true, tier: 5, sim };
+    if (sim >= 0.3) return { matches: true, tier: 6, sim };
+
+    return { matches: false, tier: 99, sim: 0 };
+  }
+
+  private searchAttractionsInProcess(
+    q: string,
+    limit: number,
+  ): AttractionIndexEntry[] {
+    const qLower = q.toLowerCase();
+    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    type Scored = { entry: AttractionIndexEntry; tier: number; sim: number };
+    const scored: Scored[] = [];
+    for (const entry of this.attractionIndex) {
+      const r = this.scoreEntry(entry.name, entry.landName, q, qNorm, qLower);
+      if (r.matches) {
+        const popular = this.topAttractionIdSet.has(entry.id);
+        scored.push({ entry, tier: popular && r.tier > 2 ? 3 : r.tier, sim: r.sim });
+      }
+    }
+    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    return scored.slice(0, limit).map((s) => s.entry);
+  }
+
+  private searchShowsInProcess(q: string, limit: number): ShowIndexEntry[] {
+    const qLower = q.toLowerCase();
+    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    type Scored = { entry: ShowIndexEntry; tier: number; sim: number };
+    const scored: Scored[] = [];
+    for (const entry of this.showIndex) {
+      const r = this.scoreEntry(entry.name, null, q, qNorm, qLower);
+      if (r.matches) scored.push({ entry, tier: r.tier, sim: r.sim });
+    }
+    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    return scored.slice(0, limit).map((s) => s.entry);
+  }
+
+  private searchRestaurantsInProcess(
+    q: string,
+    limit: number,
+  ): RestaurantIndexEntry[] {
+    const qLower = q.toLowerCase();
+    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    type Scored = { entry: RestaurantIndexEntry; tier: number; sim: number };
+    const scored: Scored[] = [];
+    for (const entry of this.restaurantIndex) {
+      const r = this.scoreEntry(entry.name, null, q, qNorm, qLower);
+      if (r.matches) scored.push({ entry, tier: r.tier, sim: r.sim });
+    }
+    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    return scored.slice(0, limit).map((s) => s.entry);
+  }
+
+  // ---------------------------------------------------------------------------
+
   /**
    * Pre-warm search cache using actual park names from the DB.
    * Called from CacheWarmupService after wait-times sync.
@@ -1504,6 +1884,8 @@ export class SearchService implements OnModuleInit {
    */
   async warmupSearch(): Promise<void> {
     try {
+      await this.refreshSearchIndex();
+
       const [parks, popularParkIds] = await Promise.all([
         this.parkRepository.find({ select: ["id", "name", "city", "country"] }),
         this.popularityService.getTopParks(30),
