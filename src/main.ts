@@ -27,9 +27,19 @@ function writeCrashLog(type: string, message: string): void {
   }
 }
 
+// Suppress EPIPE on stdout/stderr — happens when Docker's log pipe closes while
+// the process is still writing (e.g. under heavy error-log volume). Not a crash.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code !== "EPIPE") throw err;
+});
+process.stderr.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code !== "EPIPE") throw err;
+});
+
 process.on("uncaughtException", (error: Error) => {
+  // EPIPE on stdout/stderr is benign — the log pipe closed, the API is fine.
+  if ((error as NodeJS.ErrnoException).code === "EPIPE") return;
   const message = error.stack ?? error.message;
-  console.error("[CRASH] uncaughtException", message);
   writeCrashLog("uncaughtException", message);
   process.exit(1);
 });
