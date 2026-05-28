@@ -13,12 +13,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the CPU-only PyTorch build first (from the dedicated index) so the
-# neuralforecast install below resolves against it instead of pulling the
-# multi-GB CUDA wheels. dockerhost is CPU-only.
+# Install PyTorch with CUDA 12.8 support (required for Blackwell sm_120 / RTX 5080).
+# With runtime:nvidia the host driver libs are injected; the container only needs
+# the CUDA-compiled torch wheel — no toolkit install required.
+# Build arg allows overriding to cpu for CI or CPU-only hosts.
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu128
 RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.4.1
+    --index-url ${TORCH_INDEX} \
+    "torch>=2.7.0"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

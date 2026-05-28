@@ -87,6 +87,8 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None, loss=No
     trainer_kw = {
         "enable_progress_bar": settings.NF_PROGRESS_BAR,
         "enable_model_summary": False,
+        # auto-selects GPU (CUDA) when available, falls back to CPU.
+        "accelerator": "auto",
     }
     if not settings.NF_PROGRESS_BAR:
         _cb = _epoch_log_callback(chunk_idx, n_chunks)
