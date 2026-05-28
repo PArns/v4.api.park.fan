@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     CATBOOST_THREAD_COUNT: int = (
         -1
     )  # -1 = use all available CPU cores, 0 = use CPU count
+    # Cores left free for serving while the 06:00 training subprocess runs. With
+    # THREAD_COUNT=-1 training otherwise pins every core and starves the uvicorn
+    # workers, so concurrent /predict calls queued behind it hit the 120s client
+    # timeout. Reserving a couple of cores keeps serving responsive during training.
+    CATBOOST_TRAINING_RESERVED_CORES: int = 2
+    # Threads per inference call. Predicts now run concurrently in a threadpool, so a
+    # high count would oversubscribe the CPU across simultaneous requests. Inference
+    # batches are tiny (a few attractions × N timestamps) so a low count is plenty.
+    CATBOOST_INFERENCE_THREAD_COUNT: int = 2
     CATBOOST_TASK_TYPE: str = "CPU"  # "CPU" or "GPU" (if GPU available)
     # Hard cap on RAM the CatBoost trainer may use. Training now runs as an isolated
     # subprocess (see main.py), so an OOM kill only tears down that process. Budget:

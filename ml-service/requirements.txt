@@ -1,6 +1,7 @@
 # FastAPI & Server
 fastapi==0.127.0
 uvicorn[standard]==0.39.0
+gunicorn==23.0.0  # process manager: runs uvicorn workers with --preload (see gunicorn.conf.py)
 pydantic==2.12.5
 pydantic-settings==2.11.0
 

@@ -96,11 +96,14 @@ class WaitTimeModel:
         import time
         import os
 
-        # Determine thread count (use all available cores by default)
+        # Determine thread count. -1 means "all cores minus a reserved headroom"
+        # so the nightly training subprocess doesn't starve the serving workers
+        # (which share this host) and trip their 120s client timeout.
         thread_count = settings.CATBOOST_THREAD_COUNT
         if thread_count == -1:
-            # Use all available CPU cores
-            thread_count = os.cpu_count() or 4
+            cores = os.cpu_count() or 4
+            reserved = settings.CATBOOST_TRAINING_RESERVED_CORES
+            thread_count = max(1, cores - reserved)
 
         print(f"   Thread count: {thread_count}")
         print(f"   Task type: {settings.CATBOOST_TASK_TYPE}")
@@ -526,7 +529,9 @@ class WaitTimeModel:
         # Use model's feature order (from training)
         X_ordered = X[model_features].copy()
 
-        predictions = self.model.predict(X_ordered)
+        predictions = self.model.predict(
+            X_ordered, thread_count=settings.CATBOOST_INFERENCE_THREAD_COUNT
+        )
 
         # If model used RMSEWithUncertainty, predict returns (n_samples, 2)
         if predictions.ndim == 2 and predictions.shape[1] == 2:
@@ -602,6 +607,7 @@ class WaitTimeModel:
             X_ordered,
             prediction_type="VirtEnsembles",
             virtual_ensembles_count=ensembles_count,
+            thread_count=settings.CATBOOST_INFERENCE_THREAD_COUNT,
         )
 
         # CatBoost VirtEnsembles returns different shapes based on loss_function:

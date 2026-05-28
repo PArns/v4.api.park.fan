@@ -24,17 +24,15 @@ RUN mkdir -p /app/models
 # Expose port
 EXPOSE 8000
 
-# Run FastAPI with uvicorn (production mode)
-# --no-access-log: Suppress HTTP request logs (GET /health spam)
-# --workers 1: single worker process. Lowered from 2 (and earlier 4) — the
-#   service is internal (NestJS calls it, not high-QPS public). Each worker
-#   loads the CatBoost model + feature pipeline into its own memory (~4 GiB),
-#   so two workers held ~8.5 GiB at serving time; stacked on the 9 GiB training
-#   subprocess + the API container, that exhausted the 28 GiB host and the
-#   global OOM-killer killed the nightly training. One worker roughly halves
-#   the serving-side floor; predict requests serialize but the batch/low-QPS
-#   internal traffic tolerates that.
-# --timeout-keep-alive 120: Increase keep-alive timeout to prevent connection resets
-# --timeout-graceful-shutdown 30: Allow time for graceful shutdown
-# Application logs (logger.info) are still shown
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--workers", "1", "--timeout-keep-alive", "120", "--timeout-graceful-shutdown", "30"]
+# Run via gunicorn managing uvicorn workers (config: gunicorn.conf.py).
+#   - preload_app=True loads the ~4 GiB CatBoost model once in the master; the 2
+#     workers share it copy-on-write instead of each loading their own copy. This
+#     is what makes >1 worker affordable again: 2 plain uvicorn workers held
+#     ~8.5 GiB and, stacked on the 9 GiB nightly training subprocess + the API
+#     container, exhausted the 28 GiB host and got the training OOM-killed (the
+#     reason it was previously cut to 1 worker).
+#   - Predict endpoints are sync def, so each worker also serves requests
+#     concurrently from a threadpool (their DB queries overlap) instead of
+#     serializing on the event loop.
+# Worker count is overridable via ML_WORKERS.
+CMD ["gunicorn", "main:app", "-c", "gunicorn.conf.py"]
