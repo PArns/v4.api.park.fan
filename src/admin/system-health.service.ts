@@ -210,6 +210,8 @@ export class SystemHealthService {
       activeModel: modelTrained && version
         ? { version, trainedAt: finishedAt, horizon: health?.horizon ?? null, parkScope: health?.park_scope ?? null }
         : null,
+      // health kept for backward-compat with frontend (tft.health.status badge)
+      health: health ?? null,
     };
   }
 
