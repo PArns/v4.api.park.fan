@@ -2,6 +2,18 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg18
     restart: unless-stopped
+    # Postgres keeps parallel-query dynamic shared memory in /dev/shm. Docker's
+    # 64MB default overflowed ("could not resize shared memory segment ... No space
+    # left on device") once /predict began running its heavy 730-day rolling-window
+    # queries concurrently. 512m gives the concurrent DSM segments room; the
+    # per-gather cap bounds how many parallel workers any single query spawns.
+    # (shared_preload_libraries=timescaledb stays in the data-dir postgresql.conf —
+    # the -c flags here are additive, not a replacement.)
+    shm_size: 512m
+    command:
+      - "postgres"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
     ports:
       - "${DB_PORT:-5433}:5432"
     environment:
