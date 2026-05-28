@@ -187,7 +187,7 @@ export class SystemHealthService {
     };
   }
 
-  /** TFT = nf-service: live status incl. training progress (chunk/step/%). */
+  /** TFT = nf-service: live status aligned with CatBoost shape. */
   private async tft() {
     const [status, health] = await Promise.all([
       axios
@@ -199,7 +199,18 @@ export class SystemHealthService {
         .then((r) => r.data)
         .catch((e) => ({ error: String(e?.message ?? e) })),
     ]);
-    return { service: NF_URL, training: status, health };
+    const modelTrained = health?.model_trained === true;
+    const version = status?.version ?? null;
+    const finishedAt = status?.finished_at ?? null;
+    return {
+      service: NF_URL,
+      training: status,
+      // activeModel mirrors CatBoost shape so dashboards treat both uniformly.
+      // TFT has no MAE in DB (no ml_models row); quality lives in model_comparisons.
+      activeModel: modelTrained && version
+        ? { version, trainedAt: finishedAt, horizon: health?.horizon ?? null, parkScope: health?.park_scope ?? null }
+        : null,
+    };
   }
 
   /** TFT-vs-CatBoost forward scoreboard (latest scored target days). */

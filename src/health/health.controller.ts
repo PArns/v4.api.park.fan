@@ -10,6 +10,7 @@ import { Redis } from "ioredis";
 import { Inject } from "@nestjs/common";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import * as packageJson from "../../package.json";
+import axios from "axios";
 
 interface HealthStatus {
   status: "ok" | "degraded" | "error";
@@ -29,12 +30,14 @@ interface HealthStatus {
       active_model?: {
         version: string;
         trained_at: string;
-        metrics?: {
-          mae: number;
-          rmse: number;
-        };
+        metrics?: { mae: number; rmse: number };
       };
       predictions_24h?: number;
+      service_url?: string;
+    };
+    tft?: {
+      status: "ready" | "not_ready" | "unhealthy";
+      active_model?: { version: string; trained_at: string };
       service_url?: string;
     };
   };
@@ -104,6 +107,7 @@ export class HealthController {
       latestParkUpdate,
       activeModel,
       redisStatus,
+      tftStatus,
     ] = await Promise.all([
       this.parkRepository.count(),
       this.attractionRepository.count(),
@@ -113,6 +117,7 @@ export class HealthController {
       this.getLatestParkUpdate(),
       this.getActiveMLModel(),
       this.checkRedisConnection(),
+      this.getTftStatus(),
     ]);
 
     // Calculate data age
@@ -156,6 +161,7 @@ export class HealthController {
           status: redisStatus ? "connected" : "disconnected",
         },
         ml: mlStatus,
+        ...(tftStatus && { tft: tftStatus }),
       },
       data: {
         parks: parksCount,
@@ -272,6 +278,35 @@ export class HealthController {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  private async getTftStatus(): Promise<{
+    status: "ready" | "not_ready" | "unhealthy";
+    active_model?: { version: string; trained_at: string };
+    service_url: string;
+  } | null> {
+    const nfUrl = process.env.NF_SERVICE_URL || "http://nf-service:8000";
+    try {
+      const [healthRes, statusRes] = await Promise.all([
+        axios.get(`${nfUrl}/health`, { timeout: 3000 }).then((r) => r.data),
+        axios.get(`${nfUrl}/train/status`, { timeout: 3000 }).then((r) => r.data),
+      ]);
+      const modelTrained = healthRes?.model_trained === true;
+      const version = statusRes?.version ?? null;
+      const finishedAt = statusRes?.finished_at ?? null;
+      return {
+        status: modelTrained ? "ready" : "not_ready",
+        ...(modelTrained && version && {
+          active_model: {
+            version,
+            trained_at: finishedAt ?? new Date(0).toISOString(),
+          },
+        }),
+        service_url: nfUrl,
+      };
+    } catch {
+      return { status: "unhealthy", service_url: nfUrl };
     }
   }
 }
