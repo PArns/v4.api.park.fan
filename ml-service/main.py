@@ -31,8 +31,11 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Global model instance
+# Global model instance. Predict endpoints run in a threadpool (sync def), so the
+# in-place reload can race with concurrent requests reading `model`. The lock
+# serializes the swap; handlers take a local reference via _get_active_model().
 model: Optional[WaitTimeModel] = None
+_model_lock = threading.Lock()
 
 # Sentinel file: written after training so all workers detect the new version.
 # Path is on the shared models volume so every worker process sees it.
@@ -59,31 +62,64 @@ def _write_sentinel(version: str) -> None:
         logger.warning(f"Could not write sentinel file: {e}")
 
 
-def _maybe_reload_model() -> None:
+def _load_active_model() -> None:
     """
-    Check if the sentinel file signals a newer model version.
-    Called at the start of every prediction request — cheap (one file read)
-    and ensures all uvicorn workers eventually converge to the active model
-    without requiring inter-process communication.
+    Load the DB-active model into the global and write the sentinel.
+
+    Called at import time so gunicorn --preload loads the model once in the master
+    process; the forked workers then share that ~4 GiB copy-on-write instead of each
+    loading its own. Also used as a startup fallback if the import-time load failed.
+    """
+    global model
+    try:
+        model_version = fetch_active_model_version()
+        logger.info(f"Loading active model version {model_version} (from database)...")
+        m = WaitTimeModel(model_version)
+        m.load()
+        model = m
+        _write_sentinel(model_version)
+        logger.info("✅ Model loaded successfully")
+    except FileNotFoundError:
+        logger.warning("⚠️  No trained model found. Train a model first using train.py")
+        model = None
+    except Exception as e:
+        logger.error(f"❌ Error loading model: {e}")
+        model = None
+
+
+def _get_active_model() -> Optional[WaitTimeModel]:
+    """
+    Return the current model, reloading first if the sentinel signals a newer
+    version (training writes it on completion). Cheap on the hot path — one file
+    read. The lock serializes the in-place swap against concurrent threadpool
+    requests; callers use the returned reference for the whole request so a
+    mid-request swap on another thread can't tear out the model they're using.
     """
     global model
     sentinel_version = _read_sentinel()
-    if sentinel_version and (model is None or model.version != sentinel_version):
-        logger.info(
-            f"Sentinel detected new model version {sentinel_version}, reloading..."
-        )
-        try:
-            new_model = WaitTimeModel(sentinel_version)
-            new_model.load()
-            model = new_model
-            logger.info(f"✅ Model auto-reloaded to {sentinel_version}")
-        except Exception as e:
-            logger.error(f"Failed to auto-reload model {sentinel_version}: {e}")
+    with _model_lock:
+        if sentinel_version and (model is None or model.version != sentinel_version):
+            logger.info(
+                f"Sentinel detected new model version {sentinel_version}, reloading..."
+            )
+            try:
+                new_model = WaitTimeModel(sentinel_version)
+                new_model.load()
+                model = new_model
+                logger.info(f"✅ Model auto-reloaded to {sentinel_version}")
+            except Exception as e:
+                logger.error(f"Failed to auto-reload model {sentinel_version}: {e}")
+        return model
+
+
+# Load at import so gunicorn --preload populates the model in the master before
+# forking; workers then share the ~4 GiB copy-on-write instead of each loading its own.
+_load_active_model()
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model on startup - queries database for active model"""
+    """Reset stale training locks and ensure a model is loaded."""
     global model
 
     # A fresh process means no training is actually running, so an is_training=true
@@ -106,20 +142,10 @@ async def startup_event():
         training_status.update(reset)
         _write_training_status(reset)
 
-    try:
-        # Query database for active model version
-        model_version = fetch_active_model_version()
-        logger.info(f"Loading active model version {model_version} (from database)...")
-        model = WaitTimeModel(model_version)
-        model.load()
-        _write_sentinel(model_version)
-        logger.info("✅ Model loaded successfully")
-    except FileNotFoundError:
-        logger.warning("⚠️  No trained model found. Train a model first using train.py")
-        model = None
-    except Exception as e:
-        logger.error(f"❌ Error loading model: {e}")
-        model = None
+    # Normally loaded at import (preload). Retry here if that failed — e.g. the DB
+    # wasn't reachable yet when the module was first imported.
+    if model is None:
+        _load_active_model()
 
 
 # Request/Response models
@@ -255,8 +281,10 @@ async def reload_model():
         new_model = WaitTimeModel(model_version)
         new_model.load()
 
-        # Update this worker and write sentinel for the others
-        model = new_model
+        # Update this worker and write sentinel for the others. Lock the swap so it
+        # can't race with a threadpool predict reloading via _get_active_model().
+        with _model_lock:
+            model = new_model
         _write_sentinel(model_version)
         logger.info("✅ Model reloaded successfully")
 
@@ -418,7 +446,7 @@ async def get_training_status():
 
 
 @app.post("/predict", response_model=BulkPredictionResponse)
-async def predict(request: PredictionRequest):
+def predict(request: PredictionRequest):
     """
     Predict wait times for attractions
 
@@ -428,10 +456,12 @@ async def predict(request: PredictionRequest):
     Returns:
         Bulk prediction response
     """
-    # Check if training completed on another worker and wrote a new sentinel version
-    _maybe_reload_model()
+    # sync def: Starlette runs this in a threadpool, so concurrent /predict calls
+    # overlap (notably their many DB queries) instead of serializing on the event
+    # loop. _get_active_model() also reloads if training wrote a new sentinel version.
+    current_model = _get_active_model()
 
-    if model is None:
+    if current_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     if len(request.attractionIds) != len(request.parkIds):
@@ -455,7 +485,7 @@ async def predict(request: PredictionRequest):
     try:
         # Make predictions
         predictions = predict_wait_times(
-            model,
+            current_model,
             request.attractionIds,
             request.parkIds,
             request.predictionType,
@@ -481,7 +511,7 @@ async def predict(request: PredictionRequest):
         return BulkPredictionResponse(
             predictions=[PredictionResponse(**p) for p in predictions],
             count=len(predictions),
-            modelVersion=model.version,
+            modelVersion=current_model.version,
         )
 
     except Exception as e:
@@ -493,7 +523,7 @@ async def predict(request: PredictionRequest):
 
 
 @app.get("/predict/park/{park_id}", response_model=BulkPredictionResponse)
-async def predict_park(park_id: str, prediction_type: str = "hourly"):
+def predict_park(park_id: str, prediction_type: str = "hourly"):
     """
     Predict wait times for all attractions in a park
 
@@ -504,9 +534,10 @@ async def predict_park(park_id: str, prediction_type: str = "hourly"):
     Returns:
         Bulk prediction response
     """
-    _maybe_reload_model()
+    # sync def: served from the threadpool so concurrent requests don't serialize.
+    current_model = _get_active_model()
 
-    if model is None:
+    if current_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     if prediction_type not in ["hourly", "daily"]:
@@ -515,12 +546,12 @@ async def predict_park(park_id: str, prediction_type: str = "hourly"):
         )
 
     try:
-        predictions = predict_for_park(model, park_id, prediction_type)
+        predictions = predict_for_park(current_model, park_id, prediction_type)
 
         return BulkPredictionResponse(
             predictions=[PredictionResponse(**p) for p in predictions],
             count=len(predictions),
-            modelVersion=model.version,
+            modelVersion=current_model.version,
         )
 
     except Exception as e:
