@@ -90,36 +90,36 @@ mkdir -p "$NAS_DB_DATE_DIR" "$NAS_ML_DIR" "$NAS_NF_DIR"
 # ── PostgreSQL Backup (pg_basebackup) ─────────────────────────────────────────
 # pg_basebackup creates a consistent binary copy of the entire cluster including
 # TimescaleDB hypertables and chunks — no TimescaleDB-specific restore steps
-# needed. Restore = extract tar to /data/parkfan/postgres, start container.
+# needed. Restore = extract tar.gz to /data/parkfan/postgres, start container.
 DUMP_FILE="$NAS_DB_DATE_DIR/parkfan_${DATETIME}.tar.gz"
-TMP_BACKUP_DIR=$(mktemp -d)
 
 log "Starting pg_basebackup (host=$DB_HOST port=$DB_PORT)..."
 
-# Find the running postgres container and run pg_basebackup inside it.
-# This avoids needing pg_basebackup on the host and handles the Docker network.
 PG_CONTAINER=$(docker ps --filter name=postgres --format '{{.Names}}' | grep -v coolify | head -1)
-
-if [[ -z "$PG_CONTAINER" ]]; then
-  die "No running postgres container found"
-fi
-
+[[ -z "$PG_CONTAINER" ]] && die "No running postgres container found"
 log "Using postgres container: $PG_CONTAINER"
 
-# pg_basebackup streams the cluster as a tar directly to stdout, we gzip it.
-# -Ft = tar format, -z = gzip, -Xs = stream WAL (ensures consistency),
-# -P = show progress, -D - = write to stdout
-docker exec "$PG_CONTAINER" \
-  bash -c "PGPASSWORD='$DB_PASSWORD' pg_basebackup \
+# Write backup to a temp dir inside the container (needed because -Xs WAL
+# streaming requires a real directory target, not stdout). Then tar+gzip the
+# result to the NAS. Temp dir is cleaned up in the container afterwards.
+docker exec "$PG_CONTAINER" bash -c "
+  rm -rf /tmp/pgbackup && mkdir -p /tmp/pgbackup
+  PGPASSWORD='$DB_PASSWORD' pg_basebackup \
     -h localhost -U $DB_USERNAME \
     -Ft -z -Xs -P \
-    -D -" \
-  > "$DUMP_FILE" \
-  || die "pg_basebackup failed"
+    -D /tmp/pgbackup
+" || die "pg_basebackup failed"
+
+# Stream the backup files from the container to the NAS
+docker exec "$PG_CONTAINER" tar -cf - -C /tmp/pgbackup . \
+  | gzip > "$DUMP_FILE" \
+  || die "Failed to stream backup from container"
+
+# Clean up temp dir in container
+docker exec "$PG_CONTAINER" rm -rf /tmp/pgbackup
 
 DUMP_SIZE=$(du -sh "$DUMP_FILE" | cut -f1)
 log "DB backup done: parkfan/db/$DATE/$(basename "$DUMP_FILE") ($DUMP_SIZE)"
-rm -rf "$TMP_BACKUP_DIR"
 
 # Rolling retention
 DELETED_DIRS=0
