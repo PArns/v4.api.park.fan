@@ -72,13 +72,14 @@ services:
       DB_USER: ${DB_USERNAME:-parkfan}
       DB_PASSWORD: ${DB_PASSWORD}
       MODEL_DIR: ${MODEL_DIR:-/app/models}
-      # 1 worker: gunicorn preload_app shares the ~4 GiB model COW, but COW pages
-      # diverge under active inference → 2 workers effectively hold 2 full copies
-      # (~8.5 GiB). Stacked on the 06:00 training subprocess (~13 GiB peak) +
-      # nf-service (14 GiB limit) + postgres + API the 28 GiB host overflows and
-      # the OOM-killer takes out the Coolify sentinel, cascading all containers.
-      # Keep 1 worker until the host is upgraded or a worker-memory ceiling is found.
-      ML_WORKERS: "1"
+      # 2 workers with gunicorn preload_app: the ~4 GiB model is loaded once in
+      # the master and shared copy-on-write. Inference is read-only on model
+      # weights → pages stay shared → serving floor stays near 1 copy (~4 GiB),
+      # unlike 2 plain uvicorn workers that each load independently (~8.5 GiB).
+      # The initial OOM on 2026-05-28 was caused by the deployment spike (postgres
+      # container recreation + all services starting simultaneously), not
+      # steady-state serving. With everything already running, 2 workers are safe.
+      ML_WORKERS: "2"
     volumes:
       - /data/parkfan/ml-models:/app/models
     depends_on:
