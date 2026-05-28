@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# parkfan-backup.sh — Daily backup: PostgreSQL dump + ML models → Samba NAS
+# parkfan-backup.sh — Daily backup: PostgreSQL base backup + ML/NF models → Samba NAS
 #
 # NAS layout:
 #   Backups/
 #   └── parkfan/
 #       ├── db/
-#       │   └── 2026-04-06/
-#       │       └── parkfan_20260406_030001.sql.gz
-#       └── ml-models/
-#           ├── catboost_v20260329_085046.cbm
-#           ├── metadata_v20260329_085046.pkl
-#           └── active_version.txt
+#       │   ├── 2026-05-28/
+#       │   │   └── parkfan_20260528_030001.tar.gz   ← pg_basebackup (full cluster)
+#       │   └── 2026-05-29/
+#       │       └── parkfan_20260529_030012.tar.gz
+#       ├── ml-models/
+#       │   ├── catboost_v20260528_1809.cbm
+#       │   ├── metadata_v20260528_1809.pkl
+#       │   └── active_version.txt
+#       └── nf-models/
+#           └── (TFT model files)
 #
-# Deploy to dockerhost:
-#   scp scripts/backup/parkfan-backup.sh <user>@<dockerhost>:/opt/parkfan/backup.sh
+# Deploy to host:
+#   scp scripts/backup/parkfan-backup.sh <user>@<host>:/opt/parkfan/backup.sh
 #   chmod +x /opt/parkfan/backup.sh
 #   cp scripts/backup/backup.env.example /opt/parkfan/backup.env   # fill in secrets
 #
 # Cron (root): 0 3 * * * /opt/parkfan/backup.sh >> /var/log/parkfan-backup.log 2>&1
+#
+# Restore:
+#   1. Stop postgres container
+#   2. rm -rf /data/parkfan/postgres && mkdir -p /data/parkfan/postgres
+#   3. tar -xzf parkfan_<date>.tar.gz -C /data/parkfan/postgres
+#   4. Start postgres container — it will find the cluster and skip re-init
 
 set -euo pipefail
 
@@ -36,9 +46,11 @@ fi
 : "${DB_PASSWORD:?DB_PASSWORD not set}"
 
 DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5432}"
+DB_PORT="${DB_PORT:-5433}"
 DB_DATABASE="${DB_DATABASE:-parkfan}"
+POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/data/parkfan/postgres}"
 ML_MODELS_DIR="${ML_MODELS_DIR:-/data/parkfan/ml-models}"
+NF_MODELS_DIR="${NF_MODELS_DIR:-/data/parkfan/nf-models}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 BACKUP_ML_MODELS_KEEP="${BACKUP_ML_MODELS_KEEP:-7}"
 
@@ -69,44 +81,61 @@ else
   log "NAS mounted: //$BACKUP_NAS_HOST/$BACKUP_NAS_SHARE → $MOUNT_POINT"
 fi
 
-# Paths on NAS — organized by project / type / date
 NAS_ROOT="$MOUNT_POINT/parkfan"
 NAS_DB_DATE_DIR="$NAS_ROOT/db/$DATE"
 NAS_ML_DIR="$NAS_ROOT/ml-models"
-mkdir -p "$NAS_DB_DATE_DIR" "$NAS_ML_DIR"
+NAS_NF_DIR="$NAS_ROOT/nf-models"
+mkdir -p "$NAS_DB_DATE_DIR" "$NAS_ML_DIR" "$NAS_NF_DIR"
 
-# ── PostgreSQL Backup ──────────────────────────────────────────────────────────
-DUMP_FILE="$NAS_DB_DATE_DIR/parkfan_${DATETIME}.sql.gz"
+# ── PostgreSQL Backup (pg_basebackup) ─────────────────────────────────────────
+# pg_basebackup creates a consistent binary copy of the entire cluster including
+# TimescaleDB hypertables and chunks — no TimescaleDB-specific restore steps
+# needed. Restore = extract tar to /data/parkfan/postgres, start container.
+DUMP_FILE="$NAS_DB_DATE_DIR/parkfan_${DATETIME}.tar.gz"
+TMP_BACKUP_DIR=$(mktemp -d)
 
-log "Starting pg_dump (host=$DB_HOST port=$DB_PORT db=$DB_DATABASE)..."
-PGPASSWORD="$DB_PASSWORD" pg_dump \
-  -h "$DB_HOST" -p "$DB_PORT" \
-  -U "$DB_USERNAME" -d "$DB_DATABASE" \
-  --no-password --format=plain \
-  | gzip > "$DUMP_FILE" \
-  || die "pg_dump failed"
+log "Starting pg_basebackup (host=$DB_HOST port=$DB_PORT)..."
+
+# Find the running postgres container and run pg_basebackup inside it.
+# This avoids needing pg_basebackup on the host and handles the Docker network.
+PG_CONTAINER=$(docker ps --filter name=postgres --format '{{.Names}}' | grep -v coolify | head -1)
+
+if [[ -z "$PG_CONTAINER" ]]; then
+  die "No running postgres container found"
+fi
+
+log "Using postgres container: $PG_CONTAINER"
+
+# pg_basebackup streams the cluster as a tar directly to stdout, we gzip it.
+# -Ft = tar format, -z = gzip, -Xs = stream WAL (ensures consistency),
+# -P = show progress, -D - = write to stdout
+docker exec "$PG_CONTAINER" \
+  bash -c "PGPASSWORD='$DB_PASSWORD' pg_basebackup \
+    -h localhost -U $DB_USERNAME \
+    -Ft -z -Xs -P \
+    -D -" \
+  > "$DUMP_FILE" \
+  || die "pg_basebackup failed"
 
 DUMP_SIZE=$(du -sh "$DUMP_FILE" | cut -f1)
 log "DB backup done: parkfan/db/$DATE/$(basename "$DUMP_FILE") ($DUMP_SIZE)"
+rm -rf "$TMP_BACKUP_DIR"
 
-# Rolling retention: remove date folders older than BACKUP_RETENTION_DAYS days
+# Rolling retention
 DELETED_DIRS=0
 while IFS= read -r -d '' dir; do
   DIR_DATE=$(basename "$dir")
-  # Delete if the directory date is older than retention window
   if [[ $(date -d "$DIR_DATE" +%s 2>/dev/null || echo 0) -lt $(date -d "$BACKUP_RETENTION_DAYS days ago" +%s) ]]; then
     rm -rf "$dir"
     log "Removed old backup dir: parkfan/db/$DIR_DATE"
     (( DELETED_DIRS++ )) || true
   fi
 done < <(find "$NAS_ROOT/db" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
-
 (( DELETED_DIRS == 0 )) && log "No old DB backup dirs to remove (retention: ${BACKUP_RETENTION_DAYS}d)"
 
-# ── ML Model Backup ────────────────────────────────────────────────────────────
-log "Backing up last $BACKUP_ML_MODELS_KEEP ML model versions from $ML_MODELS_DIR"
+# ── ML Model Backup (CatBoost) ─────────────────────────────────────────────────
+log "Backing up last $BACKUP_ML_MODELS_KEEP CatBoost model versions from $ML_MODELS_DIR"
 
-# Find the newest N versions sorted by mtime of the .cbm file
 mapfile -t SOURCE_VERSIONS < <(
   find "$ML_MODELS_DIR" -maxdepth 1 -name "catboost_*.cbm" \
     -printf "%T@ %f\n" 2>/dev/null \
@@ -116,7 +145,7 @@ mapfile -t SOURCE_VERSIONS < <(
 )
 
 if (( ${#SOURCE_VERSIONS[@]} == 0 )); then
-  log "No ML model files found in $ML_MODELS_DIR — skipping model backup"
+  log "No CatBoost model files found — skipping"
 else
   COPIED=0
   for version in "${SOURCE_VERSIONS[@]}"; do
@@ -133,14 +162,11 @@ else
       fi
     done
   done
-  [[ $COPIED -eq 0 ]] && log "All model files already on NAS — nothing new to copy"
+  [[ $COPIED -eq 0 ]] && log "All CatBoost model files already on NAS"
 
-  # Keep active_version.txt in sync
-  if [[ -f "$ML_MODELS_DIR/active_version.txt" ]]; then
+  [[ -f "$ML_MODELS_DIR/active_version.txt" ]] && \
     cp "$ML_MODELS_DIR/active_version.txt" "$NAS_ML_DIR/active_version.txt"
-  fi
 
-  # Prune NAS: keep only last BACKUP_ML_MODELS_KEEP versions (oldest removed first)
   mapfile -t NAS_VERSIONS < <(
     find "$NAS_ML_DIR" -maxdepth 1 -name "catboost_*.cbm" \
       -printf "%T@ %f\n" 2>/dev/null \
@@ -152,11 +178,35 @@ else
     DELETE_COUNT=$(( NAS_COUNT - BACKUP_ML_MODELS_KEEP ))
     for version in "${NAS_VERSIONS[@]:0:$DELETE_COUNT}"; do
       rm -f "$NAS_ML_DIR/catboost_${version}.cbm" "$NAS_ML_DIR/metadata_${version}.pkl"
-      log "  Pruned old model version: $version"
+      log "  Pruned old CatBoost version: $version"
     done
   fi
 fi
 
+# ── NF Model Backup (TFT) ──────────────────────────────────────────────────────
+log "Backing up NF/TFT models from $NF_MODELS_DIR"
+
+if [[ -d "$NF_MODELS_DIR" ]] && [[ -n "$(ls -A "$NF_MODELS_DIR" 2>/dev/null)" ]]; then
+  NF_BACKUP="$NAS_NF_DIR/nf_models_${DATETIME}.tar.gz"
+  tar -czf "$NF_BACKUP" -C "$NF_MODELS_DIR" . 2>/dev/null || true
+  NF_SIZE=$(du -sh "$NF_BACKUP" | cut -f1)
+  log "NF models backed up: $(basename "$NF_BACKUP") ($NF_SIZE)"
+
+  # Keep last 3 NF backups (models are large)
+  mapfile -t NF_BACKUPS < <(find "$NAS_NF_DIR" -maxdepth 1 -name "nf_models_*.tar.gz" | sort)
+  NF_COUNT=${#NF_BACKUPS[@]}
+  if (( NF_COUNT > 3 )); then
+    for old in "${NF_BACKUPS[@]:0:$(( NF_COUNT - 3 ))}"; do
+      rm -f "$old"
+      log "  Pruned old NF backup: $(basename "$old")"
+    done
+  fi
+else
+  log "No NF model files found — skipping"
+fi
+
+# ── Summary ────────────────────────────────────────────────────────────────────
 DB_DAYS=$(find "$NAS_ROOT/db" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
 ML_VERSIONS=$(find "$NAS_ML_DIR" -maxdepth 1 -name "catboost_*.cbm" 2>/dev/null | wc -l)
-log "Done. DB backup days on NAS: $DB_DAYS/${BACKUP_RETENTION_DAYS}, ML versions: $ML_VERSIONS/${BACKUP_ML_MODELS_KEEP}"
+NF_BACKUPS_COUNT=$(find "$NAS_NF_DIR" -maxdepth 1 -name "nf_models_*.tar.gz" 2>/dev/null | wc -l)
+log "Done. DB days: $DB_DAYS/${BACKUP_RETENTION_DAYS}, CatBoost versions: $ML_VERSIONS/${BACKUP_ML_MODELS_KEEP}, NF backups: $NF_BACKUPS_COUNT/3"
