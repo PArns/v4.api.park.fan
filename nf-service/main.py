@@ -83,7 +83,7 @@ def _reset_stale_training_lock():
 
 @app.get("/health")
 def health():
-    model_exists = os.path.exists(os.path.join(settings.MODEL_DIR, "nf_daily"))
+    model_exists = os.path.exists(os.path.join(settings.MODEL_DIR, "nf_forecast.parquet"))
     return {
         "status": "healthy",
         "model_trained": model_exists,
