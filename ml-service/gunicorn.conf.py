@@ -14,8 +14,6 @@ reload a newly trained model, by which point training has already finished.
 
 import os
 
-from db import engine
-
 bind = "0.0.0.0:8000"
 worker_class = "uvicorn.workers.UvicornWorker"
 workers = int(os.environ.get("ML_WORKERS", "2"))
@@ -32,8 +30,15 @@ accesslog = None
 
 
 def post_fork(server, worker):
-    # The SQLAlchemy engine is created at import — i.e. inside the preloaded master.
-    # Its pooled TCP connections must NOT be reused across forked workers (sharing a
-    # connection between processes corrupts the wire protocol). Dispose the inherited
-    # pool so each worker lazily opens its own connections.
-    engine.dispose()
+    # The SQLAlchemy engine is created at import — i.e. inside the preloaded master —
+    # so the worker inherits its connection pool across the fork. Sharing a TCP
+    # connection between processes corrupts the wire protocol, so drop the inherited
+    # pool and let the worker open its own connections. close=False abandons the
+    # connections without closing the sockets (which the master still references),
+    # per SQLAlchemy's multiprocessing guidance.
+    #
+    # Imported here, not at module top: gunicorn execs this config file before it
+    # puts the app dir on sys.path, so a top-level `from db import ...` would fail.
+    from db import engine
+
+    engine.dispose(close=False)
