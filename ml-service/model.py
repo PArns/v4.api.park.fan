@@ -137,6 +137,7 @@ class WaitTimeModel:
             thread_count=thread_count,  # Use all CPU cores for parallel training
             task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
             used_ram_limit=(getattr(settings, "CATBOOST_USED_RAM_LIMIT", "") or None),
+            logging_level="Verbose",
             verbose=100,
             early_stopping_rounds=100,
         )
