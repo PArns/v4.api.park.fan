@@ -1366,6 +1366,7 @@ export class PredictionAccuracyService {
       .addGroupBy("a.name")
       .addGroupBy("p.name")
       .having("COUNT(*) >= :minPredictions", { minPredictions: 10 })
+      .andHaving("AVG(pa.actualWaitTime) >= :minAvgWait", { minAvgWait: 10 })
       .getRawMany();
 
     // Sort by MAE (ascending = best performers)
