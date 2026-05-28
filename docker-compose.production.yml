@@ -83,6 +83,9 @@ services:
       # Set CATBOOST_TASK_TYPE=GPU in .env on hosts with an NVIDIA GPU (e.g. celestrial).
       # Defaults to CPU so the service still works on hosts without a GPU (dockerhost).
       CATBOOST_TASK_TYPE: ${CATBOOST_TASK_TYPE:-CPU}
+      # Required by nvidia-container-runtime to inject GPU devices into the container.
+      # "all" exposes all GPUs; set to "" on CPU-only hosts (no-op).
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-}
     volumes:
       - /data/parkfan/ml-models:/app/models
     depends_on:
@@ -123,6 +126,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       MODEL_DIR: /app/models
       NF_PARK_IDS: ${NF_PARK_IDS:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-}
     volumes:
       - /data/parkfan/nf-models:/app/models
     depends_on:
