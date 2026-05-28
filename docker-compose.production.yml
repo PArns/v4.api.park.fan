@@ -80,6 +80,9 @@ services:
       # container recreation + all services starting simultaneously), not
       # steady-state serving. With everything already running, 2 workers are safe.
       ML_WORKERS: "2"
+      # Set CATBOOST_TASK_TYPE=GPU in .env on hosts with an NVIDIA GPU (e.g. celestrial).
+      # Defaults to CPU so the service still works on hosts without a GPU (dockerhost).
+      CATBOOST_TASK_TYPE: ${CATBOOST_TASK_TYPE:-CPU}
     volumes:
       - /data/parkfan/ml-models:/app/models
     depends_on:
@@ -87,6 +90,9 @@ services:
         condition: service_healthy
     networks:
       - parkfan-network
+    # GPU: set NVIDIA_VISIBLE_DEVICES in .env (e.g. "all") to expose the GPU.
+    # Requires nvidia-container-toolkit on the host. No-op on CPU-only hosts.
+    runtime: ${DOCKER_RUNTIME:-runc}
     # Budget: 1 worker ~4g + subprocess peak ~13g (Python/data ~5g + CatBoost 8g
     # limit) + headroom = 20g ceiling. 2-worker budget would be ~8.5g + 13g = 21.5g,
     # which exhausts the host once nf-service + API + postgres are accounted for.
@@ -124,6 +130,8 @@ services:
         condition: service_healthy
     networks:
       - parkfan-network
+    # GPU: same DOCKER_RUNTIME env var as ml-service — set to "nvidia" on GPU hosts.
+    runtime: ${DOCKER_RUNTIME:-runc}
     # PyTorch training is memory-heavy. 14g is the host-safe ceiling: host=28g,
     # ml-service ~8.5g + postgres ~5.3g committed → ~14g free, so a higher cap risks
     # a HOST OOM that would kill the API. Training the full ~2758-series panel needs
