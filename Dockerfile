@@ -4,7 +4,7 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Install pnpm via npm (corepack fetch often fails in CI/Coolify; version must match package.json packageManager)
-RUN npm install -g pnpm@10.33.0
+RUN npm install -g pnpm@11.5.0
 
 # Retry fetches on timeout (CI/Coolify, slow networks)
 ENV PNPM_CONFIG_FETCH_RETRIES=5
@@ -12,7 +12,7 @@ ENV PNPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000
 ENV PNPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
 
 # Copy package files (including pnpm-lock.yaml)
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 # Install ALL dependencies (including devDependencies for build)
 RUN pnpm install --frozen-lockfile
@@ -221,7 +221,7 @@ FROM node:22-alpine AS production
 WORKDIR /app
 
 # Install curl for health checks and pnpm via npm (version must match package.json packageManager)
-RUN apk add --no-cache curl && npm install -g pnpm@10.33.0
+RUN apk add --no-cache curl && npm install -g pnpm@11.5.0
 
 # Retry fetches on timeout (CI/Coolify, slow networks)
 ENV PNPM_CONFIG_FETCH_RETRIES=5
@@ -233,7 +233,7 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 
 # Copy package files
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 # Install su-exec for user switching in entrypoint
 RUN apk add --no-cache su-exec
