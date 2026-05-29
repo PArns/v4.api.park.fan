@@ -72,14 +72,18 @@ services:
       DB_USER: ${DB_USERNAME:-parkfan}
       DB_PASSWORD: ${DB_PASSWORD}
       MODEL_DIR: ${MODEL_DIR:-/app/models}
-      # 2 workers with gunicorn preload_app: the ~4 GiB model is loaded once in
-      # the master and shared copy-on-write. Inference is read-only on model
-      # weights → pages stay shared → serving floor stays near 1 copy (~4 GiB),
-      # unlike 2 plain uvicorn workers that each load independently (~8.5 GiB).
-      # The initial OOM on 2026-05-28 was caused by the deployment spike (postgres
-      # container recreation + all services starting simultaneously), not
-      # steady-state serving. With everything already running, 2 workers are safe.
-      ML_WORKERS: "2"
+      # 2 gunicorn workers (preload_app shares the import; the CatBoost model is only
+      # ~12 MB so per-worker model cost is negligible — the old "~4 GiB / COW serving
+      # floor" reasoning was wrong). The CPU-heavy path is TRAINING, which already
+      # uses all 24 cores via CATBOOST_THREAD_COUNT=-1, so the host's multi-core
+      # capacity is already exploited; inference is tiny (12 MB model, small batches)
+      # and not throughput-bound at 2 workers. The historical OOM was never the model:
+      # it was the never-evicting serving caches growing the workers to ~15 GiB, now
+      # bounded by gunicorn max_requests recycling (see gunicorn.conf.py).
+      # Bumping to 4 is env-overridable, but only after observing that recycling
+      # actually holds per-worker memory low in prod — otherwise it eats the 06:00
+      # training-window memory margin and risks the very OOM we're fixing.
+      ML_WORKERS: ${ML_WORKERS:-2}
       # Set CATBOOST_TASK_TYPE=GPU in .env on hosts with an NVIDIA GPU (e.g. celestrial).
       # Defaults to CPU so the service still works on hosts without a GPU (dockerhost).
       CATBOOST_TASK_TYPE: ${CATBOOST_TASK_TYPE:-CPU}
@@ -96,9 +100,13 @@ services:
     # GPU: set NVIDIA_VISIBLE_DEVICES in .env (e.g. "all") to expose the GPU.
     # Requires nvidia-container-toolkit on the host. No-op on CPU-only hosts.
     runtime: ${DOCKER_RUNTIME:-runc}
-    # Budget: 1 worker ~4g + subprocess peak ~13g (Python/data ~5g + CatBoost 8g
-    # limit) + headroom = 20g ceiling. 2-worker budget would be ~8.5g + 13g = 21.5g,
-    # which exhausts the host once nf-service + API + postgres are accounted for.
+    # Budget: 2 recycled workers (~0.5-2g each between max_requests recycles)
+    # ≈ up to ~4g serving + nightly training subprocess peak ~13g (Python/data ~5g +
+    # CatBoost 8g limit) ≈ 17g, leaving ~3g margin under the 20g ceiling. More workers
+    # eat that margin and have crashed the container during the 06:00 training window
+    # before — keep workers low so training and serving coexist. The cgroup limit is
+    # the hard stop: if training exceeds it, only the isolated training subprocess is
+    # OOM-killed (it self-recovers), not the serving workers.
     mem_limit: 20g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

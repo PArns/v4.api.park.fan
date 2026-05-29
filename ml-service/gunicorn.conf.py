@@ -1,15 +1,21 @@
 """
 Gunicorn config for the ML service.
 
-We run uvicorn workers under gunicorn so we can preload the app (preload_app=True):
-the app module — and therefore the ~4 GiB CatBoost model loaded at import time in
-main.py — is loaded once in the master process, and the worker processes share it
-copy-on-write after fork. Two plain uvicorn workers would each load their own copy
-(~8.5 GiB serving floor); combined with the nightly training subprocess that
-exhausted host memory and got the training OOM-killed (the reason the service was
-cut to a single worker). COW sharing keeps the serving floor near a single copy
-during the training-peak window — workers only diverge to their own copy once they
-reload a newly trained model, by which point training has already finished.
+We run uvicorn workers under gunicorn with preload_app=True so the app module is
+imported once in the master and forked to the workers (cheap shared startup; the
+CatBoost model itself is only ~12 MB on disk, so model memory is negligible — the
+old "~4 GiB model / COW serving floor" reasoning was wrong and is removed).
+
+The real memory risk is per-worker GROWTH, not the model. The serving caches in
+predict.py/db.py (_recent_wait_times_cache, _weather_historical_cache, …) check a
+TTL on read but never EVICT stale entries, and their keys include base_time +
+attraction combos, so the keyspace is effectively unbounded. Left unbounded the
+workers grew to ~15 GiB combined over ~25 h and pushed the host into swap.
+
+max_requests recycles each worker after a bounded number of requests (re-forking
+fresh from the preloaded master), which caps that growth regardless of the cache
+leak. It's the safety net; properly bounding/evicting those caches is the real
+follow-up fix.
 """
 
 import os
@@ -27,6 +33,14 @@ keepalive = 120
 
 # No access log (was uvicorn --no-access-log): keeps GET /health out of the logs.
 accesslog = None
+
+# Recycle workers periodically to bound the never-evicting serving caches (see the
+# module docstring). At recycle a worker re-forks from the preloaded master, so it
+# starts back at the small serving floor. jitter staggers the two workers so they
+# don't recycle on the same request and briefly drop capacity together. Tunable via
+# env if the per-request leak rate changes.
+max_requests = int(os.environ.get("ML_MAX_REQUESTS", "1000"))
+max_requests_jitter = int(os.environ.get("ML_MAX_REQUESTS_JITTER", "200"))
 
 
 def post_fork(server, worker):

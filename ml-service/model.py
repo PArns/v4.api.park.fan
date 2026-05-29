@@ -137,7 +137,10 @@ class WaitTimeModel:
             thread_count=thread_count,  # Use all CPU cores for parallel training
             task_type=settings.CATBOOST_TASK_TYPE,  # CPU or GPU
             used_ram_limit=(getattr(settings, "CATBOOST_USED_RAM_LIMIT", "") or None),
-            logging_level="Verbose",
+            # verbose=N sets the Verbose logging level AND a metric_period of N in one
+            # param. Do NOT also pass logging_level — CatBoost treats them as mutually
+            # exclusive synonyms and raises "Only one of [...] should be set" at fit()
+            # time (regression f493164, broke the 06:00 cron until it was reverted).
             verbose=100,
             early_stopping_rounds=100,
         )
