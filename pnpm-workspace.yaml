@@ -1,3 +1,32 @@
+allowBuilds:
+  '@nestjs/core': true
+  '@scarf/scarf': true
+  cpu-features: true
+  msgpackr-extract: true
+  protobufjs: true
+  ssh2: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@eslint/plugin-kit@0.7.2'
+  - eslint@10.4.1
+  - ts-loader@9.6.0
 onlyBuiltDependencies:
   - '@nestjs/core'
   - esbuild
+overrides:
+  qs: '>=6.15.2'
+  multer: '>=2.1.1'
+  serialize-javascript: '>=7.0.3'
+  minimatch@<3.1.4: 3.1.4
+  minimatch@>=9.0.0 <9.0.7: 9.0.7
+  minimatch@>=10.0.0 <10.2.3: 10.2.3
+  ajv@<6.14.0: 6.14.0
+  ajv@>=7.0.0-alpha.0 <8.18.0: 8.18.0
+  picomatch@>=4.0.0 <4.0.4: '>=4.0.4'
+  path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
+  formidable: '>=3.5.1'
+  superagent: '>=9.0.2'
+  glob: '>=11.0.0'
+  inflight: npm:lru-cache@11.0.2
+  uuid: '>=14.0.0'
+  brace-expansion: '>=5.0.6'
