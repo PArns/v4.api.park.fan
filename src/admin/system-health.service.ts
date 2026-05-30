@@ -63,14 +63,17 @@ export class SystemHealthService {
     `);
     const r = rows?.[0] ?? {};
     const ageMin = (d: unknown): number | null =>
-      d ? Math.round((Date.now() - new Date(d as string).getTime()) / 60000) : null;
+      d
+        ? Math.round((Date.now() - new Date(d as string).getTime()) / 60000)
+        : null;
     const weatherMin = ageMin(r.latest_weather);
     return {
       latestQueueTime: r.latest_queue ?? null,
       queueStaleMinutes: ageMin(r.latest_queue),
       queueRowsLastHour: Number(r.queue_rows_last_hour ?? 0),
       latestWeatherDate: r.latest_weather ?? null,
-      weatherStaleHours: weatherMin != null ? +(weatherMin / 60).toFixed(1) : null,
+      weatherStaleHours:
+        weatherMin != null ? +(weatherMin / 60).toFixed(1) : null,
     };
   }
 
@@ -92,70 +95,77 @@ export class SystemHealthService {
     }
   }
 
-  /** CPU package temperature (°C) from Linux hwmon, thermal_zone fallback.
-   * null on non-Linux or when no sensor is exposed (e.g. in some containers). */
+  /** CPU package temperature (°C). Reads Linux hwmon (coretemp/k10temp/zenpower),
+   * thermal_zone as fallback. Containers don't expose /sys/class/hwmon by default,
+   * so we also look under /host/sys (bind-mounted read-only in docker-compose).
+   * null on non-Linux or when no sensor is reachable. */
   private async cpuTemp(): Promise<number | null> {
-    // Prefer hwmon: coretemp (Intel) / k10temp / zenpower (AMD) expose the real
-    // package/Tctl temp. temp*_input is in millidegrees C.
-    try {
-      const base = "/sys/class/hwmon";
-      const dirs = await fs.promises.readdir(base);
-      const preferred = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
-      let best: { rank: number; temp: number } | null = null;
-      for (const d of dirs) {
-        const dir = `${base}/${d}`;
-        let name = "";
-        try {
-          name = (await fs.promises.readFile(`${dir}/name`, "utf8")).trim();
-        } catch {
-          continue;
+    const roots = ["/sys", "/host/sys"];
+    // 1) hwmon — the real package/Tctl temp. temp*_input is in millidegrees C.
+    const preferred = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
+    for (const root of roots) {
+      try {
+        const base = `${root}/class/hwmon`;
+        const dirs = await fs.promises.readdir(base);
+        let best: { rank: number; temp: number } | null = null;
+        for (const d of dirs) {
+          const dir = `${base}/${d}`;
+          let name = "";
+          try {
+            name = (await fs.promises.readFile(`${dir}/name`, "utf8")).trim();
+          } catch {
+            continue;
+          }
+          const rank = preferred.indexOf(name);
+          if (rank === -1) continue;
+          let maxC = 0;
+          for (const f of await fs.promises.readdir(dir)) {
+            if (!/^temp\d+_input$/.test(f)) continue;
+            const raw = Number(
+              (await fs.promises.readFile(`${dir}/${f}`, "utf8")).trim(),
+            );
+            if (raw > 0) maxC = Math.max(maxC, raw / 1000);
+          }
+          if (maxC > 0 && (!best || rank < best.rank)) {
+            best = { rank, temp: maxC };
+          }
         }
-        const rank = preferred.indexOf(name);
-        if (rank === -1) continue;
-        const files = await fs.promises.readdir(dir);
-        let maxC = 0;
-        for (const f of files) {
-          const m = /^temp(\d+)_input$/.exec(f);
-          if (!m) continue;
-          const raw = Number(
-            (await fs.promises.readFile(`${dir}/${f}`, "utf8")).trim(),
-          );
-          if (raw > 0) maxC = Math.max(maxC, raw / 1000);
-        }
-        if (maxC > 0 && (!best || rank < best.rank)) {
-          best = { rank, temp: maxC };
-        }
+        if (best) return +best.temp.toFixed(1);
+      } catch {
+        /* try next root */
       }
-      if (best) return +best.temp.toFixed(1);
-    } catch {
-      /* hwmon unavailable — fall through to thermal_zone */
     }
-    // Fallback: thermal_zone with a CPU-ish type.
-    try {
-      const base = "/sys/class/thermal";
-      const zones = (await fs.promises.readdir(base)).filter((z) =>
-        z.startsWith("thermal_zone"),
-      );
-      let fallback: number | null = null;
-      for (const z of zones) {
-        let type = "";
-        try {
-          type = (await fs.promises.readFile(`${base}/${z}/type`, "utf8")).trim();
-        } catch {
-          continue;
-        }
-        const raw = Number(
-          (await fs.promises.readFile(`${base}/${z}/temp`, "utf8")).trim(),
+    // 2) thermal_zone fallback (prefer a CPU-ish type).
+    for (const root of roots) {
+      try {
+        const base = `${root}/class/thermal`;
+        const zones = (await fs.promises.readdir(base)).filter((z) =>
+          z.startsWith("thermal_zone"),
         );
-        if (!(raw > 0)) continue;
-        const c = +(raw / 1000).toFixed(1);
-        if (/pkg|core|cpu|k10|tctl|tdie/i.test(type)) return c;
-        if (fallback == null) fallback = c;
+        let fallback: number | null = null;
+        for (const z of zones) {
+          let type = "";
+          try {
+            type = (
+              await fs.promises.readFile(`${base}/${z}/type`, "utf8")
+            ).trim();
+          } catch {
+            continue;
+          }
+          const raw = Number(
+            (await fs.promises.readFile(`${base}/${z}/temp`, "utf8")).trim(),
+          );
+          if (!(raw > 0)) continue;
+          const c = +(raw / 1000).toFixed(1);
+          if (/pkg|core|cpu|k10|tctl|tdie/i.test(type)) return c;
+          if (fallback == null) fallback = c;
+        }
+        if (fallback != null) return fallback;
+      } catch {
+        /* try next root */
       }
-      return fallback;
-    } catch {
-      return null;
     }
+    return null;
   }
 
   /** Host CPU/RAM/disk. In a container /proc still reports the host, so os.* is host-wide. */
@@ -180,7 +190,8 @@ export class SystemHealthService {
     }
     // Swap from /proc/meminfo (Linux). os.* has no swap; swap pressure was the root
     // cause of a real incident, so surface it. null on non-Linux or no swap.
-    let swap: { totalGB: number; usedGB: number; usedPct: number } | null = null;
+    let swap: { totalGB: number; usedGB: number; usedPct: number } | null =
+      null;
     try {
       const mi = await fs.promises.readFile("/proc/meminfo", "utf8");
       const kb = (k: string) =>
@@ -331,9 +342,15 @@ export class SystemHealthService {
       training: status,
       // activeModel mirrors CatBoost shape so dashboards treat both uniformly.
       // TFT has no MAE in DB (no ml_models row); quality lives in model_comparisons.
-      activeModel: modelTrained && version
-        ? { version, trainedAt: finishedAt, horizon: health?.horizon ?? null, parkScope: health?.park_scope ?? null }
-        : null,
+      activeModel:
+        modelTrained && version
+          ? {
+              version,
+              trainedAt: finishedAt,
+              horizon: health?.horizon ?? null,
+              parkScope: health?.park_scope ?? null,
+            }
+          : null,
       // health kept for backward-compat with frontend (tft.health.status badge)
       health: health ?? null,
     };
