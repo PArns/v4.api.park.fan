@@ -203,15 +203,21 @@ export class MLTrainingProcessor {
         );
       }
 
-      // Champion/challenger gate: a materially-worse model (e.g. an untuned GPU
-      // port that regressed MAE 5.6 → 26 with R² −1.15) must NOT auto-replace a
-      // good champion. The ml-service writes its own sentinel on training success,
-      // so on rejection we re-load the DB-active champion below to revert that.
-      // Validation MAE is compared apples-to-apples (both from model metadata).
+      // Champion/challenger gate: only a CATASTROPHICALLY-worse model (e.g. an
+      // untuned GPU port that regressed MAE 5.6 → 26 with R² −1.15) must be blocked
+      // from auto-replacing a good champion. A freshly trained model has seen newer
+      // data and should generally win, so we only reject large regressions — normal
+      // day-to-day MAE variance (a few %) is expected and the newer model is kept.
+      // The ml-service writes its own sentinel on training success, so on rejection
+      // we re-load the DB-active champion below to revert that. Validation MAE is
+      // compared apples-to-apples (both from model metadata).
       const champion = await this.mlModelRepository.findOne({
         where: { isActive: true },
       });
-      const REGRESSION_TOLERANCE = 1.05; // allow ≤5% MAE regression vs champion
+      // 1.25 = reject only if >25% worse than champion. Catches disasters (26 vs 5.6
+      // = 4.6× → rejected) while letting the fresher model win on normal variance
+      // (e.g. 6.06 vs 5.62 = 1.08× → accepted).
+      const REGRESSION_TOLERANCE = 1.25;
       const championMae = champion?.mae ?? 0;
       const rejectChallenger =
         champion != null &&
