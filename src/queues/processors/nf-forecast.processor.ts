@@ -310,6 +310,10 @@ export class NfForecastProcessor {
       JOIN parks p ON p.id = a."parkId"
       WHERE wp."predictionType" = 'daily'
         AND wp."predictedTime" >= NOW() - ($1 || ' days')::interval
+        -- Upper bound: the backfill only seeds the matured comparison window; the
+        -- fresh snapshot above owns the future. Without this it captured the full
+        -- 365-day daily horizon × every forecast_date (millions of rows of bloat).
+        AND DATE(wp."predictedTime" AT TIME ZONE p.timezone) <= CURRENT_DATE + 1
         AND DATE(wp."createdAt" AT TIME ZONE p.timezone)
             < DATE(wp."predictedTime" AT TIME ZONE p.timezone)
       ON CONFLICT (attraction_id, target_date, forecast_date) DO NOTHING`,
