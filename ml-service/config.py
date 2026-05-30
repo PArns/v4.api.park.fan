@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     # batches are tiny (a few attractions × N timestamps) so a low count is plenty.
     CATBOOST_INFERENCE_THREAD_COUNT: int = 2
     CATBOOST_TASK_TYPE: str = "CPU"  # "CPU" or "GPU" (if GPU available)
+    # GPU-only hyperparameters. The CPU-tuned regularizers rsm + min_data_in_leaf are
+    # not usable on the GPU backend as-is (rsm: GPU only for pairwise losses;
+    # min_data_in_leaf: GPU only with a non-symmetric grow policy). Dropping both
+    # outright produced an over-fit, over-predicting model (MAE 5.6 → 26, R² −1.15).
+    # So on GPU we re-express the regularization: a non-symmetric grow policy to keep
+    # min_data_in_leaf, plus row bagging (subsample + Bernoulli bootstrap) as the
+    # rsm substitute. All env-overridable for tuning. Only applied when TASK_TYPE=GPU.
+    CATBOOST_GPU_GROW_POLICY: str = "Depthwise"  # enables min_data_in_leaf on GPU
+    CATBOOST_GPU_SUBSAMPLE: float = 0.8  # row bagging (rsm has no GPU equivalent)
+    CATBOOST_GPU_BOOTSTRAP_TYPE: str = "Bernoulli"  # required for `subsample`
+    CATBOOST_GPU_RAM_PART: str = ""  # e.g. "0.5" to leave VRAM for nf-service; "" = CatBoost default
+    # On GPU the model lives in VRAM but data quantization still needs CPU RAM (~8.5g
+    # here), which exceeds the 8g CPU cap and floods the log with "using more CPU RAM
+    # than the limit" warnings. The container has 20g, so raise the CPU-RAM cap on GPU.
+    CATBOOST_GPU_USED_RAM_LIMIT: str = "14gb"
     # Hard cap on RAM the CatBoost trainer may use. Training now runs as an isolated
     # subprocess (see main.py), so an OOM kill only tears down that process. Budget:
     #   container mem_limit 20g

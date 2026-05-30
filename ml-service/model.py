@@ -122,14 +122,14 @@ class WaitTimeModel:
             _eval_metric = _loss_fn
         print(f"   Loss: {_loss_fn} | eval: {_eval_metric} | posterior: {_posterior}")
 
-        self.model = CatBoostRegressor(
+        _is_gpu = str(settings.CATBOOST_TASK_TYPE).upper() == "GPU"
+
+        catboost_params = dict(
             iterations=settings.CATBOOST_ITERATIONS,
             learning_rate=settings.CATBOOST_LEARNING_RATE,
             depth=settings.CATBOOST_DEPTH,
             border_count=getattr(settings, "CATBOOST_BORDER_COUNT", 254),
             l2_leaf_reg=settings.CATBOOST_L2_LEAF_REG,
-            rsm=getattr(settings, "CATBOOST_RSM", 1.0),
-            min_data_in_leaf=getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
             loss_function=_loss_fn,
             eval_metric=_eval_metric,
             random_seed=settings.CATBOOST_RANDOM_SEED,
@@ -144,6 +144,48 @@ class WaitTimeModel:
             verbose=100,
             early_stopping_rounds=100,
         )
+
+        # rsm (column subsampling) and min_data_in_leaf are CPU-only with our setup:
+        # the GPU backend rejects rsm except for pairwise losses ("rsm on GPU is
+        # supported for pairwise modes only") and rejects min_data_in_leaf with the
+        # default SymmetricTree grow policy. Dropping BOTH outright produced an
+        # over-fit, over-predicting GPU model (MAE 5.6 → 26, R² −1.15). So on GPU we
+        # re-express the regularization GPU-compatibly: a non-symmetric grow policy to
+        # keep min_data_in_leaf, plus row bagging (subsample + Bernoulli bootstrap) as
+        # the rsm substitute. On CPU the original rsm + min_data_in_leaf apply.
+        # (CATBOOST_TASK_TYPE=GPU is set in celestrial's .env.)
+        if _is_gpu:
+            _grow = settings.CATBOOST_GPU_GROW_POLICY
+            catboost_params["grow_policy"] = _grow
+            # min_data_in_leaf is only valid on GPU with a NON-symmetric grow policy;
+            # SymmetricTree (the fast GPU default) rejects it.
+            if _grow != "SymmetricTree":
+                catboost_params["min_data_in_leaf"] = getattr(
+                    settings, "CATBOOST_MIN_DATA_IN_LEAF", 1
+                )
+            catboost_params["bootstrap_type"] = settings.CATBOOST_GPU_BOOTSTRAP_TYPE
+            catboost_params["subsample"] = settings.CATBOOST_GPU_SUBSAMPLE
+            _gpu_ram = getattr(settings, "CATBOOST_GPU_RAM_PART", "") or ""
+            if _gpu_ram:
+                catboost_params["gpu_ram_part"] = float(_gpu_ram)
+            # Raise the CPU-RAM cap on GPU (data quantization needs ~8.5g > the 8g
+            # CPU default) to stop the "using more CPU RAM than the limit" log flood.
+            _gpu_ram_limit = getattr(settings, "CATBOOST_GPU_USED_RAM_LIMIT", "") or ""
+            if _gpu_ram_limit:
+                catboost_params["used_ram_limit"] = _gpu_ram_limit
+            print(
+                f"   GPU backend: grow_policy={_grow}, "
+                f"min_data_in_leaf={catboost_params.get('min_data_in_leaf', 'n/a')}, "
+                f"subsample={settings.CATBOOST_GPU_SUBSAMPLE}, "
+                f"bootstrap={settings.CATBOOST_GPU_BOOTSTRAP_TYPE} (rsm has no GPU equivalent)"
+            )
+        else:
+            catboost_params["rsm"] = getattr(settings, "CATBOOST_RSM", 1.0)
+            catboost_params["min_data_in_leaf"] = getattr(
+                settings, "CATBOOST_MIN_DATA_IN_LEAF", 1
+            )
+
+        self.model = CatBoostRegressor(**catboost_params)
 
         # Train
         self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
