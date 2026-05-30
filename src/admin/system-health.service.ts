@@ -95,48 +95,82 @@ export class SystemHealthService {
     }
   }
 
-  /** CPU package temperature (°C). Reads Linux hwmon (coretemp/k10temp/zenpower),
-   * thermal_zone as fallback. Containers don't expose /sys/class/hwmon by default,
-   * so we also look under /host/sys (bind-mounted read-only in docker-compose).
-   * null on non-Linux or when no sensor is reachable. */
-  private async cpuTemp(): Promise<number | null> {
-    const roots = ["/sys", "/host/sys"];
-    // 1) hwmon — the real package/Tctl temp. temp*_input is in millidegrees C.
-    const preferred = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
-    for (const root of roots) {
+  /** All hwmon temperature sensors (chip + label + °C). temp*_input is millidegrees.
+   * Containers don't expose /sys/class/hwmon by default, so we also look under
+   * /host/sys (bind-mounted read-only in docker-compose). Returns [] if none. */
+  private async readSensors(): Promise<
+    Array<{ chip: string; label: string; tempC: number }>
+  > {
+    for (const root of ["/sys", "/host/sys"]) {
       try {
         const base = `${root}/class/hwmon`;
         const dirs = await fs.promises.readdir(base);
-        let best: { rank: number; temp: number } | null = null;
+        const out: Array<{ chip: string; label: string; tempC: number }> = [];
         for (const d of dirs) {
           const dir = `${base}/${d}`;
-          let name = "";
+          let chip = "";
           try {
-            name = (await fs.promises.readFile(`${dir}/name`, "utf8")).trim();
+            chip = (await fs.promises.readFile(`${dir}/name`, "utf8")).trim();
           } catch {
             continue;
           }
-          const rank = preferred.indexOf(name);
-          if (rank === -1) continue;
-          let maxC = 0;
-          for (const f of await fs.promises.readdir(dir)) {
-            if (!/^temp\d+_input$/.test(f)) continue;
-            const raw = Number(
-              (await fs.promises.readFile(`${dir}/${f}`, "utf8")).trim(),
-            );
-            if (raw > 0) maxC = Math.max(maxC, raw / 1000);
+          let files: string[] = [];
+          try {
+            files = await fs.promises.readdir(dir);
+          } catch {
+            continue;
           }
-          if (maxC > 0 && (!best || rank < best.rank)) {
-            best = { rank, temp: maxC };
+          for (const f of files) {
+            const m = /^temp(\d+)_input$/.exec(f);
+            if (!m) continue;
+            let raw = 0;
+            try {
+              raw = Number(
+                (await fs.promises.readFile(`${dir}/${f}`, "utf8")).trim(),
+              );
+            } catch {
+              continue;
+            }
+            if (!(raw > 0)) continue;
+            let label = "";
+            try {
+              label = (
+                await fs.promises.readFile(`${dir}/temp${m[1]}_label`, "utf8")
+              ).trim();
+            } catch {
+              label = "";
+            }
+            out.push({
+              chip,
+              label: label || `temp${m[1]}`,
+              tempC: +(raw / 1000).toFixed(1),
+            });
           }
         }
-        if (best) return +best.temp.toFixed(1);
+        if (out.length) return out;
       } catch {
         /* try next root */
       }
     }
-    // 2) thermal_zone fallback (prefer a CPU-ish type).
-    for (const root of roots) {
+    return [];
+  }
+
+  /** Headline CPU temp: the coretemp/k10temp "Package"/Tctl reading (else the max
+   * of the CPU chip's cores). null if no CPU sensor is present. */
+  private cpuTempFromSensors(
+    sensors: Array<{ chip: string; label: string; tempC: number }>,
+  ): number | null {
+    const cpu = sensors.filter((s) =>
+      /coretemp|k10temp|zenpower|cpu_thermal/i.test(s.chip),
+    );
+    if (!cpu.length) return null;
+    const pkg = cpu.find((s) => /package|tctl|tdie/i.test(s.label));
+    return pkg ? pkg.tempC : Math.max(...cpu.map((s) => s.tempC));
+  }
+
+  /** thermal_zone fallback for hosts without hwmon coretemp (prefer a CPU-ish type). */
+  private async thermalZone(): Promise<number | null> {
+    for (const root of ["/sys", "/host/sys"]) {
       try {
         const base = `${root}/class/thermal`;
         const zones = (await fs.promises.readdir(base)).filter((z) =>
@@ -171,7 +205,9 @@ export class SystemHealthService {
   /** Host CPU/RAM/disk. In a container /proc still reports the host, so os.* is host-wide. */
   private async host() {
     const cores = os.cpus()?.length ?? 0;
-    const cpuTempC = await this.cpuTemp();
+    const sensors = await this.readSensors();
+    const cpuTempC =
+      this.cpuTempFromSensors(sensors) ?? (await this.thermalZone());
     const [l1, l5, l15] = os.loadavg();
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
@@ -227,6 +263,7 @@ export class SystemHealthService {
       },
       swap,
       disk,
+      sensors,
       uptimeHours: +(os.uptime() / 3600).toFixed(1),
     };
   }
