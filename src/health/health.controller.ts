@@ -290,19 +290,22 @@ export class HealthController {
     try {
       const [healthRes, statusRes] = await Promise.all([
         axios.get(`${nfUrl}/health`, { timeout: 3000 }).then((r) => r.data),
-        axios.get(`${nfUrl}/train/status`, { timeout: 3000 }).then((r) => r.data),
+        axios
+          .get(`${nfUrl}/train/status`, { timeout: 3000 })
+          .then((r) => r.data),
       ]);
       const modelTrained = healthRes?.model_trained === true;
       const version = statusRes?.version ?? null;
       const finishedAt = statusRes?.finished_at ?? null;
       return {
         status: modelTrained ? "ready" : "not_ready",
-        ...(modelTrained && version && {
-          active_model: {
-            version,
-            trained_at: finishedAt ?? new Date(0).toISOString(),
-          },
-        }),
+        ...(modelTrained &&
+          version && {
+            active_model: {
+              version,
+              trained_at: finishedAt ?? new Date(0).toISOString(),
+            },
+          }),
         service_url: nfUrl,
       };
     } catch {

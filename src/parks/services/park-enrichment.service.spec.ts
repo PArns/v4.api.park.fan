@@ -33,7 +33,9 @@ describe("ParkEnrichmentService", () => {
   ): Promise<Map<string, boolean>> =>
     (
       service as unknown as {
-        getBatchSchoolHolidayStatus: (p: Park[]) => Promise<Map<string, boolean>>;
+        getBatchSchoolHolidayStatus: (
+          p: Park[],
+        ) => Promise<Map<string, boolean>>;
       }
     ).getBatchSchoolHolidayStatus(parks as unknown as Park[]);
 
@@ -81,9 +83,9 @@ describe("ParkEnrichmentService", () => {
     const result = await callDedup(parks);
 
     // 4 parks, but only 3 distinct combinations -> 3 lookups instead of 4.
-    expect(
-      mockHolidaysService.isEffectiveSchoolHoliday,
-    ).toHaveBeenCalledTimes(3);
+    expect(mockHolidaysService.isEffectiveSchoolHoliday).toHaveBeenCalledTimes(
+      3,
+    );
 
     expect(result.get("1")).toBe(true);
     expect(result.get("2")).toBe(true); // shares DE/BY result with park 1
@@ -107,9 +109,9 @@ describe("ParkEnrichmentService", () => {
 
     const result = await callDedup(parks);
 
-    expect(
-      mockHolidaysService.isEffectiveSchoolHoliday,
-    ).toHaveBeenCalledTimes(1);
+    expect(mockHolidaysService.isEffectiveSchoolHoliday).toHaveBeenCalledTimes(
+      1,
+    );
     expect(result.get("1")).toBe(true);
     expect(result.get("2")).toBe(false);
   });

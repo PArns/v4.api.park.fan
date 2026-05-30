@@ -41,6 +41,7 @@
 - [Prediction Quality Issues](docs/ml/prediction-quality-issues.md) - Known bugs and fixes (5-min prediction bug, weekend underprediction, feature importance analysis).
 - [Training Roadmap](docs/ml/training-roadmap.md) - Next training steps, UNKNOWN park data strategy, known issues and fix plans.
 - [Busy-day Prediction Challenger](docs/ml/busy-day-prediction-challenger.md) - Living experiment: fixing busy/holiday future under-prediction (feature-forcing, sample-weighting, quantile/uncertainty levers). Champion/challenger log.
+- [TFT vs CatBoost — clean comparison & TFT optimization](docs/ml/tft-vs-catboost-clean-comparison.md) - **2026-05-30**: clean daily scoreboard (symmetric durable snapshot + matched population — the raw board overstated TFT), intraday 15-min nowcast backtest (TFT beats naive baselines but no busy-tail edge; occupancy hist_exog doesn't help; quantile-forcing does at a quiet cost), signal-not-force + feed-not-remove. Stage-2 settings/algo bake-off deferred.
 - [TFT vs CatBoost — daily forecast split](docs/ml/neuralforecast-tft-evaluation.md) - **PRODUCTION SPLIT (2026-05-24)**: TFT (nf-service) serves the near-term daily calendar (≤30d, headliners; ~2× better on busy peaks); CatBoost serves far-daily (31–365) + intraday 15-min slots. Loss=studentt (quantile + weather/holiday-dist/dow covariates measured & rejected). **Re-evaluate every few weeks** (next ~2026-06-14) as history grows. See the doc's "FINAL DECISION" section.
 
 ### 💾 Database

@@ -399,11 +399,18 @@ export class SystemHealthService {
       `SELECT to_regclass('public.model_comparisons') AS t`,
     );
     if (!exists?.[0]?.t) return { rows: [], note: "no scoreboard yet" };
+    // segment column is added by TypeORM synchronize; COALESCE guards the brief window
+    // before it exists / legacy rows (default 'all').
     const rows = await this.dataSource.query(
-      `SELECT "targetDate", model, n, round(mae::numeric,1) AS mae,
+      `SELECT "targetDate", model,
+              COALESCE(segment, 'all') AS segment, n,
+              round(mae::numeric,1) AS mae,
               round(bias::numeric,1) AS bias, "avgLeadDays"
          FROM model_comparisons
-         ORDER BY "targetDate" DESC, model LIMIT 30`,
+         ORDER BY "targetDate" DESC,
+                  CASE COALESCE(segment,'all') WHEN 'all' THEN 0 WHEN 'busy' THEN 1 ELSE 2 END,
+                  model
+         LIMIT 60`,
     );
     return { rows, count: rows.length };
   }
