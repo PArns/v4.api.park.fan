@@ -92,9 +92,76 @@ export class SystemHealthService {
     }
   }
 
+  /** CPU package temperature (°C) from Linux hwmon, thermal_zone fallback.
+   * null on non-Linux or when no sensor is exposed (e.g. in some containers). */
+  private async cpuTemp(): Promise<number | null> {
+    // Prefer hwmon: coretemp (Intel) / k10temp / zenpower (AMD) expose the real
+    // package/Tctl temp. temp*_input is in millidegrees C.
+    try {
+      const base = "/sys/class/hwmon";
+      const dirs = await fs.promises.readdir(base);
+      const preferred = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
+      let best: { rank: number; temp: number } | null = null;
+      for (const d of dirs) {
+        const dir = `${base}/${d}`;
+        let name = "";
+        try {
+          name = (await fs.promises.readFile(`${dir}/name`, "utf8")).trim();
+        } catch {
+          continue;
+        }
+        const rank = preferred.indexOf(name);
+        if (rank === -1) continue;
+        const files = await fs.promises.readdir(dir);
+        let maxC = 0;
+        for (const f of files) {
+          const m = /^temp(\d+)_input$/.exec(f);
+          if (!m) continue;
+          const raw = Number(
+            (await fs.promises.readFile(`${dir}/${f}`, "utf8")).trim(),
+          );
+          if (raw > 0) maxC = Math.max(maxC, raw / 1000);
+        }
+        if (maxC > 0 && (!best || rank < best.rank)) {
+          best = { rank, temp: maxC };
+        }
+      }
+      if (best) return +best.temp.toFixed(1);
+    } catch {
+      /* hwmon unavailable — fall through to thermal_zone */
+    }
+    // Fallback: thermal_zone with a CPU-ish type.
+    try {
+      const base = "/sys/class/thermal";
+      const zones = (await fs.promises.readdir(base)).filter((z) =>
+        z.startsWith("thermal_zone"),
+      );
+      let fallback: number | null = null;
+      for (const z of zones) {
+        let type = "";
+        try {
+          type = (await fs.promises.readFile(`${base}/${z}/type`, "utf8")).trim();
+        } catch {
+          continue;
+        }
+        const raw = Number(
+          (await fs.promises.readFile(`${base}/${z}/temp`, "utf8")).trim(),
+        );
+        if (!(raw > 0)) continue;
+        const c = +(raw / 1000).toFixed(1);
+        if (/pkg|core|cpu|k10|tctl|tdie/i.test(type)) return c;
+        if (fallback == null) fallback = c;
+      }
+      return fallback;
+    } catch {
+      return null;
+    }
+  }
+
   /** Host CPU/RAM/disk. In a container /proc still reports the host, so os.* is host-wide. */
   private async host() {
     const cores = os.cpus()?.length ?? 0;
+    const cpuTempC = await this.cpuTemp();
     const [l1, l5, l15] = os.loadavg();
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
@@ -140,6 +207,7 @@ export class SystemHealthService {
           "15m": +l15.toFixed(2),
         },
         loadPct: cores ? +((l1 / cores) * 100).toFixed(0) : null,
+        temperatureC: cpuTempC,
       },
       memory: {
         totalGB: +(totalMem / GB).toFixed(1),
