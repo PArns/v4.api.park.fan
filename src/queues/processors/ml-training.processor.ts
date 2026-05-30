@@ -203,11 +203,35 @@ export class MLTrainingProcessor {
         );
       }
 
-      // Deactivate old models
-      await this.mlModelRepository.update(
-        { isActive: true },
-        { isActive: false },
-      );
+      // Champion/challenger gate: a materially-worse model (e.g. an untuned GPU
+      // port that regressed MAE 5.6 → 26 with R² −1.15) must NOT auto-replace a
+      // good champion. The ml-service writes its own sentinel on training success,
+      // so on rejection we re-load the DB-active champion below to revert that.
+      // Validation MAE is compared apples-to-apples (both from model metadata).
+      const champion = await this.mlModelRepository.findOne({
+        where: { isActive: true },
+      });
+      const REGRESSION_TOLERANCE = 1.05; // allow ≤5% MAE regression vs champion
+      const championMae = champion?.mae ?? 0;
+      const rejectChallenger =
+        champion != null &&
+        championMae > 0 &&
+        metrics.mae > 0 &&
+        metrics.mae > championMae * REGRESSION_TOLERANCE;
+
+      if (rejectChallenger) {
+        this.logger.warn(
+          `⛔ Challenger ${version} (MAE ${metrics.mae.toFixed(2)}) is worse than ` +
+            `champion ${champion!.version} (MAE ${championMae.toFixed(2)}) × ${REGRESSION_TOLERANCE} — ` +
+            `keeping champion active, registering challenger as inactive.`,
+        );
+      } else {
+        // Accepted: deactivate the previous champion(s)
+        await this.mlModelRepository.update(
+          { isActive: true },
+          { isActive: false },
+        );
+      }
 
       // Fetch actual training data time range from database
       const dataRange = await this.queueDataRepository
@@ -243,11 +267,28 @@ export class MLTrainingProcessor {
         featuresUsed: (modelInfo.features as string[]) || [],
         hyperparameters:
           (modelInfo.hyperparameters as Record<string, unknown>) ?? {},
-        isActive: true,
-        notes: `Trained on ${new Date().toISOString().split("T")[0]}`,
+        isActive: !rejectChallenger,
+        notes: rejectChallenger
+          ? `Challenger rejected (MAE ${metrics.mae.toFixed(2)} > champion ${championMae.toFixed(2)}) ${new Date().toISOString().split("T")[0]}`
+          : `Trained on ${new Date().toISOString().split("T")[0]}`,
       });
 
       await this.mlModelRepository.save(model);
+
+      // If rejected, the ml-service already activated the challenger via its own
+      // sentinel during training — revert it to the still-active DB champion.
+      if (rejectChallenger) {
+        try {
+          await axios.post(`${mlServiceUrl}/model/reload`);
+          this.logger.warn(
+            `   Reverted ml-service to champion ${champion!.version}`,
+          );
+        } catch (e) {
+          this.logger.error(
+            `   Failed to revert ml-service to champion: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
 
       const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
       this.logger.log(`✅ Training completed in ${duration} minutes`);
