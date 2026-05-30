@@ -186,8 +186,47 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     park_ids = settings.park_ids or db.fetch_park_ids()
     size = max(1, settings.NF_PARK_CHUNK_SIZE)
     chunks = [park_ids[i:i + size] for i in range(0, len(park_ids), size)]
+
+    # Rich startup banner (mirrors the CatBoost ml-service training logs so the TFT
+    # run is just as observable in the worker output / admin dashboard).
+    logger.info("=" * 60)
+    logger.info("🚀 Training TFT Daily-Peak Forecaster")
+    logger.info("   Version: %s", version)
+    logger.info("=" * 60)
+
+    # Device / GPU
+    try:
+        import torch
+        if torch.cuda.is_available():
+            _dev = torch.cuda.get_device_name(0)
+            _vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+            logger.info("🖥️  Device: GPU — %s (%.1f GB VRAM)", _dev, _vram)
+        else:
+            logger.info("🖥️  Device: CPU (no CUDA)")
+    except Exception as e:  # noqa: BLE001
+        logger.info("🖥️  Device: unknown (torch probe failed: %s)", e)
+
+    # Memory
+    try:
+        import psutil
+        _mem0 = psutil.Process().memory_info().rss / 1e9
+        logger.info("💾 Initial Memory: %.2f GB", _mem0)
+    except Exception:
+        _mem0 = None
+
+    # Hyperparameters (the levers tuned for GPU — see tft-gpu-tuning-plan)
+    logger.info("🤖 Model config:")
+    logger.info("   Loss:               %s", settings.NF_LOSS)
+    logger.info("   Horizon:            %d days", settings.NF_HORIZON)
+    logger.info("   Input size:         %d days", settings.NF_INPUT_SIZE)
+    logger.info("   Hidden size:        %d", settings.NF_HIDDEN_SIZE)
+    logger.info("   Max steps:          %d", settings.NF_MAX_STEPS)
+    logger.info("   Batch size:         %d", settings.NF_BATCH_SIZE)
+    logger.info("   Windows batch size: %d", settings.NF_WINDOWS_BATCH_SIZE)
+    logger.info("   Learning rate:      %s", settings.NF_LEARNING_RATE)
+    logger.info("   Static covariates:  %s", "on" if settings.NF_USE_STATIC else "off")
     logger.info(
-        "Iterative training: %d parks in %d chunk(s) of %d (workers=%d)",
+        "📊 Panel: %d parks → %d chunk(s) of %d (dataloader workers=%d)",
         len(park_ids), len(chunks), size, settings.NF_NUM_WORKERS,
     )
 
@@ -200,6 +239,18 @@ def train_and_forecast(version: str) -> pd.DataFrame:
         if panel.empty:
             logger.info("chunk %d/%d: no data, skip", ci, len(chunks))
             continue
+        # Per-chunk panel stats (like CatBoost's per-step row/feature counts).
+        try:
+            _ns = panel["unique_id"].nunique()
+            _rows = len(panel)
+            _spd = panel.groupby("unique_id").size()
+            logger.info(
+                "🔧 chunk %d/%d: %d series, %d rows (series len min/median/max: %d/%d/%d)",
+                ci, len(chunks), _ns, _rows,
+                int(_spd.min()), int(_spd.median()), int(_spd.max()),
+            )
+        except Exception:
+            pass
         # One bad chunk (e.g. all series too short → NeuralForecast "No windows
         # available for training") must not abort the whole run — skip it, keep going.
         try:
@@ -237,5 +288,52 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     # unique_id can carry Python UUID objects from the DB → pyarrow/to_parquet can't
     # serialize them. Force str (also what persist_forecast expects).
     out["unique_id"] = out["unique_id"].astype(str)
-    logger.info("All chunks done: %d forecast rows in %.1fs", len(out), time.time() - t0)
+
+    # Rich completion summary (mirrors CatBoost's final metrics block). TFT has no
+    # inline val MAE — quality is measured by the headliner backtest — so we report
+    # the forecast distribution + run stats, which is what's observable here.
+    _elapsed = time.time() - t0
+    logger.info("=" * 60)
+    logger.info("✅ TFT Training Complete!")
+    logger.info("   Version:          %s", version)
+    logger.info("   Chunks:           %d ok, %d skipped", len(parts), skipped)
+    logger.info("   Forecast rows:    %d (%d series × %d-day horizon)",
+                len(out), out["unique_id"].nunique(), settings.NF_HORIZON)
+    logger.info("   Duration:         %.1fs (%.1f min)", _elapsed, _elapsed / 60)
+    try:
+        _pcol = _point_forecast_column(list(out.columns))
+        if _pcol:
+            s = out[_pcol]
+            logger.info("📊 Forecast wait-time distribution (%s):", _pcol)
+            logger.info("   min/median/max:   %.1f / %.1f / %.1f min",
+                        float(s.min()), float(s.median()), float(s.max()))
+            logger.info("   mean:             %.1f min", float(s.mean()))
+    except Exception as e:  # noqa: BLE001
+        logger.info("   (forecast distribution unavailable: %s)", e)
+    if _mem0 is not None:
+        try:
+            import psutil
+            _mem1 = psutil.Process().memory_info().rss / 1e9
+            logger.info("💾 Final Memory:     %.2f GB (peak delta +%.2f GB)",
+                        _mem1, _mem1 - _mem0)
+        except Exception:
+            pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info("🖥️  Peak VRAM:       %.2f GB",
+                        torch.cuda.max_memory_allocated() / 1e9)
+    except Exception:
+        pass
+    logger.info("=" * 60)
     return out
+
+
+def _point_forecast_column(cols: list[str]) -> str | None:
+    """The TFT point/median forecast column. NeuralForecast names it after the model
+    (e.g. 'TFT', 'TFT-median'); fall back to the first TFT* column."""
+    for c in ("TFT", "TFT-median", "TFT-q-50", "TFT-loc"):
+        if c in cols:
+            return c
+    tft_cols = [c for c in cols if c.startswith("TFT")]
+    return tft_cols[0] if tft_cols else None

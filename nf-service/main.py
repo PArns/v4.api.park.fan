@@ -92,6 +92,121 @@ def health():
     }
 
 
+@app.get("/gpu")
+def gpu_stats():
+    """GPU telemetry via NVML (nvidia-smi CLI isn't in the image, but the NVML
+    library is, exposed through pynvml). Used by the admin system-health dashboard.
+    Returns {available: False, ...} gracefully on CPU-only hosts."""
+    try:
+        import pynvml
+    except Exception as e:  # pragma: no cover
+        return {"available": False, "reason": f"pynvml not installed: {e}"}
+    try:
+        pynvml.nvmlInit()
+    except Exception as e:
+        return {"available": False, "reason": f"no GPU / NVML init failed: {e}"}
+    try:
+        count = pynvml.nvmlDeviceGetCount()
+        gpus = []
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            try:
+                temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+            except Exception:
+                temp = None
+            try:
+                power = round(pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0, 1)
+            except Exception:
+                power = None
+            try:
+                power_limit = round(
+                    pynvml.nvmlDeviceGetEnforcedPowerLimit(h) / 1000.0, 1
+                )
+            except Exception:
+                power_limit = None
+            mb = 1024 * 1024
+            gpus.append({
+                "index": i,
+                "name": name,
+                "temperatureC": temp,
+                "utilizationGpuPct": util.gpu,
+                "utilizationMemPct": util.memory,
+                "memoryUsedMB": mem.used // mb,
+                "memoryTotalMB": mem.total // mb,
+                "memoryUsedPct": round(100.0 * mem.used / mem.total, 1),
+                "powerW": power,
+                "powerLimitW": power_limit,
+            })
+        return {"available": True, "count": count, "gpus": gpus}
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
+@app.get("/gpu")
+def gpu_stats():
+    """GPU telemetry via the `nvidia-smi` CLI (present in the CUDA base image; the
+    pynvml lib is not). Used by the admin system-health dashboard. Returns
+    {available: False, ...} gracefully on CPU-only hosts."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return {"available": False, "reason": "nvidia-smi not found (CPU-only host)"}
+    fields = [
+        "index", "name", "temperature.gpu", "utilization.gpu",
+        "utilization.memory", "memory.used", "memory.total",
+        "power.draw", "power.limit",
+    ]
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", f"--query-gpu={','.join(fields)}",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"nvidia-smi failed: {e}"}
+
+    def _num(v):
+        v = v.strip()
+        if v in ("", "[N/A]", "[Not Supported]"):
+            return None
+        try:
+            return float(v) if "." in v else int(v)
+        except ValueError:
+            return None
+
+    gpus = []
+    for line in out.strip().splitlines():
+        p = [c.strip() for c in line.split(",")]
+        if len(p) < len(fields):
+            continue
+        used, total = _num(p[5]), _num(p[6])
+        gpus.append({
+            "index": _num(p[0]),
+            "name": p[1],
+            "temperatureC": _num(p[2]),
+            "utilizationGpuPct": _num(p[3]),
+            "utilizationMemPct": _num(p[4]),
+            "memoryUsedMB": used,
+            "memoryTotalMB": total,
+            "memoryUsedPct": round(100.0 * used / total, 1)
+            if used is not None and total else None,
+            "powerW": _num(p[7]),
+            "powerLimitW": _num(p[8]),
+        })
+    return {"available": bool(gpus), "count": len(gpus), "gpus": gpus}
+
+
 @app.get("/train/status")
 def train_status():
     st = _read_status()

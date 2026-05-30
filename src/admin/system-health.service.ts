@@ -29,9 +29,10 @@ export class SystemHealthService {
   ) {}
 
   async getHealth(): Promise<Record<string, unknown>> {
-    const [host, postgres, redis, catboost, tft, comparison] =
+    const [host, gpu, postgres, redis, catboost, tft, comparison] =
       await Promise.all([
         this.safe("host", () => this.host()),
+        this.safe("gpu", () => this.gpu()),
         this.safe("postgres", () => this.postgres()),
         this.safe("redis", () => this.redisStats()),
         this.safe("catboost", () => this.catboost()),
@@ -41,10 +42,20 @@ export class SystemHealthService {
     return {
       timestamp: new Date().toISOString(),
       host,
+      gpu,
       postgres,
       redis,
       ml: { catboost, tft, comparison },
     };
+  }
+
+  /** GPU telemetry (temp/util/VRAM/power) from nf-service's /gpu (nvidia-smi).
+   * On a CPU-only host nf-service returns {available:false}; pass it through. */
+  private async gpu() {
+    return axios
+      .get(`${NF_URL}/gpu`, { timeout: 4000 })
+      .then((r) => r.data)
+      .catch((e) => ({ available: false, error: String(e?.message ?? e) }));
   }
 
   private async safe<T>(name: string, fn: () => Promise<T>) {
