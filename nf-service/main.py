@@ -25,6 +25,10 @@ faulthandler.enable()
 # the filters on Linux. These are deprecation/internal notices, not actionable here.
 warnings.filterwarnings("ignore", message=r".*TypedStorage is deprecated.*")
 warnings.filterwarnings("ignore", message=r".*removed from hparams because it cannot be pickled.*")
+# pytorch_lightning internal: emits a DeprecationWarning about LeafSpec/TreeSpec on
+# every dataloader setup. It's a lib-internal notice (not our code) — suppress until
+# the pinned lightning version stops using the deprecated API.
+warnings.filterwarnings("ignore", message=r".*isinstance\(treespec, LeafSpec\) is deprecated.*")
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
