@@ -29,12 +29,13 @@ export class SystemHealthService {
   ) {}
 
   async getHealth(): Promise<Record<string, unknown>> {
-    const [host, gpu, postgres, redis, catboost, tft, comparison] =
+    const [host, gpu, postgres, redis, freshness, catboost, tft, comparison] =
       await Promise.all([
         this.safe("host", () => this.host()),
         this.safe("gpu", () => this.gpu()),
         this.safe("postgres", () => this.postgres()),
         this.safe("redis", () => this.redisStats()),
+        this.safe("freshness", () => this.freshness()),
         this.safe("catboost", () => this.catboost()),
         this.safe("tft", () => this.tft()),
         this.safe("comparison", () => this.comparison()),
@@ -45,7 +46,31 @@ export class SystemHealthService {
       gpu,
       postgres,
       redis,
+      freshness,
       ml: { catboost, tft, comparison },
+    };
+  }
+
+  /** Data-ingestion freshness: how long since the newest wait-time / weather row.
+   * A stalled cron (once ran 83 days dead) is otherwise invisible. */
+  private async freshness() {
+    const rows = await this.dataSource.query(`
+      SELECT
+        (SELECT MAX(timestamp) FROM queue_data) AS latest_queue,
+        (SELECT MAX(date) FROM weather_data) AS latest_weather,
+        (SELECT COUNT(*) FROM queue_data
+           WHERE timestamp > NOW() - INTERVAL '1 hour') AS queue_rows_last_hour
+    `);
+    const r = rows?.[0] ?? {};
+    const ageMin = (d: unknown): number | null =>
+      d ? Math.round((Date.now() - new Date(d as string).getTime()) / 60000) : null;
+    const weatherMin = ageMin(r.latest_weather);
+    return {
+      latestQueueTime: r.latest_queue ?? null,
+      queueStaleMinutes: ageMin(r.latest_queue),
+      queueRowsLastHour: Number(r.queue_rows_last_hour ?? 0),
+      latestWeatherDate: r.latest_weather ?? null,
+      weatherStaleHours: weatherMin != null ? +(weatherMin / 60).toFixed(1) : null,
     };
   }
 
@@ -86,6 +111,25 @@ export class SystemHealthService {
     } catch {
       disk = { error: "statfs unavailable" };
     }
+    // Swap from /proc/meminfo (Linux). os.* has no swap; swap pressure was the root
+    // cause of a real incident, so surface it. null on non-Linux or no swap.
+    let swap: { totalGB: number; usedGB: number; usedPct: number } | null = null;
+    try {
+      const mi = await fs.promises.readFile("/proc/meminfo", "utf8");
+      const kb = (k: string) =>
+        Number(new RegExp(`^${k}:\\s+(\\d+)`, "m").exec(mi)?.[1] ?? 0);
+      const totalKb = kb("SwapTotal");
+      if (totalKb > 0) {
+        const usedKb = totalKb - kb("SwapFree");
+        swap = {
+          totalGB: +(totalKb / 1024 / 1024).toFixed(1),
+          usedGB: +(usedKb / 1024 / 1024).toFixed(1),
+          usedPct: +((usedKb / totalKb) * 100).toFixed(1),
+        };
+      }
+    } catch {
+      swap = null;
+    }
     return {
       cpu: {
         cores,
@@ -102,6 +146,7 @@ export class SystemHealthService {
         usedGB: +((totalMem - freeMem) / GB).toFixed(1),
         usedPct: +(((totalMem - freeMem) / totalMem) * 100).toFixed(1),
       },
+      swap,
       disk,
       uptimeHours: +(os.uptime() / 3600).toFixed(1),
     };
