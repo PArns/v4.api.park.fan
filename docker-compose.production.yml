@@ -185,6 +185,9 @@ services:
     volumes:
       - /data/parkfan/geoip:/app/geoip
       - /data/parkfan/logs:/app/logs
+      # Host sysfs (read-only) so system-health can read CPU temp from hwmon/coretemp;
+      # containers don't expose /sys/class/hwmon by default. cpuTemp() reads /host/sys.
+      - /sys:/host/sys:ro
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
