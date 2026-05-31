@@ -11,6 +11,7 @@ import { ParksService } from "../../parks/parks.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { EntityMatcherService } from "../../external-apis/data-sources/entity-matcher.service";
 import { EntityMetadata } from "../../external-apis/data-sources/interfaces/data-source.interface";
+import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 
 /**
  * Entity Mappings Processor
@@ -325,7 +326,7 @@ export class EntityMappingsProcessor {
 
       if (entityType === "attraction") {
         if (source2Name === "queue-times") {
-          const qtNumericId = this.extractQueueTimesNumericId(
+          const qtNumericId = extractQueueTimesNumericId(
             match.entity2.externalId,
           );
           if (qtNumericId && !entity.queueTimesEntityId) {
@@ -391,31 +392,5 @@ export class EntityMappingsProcessor {
       case "restaurant":
         return this.restaurantsService.getRepository();
     }
-  }
-
-  /**
-   * Extract numeric Queue-Times ID from external ID
-   * Examples:
-   * - "qt-ride-8" -> "8"
-   * - "qt-park-56" -> "56"
-   * - "8" -> "8" (already numeric)
-   */
-  private extractQueueTimesNumericId(externalId: string): string | null {
-    if (!externalId) return null;
-
-    // Handle prefixed IDs like "qt-ride-8" or "qt-park-56"
-    if (externalId.startsWith("qt-ride-")) {
-      return externalId.replace("qt-ride-", "");
-    }
-    if (externalId.startsWith("qt-park-")) {
-      return externalId.replace("qt-park-", "");
-    }
-
-    // If already numeric, return as-is
-    if (/^\d+$/.test(externalId)) {
-      return externalId;
-    }
-
-    return null;
   }
 }

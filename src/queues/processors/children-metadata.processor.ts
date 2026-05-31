@@ -11,6 +11,7 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { ThemeParksMapper } from "../../external-apis/themeparks/themeparks.mapper";
 import { EntityResponse } from "../../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
+import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
 import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks.exclusions";
@@ -410,7 +411,7 @@ export class ChildrenMetadataProcessor {
    */
   private async syncQtAttraction(entity: any, parkId: string): Promise<void> {
     // Extract numeric Queue-Times ID (e.g., "8" from "qt-ride-8")
-    const qtNumericId = this.extractQueueTimesNumericId(entity.externalId);
+    const qtNumericId = extractQueueTimesNumericId(entity.externalId);
 
     // Check if attraction exists (by externalId)
     // Note: QT externalId is different from Wiki
@@ -465,32 +466,6 @@ export class ChildrenMetadataProcessor {
         newAttraction.externalId,
       );
     }
-  }
-
-  /**
-   * Extract numeric Queue-Times ID from external ID
-   * Examples:
-   * - "qt-ride-8" -> "8"
-   * - "qt-park-56" -> "56"
-   * - "8" -> "8" (already numeric)
-   */
-  private extractQueueTimesNumericId(externalId: string): string | null {
-    if (!externalId) return null;
-
-    // Handle prefixed IDs like "qt-ride-8" or "qt-park-56"
-    if (externalId.startsWith("qt-ride-")) {
-      return externalId.replace("qt-ride-", "");
-    }
-    if (externalId.startsWith("qt-park-")) {
-      return externalId.replace("qt-park-", "");
-    }
-
-    // If already numeric, return as-is
-    if (/^\d+$/.test(externalId)) {
-      return externalId;
-    }
-
-    return null;
   }
 
   /**

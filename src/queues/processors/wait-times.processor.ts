@@ -30,6 +30,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
+import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 
 @Processor("wait-times")
 export class WaitTimesProcessor {
@@ -533,7 +534,7 @@ export class WaitTimesProcessor {
           updatedCount++;
         }
 
-        const qtNumericId = this.extractQueueTimesNumericId(
+        const qtNumericId = extractQueueTimesNumericId(
           qtAttractionId.toString(),
         );
         if (qtNumericId && current.queueTimesEntityId !== qtNumericId) {
@@ -560,15 +561,6 @@ export class WaitTimesProcessor {
     }
 
     return updatedCount;
-  }
-
-  private extractQueueTimesNumericId(externalId: string): string | null {
-    if (!externalId) return null;
-    if (externalId.startsWith("qt-ride-"))
-      return externalId.replace("qt-ride-", "");
-    if (externalId.startsWith("qt-park-"))
-      return externalId.replace("qt-park-", "");
-    return /^\d+$/.test(externalId) ? externalId : null;
   }
 
   private adaptEntityLiveData(entityData: any): EntityLiveResponse {

@@ -7,6 +7,7 @@ import {
 } from "./interfaces/data-source.interface";
 import { MANUALLY_MATCHED_PARKS } from "./config/manual-park-matches";
 import { normalizeForMatching } from "../../common/utils/slug.util";
+import { calculateHaversineDistance } from "../../common/utils/distance.util";
 
 /**
  * Entity Matcher Service
@@ -248,17 +249,19 @@ export class EntityMatcherService {
       (Math.abs(qt.latitude) > 0.1 || Math.abs(qt.longitude) > 0.1);
 
     if (hasValidWikiGeo && hasValidQtGeo) {
-      const distance = this.haversineDistance(
+      const distance = calculateHaversineDistance(
         { latitude: wiki.latitude!, longitude: wiki.longitude! },
         { latitude: qt.latitude!, longitude: qt.longitude! },
+        "km",
       );
 
       // Smart Sign Correction: Check if flipping longitude fixes the match
       // This handles cases where one source has East positive vs West negative error
       if (distance > 1000) {
-        const flippedDist = this.haversineDistance(
+        const flippedDist = calculateHaversineDistance(
           { latitude: wiki.latitude!, longitude: wiki.longitude! },
           { latitude: qt.latitude!, longitude: -qt.longitude! }, // Try flipping sign
+          "km",
         );
 
         if (flippedDist < 100) {
@@ -304,7 +307,7 @@ export class EntityMatcherService {
       this.logger.debug(
         `Borderline match: ${wiki.name} vs ${qt.name} = ${(totalScore * 100).toFixed(1)}% ` +
           `(name: ${(rawNameSim * 100).toFixed(0)}%, country: ${countrySim > 0 ? "✓" : "✗"}, ` +
-          `distance: ${hasValidWikiGeo && hasValidQtGeo ? this.haversineDistance({ latitude: wiki.latitude!, longitude: wiki.longitude! }, { latitude: qt.latitude!, longitude: qt.longitude! }).toFixed(0) + "km" : "N/A"})`,
+          `distance: ${hasValidWikiGeo && hasValidQtGeo ? calculateHaversineDistance({ latitude: wiki.latitude!, longitude: wiki.longitude! }, { latitude: qt.latitude!, longitude: qt.longitude! }, "km").toFixed(0) + "km" : "N/A"})`,
       );
     }
 
@@ -506,9 +509,10 @@ export class EntityMatcherService {
       // Both have geo: Use weighted combination (80% name, 20% geo)
       const nameSim = rawNameSim * 0.8;
 
-      const distance = this.haversineDistance(
+      const distance = calculateHaversineDistance(
         { latitude: e1.latitude!, longitude: e1.longitude! },
         { latitude: e2.latitude!, longitude: e2.longitude! },
+        "km",
       );
       // Close = within 100m = 1.0 score
       // Far = > 1km = 0.0 score
@@ -525,32 +529,5 @@ export class EntityMatcherService {
       // This is important for Wartezeiten which has no geo data
       return rawNameSim;
     }
-  }
-
-  /**
-   * Calculate distance between two coordinates using Haversine formula
-   *
-   * @returns Distance in kilometers
-   */
-  private haversineDistance(
-    p1: { latitude: number; longitude: number },
-    p2: { latitude: number; longitude: number },
-  ): number {
-    const R = 6371; // Earth radius in km
-    const dLat = this.toRad(p2.latitude - p1.latitude);
-    const dLon = this.toRad(p2.longitude - p1.longitude);
-
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRad(p1.latitude)) *
-        Math.cos(this.toRad(p2.latitude)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  private toRad(deg: number): number {
-    return (deg * Math.PI) / 180;
   }
 }

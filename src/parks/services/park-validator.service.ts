@@ -6,6 +6,7 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { normalizeForMatching } from "../../common/utils/slug.util";
 import { calculateHaversineDistance } from "../../common/utils/distance.util";
+import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { calculateNameSimilarity } from "../utils/park-merge.util";
 
 export interface MismatchedQtId {
@@ -115,7 +116,9 @@ export class ParkValidatorService {
     const mismatches: MismatchedQtId[] = [];
 
     for (const park of parksWithQtId) {
-      const qtId = this.extractQueueTimesNumericId(park.queueTimesEntityId!);
+      const qtId = this.extractQueueTimesNumericParkId(
+        park.queueTimesEntityId!,
+      );
       if (!qtId) {
         mismatches.push({
           parkId: park.id,
@@ -431,7 +434,7 @@ export class ParkValidatorService {
       .getRawMany();
     const usedQtIdSet = new Set(
       usedQtIds
-        .map((r) => this.extractQueueTimesNumericId(r.qtId))
+        .map((r) => this.extractQueueTimesNumericParkId(r.qtId))
         .filter(Boolean),
     );
 
@@ -559,12 +562,12 @@ export class ParkValidatorService {
   }
 
   /**
-   * Extract numeric park ID from prefixed external ID
+   * Extract numeric park ID from a prefixed external ID.
+   * Wraps the shared string parser and coerces to a number for ID comparisons.
    */
-  private extractQueueTimesNumericId(externalId: string): number | null {
-    const clean = externalId.replace("qt-park-", "");
-    const id = parseInt(clean, 10);
-    return isNaN(id) ? null : id;
+  private extractQueueTimesNumericParkId(externalId: string): number | null {
+    const numeric = extractQueueTimesNumericId(externalId);
+    return numeric === null ? null : Number(numeric);
   }
 
   getParkRepository(): Repository<Park> {
