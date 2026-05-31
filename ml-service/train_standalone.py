@@ -49,6 +49,11 @@ def main() -> int:
 
     started_at = datetime.now(timezone.utc).isoformat()
 
+    # Record our own PID so a recycling uvicorn worker's startup_event can tell a
+    # genuinely-orphaned lock (dead PID) from a live training (this PID still alive)
+    # and not clobber a run in progress. This subprocess shares the container PID
+    # namespace with every gunicorn/uvicorn worker, so os.kill(pid, 0) is meaningful
+    # across processes.
     _write_json(status_file, {
         "is_training": True,
         "current_version": version,
@@ -56,6 +61,7 @@ def main() -> int:
         "status": "training",
         "error": None,
         "finished_at": None,
+        "pid": os.getpid(),
     })
 
     try:

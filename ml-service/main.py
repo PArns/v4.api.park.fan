@@ -117,30 +117,56 @@ def _get_active_model() -> Optional[WaitTimeModel]:
 _load_active_model()
 
 
+def _pid_alive(pid) -> bool:
+    """True if a process with this PID currently exists in our PID namespace."""
+    try:
+        os.kill(int(pid), 0)
+    except (TypeError, ValueError):
+        return False  # pid is None/non-numeric → not a real running process
+    except ProcessLookupError:
+        return False  # no such process
+    except PermissionError:
+        return True  # exists but owned by another user → still alive
+    return True
+
+
 @app.on_event("startup")
 async def startup_event():
     """Reset stale training locks and ensure a model is loaded."""
     global model
 
-    # A fresh process means no training is actually running, so an is_training=true
-    # left in the status file is stale (a redeploy/worker-recycle killed the training
-    # mid-run before its monitor thread could write a terminal status) and would
-    # wrongly 409 every future /train. Clear it on startup — mirrors nf-service.
+    # is_training=true in the shared status file can mean two very different things:
+    #   1. A genuinely-orphaned lock — a redeploy/OOM killed the training subprocess
+    #      before its monitor could write a terminal status. This would wrongly 409
+    #      every future /train, so it must be cleared.
+    #   2. A training that is STILL RUNNING. uvicorn workers recycle periodically
+    #      (gunicorn max_requests, see gunicorn.conf.py); a worker that boots mid-
+    #      training must NOT clear the lock, or NestJS reads a spurious "failed",
+    #      gives up, and re-triggers a SECOND concurrent training (the 2026-05-31
+    #      double-train + orphaned-model incident).
+    # The recorded subprocess PID tells the two apart: alive → keep, dead/absent → reset.
     _stale = _read_training_status()
     if _stale.get("is_training"):
-        logger.warning(
-            f"Resetting stale is_training lock (version={_stale.get('current_version')}) "
-            "left by an interrupted run"
-        )
-        reset = {
-            **_stale,
-            "is_training": False,
-            "status": "failed",
-            "error": "reset on startup (previous run interrupted)",
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }
-        training_status.update(reset)
-        _write_training_status(reset)
+        _pid = _stale.get("pid")
+        if _pid is not None and _pid_alive(_pid):
+            logger.info(
+                f"Training subprocess (pid={_pid}, version={_stale.get('current_version')}) "
+                "still alive on worker boot — leaving is_training lock in place"
+            )
+        else:
+            logger.warning(
+                f"Resetting stale is_training lock (version={_stale.get('current_version')}, "
+                f"pid={_pid}) left by an interrupted run"
+            )
+            reset = {
+                **_stale,
+                "is_training": False,
+                "status": "failed",
+                "error": "reset on startup (previous run interrupted)",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            }
+            training_status.update(reset)
+            _write_training_status(reset)
 
     # Normally loaded at import (preload). Retry here if that failed — e.g. the DB
     # wasn't reachable yet when the module was first imported.
@@ -394,6 +420,12 @@ async def train_model_endpoint(request: TrainRequest):
                 [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE, _SENTINEL_FILE],
                 cwd=os.path.dirname(_train_standalone),
             )
+            # Record the subprocess PID immediately so a worker recycling between
+            # launch and the subprocess's own first status write can still tell the
+            # lock is live (the subprocess re-writes the same PID once it starts).
+            running = {**initial, "pid": proc.pid}
+            training_status.update(running)
+            _write_training_status(running)
             exit_code = proc.wait()
         except Exception as e:
             exit_code = -1
