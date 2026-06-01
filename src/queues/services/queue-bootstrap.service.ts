@@ -159,17 +159,28 @@ export class QueueBootstrapService implements OnModuleInit {
     // park-metadata sync (park-metadata.processor.ts) so new park countries
     // get covered once their country data exists.
 
-    // Trigger ML-related bootstrap jobs
+    // Trigger ML-related bootstrap jobs — only when the data is genuinely missing.
+    // attraction_accuracy_stats is maintained by the every-15-min prediction-accuracy cron,
+    // so on a warm redeploy (table already populated) the boot trigger is pure redundant
+    // load; only seed it on a cold start.
     try {
-      // Trigger prediction accuracy aggregation immediately (Phase 2 optimization)
-      // This ensures the attraction_accuracy_stats table is populated on startup
-      await this.predictionAccuracyQueue.add(
-        "aggregate-stats",
-        {},
-        {
-          removeOnComplete: true,
-        },
+      const accuracyRows = await this.parkRepository.query(
+        `SELECT 1 FROM attraction_accuracy_stats LIMIT 1`,
       );
+      if (accuracyRows.length === 0) {
+        await this.predictionAccuracyQueue.add(
+          "aggregate-stats",
+          {},
+          { removeOnComplete: true },
+        );
+        this.logger.log(
+          "✅ Boot: accuracy-stats aggregation queued (table empty)",
+        );
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: accuracy-stats already populated — leaving it to the 15-min cron",
+        );
+      }
 
       // P90 pre-aggregation removed — the daily P50 baseline cron now
       // computes P90 alongside P50 (single 548-day scan), so the
@@ -253,14 +264,22 @@ export class QueueBootstrapService implements OnModuleInit {
       this.logger.warn(`Failed to trigger P50 baseline jobs: ${e}`);
     }
 
-    // 6. Trigger seasonal detection on startup so isSeasonal is populated immediately
+    // 6. Seasonal detection: only on a cold start. It's maintained by the daily 02:30
+    // detect-seasonal cron, so on a warm redeploy re-running it (incl. the
+    // attraction_day_operating rollup work) is pure boot-load. Gate on the rollup being
+    // empty — true exactly when the table was just created (first deploy of this feature)
+    // or wiped — so the one-time backfill still happens, then never again on redeploys.
     try {
+      const rollupRows = await this.parkRepository.query(
+        `SELECT 1 FROM attraction_day_operating LIMIT 1`,
+      );
+      const rollupEmpty = rollupRows.length === 0;
       const seasonalJobActive = await this.isJobActiveOrWaiting(
         this.analyticsQueue,
         "detect-seasonal",
       );
 
-      if (!seasonalJobActive) {
+      if (rollupEmpty && !seasonalJobActive) {
         await this.analyticsQueue.add(
           "detect-seasonal",
           {},
@@ -271,10 +290,12 @@ export class QueueBootstrapService implements OnModuleInit {
             delay: 90000, // 90s delay — let P50 baselines run first
           },
         );
-        this.logger.log("✅ Boot: Seasonal detection queued (delayed 90s)");
+        this.logger.log(
+          "✅ Boot: Seasonal detection queued (operating-day rollup empty — one-time backfill)",
+        );
       } else {
         this.logger.debug(
-          "⏭️  Boot: Seasonal detection already running, skipping",
+          "⏭️  Boot: Seasonal detection skipped (rollup populated → daily cron maintains it)",
         );
       }
     } catch (e) {

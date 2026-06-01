@@ -78,13 +78,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       this.logger.log(
         `🔥 Warming up top ${topParkIds.length} parks (priority, high concurrency)...`,
       );
-      // Priority warmup: higher concurrency and no inter-batch delay so the
-      // most-requested parks are hot as fast as possible after boot.
+      // Priority warmup, but NOT forced: Redis persists across a deploy, so a park whose
+      // integrated cache is still fresh (TTL > 2min) is skipped instead of re-fetched. This
+      // is what stops a redeploy from re-warming everything and spiking DB/ML load — only
+      // genuinely-cold parks get rebuilt.
       const warmed = await this.processBatch(
         topParkIds,
         10,
         "StartupWarmup",
-        async (id) => this.warmupParkCache(id, true, true),
+        async (id) => this.warmupParkCache(id, false, true),
         0,
       );
       this.logger.log(

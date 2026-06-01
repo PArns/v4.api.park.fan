@@ -2027,6 +2027,7 @@ export class SearchService implements OnModuleInit {
   private searchParksInProcess(q: string, limit: number): ParkIndexData[] {
     const qLower = q.toLowerCase();
     const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const qWords = qLower.split(/[^a-z0-9]+/).filter(Boolean);
     type Scored = { entry: ParkIndexData; tier: number; sim: number };
     const scored: Scored[] = [];
 
@@ -2037,6 +2038,12 @@ export class SearchService implements OnModuleInit {
       const countryLower = (park.country || "").toLowerCase();
       const continentLower = (park.continent || "").toLowerCase();
       const sim = this.trgmSim(nameLower, qLower);
+      // Word-level typo tolerance ("epuc" → "epic") — same as scoreEntry's tier 7. parks
+      // use this bespoke matcher (not scoreEntry), so it needs the check explicitly.
+      const fuzzyWord = this.wordFuzzyMatch(
+        nameLower.split(/[^a-z0-9]+/).filter(Boolean),
+        qWords,
+      );
 
       const matches =
         nameLower.includes(qLower) ||
@@ -2044,7 +2051,8 @@ export class SearchService implements OnModuleInit {
         cityLower.includes(qLower) ||
         countryLower.includes(qLower) ||
         continentLower.includes(qLower) ||
-        sim >= 0.3;
+        sim >= 0.3 ||
+        fuzzyWord;
       if (!matches) continue;
 
       let tier: number;
@@ -2052,7 +2060,8 @@ export class SearchService implements OnModuleInit {
       else if (qNorm.length > 0 && nameNorm === qNorm) tier = 1;
       else if (nameLower.startsWith(qLower)) tier = 2;
       else if (cityLower === qLower) tier = 4;
-      else tier = 5;
+      else if (sim >= 0.3) tier = 5;
+      else tier = 7; // fuzzy word match only (typo) — loosest signal, rank last
 
       // Popularity boost ranks before city-exact/other (CASE order), but not
       // before an exact/normalized/prefix name hit.
