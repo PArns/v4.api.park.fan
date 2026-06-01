@@ -154,4 +154,85 @@ describe("dedupePollEntities", () => {
       expect(out.find((e) => e.externalId === "e7")!.waitTime).toBe(60);
     });
   });
+
+  describe("happy path — typical park polls pass through untouched", () => {
+    // A realistic single-source poll: a small park's rides + a show + a restaurant,
+    // varied statuses and waits, every entity distinct. Nothing should change.
+    const typicalPoll: EntityLiveData[] = [
+      ent({ externalId: "177854", name: "Naga Bay", waitTime: 19 }),
+      ent({ externalId: "177855", name: "Typhoon", waitTime: 17 }),
+      ent({ externalId: "177856", name: "Fury", waitTime: 16 }),
+      ent({ externalId: "177857", name: "Revolution", waitTime: 14 }),
+      ent({ externalId: "177858", name: "Bob Express", waitTime: 13 }),
+      ent({ externalId: "177859", name: "Dreamcatcher", waitTime: 5 }),
+      ent({ externalId: "177860", name: "El Rio", waitTime: 11 }),
+      ent({
+        externalId: "177861",
+        name: "Sledge Hammer",
+        waitTime: 0,
+        status: LiveStatus.DOWN,
+      }),
+      ent({
+        externalId: "177862",
+        name: "King Kong",
+        waitTime: 0,
+        status: LiveStatus.REFURBISHMENT,
+      }),
+      ent({
+        externalId: "177863",
+        name: "Oki Doki",
+        waitTime: 0,
+        status: LiveStatus.CLOSED,
+      }),
+      ent({
+        externalId: "show-1",
+        entityType: EntityType.SHOW,
+        name: "Aqua Show",
+      }),
+      ent({
+        externalId: "rest-1",
+        entityType: EntityType.RESTAURANT,
+        name: "El Paso",
+      }),
+    ];
+
+    it("returns every entity unchanged for a normal single-source poll", () => {
+      const out = dedupePollEntities(typicalPoll);
+      expect(out).toHaveLength(typicalPoll.length);
+      expect(out).toEqual(typicalPoll); // same content, same order
+      out.forEach((e, i) => expect(e).toBe(typicalPoll[i])); // same object refs
+    });
+
+    it("preserves every status kind (OPERATING/DOWN/CLOSED/REFURBISHMENT)", () => {
+      const out = dedupePollEntities(typicalPoll);
+      expect(out.map((e) => e.status)).toEqual(
+        typicalPoll.map((e) => e.status),
+      );
+    });
+
+    it("a typical 3-source poll keeps all sources for every ride (3×3 → 9)", () => {
+      const sources = ["themeparks-wiki", "queue-times", "wartezeiten-app"];
+      const multi = ["177854", "177855", "177856"].flatMap((id, ri) =>
+        sources.map((source, si) =>
+          ent({ externalId: id, source, waitTime: 10 + ri * 5 + si }),
+        ),
+      );
+      expect(dedupePollEntities(multi)).toHaveLength(9);
+    });
+
+    it("a normal poll with a single upstream hiccup drops only the dup, nothing else", () => {
+      // themeparks-wiki accidentally repeats 'Fury' once; the rest is a normal poll.
+      const glitched = [
+        ...typicalPoll,
+        ent({ externalId: "177856", name: "Fury", waitTime: 18 }),
+      ];
+      const out = dedupePollEntities(glitched);
+      expect(out).toHaveLength(typicalPoll.length); // exactly one removed
+      expect(out.find((e) => e.externalId === "177856")!.waitTime).toBe(18); // last value
+      // every OTHER ride survives untouched (same object reference)
+      typicalPoll
+        .filter((e) => e.externalId !== "177856")
+        .forEach((orig) => expect(out).toContain(orig));
+    });
+  });
 });
