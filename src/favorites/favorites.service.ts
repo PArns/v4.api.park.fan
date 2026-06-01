@@ -581,11 +581,16 @@ export class FavoritesService {
       }
     }
 
-    // --- Slow path: full build for cache misses ---
+    // --- Slow path: lightweight build for cache misses ---
+    // The favorites card strips forecasts/hourlyForecast/predictionAccuracy anyway, so build
+    // the lightweight variant (no ML-forecast HTTP call / forecast / accuracy queries). It
+    // caches under its own `attraction:integrated:light:*` key — repeat favorites of the same
+    // niche attraction hit that cache, and the canonical `attraction:integrated` (which the
+    // detail page needs in full) is never polluted.
     const fallbackResponses = await Promise.all(
       missedAttractions.map((attraction) =>
         this.attractionIntegrationService
-          .buildIntegratedResponse(attraction)
+          .buildIntegratedResponse(attraction, 30, { lightweight: true })
           .catch(() => null),
       ),
     );
