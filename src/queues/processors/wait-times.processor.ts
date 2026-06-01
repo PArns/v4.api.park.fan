@@ -193,8 +193,31 @@ export class WaitTimesProcessor {
 
               // Process Entities
               const seenAttractionIds = new Set<string>();
-              if (liveData.entities && liveData.entities.length > 0) {
-                for (const entityLiveData of liveData.entities) {
+              // Dedup within a single poll by (source, externalId, entityType). A flaky
+              // upstream (observed on themeparks-wiki) sometimes returns the SAME entity
+              // twice in one response — which would write two queue_data rows per poll and
+              // over-weight that ride in the park aggregates (it once produced a phantom
+              // "extreme" month for a whole park). Keep the last occurrence. Cross-source
+              // duplicates (different `source`) are intentional multi-source coverage.
+              const pollEntities = liveData.entities
+                ? Array.from(
+                    new Map(
+                      liveData.entities.map((e) => [
+                        `${e.source}:${e.externalId}:${e.entityType}`,
+                        e,
+                      ]),
+                    ).values(),
+                  )
+                : [];
+              const dupCount =
+                (liveData.entities?.length ?? 0) - pollEntities.length;
+              if (dupCount > 0) {
+                this.logger.warn(
+                  `Dropped ${dupCount} duplicate live entit${dupCount === 1 ? "y" : "ies"} for park ${park.id} (same source+externalId in one poll)`,
+                );
+              }
+              if (pollEntities.length > 0) {
+                for (const entityLiveData of pollEntities) {
                   try {
                     let savedCount = 0;
                     switch (entityLiveData.entityType) {
