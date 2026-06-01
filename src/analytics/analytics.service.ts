@@ -30,9 +30,11 @@ import {
   GlobalStatsDto,
   ParkStatsItemDto,
   AttractionStatsItemDto,
+  PeakHourSource,
 } from "./dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
+import { peakHourConfidence } from "./utils/peak-hour.util";
 import {
   getStartOfDayInTimezone,
   getCurrentDateInTimezone,
@@ -1441,6 +1443,10 @@ export class AnalyticsService {
 
     // determine which peak hour to show (current hour must be in park timezone)
     let displayPeakHour = todayPeakRaw;
+    // Track provenance so clients can render confidence ("≈ 14:00" for forecasts).
+    let peakHourSource: PeakHourSource | null = todayPeakRaw
+      ? "observed_today"
+      : null;
 
     // If we have a typical peak prediction
     if (typicalPeakHour) {
@@ -1453,8 +1459,12 @@ export class AnalyticsService {
       // e.g. Now is 16:00, Typical is 14:00 -> Show Today's Peak (or Typical if today was weirdly flat)
       if (currentHour < typicalHour) {
         displayPeakHour = typicalPeakHour;
+        // We have a live signal today but the peak is still ahead -> forecast.
+        // No live signal at all -> historical fallback.
+        peakHourSource = todayPeakRaw ? "prediction" : "historical_fallback";
       } else if (!displayPeakHour) {
         displayPeakHour = typicalPeakHour;
+        peakHourSource = "historical_fallback";
       }
       // If currentHour > typicalHour and we have displayPeakHour (Actual), keep Actual.
     }
@@ -1472,6 +1482,7 @@ export class AnalyticsService {
       const peakHour = parseInt(displayPeakHour.split(":")[0], 10);
       if (peakHour >= closingHour) {
         displayPeakHour = null;
+        peakHourSource = null;
       }
     }
 
@@ -1526,6 +1537,9 @@ export class AnalyticsService {
       avgWaitToday,
       peakWaitToday,
       peakHour: peakHourIso,
+      peakHourLocal: displayPeakHour,
+      peakHourConfidence: peakHourConfidence(peakHourSource),
+      peakHourSource,
       // Use utility method for consistency
       crowdLevel: this.getParkCrowdLevel(occupancy.current),
       totalAttractions,

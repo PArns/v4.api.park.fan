@@ -204,6 +204,9 @@ export class ParkEnrichmentService {
           avgWaitToday: stats?.avgWaitToday || 0,
           peakWaitToday: stats?.peakWaitToday || 0,
           peakHour: stats?.peakHour || null,
+          peakHourLocal: stats?.peakHourLocal || null,
+          peakHourConfidence: stats?.peakHourConfidence ?? 0,
+          peakHourSource: stats?.peakHourSource ?? null,
           crowdLevel: this.analyticsService.determineCrowdLevel(
             occupancy.current,
           ),

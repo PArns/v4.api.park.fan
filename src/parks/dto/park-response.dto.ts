@@ -110,6 +110,13 @@ export class ParkResponseDto {
       avgWaitToday: number;
       peakWaitToday: number;
       peakHour: string | null;
+      peakHourLocal: string | null;
+      peakHourConfidence: number;
+      peakHourSource:
+        | "prediction"
+        | "observed_today"
+        | "historical_fallback"
+        | null;
       crowdLevel: CrowdLevel;
       totalAttractions: number;
       operatingAttractions: number;
