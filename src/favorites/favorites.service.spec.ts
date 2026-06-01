@@ -12,6 +12,7 @@ import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { MLService } from "../ml/ml.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -60,6 +61,12 @@ describe("FavoritesService", () => {
       .mockResolvedValue({ current: 0, breakdown: { currentAvgWait: 0 } }),
     getParkStatistics: jest.fn().mockResolvedValue(null),
     determineCrowdLevel: jest.fn().mockReturnValue("moderate"),
+    getAttractionSparklinesBatch: jest.fn().mockResolvedValue(new Map()),
+    getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
+    getLoadRating: jest.fn().mockReturnValue({ rating: "moderate" }),
+  };
+  const mlService = {
+    getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
   };
   const popularityService = {
     recordParkHit: jest.fn().mockResolvedValue(undefined),
@@ -106,6 +113,7 @@ describe("FavoritesService", () => {
         { provide: QueueDataService, useValue: queueDataService },
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: PopularityService, useValue: popularityService },
+        { provide: MLService, useValue: mlService },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
     }).compile();

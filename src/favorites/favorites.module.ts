@@ -13,6 +13,7 @@ import { RestaurantsModule } from "../restaurants/restaurants.module";
 import { QueueDataModule } from "../queue-data/queue-data.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { PopularityModule } from "../popularity/popularity.module";
+import { MLModule } from "../ml/ml.module";
 import { RedisModule } from "../common/redis/redis.module";
 
 /**
@@ -29,6 +30,7 @@ import { RedisModule } from "../common/redis/redis.module";
     forwardRef(() => RestaurantsModule),
     forwardRef(() => QueueDataModule),
     forwardRef(() => AnalyticsModule),
+    forwardRef(() => MLModule),
     PopularityModule,
     RedisModule,
   ],
