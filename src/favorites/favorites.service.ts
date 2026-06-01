@@ -9,7 +9,6 @@ import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { ParksService } from "../parks/parks.service";
 import { AttractionsService } from "../attractions/attractions.service";
-import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
 import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
 import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
@@ -63,7 +62,6 @@ export class FavoritesService {
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly parksService: ParksService,
     private readonly attractionsService: AttractionsService,
-    private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly showsService: ShowsService,
     private readonly restaurantsService: RestaurantsService,
     private readonly queueDataService: QueueDataService,
@@ -581,22 +579,66 @@ export class FavoritesService {
       }
     }
 
-    // --- Slow path: lightweight build for cache misses ---
-    // The favorites card strips forecasts/hourlyForecast/predictionAccuracy anyway, so build
-    // the lightweight variant (no ML-forecast HTTP call / forecast / accuracy queries). It
-    // caches under its own `attraction:integrated:light:*` key — repeat favorites of the same
-    // niche attraction hit that cache, and the canonical `attraction:integrated` (which the
-    // detail page needs in full) is never polluted.
-    const fallbackResponses = await Promise.all(
-      missedAttractions.map((attraction) =>
-        this.attractionIntegrationService
-          .buildIntegratedResponse(attraction, 30, { lightweight: true })
-          .catch(() => null),
-      ),
-    );
-    for (let i = 0; i < missedAttractions.length; i++) {
-      if (fallbackResponses[i]) {
-        integratedMap.set(missedAttractions[i].id, fallbackResponses[i]!);
+    // --- Slow path: BATCH card build for cache misses ---
+    // The favorites card only reads queues (current STANDBY wait/status), status, crowdLevel
+    // and statistics.history (the sparkline). Build all missed attractions from three batched
+    // queries — current queues, sparklines (one history query per park), and P50 baselines —
+    // instead of N× per-attraction buildIntegratedResponse (which re-ran the history/stats
+    // queries per ride). Sparklines exist only for rides, so this stays in enrichAttractions.
+    if (missedAttractions.length > 0) {
+      const missedIds = missedAttractions.map((a) => a.id);
+      const sparkInput = missedAttractions
+        .filter((a) => a.parkId)
+        .map((a) => ({
+          id: a.id,
+          parkId: a.parkId!,
+          timezone: a.park?.timezone || "UTC",
+        }));
+      const [queuesMap, sparklinesMap, p50Map] = await Promise.all([
+        this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
+        this.analyticsService.getAttractionSparklinesBatch(sparkInput),
+        this.analyticsService.getBatchAttractionP50s(missedIds),
+      ]);
+      const nowIso = new Date().toISOString();
+      for (const attraction of missedAttractions) {
+        const dto = AttractionResponseDto.fromEntity(attraction);
+        dto.queues = (queuesMap.get(attraction.id) || []).map((qd) => ({
+          queueType: qd.queueType,
+          status: qd.status,
+          waitTime: qd.waitTime ?? null,
+          state: qd.state ?? null,
+          returnStart: qd.returnStart ? qd.returnStart.toISOString() : null,
+          returnEnd: qd.returnEnd ? qd.returnEnd.toISOString() : null,
+          price: qd.price ?? null,
+          allocationStatus: qd.allocationStatus ?? null,
+          currentGroupStart: qd.currentGroupStart ?? null,
+          currentGroupEnd: qd.currentGroupEnd ?? null,
+          estimatedWait: qd.estimatedWait ?? null,
+          lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
+        }));
+        const standby = dto.queues.find((q) => q.queueType === "STANDBY");
+        const p50 = p50Map.get(attraction.id) || 0;
+        dto.crowdLevel =
+          standby?.status === "OPERATING" && standby.waitTime != null && p50 > 0
+            ? this.analyticsService.getLoadRating(standby.waitTime, p50).rating
+            : null;
+        const history = sparklinesMap.get(attraction.id) || [];
+        dto.statistics = {
+          avgWaitToday: null,
+          peakWaitToday: null,
+          peakWaitTimestamp: null,
+          minWaitToday: null,
+          typicalWaitThisHour: null,
+          percentile95ThisHour: null,
+          currentVsTypical: null,
+          dataPoints: history.length,
+          history,
+          timestamp: nowIso,
+        };
+        if (attraction.park) {
+          dto.url = buildAttractionUrl(attraction.park, attraction) || null;
+        }
+        integratedMap.set(attraction.id, dto);
       }
     }
 

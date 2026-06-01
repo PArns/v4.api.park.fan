@@ -97,18 +97,9 @@ export class AttractionIntegrationService {
   async buildIntegratedResponse(
     attraction: Attraction,
     days: number = 30,
-    opts?: { lightweight?: boolean },
   ): Promise<AttractionResponseDto> {
-    // `lightweight` builds the "card" version used by list surfaces (favorites): everything
-    // EXCEPT the ML forecast / hourly-prediction / prediction-accuracy fields those views
-    // strip anyway — so we never spend the ML HTTP call + forecast/accuracy queries just to
-    // discard them. It caches under a SEPARATE key so it never pollutes the canonical
-    // `attraction:integrated` the detail page (which needs those fields) relies on.
-    const lightweight = opts?.lightweight ?? false;
     // Try cache first
-    const cacheKey = lightweight
-      ? `attraction:integrated:light:${attraction.id}`
-      : `attraction:integrated:${attraction.id}`;
+    const cacheKey = `attraction:integrated:${attraction.id}`;
 
     // Track popularity hit (background)
     this.popularityService.recordAttractionHit(attraction.id).catch(() => {});
@@ -141,10 +132,7 @@ export class AttractionIntegrationService {
       predictionAccuracyResult,
     ] = await Promise.all([
       this.queueDataService.findCurrentStatusByAttraction(attraction.id),
-      // Skipped in lightweight mode — these feed dto.forecasts, which list views strip.
-      lightweight
-        ? Promise.resolve([])
-        : this.queueDataService.findForecastsByAttraction(attraction.id, 24),
+      this.queueDataService.findForecastsByAttraction(attraction.id, 24),
       attraction.parkId
         ? this.parkRepository.findOne({
             where: { id: attraction.parkId },
@@ -164,33 +152,26 @@ export class AttractionIntegrationService {
             ],
           })
         : Promise.resolve(null),
-      // Skipped in lightweight mode — this is an ML HTTP call that only feeds
-      // dto.hourlyForecast, which list views strip.
-      lightweight
-        ? Promise.resolve([])
-        : this.mlService
-            .getAttractionPredictionsWithFallback(attraction.id, "hourly")
-            .catch((err) => {
-              this.logger.warn(
-                "ML predictions unavailable:",
-                err instanceof Error ? err.message : "Unknown error",
-              );
-              return [];
-            }),
+      this.mlService
+        .getAttractionPredictionsWithFallback(attraction.id, "hourly")
+        .catch((err) => {
+          this.logger.warn(
+            "ML predictions unavailable:",
+            err instanceof Error ? err.message : "Unknown error",
+          );
+          return [];
+        }),
       attraction.parkId
         ? this.parksService
             .getBatchParkStatus([attraction.parkId])
             .catch(() => new Map<string, "OPERATING" | "CLOSED">())
         : Promise.resolve(new Map<string, "OPERATING" | "CLOSED">()),
-      // Skipped in lightweight mode — feeds dto.predictionAccuracy, stripped by list views.
-      lightweight
-        ? Promise.resolve(null)
-        : this.predictionAccuracyService
-            .getAttractionAccuracyWithBadge(attraction.id, 30)
-            .catch((err) => {
-              this.logger.warn("Failed to fetch prediction accuracy:", err);
-              return null;
-            }),
+      this.predictionAccuracyService
+        .getAttractionAccuracyWithBadge(attraction.id, 30)
+        .catch((err) => {
+          this.logger.warn("Failed to fetch prediction accuracy:", err);
+          return null;
+        }),
     ]);
 
     // --- Process queue data (trend detection per queue, already parallelized) ---
