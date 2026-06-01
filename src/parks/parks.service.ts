@@ -1050,6 +1050,20 @@ export class ParksService {
     parkId: string,
     timezone: string,
   ): Promise<{ minDate: string | null; maxDate: string | null }> {
+    // Read-through cache: MIN/MAX over schedule_entries, called on every calendar build.
+    // Schedule changes only on the daily sync / on-demand refresh, so 1h is safely fresh.
+    const cacheKey = `park:opdaterange:${parkId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached !== null) {
+      try {
+        return JSON.parse(cached) as {
+          minDate: string | null;
+          maxDate: string | null;
+        };
+      } catch {
+        // fall through
+      }
+    }
     const result = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .select("MIN(schedule.date)", "minDate")
@@ -1070,14 +1084,13 @@ export class ParksService {
       return formatInParkTimezone(v, timezone);
     };
 
-    if (!result) {
-      return { minDate: null, maxDate: null };
-    }
-
-    return {
-      minDate: fmt(result.minDate),
-      maxDate: fmt(result.maxDate),
-    };
+    const range = result
+      ? { minDate: fmt(result.minDate), maxDate: fmt(result.maxDate) }
+      : { minDate: null, maxDate: null };
+    await this.redis
+      .set(cacheKey, JSON.stringify(range), "EX", 60 * 60)
+      .catch(() => undefined);
+    return range;
   }
 
   /**

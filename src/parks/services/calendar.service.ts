@@ -96,33 +96,55 @@ export class CalendarService {
       monthCacheKeys.map((k) => this.redis.get(k)),
     );
     if (monthCached.every((v) => v != null)) {
-      const allDays: CalendarDay[] = [];
-      for (const raw of monthCached) {
-        const days = JSON.parse(raw!) as CalendarDay[];
-        allDays.push(...days);
-      }
-      allDays.sort((a, b) => a.date.localeCompare(b.date));
-      const daysInRange = allDays
-        .filter((d) => d.date >= fromStr && d.date <= toStr)
-        .map((d) => ({
-          ...d,
-          status: d.status ?? "UNKNOWN",
-          recommendation: d.date < today ? undefined : d.recommendation,
-        }));
-      const response: IntegratedCalendarResponse = {
-        meta: {
-          slug: park.slug,
-          timezone: park.timezone,
-          hasOperatingSchedule:
-            allDays.length > 0 &&
-            allDays.some((d) => d.hours && !d.hours.isInferred),
-        },
-        days: daysInRange,
-      };
       this.logger.debug(
         `Calendar assembled from ${monthsInRange.length} month cache(s): ${fromStr}–${toStr}`,
       );
-      return response;
+      return this.assembleFromMonthCaches(
+        monthCached as string[],
+        park,
+        fromStr,
+        toStr,
+        today,
+      );
+    }
+
+    // Partial hit: some months cached, only the rest missing (e.g. a request whose
+    // trailing month falls outside the warmed -1..+3 window). Build ONLY the uncached
+    // months (each as its own full-month range so it gets cached for reuse), then
+    // re-assemble from cache — instead of rebuilding the whole range every time, which
+    // was the real cost when one partial trailing month defeated the all-or-nothing read.
+    const someCached = monthCached.some((v) => v != null);
+    if (someCached) {
+      const missingMonths = monthsInRange.filter(
+        (_, i) => monthCached[i] == null,
+      );
+      for (const ym of missingMonths) {
+        const [my, mm] = ym.split("-").map(Number);
+        const mFrom = new Date(`${ym}-01T12:00:00.000Z`);
+        const mTo = new Date(
+          `${ym}-${String(new Date(my, mm, 0).getDate()).padStart(2, "0")}T12:00:00.000Z`,
+        );
+        // Recurses into the none-cached full-build path for this single month (a
+        // one-month range can't re-enter this partial branch), which caches it.
+        await this.buildCalendarResponse(park, mFrom, mTo, includeHourly);
+      }
+      const refreshed = await Promise.all(
+        monthCacheKeys.map((k) => this.redis.get(k)),
+      );
+      if (refreshed.every((v) => v != null)) {
+        this.logger.debug(
+          `Calendar assembled after building ${missingMonths.length} missing month(s): ${fromStr}–${toStr}`,
+        );
+        return this.assembleFromMonthCaches(
+          refreshed as string[],
+          park,
+          fromStr,
+          toStr,
+          today,
+        );
+      }
+      // Fall through to a full build if a month still failed to cache (e.g. a month
+      // shorter than the requested span never satisfies cacheFullMonths).
     }
     this.logger.debug(
       `Building calendar for ${park.slug} from ${fromStr} to ${toStr}`,
@@ -367,6 +389,43 @@ export class CalendarService {
     );
 
     return response;
+  }
+
+  /**
+   * Assemble a calendar response from per-month Redis caches (raw JSON strings, in
+   * monthsInRange order), filtered to [fromStr, toStr]. Shared by the all-cached fast
+   * path and the partial-hit path (after the missing months were built).
+   */
+  private assembleFromMonthCaches(
+    monthCachedRaw: string[],
+    park: Park,
+    fromStr: string,
+    toStr: string,
+    today: string,
+  ): IntegratedCalendarResponse {
+    const allDays: CalendarDay[] = [];
+    for (const raw of monthCachedRaw) {
+      const days = JSON.parse(raw) as CalendarDay[];
+      allDays.push(...days);
+    }
+    allDays.sort((a, b) => a.date.localeCompare(b.date));
+    const daysInRange = allDays
+      .filter((d) => d.date >= fromStr && d.date <= toStr)
+      .map((d) => ({
+        ...d,
+        status: d.status ?? "UNKNOWN",
+        recommendation: d.date < today ? undefined : d.recommendation,
+      }));
+    return {
+      meta: {
+        slug: park.slug,
+        timezone: park.timezone,
+        hasOperatingSchedule:
+          allDays.length > 0 &&
+          allDays.some((d) => d.hours && !d.hours.isInferred),
+      },
+      days: daysInRange,
+    };
   }
 
   /** Returns ["YYYY-MM", ...] for all months overlapping [fromDate, toDate] in park timezone. */

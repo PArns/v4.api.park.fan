@@ -142,9 +142,17 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   /**
    * Warm up calendar cache for one park: -1 month to +3 months (park timezone).
    * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
-   * Called from warmupCalendarForAllParks (daily warmup at 5am).
+   * Called from warmupCalendarForAllParks (background warmup every 12h).
+   *
+   * @param force When true, evict the daily serving-prediction cache and the calendar
+   *   month caches first, so the rebuild regenerates fresh predictions instead of just
+   *   reading the still-warm cache. This is how the 12h background refresh actually
+   *   refreshes the data (weather/model) while keeping users off the ~15s cold path.
    */
-  private async warmupCalendarForPark(park: Park): Promise<void> {
+  private async warmupCalendarForPark(
+    park: Park,
+    force: boolean = false,
+  ): Promise<void> {
     try {
       const tz = park.timezone || "UTC";
       const todayStr = getCurrentDateInTimezone(tz);
@@ -168,11 +176,39 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const toStr = `${endY}-${String(endM).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
       const fromDate = new Date(`${fromStr}T12:00:00.000Z`);
       const toDate = new Date(`${toStr}T12:00:00.000Z`);
+
+      if (force) {
+        // Evict the cold-path ML caches + the calendar month caches in range so the
+        // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
+        // the still-warm month cache and the 12h refresh would be a no-op).
+        const evictKeys: string[] = [
+          `ml:park:${park.id}:daily:${todayStr}`,
+          `ml:park:${park.id}:yearly:${todayStr}`,
+        ];
+        // Month keys for every month in [-1, +3] (variant the FE reads: "none").
+        for (let mm = fromM, yy = fromY; ; ) {
+          evictKeys.push(
+            `calendar:month:${park.id}:${yy}-${String(mm).padStart(2, "0")}:none`,
+          );
+          if (yy === endY && mm === endM) break;
+          mm += 1;
+          if (mm > 12) {
+            mm = 1;
+            yy += 1;
+          }
+        }
+        await this.redis.del(...evictKeys).catch(() => undefined);
+      }
+
+      // Warm the SAME variant the frontend park page requests (includeHourly="none").
+      // The month-cache key is `calendar:month:{parkId}:{ym}:{includeHourly}`, so warming
+      // "today+tomorrow" populated a key the FE never reads → every real calendar request
+      // missed the warmed cache and rebuilt from cold (incl. the ~15s cold daily ML call).
       await this.calendarService.buildCalendarResponse(
         park,
         fromDate,
         toDate,
-        "today+tomorrow",
+        "none",
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -181,15 +217,17 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   }
 
   /**
-   * Warm up calendar cache (-1 to +3 months) for all parks.
-   * Called once per day by warmup-calendar-daily job (e.g. 5am), not every 5 min with park warmup.
+   * Warm up calendar cache (-1 to +3 months) for all parks, force-refreshing the daily
+   * serving predictions. Called every 12h (08:00 + 20:00 UTC) by the warmup-calendar-daily
+   * job — not every 5 min with park warmup — so the cold ~15s daily-ML cost is absorbed by
+   * the background instead of by the first visitor, while data stays fresh (weather/model).
    *
    * @returns Number of parks for which calendar was warmed (or attempted)
    */
   async warmupCalendarForAllParks(): Promise<number> {
     const startTime = Date.now();
     this.logger.verbose(
-      "🔥 Starting calendar warmup for all parks (once daily)...",
+      "🔥 Starting calendar warmup for all parks (every 12h, force-refresh)...",
     );
 
     try {
@@ -215,7 +253,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
             relations: ["influencingRegions"],
           });
           if (!park) return false;
-          await this.warmupCalendarForPark(park);
+          await this.warmupCalendarForPark(park, true);
           return true;
         },
       );

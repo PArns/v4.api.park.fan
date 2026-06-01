@@ -141,6 +141,11 @@ export class QueuePercentileProcessor {
     const LOOKBACK_DAYS = 60;
     const RESET_DAYS = 14;
 
+    // Refresh the per-(attraction, park-local day) operating rollup the detection CTEs read
+    // below, so they no longer re-scan ~60 days of raw queue_data on every run (that was the
+    // ~227s top slow-query). Incremental upsert — only the full backfill (first run) is heavy.
+    await this.refreshOperatingDayRollup(LOOKBACK_DAYS);
+
     // Step 1: Find attractions that were recently OPERATING (reset candidates)
     const recentlyOperating: { attractionId: string }[] =
       await this.dataSource.query(
@@ -185,24 +190,16 @@ export class QueuePercentileProcessor {
       await this.dataSource.query(
         `
       WITH park_open_days AS (
-        SELECT DISTINCT
-          a."parkId",
-          DATE(q.timestamp AT TIME ZONE p.timezone) as open_day
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+        -- park-local days any attraction in the park was OPERATING (precomputed rollup)
+        SELECT DISTINCT "parkId", op_day AS open_day
+        FROM attraction_day_operating
+        WHERE op_day >= CURRENT_DATE - $2::int
       ),
       attraction_operating_days AS (
-        SELECT DISTINCT
-          q."attractionId",
-          DATE(q.timestamp AT TIME ZONE p.timezone) as op_day
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+        -- (attraction, park-local day) it was OPERATING (precomputed rollup)
+        SELECT "attractionId", op_day
+        FROM attraction_day_operating
+        WHERE op_day >= CURRENT_DATE - $2::int
       ),
       ever_operating AS (
         SELECT "attractionId", COUNT(*) as op_count
@@ -259,14 +256,10 @@ export class QueuePercentileProcessor {
       await this.dataSource.query(
         `
       WITH park_open_days AS (
-        SELECT DISTINCT
-          a."parkId",
-          DATE(q.timestamp AT TIME ZONE p.timezone) as open_day
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+        -- park-local days any attraction in the park was OPERATING (precomputed rollup)
+        SELECT DISTINCT "parkId", op_day AS open_day
+        FROM attraction_day_operating
+        WHERE op_day >= CURRENT_DATE - $2::int
       ),
       park_open_day_counts AS (
         SELECT "parkId", COUNT(DISTINCT open_day) as open_days
@@ -311,14 +304,10 @@ export class QueuePercentileProcessor {
         ORDER BY "attractionId", timestamp DESC
       ),
       attraction_operating_days AS (
-        SELECT DISTINCT
-          q."attractionId",
-          DATE(q.timestamp AT TIME ZONE p.timezone) as op_day
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+        -- (attraction, park-local day) it was OPERATING (precomputed rollup)
+        SELECT "attractionId", op_day
+        FROM attraction_day_operating
+        WHERE op_day >= CURRENT_DATE - $2::int
       ),
       closed_on_open_days AS (
         SELECT
@@ -433,14 +422,10 @@ export class QueuePercentileProcessor {
     const showCandidates: { showId: string }[] = await this.dataSource.query(
       `
       WITH park_open_days AS (
-        SELECT DISTINCT
-          a."parkId",
-          DATE(q.timestamp AT TIME ZONE p.timezone) as open_day
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - $2 * INTERVAL '1 day'
+        -- park-local days any attraction in the park was OPERATING (precomputed rollup)
+        SELECT DISTINCT "parkId", op_day AS open_day
+        FROM attraction_day_operating
+        WHERE op_day >= CURRENT_DATE - $2::int
       ),
       show_last_updated AS (
         SELECT DISTINCT ON ("showId")
@@ -499,6 +484,53 @@ export class QueuePercentileProcessor {
     }
 
     this.logger.log(`✅ Shows: marked ${showCandidates.length} as seasonal.`);
+  }
+
+  /**
+   * Maintain the `attraction_day_operating` rollup (any-OPERATING / any-queueType, per
+   * park-local day). detect-seasonal's CTEs read this small table instead of re-scanning
+   * ~60 days of raw `queue_data` every run (the old multi-CTE scan peaked at ~227s).
+   *
+   * Incremental: scans only from 2 local days before the last stored day (boundary-safe;
+   * ON CONFLICT dedupes). The one-time full backfill (lookback + 5d buffer) runs only when
+   * the table is empty. Old rows beyond lookback + 30d are pruned to bound growth.
+   */
+  private async refreshOperatingDayRollup(lookbackDays: number): Promise<void> {
+    const maxRow: { max: string | null }[] = await this.dataSource.query(
+      `SELECT MAX(op_day)::text AS max FROM attraction_day_operating`,
+    );
+    const maxDay = maxRow[0]?.max ?? null;
+    const since = maxDay
+      ? { clause: `($1::date - INTERVAL '2 days')`, param: maxDay }
+      : { clause: `(NOW() - $1 * INTERVAL '1 day')`, param: lookbackDays + 5 };
+
+    await this.dataSource.query(
+      `
+      INSERT INTO attraction_day_operating ("attractionId", "parkId", op_day, "updatedAt")
+      SELECT DISTINCT
+        q."attractionId",
+        a."parkId",
+        DATE(q.timestamp AT TIME ZONE p.timezone) AS op_day,
+        NOW()
+      FROM queue_data q
+      JOIN attractions a ON a.id = q."attractionId"
+      JOIN parks p ON p.id = a."parkId"
+      WHERE q.status = 'OPERATING'
+        AND q.timestamp >= ${since.clause}
+      ON CONFLICT ("attractionId", op_day) DO NOTHING
+      `,
+      [since.param],
+    );
+
+    await this.dataSource.query(
+      `DELETE FROM attraction_day_operating
+       WHERE op_day < CURRENT_DATE - ($1 + 30) * INTERVAL '1 day'`,
+      [lookbackDays],
+    );
+
+    this.logger.log(
+      `   🗓️  attraction_day_operating refreshed (${maxDay ? `incremental from ${maxDay}` : `backfill ${lookbackDays + 5}d`})`,
+    );
   }
 
   /**

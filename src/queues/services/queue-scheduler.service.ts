@@ -123,10 +123,16 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
-    // Calendar warmup: once per day (5am) so /calendar is fast without warming every 5 min
+    // Calendar warmup: every 12h (08:00 + 20:00 UTC, both AFTER the nightly CatBoost
+    // retrain at 06:00 and TFT at 07:00) so /calendar serves fresh predictions and users
+    // never hit the ~15s cold daily-ML path. force=true evicts the daily ML + month caches
+    // so each run actually refreshes (weather syncs every 12h too). TTL_DAILY_PREDICTIONS
+    // (13h) > 12h interval so the cache never expires between two background refreshes.
+    const CALENDAR_WARMUP_CRON = "0 8,20 * * *";
     const hasCalendarWarmupCron = await this.hasRepeatableJob(
       this.parkMetadataQueue,
       "warmup-calendar-daily-cron",
+      CALENDAR_WARMUP_CRON,
     );
     if (!hasCalendarWarmupCron) {
       await this.parkMetadataQueue.add(
@@ -134,7 +140,7 @@ export class QueueSchedulerService implements OnModuleInit {
         {},
         {
           repeat: {
-            cron: "0 5 * * *", // Daily at 5am
+            cron: CALENDAR_WARMUP_CRON,
           },
           jobId: "warmup-calendar-daily-cron",
         },

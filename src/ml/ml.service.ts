@@ -45,7 +45,12 @@ export class MLService {
 
   // Cache TTLs based on prediction generation frequency
   private readonly TTL_HOURLY_PREDICTIONS = 30 * 60; // 30 minutes - matches createdAtCutoff window
-  private readonly TTL_DAILY_PREDICTIONS = 6 * 60 * 60; // 6 hours - more stable, less volatile
+  // 13h: daily (future-day) forecasts change at most ~2×/day (CatBoost retrains nightly,
+  // weather syncs every 12h). A background warmup force-refreshes this every 12h so users
+  // never pay the ~15s cold CatBoost daily-inference cost; the 13h TTL (>12h interval) is a
+  // safety net with 1h overlap so the key never expires between two background refreshes,
+  // while still self-healing a degraded/empty ML response within 13h instead of 25h.
+  private readonly TTL_DAILY_PREDICTIONS = 13 * 60 * 60; // 13 hours
 
   constructor(
     @InjectRepository(WaitTimePrediction)

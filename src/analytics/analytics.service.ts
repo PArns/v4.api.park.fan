@@ -2158,18 +2158,26 @@ export class AnalyticsService {
     const twoYearsAgo = new Date();
     twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
 
+    // Read from the pre-aggregated hourly rollup (queue_data_aggregates: 1 row per
+    // attraction/hour-bucket, OPERATING+STANDBY only, populated nightly) instead of
+    // scanning millions of raw queue_data rows — drops this from ~15s to <10ms (it was the
+    // top offender in the slow-query log). Served by the (attractionId, hour) index; the
+    // EXTRACT filters are residual over a single attraction's ~hourly rows.
+    //   avg = sample-weighted mean of bucket means → EXACT (verified vs raw on live).
+    //   p95 = 95th percentile of the per-bucket p95s → an approximation (cross-bucket
+    //         percentiles can't be recombined exactly), but it tracks the raw 2-year p95
+    //         well — e.g. raw 55/70/35/75 → 56/70/37/89 — far better than weight-averaging
+    //         the bucket p95s (which collapses the cross-day tail). Fine for the rounded
+    //         "typical wait this hour" reference.
     const rows = await this.queueDataRepository.query(
       `SELECT
-         AVG("waitTime")                                          AS avg_wait,
-         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "waitTime") AS p95_wait
-       FROM queue_data
-       WHERE "attractionId" = $1::uuid
-         AND timestamp      >= $2
-         AND EXTRACT(HOUR FROM timestamp AT TIME ZONE $3) = $4
-         AND EXTRACT(DOW  FROM timestamp AT TIME ZONE $3) = $5
-         AND status         = 'OPERATING'
-         AND "waitTime"     IS NOT NULL
-         AND "queueType"    = 'STANDBY'`,
+         SUM(mean * "sampleCount") / NULLIF(SUM("sampleCount"), 0)  AS avg_wait,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY p95)          AS p95_wait
+       FROM queue_data_aggregates
+       WHERE "attractionId" = $1
+         AND hour >= $2
+         AND EXTRACT(HOUR FROM hour AT TIME ZONE $3) = $4
+         AND EXTRACT(DOW  FROM hour AT TIME ZONE $3) = $5`,
       [attractionId, twoYearsAgo, timezone, hour, dayOfWeek],
     );
 
@@ -4534,9 +4542,24 @@ export class AnalyticsService {
   async getHeadlinerAttractions(
     parkId: string,
   ): Promise<HeadlinerAttraction[]> {
-    return this.headlinerAttractionRepository.find({
+    // Read-through cache: headliners are recomputed by a periodic job and barely change,
+    // but this is called on every calendar build + nearby/favorites crowd-level pass.
+    const cacheKey = `analytics:headliners:${parkId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached !== null) {
+      try {
+        return JSON.parse(cached) as HeadlinerAttraction[];
+      } catch {
+        // fall through to DB on corrupt cache
+      }
+    }
+    const rows = await this.headlinerAttractionRepository.find({
       where: { parkId },
     });
+    await this.redis
+      .set(cacheKey, JSON.stringify(rows), "EX", 6 * 60 * 60)
+      .catch(() => undefined);
+    return rows;
   }
 
   /**

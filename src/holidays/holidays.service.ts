@@ -352,7 +352,18 @@ export class HolidaysService {
     startDate: string,
     endDate: string,
   ): Promise<Holiday[]> {
-    return this.holidayRepository
+    // Read-through cache: holidays are static reference data but this runs per country on
+    // every calendar build (n=22/day at up to 14s in the slow-query log). 24h TTL.
+    const cacheKey = `holiday:range:${countryCode}:${startDate}:${endDate}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached !== null) {
+      try {
+        return JSON.parse(cached) as Holiday[];
+      } catch {
+        // fall through to DB on corrupt cache
+      }
+    }
+    const rows = await this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
       .andWhere("holiday.date BETWEEN :startDate AND :endDate", {
@@ -361,6 +372,10 @@ export class HolidaysService {
       })
       .orderBy("holiday.date", "ASC")
       .getMany();
+    await this.redis
+      .set(cacheKey, JSON.stringify(rows), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+    return rows;
   }
 
   /**

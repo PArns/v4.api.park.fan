@@ -138,6 +138,20 @@ export class SearchService implements OnModuleInit {
         "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;",
       );
 
+      // Lower the word-similarity threshold for the `<%` operator from its default (0.6) to
+      // 0.4 so single-character typos in short words still match — e.g. "epuc" / "epuc univ"
+      // → "Universal Epic Universe" (a 1-char typo in a 4-char word drops word_similarity to
+      // ~0.40, which 0.6 rejected). Set as the DB-level default (effective for connections
+      // opened after this runs — i.e. the on-demand pool connections that serve searches).
+      // Safe globally: the search service is the only `<%` / word_similarity consumer.
+      await this.parkRepository
+        .query(
+          `DO $$ BEGIN
+             EXECUTE format('ALTER DATABASE %I SET pg_trgm.word_similarity_threshold = 0.4', current_database());
+           END $$;`,
+        )
+        .catch(() => {});
+
       // Create indices concurrently if possible, but safe here without valid concurrently in transaction block usually
       // Park indices
       await this.parkRepository.query(
@@ -1882,6 +1896,44 @@ export class SearchService implements OnModuleInit {
     return shared / (at.size + bt.size - shared);
   }
 
+  /** Levenshtein distance with early exit once it provably exceeds `max`. */
+  private boundedLevenshtein(a: string, b: string, max: number): number {
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const curr = [i];
+      let rowMin = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const v = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+        curr.push(v);
+        if (v < rowMin) rowMin = v;
+      }
+      if (rowMin > max) return max + 1; // whole row already over budget
+      prev = curr;
+    }
+    return prev[b.length];
+  }
+
+  /**
+   * Typo-tolerant word match: every query word must match some name word by prefix or by a
+   * short edit distance (1 for words ≤4 chars, 2 for longer). This is what catches "epuc"
+   * → "epic" (lev 1) and "epuc univ" → "Universal Epic Universe", which whole-string trigram
+   * similarity (the `% >= 0.3` tier) rejects because a 1-char typo in a short word tanks it.
+   */
+  private wordFuzzyMatch(nameWords: string[], qWords: string[]): boolean {
+    if (qWords.length === 0) return false;
+    return qWords.every((qw) => {
+      if (qw.length < 3) return false; // too short to fuzzy-match safely
+      const maxDist = qw.length <= 4 ? 1 : 2;
+      return nameWords.some(
+        (nw) =>
+          nw.startsWith(qw) ||
+          this.boundedLevenshtein(qw, nw, maxDist) <= maxDist,
+      );
+    });
+  }
+
   private scoreEntry(
     name: string,
     extra: string | null | undefined,
@@ -1904,6 +1956,12 @@ export class SearchService implements OnModuleInit {
     if (extra && extra.toLowerCase().includes(qLower))
       return { matches: true, tier: 5, sim };
     if (sim >= 0.3) return { matches: true, tier: 6, sim };
+    // Typo tolerance (e.g. "epuc" → "epic"): every query word must fuzzy-match a name word.
+    // Ranked below the trigram tier since it's the loosest signal.
+    const nameWords = nameLower.split(/[^a-z0-9]+/).filter(Boolean);
+    const qWords = qLower.split(/[^a-z0-9]+/).filter(Boolean);
+    if (this.wordFuzzyMatch(nameWords, qWords))
+      return { matches: true, tier: 7, sim };
 
     return { matches: false, tier: 99, sim: 0 };
   }

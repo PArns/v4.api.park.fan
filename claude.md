@@ -19,6 +19,7 @@
 
 ### 🏗️ Architecture & Infrastructure
 - [System Overview](docs/architecture/system-overview.md) - High-level component design.
+- [Search](docs/architecture/search.md) - In-process (primary) vs Postgres pg_trgm (fallback) matching, Redis result/index caches, tier ladder, typo tolerance (word-level Levenshtein + word_similarity 0.4).
 - [Job Queues & Processors](docs/architecture/job-queues.md) - Background BullMQ infrastructure.
 - [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
 - [Schedule Sync & Calendar](docs/architecture/schedule-sync-and-calendar.md) - Opening hours sync (ThemeParks Wiki), on-demand refresh, calendar first-request slowness.
@@ -58,6 +59,7 @@
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
+- [API Performance & Cache Audit](docs/troubleshooting/api-performance-cache-audit.md) - **2026-06-01**: calendar cold-build (~15s) + DB saturation (227s CTE) diagnosis, Redis keyspace audit, prewarm/TTL fixes shipped, prioritized roadmap.
 - [DB Health Runbook](docs/troubleshooting/db-health-runbook.md) - Copy-paste SQL for table sizes, unused indexes, dead tuples, slow queries, OOM checks.
 
 ### 🚀 Deployment
