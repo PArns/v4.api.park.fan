@@ -1,6 +1,24 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 
+/**
+ * Where the displayed peak hour came from:
+ * - observed_today: today's peak has already passed; this is the real value.
+ * - prediction: we have live data today but the peak is still ahead; this is
+ *   the typical-peak forecast.
+ * - historical_fallback: no usable data today, falling back to the typical peak.
+ */
+export type PeakHourSource =
+  | "prediction"
+  | "observed_today"
+  | "historical_fallback";
+
+export const PEAK_HOUR_SOURCE_ENUM = [
+  "prediction",
+  "observed_today",
+  "historical_fallback",
+] as const;
+
 export class ParkStatisticsDto {
   @ApiProperty({
     description: "Average wait time across all operating attractions (minutes)",
@@ -22,11 +40,40 @@ export class ParkStatisticsDto {
   peakWaitToday: number;
 
   @ApiProperty({
-    description: "Hour when peak wait times typically occur (format: HH:00)",
-    example: "14:00",
+    description:
+      "Peak hour as a full ISO 8601 timestamp with timezone offset, e.g. " +
+      '"2026-06-01T14:00:00+02:00". Null when no peak applies (e.g. after ' +
+      "closing). Always ISO — clients should not re-parse HH:MM.",
+    example: "2026-06-01T14:00:00+02:00",
     nullable: true,
   })
   peakHour: string | null;
+
+  @ApiProperty({
+    description:
+      'Peak hour in the park\'s local time as "HH:MM", ready to display ' +
+      "without another timezone conversion. Null when no peak applies.",
+    example: "14:00",
+    nullable: true,
+  })
+  peakHourLocal: string | null;
+
+  @ApiProperty({
+    description:
+      "Confidence in the peak-hour value, 0..1 (0 = no statement possible). " +
+      "Highest when the peak is already observed today, lower for forecasts.",
+    example: 0.9,
+  })
+  peakHourConfidence: number;
+
+  @ApiProperty({
+    description: "Origin of the peak-hour value.",
+    enum: PEAK_HOUR_SOURCE_ENUM,
+    enumName: "PeakHourSource",
+    example: "prediction",
+    nullable: true,
+  })
+  peakHourSource: PeakHourSource | null;
 
   @ApiProperty({
     description: "Current crowd level based on occupancy percentage",

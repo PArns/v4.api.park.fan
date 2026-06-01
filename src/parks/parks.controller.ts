@@ -1016,6 +1016,19 @@ export class ParksController {
     description: "Number of years to look back (default: 2, max: 5)",
     example: 2,
   })
+  @ApiQuery({
+    name: "topN",
+    required: false,
+    description: "Number of top attractions to return (default: 10, max: 50)",
+    example: 10,
+  })
+  @ApiQuery({
+    name: "minSampleDays",
+    required: false,
+    description:
+      "Minimum sample days before meta.displayable becomes true (default: 30)",
+    example: 30,
+  })
   @ApiResponse({ status: 200, type: ParkHistoricalStatsDto })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkHistoricalStats(
@@ -1024,6 +1037,8 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
     @Query("years") yearsStr?: string,
+    @Query("topN") topNStr?: string,
+    @Query("minSampleDays") minSampleDaysStr?: string,
   ): Promise<ParkHistoricalStatsDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
@@ -1039,7 +1054,14 @@ export class ParksController {
     }
 
     const years = Math.min(Math.max(Number(yearsStr) || 2, 1), 5);
-    return this.parkHistoricalStatsService.getParkHistoricalStats(park, years);
+    const topN = Math.min(Math.max(Number(topNStr) || 10, 1), 50);
+    const minSampleDays = Math.max(Number(minSampleDaysStr) || 30, 0);
+    return this.parkHistoricalStatsService.getParkHistoricalStats(
+      park,
+      years,
+      topN,
+      minSampleDays,
+    );
   }
 
   /**

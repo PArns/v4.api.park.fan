@@ -912,6 +912,9 @@ export class ParkIntegrationService {
             avgWaitToday: statistics.avgWaitToday,
             peakWaitToday: statistics.peakWaitToday,
             peakHour: statistics.peakHour,
+            peakHourLocal: statistics.peakHourLocal,
+            peakHourConfidence: statistics.peakHourConfidence,
+            peakHourSource: statistics.peakHourSource,
             crowdLevel: statistics.crowdLevel,
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
@@ -970,6 +973,9 @@ export class ParkIntegrationService {
             avgWaitToday: statistics.avgWaitToday || 0, // Historical from when park was open today
             peakWaitToday: statistics.peakWaitToday || 0,
             peakHour: statistics.peakHour || null, // Historical peak hour
+            peakHourLocal: statistics.peakHourLocal || null,
+            peakHourConfidence: statistics.peakHourConfidence ?? 0,
+            peakHourSource: statistics.peakHourSource ?? null,
             crowdLevel: "very_low", // Currently very low (closed)
             totalAttractions: totalAttractionsCount,
             operatingAttractions: 0,
@@ -1003,6 +1009,9 @@ export class ParkIntegrationService {
             avgWaitToday: 0,
             peakWaitToday: 0,
             peakHour: null,
+            peakHourLocal: null,
+            peakHourConfidence: 0,
+            peakHourSource: null,
             crowdLevel: "very_low",
             totalAttractions: totalAttractionsCount,
             operatingAttractions: 0,

@@ -289,8 +289,37 @@ export class ParkStatisticsDto {
   @ApiProperty({ description: "Peak wait today" })
   peakWaitToday: number;
 
-  @ApiProperty({ description: "Peak hour", nullable: true })
+  @ApiProperty({
+    description:
+      "Peak hour as ISO 8601 with timezone offset, e.g. " +
+      '"2026-06-01T14:00:00+02:00". Null when no peak applies.',
+    nullable: true,
+  })
   peakHour: string | null;
+
+  @ApiProperty({
+    description: 'Peak hour in park-local "HH:MM" (no conversion needed)',
+    example: "14:00",
+    nullable: true,
+  })
+  peakHourLocal: string | null;
+
+  @ApiProperty({
+    description: "Confidence in the peak-hour value (0..1)",
+    example: 0.9,
+  })
+  peakHourConfidence: number;
+
+  @ApiProperty({
+    description: "Origin of the peak-hour value",
+    enum: ["prediction", "observed_today", "historical_fallback"],
+    nullable: true,
+  })
+  peakHourSource:
+    | "prediction"
+    | "observed_today"
+    | "historical_fallback"
+    | null;
 
   @ApiProperty({
     description: "Crowd level",
