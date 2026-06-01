@@ -146,14 +146,15 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Discovery/geo endpoints (2 min - live park status)
+    // Discovery/geo endpoints (5 min — underlying live park status only refreshes on the
+    // 5-min wait-times sync, so a shorter cache is pure origin churn for no fresher data)
     if (path.includes("/discovery")) {
-      return "public, max-age=120, s-maxage=120, stale-while-revalidate=120";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Search - short cache (1 min) - matches Redis TTL
+    // Search - 5 min (matches the Redis search result cache)
     if (path.includes("/search")) {
-      return "public, max-age=60, s-maxage=60, stale-while-revalidate=60";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Holidays - long cache (1 day)
@@ -161,9 +162,9 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=86400, s-maxage=86400, stale-while-revalidate=172800";
     }
 
-    // Stats/analytics - short cache (2 min for live stats)
+    // Stats/analytics - 5 min (live stats refresh on the 5-min sync cadence)
     if (path.includes("/stats") || path.includes("/analytics")) {
-      return "public, max-age=120, s-maxage=120, stale-while-revalidate=120";
+      return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
     // Default - moderate cache for other endpoints

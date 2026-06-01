@@ -49,7 +49,7 @@ import {
 @Injectable()
 export class FavoritesService {
   private readonly logger = new Logger(FavoritesService.name);
-  private readonly CACHE_TTL = 2 * 60; // 2 minutes - matches HTTP cache
+  private readonly CACHE_TTL = 5 * 60; // 5 minutes — wait-times only sync every 5min, so a shorter TTL is pure churn
   private readonly CACHE_STALE_THRESHOLD = 60; // Refresh if TTL < 1 minute
 
   constructor(
