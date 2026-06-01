@@ -31,6 +31,7 @@ import {
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
+import { dedupePollEntities } from "../../common/utils/dedupe-poll-entities.util";
 
 @Processor("wait-times")
 export class WaitTimesProcessor {
@@ -193,22 +194,12 @@ export class WaitTimesProcessor {
 
               // Process Entities
               const seenAttractionIds = new Set<string>();
-              // Dedup within a single poll by (source, externalId, entityType). A flaky
-              // upstream (observed on themeparks-wiki) sometimes returns the SAME entity
-              // twice in one response — which would write two queue_data rows per poll and
-              // over-weight that ride in the park aggregates (it once produced a phantom
-              // "extreme" month for a whole park). Keep the last occurrence. Cross-source
-              // duplicates (different `source`) are intentional multi-source coverage.
-              const pollEntities = liveData.entities
-                ? Array.from(
-                    new Map(
-                      liveData.entities.map((e) => [
-                        `${e.source}:${e.externalId}:${e.entityType}`,
-                        e,
-                      ]),
-                    ).values(),
-                  )
-                : [];
+              // Dedup within a single poll: a flaky upstream (observed on themeparks-wiki)
+              // sometimes returns the SAME entity twice in one response — which would write
+              // two queue_data rows per poll and over-weight that ride in the park
+              // aggregates (it once produced a phantom "extreme" month for a whole park).
+              // See dedupePollEntities for the exact key + what is intentionally preserved.
+              const pollEntities = dedupePollEntities(liveData.entities);
               const dupCount =
                 (liveData.entities?.length ?? 0) - pollEntities.length;
               if (dupCount > 0) {
