@@ -15,6 +15,10 @@ import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { MLService } from "../ml/ml.service";
+import { PredictionDto } from "../ml/dto";
+import { computeBestVisitTimes } from "../common/utils/best-visit-times.util";
+import { formatInParkTimezone } from "../common/utils/date.util";
 import {
   FavoritesResponseDto,
   AttractionWithDistanceDto,
@@ -67,6 +71,7 @@ export class FavoritesService {
     private readonly queueDataService: QueueDataService,
     private readonly analyticsService: AnalyticsService,
     private readonly popularityService: PopularityService,
+    private readonly mlService: MLService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -580,13 +585,22 @@ export class FavoritesService {
     }
 
     // --- Slow path: BATCH card build for cache misses ---
-    // The favorites card only reads queues (current STANDBY wait/status), status, crowdLevel
-    // and statistics.history (the sparkline). Build all missed attractions from three batched
-    // queries — current queues, sparklines (one history query per park), and P50 baselines —
-    // instead of N× per-attraction buildIntegratedResponse (which re-ran the history/stats
-    // queries per ride). Sparklines exist only for rides, so this stays in enrichAttractions.
+    // The favorites card reads queues (current STANDBY wait/status), status, crowdLevel,
+    // statistics.history (the sparkline) and bestVisitTimes (from the ML model). Build all
+    // missed attractions from batched queries — current queues, sparklines (one history
+    // query per park), P50 baselines, today's schedule (closing time) and the park-level
+    // hourly ML predictions (one cached call per park, NOT per ride) — instead of N×
+    // per-attraction buildIntegratedResponse. Sparklines/best-times are rides-only, so this
+    // stays in enrichAttractions.
     if (missedAttractions.length > 0) {
       const missedIds = missedAttractions.map((a) => a.id);
+      const missedParkIds = [
+        ...new Set(
+          missedAttractions
+            .map((a) => a.parkId)
+            .filter((p): p is string => !!p),
+        ),
+      ];
       const sparkInput = missedAttractions
         .filter((a) => a.parkId)
         .map((a) => ({
@@ -594,11 +608,27 @@ export class FavoritesService {
           parkId: a.parkId!,
           timezone: a.park?.timezone || "UTC",
         }));
-      const [queuesMap, sparklinesMap, p50Map] = await Promise.all([
+      const [
+        queuesMap,
+        sparklinesMap,
+        p50Map,
+        schedulesForBest,
+        parkPredEntries,
+      ] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
         this.analyticsService.getAttractionSparklinesBatch(sparkInput),
         this.analyticsService.getBatchAttractionP50s(missedIds),
+        this.parksService.getBatchSchedules(missedParkIds),
+        Promise.all(
+          missedParkIds.map((pid) =>
+            this.mlService
+              .getParkPredictions(pid, "hourly")
+              .then((r) => [pid, r.predictions] as const)
+              .catch(() => [pid, [] as PredictionDto[]] as const),
+          ),
+        ),
       ]);
+      const predsByPark = new Map<string, PredictionDto[]>(parkPredEntries);
       const nowIso = new Date().toISOString();
       for (const attraction of missedAttractions) {
         const dto = AttractionResponseDto.fromEntity(attraction);
@@ -635,6 +665,27 @@ export class FavoritesService {
           history,
           timestamp: nowIso,
         };
+        // Best visit time from the ML model: today's hourly predictions for THIS ride,
+        // capped at the park's closing time. Predictions come from the per-park bulk call.
+        if (attraction.parkId && attraction.park) {
+          const tz = attraction.park.timezone || "UTC";
+          const todayStr = getCurrentDateInTimezone(tz);
+          const todayAttrPreds = (
+            predsByPark.get(attraction.parkId) || []
+          ).filter(
+            (p) =>
+              p.attractionId === attraction.id &&
+              formatInParkTimezone(new Date(p.predictedTime), tz) === todayStr,
+          );
+          const closing =
+            (schedulesForBest.today.get(attraction.parkId) || []).find(
+              (e) => e.closingTime != null,
+            )?.closingTime ?? null;
+          dto.bestVisitTimes = computeBestVisitTimes(
+            todayAttrPreds,
+            closing ? closing.toISOString() : null,
+          );
+        }
         if (attraction.park) {
           dto.url = buildAttractionUrl(attraction.park, attraction) || null;
         }
