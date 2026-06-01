@@ -7,6 +7,7 @@ import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
  * Coverage for the public surface of LocationService — the "where am I,
@@ -72,6 +73,12 @@ describe("LocationService", () => {
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: ParksService, useValue: parksService },
         { provide: PopularityService, useValue: popularityService },
+        {
+          // Empty MGET → every park is a cache miss → exercises the batch fallback path
+          // these tests already mock.
+          provide: REDIS_CLIENT,
+          useValue: { mget: jest.fn().mockResolvedValue([]) },
+        },
       ],
     }).compile();
 

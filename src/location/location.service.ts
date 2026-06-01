@@ -1,6 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -48,6 +52,7 @@ export class LocationService {
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
     private readonly popularityService: PopularityService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /**
@@ -348,52 +353,114 @@ export class LocationService {
       userLocation,
     ).slice(0, limit);
 
-    // Get park IDs for batch queries
-    const parkIds = sortedParks.map((p) => p.id);
+    // Fast path: read the prewarmed park:integrated cache (single MGET). All parks are
+    // warmed every 5min, so this normally serves every nearby park directly from Redis —
+    // the per-park batch status/occupancy/statistics/schedule round-trips below then only
+    // run for genuine cache misses. Mirrors FavoritesService.enrichParks.
+    const cachedRaw = await this.redis.mget(
+      ...sortedParks.map((p) => `park:integrated:${p.id}`),
+    );
+    const integratedMap = new Map<string, ParkWithAttractionsDto>();
+    const missedParks: typeof sortedParks = [];
+    sortedParks.forEach((p, i) => {
+      const raw = cachedRaw[i];
+      if (raw) {
+        try {
+          integratedMap.set(p.id, JSON.parse(raw) as ParkWithAttractionsDto);
+        } catch {
+          missedParks.push(p);
+        }
+      } else {
+        missedParks.push(p);
+      }
+    });
 
-    // Batch fetch status, analytics, and schedules
+    // Slow path: batch queries cover ONLY cache misses (empty + near-free when all cached).
+    const missedIds = missedParks.map((p) => p.id);
     const [statusMap, occupancyMap, schedules, operatingScheduleMap] =
       await Promise.all([
-        this.parksService.getBatchParkStatus(parkIds),
-        this.analyticsService["getBatchParkOccupancy"](parkIds),
-        this.batchFetchSchedules(parkIds),
-        this.parksService.getBatchHasOperatingSchedule(parkIds),
+        this.parksService.getBatchParkStatus(missedIds),
+        this.analyticsService["getBatchParkOccupancy"](missedIds),
+        this.batchFetchSchedules(missedIds),
+        this.parksService.getBatchHasOperatingSchedule(missedIds),
       ]);
-
-    // Get statistics for each park (with timezone context) - Batch optimized
-    const startTimeMap = await this.analyticsService.getBatchEffectiveStartTime(
-      sortedParks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
-    );
     const context = new Map<string, { timezone: string; startTime: Date }>();
-    for (const park of sortedParks) {
-      const startTime = startTimeMap.get(park.id)!;
-      context.set(park.id, {
-        timezone: park.timezone || "UTC",
-        startTime,
-      });
+    if (missedIds.length > 0) {
+      const startTimeMap =
+        await this.analyticsService.getBatchEffectiveStartTime(
+          missedParks.map((p) => ({ id: p.id, timezone: p.timezone || "UTC" })),
+        );
+      for (const park of missedParks) {
+        context.set(park.id, {
+          timezone: park.timezone || "UTC",
+          startTime: startTimeMap.get(park.id)!,
+        });
+      }
     }
-
     const statisticsMap = await this.analyticsService.getBatchParkStatistics(
-      parkIds,
+      missedIds,
       context,
     );
 
-    // Build park DTOs
+    // Build park DTOs (hits from the integrated cache, misses from the batch maps)
     const parkDtos: ParkWithDistanceDto[] = sortedParks.map((park) => {
-      const status = statusMap.get(park.id) || "CLOSED";
+      const distance = Math.round(park.distance);
+      const integrated = integratedMap.get(park.id);
+
+      if (integrated) {
+        const today = getCurrentDateInTimezone(park.timezone || "UTC");
+        const todayEntry = integrated.schedule?.find((s) => s.date === today);
+        return {
+          id: park.id,
+          name: park.name,
+          slug: park.slug,
+          distance,
+          city: park.city || null,
+          country: park.country || null,
+          status: integrated.status || "CLOSED",
+          hasOperatingSchedule: integrated.hasOperatingSchedule ?? false,
+          totalAttractions:
+            integrated.analytics?.statistics?.totalAttractions || 0,
+          operatingAttractions:
+            integrated.analytics?.statistics?.operatingAttractions || 0,
+          analytics: integrated.analytics
+            ? {
+                avgWaitTime:
+                  integrated.analytics.occupancy?.breakdown?.currentAvgWait ||
+                  0,
+                crowdLevel: integrated.analytics.statistics?.crowdLevel,
+                occupancy: integrated.analytics.occupancy?.current,
+              }
+            : undefined,
+          url: integrated.url || buildParkUrl(park) || null,
+          timezone: park.timezone,
+          todaySchedule: todayEntry
+            ? {
+                openingTime: todayEntry.openingTime || "",
+                closingTime: todayEntry.closingTime || "",
+                scheduleType: todayEntry.scheduleType,
+              }
+            : undefined,
+          nextSchedule: integrated.nextSchedule
+            ? {
+                openingTime: integrated.nextSchedule.openingTime,
+                closingTime: integrated.nextSchedule.closingTime,
+                scheduleType: integrated.nextSchedule.scheduleType,
+              }
+            : undefined,
+        };
+      }
+
       const occupancy = occupancyMap.get(park.id);
       const stats = statisticsMap.get(park.id);
-      const todaySchedule = schedules.today.get(park.id);
-      const nextSchedule = schedules.next.get(park.id);
-
       return {
         id: park.id,
         name: park.name,
         slug: park.slug,
-        distance: Math.round(park.distance),
+        distance,
         city: park.city || null,
         country: park.country || null,
-        status,
+        status: statusMap.get(park.id) || "CLOSED",
         hasOperatingSchedule: operatingScheduleMap.get(park.id) || false,
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,
@@ -408,8 +475,8 @@ export class LocationService {
           : undefined,
         url: buildParkUrl(park) || null,
         timezone: park.timezone,
-        todaySchedule: formatTodaySchedule(todaySchedule),
-        nextSchedule: formatNextSchedule(nextSchedule),
+        todaySchedule: formatTodaySchedule(schedules.today.get(park.id)),
+        nextSchedule: formatNextSchedule(schedules.next.get(park.id)),
       };
     });
 
