@@ -503,7 +503,10 @@ export class ParksController {
       await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
     const includesHistoricalData = response.days.some((d) => d.date <= today);
-    const cacheTTL = includesHistoricalData ? 5 * 60 : 30 * 60; // 5 min for past/today, 30 min for future
+    // 15 min for ranges including past/today, 30 min for pure-future ranges. Today's
+    // live crowd level is patched client-side (separate today-only fetch) and the
+    // daily forecast only refreshes ~every 13h, so the old 5 min was just CDN churn.
+    const cacheTTL = includesHistoricalData ? 15 * 60 : 30 * 60;
 
     if (res) {
       res.setHeader(

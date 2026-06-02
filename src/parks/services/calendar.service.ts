@@ -475,7 +475,12 @@ export class CalendarService {
       )
         continue;
       const key = `calendar:month:${parkId}:${ym}:${includeHourly}`;
-      const ttl = today.startsWith(ym) ? 5 * 60 : this.CALENDAR_CACHE_TTL;
+      // Current month gets a shorter TTL than future months, but it does NOT need
+      // to be 5 min: today's live crowd level is patched client-side via a
+      // separate today-only fetch, and the underlying daily forecast only changes
+      // ~every 13h. 15 min keeps schedule/weather edits reasonably fresh without
+      // rebuilding the current-month calendar 12×/hour.
+      const ttl = today.startsWith(ym) ? 15 * 60 : this.CALENDAR_CACHE_TTL;
       writes.push(
         this.redis
           .set(key, JSON.stringify(monthDays), "EX", ttl)
