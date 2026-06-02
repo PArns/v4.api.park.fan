@@ -595,13 +595,13 @@ export class ParksController {
    * Cache TTL: 15 minutes (matches the upstream data resolution).
    */
   @Get(":continent/:country/:city/:parkSlug/weather/nowcast")
-  @UseInterceptors(new HttpCacheInterceptor(15 * 60)) // 15 minutes
   @ApiOperation({
     summary: "Get short-term weather nowcast (geo)",
     description:
       "Returns a precipitation and thunderstorm nowcast for a park (15-min resolution, ~6h window). " +
       "Designed for live in-park alerts ('rain in X min, ending in Y min'). " +
-      "Cache TTL: 15 minutes (HTTP + Redis).",
+      "Cache is aligned to the next 15-min slot boundary (nextUpdateAt): the snapshot " +
+      "is re-derived per request and the response cannot outlive its promised update.",
   })
   @ApiParam({ name: "continent", example: "europe" })
   @ApiParam({ name: "country", example: "germany" })
@@ -622,6 +622,7 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
+    @Res({ passthrough: true }) res?: any,
   ): Promise<WeatherNowcastDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
@@ -642,6 +643,21 @@ export class ParksController {
       throw new NotFoundException(
         `Nowcast unavailable for park "${parkSlug}" (missing coordinates or upstream error)`,
       );
+    }
+
+    // Align the CDN/browser cache to the slot boundary the client is told to poll
+    // at (nextUpdateAt), with NO stale-while-revalidate, so a cached response can
+    // never outlive its own promised update — once nextUpdateAt passes, the next
+    // request re-derives a fresh snapshot at both the CDN and the origin.
+    if (res) {
+      const ttl = Math.max(
+        1,
+        Math.ceil(
+          (new Date(nowcast.nextUpdateAt).getTime() - Date.now()) / 1000,
+        ),
+      );
+      res.setHeader("Cache-Control", `public, max-age=${ttl}, s-maxage=${ttl}`);
+      res.setHeader("Vary", "Accept-Encoding");
     }
 
     return WeatherNowcastDto.fromNowcast(

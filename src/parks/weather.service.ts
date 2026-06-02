@@ -178,17 +178,25 @@ export class WeatherService {
    * @returns Nowcast result, or `null` if coordinates are missing
    */
   async getNowcast(parkId: string): Promise<ParkNowcast | null> {
-    const cacheKey = `weather:nowcast:park:${parkId}`;
+    // Cache the RAW upstream forecast (not the derived snapshot) so that on a
+    // cache hit we re-derive the snapshot at the *current* time. The raw window
+    // covers ~6h, so observedAt, the "current slot" values, and nextUpdateAt all
+    // advance to now on every read — the snapshot tracks the live slot instead of
+    // freezing at fetch time. Open-Meteo is only called again when the cached raw
+    // expires (NOWCAST_CACHE_TTL), so upstream request volume is unchanged.
+    const cacheKey = `weather:nowcast:raw:${parkId}`;
+    const nowIso = new Date().toISOString();
 
-    // Cache hit → return the cached snapshot, but refresh nextUpdateAt from the
-    // current time so the client keeps polling every 15 min (at the next slot
-    // boundary) even while we keep serving the same upstream data.
     try {
       const cachedStr = await this.redis.get(cacheKey);
       if (cachedStr) {
-        const cached = JSON.parse(cachedStr) as ParkNowcast;
-        cached.nextUpdateAt = this.nextSlotBoundaryIso(Date.now());
-        return cached;
+        const cached = JSON.parse(cachedStr) as {
+          raw: MinutelyNowcastResponse;
+          timezone: string;
+        };
+        if (cached?.raw) {
+          return this.deriveNowcastAlert(cached.raw, cached.timezone, nowIso);
+        }
       }
     } catch (err) {
       this.logger.warn(`Redis cache error: ${err}`);
@@ -221,19 +229,15 @@ export class WeatherService {
       return null;
     }
 
-    const result = this.deriveNowcastAlert(
-      raw,
-      park.timezone || "UTC",
-      new Date().toISOString(),
-    );
+    const timezone = park.timezone || "UTC";
 
     try {
-      // Upstream cadence: cache for ~30 min to keep request volume low. This is
-      // independent of nextUpdateAt (the client polls every 15 min); the next
-      // 15-min poll after this expires triggers the refetch.
+      // Upstream cadence: cache the raw forecast for ~30 min to keep request
+      // volume low. Freshness of the snapshot does not depend on this TTL — each
+      // read re-derives against the cached window — so a long raw TTL is fine.
       await this.redis.set(
         cacheKey,
-        JSON.stringify(result),
+        JSON.stringify({ raw, timezone }),
         "EX",
         this.NOWCAST_CACHE_TTL,
       );
@@ -241,7 +245,7 @@ export class WeatherService {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
 
-    return result;
+    return this.deriveNowcastAlert(raw, timezone, nowIso);
   }
 
   /**
