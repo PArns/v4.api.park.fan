@@ -65,6 +65,55 @@ export class PredictionAccuracyService {
   }
 
   /**
+   * Batch variant of {@link recordPrediction}: records many predictions in a
+   * few multi-row upserts instead of one round-trip per prediction.
+   *
+   * Why: the per-row loop fired N single-row `ON CONFLICT` upserts against the
+   * large unique index, which under the concurrent comparison job's bulk UPDATE
+   * showed up as multi-second lock waits. Batching collapses N round-trips into
+   * ceil(N / CHUNK) statements.
+   *
+   * `synchronous_commit = off` (LOCAL to this transaction) is Postgres' closest
+   * thing to a "delayed insert": the commit returns without waiting for the WAL
+   * fsync. Safe here because accuracy rows are regenerable telemetry — losing
+   * the last few hundred ms of them on a crash has no correctness impact.
+   *
+   * @returns the number of predictions written
+   */
+  async recordPredictions(predictions: WaitTimePrediction[]): Promise<number> {
+    if (!predictions || predictions.length === 0) return 0;
+
+    const rows = predictions.map((prediction) => {
+      const accuracy = new PredictionAccuracy();
+      accuracy.attractionId = prediction.attractionId;
+      accuracy.predictionTime = prediction.createdAt;
+      accuracy.targetTime = prediction.predictedTime;
+      accuracy.predictedWaitTime = prediction.predictedWaitTime;
+      accuracy.modelVersion = prediction.modelVersion;
+      accuracy.predictionType = prediction.predictionType;
+      accuracy.features = prediction.features;
+      return accuracy;
+    });
+
+    // Keep each statement well under Postgres' 65535-parameter limit
+    // (~8 columns per row → ~8k row ceiling; 1000 leaves ample headroom).
+    const CHUNK = 1000;
+
+    await this.accuracyRepository.manager.transaction(async (em) => {
+      await em.query("SET LOCAL synchronous_commit = off");
+      const repo = em.getRepository(PredictionAccuracy);
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        await repo.upsert(rows.slice(i, i + CHUNK) as any, {
+          conflictPaths: ["attractionId", "targetTime"],
+          skipUpdateIfNoValuesChanged: false,
+        });
+      }
+    });
+
+    return rows.length;
+  }
+
+  /**
    * Cleanup old accuracy records
    * Retention Policy:
    * - MISSED/PENDING: 7 days (short term for debugging)

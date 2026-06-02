@@ -36,8 +36,11 @@ export class PredictionAccuracy {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
+  // No standalone index: attraction_id is the leading column of the
+  // uq_pa_attraction_target unique index, which already serves attraction_id
+  // lookups. A separate single-column index had 0 scans and only added write
+  // cost to every accuracy upsert.
   @Column({ name: "attraction_id" })
-  @Index()
   attractionId: string;
 
   @ManyToOne(() => Attraction)
@@ -79,13 +82,16 @@ export class PredictionAccuracy {
   @Column({ type: "boolean", default: false })
   wasUnplannedClosure: boolean;
 
+  // No standalone index: comparison_status is the leading column of
+  // idx_pa_status_target (comparison_status, target_time), which already serves
+  // status-only lookups. A separate single-column index on a low-cardinality
+  // enum added write cost for no read benefit.
   @Column({
     name: "comparison_status",
     type: "enum",
     enum: ["PENDING", "COMPLETED", "MISSED"],
     default: "PENDING",
   })
-  @Index() // Index for fast lookup of pending records
   comparisonStatus: "PENDING" | "COMPLETED" | "MISSED";
 
   @CreateDateColumn({ type: "timestamptz" })

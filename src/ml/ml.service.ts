@@ -1169,25 +1169,26 @@ export class MLService {
         (pred.status === "OPERATING" || pred.status === null),
     );
 
-    let recordedCount = 0;
-
     if (validPredictionsForFeedback.length < savedPredictions.length) {
       this.logger.debug(
         `Filtering: Recording ${validPredictionsForFeedback.length}/${savedPredictions.length} predictions (excluding scheduled closures and daily predictions)`,
       );
     }
 
-    for (const prediction of validPredictionsForFeedback) {
-      try {
-        await this.predictionAccuracyService.recordPrediction(prediction);
-        recordedCount++;
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logger.warn(
-          `Failed to record prediction for accuracy tracking: ${errorMessage}`,
-        );
-      }
+    let recordedCount = 0;
+    try {
+      // Batched upsert (few multi-row statements, synchronous_commit=off) instead
+      // of one round-trip per prediction — avoids the multi-second lock waits the
+      // per-row loop produced under the concurrent comparison job.
+      recordedCount = await this.predictionAccuracyService.recordPredictions(
+        validPredictionsForFeedback,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      this.logger.warn(
+        `Failed to record predictions for accuracy tracking: ${errorMessage}`,
+      );
     }
 
     this.logger.verbose(
