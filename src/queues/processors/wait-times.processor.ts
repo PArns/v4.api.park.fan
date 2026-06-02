@@ -757,12 +757,23 @@ export class WaitTimesProcessor {
           if (now < open || (close && now > close)) continue;
           const attractions = attractionsByPark.get(park.id) ?? [];
           if (attractions.length === 0) continue;
+          // Time-bound the "latest reading per attraction" lookup so TimescaleDB
+          // can exclude old chunks instead of decompressing each attraction's full
+          // history (an unbounded DISTINCT ON over the compressed hypertable hit
+          // ~14s under load and IO-saturated everything behind it).
+          // 2 days is behavior-preserving: this loop only acts on readings <1h old
+          // and skips attractions stale >24h via the Redis lastSeen check below, so
+          // any `last` row that can change the outcome is well within the window.
+          const heartbeatLookupSince = new Date(
+            now.getTime() - 2 * 24 * 60 * 60 * 1000,
+          );
           const latestData = await this.queueDataRepository
             .createQueryBuilder("qd")
             .where("qd.attractionId IN (:...ids)", {
               ids: attractions.map((a) => a.id),
             })
             .andWhere("qd.queueType = :qt", { qt: QueueType.STANDBY })
+            .andWhere("qd.timestamp >= :since", { since: heartbeatLookupSince })
             .distinctOn(["qd.attractionId"])
             .orderBy("qd.attractionId", "ASC")
             .addOrderBy("qd.timestamp", "DESC")

@@ -205,9 +205,17 @@ export class AttractionsService {
       // This replaces the O(n²) correlated subquery with a single efficient query
       // Uses the composite index on (attractionId, queueType, timestamp) for optimal performance
       // Prioritizes STANDBY queue type, falls back to others if STANDBY not available
+      //
+      // Time-bound the subquery so TimescaleDB can exclude old chunks. Without it,
+      // DISTINCT ON over the whole compressed hypertable decompresses every chunk
+      // (~6s isolated, ~14s under load). A current-status view only cares about
+      // recent readings; a 2-day window keeps even overnight/poll-gap parks (which
+      // still emit fresh CLOSED rows each poll) while scanning ~2 of ~160 chunks.
+      const latestSince = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
       queryBuilder.leftJoin(
         (subQuery) => {
           return subQuery
+            .where("qd.timestamp >= :latestSince")
             .select("qd.attractionId")
             .addSelect("qd.queueType")
             .addSelect("qd.timestamp")
@@ -236,6 +244,7 @@ export class AttractionsService {
         "qd",
         "qd.attractionId = attraction.id",
       );
+      queryBuilder.setParameter("latestSince", latestSince);
 
       // Filter by status
       if (filters.status) {
