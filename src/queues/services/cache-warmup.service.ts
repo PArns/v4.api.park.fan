@@ -412,10 +412,14 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         `Found ${parks.length} parks to verify in cache (Full Warmup: Operating -> Popular -> Rest)`,
       );
 
-      // Warm up in batches (Smart Warmup decision logic is inside callback)
+      // Warm up in batches (Smart Warmup decision logic is inside callback).
+      // Batch size 5 (not 10): each park warmup fires several heavy queue_data queries
+      // (status + occupancy + statistics), so 10 parks × that = ~30+ concurrent heavy scans,
+      // which periodically saturated the DB (search/etc. stalled for seconds). 5 halves the
+      // peak; the 1s inter-batch delay (processBatch default) further spreads the load.
       const warmedCount = await this.processBatch(
         sortedParkIds,
-        10,
+        5,
         "OperatingParks",
         async (parkId) => {
           const status = statusMap.get(parkId);

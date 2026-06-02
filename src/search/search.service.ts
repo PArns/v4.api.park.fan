@@ -369,13 +369,23 @@ export class SearchService implements OnModuleInit {
     const parentParkIdOf = (c: Candidate): string =>
       c.type === "park" ? c.entity.id : (c.entity.park?.id ?? c.entity.id);
 
-    // Preload park status (cached) once for the OPERATING-first ranking.
+    // Preload park status (cached) once for the OPERATING-first ranking. This only affects
+    // ranking — never block search on it: when the per-park status cache is cold during a
+    // DB-saturation burst, the underlying getBatchParkStatus can take many seconds (observed
+    // 16s). Cap it at 1s; on timeout fall back to an empty map → results are identical, just
+    // not status-prioritized, and the slow lookup still fills the cache for the next search.
     const rankParkIds = Array.from(
       new Set(candidates.map((c) => parentParkIdOf(c))),
     );
+    const RANK_STATUS_TIMEOUT_MS = 1000;
     const rankStatusMap = await timed(
       "rankParkStatus",
-      this.getCachedParkStatusMap(rankParkIds),
+      Promise.race([
+        this.getCachedParkStatusMap(rankParkIds),
+        new Promise<Map<string, "OPERATING" | "CLOSED">>((resolve) =>
+          setTimeout(() => resolve(new Map()), RANK_STATUS_TIMEOUT_MS),
+        ),
+      ]),
     );
 
     // Stable OPERATING-first sort, then dedup by type + name + parent park.
