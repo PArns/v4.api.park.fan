@@ -389,9 +389,14 @@ export class ShowsService {
     showId: string,
     newData: EntityLiveResponse,
   ): Promise<boolean> {
-    // Get latest entry for this show, including park to get timezone
+    // Get latest entry for this show, including park to get timezone.
+    // 7-day cutoff enables TimescaleDB chunk exclusion (show_live_data is a
+    // compressed hypertable; an unbounded latest-lookup decompresses every
+    // chunk per show → ~14s under load). A show with no data in 7 days is
+    // correctly treated as "no previous data" → save the fresh reading.
+    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const latest = await this.showLiveDataRepository.findOne({
-      where: { showId },
+      where: { showId, timestamp: MoreThanOrEqual(liveDataCutoff) },
       order: { timestamp: "DESC" },
       relations: ["show", "show.park"],
     });
@@ -494,8 +499,11 @@ export class ShowsService {
    * Find current status for a show (most recent live data)
    */
   async findCurrentStatusByShow(showId: string): Promise<ShowLiveData | null> {
+    // 7-day cutoff for chunk exclusion (see shouldSaveShowLiveData). Live data
+    // is only useful for "now", so a show stale >7d correctly returns null.
+    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     return this.showLiveDataRepository.findOne({
-      where: { showId },
+      where: { showId, timestamp: MoreThanOrEqual(liveDataCutoff) },
       relations: ["show", "show.park"],
       order: { timestamp: "DESC" },
     });

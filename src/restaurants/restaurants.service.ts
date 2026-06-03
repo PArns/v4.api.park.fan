@@ -359,9 +359,14 @@ export class RestaurantsService {
     restaurantId: string,
     newData: EntityLiveResponse,
   ): Promise<boolean> {
-    // Get latest entry for this restaurant
+    // Get latest entry for this restaurant. 7-day cutoff enables TimescaleDB
+    // chunk exclusion (restaurant_live_data is a compressed hypertable; an
+    // unbounded latest-lookup decompresses every chunk per restaurant → ~14s
+    // under load). A restaurant with no data in 7 days is correctly treated as
+    // "no previous data" → save the fresh reading.
+    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const latest = await this.restaurantLiveDataRepository.findOne({
-      where: { restaurantId },
+      where: { restaurantId, timestamp: MoreThanOrEqual(liveDataCutoff) },
       order: { timestamp: "DESC" },
       relations: ["restaurant", "restaurant.park"],
     });
@@ -420,8 +425,11 @@ export class RestaurantsService {
   async findCurrentStatusByRestaurant(
     restaurantId: string,
   ): Promise<RestaurantLiveData | null> {
+    // 7-day cutoff for chunk exclusion (see shouldSaveDiningAvailability).
+    // Live data is only useful for "now", so a restaurant stale >7d returns null.
+    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     return this.restaurantLiveDataRepository.findOne({
-      where: { restaurantId },
+      where: { restaurantId, timestamp: MoreThanOrEqual(liveDataCutoff) },
       relations: ["restaurant", "restaurant.park"],
       order: { timestamp: "DESC" },
     });
