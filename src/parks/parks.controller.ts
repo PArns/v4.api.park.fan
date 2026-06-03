@@ -305,6 +305,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
   @ApiOperation({
     summary: "List parks in country",
     description: "Returns all parks operating in a specific country.",
@@ -340,6 +341,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country/:city")
+  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
   @ApiOperation({
     summary: "List parks in city",
     description: "Returns all parks operating in a specific city.",

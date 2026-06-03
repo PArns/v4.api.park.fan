@@ -98,8 +98,8 @@ describe("HttpCacheInterceptor", () => {
     });
   });
 
-  describe("ETag", () => {
-    it("emits a strong ETag derived from the response body", async () => {
+  describe("ETag (now owned by the global CacheControlInterceptor)", () => {
+    it("does NOT set an ETag here — the global interceptor hashes the final wire body", async () => {
       const interceptor = new HttpCacheInterceptor(60);
       const { ctx, headers } = buildMockContext();
 
@@ -107,33 +107,24 @@ describe("HttpCacheInterceptor", () => {
         interceptor.intercept(ctx, handlerOf({ a: 1, b: 2 })),
       );
 
-      expect(headers["ETag"]).toMatch(/^"[a-f0-9]{32}"$/);
+      expect(headers["ETag"]).toBeUndefined();
     });
 
-    it("returns 304 when the client's If-None-Match matches the body's ETag", async () => {
-      const body = { foo: "bar" };
-
-      // First call: capture the ETag the interceptor would produce.
-      const probe = new HttpCacheInterceptor(60);
-      const probeCtx = buildMockContext();
-      await firstValueFrom(probe.intercept(probeCtx.ctx, handlerOf(body)));
-      const etag = probeCtx.headers["ETag"];
-
-      // Second call: client sends that ETag back → expect 304.
+    it("ignores If-None-Match and never short-circuits to 304", async () => {
       const interceptor = new HttpCacheInterceptor(60);
-      const { ctx, response, getStatus } = buildMockContext({
-        "if-none-match": etag,
+      const { ctx, headers, getStatus } = buildMockContext({
+        "if-none-match": '"whatever"',
       });
 
-      await firstValueFrom(interceptor.intercept(ctx, handlerOf(body)));
-
-      expect(getStatus()).toBe(304);
-      // Cache headers are NOT set on a 304 — the existing browser/CDN
-      // entry stays in place.
-      expect(response.setHeader).not.toHaveBeenCalledWith(
-        "Cache-Control",
-        expect.anything(),
+      const result = await firstValueFrom(
+        interceptor.intercept(ctx, handlerOf({ foo: "bar" })),
       );
+
+      // Body flows through untouched; status is left to NestJS/Cloudflare.
+      expect(result).toEqual({ foo: "bar" });
+      expect(getStatus()).toBeNull();
+      // TTL header is still applied normally.
+      expect(headers["Cache-Control"]).toContain("max-age=60");
     });
   });
 

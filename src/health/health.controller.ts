@@ -1,4 +1,5 @@
 import { Controller, Get, Logger } from "@nestjs/common";
+import { SkipThrottle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
 import { Connection, Repository, MoreThanOrEqual } from "typeorm";
@@ -55,6 +56,7 @@ interface HealthStatus {
 
 @ApiTags("health")
 @Controller("health")
+@SkipThrottle() // monitoring/uptime probes must never be rate limited
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
