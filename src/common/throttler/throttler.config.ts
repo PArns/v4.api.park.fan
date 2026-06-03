@@ -24,6 +24,25 @@ export const THROTTLE_LIMIT = parseInt(process.env.THROTTLE_LIMIT ?? "300", 10);
 
 export const isThrottlingEnabled = (): boolean => THROTTLE_LIMIT > 0;
 
+/**
+ * Bypass allow-list. A request carrying THROTTLE_BYPASS_HEADER with a value
+ * matching one of THROTTLE_BYPASS_KEYS skips the rate limiter entirely.
+ * This is how our own frontend opts out of the circuit breaker. The keys
+ * are shared secrets — rotate them via env, never commit real values.
+ *
+ * Disabled (no bypass) when THROTTLE_BYPASS_KEYS is empty.
+ */
+export const THROTTLE_BYPASS_HEADER = (
+  process.env.THROTTLE_BYPASS_HEADER ?? "x-rl-bypass"
+).toLowerCase();
+
+export const THROTTLE_BYPASS_KEYS: readonly string[] = (
+  process.env.THROTTLE_BYPASS_KEYS ?? ""
+)
+  .split(",")
+  .map((key) => key.trim())
+  .filter((key) => key.length > 0);
+
 export const throttlerOptions: ThrottlerModuleOptions = [
   {
     // @nestjs/throttler v6 expects the window in milliseconds.

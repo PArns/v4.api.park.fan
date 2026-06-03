@@ -102,7 +102,7 @@ export class ParksController {
    * Now supports pagination with default limit of 10 items.
    */
   @Get()
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List all parks",
     description:
@@ -263,7 +263,7 @@ export class ParksController {
    * @throws NotFoundException if continent not found
    */
   @Get(":continent")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "Get parks by continent",
     description:
@@ -305,7 +305,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List parks in country",
     description: "Returns all parks operating in a specific country.",
@@ -341,7 +341,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country/:city")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List parks in city",
     description: "Returns all parks operating in a specific city.",
@@ -946,12 +946,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/wait-times")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
     summary: "Get wait times (geo)",
     description:
       "Returns current wait times for all attractions in a park via geographic path. " +
-      "Cached for 2 minutes.",
+      "Cached for 5 minutes.",
   })
   @ApiParam({
     name: "continent",
@@ -1189,12 +1189,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
     summary: "List park attractions (geo)",
     description:
       "Returns a paginated list of all attractions for a specific park via geographic path. " +
-      "Cached for 2 minutes.",
+      "Cached for 5 minutes.",
   })
   @ApiParam({
     name: "continent",
@@ -1321,13 +1321,13 @@ export class ParksController {
    * @throws NotFoundException if park or attraction not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions/:attractionSlug")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live wait times
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
     summary: "Get attraction details (geo)",
     description:
       "Returns details for a specific attraction in a park via full geographic path. " +
       "This is the primary route with full integration support. Includes historical data (utilization, hourly P90, down counts). " +
-      "Cached for 2 minutes.",
+      "Cached for 5 minutes.",
   })
   @ApiParam({
     name: "continent",
@@ -1413,12 +1413,12 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live park status
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "Get park by location",
     description:
       "Returns a specific park by its geographic structure. " +
-      "Cached for 2 minutes.",
+      "Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,

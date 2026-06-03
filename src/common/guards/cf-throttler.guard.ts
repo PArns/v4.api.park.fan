@@ -1,8 +1,13 @@
-import { Injectable } from "@nestjs/common";
+import { ExecutionContext, Injectable } from "@nestjs/common";
 import { ThrottlerGuard } from "@nestjs/throttler";
+import {
+  THROTTLE_BYPASS_HEADER,
+  THROTTLE_BYPASS_KEYS,
+} from "../throttler/throttler.config";
 
 /**
- * Rate-limit guard that keys on the REAL client IP.
+ * Rate-limit guard that keys on the REAL client IP and supports a
+ * header-based bypass allow-list.
  *
  * Behind Cloudflare every origin request arrives from a Cloudflare edge
  * address, so the default `req.ip` tracker would lump all clients into a
@@ -24,5 +29,28 @@ export class CfThrottlerGuard extends ThrottlerGuard {
     }
 
     return req.ip ?? "unknown";
+  }
+
+  /**
+   * Skip rate limiting for callers presenting a valid bypass key in the
+   * configured header (our frontend), in addition to the default
+   * @SkipThrottle() handling. No-op when no bypass keys are configured.
+   */
+  protected async shouldSkip(context: ExecutionContext): Promise<boolean> {
+    if (THROTTLE_BYPASS_KEYS.length > 0) {
+      const req = context.switchToHttp().getRequest();
+      const provided = req.headers?.[THROTTLE_BYPASS_HEADER];
+      const values = Array.isArray(provided) ? provided : [provided];
+      if (
+        values.some(
+          (value) =>
+            typeof value === "string" && THROTTLE_BYPASS_KEYS.includes(value),
+        )
+      ) {
+        return true;
+      }
+    }
+
+    return super.shouldSkip(context);
   }
 }

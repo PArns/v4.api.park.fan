@@ -10,11 +10,11 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("realtime")
-  @UseInterceptors(new HttpCacheInterceptor(120))
+  @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Get global platform statistics",
     description:
-      "Returns real-time global statistics including open/closed parks, most/least crowded parks, longest/shortest wait rides, and platform-wide counts. Cached for 2 minutes for optimal performance.",
+      "Returns real-time global statistics including open/closed parks, most/least crowded parks, longest/shortest wait rides, and platform-wide counts. Cached for 5 minutes for optimal performance.",
   })
   @ApiResponse({
     status: 200,
@@ -30,13 +30,13 @@ export class AnalyticsController {
   }
 
   @Get("geo-live")
-  @UseInterceptors(new HttpCacheInterceptor(120))
+  @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Get live geographic statistics",
     description:
       "Returns real-time statistics (open park count and average wait time) " +
       "for all continents, countries, and cities. Useful for showing live data " +
-      "on geographic navigation pages. Cached for 2 minutes.",
+      "on geographic navigation pages. Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -57,7 +57,7 @@ export class AnalyticsController {
     summary: "Live wait-time ticker",
     description:
       "Returns the top 40 attractions sorted by current wait time across all open parks. " +
-      "Only includes OPERATING attractions with a wait time > 0. Cached for 2 minutes.",
+      "Only includes OPERATING attractions with a wait time > 0. Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,

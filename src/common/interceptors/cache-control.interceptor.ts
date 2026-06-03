@@ -192,7 +192,8 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Default - moderate cache for other endpoints
-    return "public, max-age=300, s-maxage=300";
+    // Default - moderate cache (5 min) for other GET endpoints, matching
+    // the 5-min data sync cadence. SWR mirrors the explicit branches above.
+    return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
   }
 }
