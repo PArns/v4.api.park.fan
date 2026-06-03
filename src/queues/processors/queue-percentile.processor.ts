@@ -255,46 +255,43 @@ export class QueuePercentileProcessor {
     const zeroHistoryCandidates: { attractionId: string; parkId: string }[] =
       await this.dataSource.query(
         `
-      WITH park_open_days AS (
-        -- park-local days any attraction in the park was OPERATING (precomputed rollup)
-        SELECT DISTINCT "parkId", op_day AS open_day
+      -- Per-attraction all-time activity in ONE pass over queue_data.
+      -- Row present   => attraction has >=1 queue_data record (ever).
+      -- has_operating => attraction was OPERATING at least once (ever).
+      -- This replaces the previous correlated EXISTS subqueries against
+      -- queue_data (one per attraction), which re-scanned the whole compressed
+      -- queue_data hypertable once PER attraction (thousands of chunk-
+      -- decompressing probes, ~240s). Equivalent semantics, single scan.
+      attr_activity AS (
+        SELECT "attractionId", bool_or(status = 'OPERATING') AS has_operating
+        FROM queue_data
+        GROUP BY "attractionId"
+      ),
+      -- park-local days any attraction in the park was OPERATING (precomputed rollup)
+      park_open_day_counts AS (
+        SELECT "parkId", COUNT(DISTINCT op_day) as open_days
         FROM attraction_day_operating
         WHERE op_day >= CURRENT_DATE - $2::int
-      ),
-      park_open_day_counts AS (
-        SELECT "parkId", COUNT(DISTINCT open_day) as open_days
-        FROM park_open_days
         GROUP BY "parkId"
       ),
       -- Only apply zero-history logic to parks where the majority of
       -- tracked attractions have at least one OPERATING record.
       -- Prevents flagging parks with systematic data-source gaps
       -- (e.g. parks where the API never reports OPERATING status).
+      -- JOIN attr_activity == "attraction has >=1 queue_data record".
       park_tracking_quality AS (
-        SELECT t."parkId"
-        FROM (
-          SELECT a."parkId",
-            EXISTS(
-              SELECT 1 FROM queue_data q2
-              WHERE q2."attractionId" = a.id AND q2.status = 'OPERATING'
-            ) AS has_operating
-          FROM attractions a
-          WHERE EXISTS (SELECT 1 FROM queue_data q3 WHERE q3."attractionId" = a.id)
-        ) t
-        GROUP BY t."parkId"
-        HAVING SUM(CASE WHEN t.has_operating THEN 1 ELSE 0 END)
-             > SUM(CASE WHEN NOT t.has_operating THEN 1 ELSE 0 END)
+        SELECT a."parkId"
+        FROM attractions a
+        JOIN attr_activity aa ON aa."attractionId" = a.id
+        GROUP BY a."parkId"
+        HAVING SUM(CASE WHEN aa.has_operating THEN 1 ELSE 0 END)
+             > SUM(CASE WHEN NOT aa.has_operating THEN 1 ELSE 0 END)
       ),
       never_operating AS (
-        SELECT DISTINCT a.id as "attractionId", a."parkId"
+        SELECT a.id as "attractionId", a."parkId"
         FROM attractions a
-        WHERE EXISTS (
-          SELECT 1 FROM queue_data q2 WHERE q2."attractionId" = a.id
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM queue_data q2
-          WHERE q2."attractionId" = a.id AND q2.status = 'OPERATING'
-        )
+        JOIN attr_activity aa ON aa."attractionId" = a.id
+        WHERE aa.has_operating = false
       ),
       current_status AS (
         SELECT DISTINCT ON ("attractionId")
@@ -302,37 +299,24 @@ export class QueuePercentileProcessor {
         FROM queue_data
         WHERE timestamp >= NOW() - INTERVAL '7 days'
         ORDER BY "attractionId", timestamp DESC
-      ),
-      attraction_operating_days AS (
-        -- (attraction, park-local day) it was OPERATING (precomputed rollup)
-        SELECT "attractionId", op_day
-        FROM attraction_day_operating
-        WHERE op_day >= CURRENT_DATE - $2::int
-      ),
-      closed_on_open_days AS (
-        SELECT
-          no."attractionId",
-          no."parkId",
-          COUNT(DISTINCT pod.open_day) as closed_days
-        FROM never_operating no
-        JOIN park_open_days pod ON pod."parkId" = no."parkId"
-        WHERE NOT EXISTS (
-          SELECT 1 FROM attraction_operating_days aod
-          WHERE aod."attractionId" = no."attractionId"
-            AND aod.op_day = pod.open_day
-        )
-        GROUP BY no."attractionId", no."parkId"
       )
-      SELECT cod."attractionId", cod."parkId"
-      FROM closed_on_open_days cod
-      JOIN never_operating no ON no."attractionId" = cod."attractionId"
-      JOIN current_status cs ON cs."attractionId" = cod."attractionId"
-      JOIN park_open_day_counts poc ON poc."parkId" = cod."parkId"
-      JOIN park_tracking_quality ptq ON ptq."parkId" = cod."parkId"
-      WHERE cod.closed_days = poc.open_days
-        AND poc.open_days >= $3
+      -- A never_operating attraction has, by definition, ZERO OPERATING days,
+      -- so it never appears in the attraction_day_operating rollup (that rollup
+      -- is populated only from status='OPERATING' rows — see refreshOperatingDayRollup).
+      -- Therefore it is CLOSED on EVERY park-open day, i.e. closed_days always
+      -- equals the park's open_days. The previous closed_on_open_days CTE
+      -- (never_operating × park_open_days, with a per-pair NOT EXISTS against the
+      -- rollup) computed that always-true count over ~74M buffer hits (~133s).
+      -- It filtered nothing, so it is dropped: keep the park open-day-count gate
+      -- (poc.open_days >= $3) and the "currently CLOSED" gate directly.
+      SELECT no."attractionId", no."parkId"
+      FROM never_operating no
+      JOIN current_status cs ON cs."attractionId" = no."attractionId"
+      JOIN park_open_day_counts poc ON poc."parkId" = no."parkId"
+      JOIN park_tracking_quality ptq ON ptq."parkId" = no."parkId"
+      WHERE poc.open_days >= $3
         AND cs.status = 'CLOSED'
-        AND NOT (cod."attractionId" = ANY($1))
+        AND NOT (no."attractionId" = ANY($1))
     `,
         [
           Array.from(recentlyOperatingIds),
