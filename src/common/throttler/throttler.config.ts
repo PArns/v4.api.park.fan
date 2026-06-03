@@ -14,39 +14,41 @@ import { ThrottlerModuleOptions } from "@nestjs/throttler";
  *    limit would punish legitimate users sharing a carrier gateway.
  *
  * Tunable via env; set THROTTLE_LIMIT=0 to disable entirely.
- */
-export const THROTTLE_TTL_SECONDS = parseInt(
-  process.env.THROTTLE_TTL ?? "60",
-  10,
-);
-
-export const THROTTLE_LIMIT = parseInt(process.env.THROTTLE_LIMIT ?? "300", 10);
-
-export const isThrottlingEnabled = (): boolean => THROTTLE_LIMIT > 0;
-
-/**
- * Bypass allow-list. A request carrying THROTTLE_BYPASS_HEADER with a value
- * matching one of THROTTLE_BYPASS_KEYS skips the rate limiter entirely.
- * This is how our own frontend opts out of the circuit breaker. The keys
- * are shared secrets — rotate them via env, never commit real values.
  *
- * Disabled (no bypass) when THROTTLE_BYPASS_KEYS is empty.
+ * NOTE: every value is read lazily (functions, not module-level consts).
+ * `@nestjs/config` only assigns a .env file into `process.env` when
+ * `ConfigModule.forRoot()` runs, which happens AFTER this file's imports
+ * are evaluated. Reading at import time would miss .env-provided values
+ * and silently fall back to defaults (e.g. dropping the frontend bypass).
  */
-export const THROTTLE_BYPASS_HEADER = (
-  process.env.THROTTLE_BYPASS_HEADER ?? "x-auth-key"
-).toLowerCase();
+const getThrottleLimit = (): number =>
+  parseInt(process.env.THROTTLE_LIMIT ?? "300", 10);
 
-export const THROTTLE_BYPASS_KEYS: readonly string[] = (
-  process.env.THROTTLE_BYPASS_KEYS ?? ""
-)
-  .split(",")
-  .map((key) => key.trim())
-  .filter((key) => key.length > 0);
+const getThrottleTtlSeconds = (): number =>
+  parseInt(process.env.THROTTLE_TTL ?? "60", 10);
 
-export const throttlerOptions: ThrottlerModuleOptions = [
+export const isThrottlingEnabled = (): boolean => getThrottleLimit() > 0;
+
+export const getThrottlerOptions = (): ThrottlerModuleOptions => [
   {
     // @nestjs/throttler v6 expects the window in milliseconds.
-    ttl: THROTTLE_TTL_SECONDS * 1000,
-    limit: THROTTLE_LIMIT,
+    ttl: getThrottleTtlSeconds() * 1000,
+    limit: getThrottleLimit(),
   },
 ];
+
+/**
+ * Bypass allow-list. A request carrying the bypass header with a value
+ * matching one of the configured keys skips the rate limiter entirely.
+ * This is how our own frontend opts out of the circuit breaker. The keys
+ * are shared secrets — rotate them via env, never commit real values.
+ * Bypass is disabled when no keys are configured.
+ */
+export const getThrottleBypassHeader = (): string =>
+  (process.env.THROTTLE_BYPASS_HEADER ?? "x-auth-key").toLowerCase();
+
+export const getThrottleBypassKeys = (): string[] =>
+  (process.env.THROTTLE_BYPASS_KEYS ?? "")
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0);

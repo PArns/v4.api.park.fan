@@ -1,8 +1,8 @@
 import { ExecutionContext, Injectable } from "@nestjs/common";
 import { ThrottlerGuard } from "@nestjs/throttler";
 import {
-  THROTTLE_BYPASS_HEADER,
-  THROTTLE_BYPASS_KEYS,
+  getThrottleBypassHeader,
+  getThrottleBypassKeys,
 } from "../throttler/throttler.config";
 
 /**
@@ -37,14 +37,14 @@ export class CfThrottlerGuard extends ThrottlerGuard {
    * @SkipThrottle() handling. No-op when no bypass keys are configured.
    */
   protected async shouldSkip(context: ExecutionContext): Promise<boolean> {
-    if (THROTTLE_BYPASS_KEYS.length > 0) {
+    const bypassKeys = getThrottleBypassKeys();
+    if (bypassKeys.length > 0) {
       const req = context.switchToHttp().getRequest();
-      const provided = req.headers?.[THROTTLE_BYPASS_HEADER];
+      const provided = req.headers?.[getThrottleBypassHeader()];
       const values = Array.isArray(provided) ? provided : [provided];
       if (
         values.some(
-          (value) =>
-            typeof value === "string" && THROTTLE_BYPASS_KEYS.includes(value),
+          (value) => typeof value === "string" && bypassKeys.includes(value),
         )
       ) {
         return true;

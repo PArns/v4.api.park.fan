@@ -31,8 +31,8 @@ import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { PopularityInterceptor } from "./popularity/interceptors/popularity.interceptor";
 import { ThrottlerModule } from "@nestjs/throttler";
 import {
+  getThrottlerOptions,
   isThrottlingEnabled,
-  throttlerOptions,
 } from "./common/throttler/throttler.config";
 import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
 
@@ -48,8 +48,10 @@ import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
     // Redis
     RedisModule,
 
-    // Origin rate limiting (circuit breaker; tunable/disable-able via env)
-    ThrottlerModule.forRoot(throttlerOptions),
+    // Origin rate limiting (circuit breaker; tunable/disable-able via env).
+    // Evaluated after ConfigModule.forRoot() above has loaded .env into
+    // process.env, so getThrottlerOptions() sees env-file values too.
+    ThrottlerModule.forRoot(getThrottlerOptions()),
 
     // TypeORM with async config
     TypeOrmModule.forRootAsync(typeOrmConfig),
