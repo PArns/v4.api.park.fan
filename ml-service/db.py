@@ -204,7 +204,10 @@ def fetch_training_data(
         FROM hourly_queue hq
         LEFT JOIN weather_daily wd ON wd."parkId" = hq."parkId"
             AND DATE(hq.timestamp) = wd.date
-        ORDER BY hq.timestamp
+        -- No ORDER BY: feature engineering re-sorts the DataFrame by its own keys
+        -- (sort_values(["attractionId","timestamp"]) etc.), so ordering here is
+        -- redundant work. Sorting ~2.1M rows by timestamp spilled ~320MB to disk
+        -- (external merge) during the training window for no downstream benefit.
     """
     )
 
