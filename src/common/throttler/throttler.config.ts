@@ -33,7 +33,7 @@ export const isThrottlingEnabled = (): boolean => THROTTLE_LIMIT > 0;
  * Disabled (no bypass) when THROTTLE_BYPASS_KEYS is empty.
  */
 export const THROTTLE_BYPASS_HEADER = (
-  process.env.THROTTLE_BYPASS_HEADER ?? "x-rl-bypass"
+  process.env.THROTTLE_BYPASS_HEADER ?? "x-auth-key"
 ).toLowerCase();
 
 export const THROTTLE_BYPASS_KEYS: readonly string[] = (
