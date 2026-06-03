@@ -12,6 +12,9 @@
 
 ---
 
+## ✅ Open TODOs
+- [todo.md](todo.md) – Active follow-ups (e.g. ML `hourly_agg` cache post-deploy verification & per-attraction caching gate).
+
 ## 📚 Documentation Index
 
 ### 📋 Changelog

@@ -47,6 +47,7 @@ scripts/backup/*.env
 *.md
 !README.md
 !DEPLOYMENT.md
+!todo.md
 
 # GeoIP (GeoLite2-City) – downloaded by geoip-update job
 /data/

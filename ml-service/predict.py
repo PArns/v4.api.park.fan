@@ -183,9 +183,15 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# Cache for recent wait times (short-lived, 2 minutes)
+# Cache for recent wait times (short-lived).
+# NOTE: this query is the single biggest steady-state DB load (~270 ms x thousands
+# of calls). It aggregates 730 days of hourly history, which barely changes within
+# minutes, and the real-time signal is fed separately via current_wait_times. So we
+# cache it for 15 min. The cache key buckets end_time to the same window (see below)
+# — without that, base_time=now() carries microsecond precision and the key never
+# repeats, so the cache had a ~0% hit rate.
 _recent_wait_times_cache = {}
-_recent_wait_times_cache_ttl = 120  # 2 minutes
+_recent_wait_times_cache_ttl = 900  # 15 minutes
 
 
 def fetch_recent_wait_times(
@@ -211,8 +217,21 @@ def fetch_recent_wait_times(
     if not attraction_ids:
         return pd.DataFrame()
 
+    # Bucket end_time to the cache-TTL window so calls within the same window
+    # share a cache key AND a deterministic SQL upper bound. base_time=now() otherwise
+    # carries microsecond precision → every key is unique → cache never hits.
+    # (end_time is None only for non-prediction callers; leave those unbounded.)
+    if end_time is not None:
+        bucket = int(end_time.timestamp()) // _recent_wait_times_cache_ttl
+        query_end_time = datetime.fromtimestamp(
+            bucket * _recent_wait_times_cache_ttl,
+            tz=end_time.tzinfo or timezone.utc,
+        )
+    else:
+        query_end_time = None
+
     # Create cache key from sorted attraction IDs
-    cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}:{end_time}"
+    cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}:{query_end_time}"
 
     # Check cache
     if cache_key in _recent_wait_times_cache:
@@ -320,16 +339,24 @@ def fetch_recent_wait_times(
             {
                 "attraction_ids": attraction_ids,
                 "lookback_days": lookback_days,
-                "end_time": end_time,
+                "end_time": query_end_time,
             },
         )
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         df = convert_df_types(df)
 
-        # Update cache
+        # Update cache, evicting expired buckets so the dict can't grow unbounded.
         import time
 
-        _recent_wait_times_cache[cache_key] = (df.copy(), time.time())
+        now_ts = time.time()
+        expired = [
+            k
+            for k, (_, ts) in _recent_wait_times_cache.items()
+            if now_ts - ts >= _recent_wait_times_cache_ttl
+        ]
+        for k in expired:
+            del _recent_wait_times_cache[k]
+        _recent_wait_times_cache[cache_key] = (df.copy(), now_ts)
 
         return df
 
