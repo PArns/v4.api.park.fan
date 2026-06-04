@@ -71,6 +71,7 @@ describe("AnalyticsService — P90 + hourly history", () => {
   };
   const attractionP50Repo = {
     findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     save: jest.fn(),
     upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
   };
@@ -642,6 +643,54 @@ describe("AnalyticsService — P90 + hourly history", () => {
       expect(attractionP90Repo.upsert).not.toHaveBeenCalled();
       // No pipeline either — wasted Redis round-trip avoided.
       expect(redis.pipeline).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getBatchAttractionP50s — negative caching", () => {
+    it("negative-caches ids with no baseline row ('0') so they stop hitting the DB", async () => {
+      attractionP50Repo.find.mockResolvedValueOnce([
+        { attractionId: "a1", p50Baseline: 25 },
+        // a2 deliberately has no row
+      ]);
+
+      const result = await service.getBatchAttractionP50s(["a1", "a2"]);
+
+      expect(result.get("a1")).toBe(25);
+      // absent from the map → consumers fall back via `p50 || p90`
+      expect(result.has("a2")).toBe(false);
+      expect(redisStore.get("attraction:p50:a1")).toBe("25");
+      // a2 negatively cached so the next request doesn't re-query Postgres
+      expect(redisStore.get("attraction:p50:a2")).toBe("0");
+    });
+
+    it("serves a negatively-cached ('0') id from Redis without a DB hit", async () => {
+      redisStore.set("attraction:p50:a1", "0");
+
+      const result = await service.getBatchAttractionP50s(["a1"]);
+
+      // "0" reads back as 0 — identical to "missing" for all consumers
+      expect(result.get("a1")).toBe(0);
+      expect(attractionP50Repo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getAttractionP50BaselineFromCache — negative caching", () => {
+    it("caches absence as '0' and returns 0 when no row exists", async () => {
+      attractionP50Repo.findOne.mockResolvedValueOnce(null);
+
+      const v = await service.getAttractionP50BaselineFromCache("nope");
+
+      expect(v).toBe(0);
+      expect(redisStore.get("attraction:p50:nope")).toBe("0");
+    });
+
+    it("serves the negatively-cached '0' without a DB hit", async () => {
+      redisStore.set("attraction:p50:a1", "0");
+
+      const v = await service.getAttractionP50BaselineFromCache("a1");
+
+      expect(v).toBe(0);
+      expect(attractionP50Repo.findOne).not.toHaveBeenCalled();
     });
   });
 });

@@ -220,5 +220,42 @@ describe("QueueDataService", () => {
 
       expect(result).toEqual([]);
     });
+
+    it("sorts by attraction name and applies a chunk-exclusion cutoff", async () => {
+      // Latest reading per attraction comes back ordered by (attractionId,
+      // queueType) from DISTINCT ON; the service must restore name order.
+      const rows = [
+        { attraction: { name: "Zeta Coaster" }, queueType: "STANDBY" },
+        { attraction: { name: "Alpha Ride" }, queueType: "STANDBY" },
+      ];
+      const qb: Record<string, jest.Mock> = {};
+      for (const m of [
+        "innerJoinAndSelect",
+        "where",
+        "distinctOn",
+        "orderBy",
+        "addOrderBy",
+        "andWhere",
+      ]) {
+        qb[m] = jest.fn().mockReturnValue(qb);
+      }
+      qb.getMany = jest.fn().mockResolvedValue(rows);
+      mockQueueDataRepository.createQueryBuilder.mockReturnValueOnce(
+        qb as never,
+      );
+
+      const result = await service.findWaitTimesByPark("park-123");
+
+      expect(result.map((r) => r.attraction.name)).toEqual([
+        "Alpha Ride",
+        "Zeta Coaster",
+      ]);
+      // Time-bound applied (TimescaleDB chunk exclusion), replacing the old
+      // unbounded full-hypertable MAX(timestamp) subquery.
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "qd.timestamp >= :cutoff",
+        expect.objectContaining({ cutoff: expect.any(Date) }),
+      );
+    });
   });
 });
