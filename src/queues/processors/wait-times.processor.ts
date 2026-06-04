@@ -335,13 +335,16 @@ export class WaitTimesProcessor {
 
       // Warmup & Heartbeats
       try {
-        await Promise.all([
-          this.cacheWarmupService.warmupOperatingParks(),
-          this.cacheWarmupService.warmupTopAttractions(1000),
-          this.cacheWarmupService.warmupParkOccupancy(
-            prioritizedParks.map((p) => p.id),
-          ),
-        ]);
+        // Run the heavy warmups SEQUENTIALLY, not via Promise.all: each one
+        // already fans out batched DB work against queue_data, and firing all
+        // three at once every 5 min recreates the connection-pool/DB-saturation
+        // peak this sync is meant to avoid. Sequential keeps the per-tick DB
+        // pressure bounded while still finishing well within the 5-min window.
+        await this.cacheWarmupService.warmupOperatingParks();
+        await this.cacheWarmupService.warmupTopAttractions(1000);
+        await this.cacheWarmupService.warmupParkOccupancy(
+          prioritizedParks.map((p) => p.id),
+        );
         const hb = await this.writeHourlyHeartbeats();
         if (hb > 0) this.logger.log(`💓 Wrote ${hb} hourly heartbeats`);
       } catch (e) {

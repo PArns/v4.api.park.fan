@@ -822,32 +822,40 @@ export class QueueDataService {
     parkId: string,
     queueType?: QueueType,
   ): Promise<QueueData[]> {
-    const queryBuilder = this.queueDataRepository
-      .createQueryBuilder("queue_data")
-      .innerJoinAndSelect("queue_data.attraction", "attraction")
+    // Latest reading per (attractionId, queueType) via DISTINCT ON + a
+    // park-opening-hours cutoff for TimescaleDB chunk exclusion. Replaces a
+    // correlated `MAX(timestamp)` subquery that re-scanned the ENTIRE queue_data
+    // hypertable (all chunks, incl. compressed) once per attraction — the same
+    // pattern findCurrentStatusByPark already uses.
+    const cutoff = await this.getValidDataCutoff(parkId);
+
+    const query = this.queueDataRepository
+      .createQueryBuilder("qd")
+      .innerJoinAndSelect("qd.attraction", "attraction")
       .innerJoinAndSelect("attraction.park", "park")
-      .where("park.id = :parkId", { parkId });
+      .where("park.id = :parkId", { parkId })
+      .distinctOn(["qd.attractionId", "qd.queueType"])
+      .orderBy("qd.attractionId", "ASC")
+      .addOrderBy("qd.queueType", "ASC")
+      .addOrderBy("qd.timestamp", "DESC"); // latest first within each group
 
     if (queueType) {
-      queryBuilder.andWhere("queue_data.queueType = :queueType", { queueType });
+      query.andWhere("qd.queueType = :queueType", { queueType });
+    }
+    if (cutoff) {
+      query.andWhere("qd.timestamp >= :cutoff", { cutoff });
     }
 
-    // Get the most recent entry for each attraction
-    // This is a bit complex with TypeORM, so we'll use a subquery
-    queryBuilder.andWhere(
-      `queue_data.timestamp = (
-        SELECT MAX(qd2.timestamp)
-        FROM queue_data qd2
-        INNER JOIN attractions a2 ON qd2."attractionId" = a2.id
-        WHERE a2."parkId" = :parkId
-          AND qd2."attractionId" = queue_data."attractionId"
-          ${queueType ? 'AND qd2."queueType" = :queueType' : ""}
-      )`,
+    const rows = await query.getMany();
+
+    // DISTINCT ON forces ordering by (attractionId, queueType); restore the
+    // display order (attraction name) in memory. The set is one row per
+    // attraction/queueType for a single park, so this is cheap.
+    rows.sort((a, b) =>
+      (a.attraction?.name ?? "").localeCompare(b.attraction?.name ?? ""),
     );
 
-    queryBuilder.orderBy("attraction.name", "ASC");
-
-    return queryBuilder.getMany();
+    return rows;
   }
   /**
    * Find forecasts for all attractions in a park

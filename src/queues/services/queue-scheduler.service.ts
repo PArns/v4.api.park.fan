@@ -286,6 +286,11 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 6 * * *", // Daily at 6am
           },
           jobId: "ml-training-cron",
+          // Never retry: training is a ~45min CatBoost job. The global default
+          // (attempts:3 + backoff) would re-POST /train and re-run the whole
+          // job up to 3× on a transient failure — a retry storm. Matches the
+          // train-nf / score-comparison guards.
+          attempts: 1,
         },
       );
     }
