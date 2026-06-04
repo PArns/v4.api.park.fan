@@ -16,7 +16,9 @@ import { Show } from "../../shows/entities/show.entity";
  * - Runs daily at 2am
  * - Calculates percentiles for yesterday (complete 24 hours)
  * - Uses PostgreSQL percentile_cont() for efficiency
- * - Upserts via ON CONFLICT (idempotent)
+ * - Idempotent upsert: the row id is a deterministic hash of
+ *   (attractionId, hour), so the existing (id, hour) PK enforces one row
+ *   per bucket and ON CONFLICT (id, hour) actually fires on re-runs
  *
  * Benefits:
  * - Fast ML feature lookups (no on-the-fly calculation)
@@ -68,7 +70,13 @@ export class QueuePercentileProcessor {
           "createdAt", "updatedAt"
         )
         SELECT
-          gen_random_uuid() as id,
+          -- DETERMINISTIC id derived from the natural key (attractionId, hour).
+          -- The PK is (id, hour), so a stable id makes that PK enforce one row
+          -- per (attractionId, hour) and lets ON CONFLICT (id, hour) actually
+          -- fire. Previously this was gen_random_uuid(), so the conflict target
+          -- never matched and every re-run/retry/backfill inserted duplicate
+          -- rows — double-counting sampleCount and skewing the percentiles.
+          md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
           date_trunc('hour', qd.timestamp) as hour,
           qd."attractionId",
           a."parkId",
@@ -559,7 +567,9 @@ export class QueuePercentileProcessor {
             "createdAt", "updatedAt"
           )
           SELECT
-            gen_random_uuid() as id,
+            -- Deterministic id from (attractionId, hour) — see calculate-
+            -- percentiles. Makes the (id, hour) PK dedupe and ON CONFLICT fire.
+            md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
             date_trunc('hour', qd.timestamp) as hour,
             qd."attractionId",
             a."parkId",
