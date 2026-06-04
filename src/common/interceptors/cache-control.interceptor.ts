@@ -7,26 +7,22 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Response } from "express";
-import * as crypto from "crypto";
 
 /**
  * Sets appropriate Cache-Control headers for Cloudflare caching
  * based on endpoint patterns and data volatility.
  *
- * This runs as the OUTERMOST global interceptor, so by the time `tap`
- * sees the body it is the final payload (post `ExcludeNullInterceptor`).
- * That makes it the single correct place to compute the ETag — the
- * per-route `HttpCacheInterceptor` runs further in and would hash a
- * pre-null-stripped body that never reaches the wire.
+ * Scope: this owns the CACHE POLICY only (`Cache-Control` per path, plus
+ * a `Last-Modified` when the payload carries a real timestamp).
  *
- * Responsibilities:
- * - ETag generation (MD5 of the final body) for every object response.
- *   Cloudflare and direct clients use it for conditional requests; the
- *   CDN answers `If-None-Match` from the edge without hitting origin.
- * - `Last-Modified` only when the payload carries a real timestamp (a
- *   `Date.now()` fallback is meaningless and only churns caches).
- * - `Cache-Control`, but only when a more specific local interceptor has
- *   not already set it.
+ * ETag generation and conditional-request (`If-None-Match` → 304) handling
+ * are intentionally NOT done here: Express (under Nest) already emits a
+ * weak ETag for JSON responses and automatically answers a matching
+ * `If-None-Match` with a body-less `304 Not Modified`. A hand-rolled MD5
+ * strong ETag would only duplicate that — and a *strong* ETag is in fact
+ * less correct once `compression` is in play (gzipped vs identity bytes
+ * differ), which is exactly why the native ETag is weak. We let Express
+ * own it.
  */
 @Injectable()
 export class CacheControlInterceptor implements NestInterceptor {
@@ -39,22 +35,14 @@ export class CacheControlInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
-        // 1. Strong ETag from the final body. We do not short-circuit to
-        //    304 here: NestJS overwrites the status code from the route
-        //    handler metadata, so an interceptor-set 304 never reaches the
-        //    client. Conditional revalidation is handled by Cloudflare at
-        //    the edge (and by direct clients) using this ETag.
-        if (data && typeof data === "object") {
-          response.setHeader("ETag", this.generateETag(data));
-        }
-
-        // 2. Last-Modified only when the payload exposes a real timestamp.
+        // 1. Last-Modified only when the payload exposes a real timestamp
+        //    (Express does not set this for JSON; ETag/304 is native).
         const lastModified = this.extractLastModified(data);
         if (lastModified) {
           response.setHeader("Last-Modified", lastModified.toUTCString());
         }
 
-        // 3. Set Cache-Control ONLY if not already set by a local interceptor
+        // 2. Set Cache-Control ONLY if not already set by a local interceptor
         if (!response.getHeader("Cache-Control")) {
           const cacheHeader = this.getCacheHeaderForPath(path, method);
           if (cacheHeader) {
@@ -64,18 +52,6 @@ export class CacheControlInterceptor implements NestInterceptor {
         }
       }),
     );
-  }
-
-  private generateETag(data: any): string {
-    try {
-      const hash = crypto
-        .createHash("md5")
-        .update(JSON.stringify(data))
-        .digest("hex");
-      return `"${hash}"`;
-    } catch {
-      return "";
-    }
   }
 
   private extractLastModified(data: any): Date | null {

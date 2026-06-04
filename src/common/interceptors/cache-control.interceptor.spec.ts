@@ -77,11 +77,11 @@ describe("CacheControlInterceptor", () => {
     });
   });
 
-  describe("ETag", () => {
-    it("sets a strong ETag for object bodies", async () => {
+  describe("ETag (delegated to Express's native weak ETag)", () => {
+    it("does NOT set its own ETag — Express owns ETag/304", async () => {
       const { ctx, headers } = buildMockContext("/v1/parks");
       await firstValueFrom(interceptor.intercept(ctx, handlerOf({ a: 1 })));
-      expect(headers["ETag"]).toMatch(/^"[a-f0-9]{32}"$/);
+      expect(headers["ETag"]).toBeUndefined();
     });
   });
 

@@ -98,8 +98,8 @@ describe("HttpCacheInterceptor", () => {
     });
   });
 
-  describe("ETag (now owned by the global CacheControlInterceptor)", () => {
-    it("does NOT set an ETag here — the global interceptor hashes the final wire body", async () => {
+  describe("ETag (owned by Express's native weak ETag)", () => {
+    it("does NOT set an ETag here — Express emits the ETag at send time", async () => {
       const interceptor = new HttpCacheInterceptor(60);
       const { ctx, headers } = buildMockContext();
 

@@ -24,11 +24,10 @@ import { Response } from "express";
  *   the edge (low origin load) while keeping a short browser cache
  *   (fresh data after a reload).
  *
- * ETag/conditional-request handling is intentionally NOT done here. The
- * global `CacheControlInterceptor` runs further out (after
- * `ExcludeNullInterceptor`) and therefore hashes the *final* wire body;
- * computing an ETag here would hash a pre-null-stripped body that never
- * reaches the client and waste a second MD5 pass per response.
+ * ETag/conditional-request handling is intentionally NOT done here.
+ * Express (under Nest) already emits a weak ETag for JSON responses and
+ * answers a matching `If-None-Match` with an automatic body-less 304, so
+ * we only set TTL headers and let the platform own validation.
  *
  * Usage:
  *   @UseInterceptors(new HttpCacheInterceptor(900))
