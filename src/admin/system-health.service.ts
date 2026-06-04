@@ -7,8 +7,13 @@ import * as fs from "fs";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
-const ML_URL = process.env.ML_SERVICE_URL || "http://ml-service:8000";
-const NF_URL = process.env.NF_SERVICE_URL || "http://nf-service:8000";
+// Read lazily: ConfigModule only assigns a .env file into process.env at
+// runtime, after this module's imports are evaluated. The Docker defaults are
+// correct for prod regardless, but this keeps .env-file overrides working.
+const mlServiceUrl = (): string =>
+  process.env.ML_SERVICE_URL || "http://ml-service:8000";
+const nfServiceUrl = (): string =>
+  process.env.NF_SERVICE_URL || "http://nf-service:8000";
 const GB = 1024 ** 3;
 
 /**
@@ -81,7 +86,7 @@ export class SystemHealthService {
    * On a CPU-only host nf-service returns {available:false}; pass it through. */
   private async gpu() {
     return axios
-      .get(`${NF_URL}/gpu`, { timeout: 4000 })
+      .get(`${nfServiceUrl()}/gpu`, { timeout: 4000 })
       .then((r) => r.data)
       .catch((e) => ({ available: false, error: String(e?.message ?? e) }));
   }
@@ -329,7 +334,7 @@ export class SystemHealthService {
   private async catboost() {
     const [statusRes, modelRows] = await Promise.all([
       axios
-        .get(`${ML_URL}/train/status`, { timeout: 4000 })
+        .get(`${mlServiceUrl()}/train/status`, { timeout: 4000 })
         .then((r) => r.data)
         .catch((e) => ({ error: String(e?.message ?? e) })),
       this.dataSource
@@ -343,7 +348,7 @@ export class SystemHealthService {
     ]);
     const m = modelRows?.[0];
     return {
-      service: ML_URL,
+      service: mlServiceUrl(),
       training: statusRes,
       activeModel: m
         ? {
@@ -363,11 +368,11 @@ export class SystemHealthService {
   private async tft() {
     const [status, health] = await Promise.all([
       axios
-        .get(`${NF_URL}/train/status`, { timeout: 4000 })
+        .get(`${nfServiceUrl()}/train/status`, { timeout: 4000 })
         .then((r) => r.data)
         .catch((e) => ({ error: String(e?.message ?? e) })),
       axios
-        .get(`${NF_URL}/health`, { timeout: 4000 })
+        .get(`${nfServiceUrl()}/health`, { timeout: 4000 })
         .then((r) => r.data)
         .catch((e) => ({ error: String(e?.message ?? e) })),
     ]);
@@ -375,7 +380,7 @@ export class SystemHealthService {
     const version = status?.version ?? null;
     const finishedAt = status?.finished_at ?? null;
     return {
-      service: NF_URL,
+      service: nfServiceUrl(),
       training: status,
       // activeModel mirrors CatBoost shape so dashboards treat both uniformly.
       // TFT has no MAE in DB (no ml_models row); quality lives in model_comparisons.

@@ -6,7 +6,10 @@ import { Job } from "bull";
 import axios from "axios";
 import { ModelComparison } from "../../ml/entities/model-comparison.entity";
 
-const NF_URL = process.env.NF_SERVICE_URL || "http://nf-service:8000";
+// Read lazily so a .env-file override is honoured (ConfigModule loads it after
+// this module's imports run). The Docker default is correct for prod anyway.
+const nfServiceUrl = (): string =>
+  process.env.NF_SERVICE_URL || "http://nf-service:8000";
 const SCORE_LOOKBACK_DAYS = 14; // re-score the last N matured days each run (idempotent)
 
 /**
@@ -32,13 +35,13 @@ export class NfForecastProcessor {
   async handleTrainNf(
     _job: Job,
   ): Promise<{ status: string; version?: string }> {
-    this.logger.log(`🧠 Triggering TFT training via ${NF_URL}/train`);
+    this.logger.log(`🧠 Triggering TFT training via ${nfServiceUrl()}/train`);
     try {
       // Overlap guard: a TFT train can run up to ~90 min. If one is still in
       // flight (long run, manual trigger, or a re-fire), skip rather than stack a
       // second training on the shared host. nf-service also rejects with 409.
       const pre = (
-        await axios.get(`${NF_URL}/train/status`, { timeout: 15000 })
+        await axios.get(`${nfServiceUrl()}/train/status`, { timeout: 15000 })
       ).data;
       if (pre?.is_training) {
         this.logger.warn(
@@ -49,7 +52,11 @@ export class NfForecastProcessor {
 
       let start;
       try {
-        start = await axios.post(`${NF_URL}/train`, {}, { timeout: 30000 });
+        start = await axios.post(
+          `${nfServiceUrl()}/train`,
+          {},
+          { timeout: 30000 },
+        );
       } catch (e: any) {
         if (e?.response?.status === 409) {
           this.logger.warn(
@@ -70,7 +77,7 @@ export class NfForecastProcessor {
         await new Promise((r) => setTimeout(r, pollSeconds * 1000));
         attempts++;
         const st = (
-          await axios.get(`${NF_URL}/train/status`, { timeout: 15000 })
+          await axios.get(`${nfServiceUrl()}/train/status`, { timeout: 15000 })
         ).data;
         if (st.status === "completed") {
           this.logger.log(`✅ TFT training completed: ${st.version}`);
@@ -87,7 +94,7 @@ export class NfForecastProcessor {
       // Forecast + persist forward records for the scoreboard.
       this.logger.log("Running TFT forecast (persists tft_forecasts)…");
       const fc = await axios.post(
-        `${NF_URL}/forecast`,
+        `${nfServiceUrl()}/forecast`,
         {},
         { timeout: 300000 },
       );

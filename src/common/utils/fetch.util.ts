@@ -33,12 +33,17 @@ export async function fetchWithRetry(
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeout);
 
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-
-      clearTimeout(id);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        });
+      } finally {
+        // Always clear the abort timer — on the throw path too, otherwise it
+        // lingers (and fires a no-op abort) for up to `timeout` ms.
+        clearTimeout(id);
+      }
 
       if (response.ok) {
         return response;
