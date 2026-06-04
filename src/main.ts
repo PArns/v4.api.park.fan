@@ -2,6 +2,7 @@ import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { ValidationPipe, LogLevel } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
+import compression from "compression";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
@@ -64,6 +65,17 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: logLevelMap[logLevel] ?? logLevelMap["log"],
   });
+
+  // Trust the proxy in front of us (Cloudflare → reverse proxy) so
+  // `req.ip` and protocol reflect the real client, not the edge. Rate
+  // limiting additionally prefers the CF-Connecting-IP header.
+  app.set("trust proxy", true);
+
+  // Gzip/deflate responses at the origin. Cloudflare compresses at the
+  // edge for browsers, but compressing here also shrinks the origin↔edge
+  // hop (egress + latency) and covers any non-CDN/direct API consumer.
+  // Threshold keeps tiny payloads uncompressed (compression overhead > win).
+  app.use(compression({ threshold: 1024 }));
 
   // Custom X-Powered-By header
   app.disable("x-powered-by");

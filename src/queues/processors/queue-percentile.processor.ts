@@ -16,7 +16,9 @@ import { Show } from "../../shows/entities/show.entity";
  * - Runs daily at 2am
  * - Calculates percentiles for yesterday (complete 24 hours)
  * - Uses PostgreSQL percentile_cont() for efficiency
- * - Upserts via ON CONFLICT (idempotent)
+ * - Idempotent upsert: the row id is a deterministic hash of
+ *   (attractionId, hour), so the existing (id, hour) PK enforces one row
+ *   per bucket and ON CONFLICT (id, hour) actually fires on re-runs
  *
  * Benefits:
  * - Fast ML feature lookups (no on-the-fly calculation)
@@ -68,7 +70,13 @@ export class QueuePercentileProcessor {
           "createdAt", "updatedAt"
         )
         SELECT
-          gen_random_uuid() as id,
+          -- DETERMINISTIC id derived from the natural key (attractionId, hour).
+          -- The PK is (id, hour), so a stable id makes that PK enforce one row
+          -- per (attractionId, hour) and lets ON CONFLICT (id, hour) actually
+          -- fire. Previously this was gen_random_uuid(), so the conflict target
+          -- never matched and every re-run/retry/backfill inserted duplicate
+          -- rows — double-counting sampleCount and skewing the percentiles.
+          md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
           date_trunc('hour', qd.timestamp) as hour,
           qd."attractionId",
           a."parkId",
@@ -559,7 +567,9 @@ export class QueuePercentileProcessor {
             "createdAt", "updatedAt"
           )
           SELECT
-            gen_random_uuid() as id,
+            -- Deterministic id from (attractionId, hour) — see calculate-
+            -- percentiles. Makes the (id, hour) PK dedupe and ON CONFLICT fire.
+            md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
             date_trunc('hour', qd.timestamp) as hour,
             qd."attractionId",
             a."parkId",
@@ -604,6 +614,87 @@ export class QueuePercentileProcessor {
         error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Failed to backfill percentiles: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * One-time (re-runnable) cleanup of historical DUPLICATE rows in
+   * queue_data_aggregates.
+   *
+   * Before the deterministic-id fix, the upsert used gen_random_uuid() so
+   * re-runs/retries/backfills inserted duplicate (attractionId, hour) rows.
+   * The id fix stops NEW duplicates, but the old ones still skew the
+   * percentile-of-percentiles + SUM(sampleCount) reads (and the ML percentile
+   * features) until removed. This collapses each (attractionId, hour) bucket
+   * back to a single row, keeping the most recently updated one.
+   *
+   * Idempotent: a clean table deletes 0 rows. Triggered manually (admin /
+   * script) rather than at boot — duplicates can live in compressed chunks,
+   * and a DELETE there forces decompression, which we don't want on the
+   * startup path.
+   */
+  @Process("dedupe-percentile-aggregates")
+  async handleDedupePercentileAggregates(_job: Job): Promise<void> {
+    this.logger.log(
+      "🧹 Deduplicating queue_data_aggregates by (attractionId, hour)...",
+    );
+
+    try {
+      const dupCheck = await this.aggregateRepository.query(
+        `SELECT count(*)::int AS groups FROM (
+           SELECT 1 FROM queue_data_aggregates
+           GROUP BY "attractionId", hour
+           HAVING count(*) > 1
+         ) d`,
+      );
+      const duplicateBuckets = dupCheck[0]?.groups ?? 0;
+
+      if (duplicateBuckets === 0) {
+        this.logger.log(
+          "✅ No duplicate (attractionId, hour) rows — nothing to clean.",
+        );
+        return;
+      }
+
+      this.logger.warn(
+        `Found ${duplicateBuckets} duplicated (attractionId, hour) bucket(s) — collapsing to one row each...`,
+      );
+
+      // Keep the most-recently-updated row per bucket. The ctid join is scoped
+      // by (attractionId, hour) too, so it stays correct even though ctid is
+      // only unique within a chunk on a hypertable (duplicates of one bucket
+      // share a time chunk, so this never crosses chunks).
+      await this.aggregateRepository.query(
+        `WITH ranked AS (
+           SELECT
+             ctid AS ct,
+             "attractionId" AS aid,
+             hour AS h,
+             row_number() OVER (
+               PARTITION BY "attractionId", hour
+               ORDER BY "updatedAt" DESC NULLS LAST, ctid
+             ) AS rn
+           FROM queue_data_aggregates
+         )
+         DELETE FROM queue_data_aggregates q
+         USING ranked r
+         WHERE q.ctid = r.ct
+           AND q."attractionId" = r.aid
+           AND q.hour = r.h
+           AND r.rn > 1`,
+      );
+
+      this.logger.log(
+        `✅ Dedupe complete: ${duplicateBuckets} bucket(s) collapsed to a single row each.`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to dedupe percentile aggregates: ${errorMessage}`,
         error instanceof Error ? error.stack : undefined,
       );
       throw error;

@@ -7,16 +7,22 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Response } from "express";
-import * as crypto from "crypto";
 
 /**
  * Sets appropriate Cache-Control headers for Cloudflare caching
- * Based on endpoint patterns and data volatility.
+ * based on endpoint patterns and data volatility.
  *
- * NOW INCLUDES:
- * - ETag generation (MD5 of body)
- * - Last-Modified header
- * - Respects existing Cache-Control headers (won't overwrite if set)
+ * Scope: this owns the CACHE POLICY only (`Cache-Control` per path, plus
+ * a `Last-Modified` when the payload carries a real timestamp).
+ *
+ * ETag generation and conditional-request (`If-None-Match` → 304) handling
+ * are intentionally NOT done here: Express (under Nest) already emits a
+ * weak ETag for JSON responses and automatically answers a matching
+ * `If-None-Match` with a body-less `304 Not Modified`. A hand-rolled MD5
+ * strong ETag would only duplicate that — and a *strong* ETag is in fact
+ * less correct once `compression` is in play (gzipped vs identity bytes
+ * differ), which is exactly why the native ETag is weak. We let Express
+ * own it.
  */
 @Injectable()
 export class CacheControlInterceptor implements NestInterceptor {
@@ -29,25 +35,14 @@ export class CacheControlInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
-        // 1. Generate ETag if data is present and valid
-        if (data && typeof data === "object") {
-          const etag = this.generateETag(data);
-          const clientETag = request.headers["if-none-match"];
-
-          // Check for conditional request match
-          if (clientETag === etag) {
-            response.status(304); // Not Modified - NestJS might handle this, but being explicit helps
-            return;
-          }
-          response.setHeader("ETag", etag);
+        // 1. Last-Modified only when the payload exposes a real timestamp
+        //    (Express does not set this for JSON; ETag/304 is native).
+        const lastModified = this.extractLastModified(data);
+        if (lastModified) {
+          response.setHeader("Last-Modified", lastModified.toUTCString());
         }
 
-        // 2. Set Last-Modified (default to now if no data timestamp found)
-        // Try to find a logical "updatedAt" or "timestamp" in the data
-        const lastModified = this.extractLastModified(data);
-        response.setHeader("Last-Modified", lastModified.toUTCString());
-
-        // 3. Set Cache-Control ONLY if not already set by a local interceptor
+        // 2. Set Cache-Control ONLY if not already set by a local interceptor
         if (!response.getHeader("Cache-Control")) {
           const cacheHeader = this.getCacheHeaderForPath(path, method);
           if (cacheHeader) {
@@ -59,26 +54,16 @@ export class CacheControlInterceptor implements NestInterceptor {
     );
   }
 
-  private generateETag(data: any): string {
-    try {
-      const hash = crypto
-        .createHash("md5")
-        .update(JSON.stringify(data))
-        .digest("hex");
-      return `"${hash}"`;
-    } catch {
-      return "";
-    }
-  }
-
-  private extractLastModified(data: any): Date {
-    // Try common timestamp fields
+  private extractLastModified(data: any): Date | null {
+    // Only emit Last-Modified when the payload carries a real timestamp.
+    // A `new Date()` fallback would change on every request and defeat the
+    // purpose of the header (and fragment caches needlessly).
     if (data) {
       if (data.lastUpdated) return new Date(data.lastUpdated);
       if (data.updatedAt) return new Date(data.updatedAt);
       if (data.timestamp) return new Date(data.timestamp);
     }
-    return new Date();
+    return null;
   }
 
   private getCacheHeaderForPath(path: string, method: string): string | null {
@@ -101,6 +86,22 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300"; // 5 minutes for API spec
     }
 
+    // Admin endpoints - NEVER cache. These are operator-only, may carry
+    // real-time operational state, and must not land in a shared CDN cache.
+    // (Matches "/admin" as a path segment so we don't snag slugs like
+    // ".../adminton-park".)
+    if (/\/admin(\/|$|\?)/.test(path)) {
+      return "private, no-store, no-cache, must-revalidate";
+    }
+
+    // ML internal surface (monitoring, drift, alerts, anomalies, dashboard,
+    // accuracy, ml-health) - real-time operator data, never cache. Note the
+    // USER-facing ML predictions live under "/parks/.../predictions" and are
+    // handled by the "/predictions" branch below, not here.
+    if (/\/ml(\/|$|\?)/.test(path)) {
+      return "private, no-store, no-cache, must-revalidate";
+    }
+
     // Health endpoints - minimal cache (2s) for monitoring
     if (path.includes("/health")) {
       return "public, max-age=2, s-maxage=2";
@@ -121,8 +122,8 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Predictions - depends on type
-    if (path.includes("/predictions") || path.includes("/ml")) {
+    // Predictions - depends on type (user-facing, under /parks/.../predictions)
+    if (path.includes("/predictions")) {
       // Daily predictions - longer cache (1 hour)
       if (path.includes("daily") || path.includes("predictionType=daily")) {
         return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=7200";
@@ -167,7 +168,8 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
     }
 
-    // Default - moderate cache for other endpoints
-    return "public, max-age=300, s-maxage=300";
+    // Default - moderate cache (5 min) for other GET endpoints, matching
+    // the 5-min data sync cadence. SWR mirrors the explicit branches above.
+    return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
   }
 }

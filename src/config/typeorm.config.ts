@@ -24,7 +24,12 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log
       timezone: "UTC", // Always use UTC
       extra: {
-        max: 20, // Connection pool size
+        // Connection pool size. Default raised to 30 (from 20) to absorb
+        // cache-miss bursts (e.g. a mobile-app launch spike) running
+        // alongside the background cache-warmup jobs. Tunable via env.
+        max: parseInt(process.env.DB_POOL_SIZE ?? "30", 10),
+        // Reap idle clients so an off-peak pool doesn't pin connections.
+        idleTimeoutMillis: 30000,
         // During build, use very short timeout to fail fast
         connectionTimeoutMillis: isBuildTime ? 100 : 15000,
       },

@@ -7,12 +7,12 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Response } from "express";
-import * as crypto from "crypto";
 
 /**
  * HTTP Cache Interceptor
  *
- * Sets the cache headers honoured by Cloudflare and browsers.
+ * Sets the TTL cache headers honoured by Cloudflare and browsers for a
+ * specific route.
  *
  * - `Cache-Control` carries the BROWSER TTL (`max-age`) plus an
  *   `s-maxage` mirror so caches that do not understand
@@ -23,8 +23,11 @@ import * as crypto from "crypto";
  *   `Cache-Control`, browsers ignore it. This lets us cache long on
  *   the edge (low origin load) while keeping a short browser cache
  *   (fresh data after a reload).
- * - `ETag` is set so Cloudflare and clients can short-circuit identical
- *   bodies with a 304.
+ *
+ * ETag/conditional-request handling is intentionally NOT done here.
+ * Express (under Nest) already emits a weak ETag for JSON responses and
+ * answers a matching `If-None-Match` with an automatic body-less 304, so
+ * we only set TTL headers and let the platform own validation.
  *
  * Usage:
  *   @UseInterceptors(new HttpCacheInterceptor(900))
@@ -47,18 +50,9 @@ export class HttpCacheInterceptor implements NestInterceptor {
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const response = context.switchToHttp().getResponse<Response>();
-    const request = context.switchToHttp().getRequest();
 
     return next.handle().pipe(
-      tap((data) => {
-        const etag = this.generateETag(data);
-
-        // Short-circuit if the client already has this exact body.
-        if (request.headers["if-none-match"] === etag) {
-          response.status(304);
-          return;
-        }
-
+      tap(() => {
         const cdnMaxAge = this.sMaxAge ?? this.maxAge;
         // stale-while-revalidate doubles the TTL for forecast-like
         // endpoints (>2 min) so Cloudflare can serve stale-but-known
@@ -81,21 +75,7 @@ export class HttpCacheInterceptor implements NestInterceptor {
             `public, max-age=${cdnMaxAge}, stale-while-revalidate=${swr}`,
           );
         }
-
-        response.setHeader("ETag", etag);
       }),
     );
-  }
-
-  /**
-   * Strong ETag from the JSON body. MD5 is sufficient because we use
-   * the hash for cache identity, not security.
-   */
-  private generateETag(data: unknown): string {
-    const hash = crypto
-      .createHash("md5")
-      .update(JSON.stringify(data))
-      .digest("hex");
-    return `"${hash}"`;
   }
 }

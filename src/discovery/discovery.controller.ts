@@ -43,15 +43,15 @@ export class DiscoveryController {
    * GET /v1/discovery/geo
    *
    * Returns complete hierarchical geographic structure.
-   * Cached for 2 minutes (HTTP + Redis) to include live statistics.
+   * Cached for 5 minutes (HTTP + Redis) to include live statistics.
    */
   @Get("geo")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get complete geo structure",
     description:
       "Returns hierarchical structure of continents → countries → cities → parks → attractions. " +
-      "Includes live statistics (crowd levels, wait times). Cached for 2 minutes.",
+      "Includes live statistics (crowd levels, wait times). Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -117,12 +117,12 @@ export class DiscoveryController {
    * Returns all continents with nested data.
    */
   @Get("continents")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "List all continents",
     description:
       "Returns all continents with countries, cities, parks, and attractions. " +
-      "Includes live statistics. Cached for 2 minutes.",
+      "Includes live statistics. Cached for 5 minutes.",
   })
   @ApiResponse({
     status: 200,
@@ -139,7 +139,7 @@ export class DiscoveryController {
    * Returns countries in a specific continent.
    */
   @Get("continents/:continentSlug")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get countries in continent",
     description:
@@ -207,7 +207,7 @@ export class DiscoveryController {
    * Returns cities in a specific country.
    */
   @Get("continents/:continentSlug/:countrySlug")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get cities in country",
     description:
@@ -321,7 +321,7 @@ export class DiscoveryController {
    * Returns list of hydrated park objects for a country
    */
   @Get(":continent/:country")
-  @UseInterceptors(new HttpCacheInterceptor(120)) // 2 minutes - live stats
+  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get hydrated parks in country",
     description: "Returns fully hydrated park objects for a country.",

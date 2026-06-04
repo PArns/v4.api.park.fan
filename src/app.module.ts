@@ -27,8 +27,14 @@ import { StatsModule } from "./stats/stats.module";
 import { PopularityModule } from "./popularity/popularity.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
-import { APP_INTERCEPTOR } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { PopularityInterceptor } from "./popularity/interceptors/popularity.interceptor";
+import { ThrottlerModule } from "@nestjs/throttler";
+import {
+  getThrottlerOptions,
+  isThrottlingEnabled,
+} from "./common/throttler/throttler.config";
+import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
 
 @Module({
   imports: [
@@ -41,6 +47,11 @@ import { PopularityInterceptor } from "./popularity/interceptors/popularity.inte
 
     // Redis
     RedisModule,
+
+    // Origin rate limiting (circuit breaker; tunable/disable-able via env).
+    // Evaluated after ConfigModule.forRoot() above has loaded .env into
+    // process.env, so getThrottlerOptions() sees env-file values too.
+    ThrottlerModule.forRoot(getThrottlerOptions()),
 
     // TypeORM with async config
     TypeOrmModule.forRootAsync(typeOrmConfig),
@@ -89,6 +100,11 @@ import { PopularityInterceptor } from "./popularity/interceptors/popularity.inte
       provide: APP_INTERCEPTOR,
       useClass: PopularityInterceptor,
     },
+    // Only register the throttler guard when a positive limit is set
+    // (THROTTLE_LIMIT=0 disables rate limiting entirely).
+    ...(isThrottlingEnabled()
+      ? [{ provide: APP_GUARD, useClass: CfThrottlerGuard }]
+      : []),
   ],
 })
 export class AppModule {}
