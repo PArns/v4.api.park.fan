@@ -41,3 +41,38 @@ describe("QueuePercentileProcessor — deterministic aggregate id", () => {
     expect(sql).not.toContain("gen_random_uuid() as id");
   });
 });
+
+describe("QueuePercentileProcessor — dedupe-percentile-aggregates", () => {
+  const buildProcessor = (query: jest.Mock) =>
+    new QueuePercentileProcessor(
+      { query } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  it("is a no-op when there are no duplicate buckets (idempotent)", async () => {
+    const query = jest.fn().mockResolvedValueOnce([{ groups: 0 }]);
+
+    await buildProcessor(query).handleDedupePercentileAggregates({} as never);
+
+    // Only the duplicate-count probe runs; no DELETE is issued.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain("HAVING count(*) > 1");
+  });
+
+  it("collapses duplicates to one row when buckets are duplicated", async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ groups: 3 }]) // probe finds dupes
+      .mockResolvedValueOnce([]); // delete
+
+    await buildProcessor(query).handleDedupePercentileAggregates({} as never);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    const deleteSql = query.mock.calls[1][0] as string;
+    expect(deleteSql).toContain("DELETE FROM queue_data_aggregates");
+    expect(deleteSql).toContain("row_number()");
+    expect(deleteSql).toContain("rn > 1");
+  });
+});

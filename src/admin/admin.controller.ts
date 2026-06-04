@@ -322,6 +322,41 @@ export class AdminController {
   }
 
   /**
+   * One-time cleanup of historical duplicate percentile-aggregate rows.
+   *
+   * Collapses each duplicated (attractionId, hour) bucket in
+   * queue_data_aggregates to a single (latest) row. These duplicates came
+   * from the old random-uuid upsert; the deterministic-id fix prevents new
+   * ones, this clears the backlog. Idempotent and safe to re-run. Run in a
+   * controlled window — it may decompress old TimescaleDB chunks.
+   */
+  @Post("dedupe-percentile-aggregates")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Dedupe percentile aggregates",
+    description:
+      "Removes historical duplicate (attractionId, hour) rows from queue_data_aggregates, keeping the latest. Idempotent.",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Dedupe job queued successfully",
+  })
+  async triggerDedupePercentileAggregates(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const job = await this.analyticsQueue.add(
+      "dedupe-percentile-aggregates",
+      {},
+      { priority: 5 },
+    );
+    return {
+      message: "Percentile-aggregate dedupe job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
    * Flush park-related Redis cache
    *
    * Clears only park-related cached data (schedules, wait times, analytics, etc.)
