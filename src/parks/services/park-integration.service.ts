@@ -67,6 +67,17 @@ export class ParkIntegrationService {
   private readonly TTL_QUEUE_DATA = 5 * 60; // 5 minutes (matches update frequency)
   private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
 
+  /**
+   * Parks whose integrated cache is currently being refreshed in the
+   * background. Coalesces the stale-while-revalidate path so that N
+   * concurrent requests hitting the &lt;60s-TTL window trigger only ONE
+   * rebuild instead of a thundering herd (each rebuild fans out to ~15
+   * dependent service/DB calls). In-process only — covers the dominant
+   * single-instance dogpile; a Redis NX lock would extend this across
+   * instances (follow-up).
+   */
+  private readonly refreshingParks = new Set<string>();
+
   constructor(
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
@@ -1101,13 +1112,24 @@ export class ParkIntegrationService {
    * This ensures users always get fast cached responses
    */
   private async refreshCacheInBackground(park: Park): Promise<void> {
-    // Clear the cache and rebuild
-    const cacheKey = `park:integrated:${park.id}`;
-    await this.redis.del(cacheKey);
+    // Single-flight: if a refresh for this park is already running, skip —
+    // the in-flight rebuild will publish the fresh value for everyone.
+    if (this.refreshingParks.has(park.id)) {
+      return;
+    }
+    this.refreshingParks.add(park.id);
 
-    // Rebuild will automatically cache the result. Don't count this as a
-    // popularity hit — the triggering user request was already counted.
-    await this.buildIntegratedResponse(park, false, false);
+    try {
+      // Do NOT delete the key first: the rebuild's `set ... EX` overwrites it,
+      // and deleting would open a miss window where concurrent readers fall
+      // through to their own full rebuilds (the dogpile we're avoiding).
+      // Rebuild over the existing key so readers keep getting the stale value
+      // until the fresh one is written. Don't count a popularity hit — the
+      // triggering user request was already counted.
+      await this.buildIntegratedResponse(park, false, false);
+    } finally {
+      this.refreshingParks.delete(park.id);
+    }
   }
 
   /**

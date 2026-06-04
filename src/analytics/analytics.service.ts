@@ -48,6 +48,16 @@ import { subDays } from "date-fns";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
+/**
+ * TTL (seconds) for negatively-cached attraction baselines — i.e. caching
+ * the *absence* of a P50/P90 baseline row so attractions without one stop
+ * hammering Postgres on every request. Kept short (6h) relative to the
+ * daily baseline recompute so a newly-created baseline is picked up soon.
+ */
+const NEGATIVE_BASELINE_TTL = 6 * 60 * 60;
+/** Sentinel value marking a negatively-cached P90 baseline (read path skips it). */
+const P90_NEGATIVE_SENTINEL = "-1";
+
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
@@ -4513,6 +4523,12 @@ export class AnalyticsService {
       return parseFloat(baseline.p50Baseline.toString());
     }
 
+    // Negative-cache the absence so attractions without a baseline row yet
+    // (new/low-traffic rides) stop re-hitting Postgres on every request.
+    // Short TTL so a freshly-computed baseline surfaces within ~6h.
+    await this.redis
+      .set(cacheKey, "0", "EX", NEGATIVE_BASELINE_TTL)
+      .catch(() => undefined);
     return 0;
   }
 
@@ -4592,15 +4608,25 @@ export class AnalyticsService {
     });
 
     const pipeline = this.redis.pipeline();
+    const found = new Set<string>();
     for (const row of rows) {
       const val = parseFloat(row.p50Baseline.toString());
       resultMap.set(row.attractionId, val);
+      found.add(row.attractionId);
       pipeline.set(
         `attraction:p50:${row.attractionId}`,
         row.p50Baseline.toString(),
         "EX",
         86400,
       );
+    }
+    // Negative-cache IDs with no baseline row yet so they stop re-querying
+    // Postgres every request. "0" reads back as 0, which all consumers treat
+    // identically to "missing" (they fall back to P90 via `p50 || p90`).
+    for (const id of uncachedIds) {
+      if (!found.has(id)) {
+        pipeline.set(`attraction:p50:${id}`, "0", "EX", NEGATIVE_BASELINE_TTL);
+      }
     }
     await pipeline.exec();
 
@@ -5039,6 +5065,9 @@ export class AnalyticsService {
     for (let i = 0; i < attractionIds.length; i++) {
       const raw = cached[i];
       if (raw) {
+        // Negatively-cached absence — skip the DB, leave it out of the result
+        // (consumers fall back to P50/0), don't re-query every request.
+        if (raw === P90_NEGATIVE_SENTINEL) continue;
         const v = parseFloat(raw);
         if (v > 0) {
           result.set(attractionIds[i], v);
@@ -5053,15 +5082,29 @@ export class AnalyticsService {
         where: { attractionId: In(missing) },
       });
       const pipeline = this.redis.pipeline();
+      const found = new Set<string>();
       for (const row of rows) {
         const value = parseFloat(row.p90Baseline.toString());
         if (value > 0) {
           result.set(row.attractionId, value);
+          found.add(row.attractionId);
           pipeline.set(
             `attraction:p90:${row.attractionId}`,
             value.toString(),
             "EX",
             86400,
+          );
+        }
+      }
+      // Negative-cache IDs with no usable baseline so they stop hammering
+      // Postgres on every request (short TTL → picks up new baselines soon).
+      for (const id of missing) {
+        if (!found.has(id)) {
+          pipeline.set(
+            `attraction:p90:${id}`,
+            P90_NEGATIVE_SENTINEL,
+            "EX",
+            NEGATIVE_BASELINE_TTL,
           );
         }
       }

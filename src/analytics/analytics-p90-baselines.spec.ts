@@ -257,8 +257,19 @@ describe("AnalyticsService — P90 + hourly history", () => {
       expect(result.has("a3")).toBe(false);
       // a2 should be in Redis now (write-back)
       expect(redisStore.get("attraction:p90:a2")).toBe("60");
-      // a3's sentinel zero is NOT written — would poison future cache reads
-      expect(redisStore.get("attraction:p90:a3")).toBeUndefined();
+      // a3 (no usable baseline) is negatively cached with the "-1" sentinel so
+      // it stops re-hitting Postgres every request. The read path skips "-1",
+      // so it does NOT poison results — consumers still fall back to P50/0.
+      expect(redisStore.get("attraction:p90:a3")).toBe("-1");
+    });
+
+    it("serves a negatively-cached (-1) id from Redis without a DB hit", async () => {
+      redisStore.set("attraction:p90:a1", "-1");
+
+      const result = await service.getBatchAttractionP90Baselines(["a1"]);
+
+      expect(result.has("a1")).toBe(false); // sentinel → treated as absent
+      expect(attractionP90Repo.find).not.toHaveBeenCalled(); // no DB re-query
     });
   });
 
