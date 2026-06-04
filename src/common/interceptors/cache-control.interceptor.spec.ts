@@ -87,9 +87,14 @@ describe("CacheControlInterceptor", () => {
 
   describe("respects a locally-set Cache-Control", () => {
     it("does not overwrite an existing Cache-Control header", async () => {
-      const { ctx, headers } = buildMockContext("/v1/parks", "GET", {}, {
-        "Cache-Control": "public, max-age=120, s-maxage=120",
-      });
+      const { ctx, headers } = buildMockContext(
+        "/v1/parks",
+        "GET",
+        {},
+        {
+          "Cache-Control": "public, max-age=120, s-maxage=120",
+        },
+      );
       await firstValueFrom(interceptor.intercept(ctx, handlerOf({ a: 1 })));
       expect(headers["Cache-Control"]).toBe(
         "public, max-age=120, s-maxage=120",
