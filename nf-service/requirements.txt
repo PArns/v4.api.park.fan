@@ -12,7 +12,7 @@ neuralforecast==3.1.8
 # Data
 pandas==2.2.3
 numpy==1.26.4
-pyarrow==17.0.0
+pyarrow==23.0.1
 
 # Database (same pattern as ml-service)
 psycopg2-binary==2.9.10
