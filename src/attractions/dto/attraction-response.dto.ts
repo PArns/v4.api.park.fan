@@ -7,6 +7,7 @@ import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
+import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 
 /**
  * Attraction Response DTO
@@ -234,6 +235,16 @@ export class AttractionResponseDto {
     nullable: true,
   })
   bestVisitTimes?: BestVisitSlot[] | null;
+
+  @ApiProperty({
+    description:
+      "Rope-drop recommendation for this headliner (worth arriving at park opening). " +
+      "Only present for tier1/tier2 headliners in parks with a schedule. " +
+      "`worth` flips seasonally. Times are UTC ISO 8601; offsets are minutes-after-open.",
+    required: false,
+    nullable: true,
+  })
+  ropeDrop?: RopeDropInfo | null;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

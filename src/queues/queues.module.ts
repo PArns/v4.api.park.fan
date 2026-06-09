@@ -22,6 +22,7 @@ import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
+import { RopeDropProcessor } from "./processors/rope-drop.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { GeoipModule } from "../geoip/geoip.module";
@@ -144,6 +145,17 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
       },
       { name: "geoip-update" }, // GeoLite2-City every 48h
       { name: "nf-training" }, // TFT train+forecast + TFT-vs-CatBoost scoreboard
+      {
+        // Rope-drop: one LATERAL query per park over hourly-history slots +
+        // pure aggregation. Lighter than p50-baseline (no fresh PERCENTILE
+        // scan) but still iterates all parks — give it the same headroom so a
+        // batch run is never flagged stalled.
+        name: "rope-drop",
+        settings: {
+          lockDuration: 600000, // 10 min
+          lockRenewTime: 300000, // renew every 5 min
+        },
+      },
     ),
 
     // Feature modules for processors
@@ -191,6 +203,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     StatsProcessor,
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
+    RopeDropProcessor, // Rope-drop recommendations (daily)
     GeoipUpdateProcessor,
     NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
   ],

@@ -11,3 +11,8 @@ export { ParkStatus, AttractionStatus } from "./status.type";
 export type { FeatureContext, QueueDataInfo } from "./feature-context.type";
 export type { HolidayInput } from "./holiday-input.type";
 export type { Percentiles, PercentilesWithIqr } from "./percentiles.type";
+export type {
+  RopeDropInfo,
+  RopeDropStored,
+  RopeDropDayBucket,
+} from "./rope-drop.type";

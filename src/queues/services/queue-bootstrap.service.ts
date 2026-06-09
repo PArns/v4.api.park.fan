@@ -38,6 +38,7 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("prediction-accuracy") private predictionAccuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
+    @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(AttractionP50Baseline)
     private p50Repository: Repository<AttractionP50Baseline>,
@@ -300,6 +301,44 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     } catch (e) {
       this.logger.warn(`Failed to trigger seasonal detection: ${e}`);
+    }
+
+    // 7. Rope-drop: one-time force-run when the table is empty (post-deploy
+    // backfill). Maintained by the daily 05:15 cron, so on a warm redeploy this
+    // is skipped. Gate on the table being empty — true only on the first deploy
+    // of this feature (synchronize just created it) or after a wipe. Delayed so
+    // the boot-rush and the hourly-history/p50 jobs clear first.
+    try {
+      const ropeRows = await this.parkRepository.query(
+        `SELECT 1 FROM attraction_rope_drop LIMIT 1`,
+      );
+      const ropeEmpty = ropeRows.length === 0;
+      const ropeJobActive = await this.isJobActiveOrWaiting(
+        this.ropeDropQueue,
+        "calculate-rope-drop",
+      );
+
+      if (ropeEmpty && !ropeJobActive) {
+        await this.ropeDropQueue.add(
+          "calculate-rope-drop",
+          {},
+          {
+            priority: 7,
+            jobId: "bootstrap-rope-drop",
+            removeOnComplete: true,
+            delay: 360000, // 6min — let boot-rush + p50 baselines run first
+          },
+        );
+        this.logger.log(
+          "✅ Boot: rope-drop queued (table empty — one-time backfill)",
+        );
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: rope-drop skipped (populated → daily cron maintains it)",
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`Failed to trigger rope-drop: ${e}`);
     }
   }
 
