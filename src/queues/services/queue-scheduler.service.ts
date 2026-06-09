@@ -45,6 +45,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 + P90 baseline
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
+    @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
   ) {}
@@ -672,6 +673,26 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "30 4 * * *", // Daily at 4:30am
           },
           jobId: "attraction-hourly-history-cron",
+        },
+      );
+    }
+
+    // Rope-drop recommendations: daily at 5:15 AM (after attraction-hourly-history
+    // at 4:30 finishes writing yesterday's slots). Daily recompute on a trailing
+    // window = the "window adapts to the current season" requirement.
+    const hasRopeDropCron = await this.hasRepeatableJob(
+      this.ropeDropQueue,
+      "rope-drop-cron",
+    );
+    if (!hasRopeDropCron) {
+      await this.ropeDropQueue.add(
+        "calculate-rope-drop",
+        {},
+        {
+          repeat: {
+            cron: "15 5 * * *", // Daily at 5:15am
+          },
+          jobId: "rope-drop-cron",
         },
       );
     }

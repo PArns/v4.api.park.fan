@@ -23,6 +23,7 @@ import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
+import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -33,6 +34,13 @@ import {
   PeakHourSource,
 } from "./dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
+import { RopeDropStored } from "../common/types/rope-drop.type";
+import {
+  computeRopeDrop,
+  DEFAULT_ROPE_DROP_THRESHOLDS,
+  RopeDropComputeResult,
+  RopeDropDayInput,
+} from "./utils/rope-drop.util";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { peakHourConfidence } from "./utils/peak-hour.util";
 import {
@@ -124,6 +132,8 @@ export class AnalyticsService {
     private attractionP90BaselineRepository: Repository<AttractionP90Baseline>,
     @InjectRepository(AttractionHourlyHistory)
     private attractionHourlyHistoryRepository: Repository<AttractionHourlyHistory>,
+    @InjectRepository(AttractionRopeDrop)
+    private attractionRopeDropRepository: Repository<AttractionRopeDrop>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -5293,5 +5303,233 @@ export class AnalyticsService {
       })),
       ["attractionId", "date"],
     );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Rope-Drop recommendations
+  //
+  // "Is it worth rope-dropping this headliner?" Two-layer model (see plan /
+  // docs/analytics): shape (opening-relative ratio curve, pooled over history)
+  // + levels (absolute minutes on a trailing window, weekend/weekday buckets,
+  // recomputed daily so they track the current season). Source: the precomputed
+  // `attraction_hourly_history` 15-min P90 slots + `schedule_entries` opening
+  // times (so only parks/days with a schedule contribute — the feature gate).
+  // ──────────────────────────────────────────────────────────────────────────
+
+  private readonly ROPE_DROP_CACHE_TTL = 12 * 60 * 60; // 12h — flips daily
+
+  /**
+   * Compute rope-drop recommendations for all tier1/2 headliners of a park.
+   * One SELECT per park over the hourly-history slots, then pure aggregation.
+   * Returns a map keyed by attractionId; parks without a schedule yield empty.
+   */
+  async computeRopeDropForPark(
+    parkId: string,
+    timezone: string,
+  ): Promise<Map<string, RopeDropComputeResult>> {
+    // Slot timestamps are park-local "HH:MM"; opening time is a UTC instant.
+    // Resolve both to local minutes-of-day and subtract → minutes-after-open.
+    const rows: Array<{
+      attraction_id: string;
+      date: string;
+      dow: number;
+      mao: number;
+      p90: number;
+    }> = await this.queueDataRepository.query(
+      `
+      WITH hl AS (
+        SELECT "attractionId"
+        FROM headliner_attractions
+        WHERE "parkId" = $1::uuid AND tier IN ('tier1', 'tier2')
+      ),
+      sched AS (
+        SELECT date, MIN("openingTime") AS opening
+        FROM schedule_entries
+        WHERE "parkId" = $1::uuid
+          AND "scheduleType" = 'OPERATING'
+          AND "openingTime" IS NOT NULL
+          AND "attractionId" IS NULL
+        GROUP BY date
+      )
+      SELECT
+        ahh."attractionId" AS attraction_id,
+        ahh.date::text AS date,
+        EXTRACT(DOW FROM ahh.date)::int AS dow,
+        (
+          (split_part(s->>'time_slot', ':', 1)::int * 60
+           + split_part(s->>'time_slot', ':', 2)::int)
+          - (EXTRACT(HOUR FROM sched.opening AT TIME ZONE $2) * 60
+             + EXTRACT(MINUTE FROM sched.opening AT TIME ZONE $2))::int
+        ) AS mao,
+        (s->>'p90')::float AS p90
+      FROM attraction_hourly_history ahh
+      JOIN hl ON hl."attractionId" = ahh."attractionId"
+      JOIN sched ON sched.date = ahh.date
+      CROSS JOIN LATERAL jsonb_array_elements(ahh.slots) AS s
+      WHERE ahh."parkId" = $1::uuid
+        AND ahh.date >= (CURRENT_DATE - 800)
+      `,
+      [parkId, timezone],
+    );
+
+    // Group rows → per attraction → per date → slots.
+    const byAttraction = new Map<string, Map<string, RopeDropDayInput>>();
+    for (const row of rows) {
+      const mao =
+        typeof row.mao === "number" ? row.mao : parseInt(String(row.mao), 10);
+      const p90 =
+        typeof row.p90 === "number" ? row.p90 : parseFloat(String(row.p90));
+      if (!Number.isFinite(mao) || !Number.isFinite(p90)) continue;
+
+      let dates = byAttraction.get(row.attraction_id);
+      if (!dates) {
+        dates = new Map();
+        byAttraction.set(row.attraction_id, dates);
+      }
+      let day = dates.get(row.date);
+      if (!day) {
+        day = { date: row.date, dow: Number(row.dow), slots: [] };
+        dates.set(row.date, day);
+      }
+      day.slots.push({ minutesAfterOpen: mao, p90 });
+    }
+
+    // Trailing-window cutoff in park-local date terms.
+    const windowStart = formatInTimeZone(
+      subDays(new Date(), DEFAULT_ROPE_DROP_THRESHOLDS.windowDays),
+      timezone,
+      "yyyy-MM-dd",
+    );
+
+    const result = new Map<string, RopeDropComputeResult>();
+    for (const [attractionId, dates] of byAttraction.entries()) {
+      const computed = computeRopeDrop(Array.from(dates.values()), windowStart);
+      if (computed) result.set(attractionId, computed);
+    }
+    return result;
+  }
+
+  /**
+   * Bulk-persist a park's rope-drop rows (DB upsert + pipelined Redis warmup).
+   * Stores all computed headliners (incl. `worth=false`) so the ride endpoint
+   * can show "not worth today"; the park list filters `worth=true`.
+   */
+  async saveRopeDropBatch(
+    parkId: string,
+    results: Map<string, RopeDropComputeResult>,
+  ): Promise<number> {
+    if (results.size === 0) return 0;
+    const now = new Date();
+    const rows = Array.from(results.entries()).map(([attractionId, r]) => ({
+      attractionId,
+      parkId,
+      worth: r.worth,
+      strength: r.strength,
+      confidence: r.confidence,
+      busyPeak: r.busyPeak,
+      openWait: r.openWait,
+      savings: r.savings,
+      rideByMinutesAfterOpen: r.rideByMinutesAfterOpen,
+      bestSlotMinutesAfterOpen: r.bestSlotMinutesAfterOpen,
+      byDaytype: r.byDaytype,
+      windowDays: r.windowDays,
+      sampleDays: r.sampleDays,
+      calculatedAt: now,
+    }));
+
+    await this.attractionRopeDropRepository.upsert(rows, ["attractionId"]);
+
+    const pipeline = this.redis.pipeline();
+    for (const r of rows) {
+      pipeline.set(
+        `attraction:ropedrop:${r.attractionId}`,
+        JSON.stringify(this.toRopeDropStored(r)),
+        "EX",
+        this.ROPE_DROP_CACHE_TTL,
+      );
+    }
+    await pipeline.exec();
+
+    return rows.length;
+  }
+
+  /** Map a stored/entity row to the cached `RopeDropStored` shape. */
+  private toRopeDropStored(r: {
+    worth: boolean;
+    strength: "high" | "moderate" | null;
+    confidence: "high" | "medium" | "low";
+    busyPeak: number | string;
+    openWait: number | string;
+    savings: number | string;
+    rideByMinutesAfterOpen: number;
+    bestSlotMinutesAfterOpen: number;
+    byDaytype: RopeDropStored["byDaytype"];
+  }): RopeDropStored {
+    return {
+      worth: r.worth,
+      strength: r.strength,
+      confidence: r.confidence,
+      busyPeak: Number(r.busyPeak),
+      openWait: Number(r.openWait),
+      savings: Number(r.savings),
+      rideByMinutesAfterOpen: r.rideByMinutesAfterOpen,
+      bestSlotMinutesAfterOpen: r.bestSlotMinutesAfterOpen,
+      byDaytype: r.byDaytype,
+    };
+  }
+
+  /**
+   * Read-through single-attraction rope-drop lookup (Redis → DB → re-cache).
+   * Returns null when the attraction has no recommendation (not a headliner,
+   * park has no schedule, or insufficient data).
+   */
+  async getRopeDropFromCache(
+    attractionId: string,
+  ): Promise<RopeDropStored | null> {
+    const cacheKey = `attraction:ropedrop:${attractionId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as RopeDropStored;
+      } catch {
+        // fall through to DB on malformed cache
+      }
+    }
+
+    const row = await this.attractionRopeDropRepository.findOne({
+      where: { attractionId },
+    });
+    if (!row) return null;
+
+    const stored = this.toRopeDropStored(row);
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(stored),
+      "EX",
+      this.ROPE_DROP_CACHE_TTL,
+    );
+    return stored;
+  }
+
+  /**
+   * Batch rope-drop lookup for a whole park (used by the park integration
+   * response). One DB read; returns a map keyed by attractionId.
+   */
+  async getRopeDropForPark(
+    parkId: string,
+  ): Promise<Map<string, RopeDropStored>> {
+    const rows = await this.attractionRopeDropRepository.find({
+      where: { parkId },
+    });
+    const map = new Map<string, RopeDropStored>();
+    for (const row of rows) {
+      map.set(row.attractionId, this.toRopeDropStored(row));
+    }
+    return map;
+  }
+
+  /** Count of rope-drop rows — used by the post-deploy bootstrap force-run. */
+  async countRopeDropRows(): Promise<number> {
+    return this.attractionRopeDropRepository.count();
   }
 }

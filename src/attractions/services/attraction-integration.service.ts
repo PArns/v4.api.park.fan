@@ -39,6 +39,7 @@ import {
 import { subDays } from "date-fns";
 import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
+import { buildRopeDropInfo } from "../../common/utils/rope-drop-info.util";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
 import { PopularityService } from "../../popularity/popularity.service";
 
@@ -446,6 +447,21 @@ export class AttractionIntegrationService {
           await this.parkEnrichmentService.enrichScheduleWithHolidays(
             dto.schedule,
             park,
+          );
+        }
+
+        // --- Rope-drop recommendation (read-through; UTC resolved vs today's opening) ---
+        // Single read per attraction request (not N+1). Offsets are the portable
+        // truth; the UTC instants are a convenience anchored to today's opening.
+        const ropeDropStored = await this.analyticsService.getRopeDropFromCache(
+          attraction.id,
+        );
+        if (ropeDropStored) {
+          const rdTodayStr = getCurrentDateInTimezone(park.timezone);
+          const rdTodayEntry = dto.schedule.find((s) => s.date === rdTodayStr);
+          dto.ropeDrop = buildRopeDropInfo(
+            ropeDropStored,
+            rdTodayEntry?.openingTime ?? null,
           );
         }
 

@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject } from "@nestjs/common";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
+import { buildRopeDropInfo } from "../../common/utils/rope-drop-info.util";
 import { WeatherItemDto } from "../dto/weather-item.dto";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import { ScheduleItemDto } from "../dto/schedule-item.dto";
@@ -491,6 +492,7 @@ export class ParkIntegrationService {
         trendsMap,
         headlinerIds,
         storedPredictionsMap,
+        ropeDropMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
@@ -510,7 +512,18 @@ export class ParkIntegrationService {
           "hourly",
           new Date(currentSlotStartMs()),
         ),
+        // One DB read for the whole park — no N+1 across attractions.
+        this.analyticsService.getRopeDropForPark(park.id),
       ]);
+
+      // Resolve rope-drop UTC instants against today's opening (single value).
+      const ropeDropOpeningIso = todaySchedule?.openingTime
+        ? todaySchedule.openingTime instanceof Date
+          ? todaySchedule.openingTime.toISOString()
+          : String(todaySchedule.openingTime)
+        : null;
+      const ropeDropHeadliners: ParkWithAttractionsDto["ropeDropHeadliners"] =
+        [];
 
       for (const attraction of dto.attractions) {
         totalAttractionsCount++;
@@ -767,7 +780,28 @@ export class ParkIntegrationService {
 
         // Mark headliner attractions
         attraction.isHeadliner = headlinerIds.has(attraction.id);
+
+        // Rope-drop recommendation (from the batched park read).
+        const ropeDropStored = ropeDropMap.get(attraction.id);
+        if (ropeDropStored) {
+          attraction.ropeDrop = buildRopeDropInfo(
+            ropeDropStored,
+            ropeDropOpeningIso,
+          );
+          if (ropeDropStored.worth && ropeDropStored.strength) {
+            ropeDropHeadliners.push({
+              attractionId: attraction.id,
+              name: attraction.name,
+              savings: ropeDropStored.savings,
+              strength: ropeDropStored.strength,
+            });
+          }
+        }
       }
+
+      // Park-level summary: worthy headliners, biggest time-saver first.
+      ropeDropHeadliners.sort((a, b) => b.savings - a.savings);
+      dto.ropeDropHeadliners = ropeDropHeadliners;
     }
 
     // Removed problematic fallback heuristic - timezone-aware status is reliable

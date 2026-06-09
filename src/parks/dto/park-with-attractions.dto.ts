@@ -6,6 +6,7 @@ import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
+import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -157,6 +158,15 @@ export class ParkAttractionDto {
     nullable: true,
   })
   bestVisitTimes?: BestVisitSlot[] | null;
+
+  @ApiProperty({
+    description:
+      "Rope-drop recommendation for this headliner (worth arriving at park opening). " +
+      "Only present for tier1/tier2 headliners in parks with a schedule.",
+    required: false,
+    nullable: true,
+  })
+  ropeDrop?: RopeDropInfo | null;
 }
 
 export class ParkShowDto {
@@ -362,6 +372,23 @@ export class ParkAnalyticsDto {
  * Used when returning park data with its attractions included.
  * Now includes integrated live data: weather, schedule, wait times, analytics.
  */
+export class RopeDropHeadlinerDto {
+  @ApiProperty({ description: "Attraction id" })
+  attractionId: string;
+
+  @ApiProperty({ description: "Attraction name" })
+  name: string;
+
+  @ApiProperty({ description: "Minutes saved by rope-dropping on a busy day" })
+  savings: number;
+
+  @ApiProperty({
+    description: "Recommendation tier",
+    enum: ["high", "moderate"],
+  })
+  strength: "high" | "moderate";
+}
+
 export class ParkWithAttractionsDto {
   @ApiProperty({ description: "Unique identifier of the park" })
   id: string;
@@ -451,6 +478,15 @@ export class ParkWithAttractionsDto {
     required: false,
   })
   attractions: ParkAttractionDto[];
+
+  @ApiProperty({
+    description:
+      "Headliners worth rope-dropping today (worth=true), sorted by minutes saved. " +
+      "Quick 'is it worth arriving at opening' summary; full details on each attraction's ropeDrop.",
+    type: [RopeDropHeadlinerDto],
+    required: false,
+  })
+  ropeDropHeadliners?: RopeDropHeadlinerDto[];
 
   @ApiProperty({
     description: "List of shows",
