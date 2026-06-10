@@ -102,7 +102,11 @@ export class AttractionIntegrationService {
     const cacheKey = `attraction:integrated:${attraction.id}`;
 
     // Track popularity hit (background)
-    this.popularityService.recordAttractionHit(attraction.id).catch(() => {});
+    this.popularityService
+      .recordAttractionHit(attraction.id)
+      .catch((err) =>
+        this.logger.debug(`Failed to record attraction hit: ${err}`),
+      );
 
     const cached = await this.redis.get(cacheKey);
 

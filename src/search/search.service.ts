@@ -150,7 +150,9 @@ export class SearchService implements OnModuleInit {
              EXECUTE format('ALTER DATABASE %I SET pg_trgm.word_similarity_threshold = 0.4', current_database());
            END $$;`,
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(`word_similarity_threshold not set: ${err}`),
+        );
 
       // Create indices concurrently if possible, but safe here without valid concurrently in transaction block usually
       // Park indices
@@ -170,7 +172,9 @@ export class SearchService implements OnModuleInit {
         .query(
           "CREATE INDEX IF NOT EXISTS idx_park_name_normalized ON parks USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(`idx_park_name_normalized not created: ${err}`),
+        );
 
       // Attraction indices
       await this.attractionRepository.query(
@@ -186,14 +190,21 @@ export class SearchService implements OnModuleInit {
         .query(
           "CREATE INDEX IF NOT EXISTS idx_attraction_name_normalized ON attractions USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(
+            `idx_attraction_name_normalized not created: ${err}`,
+          ),
+        );
 
       // Word similarity index for partial matches (e.g. "phantasia" matching "phantasialand")
       await this.attractionRepository
         .query(
           "CREATE INDEX IF NOT EXISTS idx_park_name_word_trgm ON parks USING gist (name gist_trgm_ops);",
         )
-        .catch(() => {}); // gist might not be available depending on postgres version/extensions
+        // gist might not be available depending on postgres version/extensions
+        .catch((err) =>
+          this.logger.debug(`idx_park_name_word_trgm not created: ${err}`),
+        );
 
       // Show indices
       await this.showRepository.query(
@@ -1668,7 +1679,12 @@ export class SearchService implements OnModuleInit {
         "Search index load from Redis failed, falling back to DB",
         err,
       );
-      await this.refreshSearchIndex().catch(() => {});
+      await this.refreshSearchIndex().catch((refreshErr) =>
+        this.logger.error(
+          "Search index refresh failed — search will serve stale or empty results",
+          refreshErr,
+        ),
+      );
     }
   }
 
@@ -2183,7 +2199,9 @@ export class SearchService implements OnModuleInit {
       if (this.parkIndex.length > 0) {
         await this.getCachedParkStatusMap(
           this.parkIndex.map((p) => p.id),
-        ).catch(() => {});
+        ).catch((err) =>
+          this.logger.debug(`Park status pre-warm failed: ${err}`),
+        );
       }
 
       const [parks, popularParkIds] = await Promise.all([

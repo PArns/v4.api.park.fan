@@ -132,7 +132,9 @@ export class ParkIntegrationService {
     // Track popularity hit (background). Skipped for system rebuilds
     // (cache warmup / background refresh) so the ranking reflects real demand.
     if (countHit) {
-      this.popularityService.recordParkHit(park.id).catch(() => {});
+      this.popularityService
+        .recordParkHit(park.id)
+        .catch((err) => this.logger.debug(`Failed to record park hit: ${err}`));
     }
 
     if (!skipCache) {
