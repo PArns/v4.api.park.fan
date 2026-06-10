@@ -25,6 +25,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { ParkValidatorService } from "../parks/services/park-validator.service";
 import { ParkRepairService } from "../parks/services/park-repair.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
+import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
 
 /**
@@ -848,38 +849,7 @@ export class AdminController {
           continue;
         }
 
-        // Simple priority: Wiki-ID > more Entity-IDs > older
-        let winnerId = duplicate.park1.id;
-        let loserId = duplicate.park2.id;
-
-        if (park2.wikiEntityId && !park1.wikiEntityId) {
-          winnerId = duplicate.park2.id;
-          loserId = duplicate.park1.id;
-        } else if (
-          (park1.wikiEntityId && park2.wikiEntityId) ||
-          (!park1.wikiEntityId && !park2.wikiEntityId)
-        ) {
-          // Count Entity-IDs
-          const count1 =
-            (park1.wikiEntityId ? 1 : 0) +
-            (park1.queueTimesEntityId ? 1 : 0) +
-            (park1.wartezeitenEntityId ? 1 : 0);
-          const count2 =
-            (park2.wikiEntityId ? 1 : 0) +
-            (park2.queueTimesEntityId ? 1 : 0) +
-            (park2.wartezeitenEntityId ? 1 : 0);
-
-          if (count2 > count1) {
-            winnerId = duplicate.park2.id;
-            loserId = duplicate.park1.id;
-          } else if (count1 === count2 && park2.createdAt < park1.createdAt) {
-            // Older park wins if counts are equal
-            winnerId = duplicate.park2.id;
-            loserId = duplicate.park1.id;
-          }
-        }
-
-        mergePairs.push({ winnerId, loserId });
+        mergePairs.push(determineMergeWinner(park1, park2));
       }
 
       // Use repair service to perform merges
@@ -955,34 +925,7 @@ export class AdminController {
         };
       }
 
-      // Determine winner
-      let winnerId = body.park1Id;
-      let loserId = body.park2Id;
-
-      if (park2.wikiEntityId && !park1.wikiEntityId) {
-        winnerId = body.park2Id;
-        loserId = body.park1Id;
-      } else if (
-        (park1.wikiEntityId && park2.wikiEntityId) ||
-        (!park1.wikiEntityId && !park2.wikiEntityId)
-      ) {
-        const count1 =
-          (park1.wikiEntityId ? 1 : 0) +
-          (park1.queueTimesEntityId ? 1 : 0) +
-          (park1.wartezeitenEntityId ? 1 : 0);
-        const count2 =
-          (park2.wikiEntityId ? 1 : 0) +
-          (park2.queueTimesEntityId ? 1 : 0) +
-          (park2.wartezeitenEntityId ? 1 : 0);
-
-        if (count2 > count1) {
-          winnerId = body.park2Id;
-          loserId = body.park1Id;
-        } else if (count1 === count2 && park2.createdAt < park1.createdAt) {
-          winnerId = body.park2Id;
-          loserId = body.park1Id;
-        }
-      }
+      const { winnerId, loserId } = determineMergeWinner(park1, park2);
 
       try {
         const mergeResult = await this.parkMergeService.mergeParks(

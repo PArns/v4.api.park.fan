@@ -1,3 +1,5 @@
+import { Logger } from "@nestjs/common";
+
 export interface DatabaseConfig {
   host: string;
   port: number;
@@ -33,7 +35,7 @@ export const getDatabaseConfig = (): DatabaseConfig => {
     }
 
     // Warning banner
-    console.log(
+    new Logger("DatabaseConfig").warn(
       `\n` +
         `┌────────────────────────────────────────────────────┐\n` +
         `│  ⚠️  TEST MODE ACTIVE                              │\n` +

@@ -122,3 +122,44 @@ export function calculateParkPriority(
 
   return score;
 }
+
+/**
+ * Decide which of two duplicate parks survives a merge.
+ *
+ * Priority: Wiki-ID > more external entity IDs > older park.
+ * Used by the admin merge-duplicate-parks endpoint for both the
+ * auto-detect and the manual merge path.
+ */
+export function determineMergeWinner(
+  park1: Park,
+  park2: Park,
+): { winnerId: string; loserId: string } {
+  let winnerId = park1.id;
+  let loserId = park2.id;
+
+  if (park2.wikiEntityId && !park1.wikiEntityId) {
+    winnerId = park2.id;
+    loserId = park1.id;
+  } else if (
+    (park1.wikiEntityId && park2.wikiEntityId) ||
+    (!park1.wikiEntityId && !park2.wikiEntityId)
+  ) {
+    const countIds = (park: Park): number =>
+      (park.wikiEntityId ? 1 : 0) +
+      (park.queueTimesEntityId ? 1 : 0) +
+      (park.wartezeitenEntityId ? 1 : 0);
+    const count1 = countIds(park1);
+    const count2 = countIds(park2);
+
+    if (count2 > count1) {
+      winnerId = park2.id;
+      loserId = park1.id;
+    } else if (count1 === count2 && park2.createdAt < park1.createdAt) {
+      // Older park wins if counts are equal
+      winnerId = park2.id;
+      loserId = park1.id;
+    }
+  }
+
+  return { winnerId, loserId };
+}
