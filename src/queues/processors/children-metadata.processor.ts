@@ -1,4 +1,5 @@
 import { Processor, Process, InjectQueue } from "@nestjs/bull";
+import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -190,7 +191,7 @@ export class ChildrenMetadataProcessor {
 
               // Invalidate integrated park cache to ensure new data (shows/restaurants) is visible immediately
               try {
-                await this.redis.del(`park:integrated:${park.id}`);
+                await this.redis.del(CacheKeys.parkIntegrated(park.id));
                 // this.logger.debug(
                 //   `🧹 Invalidated integrated cache for ${park.name} after sync`,
                 // );

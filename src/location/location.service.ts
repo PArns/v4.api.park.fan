@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -358,7 +359,7 @@ export class LocationService {
     // the per-park batch status/occupancy/statistics/schedule round-trips below then only
     // run for genuine cache misses. Mirrors FavoritesService.enrichParks.
     const cachedRaw = await this.redis.mget(
-      ...sortedParks.map((p) => `park:integrated:${p.id}`),
+      ...sortedParks.map((p) => CacheKeys.parkIntegrated(p.id)),
     );
     const integratedMap = new Map<string, ParkWithAttractionsDto>();
     const missedParks: typeof sortedParks = [];

@@ -1,4 +1,6 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
+import { safeJsonParse } from "../common/utils/json.util";
 import { getMlServiceUrl } from "../config/ml-services.config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, MoreThan } from "typeorm";
@@ -245,7 +247,7 @@ export class MLService {
 
     // Try cache first (include date in park timezone to invalidate daily)
     const today = getCurrentDateInTimezone(park.timezone);
-    const cacheKey = `ml:park:${parkId}:${predictionType}:${today}`;
+    const cacheKey = CacheKeys.mlParkPredictions(parkId, predictionType, today);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -291,9 +293,11 @@ export class MLService {
       // that always become wasUnplannedClosure=true, killing coverage.
       const activeCacheKey = `ml:active-attractions:${parkId}:90d:op`;
       let activeIdSet: Set<string>;
-      const cachedActiveIds = await this.redis.get(activeCacheKey);
+      const cachedActiveIds = safeJsonParse<string[]>(
+        await this.redis.get(activeCacheKey),
+      );
       if (cachedActiveIds) {
-        activeIdSet = new Set(JSON.parse(cachedActiveIds) as string[]);
+        activeIdSet = new Set(cachedActiveIds);
       } else {
         const activeAttractions = await this.queueDataRepository
           .createQueryBuilder("q")
@@ -749,7 +753,7 @@ export class MLService {
 
     // Separate cache key for yearly predictions (timezone-aware)
     const today = getCurrentDateInTimezone(park.timezone);
-    const cacheKey = `ml:park:${parkId}:yearly:${today}`;
+    const cacheKey = CacheKeys.mlParkPredictions(parkId, "yearly", today);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -809,7 +813,8 @@ export class MLService {
 
     const cacheKey = `ml:tft-daily:${parkId}:${days}:${today}`;
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached) as PredictionDto[];
+    const cachedPredictions = safeJsonParse<PredictionDto[]>(cached);
+    if (cachedPredictions) return cachedPredictions;
 
     // Freshest forward forecast per (attraction, target_date); headliners of THIS
     // park; within the horizon; not stale. ::text casts avoid uuid=text mismatches.

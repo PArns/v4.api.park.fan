@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
 import { Redis } from "ioredis";
@@ -374,7 +375,7 @@ export class FavoritesService {
     void this.popularityService.recordParkHits(parks.map((p) => p.id));
 
     // --- Fast path: read from prewarmed park:integrated cache (single MGET) ---
-    const cacheKeys = parks.map((p) => `park:integrated:${p.id}`);
+    const cacheKeys = parks.map((p) => CacheKeys.parkIntegrated(p.id));
     const cachedRaw = await this.redis.mget(...cacheKeys);
 
     const integratedMap = new Map<string, ParkWithAttractionsDto>();
@@ -563,7 +564,9 @@ export class FavoritesService {
     }
 
     // --- Fast path: single MGET for all attraction integrated caches ---
-    const cacheKeys = attractions.map((a) => `attraction:integrated:${a.id}`);
+    const cacheKeys = attractions.map((a) =>
+      CacheKeys.attractionIntegrated(a.id),
+    );
     const cachedRaw = await this.redis.mget(...cacheKeys);
 
     const integratedMap = new Map<string, AttractionResponseDto>();

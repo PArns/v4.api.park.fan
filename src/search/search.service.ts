@@ -1,4 +1,5 @@
 import { Injectable, Inject, OnModuleInit, Logger } from "@nestjs/common";
+import { safeJsonParse } from "../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Brackets } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -253,9 +254,11 @@ export class SearchService implements OnModuleInit {
     const cacheKey = `search:fuzzy:v1:${typeKey}:${q.toLowerCase()}`;
 
     // Try cache first
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
+    const cachedResponse = safeJsonParse<SearchResultDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cachedResponse) {
+      return cachedResponse;
     }
 
     // Determine which entity types to search
@@ -1714,37 +1717,58 @@ export class SearchService implements OnModuleInit {
       this.topAttractionIdSet = new Set(topAttractionIds);
       this.indexReady = true;
 
+      const serializedParks = JSON.stringify(parks);
+      const serializedAttractions = JSON.stringify(attractions);
+      const serializedShows = JSON.stringify(shows);
+      const serializedRestaurants = JSON.stringify(restaurants);
+
       const pipeline = this.redis.pipeline();
       pipeline.set(
         SearchService.INDEX_KEY_PARKS,
-        JSON.stringify(parks),
+        serializedParks,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_ATTRACTIONS,
-        JSON.stringify(attractions),
+        serializedAttractions,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_SHOWS,
-        JSON.stringify(shows),
+        serializedShows,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_RESTAURANTS,
-        JSON.stringify(restaurants),
+        serializedRestaurants,
         "EX",
         SearchService.INDEX_TTL,
       );
       await pipeline.exec();
 
+      // The index loaders are unbounded full-table reads (there is no
+      // active/deleted flag to filter on), so watch the serialized size:
+      // past this threshold the JSON round-trip and in-memory index start
+      // to hurt boot/refresh latency and a bounded strategy is needed.
+      const totalBytes =
+        serializedParks.length +
+        serializedAttractions.length +
+        serializedShows.length +
+        serializedRestaurants.length;
+      const totalMb = totalBytes / (1024 * 1024);
+      if (totalMb > 16) {
+        this.logger.warn(
+          `Search index serialization is ${totalMb.toFixed(1)} MB — consider bounding the index (filter or popularity cap)`,
+        );
+      }
+
       this.logger.log(
         `✅ Search index refreshed from DB → Redis (${parks.length} parks, ` +
           `${attractions.length} attractions, ${shows.length} shows, ` +
-          `${restaurants.length} restaurants)`,
+          `${restaurants.length} restaurants, ${totalMb.toFixed(1)} MB)`,
       );
     } catch (err) {
       this.logger.warn("Search index refresh failed", err);

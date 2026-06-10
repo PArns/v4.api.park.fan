@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
+import { safeJsonParse } from "../../common/utils/json.util";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
@@ -127,7 +129,7 @@ export class ParkIntegrationService {
     }
 
     // Try cache first (unless skipped)
-    const cacheKey = `park:integrated:${park.id}`;
+    const cacheKey = CacheKeys.parkIntegrated(park.id);
 
     // Track popularity hit (background). Skipped for system rebuilds
     // (cache warmup / background refresh) so the ranking reflects real demand.
@@ -139,10 +141,9 @@ export class ParkIntegrationService {
 
     if (!skipCache) {
       const cached = await this.redis.get(cacheKey);
+      const cachedDto = safeJsonParse<ParkWithAttractionsDto>(cached);
 
-      if (cached) {
-        const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
-
+      if (cachedDto) {
         // Check if attractions have URLs (invalidate cache if missing)
         const hasAttractionsWithoutUrls =
           cachedDto.attractions &&

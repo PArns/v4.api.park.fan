@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { Park } from "./entities/park.entity";
@@ -1117,7 +1118,7 @@ export class ParksService {
   ): Promise<{ minDate: string | null; maxDate: string | null }> {
     // Read-through cache: MIN/MAX over schedule_entries, called on every calendar build.
     // Schedule changes only on the daily sync / on-demand refresh, so 1h is safely fresh.
-    const cacheKey = `park:opdaterange:${parkId}`;
+    const cacheKey = CacheKeys.parkOpDateRange(parkId);
     const cached = await this.redis.get(cacheKey);
     if (cached !== null) {
       try {
@@ -1948,7 +1949,7 @@ export class ParksService {
     }
 
     const todayStr = getCurrentDateInTimezone(tz);
-    const cacheKey = `schedule:today:${parkId}:${todayStr}`;
+    const cacheKey = CacheKeys.scheduleToday(parkId, todayStr);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1996,7 +1997,7 @@ export class ParksService {
     if (!park) return null;
 
     const tomorrowStr = getTomorrowDateInTimezone(park.timezone || "UTC");
-    const cacheKey = `schedule:next:${parkId}:${tomorrowStr}`;
+    const cacheKey = CacheKeys.scheduleNext(parkId, tomorrowStr);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -2070,13 +2071,17 @@ export class ParksService {
     }
 
     // Try to get from cache first (today/tomorrow in each park's timezone)
-    const cacheKeysToday = parks.map(
-      (p) =>
-        `schedule:today:${p.id}:${getCurrentDateInTimezone(p.timezone || "UTC")}`,
+    const cacheKeysToday = parks.map((p) =>
+      CacheKeys.scheduleToday(
+        p.id,
+        getCurrentDateInTimezone(p.timezone || "UTC"),
+      ),
     );
-    const cacheKeysNext = parks.map(
-      (p) =>
-        `schedule:next:${p.id}:${getTomorrowDateInTimezone(p.timezone || "UTC")}`,
+    const cacheKeysNext = parks.map((p) =>
+      CacheKeys.scheduleNext(
+        p.id,
+        getTomorrowDateInTimezone(p.timezone || "UTC"),
+      ),
     );
 
     const cachedToday = await this.redis.mget(...cacheKeysToday);
@@ -2184,7 +2189,7 @@ export class ParksService {
           // Cache results
           for (const park of parksForToday.filter((p) => ids.includes(p.id))) {
             const parkSchedules = scheduleMap.get(park.id) || [];
-            const cacheKey = `schedule:today:${park.id}:${todayStr}`;
+            const cacheKey = CacheKeys.scheduleToday(park.id, todayStr);
             await this.redis.set(
               cacheKey,
               JSON.stringify(parkSchedules),
@@ -2247,7 +2252,10 @@ export class ParksService {
       for (const park of parksForNext) {
         const schedule = nextScheduleMap.get(park.id) || null;
         const timezone = park.timezone || "UTC";
-        const cacheKey = `schedule:next:${park.id}:${getTomorrowDateInTimezone(timezone)}`;
+        const cacheKey = CacheKeys.scheduleNext(
+          park.id,
+          getTomorrowDateInTimezone(timezone),
+        );
         await this.redis.set(
           cacheKey,
           JSON.stringify(schedule),
@@ -2278,7 +2286,11 @@ export class ParksService {
     const twoDaysAgo = addDays(startDate, -2);
     const endDate = addDays(startDate, days + 1);
 
-    const cacheKey = `schedule:upcoming:${parkId}:${getCurrentDateInTimezone(tz)}:${days}`;
+    const cacheKey = CacheKeys.scheduleUpcoming(
+      parkId,
+      getCurrentDateInTimezone(tz),
+      days,
+    );
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -2697,7 +2709,7 @@ export class ParksService {
    * Invalidates schedule cache for a park
    */
   async invalidateScheduleCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(`schedule:*:${parkId}:*`);
+    const keys = await this.redis.keys(CacheKeys.scheduleParkPattern(parkId));
     if (keys.length > 0) {
       await this.redis.del(...keys);
     }
@@ -2709,7 +2721,7 @@ export class ParksService {
    * after ThemeParks Wiki publishes new opening hours.
    */
   async invalidateCalendarMonthCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(`calendar:month:${parkId}:*`);
+    const keys = await this.redis.keys(CacheKeys.calendarMonthPattern(parkId));
     if (keys.length > 0) {
       await this.redis.del(...keys);
       this.logger.debug(

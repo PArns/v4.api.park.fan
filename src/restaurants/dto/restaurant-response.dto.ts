@@ -1,4 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
+import {
+  ParkSummaryDto,
+  mapParkSummary,
+} from "../../common/dto/park-summary.dto";
 import { Restaurant } from "../entities/restaurant.entity";
 
 /**
@@ -41,15 +45,7 @@ export class RestaurantResponseDto {
     required: false,
     nullable: true,
   })
-  park: {
-    id: string;
-    name: string;
-    slug: string;
-    timezone: string;
-    continent: string | null;
-    country: string | null;
-    city: string | null;
-  } | null;
+  park: ParkSummaryDto | null;
 
   /**
    * Maps Restaurant entity to DTO
@@ -67,20 +63,7 @@ export class RestaurantResponseDto {
     dto.latitude = restaurant.latitude || null;
     dto.longitude = restaurant.longitude || null;
 
-    // Map park relation if loaded
-    if (restaurant.park) {
-      dto.park = {
-        id: restaurant.park.id,
-        name: restaurant.park.name,
-        slug: restaurant.park.slug,
-        timezone: restaurant.park.timezone,
-        continent: restaurant.park.continent || null,
-        country: restaurant.park.country || null,
-        city: restaurant.park.city || null,
-      };
-    } else {
-      dto.park = null;
-    }
+    dto.park = mapParkSummary(restaurant.park);
 
     return dto;
   }

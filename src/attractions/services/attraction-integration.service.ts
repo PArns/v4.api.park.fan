@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
+import { safeJsonParse } from "../../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, DataSource } from "typeorm";
 import { Attraction } from "../entities/attraction.entity";
@@ -99,7 +101,7 @@ export class AttractionIntegrationService {
     days: number = 30,
   ): Promise<AttractionResponseDto> {
     // Try cache first
-    const cacheKey = `attraction:integrated:${attraction.id}`;
+    const cacheKey = CacheKeys.attractionIntegrated(attraction.id);
 
     // Track popularity hit (background)
     this.popularityService
@@ -109,9 +111,9 @@ export class AttractionIntegrationService {
       );
 
     const cached = await this.redis.get(cacheKey);
+    const cachedDto = safeJsonParse<AttractionResponseDto>(cached);
 
-    if (cached) {
-      const cachedDto = JSON.parse(cached);
+    if (cachedDto) {
       // Check if cached response has URL (new feature - invalidate cache if missing)
       if (!cachedDto.url) {
         // Cache is missing URL, rebuild

@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between } from "typeorm";
 import { Redis } from "ioredis";
@@ -816,7 +817,7 @@ export class WeatherService {
       select: ["id", "timezone"],
     });
 
-    const cacheKey = `weather:forecast:${parkId}`;
+    const cacheKey = CacheKeys.weatherForecast(parkId);
 
     // Try cache first
     const cached = await this.redis.get(cacheKey);

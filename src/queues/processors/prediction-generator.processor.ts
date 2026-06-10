@@ -1,4 +1,5 @@
 import { Processor, Process } from "@nestjs/bull";
+import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, OnModuleInit, Inject } from "@nestjs/common";
 import { Job } from "bull";
 import { Redis } from "ioredis";
@@ -130,7 +131,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 // Invalidate park integrated cache so the next request picks up
                 // fresh bestVisitTimes immediately instead of waiting for TTL expiry.
                 await this.redis
-                  .del(`park:integrated:${park.id}`)
+                  .del(CacheKeys.parkIntegrated(park.id))
                   .catch((e) =>
                     this.logger.warn(
                       `Failed to invalidate integrated cache for park ${park.id}: ${e?.message ?? e}`,

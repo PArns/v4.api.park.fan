@@ -1,4 +1,5 @@
 import { Processor, Process } from "@nestjs/bull";
+import { CacheKeys } from "../../common/cache/cache-keys";
 import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { Redis } from "ioredis";
@@ -167,7 +168,7 @@ export class WeatherProcessor {
                 totalForecast += savedForecast;
               }
 
-              await this.redis.del(`weather:forecast:${park.id}`);
+              await this.redis.del(CacheKeys.weatherForecast(park.id));
             } catch (error: unknown) {
               const errorMessage =
                 error instanceof Error ? error.message : String(error);
