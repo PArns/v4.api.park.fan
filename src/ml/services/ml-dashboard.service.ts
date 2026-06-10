@@ -9,6 +9,7 @@ import { PredictionDeviationService } from "./prediction-deviation.service";
 import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { safeJsonParse } from "../../common/utils/json.util";
 
 /**
  * MLDashboardService - V2 Restructured
@@ -28,6 +29,25 @@ export class MLDashboardService {
   ) {}
 
   async getDashboard(): Promise<MLDashboardDto> {
+    // Read-through cache: the dashboard fires 4 uncached aggregations over
+    // prediction_accuracy (~4.5M rows for the 30d patterns) per call and gets
+    // polled every few minutes by the admin UI — it was the top recurring
+    // entry in the slow-query log (~250 calls/day × ~1s each). The underlying
+    // accuracy data only changes with the 15-min compare cron, so a 5-min TTL
+    // costs no meaningful freshness.
+    const cacheKey = "ml:dashboard:v2";
+    const cached = await this.redis.get(cacheKey).catch(() => null);
+    const cachedDto = safeJsonParse<MLDashboardDto>(cached);
+    if (cachedDto) return cachedDto;
+
+    const dto = await this.buildDashboard();
+    await this.redis
+      .set(cacheKey, JSON.stringify(dto), "EX", 300)
+      .catch(() => undefined);
+    return dto;
+  }
+
+  private async buildDashboard(): Promise<MLDashboardDto> {
     this.logger.log("🔄 Fetching ML dashboard (V2 restructured)...");
 
     const [
