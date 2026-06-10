@@ -41,6 +41,7 @@ describe("AttractionIntegrationService", () => {
     // Hourly history pre-aggregation reader — returns empty map by
     // default so the history path falls back to live today-only compute.
     getAttractionHourlyHistory: jest.fn().mockResolvedValue(new Map()),
+    getRopeDropFromCache: jest.fn().mockResolvedValue(null),
   };
 
   const mockMLService = {
