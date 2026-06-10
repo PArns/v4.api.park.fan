@@ -57,16 +57,9 @@ import {
 export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
-  // Multi-tier caching strategy aligned with actual update frequencies
-  // TTL for OPERATING parks is driven by wait-times sync (every 5 min), not by prediction generation.
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (matches wait-times sync)
-  private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
-  private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
-  private readonly TTL_WEATHER_FORECAST = 6 * 60 * 60; // 6 hours (forecast updates every 12h)
-  private readonly TTL_WEATHER_CURRENT = 6 * 60 * 60; // 6 hours (current updates every 12h)
-  private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
-  private readonly TTL_QUEUE_DATA = 5 * 60; // 5 minutes (matches update frequency)
-  private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
+  // Cap for CLOSED parks' integrated-response cache (no live data changes
+  // while closed; the actual TTL is time-until-opening, bounded by this).
+  private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours
 
   /**
    * Parks whose integrated cache is currently being refreshed in the

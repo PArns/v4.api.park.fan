@@ -72,8 +72,6 @@ export class AnalyticsService {
 
   // Differentiated cache TTLs based on data characteristics
   private readonly TTL_REALTIME = 5 * 60; // 5 minutes - real-time wait times, occupancy
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes - integrated park/attraction responses
-  private readonly TTL_PERCENTILES = 24 * 60 * 60; // 24 hours - historical percentiles (very stable)
   private readonly TTL_GLOBAL_STATS = 5 * 60; // 5 minutes - global statistics
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
 

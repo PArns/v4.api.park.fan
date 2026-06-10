@@ -74,8 +74,6 @@ import {
 @ApiTags("parks")
 @Controller("parks")
 export class ParksController {
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes for real-time data
-
   constructor(
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,

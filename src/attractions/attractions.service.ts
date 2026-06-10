@@ -8,6 +8,7 @@ import { QueueTimesClient } from "../external-apis/queue-times/queue-times.clien
 import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
+import { NegativeCache } from "../common/utils/negative-cache.util";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 
@@ -15,10 +16,9 @@ import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 export class AttractionsService {
   private readonly logger = new Logger(AttractionsService.name);
 
-  /** In-memory cache for geographic path lookups that returned null (404).
-   *  Key: "continent:country:city:park:attraction" → expiry timestamp (ms). */
-  private readonly notFoundCache = new Map<string, number>();
-  private readonly NOT_FOUND_TTL_MS = 60 * 60 * 1000; // 1 hour
+  /** Negative cache for geographic path lookups that returned null (404).
+   *  Key: "continent:country:city:park:attraction". */
+  private readonly notFoundCache = new NegativeCache();
 
   constructor(
     @InjectRepository(Attraction)
@@ -370,12 +370,8 @@ export class AttractionsService {
     attractionSlug: string,
   ): Promise<Attraction | null> {
     const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}:${attractionSlug}`;
-    const expiry = this.notFoundCache.get(cacheKey);
-    if (expiry !== undefined) {
-      if (Date.now() < expiry) {
-        return null; // known 404 — skip DB query
-      }
-      this.notFoundCache.delete(cacheKey);
+    if (this.notFoundCache.has(cacheKey)) {
+      return null; // known 404 — skip DB query
     }
 
     const attraction = await this.attractionRepository
@@ -390,7 +386,7 @@ export class AttractionsService {
       .getOne();
 
     if (!attraction) {
-      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
+      this.notFoundCache.add(cacheKey);
     }
 
     return attraction;

@@ -37,17 +37,16 @@ import {
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { NegativeCache } from "../common/utils/negative-cache.util";
 
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
-  private readonly CACHE_TTL_SECONDS = 60 * 60; // 1 hour - legacy
 
-  /** In-memory cache for geographic path lookups that returned null (404).
-   *  Key: "continent:country:city:slug" → expiry timestamp (ms). */
-  private readonly notFoundCache = new Map<string, number>();
-  private readonly NOT_FOUND_TTL_MS = 60 * 60 * 1000; // 1 hour
+  /** Negative cache for geographic path lookups that returned null (404).
+   *  Key: "continent:country:city:slug". */
+  private readonly notFoundCache = new NegativeCache();
 
   constructor(
     @InjectRepository(Park)
@@ -2356,12 +2355,8 @@ export class ParksService {
     parkSlug: string,
   ): Promise<Park | null> {
     const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}`;
-    const expiry = this.notFoundCache.get(cacheKey);
-    if (expiry !== undefined) {
-      if (Date.now() < expiry) {
-        return null; // known 404 — skip DB query
-      }
-      this.notFoundCache.delete(cacheKey);
+    if (this.notFoundCache.has(cacheKey)) {
+      return null; // known 404 — skip DB query
     }
 
     const park = await this.parkRepository.findOne({
@@ -2370,7 +2365,7 @@ export class ParksService {
     });
 
     if (!park) {
-      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
+      this.notFoundCache.add(cacheKey);
     }
 
     return park;

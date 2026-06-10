@@ -57,7 +57,6 @@ import { PopularityService } from "../../popularity/popularity.service";
 @Injectable()
 export class AttractionIntegrationService {
   private readonly logger = new Logger(AttractionIntegrationService.name);
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes for real-time data
 
   constructor(
     private readonly queueDataService: QueueDataService,
@@ -467,7 +466,7 @@ export class AttractionIntegrationService {
 
         // --- Best visit times (today only, including current active 15-min slot) ---
         // Uses today's closing time from schedule so recommendations don't exceed operating hours.
-        // Cached with the integrated response (TTL_INTEGRATED_RESPONSE = 5 min).
+        // Cached with the integrated response (expires at the next 5-min boundary).
         if (mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);
