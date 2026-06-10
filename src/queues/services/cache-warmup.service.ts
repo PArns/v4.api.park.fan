@@ -5,6 +5,7 @@ import {
   OnApplicationBootstrap,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { CacheKeys } from "../../common/cache/cache-keys";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -184,8 +185,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
         // the still-warm month cache and the 12h refresh would be a no-op).
         const evictKeys: string[] = [
-          `ml:park:${park.id}:daily:${todayStr}`,
-          `ml:park:${park.id}:yearly:${todayStr}`,
+          CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
+          CacheKeys.mlParkPredictions(park.id, "yearly", todayStr),
         ];
         // Month keys for every month in [-1, +3] (variant the FE reads: "none").
         for (let mm = fromM, yy = fromY; ; ) {
@@ -305,7 +306,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     includeCalendar: boolean = false,
   ): Promise<boolean> {
     try {
-      const cacheKey = `park:integrated:${parkId}`;
+      const cacheKey = CacheKeys.parkIntegrated(parkId);
 
       // Check if cache is already fresh
       if (!force) {
@@ -531,7 +532,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     force: boolean = false,
   ): Promise<boolean> {
     try {
-      const cacheKey = `attraction:integrated:${attractionId}`;
+      const cacheKey = CacheKeys.attractionIntegrated(attractionId);
 
       // Check if cache is already fresh
       if (!force) {

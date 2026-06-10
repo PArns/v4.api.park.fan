@@ -1,6 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
-import { ValidationPipe, LogLevel } from "@nestjs/common";
+import { Logger, ValidationPipe, LogLevel } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 import compression from "compression";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
@@ -241,11 +241,12 @@ async function bootstrap(): Promise<void> {
   const port = process.env.PORT || 3000;
   await app.listen(port);
 
-  console.log(`🚀 park.fan API v4 running on: http://localhost:${port}/v1`);
-  console.log(`📚 API Documentation: http://localhost:${port}/api`);
-  console.log(`📊 Bull Board Dashboard: http://localhost:3001`);
-  console.log(`🗄️  Database: PostgreSQL + TimescaleDB on port 5432`);
-  console.log(`⚡ Redis: localhost:6379`);
+  const logger = new Logger("Bootstrap");
+  logger.log(`🚀 park.fan API v4 running on: http://localhost:${port}/v1`);
+  logger.log(`📚 API Documentation: http://localhost:${port}/api`);
+  logger.log(`📊 Bull Board Dashboard: http://localhost:3001`);
+  logger.log(`🗄️  Database: PostgreSQL + TimescaleDB on port 5432`);
+  logger.log(`⚡ Redis: localhost:6379`);
 }
 
 bootstrap();

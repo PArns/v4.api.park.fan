@@ -20,6 +20,7 @@ import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
+import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("AnalyticsService", () => {
@@ -251,6 +252,10 @@ describe("AnalyticsService", () => {
         },
         {
           provide: getRepositoryToken(AttractionHourlyHistory),
+          useValue: mockAttractionHourlyHistoryRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionRopeDrop),
           useValue: mockAttractionHourlyHistoryRepository,
         },
         {

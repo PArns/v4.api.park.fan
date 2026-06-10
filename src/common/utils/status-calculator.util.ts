@@ -10,22 +10,21 @@ export interface RideStatusData {
 }
 
 /**
- * SINGLE SOURCE OF TRUTH für Park-Status
+ * SINGLE SOURCE OF TRUTH for park status
  *
- * Hybrid-Strategie:
- * 1. Primär: Schedule-basiert (wenn Schedule vorhanden)
- * 2. Fallback: Ride-basiert (nur für Parks OHNE Schedule)
+ * Hybrid strategy:
+ * 1. Primary: schedule-based (when a schedule exists)
+ * 2. Fallback: ride-based (only for parks WITHOUT a schedule)
  *
- * Diese Funktion wird von ALLEN Services verwendet, um konsistente
- * Status-Berechnungen sicherzustellen und die Inkonsistenz zwischen
- * verschiedenen API-Endpoints zu vermeiden.
+ * Every service uses this function so status calculations stay consistent
+ * across all API endpoints.
  *
- * @param scheduleEntries - Schedule-Einträge des Parks
- * @param rideStatusData - Aktuelle Ride-Statusdaten (optional, für Fallback)
- * @returns true wenn Park offen, false wenn geschlossen
+ * @param scheduleEntries - The park's schedule entries
+ * @param rideStatusData - Current ride status data (optional, for the fallback)
+ * @returns true if the park is open, false if closed
  *
  * @example
- * // Mit Schedule (Primär)
+ * // With schedule (primary)
  * const isOpen = isParkOpen(scheduleEntries);
  *
  * @example
@@ -38,8 +37,8 @@ export function isParkOpen(
 ): boolean {
   const now = new Date();
 
-  // Strategie 1: Schedule-basiert (Primär)
-  // Prüfe ob es ein OPERATING schedule gibt, das aktuell aktiv ist
+  // Strategy 1: schedule-based (primary)
+  // Check whether an OPERATING schedule entry is currently active
   const operatingSchedule = scheduleEntries.find(
     (s) =>
       s.scheduleType === "OPERATING" &&
@@ -49,13 +48,13 @@ export function isParkOpen(
       now < s.closingTime,
   );
 
-  // Wenn Schedule vorhanden und Park ist offen: OPERATING
+  // Schedule present and park is open: OPERATING
   if (operatingSchedule) {
     return true;
   }
 
-  // Wenn Schedule vorhanden aber Park ist geschlossen: CLOSED
-  // (Ignoriere Ride-Daten wenn Schedule existiert)
+  // Schedule present but park is closed: CLOSED
+  // (ignore ride data whenever a schedule exists)
   const hasSchedule =
     scheduleEntries.length > 0 &&
     scheduleEntries.some((s) => s.scheduleType === "OPERATING");
@@ -63,23 +62,23 @@ export function isParkOpen(
     return false;
   }
 
-  // Strategie 2: Ride-basierter Fallback (nur wenn KEIN Schedule)
-  // Wird nur für Parks ohne Schedule-Integration verwendet
+  // Strategy 2: ride-based fallback (only when there is NO schedule)
+  // Used only for parks without schedule integration
   if (!rideStatusData || rideStatusData.length === 0) {
-    return false; // Keine Daten → Safe Default: CLOSED
+    return false; // No data → safe default: CLOSED
   }
 
-  // Filtere nur aktuelle Ride-Daten (letzte 30 Minuten)
+  // Only consider recent ride data (last 30 minutes)
   const recentRides = rideStatusData.filter((r) =>
     isDataRecent(r.lastUpdated, 30),
   );
 
   if (recentRides.length === 0) {
-    return false; // Keine aktuellen Daten → CLOSED
+    return false; // No recent data → CLOSED
   }
 
-  // Prüfe ob mindestens eine Ride OPERATING ist UND Wartezeit > 0 hat.
-  // Geschlossene Parks zeigen oft 0 oder 5 Min (Stale/Platzhalter) – nur echte Wartezeit zählt.
+  // Check that at least one ride is OPERATING AND has a wait time > 0.
+  // Closed parks often report 0 or 5 min (stale/placeholder) — only a real wait counts.
   const operatingRides = recentRides.filter(
     (r) => r.status === "OPERATING" && r.waitTime !== null && r.waitTime > 0,
   );
@@ -88,14 +87,14 @@ export function isParkOpen(
 }
 
 /**
- * Hilfsfunktion: Prüft ob Daten aktuell sind
+ * Helper: checks whether data is recent.
  *
- * Verwendet um alte/stale Daten zu filtern und nur aktuelle
- * Informationen für Status-Berechnungen zu verwenden.
+ * Used to filter out old/stale data so status calculations only rely on
+ * current information.
  *
- * @param lastUpdated - Zeitstempel des letzten Updates
- * @param maxAgeMinutes - Maximales Alter in Minuten (default: 30)
- * @returns true wenn Daten aktuell, false wenn zu alt
+ * @param lastUpdated - Timestamp of the last update
+ * @param maxAgeMinutes - Maximum age in minutes (default: 30)
+ * @returns true if the data is recent, false if it is too old
  *
  * @example
  * const isFresh = isDataRecent(new Date(), 30); // true

@@ -1,4 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
+import {
+  ParkSummaryDto,
+  mapParkSummary,
+} from "../../common/dto/park-summary.dto";
 import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
@@ -87,15 +91,7 @@ export class AttractionResponseDto {
     required: false,
     nullable: true,
   })
-  park: {
-    id: string;
-    name: string;
-    slug: string;
-    timezone: string;
-    continent: string | null;
-    country: string | null;
-    city: string | null;
-  } | null;
+  park: ParkSummaryDto | null;
 
   @ApiProperty({
     description: "Whether this attraction only operates during certain seasons",
@@ -258,17 +254,7 @@ export class AttractionResponseDto {
       longitude:
         attraction.longitude !== undefined ? attraction.longitude : null,
 
-      park: attraction.park
-        ? {
-            id: attraction.park.id,
-            name: attraction.park.name,
-            slug: attraction.park.slug,
-            timezone: attraction.park.timezone,
-            continent: attraction.park.continent || null,
-            country: attraction.park.country || null,
-            city: attraction.park.city || null,
-          }
-        : null,
+      park: mapParkSummary(attraction.park),
 
       land: attraction.landName || null,
 

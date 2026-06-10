@@ -52,6 +52,11 @@ export class EntityMatcherService {
     // Manual Overrides loaded from config
     const manualOverrides = MANUALLY_MATCHED_PARKS;
 
+    // Memoize name normalization: the ride-signature step otherwise calls
+    // normalizeForMatching once per wiki-park × qt-park × attraction
+    // (millions of regex/transliteration calls per sync).
+    const norm = this.memoizedNormalizer();
+
     for (const wiki of wikiParks) {
       let bestMatch: ParkMetadata | null = null;
       let bestScore = 0;
@@ -93,10 +98,8 @@ export class EntityMatcherService {
 
       // 3. Smart Strategy: Slug Match (High Confidence)
       if (!bestMatch) {
-        const wikiSlug = normalizeForMatching(wiki.name);
-        const slugMatch = qtOnly.find(
-          (p) => normalizeForMatching(p.name) === wikiSlug,
-        );
+        const wikiSlug = norm(wiki.name);
+        const slugMatch = qtOnly.find((p) => norm(p.name) === wikiSlug);
         if (slugMatch) {
           bestMatch = slugMatch;
           bestScore = 0.95;
@@ -109,16 +112,14 @@ export class EntityMatcherService {
       // 4. Smart Strategy: Ride Signature Match (Very High Confidence)
       // If two parks share multiple unique attraction names, they are the same.
       if (!bestMatch && wiki.attractions && wiki.attractions.length > 0) {
-        const wikiRides = new Set(
-          wiki.attractions.map((a) => normalizeForMatching(a.name)),
-        );
+        const wikiRides = new Set(wiki.attractions.map((a) => norm(a.name)));
 
         for (const qt of qtOnly) {
           if (!qt.attractions || qt.attractions.length === 0) continue;
 
           let sharedRides = 0;
           for (const qtRide of qt.attractions) {
-            if (wikiRides.has(normalizeForMatching(qtRide.name))) {
+            if (wikiRides.has(norm(qtRide.name))) {
               sharedRides++;
             }
           }
@@ -142,7 +143,12 @@ export class EntityMatcherService {
       // 5. Fallback to fuzzy matching
       if (!bestMatch) {
         for (const qt of qtOnly) {
-          const score = this.calculateParkSimilarity(wiki, qt);
+          const score = this.calculateParkSimilarity(
+            wiki,
+            qt,
+            norm(wiki.name),
+            norm(qt.name),
+          );
           if (score > bestScore && score >= 0.7) {
             bestScore = score;
             bestMatch = qt;
@@ -165,6 +171,23 @@ export class EntityMatcherService {
   }
 
   /**
+   * Returns a normalizeForMatching wrapper that caches results per input name.
+   * Matching runs compare the same names against many candidates, so the
+   * normalization (regex + transliteration) dominates without a cache.
+   */
+  private memoizedNormalizer(): (name: string) => string {
+    const cache = new Map<string, string>();
+    return (name: string) => {
+      let normalized = cache.get(name);
+      if (normalized === undefined) {
+        normalized = normalizeForMatching(name);
+        cache.set(name, normalized);
+      }
+      return normalized;
+    };
+  }
+
+  /**
    * Calculate similarity between two parks
    *
    * @param wiki - Wiki park
@@ -174,10 +197,9 @@ export class EntityMatcherService {
   private calculateParkSimilarity(
     wiki: ParkMetadata,
     qt: ParkMetadata,
+    n1: string = normalizeForMatching(wiki.name),
+    n2: string = normalizeForMatching(qt.name),
   ): number {
-    const n1 = normalizeForMatching(wiki.name);
-    const n2 = normalizeForMatching(qt.name);
-
     // HARD CONSTRAINT: Different continents = instant rejection
     // This prevents false matches like Everland (Asia) + Toverland (Europe)
     if (wiki.continent && qt.continent) {
@@ -434,6 +456,8 @@ export class EntityMatcherService {
     const unmatched1: EntityMetadata[] = [];
     const unmatched2 = [...source2Entities]; // Clone for manipulation
 
+    const norm = this.memoizedNormalizer();
+
     for (const entity1 of source1Entities) {
       let bestMatch: EntityMetadata | null = null;
       let bestScore = 0;
@@ -444,7 +468,12 @@ export class EntityMatcherService {
           continue;
         }
 
-        const score = this.calculateEntitySimilarity(entity1, entity2);
+        const score = this.calculateEntitySimilarity(
+          entity1,
+          entity2,
+          norm(entity1.name),
+          norm(entity2.name),
+        );
         // Dynamic threshold: Lower for entities without geo data (e.g. Wartezeiten)
         // This ensures we can match entities even when one source lacks location data
         const hasGeo =
@@ -485,11 +514,9 @@ export class EntityMatcherService {
   private calculateEntitySimilarity(
     e1: EntityMetadata,
     e2: EntityMetadata,
+    n1: string = normalizeForMatching(e1.name),
+    n2: string = normalizeForMatching(e2.name),
   ): number {
-    // Name similarity (primary factor)
-    const n1 = normalizeForMatching(e1.name);
-    const n2 = normalizeForMatching(e2.name);
-
     // Name similarity calculation
     let rawNameSim = compareTwoStrings(n1, n2);
 

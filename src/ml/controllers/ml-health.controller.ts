@@ -1,4 +1,5 @@
 import { Controller, Get } from "@nestjs/common";
+import { getMlServiceUrl } from "../../config/ml-services.config";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { MLService } from "../ml.service";
 import { MLModelService } from "../services/ml-model.service";
@@ -52,7 +53,7 @@ export class MLHealthController {
       status: isHealthy ? "healthy" : "unhealthy",
       mlService: {
         status: isHealthy ? "healthy" : "unhealthy",
-        url: process.env.ML_SERVICE_URL || "http://ml-service:8000",
+        url: getMlServiceUrl(),
       },
       model: activeModel
         ? {

@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
+import { safeJsonParse } from "../../common/utils/json.util";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
@@ -57,16 +59,9 @@ import {
 export class ParkIntegrationService {
   private readonly logger = new Logger(ParkIntegrationService.name);
 
-  // Multi-tier caching strategy aligned with actual update frequencies
-  // TTL for OPERATING parks is driven by wait-times sync (every 5 min), not by prediction generation.
-  private readonly TTL_INTEGRATED_RESPONSE_OPERATING = 5 * 60; // 5 minutes (matches wait-times sync)
-  private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours (no live data changes)
-  private readonly TTL_ML_DAILY = 24 * 60 * 60; // 24 hours (daily predictions update at 1am)
-  private readonly TTL_WEATHER_FORECAST = 6 * 60 * 60; // 6 hours (forecast updates every 12h)
-  private readonly TTL_WEATHER_CURRENT = 6 * 60 * 60; // 6 hours (current updates every 12h)
-  private readonly TTL_SCHEDULE = 12 * 60 * 60; // 12 hours (schedule updates daily at 4am)
-  private readonly TTL_QUEUE_DATA = 5 * 60; // 5 minutes (matches update frequency)
-  private readonly TTL_ANALYTICS_PERCENTILES = 12 * 60 * 60; // 12 hours (percentiles update daily at 2am)
+  // Cap for CLOSED parks' integrated-response cache (no live data changes
+  // while closed; the actual TTL is time-until-opening, bounded by this).
+  private readonly TTL_INTEGRATED_RESPONSE_CLOSED = 6 * 60 * 60; // 6 hours
 
   /**
    * Parks whose integrated cache is currently being refreshed in the
@@ -134,20 +129,21 @@ export class ParkIntegrationService {
     }
 
     // Try cache first (unless skipped)
-    const cacheKey = `park:integrated:${park.id}`;
+    const cacheKey = CacheKeys.parkIntegrated(park.id);
 
     // Track popularity hit (background). Skipped for system rebuilds
     // (cache warmup / background refresh) so the ranking reflects real demand.
     if (countHit) {
-      this.popularityService.recordParkHit(park.id).catch(() => {});
+      this.popularityService
+        .recordParkHit(park.id)
+        .catch((err) => this.logger.debug(`Failed to record park hit: ${err}`));
     }
 
     if (!skipCache) {
       const cached = await this.redis.get(cacheKey);
+      const cachedDto = safeJsonParse<ParkWithAttractionsDto>(cached);
 
-      if (cached) {
-        const cachedDto = JSON.parse(cached) as ParkWithAttractionsDto;
-
+      if (cachedDto) {
         // Check if attractions have URLs (invalidate cache if missing)
         const hasAttractionsWithoutUrls =
           cachedDto.attractions &&

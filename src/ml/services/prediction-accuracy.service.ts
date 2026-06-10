@@ -39,34 +39,14 @@ export class PredictionAccuracyService {
   ) {}
 
   /**
-   * Record prediction for accuracy tracking
-   * Called when a prediction is stored in the database
-   */
-  async recordPrediction(prediction: WaitTimePrediction): Promise<void> {
-    const accuracy = new PredictionAccuracy();
-    accuracy.attractionId = prediction.attractionId;
-    accuracy.predictionTime = prediction.createdAt;
-    accuracy.targetTime = prediction.predictedTime;
-    accuracy.predictedWaitTime = prediction.predictedWaitTime;
-    accuracy.modelVersion = prediction.modelVersion;
-    accuracy.predictionType = prediction.predictionType;
-    accuracy.features = prediction.features;
-
-    // Upsert: one record per (attractionId, targetTime).
-    // Each prediction run re-covers the same future slots — without this,
-    // 15-min prediction cycles create ~8x duplicates per slot, inflating
-    // MAE stats and sample weights. Keep the latest prediction_time (most
-    // recent forecast is most accurate due to updated real-time features).
-    await this.accuracyRepository.upsert(accuracy as any, {
-      conflictPaths: ["attractionId", "targetTime"],
-      skipUpdateIfNoValuesChanged: false,
-    });
-    // Logging handled by caller with progress updates
-  }
-
-  /**
-   * Batch variant of {@link recordPrediction}: records many predictions in a
-   * few multi-row upserts instead of one round-trip per prediction.
+   * Record predictions for accuracy tracking in a few multi-row upserts
+   * instead of one round-trip per prediction.
+   *
+   * Upsert: one record per (attractionId, targetTime).
+   * Each prediction run re-covers the same future slots — without this,
+   * 15-min prediction cycles create ~8x duplicates per slot, inflating
+   * MAE stats and sample weights. Keep the latest prediction_time (most
+   * recent forecast is most accurate due to updated real-time features).
    *
    * Why: the per-row loop fired N single-row `ON CONFLICT` upserts against the
    * large unique index, which under the concurrent comparison job's bulk UPDATE

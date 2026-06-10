@@ -1,3 +1,5 @@
+import { ObjectLiteral, SelectQueryBuilder } from "typeorm";
+
 /**
  * Query parsing and normalization utilities
  */
@@ -25,4 +27,20 @@ export function normalizeSortDirection(direction: string): "ASC" | "DESC" {
 export function parseSortParameter(sort: string): [string, "ASC" | "DESC"] {
   const [field, direction = "asc"] = sort.split(":");
   return [field, normalizeSortDirection(direction)];
+}
+
+/**
+ * Applies page/limit pagination to a query builder and returns data + total.
+ * Shared by the attractions/shows/restaurants list endpoints.
+ */
+export async function paginate<T extends ObjectLiteral>(
+  queryBuilder: SelectQueryBuilder<T>,
+  page: number = 1,
+  limit: number = 10,
+): Promise<{ data: T[]; total: number }> {
+  const [data, total] = await queryBuilder
+    .skip((page - 1) * limit)
+    .take(limit)
+    .getManyAndCount();
+  return { data, total };
 }

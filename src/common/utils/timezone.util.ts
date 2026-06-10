@@ -1,4 +1,4 @@
-import { DateTime } from "luxon";
+import { fromZonedTime } from "date-fns-tz";
 
 /**
  * Country to Timezone mapping
@@ -89,11 +89,8 @@ export function parseDateInTimezone(
   dateString: string,
   timezone: string,
 ): Date {
-  // Parse the date in the specified timezone at midnight
-  const dt = DateTime.fromISO(dateString, { zone: timezone });
-
-  // Convert to JavaScript Date (will be in UTC)
-  return dt.toJSDate();
+  // Interpret midnight of the given calendar date in the timezone, as UTC
+  return fromZonedTime(`${dateString}T00:00:00`, timezone);
 }
 
 /**

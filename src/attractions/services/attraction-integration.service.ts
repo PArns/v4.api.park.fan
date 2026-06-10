@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
+import { safeJsonParse } from "../../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, DataSource } from "typeorm";
 import { Attraction } from "../entities/attraction.entity";
@@ -57,7 +59,6 @@ import { PopularityService } from "../../popularity/popularity.service";
 @Injectable()
 export class AttractionIntegrationService {
   private readonly logger = new Logger(AttractionIntegrationService.name);
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes for real-time data
 
   constructor(
     private readonly queueDataService: QueueDataService,
@@ -100,15 +101,19 @@ export class AttractionIntegrationService {
     days: number = 30,
   ): Promise<AttractionResponseDto> {
     // Try cache first
-    const cacheKey = `attraction:integrated:${attraction.id}`;
+    const cacheKey = CacheKeys.attractionIntegrated(attraction.id);
 
     // Track popularity hit (background)
-    this.popularityService.recordAttractionHit(attraction.id).catch(() => {});
+    this.popularityService
+      .recordAttractionHit(attraction.id)
+      .catch((err) =>
+        this.logger.debug(`Failed to record attraction hit: ${err}`),
+      );
 
     const cached = await this.redis.get(cacheKey);
+    const cachedDto = safeJsonParse<AttractionResponseDto>(cached);
 
-    if (cached) {
-      const cachedDto = JSON.parse(cached);
+    if (cachedDto) {
       // Check if cached response has URL (new feature - invalidate cache if missing)
       if (!cachedDto.url) {
         // Cache is missing URL, rebuild
@@ -467,7 +472,7 @@ export class AttractionIntegrationService {
 
         // --- Best visit times (today only, including current active 15-min slot) ---
         // Uses today's closing time from schedule so recommendations don't exceed operating hours.
-        // Cached with the integrated response (TTL_INTEGRATED_RESPONSE = 5 min).
+        // Cached with the integrated response (expires at the next 5-min boundary).
         if (mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);

@@ -80,9 +80,6 @@ importers:
       ioredis:
         specifier: ^5.11.0
         version: 5.11.0
-      luxon:
-        specifier: ^3.7.2
-        version: 3.7.2
       marked:
         specifier: ^18.0.4
         version: 18.0.4

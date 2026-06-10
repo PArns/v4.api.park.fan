@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
@@ -364,13 +365,19 @@ export class ParkRepairService {
    */
   private async invalidateParkCache(parkId: string): Promise<void> {
     try {
-      const patterns = [
-        `park:integrated:${parkId}`,
-        `park:${parkId}:*`,
-        `schedule:${parkId}:*`,
-        `wait-times:${parkId}:*`,
-      ];
+      // Exact keys first, then glob patterns. The schedule keys have the
+      // parkId as their THIRD segment (schedule:today:<parkId>:<date>) —
+      // the old `schedule:${parkId}:*` pattern matched nothing, so the
+      // schedule cache survived every repair/merge.
+      await this.redis.del(
+        CacheKeys.parkIntegrated(parkId),
+        CacheKeys.parkOpDateRange(parkId),
+      );
 
+      const patterns = [
+        CacheKeys.scheduleParkPattern(parkId),
+        CacheKeys.calendarMonthPattern(parkId),
+      ];
       for (const pattern of patterns) {
         const keys = await this.redis.keys(pattern);
         if (keys.length > 0) {

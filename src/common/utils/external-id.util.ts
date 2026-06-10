@@ -33,3 +33,18 @@ export function extractQueueTimesNumericId(externalId: string): string | null {
 
   return null;
 }
+
+/**
+ * True when an external ID belongs to ThemeParks.wiki (i.e. is not a
+ * Queue-Times "qt-" or Wartezeiten "wz-" ID). Entity syncs that only
+ * support the wiki API use this to skip parks from other sources.
+ */
+export function isThemeParksWikiId(
+  externalId: string | null | undefined,
+): externalId is string {
+  return (
+    !!externalId &&
+    !externalId.startsWith("qt-") &&
+    !externalId.startsWith("wz-")
+  );
+}

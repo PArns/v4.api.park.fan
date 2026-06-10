@@ -72,8 +72,6 @@ export class AnalyticsService {
 
   // Differentiated cache TTLs based on data characteristics
   private readonly TTL_REALTIME = 5 * 60; // 5 minutes - real-time wait times, occupancy
-  private readonly TTL_INTEGRATED_RESPONSE = 5 * 60; // 5 minutes - integrated park/attraction responses
-  private readonly TTL_PERCENTILES = 24 * 60 * 60; // 24 hours - historical percentiles (very stable)
   private readonly TTL_GLOBAL_STATS = 5 * 60; // 5 minutes - global statistics
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
 
@@ -441,7 +439,7 @@ export class AnalyticsService {
         ? perRideRatios.ratioP90 * 100
         : (currentPeakWait / baseline) * 100;
 
-    // Calculate Park Trend (Hybrid Logic) – headliner-only, Durchschnitt pro Headliner dann / Anzahl
+    // Calculate park trend (hybrid logic) — headliner-only: average per headliner, then divide by count
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
     const twoHoursAgo = new Date(now.getTime() - 120 * 60 * 1000);
 
@@ -839,7 +837,7 @@ export class AnalyticsService {
    * @param parkId - Park ID
    * @param percentile - Percentile when not using headliners (0.5 = Median). Ignored when headlinerIds set.
    * @param minWaitTime - Minimum wait time threshold (default: 5 min to exclude walk-ons)
-   * @param headlinerIds - Optional: restrict to headliners and use Durchschnitt pro Headliner dann / Anzahl
+   * @param headlinerIds - Optional: restrict to headliners (average per headliner, then divide by count)
    * @returns Wait time in minutes or null if no data
    */
   private async getCurrentSpotWaitTime(
@@ -1396,7 +1394,7 @@ export class AnalyticsService {
 
     // Get TODAY's aggregate statistics for history
     const avgWaitToday = roundToNearest5Minutes(stats?.avg_wait_today || 0);
-    // Park-Höchststand: Durchschnitt der Spitzen (pro Headliner MAX heute, dann / Anzahl) – typische Spitzenlast, nicht von einem Ride dominiert
+    // Park peak: average of the peaks (per-headliner MAX today, then divide by count) — typical peak load, not dominated by a single ride
     let peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },

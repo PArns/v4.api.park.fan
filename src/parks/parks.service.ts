@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { Park } from "./entities/park.entity";
@@ -37,17 +38,30 @@ import {
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { NegativeCache } from "../common/utils/negative-cache.util";
+
+/**
+ * Input shape for saveScheduleData. Covers both the ThemeParks.wiki schedule
+ * API entries and the ad-hoc updates built by the wartezeiten/wait-times
+ * processors.
+ */
+export interface ScheduleSyncEntry {
+  date: string | Date;
+  type?: string;
+  openingTime?: string | Date | null;
+  closingTime?: string | Date | null;
+  description?: string | null;
+  purchases?: ScheduleEntry["purchases"];
+}
 
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
   private readonly TTL_SCHEDULE = 60 * 60; // 1 hour - park schedules
-  private readonly CACHE_TTL_SECONDS = 60 * 60; // 1 hour - legacy
 
-  /** In-memory cache for geographic path lookups that returned null (404).
-   *  Key: "continent:country:city:slug" → expiry timestamp (ms). */
-  private readonly notFoundCache = new Map<string, number>();
-  private readonly NOT_FOUND_TTL_MS = 60 * 60 * 1000; // 1 hour
+  /** Negative cache for geographic path lookups that returned null (404).
+   *  Key: "continent:country:city:slug". */
+  private readonly notFoundCache = new NegativeCache();
 
   constructor(
     @InjectRepository(Park)
@@ -321,54 +335,91 @@ export class ParksService {
               await this.parkRepository.manager.transaction(
                 async (transactionalEntityManager) => {
                   // 1. Handle Attraction Collisions
-                  // Fetch attractions from both parks to compare
-                  const existingAttractions =
+                  // Fetch attractions from both parks in one query, then split
+                  type GhostAttractionRow = {
+                    id: string;
+                    parkId: string;
+                    slug: string;
+                    queue_times_entity_id: string | null;
+                    land_name: string | null;
+                    land_external_id: string | null;
+                  };
+                  const bothParkAttractions: GhostAttractionRow[] =
                     await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
-                      [existing.id],
+                      `SELECT id, "parkId", slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = ANY($1::uuid[])`,
+                      [[existing.id, ghostPark.id]],
                     );
-                  const ghostAttractions =
-                    await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
-                      [ghostPark.id],
-                    );
+                  const existingAttractions = bothParkAttractions.filter(
+                    (a) => a.parkId === existing.id,
+                  );
+                  const ghostAttractions = bothParkAttractions.filter(
+                    (a) => a.parkId === ghostPark.id,
+                  );
+
+                  // Partition once, then run batched statements instead of
+                  // 1-2 queries per ghost attraction.
+                  const existingBySlug = new Map<string, GhostAttractionRow>(
+                    existingAttractions.map((a) => [a.slug, a]),
+                  );
+                  const collisions: Array<{
+                    ghost: GhostAttractionRow;
+                    matchId: string;
+                  }> = [];
+                  const movedIds: string[] = [];
 
                   for (const ghostAttr of ghostAttractions) {
-                    const match = existingAttractions.find(
-                      (a: any) => a.slug === ghostAttr.slug,
-                    );
-
+                    const match = existingBySlug.get(ghostAttr.slug);
                     if (match) {
-                      // COLLISION: Merge data into existing attraction, then delete ghost attraction
-                      // We specifically want the Land Info and Queue-Times ID from the ghost
-                      await transactionalEntityManager.query(
-                        `UPDATE attractions 
-                         SET "land_name" = COALESCE($1, "land_name"),
-                             "land_external_id" = COALESCE($2, "land_external_id"),
-                             "queue_times_entity_id" = COALESCE($3, "queue_times_entity_id")
-                         WHERE id = $4`,
-                        [
-                          ghostAttr.land_name,
-                          ghostAttr.land_external_id,
-                          ghostAttr.queue_times_entity_id,
-                          match.id,
-                        ],
-                      );
-                      // Delete the ghost attraction since we merged its useful data
-                      await transactionalEntityManager.query(
-                        `DELETE FROM attractions WHERE id = $1`,
-                        [ghostAttr.id],
-                      );
-                      this.logger.log(
-                        `    Merges attraction data: ${ghostAttr.slug}`,
-                      );
+                      collisions.push({ ghost: ghostAttr, matchId: match.id });
                     } else {
-                      // NO COLLISION: Move attraction to new park
-                      await transactionalEntityManager.query(
-                        `UPDATE attractions SET "parkId" = $1 WHERE id = $2`,
-                        [existing.id, ghostAttr.id],
-                      );
+                      movedIds.push(ghostAttr.id);
                     }
+                  }
+
+                  if (collisions.length > 0) {
+                    // COLLISION: Merge data into existing attractions, then delete
+                    // the ghosts. We specifically want the Land Info and
+                    // Queue-Times ID from each ghost.
+                    const values: string[] = [];
+                    const params: Array<string | null> = [];
+                    collisions.forEach(({ ghost, matchId }, i) => {
+                      const o = i * 4;
+                      values.push(
+                        `($${o + 1}::uuid, $${o + 2}, $${o + 3}, $${o + 4})`,
+                      );
+                      params.push(
+                        matchId,
+                        ghost.land_name,
+                        ghost.land_external_id,
+                        ghost.queue_times_entity_id,
+                      );
+                    });
+                    await transactionalEntityManager.query(
+                      `UPDATE attractions a
+                       SET "land_name" = COALESCE(v.land_name, a."land_name"),
+                           "land_external_id" = COALESCE(v.land_external_id, a."land_external_id"),
+                           "queue_times_entity_id" = COALESCE(v.qt_id, a."queue_times_entity_id")
+                       FROM (VALUES ${values.join(", ")}) AS v(id, land_name, land_external_id, qt_id)
+                       WHERE a.id = v.id`,
+                      params,
+                    );
+                    await transactionalEntityManager.query(
+                      `DELETE FROM attractions WHERE id = ANY($1::uuid[])`,
+                      [collisions.map((c) => c.ghost.id)],
+                    );
+                    this.logger.log(
+                      `    Merged attraction data: ${collisions
+                        .map((c) => c.ghost.slug)
+                        .join(", ")}`,
+                    );
+                  }
+
+                  if (movedIds.length > 0) {
+                    // NO COLLISION: Move attractions to the surviving park
+                    await transactionalEntityManager.query(
+                      `UPDATE attractions SET "parkId" = $1 WHERE id = ANY($2::uuid[])`,
+                      [existing.id, movedIds],
+                    );
                   }
 
                   // 2. Migrate Shows (Blind update OK if slugs distinctive, else duplicate logic needed? mostly safe for now)
@@ -748,7 +799,10 @@ export class ParksService {
    * @param parkId - Our internal park ID (UUID)
    * @param scheduleData - Schedule data from ThemeParks.wiki API
    */
-  async saveScheduleData(parkId: string, scheduleData: any[]): Promise<number> {
+  async saveScheduleData(
+    parkId: string,
+    scheduleData: ScheduleSyncEntry[],
+  ): Promise<number> {
     if (!scheduleData || scheduleData.length === 0) {
       return 0;
     }
@@ -759,26 +813,49 @@ export class ParksService {
       select: ["id", "countryCode", "regionCode", "timezone"],
     });
 
-    // 2. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
+    // 2. Normalize date + type once per entry; reused by the holiday prefetch,
+    // upsert, and delete phases.
+    // The API returns date-only strings ("YYYY-MM-DD") that represent the park's local
+    // calendar date. new Date("YYYY-MM-DD") produces midnight UTC, so applying
+    // formatInParkTimezone to it would shift the date back by one day for parks west
+    // of UTC (e.g. "2026-03-02" → "2026-03-01" in America/New_York). Instead we detect
+    // date-only strings and use them directly; full datetime strings are still converted.
+    const normalizedEntries = scheduleData.map((entry) => {
+      const raw: string =
+        typeof entry.date === "string"
+          ? entry.date
+          : entry.date instanceof Date
+            ? entry.date.toISOString().split("T")[0]
+            : String(entry.date);
+      const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+        ? raw
+        : formatInParkTimezone(new Date(raw), park!.timezone);
+
+      // Normalize API type: "Closed"/"CLOSED" → CLOSED so off-season (e.g. Phantasialand Feb)
+      // is persisted. Also normalize "PARK_OPEN" to OPERATING.
+      const rawType = entry.type?.toString().toUpperCase();
+      let scheduleType: ScheduleType;
+      if (rawType === "CLOSED") {
+        scheduleType = ScheduleType.CLOSED;
+      } else if (rawType === "PARK_OPEN") {
+        scheduleType = ScheduleType.OPERATING;
+      } else {
+        scheduleType = entry.type as ScheduleType;
+      }
+
+      return { entry, dateStr, scheduleType };
+    });
+
+    // 3. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
     const holidayMap = new Map<string, string | HolidayEntry>(); // Date -> Name or HolidayEntry
     if (park?.countryCode) {
       try {
         // Use noon-UTC timestamps so formatInParkTimezone() stays on the same
         // calendar day for parks in every timezone (west-of-UTC parks shift
         // midnight-UTC to the previous day, which would narrow the holiday range).
-        const dates = scheduleData.map((e) => {
-          const raw =
-            typeof e.date === "string"
-              ? e.date
-              : e.date instanceof Date
-                ? e.date.toISOString().split("T")[0]
-                : String(e.date);
-          const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
-          const dStr = isDateOnly
-            ? raw
-            : formatInParkTimezone(new Date(raw), park!.timezone);
-          return new Date(`${dStr}T12:00:00Z`).getTime();
-        });
+        const dates = normalizedEntries.map((e) =>
+          new Date(`${e.dateStr}T12:00:00Z`).getTime(),
+        );
         const minDate = new Date(Math.min(...dates));
         const maxDate = new Date(Math.max(...dates));
 
@@ -844,25 +921,53 @@ export class ParksService {
       }
     }
 
-    let savedCount = 0;
+    // Pre-load all existing entries for the affected dates in a single query
+    // instead of one SELECT per entry (a full sync covers ~365 days per park).
+    // Select the date as text so the park-local YYYY-MM-DD key is driver/TZ-safe.
+    type ExistingScheduleRow = {
+      id: string;
+      date: string;
+      scheduleType: ScheduleType;
+      openingTime: Date | null;
+      closingTime: Date | null;
+      description: string | null;
+      purchases: ScheduleEntry["purchases"];
+      isHoliday: boolean;
+      holidayName: string | null;
+      isBridgeDay: boolean;
+    };
+    const existingByKey = new Map<string, ExistingScheduleRow>();
+    const affectedDates = [...new Set(normalizedEntries.map((e) => e.dateStr))];
+    if (affectedDates.length > 0) {
+      const existingRows: ExistingScheduleRow[] = await this.scheduleRepository
+        .createQueryBuilder("schedule")
+        .select("schedule.id", "id")
+        .addSelect("to_char(schedule.date, 'YYYY-MM-DD')", "date")
+        .addSelect('schedule."scheduleType"', "scheduleType")
+        .addSelect('schedule."openingTime"', "openingTime")
+        .addSelect('schedule."closingTime"', "closingTime")
+        .addSelect("schedule.description", "description")
+        .addSelect("schedule.purchases", "purchases")
+        .addSelect('schedule."isHoliday"', "isHoliday")
+        .addSelect('schedule."holidayName"', "holidayName")
+        .addSelect('schedule."isBridgeDay"', "isBridgeDay")
+        .where("schedule.parkId = :parkId", { parkId })
+        .andWhere("schedule.date IN (:...dates)", { dates: affectedDates })
+        .getRawMany();
+      for (const row of existingRows) {
+        const key = `${row.date}|${row.scheduleType}`;
+        if (!existingByKey.has(key)) {
+          existingByKey.set(key, row);
+        }
+      }
+    }
 
-    for (const entry of scheduleData) {
-      // Derive the park-local calendar date (YYYY-MM-DD) safely.
-      // The API returns date-only strings ("YYYY-MM-DD") that represent the park's local
-      // calendar date. new Date("YYYY-MM-DD") produces midnight UTC, so applying
-      // formatInParkTimezone to it would shift the date back by one day for parks west
-      // of UTC (e.g. "2026-03-02" → "2026-03-01" in America/New_York). Instead we detect
-      // date-only strings and use them directly; full datetime strings are still converted.
-      const rawDateStr: string =
-        typeof entry.date === "string"
-          ? entry.date
-          : entry.date instanceof Date
-            ? entry.date.toISOString().split("T")[0]
-            : String(entry.date);
-      const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawDateStr);
-      const dateStr: string = isDateOnly
-        ? rawDateStr
-        : formatInParkTimezone(new Date(rawDateStr), park!.timezone);
+    // Keyed by date|type so duplicate pairs within one payload collapse (last wins),
+    // mirroring the previous insert-then-update behaviour.
+    const toInsert = new Map<string, Partial<ScheduleEntry>>();
+    const toUpdate: Array<{ id: string; data: Partial<ScheduleEntry> }> = [];
+
+    for (const { entry, dateStr, scheduleType } of normalizedEntries) {
       // Use noon UTC so timezone conversions inside calculateHolidayInfo won't shift the date
       const dateObj = new Date(`${dateStr}T12:00:00Z`);
 
@@ -872,25 +977,9 @@ export class ParksService {
         park!.timezone,
       );
 
-      // Normalize API type: "Closed"/"CLOSED" → CLOSED so off-season (e.g. Phantasialand Feb) is persisted
-      // Also normalize "PARK_OPEN" to OPERATING
-      const rawType = entry.type?.toString().toUpperCase();
-      let scheduleType: ScheduleType;
-
-      if (rawType === "CLOSED") {
-        scheduleType = ScheduleType.CLOSED;
-      } else if (rawType === "PARK_OPEN") {
-        scheduleType = ScheduleType.OPERATING;
-      } else {
-        scheduleType = entry.type as ScheduleType;
-      }
-
-      // dateStr is already the park-local calendar date (YYYY-MM-DD)
-      const normalizedDate = new Date(`${dateStr}T12:00:00Z`);
-
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
-        date: normalizedDate,
+        date: dateObj,
         scheduleType,
         openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
@@ -901,89 +990,66 @@ export class ParksService {
         isBridgeDay: holidayInfo.isBridgeDay,
       };
 
-      // Check if entry exists for this park, date, and type
-      // Use date string for reliable comparison (avoids TZ issues with Date objects)
-      const existing = await this.scheduleRepository
-        .createQueryBuilder("schedule")
-        .where("schedule.parkId = :parkId", { parkId })
-        .andWhere("schedule.date = :date", { date: dateStr })
-        .andWhere("schedule.scheduleType = :type", {
-          type: scheduleEntry.scheduleType,
-        })
-        .getOne();
+      const key = `${dateStr}|${scheduleType}`;
+      const existing = existingByKey.get(key);
 
       if (!existing) {
-        await this.scheduleRepository.save(scheduleEntry);
-        savedCount++;
-        await this.invalidateScheduleCache(parkId);
-      } else {
-        // Update if times, description, or holiday/bridge status changed
-        const hasChanges =
-          existing.openingTime?.getTime() !==
-            scheduleEntry.openingTime?.getTime() ||
-          existing.closingTime?.getTime() !==
-            scheduleEntry.closingTime?.getTime() ||
-          existing.description !== scheduleEntry.description ||
-          existing.purchases !== scheduleEntry.purchases ||
-          existing.isHoliday !== scheduleEntry.isHoliday ||
-          existing.holidayName !== scheduleEntry.holidayName ||
-          existing.isBridgeDay !== scheduleEntry.isBridgeDay;
-
-        if (hasChanges) {
-          await this.scheduleRepository.update(existing.id, scheduleEntry);
-          savedCount++;
-          await this.invalidateScheduleCache(parkId);
-        }
+        toInsert.set(key, scheduleEntry);
+        continue;
       }
 
-      // Note: Deletions are batched and executed after the loop for performance
-      // (reduces N DELETE queries to 3 batch queries, 99% reduction)
+      // Update if times, description, purchases, or holiday/bridge status changed.
+      // purchases is jsonb; compare by content (jsonb normalizes key order, so a
+      // false mismatch only causes a redundant update, never a missed one).
+      const hasChanges =
+        existing.openingTime?.getTime() !==
+          scheduleEntry.openingTime?.getTime() ||
+        existing.closingTime?.getTime() !==
+          scheduleEntry.closingTime?.getTime() ||
+        existing.description !== scheduleEntry.description ||
+        JSON.stringify(existing.purchases) !==
+          JSON.stringify(scheduleEntry.purchases) ||
+        existing.isHoliday !== scheduleEntry.isHoliday ||
+        existing.holidayName !== scheduleEntry.holidayName ||
+        existing.isBridgeDay !== scheduleEntry.isBridgeDay;
+
+      if (hasChanges) {
+        toUpdate.push({ id: existing.id, data: scheduleEntry });
+      }
+    }
+
+    let savedCount = 0;
+
+    if (toInsert.size > 0) {
+      await this.scheduleRepository.save([...toInsert.values()]);
+      savedCount += toInsert.size;
+    }
+
+    for (const update of toUpdate) {
+      await this.scheduleRepository.update(update.id, update.data);
+    }
+    savedCount += toUpdate.length;
+
+    // Invalidate once after all writes instead of once per written entry.
+    if (savedCount > 0) {
+      await this.invalidateScheduleCache(parkId);
     }
 
     // Batch DELETE operations: Cleanup placeholders when we have real data from the API.
     // Use date strings for reliable deletion (avoids TZ-dependent off-by-one with Date objects).
 
-    // Normalize entries once (avoid 3x redundant normalization).
-    // Use the same date-only detection as the main loop to avoid off-by-one TZ shifts.
-    const normalizedEntries = scheduleData.map((e) => {
-      const rawType = e.type?.toString().toUpperCase();
-      const raw: string =
-        typeof e.date === "string"
-          ? e.date
-          : e.date instanceof Date
-            ? e.date.toISOString().split("T")[0]
-            : String(e.date);
-      const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
-        ? raw
-        : formatInParkTimezone(new Date(raw), park!.timezone);
-
-      let scheduleType: ScheduleType;
-      if (rawType === "CLOSED") {
-        scheduleType = ScheduleType.CLOSED;
-      } else if (rawType === "PARK_OPEN") {
-        scheduleType = ScheduleType.OPERATING;
-      } else {
-        scheduleType = e.type as ScheduleType;
-      }
-
-      return {
-        date,
-        scheduleType,
-      };
-    });
-
     // Filter normalized entries for deletion
     const deleteUnknownDates = normalizedEntries
       .filter((e) => e.scheduleType !== ScheduleType.UNKNOWN)
-      .map((e) => e.date);
+      .map((e) => e.dateStr);
 
     const deleteClosedDates = normalizedEntries
       .filter((e) => e.scheduleType === ScheduleType.OPERATING)
-      .map((e) => e.date);
+      .map((e) => e.dateStr);
 
     const deleteOperatingDates = normalizedEntries
       .filter((e) => e.scheduleType === ScheduleType.CLOSED)
-      .map((e) => e.date);
+      .map((e) => e.dateStr);
 
     if (deleteUnknownDates.length > 0) {
       await this.scheduleRepository
@@ -1052,7 +1118,7 @@ export class ParksService {
   ): Promise<{ minDate: string | null; maxDate: string | null }> {
     // Read-through cache: MIN/MAX over schedule_entries, called on every calendar build.
     // Schedule changes only on the daily sync / on-demand refresh, so 1h is safely fresh.
-    const cacheKey = `park:opdaterange:${parkId}`;
+    const cacheKey = CacheKeys.parkOpDateRange(parkId);
     const cached = await this.redis.get(cacheKey);
     if (cached !== null) {
       try {
@@ -1378,7 +1444,14 @@ export class ParksService {
 
     // 3. Batch collectors for INSERT/UPDATE operations (performance optimization)
     const entriesToInsert: Partial<ScheduleEntry>[] = [];
-    const holidayUpdates: Array<{ id: string; fields: any }> = [];
+    const holidayUpdates: Array<{
+      id: string;
+      fields: {
+        isHoliday: boolean;
+        holidayName: string | null;
+        isBridgeDay: boolean;
+      };
+    }> = [];
     const statusPromotions: string[] = []; // IDs to promote UNKNOWN → CLOSED
     const statusDemotions: string[] = []; // IDs to demote gap-filled CLOSED → UNKNOWN
 
@@ -1490,9 +1563,31 @@ export class ParksService {
         .execute();
     }
 
-    // Individual UPDATEs for holiday changes (fields may differ per entry)
-    for (const update of holidayUpdates) {
-      await this.scheduleRepository.update(update.id, update.fields);
+    // Batch UPDATE for holiday changes (fields differ per entry, so use VALUES)
+    if (holidayUpdates.length > 0) {
+      const values: string[] = [];
+      const params: Array<string | boolean | null> = [];
+      holidayUpdates.forEach((update, i) => {
+        const o = i * 4;
+        values.push(
+          `($${o + 1}::uuid, $${o + 2}::boolean, $${o + 3}, $${o + 4}::boolean)`,
+        );
+        params.push(
+          update.id,
+          update.fields.isHoliday,
+          update.fields.holidayName,
+          update.fields.isBridgeDay,
+        );
+      });
+      await this.scheduleRepository.query(
+        `UPDATE schedule_entries s
+         SET "isHoliday" = v.is_holiday,
+             "holidayName" = v.holiday_name,
+             "isBridgeDay" = v.is_bridge_day
+         FROM (VALUES ${values.join(", ")}) AS v(id, is_holiday, holiday_name, is_bridge_day)
+         WHERE s.id = v.id`,
+        params,
+      );
     }
 
     if (filledCount > 0) {
@@ -1513,7 +1608,7 @@ export class ParksService {
     // Clean up duplicate schedule entries before filling gaps
     await this.cleanupDuplicateScheduleEntries();
 
-    const parks = await this.parkRepository.find();
+    const parks = await this.parkRepository.find({ select: ["id", "name"] });
     let totalUpdated = 0;
 
     for (const park of parks) {
@@ -1854,7 +1949,7 @@ export class ParksService {
     }
 
     const todayStr = getCurrentDateInTimezone(tz);
-    const cacheKey = `schedule:today:${parkId}:${todayStr}`;
+    const cacheKey = CacheKeys.scheduleToday(parkId, todayStr);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1902,7 +1997,7 @@ export class ParksService {
     if (!park) return null;
 
     const tomorrowStr = getTomorrowDateInTimezone(park.timezone || "UTC");
-    const cacheKey = `schedule:next:${parkId}:${tomorrowStr}`;
+    const cacheKey = CacheKeys.scheduleNext(parkId, tomorrowStr);
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -1976,13 +2071,17 @@ export class ParksService {
     }
 
     // Try to get from cache first (today/tomorrow in each park's timezone)
-    const cacheKeysToday = parks.map(
-      (p) =>
-        `schedule:today:${p.id}:${getCurrentDateInTimezone(p.timezone || "UTC")}`,
+    const cacheKeysToday = parks.map((p) =>
+      CacheKeys.scheduleToday(
+        p.id,
+        getCurrentDateInTimezone(p.timezone || "UTC"),
+      ),
     );
-    const cacheKeysNext = parks.map(
-      (p) =>
-        `schedule:next:${p.id}:${getTomorrowDateInTimezone(p.timezone || "UTC")}`,
+    const cacheKeysNext = parks.map((p) =>
+      CacheKeys.scheduleNext(
+        p.id,
+        getTomorrowDateInTimezone(p.timezone || "UTC"),
+      ),
     );
 
     const cachedToday = await this.redis.mget(...cacheKeysToday);
@@ -2090,7 +2189,7 @@ export class ParksService {
           // Cache results
           for (const park of parksForToday.filter((p) => ids.includes(p.id))) {
             const parkSchedules = scheduleMap.get(park.id) || [];
-            const cacheKey = `schedule:today:${park.id}:${todayStr}`;
+            const cacheKey = CacheKeys.scheduleToday(park.id, todayStr);
             await this.redis.set(
               cacheKey,
               JSON.stringify(parkSchedules),
@@ -2153,7 +2252,10 @@ export class ParksService {
       for (const park of parksForNext) {
         const schedule = nextScheduleMap.get(park.id) || null;
         const timezone = park.timezone || "UTC";
-        const cacheKey = `schedule:next:${park.id}:${getTomorrowDateInTimezone(timezone)}`;
+        const cacheKey = CacheKeys.scheduleNext(
+          park.id,
+          getTomorrowDateInTimezone(timezone),
+        );
         await this.redis.set(
           cacheKey,
           JSON.stringify(schedule),
@@ -2184,7 +2286,11 @@ export class ParksService {
     const twoDaysAgo = addDays(startDate, -2);
     const endDate = addDays(startDate, days + 1);
 
-    const cacheKey = `schedule:upcoming:${parkId}:${getCurrentDateInTimezone(tz)}:${days}`;
+    const cacheKey = CacheKeys.scheduleUpcoming(
+      parkId,
+      getCurrentDateInTimezone(tz),
+      days,
+    );
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
@@ -2278,12 +2384,8 @@ export class ParksService {
     parkSlug: string,
   ): Promise<Park | null> {
     const cacheKey = `${continentSlug}:${countrySlug}:${citySlug}:${parkSlug}`;
-    const expiry = this.notFoundCache.get(cacheKey);
-    if (expiry !== undefined) {
-      if (Date.now() < expiry) {
-        return null; // known 404 — skip DB query
-      }
-      this.notFoundCache.delete(cacheKey);
+    if (this.notFoundCache.has(cacheKey)) {
+      return null; // known 404 — skip DB query
     }
 
     const park = await this.parkRepository.findOne({
@@ -2292,7 +2394,7 @@ export class ParksService {
     });
 
     if (!park) {
-      this.notFoundCache.set(cacheKey, Date.now() + this.NOT_FOUND_TTL_MS);
+      this.notFoundCache.add(cacheKey);
     }
 
     return park;
@@ -2607,7 +2709,7 @@ export class ParksService {
    * Invalidates schedule cache for a park
    */
   async invalidateScheduleCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(`schedule:*:${parkId}:*`);
+    const keys = await this.redis.keys(CacheKeys.scheduleParkPattern(parkId));
     if (keys.length > 0) {
       await this.redis.del(...keys);
     }
@@ -2619,7 +2721,7 @@ export class ParksService {
    * after ThemeParks Wiki publishes new opening hours.
    */
   async invalidateCalendarMonthCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(`calendar:month:${parkId}:*`);
+    const keys = await this.redis.keys(CacheKeys.calendarMonthPattern(parkId));
     if (keys.length > 0) {
       await this.redis.del(...keys);
       this.logger.debug(

@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NestInterceptor,
   ExecutionContext,
   CallHandler,
@@ -16,6 +17,8 @@ import { PopularityService } from "../popularity.service";
  */
 @Injectable()
 export class PopularityInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(PopularityInterceptor.name);
+
   constructor(private readonly popularityService: PopularityService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -30,10 +33,11 @@ export class PopularityInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
-        // Track after successful response
-        this.trackRequest(url, params).catch(() => {
-          /* ignore tracking errors */
-        });
+        // Track after successful response; tracking failures must never
+        // affect the response, but should still be visible in debug logs.
+        this.trackRequest(url, params).catch((err) =>
+          this.logger.debug(`Popularity tracking failed for ${url}: ${err}`),
+        );
       }),
     );
   }

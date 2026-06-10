@@ -1,4 +1,5 @@
 import { Injectable, Inject, OnModuleInit, Logger } from "@nestjs/common";
+import { safeJsonParse } from "../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Brackets } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
@@ -150,7 +151,9 @@ export class SearchService implements OnModuleInit {
              EXECUTE format('ALTER DATABASE %I SET pg_trgm.word_similarity_threshold = 0.4', current_database());
            END $$;`,
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(`word_similarity_threshold not set: ${err}`),
+        );
 
       // Create indices concurrently if possible, but safe here without valid concurrently in transaction block usually
       // Park indices
@@ -170,7 +173,9 @@ export class SearchService implements OnModuleInit {
         .query(
           "CREATE INDEX IF NOT EXISTS idx_park_name_normalized ON parks USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(`idx_park_name_normalized not created: ${err}`),
+        );
 
       // Attraction indices
       await this.attractionRepository.query(
@@ -186,14 +191,21 @@ export class SearchService implements OnModuleInit {
         .query(
           "CREATE INDEX IF NOT EXISTS idx_attraction_name_normalized ON attractions USING gin (REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g') gin_trgm_ops);",
         )
-        .catch(() => {});
+        .catch((err) =>
+          this.logger.debug(
+            `idx_attraction_name_normalized not created: ${err}`,
+          ),
+        );
 
       // Word similarity index for partial matches (e.g. "phantasia" matching "phantasialand")
       await this.attractionRepository
         .query(
           "CREATE INDEX IF NOT EXISTS idx_park_name_word_trgm ON parks USING gist (name gist_trgm_ops);",
         )
-        .catch(() => {}); // gist might not be available depending on postgres version/extensions
+        // gist might not be available depending on postgres version/extensions
+        .catch((err) =>
+          this.logger.debug(`idx_park_name_word_trgm not created: ${err}`),
+        );
 
       // Show indices
       await this.showRepository.query(
@@ -242,9 +254,11 @@ export class SearchService implements OnModuleInit {
     const cacheKey = `search:fuzzy:v1:${typeKey}:${q.toLowerCase()}`;
 
     // Try cache first
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
+    const cachedResponse = safeJsonParse<SearchResultDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cachedResponse) {
+      return cachedResponse;
     }
 
     // Determine which entity types to search
@@ -1668,7 +1682,12 @@ export class SearchService implements OnModuleInit {
         "Search index load from Redis failed, falling back to DB",
         err,
       );
-      await this.refreshSearchIndex().catch(() => {});
+      await this.refreshSearchIndex().catch((refreshErr) =>
+        this.logger.error(
+          "Search index refresh failed — search will serve stale or empty results",
+          refreshErr,
+        ),
+      );
     }
   }
 
@@ -1698,37 +1717,58 @@ export class SearchService implements OnModuleInit {
       this.topAttractionIdSet = new Set(topAttractionIds);
       this.indexReady = true;
 
+      const serializedParks = JSON.stringify(parks);
+      const serializedAttractions = JSON.stringify(attractions);
+      const serializedShows = JSON.stringify(shows);
+      const serializedRestaurants = JSON.stringify(restaurants);
+
       const pipeline = this.redis.pipeline();
       pipeline.set(
         SearchService.INDEX_KEY_PARKS,
-        JSON.stringify(parks),
+        serializedParks,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_ATTRACTIONS,
-        JSON.stringify(attractions),
+        serializedAttractions,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_SHOWS,
-        JSON.stringify(shows),
+        serializedShows,
         "EX",
         SearchService.INDEX_TTL,
       );
       pipeline.set(
         SearchService.INDEX_KEY_RESTAURANTS,
-        JSON.stringify(restaurants),
+        serializedRestaurants,
         "EX",
         SearchService.INDEX_TTL,
       );
       await pipeline.exec();
 
+      // The index loaders are unbounded full-table reads (there is no
+      // active/deleted flag to filter on), so watch the serialized size:
+      // past this threshold the JSON round-trip and in-memory index start
+      // to hurt boot/refresh latency and a bounded strategy is needed.
+      const totalBytes =
+        serializedParks.length +
+        serializedAttractions.length +
+        serializedShows.length +
+        serializedRestaurants.length;
+      const totalMb = totalBytes / (1024 * 1024);
+      if (totalMb > 16) {
+        this.logger.warn(
+          `Search index serialization is ${totalMb.toFixed(1)} MB — consider bounding the index (filter or popularity cap)`,
+        );
+      }
+
       this.logger.log(
         `✅ Search index refreshed from DB → Redis (${parks.length} parks, ` +
           `${attractions.length} attractions, ${shows.length} shows, ` +
-          `${restaurants.length} restaurants)`,
+          `${restaurants.length} restaurants, ${totalMb.toFixed(1)} MB)`,
       );
     } catch (err) {
       this.logger.warn("Search index refresh failed", err);
@@ -2183,7 +2223,9 @@ export class SearchService implements OnModuleInit {
       if (this.parkIndex.length > 0) {
         await this.getCachedParkStatusMap(
           this.parkIndex.map((p) => p.id),
-        ).catch(() => {});
+        ).catch((err) =>
+          this.logger.debug(`Park status pre-warm failed: ${err}`),
+        );
       }
 
       const [parks, popularParkIds] = await Promise.all([
