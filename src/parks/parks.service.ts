@@ -39,6 +39,20 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 
+/**
+ * Input shape for saveScheduleData. Covers both the ThemeParks.wiki schedule
+ * API entries and the ad-hoc updates built by the wartezeiten/wait-times
+ * processors.
+ */
+export interface ScheduleSyncEntry {
+  date: string | Date;
+  type?: string;
+  openingTime?: string | Date | null;
+  closingTime?: string | Date | null;
+  description?: string | null;
+  purchases?: ScheduleEntry["purchases"];
+}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -784,7 +798,10 @@ export class ParksService {
    * @param parkId - Our internal park ID (UUID)
    * @param scheduleData - Schedule data from ThemeParks.wiki API
    */
-  async saveScheduleData(parkId: string, scheduleData: any[]): Promise<number> {
+  async saveScheduleData(
+    parkId: string,
+    scheduleData: ScheduleSyncEntry[],
+  ): Promise<number> {
     if (!scheduleData || scheduleData.length === 0) {
       return 0;
     }

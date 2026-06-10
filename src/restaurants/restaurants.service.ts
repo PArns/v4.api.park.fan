@@ -14,6 +14,7 @@ import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper"
 import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
+import { isThemeParksWikiId } from "../common/utils/external-id.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   hasDateChangedInTimezone,
@@ -67,11 +68,7 @@ export class RestaurantsService {
 
     for (const park of parks) {
       // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
-      if (
-        !park.externalId ||
-        park.externalId.startsWith("qt-") ||
-        park.externalId.startsWith("wz-")
-      ) {
+      if (!isThemeParksWikiId(park.externalId)) {
         continue;
       }
 

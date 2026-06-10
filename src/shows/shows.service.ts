@@ -11,6 +11,7 @@ import {
   ShowtimeData,
 } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
+import { isThemeParksWikiId } from "../common/utils/external-id.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   formatInParkTimezone,
@@ -66,11 +67,7 @@ export class ShowsService {
 
     for (const park of parks) {
       // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
-      if (
-        !park.externalId ||
-        park.externalId.startsWith("qt-") ||
-        park.externalId.startsWith("wz-")
-      ) {
+      if (!isThemeParksWikiId(park.externalId)) {
         continue;
       }
 
