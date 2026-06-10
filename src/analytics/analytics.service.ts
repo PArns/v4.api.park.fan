@@ -69,6 +69,10 @@ const P90_NEGATIVE_SENTINEL = "-1";
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
+  // Per-park throttle for the "no P50/P90 baseline" warning (1/h/park) — see
+  // getCurrentOccupancy; some parks can never have a baseline (sources report
+  // status only, zero waits) and would otherwise warn on every request.
+  private readonly missingBaselineWarnAt = new Map<string, number>();
 
   // Differentiated cache TTLs based on data characteristics
   private readonly TTL_REALTIME = 5 * 60; // 5 minutes - real-time wait times, occupancy
@@ -410,9 +414,18 @@ export class AnalyticsService {
     }
 
     if (baseline === 0) {
-      this.logger.warn(
-        `No P50/P90 baseline for park ${parkId} — returning low-confidence default until daily cron repopulates it`,
-      );
+      // Throttled to once per park per hour: ~24 parks legitimately NEVER get a
+      // baseline (their sources — queue-times/wiki — deliver status only, all
+      // waits are 0: water parks, Lotte World, several Six Flags/Cedar Fair
+      // parks), so this fired on every request and was the loudest line in the
+      // log while signalling nothing actionable.
+      const lastWarn = this.missingBaselineWarnAt.get(parkId) ?? 0;
+      if (now.getTime() - lastWarn > 60 * 60 * 1000) {
+        this.missingBaselineWarnAt.set(parkId, now.getTime());
+        this.logger.warn(
+          `No P50/P90 baseline for park ${parkId} — returning low-confidence default (expected for parks whose sources report no wait values; throttled to 1/h)`,
+        );
+      }
       return {
         current: 50,
         trend: "stable",
