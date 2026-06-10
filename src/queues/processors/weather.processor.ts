@@ -96,70 +96,87 @@ export class WeatherProcessor {
         `Deduped ${total} parks to ${uniqueCount} unique locations for API calls`,
       );
 
-      // Fetch weather for unique locations first (populates client-side cache)
-      let apiIdx = 0;
-      for (const [, repPark] of uniqueCoordParks) {
-        try {
-          await this.openMeteoClient.getDailyWeather(
-            repPark.latitude!,
-            repPark.longitude!,
-            currentOnly ? 1 : 16,
-          );
-        } catch {
-          // Errors will surface again per-park below; ignore here
-        }
+      // Fetch weather for unique locations first (populates client-side cache).
+      // Batched Promise.all instead of strictly sequential calls: with ~300
+      // unique locations the old 1 call + fixed delay loop took several
+      // minutes of wall time. The batch delay keeps the request rate well
+      // under Open-Meteo's limit; the client additionally handles 429s.
+      const API_BATCH_SIZE = 5;
+      const apiBatchDelay = currentOnly ? 1000 : 2000;
+      const uniqueParks = [...uniqueCoordParks.values()];
+      for (let i = 0; i < uniqueParks.length; i += API_BATCH_SIZE) {
+        const batch = uniqueParks.slice(i, i + API_BATCH_SIZE);
+        await Promise.all(
+          batch.map((repPark) =>
+            this.openMeteoClient
+              .getDailyWeather(
+                repPark.latitude!,
+                repPark.longitude!,
+                currentOnly ? 1 : 16,
+              )
+              // Errors will surface again per-park below; ignore here
+              .catch(() => undefined),
+          ),
+        );
 
-        apiIdx++;
-        if (apiIdx % 10 === 0 || apiIdx === uniqueCount) {
+        const fetched = Math.min(i + API_BATCH_SIZE, uniqueCount);
+        if (fetched % 50 === 0 || fetched === uniqueCount) {
           this.logger.log(
-            `API fetch progress: ${apiIdx}/${uniqueCount} unique locations`,
+            `API fetch progress: ${fetched}/${uniqueCount} unique locations`,
           );
         }
 
-        // Delay between unique API calls (cache hits for same-coord parks skip this)
-        const delay = currentOnly ? 500 : 1500;
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (i + API_BATCH_SIZE < uniqueParks.length) {
+          await new Promise((resolve) => setTimeout(resolve, apiBatchDelay));
+        }
       }
 
-      // Now save weather for every park (cache hit for shared-coord parks = no extra API call)
-      for (const park of parksWithCoords) {
-        try {
-          const forecastData = await this.openMeteoClient.getDailyWeather(
-            park.latitude!,
-            park.longitude!,
-            currentOnly ? 1 : 16,
-          );
+      // Now save weather for every park (cache hit for shared-coord parks = no
+      // extra API call). DB-bound, so a larger batch size is fine.
+      const SAVE_BATCH_SIZE = 10;
+      for (let i = 0; i < parksWithCoords.length; i += SAVE_BATCH_SIZE) {
+        const batch = parksWithCoords.slice(i, i + SAVE_BATCH_SIZE);
+        await Promise.all(
+          batch.map(async (park) => {
+            try {
+              const forecastData = await this.openMeteoClient.getDailyWeather(
+                park.latitude!,
+                park.longitude!,
+                currentOnly ? 1 : 16,
+              );
 
-          const currentDay = forecastData.days.slice(0, 1);
-          const forecast = forecastData.days.slice(1);
+              const currentDay = forecastData.days.slice(0, 1);
+              const forecast = forecastData.days.slice(1);
 
-          if (currentDay.length > 0) {
-            const savedCurrent = await this.weatherService.saveWeatherData(
-              park.id,
-              currentDay,
-              "current",
-              forecastData.current,
-            );
-            totalCurrent += savedCurrent;
-          }
+              if (currentDay.length > 0) {
+                const savedCurrent = await this.weatherService.saveWeatherData(
+                  park.id,
+                  currentDay,
+                  "current",
+                  forecastData.current,
+                );
+                totalCurrent += savedCurrent;
+              }
 
-          if (!currentOnly && forecast.length > 0) {
-            const savedForecast = await this.weatherService.saveWeatherData(
-              park.id,
-              forecast,
-              "forecast",
-            );
-            totalForecast += savedForecast;
-          }
+              if (!currentOnly && forecast.length > 0) {
+                const savedForecast = await this.weatherService.saveWeatherData(
+                  park.id,
+                  forecast,
+                  "forecast",
+                );
+                totalForecast += savedForecast;
+              }
 
-          await this.redis.del(`weather:forecast:${park.id}`);
-        } catch (error: unknown) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          this.logger.error(
-            `❌ Failed to process weather for ${park.name}: ${errorMessage}`,
-          );
-        }
+              await this.redis.del(`weather:forecast:${park.id}`);
+            } catch (error: unknown) {
+              const errorMessage =
+                error instanceof Error ? error.message : String(error);
+              this.logger.error(
+                `❌ Failed to process weather for ${park.name}: ${errorMessage}`,
+              );
+            }
+          }),
+        );
       }
 
       this.logger.log(

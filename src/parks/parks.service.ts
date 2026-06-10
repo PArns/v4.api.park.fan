@@ -321,54 +321,91 @@ export class ParksService {
               await this.parkRepository.manager.transaction(
                 async (transactionalEntityManager) => {
                   // 1. Handle Attraction Collisions
-                  // Fetch attractions from both parks to compare
-                  const existingAttractions =
+                  // Fetch attractions from both parks in one query, then split
+                  type GhostAttractionRow = {
+                    id: string;
+                    parkId: string;
+                    slug: string;
+                    queue_times_entity_id: string | null;
+                    land_name: string | null;
+                    land_external_id: string | null;
+                  };
+                  const bothParkAttractions: GhostAttractionRow[] =
                     await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
-                      [existing.id],
+                      `SELECT id, "parkId", slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = ANY($1::uuid[])`,
+                      [[existing.id, ghostPark.id]],
                     );
-                  const ghostAttractions =
-                    await transactionalEntityManager.query(
-                      `SELECT id, slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
-                      [ghostPark.id],
-                    );
+                  const existingAttractions = bothParkAttractions.filter(
+                    (a) => a.parkId === existing.id,
+                  );
+                  const ghostAttractions = bothParkAttractions.filter(
+                    (a) => a.parkId === ghostPark.id,
+                  );
+
+                  // Partition once, then run batched statements instead of
+                  // 1-2 queries per ghost attraction.
+                  const existingBySlug = new Map<string, GhostAttractionRow>(
+                    existingAttractions.map((a) => [a.slug, a]),
+                  );
+                  const collisions: Array<{
+                    ghost: GhostAttractionRow;
+                    matchId: string;
+                  }> = [];
+                  const movedIds: string[] = [];
 
                   for (const ghostAttr of ghostAttractions) {
-                    const match = existingAttractions.find(
-                      (a: any) => a.slug === ghostAttr.slug,
-                    );
-
+                    const match = existingBySlug.get(ghostAttr.slug);
                     if (match) {
-                      // COLLISION: Merge data into existing attraction, then delete ghost attraction
-                      // We specifically want the Land Info and Queue-Times ID from the ghost
-                      await transactionalEntityManager.query(
-                        `UPDATE attractions 
-                         SET "land_name" = COALESCE($1, "land_name"),
-                             "land_external_id" = COALESCE($2, "land_external_id"),
-                             "queue_times_entity_id" = COALESCE($3, "queue_times_entity_id")
-                         WHERE id = $4`,
-                        [
-                          ghostAttr.land_name,
-                          ghostAttr.land_external_id,
-                          ghostAttr.queue_times_entity_id,
-                          match.id,
-                        ],
-                      );
-                      // Delete the ghost attraction since we merged its useful data
-                      await transactionalEntityManager.query(
-                        `DELETE FROM attractions WHERE id = $1`,
-                        [ghostAttr.id],
-                      );
-                      this.logger.log(
-                        `    Merges attraction data: ${ghostAttr.slug}`,
-                      );
+                      collisions.push({ ghost: ghostAttr, matchId: match.id });
                     } else {
-                      // NO COLLISION: Move attraction to new park
-                      await transactionalEntityManager.query(
-                        `UPDATE attractions SET "parkId" = $1 WHERE id = $2`,
-                        [existing.id, ghostAttr.id],
-                      );
+                      movedIds.push(ghostAttr.id);
                     }
+                  }
+
+                  if (collisions.length > 0) {
+                    // COLLISION: Merge data into existing attractions, then delete
+                    // the ghosts. We specifically want the Land Info and
+                    // Queue-Times ID from each ghost.
+                    const values: string[] = [];
+                    const params: Array<string | null> = [];
+                    collisions.forEach(({ ghost, matchId }, i) => {
+                      const o = i * 4;
+                      values.push(
+                        `($${o + 1}::uuid, $${o + 2}, $${o + 3}, $${o + 4})`,
+                      );
+                      params.push(
+                        matchId,
+                        ghost.land_name,
+                        ghost.land_external_id,
+                        ghost.queue_times_entity_id,
+                      );
+                    });
+                    await transactionalEntityManager.query(
+                      `UPDATE attractions a
+                       SET "land_name" = COALESCE(v.land_name, a."land_name"),
+                           "land_external_id" = COALESCE(v.land_external_id, a."land_external_id"),
+                           "queue_times_entity_id" = COALESCE(v.qt_id, a."queue_times_entity_id")
+                       FROM (VALUES ${values.join(", ")}) AS v(id, land_name, land_external_id, qt_id)
+                       WHERE a.id = v.id`,
+                      params,
+                    );
+                    await transactionalEntityManager.query(
+                      `DELETE FROM attractions WHERE id = ANY($1::uuid[])`,
+                      [collisions.map((c) => c.ghost.id)],
+                    );
+                    this.logger.log(
+                      `    Merged attraction data: ${collisions
+                        .map((c) => c.ghost.slug)
+                        .join(", ")}`,
+                    );
+                  }
+
+                  if (movedIds.length > 0) {
+                    // NO COLLISION: Move attractions to the surviving park
+                    await transactionalEntityManager.query(
+                      `UPDATE attractions SET "parkId" = $1 WHERE id = ANY($2::uuid[])`,
+                      [existing.id, movedIds],
+                    );
                   }
 
                   // 2. Migrate Shows (Blind update OK if slugs distinctive, else duplicate logic needed? mostly safe for now)
@@ -1390,7 +1427,14 @@ export class ParksService {
 
     // 3. Batch collectors for INSERT/UPDATE operations (performance optimization)
     const entriesToInsert: Partial<ScheduleEntry>[] = [];
-    const holidayUpdates: Array<{ id: string; fields: any }> = [];
+    const holidayUpdates: Array<{
+      id: string;
+      fields: {
+        isHoliday: boolean;
+        holidayName: string | null;
+        isBridgeDay: boolean;
+      };
+    }> = [];
     const statusPromotions: string[] = []; // IDs to promote UNKNOWN → CLOSED
     const statusDemotions: string[] = []; // IDs to demote gap-filled CLOSED → UNKNOWN
 
@@ -1502,9 +1546,31 @@ export class ParksService {
         .execute();
     }
 
-    // Individual UPDATEs for holiday changes (fields may differ per entry)
-    for (const update of holidayUpdates) {
-      await this.scheduleRepository.update(update.id, update.fields);
+    // Batch UPDATE for holiday changes (fields differ per entry, so use VALUES)
+    if (holidayUpdates.length > 0) {
+      const values: string[] = [];
+      const params: Array<string | boolean | null> = [];
+      holidayUpdates.forEach((update, i) => {
+        const o = i * 4;
+        values.push(
+          `($${o + 1}::uuid, $${o + 2}::boolean, $${o + 3}, $${o + 4}::boolean)`,
+        );
+        params.push(
+          update.id,
+          update.fields.isHoliday,
+          update.fields.holidayName,
+          update.fields.isBridgeDay,
+        );
+      });
+      await this.scheduleRepository.query(
+        `UPDATE schedule_entries s
+         SET "isHoliday" = v.is_holiday,
+             "holidayName" = v.holiday_name,
+             "isBridgeDay" = v.is_bridge_day
+         FROM (VALUES ${values.join(", ")}) AS v(id, is_holiday, holiday_name, is_bridge_day)
+         WHERE s.id = v.id`,
+        params,
+      );
     }
 
     if (filledCount > 0) {
@@ -1525,7 +1591,7 @@ export class ParksService {
     // Clean up duplicate schedule entries before filling gaps
     await this.cleanupDuplicateScheduleEntries();
 
-    const parks = await this.parkRepository.find();
+    const parks = await this.parkRepository.find({ select: ["id", "name"] });
     let totalUpdated = 0;
 
     for (const park of parks) {
