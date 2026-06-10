@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
+import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
@@ -10,10 +11,8 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 // Read lazily: ConfigModule only assigns a .env file into process.env at
 // runtime, after this module's imports are evaluated. The Docker defaults are
 // correct for prod regardless, but this keeps .env-file overrides working.
-const mlServiceUrl = (): string =>
-  process.env.ML_SERVICE_URL || "http://ml-service:8000";
-const nfServiceUrl = (): string =>
-  process.env.NF_SERVICE_URL || "http://nf-service:8000";
+const mlServiceUrl = getMlServiceUrl;
+const nfServiceUrl = getNfServiceUrl;
 const GB = 1024 ** 3;
 
 /**

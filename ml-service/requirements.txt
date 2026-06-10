@@ -6,7 +6,7 @@ pydantic==2.12.5
 pydantic-settings==2.11.0
 
 # ML & Data Processing
-catboost
+catboost==1.2.10  # pinned: nightly retrain must not silently pick up a new major
 numpy==1.26.4
 pandas==2.2.3
 scikit-learn==1.6.1

@@ -1,4 +1,5 @@
 import { Processor, Process } from "@nestjs/bull";
+import { getMlServiceUrl } from "../../config/ml-services.config";
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { exec } from "child_process";
@@ -48,8 +49,7 @@ export class MLTrainingProcessor {
       this.logger.log(`Training version: ${version}`);
 
       // Trigger training via HTTP API (replaces docker exec)
-      const mlServiceUrl =
-        process.env.ML_SERVICE_URL || "http://ml-service:8000";
+      const mlServiceUrl = getMlServiceUrl();
       this.logger.log(`Triggering training via ${mlServiceUrl}/train`);
 
       const response = await axios.post(`${mlServiceUrl}/train`, {
@@ -328,7 +328,7 @@ export class MLTrainingProcessor {
 
       // Log to dedicated file for critical job failures
       logJobFailure("train-model", "ml-training", error, {
-        mlServiceUrl: process.env.ML_SERVICE_URL || "http://ml-service:8000",
+        mlServiceUrl: getMlServiceUrl(),
       });
 
       throw error;

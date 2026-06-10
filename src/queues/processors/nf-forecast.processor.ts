@@ -1,4 +1,5 @@
 import { Process, Processor } from "@nestjs/bull";
+import { getNfServiceUrl } from "../../config/ml-services.config";
 import { Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -6,10 +7,7 @@ import { Job } from "bull";
 import axios from "axios";
 import { ModelComparison } from "../../ml/entities/model-comparison.entity";
 
-// Read lazily so a .env-file override is honoured (ConfigModule loads it after
-// this module's imports run). The Docker default is correct for prod anyway.
-const nfServiceUrl = (): string =>
-  process.env.NF_SERVICE_URL || "http://nf-service:8000";
+const nfServiceUrl = getNfServiceUrl;
 const SCORE_LOOKBACK_DAYS = 14; // re-score the last N matured days each run (idempotent)
 
 /**

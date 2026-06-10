@@ -1,4 +1,5 @@
 import { Controller, Get, Logger } from "@nestjs/common";
+import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
 import { SkipThrottle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
@@ -146,7 +147,7 @@ export class HealthController {
         },
       }),
       ...(predictions24h > 0 && { predictions_24h: predictions24h }),
-      service_url: process.env.ML_SERVICE_URL || "http://ml-service:8000",
+      service_url: getMlServiceUrl(),
     };
 
     return {
@@ -288,7 +289,7 @@ export class HealthController {
     active_model?: { version: string; trained_at: string };
     service_url: string;
   } | null> {
-    const nfUrl = process.env.NF_SERVICE_URL || "http://nf-service:8000";
+    const nfUrl = getNfServiceUrl();
     try {
       const [healthRes, statusRes] = await Promise.all([
         axios.get(`${nfUrl}/health`, { timeout: 3000 }).then((r) => r.data),

@@ -1,4 +1,5 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
+import { getMlServiceUrl } from "../config/ml-services.config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, MoreThan } from "typeorm";
 import { ConfigService } from "@nestjs/config";
@@ -74,8 +75,7 @@ export class MLService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
     // ML service URL from environment or default
-    this.ML_SERVICE_URL =
-      process.env.ML_SERVICE_URL || "http://ml-service:8000";
+    this.ML_SERVICE_URL = getMlServiceUrl();
 
     this.mlClient = axios.create({
       baseURL: this.ML_SERVICE_URL,
@@ -332,13 +332,6 @@ export class MLService {
         return { predictions: [], count: 0, modelVersion: "none" };
       }
 
-      const skippedCount = attractionIds.length - activeAttractionIds.length;
-      if (skippedCount > 0) {
-        // this.logger.debug(
-        //   `Skipping ${skippedCount} inactive attractions for park ${parkId}`,
-        // );
-      }
-
       // 3. Fetch hourly weather forecast (cached by WeatherService)
       let weatherForecast: WeatherForecastItemDto[] = [];
       try {
@@ -539,13 +532,17 @@ export class MLService {
           ? getCurrentDateInTimezone(park.timezone)
           : getCurrentDateInTimezone("UTC");
 
-        const schedule = await this.scheduleEntryRepository.findOne({
-          where: {
-            parkId,
-            date: todayStr as any,
-            scheduleType: ScheduleType.OPERATING,
-          },
-        });
+        // Compare the date column against the park-local YYYY-MM-DD string
+        // explicitly (the entity types `date` as Date, but the column is a
+        // Postgres `date` — string comparison avoids TZ-dependent shifts).
+        const schedule = await this.scheduleEntryRepository
+          .createQueryBuilder("schedule")
+          .where("schedule.parkId = :parkId", { parkId })
+          .andWhere("schedule.date = :date", { date: todayStr })
+          .andWhere("schedule.scheduleType = :type", {
+            type: ScheduleType.OPERATING,
+          })
+          .getOne();
 
         if (schedule?.openingTime) {
           parkOpeningTimes[parkId] = schedule.openingTime.toISOString();
@@ -905,7 +902,12 @@ export class MLService {
     });
 
     if (!attraction) {
-      throw new HttpException("Attraction not found", 404);
+      // Services don't throw HTTP exceptions; an unknown attraction simply
+      // has no predictions (the integration caller falls back to [] anyway).
+      this.logger.warn(
+        `getAttractionPredictions: attraction ${attractionId} not found`,
+      );
+      return [];
     }
 
     // 2–3.5: Fetch weather forecast, current wait time, and recent wait time in parallel
