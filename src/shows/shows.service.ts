@@ -19,7 +19,13 @@ import {
 import {
   hasDateChangedInTimezone,
   hasOperatingHoursChanged,
+  liveDataCutoff,
 } from "../common/utils/live-data.util";
+import {
+  applyLatestPerEntity,
+  latestTodayPerEntity,
+  todayLookbackDate,
+} from "../common/utils/live-data-query.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 @Injectable()
@@ -394,9 +400,9 @@ export class ShowsService {
     // compressed hypertable; an unbounded latest-lookup decompresses every
     // chunk per show → ~14s under load). A show with no data in 7 days is
     // correctly treated as "no previous data" → save the fresh reading.
-    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = liveDataCutoff();
     const latest = await this.showLiveDataRepository.findOne({
-      where: { showId, timestamp: MoreThanOrEqual(liveDataCutoff) },
+      where: { showId, timestamp: MoreThanOrEqual(cutoff) },
       order: { timestamp: "DESC" },
       relations: ["show", "show.park"],
     });
@@ -501,9 +507,9 @@ export class ShowsService {
   async findCurrentStatusByShow(showId: string): Promise<ShowLiveData | null> {
     // 7-day cutoff for chunk exclusion (see shouldSaveShowLiveData). Live data
     // is only useful for "now", so a show stale >7d correctly returns null.
-    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = liveDataCutoff();
     return this.showLiveDataRepository.findOne({
-      where: { showId, timestamp: MoreThanOrEqual(liveDataCutoff) },
+      where: { showId, timestamp: MoreThanOrEqual(cutoff) },
       relations: ["show", "show.park"],
       order: { timestamp: "DESC" },
     });
@@ -527,19 +533,16 @@ export class ShowsService {
       showIds.map((id) => [id, null]),
     );
 
-    // Use DISTINCT ON to get latest record per showId.
-    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const showData = await this.showLiveDataRepository
-      .createQueryBuilder("sld")
-      .innerJoinAndSelect("sld.show", "linked_show")
-      .leftJoinAndSelect("linked_show.park", "linked_park")
-      .where("sld.showId IN (:...showIds)", { showIds })
-      .andWhere("sld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
-      .distinctOn(["sld.showId"])
-      .orderBy("sld.showId", "ASC")
-      .addOrderBy("sld.timestamp", "DESC")
-      .getMany();
+    // Latest record per showId (DISTINCT ON, cutoff for chunk exclusion)
+    const showData = await applyLatestPerEntity(
+      this.showLiveDataRepository
+        .createQueryBuilder("sld")
+        .innerJoinAndSelect("sld.show", "linked_show")
+        .leftJoinAndSelect("linked_show.park", "linked_park")
+        .where("sld.showId IN (:...showIds)", { showIds }),
+      "sld",
+      "showId",
+    ).getMany();
 
     const now = new Date();
     const maxShowAgeMs = 48 * 60 * 60 * 1000; // 48 hours
@@ -604,18 +607,16 @@ export class ShowsService {
   async findCurrentStatusByPark(
     parkId: string,
   ): Promise<Map<string, ShowLiveData>> {
-    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const showData = await this.showLiveDataRepository
-      .createQueryBuilder("sld")
-      .innerJoinAndSelect("sld.show", "linked_show")
-      .leftJoinAndSelect("linked_show.park", "linked_park")
-      .where("linked_show.parkId = :parkId", { parkId })
-      .andWhere("sld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
-      .distinctOn(["sld.showId"])
-      .orderBy("sld.showId", "ASC")
-      .addOrderBy("sld.timestamp", "DESC")
-      .getMany();
+    // Latest record per showId (DISTINCT ON, cutoff for chunk exclusion)
+    const showData = await applyLatestPerEntity(
+      this.showLiveDataRepository
+        .createQueryBuilder("sld")
+        .innerJoinAndSelect("sld.show", "linked_show")
+        .leftJoinAndSelect("linked_show.park", "linked_park")
+        .where("linked_show.parkId = :parkId", { parkId }),
+      "sld",
+      "showId",
+    ).getMany();
 
     const result = new Map<string, ShowLiveData>();
     const now = new Date(); // Use server time for "Today"
@@ -701,55 +702,17 @@ export class ShowsService {
     parkId: string,
     timezone: string,
   ): Promise<Map<string, ShowLiveData>> {
-    // 1. Calculate Start of Day in Park's Timezone
-    // We want 00:00:00 in the park's timezone, converted to UTC
-    const now = new Date();
-    const parkDate = formatInParkTimezone(now, timezone);
-    // Format: YYYY-MM-DD
-
-    // Create Date object (node assumes local time if no Z, but we need to trick it or use a library)
-    // Better strategy: Use the timestamp from DB directly with a string comparison or raw query if needed.
-    // However, TypeORM abstracts this. Let's rely on the fact that we've stored UTC timestamps.
-    // We strictly need the UTC timestamp corresponding to 00:00:00 Park Time.
-
-    // Using simple offset calculation (approximate but robust enough for "today")
-    // Or just use the string comparison logic on the application side if the volume is low.
-    // Best: Use a library like date-fns-tz if available, or Intl.DateTimeFormat (which we used).
-
-    // Let's get the UTC equivalent of "00:00 Park Time"
-    // We can do this by creating a date at 00:00 UTC and adjusting.
-    // But since we already have the YYYY-MM-DD for the park, let's just use that as a broad filter.
-    // Ideally we'd use: timestamp >= StartOfTodayInUTC
-
-    // Simplified: Fetch all Operating data for the last 24h and filter in memory for "today park time"
-    const lookbackHours = 26; // 24h + buffer
-    const lookbackDate = new Date(
-      now.getTime() - lookbackHours * 60 * 60 * 1000,
-    );
-
     const showData = await this.showLiveDataRepository
       .createQueryBuilder("sld")
       .innerJoin("sld.show", "show")
       .where("show.parkId = :parkId", { parkId })
       .andWhere("sld.status = 'OPERATING'")
-      .andWhere("sld.timestamp > :lookbackDate", { lookbackDate })
+      .andWhere("sld.timestamp > :lookbackDate", {
+        lookbackDate: todayLookbackDate(),
+      })
       .orderBy("sld.timestamp", "DESC")
       .getMany();
 
-    const result = new Map<string, ShowLiveData>();
-
-    // Filter for "Today" in Park Time
-    for (const data of showData) {
-      if (!result.has(data.showId)) {
-        // Check if this data point belongs to "today" in the park's timezone
-        const entryDate = formatInParkTimezone(data.timestamp, timezone);
-
-        if (entryDate === parkDate) {
-          result.set(data.showId, data);
-        }
-      }
-    }
-
-    return result;
+    return latestTodayPerEntity(showData, (data) => data.showId, timezone);
   }
 }

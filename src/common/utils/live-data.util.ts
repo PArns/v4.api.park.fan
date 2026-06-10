@@ -3,6 +3,21 @@ import { formatInParkTimezone, getCurrentDateInTimezone } from "./date.util";
 type OperatingHoursEntry = { type: string; startTime: string; endTime: string };
 
 /**
+ * How far back live data (wait times, show times, dining availability) is
+ * considered at all — it is only useful for "today", the window just gives
+ * slack for parks that span midnight.
+ */
+export const LIVE_DATA_CUTOFF_DAYS = 7;
+
+/**
+ * Cutoff timestamp for live-data queries. Bounding every query by this
+ * enables TimescaleDB chunk exclusion on the hypertables.
+ */
+export function liveDataCutoff(): Date {
+  return new Date(Date.now() - LIVE_DATA_CUTOFF_DAYS * 24 * 60 * 60 * 1000);
+}
+
+/**
  * Compares two operating hours arrays for changes.
  * Shared between ShowsService and RestaurantsService.
  *

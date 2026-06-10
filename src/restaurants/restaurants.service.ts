@@ -15,11 +15,16 @@ import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
-import { formatInParkTimezone } from "../common/utils/date.util";
 import {
   hasDateChangedInTimezone,
   hasOperatingHoursChanged,
+  liveDataCutoff,
 } from "../common/utils/live-data.util";
+import {
+  applyLatestPerEntity,
+  latestTodayPerEntity,
+  todayLookbackDate,
+} from "../common/utils/live-data-query.util";
 
 @Injectable()
 export class RestaurantsService {
@@ -364,9 +369,9 @@ export class RestaurantsService {
     // unbounded latest-lookup decompresses every chunk per restaurant → ~14s
     // under load). A restaurant with no data in 7 days is correctly treated as
     // "no previous data" → save the fresh reading.
-    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = liveDataCutoff();
     const latest = await this.restaurantLiveDataRepository.findOne({
-      where: { restaurantId, timestamp: MoreThanOrEqual(liveDataCutoff) },
+      where: { restaurantId, timestamp: MoreThanOrEqual(cutoff) },
       order: { timestamp: "DESC" },
       relations: ["restaurant", "restaurant.park"],
     });
@@ -427,9 +432,9 @@ export class RestaurantsService {
   ): Promise<RestaurantLiveData | null> {
     // 7-day cutoff for chunk exclusion (see shouldSaveDiningAvailability).
     // Live data is only useful for "now", so a restaurant stale >7d returns null.
-    const liveDataCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = liveDataCutoff();
     return this.restaurantLiveDataRepository.findOne({
-      where: { restaurantId, timestamp: MoreThanOrEqual(liveDataCutoff) },
+      where: { restaurantId, timestamp: MoreThanOrEqual(cutoff) },
       relations: ["restaurant", "restaurant.park"],
       order: { timestamp: "DESC" },
     });
@@ -456,19 +461,16 @@ export class RestaurantsService {
       resultMap.set(restaurantId, null);
     }
 
-    // Use DISTINCT ON to get latest record per restaurantId.
-    // 7-day cutoff enables TimescaleDB chunk exclusion (live data is only useful for today).
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const restaurantData = await this.restaurantLiveDataRepository
-      .createQueryBuilder("rld")
-      .innerJoinAndSelect("rld.restaurant", "restaurant")
-      .leftJoinAndSelect("restaurant.park", "park")
-      .where("rld.restaurantId IN (:...restaurantIds)", { restaurantIds })
-      .andWhere("rld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
-      .distinctOn(["rld.restaurantId"])
-      .orderBy("rld.restaurantId", "ASC")
-      .addOrderBy("rld.timestamp", "DESC")
-      .getMany();
+    // Latest record per restaurantId (DISTINCT ON, cutoff for chunk exclusion)
+    const restaurantData = await applyLatestPerEntity(
+      this.restaurantLiveDataRepository
+        .createQueryBuilder("rld")
+        .innerJoinAndSelect("rld.restaurant", "restaurant")
+        .leftJoinAndSelect("restaurant.park", "park")
+        .where("rld.restaurantId IN (:...restaurantIds)", { restaurantIds }),
+      "rld",
+      "restaurantId",
+    ).getMany();
 
     // Map results
     for (const data of restaurantData) {
@@ -519,18 +521,15 @@ export class RestaurantsService {
   async findCurrentStatusByPark(
     parkId: string,
   ): Promise<Map<string, RestaurantLiveData>> {
-    // DISTINCT ON replaces the correlated MAX subquery — much faster on TimescaleDB.
-    // 7-day cutoff enables chunk exclusion (live data is only useful for today).
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const data = await this.restaurantLiveDataRepository
-      .createQueryBuilder("rld")
-      .innerJoin("rld.restaurant", "restaurant")
-      .where("restaurant.parkId = :parkId", { parkId })
-      .andWhere("rld.timestamp >= :cutoff", { cutoff: sevenDaysAgo })
-      .distinctOn(["rld.restaurantId"])
-      .orderBy("rld.restaurantId", "ASC")
-      .addOrderBy("rld.timestamp", "DESC")
-      .getMany();
+    // Latest record per restaurantId (DISTINCT ON, cutoff for chunk exclusion)
+    const data = await applyLatestPerEntity(
+      this.restaurantLiveDataRepository
+        .createQueryBuilder("rld")
+        .innerJoin("rld.restaurant", "restaurant")
+        .where("restaurant.parkId = :parkId", { parkId }),
+      "rld",
+      "restaurantId",
+    ).getMany();
 
     const result = new Map<string, RestaurantLiveData>();
     for (const item of data) {
@@ -549,39 +548,17 @@ export class RestaurantsService {
     parkId: string,
     timezone: string,
   ): Promise<Map<string, RestaurantLiveData>> {
-    // 1. Calculate Start of Day in Park's Timezone
-    const now = new Date();
-    const parkDate = formatInParkTimezone(now, timezone);
-
-    // Simplified: Fetch all Operating data for the last 24h and filter in memory
-    const lookbackHours = 26; // 24h + buffer
-    const lookbackDate = new Date(
-      now.getTime() - lookbackHours * 60 * 60 * 1000,
-    );
-
     const data = await this.restaurantLiveDataRepository
       .createQueryBuilder("rld")
       .innerJoin("rld.restaurant", "restaurant")
       .where("restaurant.parkId = :parkId", { parkId })
       .andWhere("rld.status = 'OPERATING'")
-      .andWhere("rld.timestamp > :lookbackDate", { lookbackDate })
+      .andWhere("rld.timestamp > :lookbackDate", {
+        lookbackDate: todayLookbackDate(),
+      })
       .orderBy("rld.timestamp", "DESC")
       .getMany();
 
-    const result = new Map<string, RestaurantLiveData>();
-
-    // Filter for "Today" in Park Time
-    for (const item of data) {
-      if (!result.has(item.restaurantId)) {
-        // Check if this data point belongs to "today" in the park's timezone
-        const entryDate = formatInParkTimezone(item.timestamp, timezone);
-
-        if (entryDate === parkDate) {
-          result.set(item.restaurantId, item);
-        }
-      }
-    }
-
-    return result;
+    return latestTodayPerEntity(data, (item) => item.restaurantId, timezone);
   }
 }
