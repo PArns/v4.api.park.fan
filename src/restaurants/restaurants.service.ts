@@ -14,7 +14,7 @@ import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper"
 import { ParksService } from "../parks/parks.service";
 import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
-import { normalizeSortDirection } from "../common/utils/query.util";
+import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   hasDateChangedInTimezone,
   hasOperatingHoursChanged,
@@ -237,13 +237,7 @@ export class RestaurantsService {
       queryBuilder.orderBy("restaurant.name", "ASC");
     }
 
-    // Apply pagination
-    const page = filters.page || 1;
-    const limit = filters.limit || 10;
-    queryBuilder.skip((page - 1) * limit).take(limit);
-
-    const [data, total] = await queryBuilder.getManyAndCount();
-    return { data, total };
+    return paginate(queryBuilder, filters.page, filters.limit);
   }
 
   /**

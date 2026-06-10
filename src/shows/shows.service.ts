@@ -11,7 +11,7 @@ import {
   ShowtimeData,
 } from "../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
-import { normalizeSortDirection } from "../common/utils/query.util";
+import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -204,13 +204,7 @@ export class ShowsService {
       queryBuilder.orderBy("show.name", "ASC");
     }
 
-    // Apply pagination
-    const page = filters.page || 1;
-    const limit = filters.limit || 10;
-    queryBuilder.skip((page - 1) * limit).take(limit);
-
-    const [data, total] = await queryBuilder.getManyAndCount();
-    return { data, total };
+    return paginate(queryBuilder, filters.page, filters.limit);
   }
 
   /**
