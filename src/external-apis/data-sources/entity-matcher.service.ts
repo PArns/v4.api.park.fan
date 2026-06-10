@@ -200,7 +200,6 @@ export class EntityMatcherService {
     n1: string = normalizeForMatching(wiki.name),
     n2: string = normalizeForMatching(qt.name),
   ): number {
-
     // HARD CONSTRAINT: Different continents = instant rejection
     // This prevents false matches like Everland (Asia) + Toverland (Europe)
     if (wiki.continent && qt.continent) {
