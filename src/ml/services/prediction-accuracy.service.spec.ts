@@ -11,7 +11,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
  * Coverage for PredictionAccuracyService — drives the
  * /attractions/{id} prediction-quality badge. The service is large
  * (1800+ lines) so this file targets the public surfaces that are
- * user-visible: `calculateAccuracyBadge`, `recordPrediction`'s upsert
+ * user-visible: `calculateAccuracyBadge`, `recordPredictions`' upsert
  * contract, and `getAttractionAccuracyWithBadge`'s 3-layer cache
  * fallback (Redis → pre-aggregated table → raw SQL).
  */
@@ -23,6 +23,15 @@ describe("PredictionAccuracyService", () => {
     findOne: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     query: jest.fn().mockResolvedValue([]),
+    manager: {
+      transaction: jest.fn(
+        (cb: (em: unknown) => Promise<void>): Promise<void> =>
+          cb({
+            query: jest.fn().mockResolvedValue(undefined),
+            getRepository: () => accuracyRepo,
+          }),
+      ),
+    },
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -115,7 +124,7 @@ describe("PredictionAccuracyService", () => {
     });
   });
 
-  describe("recordPrediction — upsert contract", () => {
+  describe("recordPredictions — upsert contract", () => {
     it("upserts on (attractionId, targetTime) — never inserts duplicates", async () => {
       const prediction = {
         attractionId: "a-1",
@@ -127,7 +136,7 @@ describe("PredictionAccuracyService", () => {
         features: { foo: 1 },
       } as unknown as WaitTimePrediction;
 
-      await service.recordPrediction(prediction);
+      await service.recordPredictions([prediction]);
 
       expect(accuracyRepo.upsert).toHaveBeenCalledTimes(1);
       const [, options] = accuracyRepo.upsert.mock.calls[0];

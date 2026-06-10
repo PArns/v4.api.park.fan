@@ -83,7 +83,7 @@ describe("MLService", () => {
 
   // Mock Services
   const mockPredictionAccuracyService = {
-    recordPrediction: jest.fn(),
+    recordPredictions: jest.fn().mockResolvedValue(0),
   };
 
   const mockWeatherService = {
