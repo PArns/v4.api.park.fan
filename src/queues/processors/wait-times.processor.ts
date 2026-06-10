@@ -287,11 +287,10 @@ export class WaitTimesProcessor {
                 }
               }
 
-              // Reverse-Reconciliation: Attraktionen, die seit >24h in keiner
-              // Quelle mehr erscheinen, auf CLOSED setzen. Nur ausführen, wenn
-              // wir tatsächlich Daten aus mind. einer Quelle bekommen haben —
-              // sonst würden bei globalen API-Ausfällen alle Attraktionen
-              // fälschlich geschlossen.
+              // Reverse reconciliation: mark attractions that no source has
+              // reported for >24h as CLOSED. Only run when we actually got
+              // data from at least one source — otherwise a global API outage
+              // would falsely close every attraction.
               if (seenAttractionIds.size > 0) {
                 try {
                   const closed = await this.reconcileMissingAttractions(

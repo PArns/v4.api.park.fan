@@ -290,7 +290,7 @@ export class ParksController {
     }
 
     // Return list of parks with live data
-    return this.mapToResponseWithStatus(parks);
+    return this.parkEnrichmentService.enrichParksWithLiveData(parks);
   }
 
   /**
@@ -325,7 +325,7 @@ export class ParksController {
       throw new NotFoundException(`No parks found in ${country}, ${continent}`);
     }
 
-    return this.mapToResponseWithStatus(parks);
+    return this.parkEnrichmentService.enrichParksWithLiveData(parks);
   }
 
   /**
@@ -364,7 +364,7 @@ export class ParksController {
       );
     }
 
-    return this.mapToResponseWithStatus(parks);
+    return this.parkEnrichmentService.enrichParksWithLiveData(parks);
   }
 
   /**
@@ -1483,15 +1483,5 @@ export class ParksController {
       weather: forecastData.map((w) => WeatherItemDto.fromEntity(w)),
       attribution: OPEN_METEO_ATTRIBUTION,
     };
-  }
-
-  /**
-   * Helper: Map parks to response DTOs with status and analytics
-   * @deprecated Use ParkEnrichmentService.enrichParksWithLiveData instead
-   */
-  private async mapToResponseWithStatus(
-    parks: Park[],
-  ): Promise<ParkResponseDto[]> {
-    return this.parkEnrichmentService.enrichParksWithLiveData(parks);
   }
 }
