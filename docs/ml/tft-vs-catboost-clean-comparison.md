@@ -325,6 +325,57 @@ never overall MAE** (overall is dominated by quiet rides and hides the signal):
 (occupancy hist_exog, more steps, bigger hidden, busy loss-weighting). Guardrail: a lever
 must improve busy/headliner **without** inflating quiet, and beat the naive baseline.
 
+## 6.5 Re-evaluation 2026-06-10 (scheduled ~06-14, run early) — RESULTS
+
+History at re-eval: 167 days total; headliner series median **168 operating-day points**
+(p25 167 — essentially gapless) vs 72 at the original h=30 gate.
+
+**Daily, live matched scoreboard (14d):** TFT now beats CatBoost on EVERY segment, and
+it is not a lead artifact — strict lead-1-only intersection (MAE/bias):
+
+| segment | n | CatBoost | TFT |
+|---|---|---|---|
+| all | 6987 | 11.9 / −4.1 | **8.1 / −0.1** |
+| busy (P90≥40) | 1548 | 27.4 / −25.2 | **16.1 / −7.1** |
+| headliner | 3001 | 17.3 / −9.0 | **11.6 / −0.1** |
+
+**Lead curve (matched same-forecast-date pairs, 17d window):** TFT degrades shallowly
+(ALL 8.2 → 9.3 from lead 1-2 to 10-13; busy headliner 16.1 → 17.1 through lead 9) while
+CatBoost is flat-but-worse everywhere; TFT at lead 10-13 < CatBoost at lead 1-2.
+
+**Horizon backtests** (`backtest_horizon.py`, headliners, studentt, env BT_BASE/BT_H):
+
+| run | lead bucket | ALL | busy≥40 | busy≥70 |
+|---|---|---|---|---|
+| h=45, BASE 04-26 | 31-45 | 15.3 / −3.2 | 20.8 / −11.9 | 31.9 / −25.6 |
+| h=60, BASE 04-11 | 46-60 | 17.6 / +7.5 | 19.2 / +1.0 | 26.8 / −9.2 |
+
+Both beat CatBoost-at-lead-1 on busy by a wide margin (and ≈match it on ALL even at
+lead 46-60, trained on a *thinner* window than production gets). **Decision: NF_HORIZON
+30 → 45 shipped** (+ serving `tftDays` 45). h=60 deferred — passes the gate but the
++7.5 overall bias (April-cutoff training window) wants ~8 months of history; re-test
+~2026-08.
+
+**Intraday re-run (Shanghai, 5 bases, studentt, plain):** busy bias improved with data
+maturity (−20.4 → −14.1) but TFT still loses to persistence on busy≥60 (22.9 vs 19.7
+MAE) and only ties yesterday-same-slot overall (12.1 vs 11.9). **Intraday stays
+CatBoost**; re-run with the next cycle.
+
+**CatBoost daily was ALSO handicapped by a production bug** (found during this re-eval,
+fixed 2026-06-10, see changelog): generate-daily silently failed for ~87/139 live parks
+(bind-param overflow on big-park INSERTs + Timescale decompression abort in the dedupe
+DELETE — a permanent per-park failure loop). The matched scoreboard itself stays valid
+(both models scored on the intersection), but CatBoost's daily *coverage* (44 parks vs
+TFT's 100) and stale-lead tail were symptoms. Expect CatBoost coverage to recover; the
+TFT-vs-CatBoost accuracy gap above is measured at matched lead 1 and stands regardless.
+
+**CatBoost intraday live calibration finding** (prediction_accuracy, 7d): quiet(<30)
+bias **+11.2** (n≈991k, 92% of slots), mid −0.1, busy≥60 −11.3. The q0.8 quantile loss
+buys its busy lift by inflating the dominant quiet bucket — live cost is far higher than
+the training-holdout estimate (+2.7). This is the #1 CatBoost lever: probabilistic /
+multi-quantile serving (e.g. `MultiQuantile:alpha=0.5,0.8` — median for the wait
+display, q0.8 only for the crowd-level signal), measured against the champion gate.
+
 ## 7. What to test next — and when
 
 | # | test | when / trigger | success metric |

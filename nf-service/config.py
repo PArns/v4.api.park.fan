@@ -25,15 +25,16 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    # Forecast horizon (days) = 30: TFT serves the calendar's near-term daily crowd
-    # levels (days 1-30); CatBoost serves day 31-365 + intraday. 30 is a product call
-    # (a month of calendar coverage) traded against data-fit: per-headliner history is
-    # short + gappy (median 72 operating-day points, p25=36), so a window needing ~h
-    # real horizon points trains 79% of series at h=30 vs 93% at h=14. Validated by the
-    # headliner backtest before wiring (accuracy at h=30 must stay close to the h=14
-    # baseline of MAE 11.1). Re-evaluate as history accumulates — the ceiling on h
-    # rises with more seasonal coverage.
-    NF_HORIZON: int = 30
+    # Forecast horizon (days) = 45: TFT serves the calendar's daily crowd levels
+    # (days 1-45); CatBoost serves day 46-365 + intraday. Raised from 30 on
+    # 2026-06-10: per-headliner history matured (median 168 operating-day points vs
+    # 72 at the original gate), and the horizon backtest (backtest_horizon.py,
+    # BASE=2026-04-26 h=45) showed TFT at lead 31-45 (ALL MAE 15.3, busy>=40
+    # 20.8/-11.9) still beats CatBoost at lead 1 (17.3 / 27.7/-25.3). h=60 also
+    # passed (lead 46-60 ALL 17.6, busy 19.2/+1.0) but with +7.5 overall bias from
+    # the thinner training window — revisit 60 when history reaches ~8 months.
+    # Re-evaluate as history accumulates — the ceiling on h rises with coverage.
+    NF_HORIZON: int = 45
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
     NF_INPUT_SIZE: int = 90

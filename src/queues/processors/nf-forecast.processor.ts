@@ -246,7 +246,7 @@ export class NfForecastProcessor {
    * Only predictions CREATED in the last 26h are captured (so forecast_date=today
    * is honest — if generate-daily didn't run today, we snapshot nothing rather than
    * mislabel a stale forecast as lead-1). Horizon capped at +45d to mirror TFT's
-   * 30-day surface and keep the table bounded (CatBoost daily itself spans 365d).
+   * 45-day surface and keep the table bounded (CatBoost daily itself spans 365d).
    * predictedWaitTime is already the per-day MAX over DAILY_PEAK_HOURS (≈ P90 peak).
    */
   private async snapshotCatboostDaily(): Promise<void> {

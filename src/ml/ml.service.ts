@@ -761,7 +761,7 @@ export class MLService {
     }
 
     try {
-      // Serving path: TFT near-term (≤30d headliners) merged over CatBoost long tail,
+      // Serving path: TFT near-term (≤45d headliners) merged over CatBoost long tail,
       // same source as the calendar so the two views' crowd levels agree.
       const response = await this.getServingDailyPredictions(parkId);
 
@@ -802,7 +802,7 @@ export class MLService {
    */
   async getTftDailyPredictions(
     parkId: string,
-    days = 30,
+    days = 45,
   ): Promise<PredictionDto[]> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -867,7 +867,7 @@ export class MLService {
    */
   async getServingDailyPredictions(
     parkId: string,
-    tftDays = 30,
+    tftDays = 45,
   ): Promise<BulkPredictionResponseDto> {
     const base = await this.getParkPredictions(parkId, "daily");
     let tft: PredictionDto[] = [];
@@ -1157,7 +1157,13 @@ export class MLService {
       return entity;
     });
 
-    const savedPredictions = await this.predictionRepository.save(entities);
+    // Chunked: a single multi-row INSERT for a big park (e.g. 60 attractions ×
+    // 365 daily rows × 11 columns) exceeds the Postgres wire-protocol limit of
+    // 65535 bind parameters — the driver then fails with "bind message has N
+    // parameter formats but 0 parameters" and the whole park gets no predictions.
+    const savedPredictions = await this.predictionRepository.save(entities, {
+      chunk: 1000,
+    });
     this.logger.debug(
       `Stored ${savedPredictions.length} predictions in database`,
     );
@@ -1335,14 +1341,27 @@ export class MLService {
     predictionType: "hourly" | "daily",
     cutoffDate: Date,
   ): Promise<number> {
-    const result = await this.predictionRepository
-      .createQueryBuilder()
-      .delete()
-      .where("predictionType = :predictionType", { predictionType })
-      .andWhere("predictedTime < :cutoffDate", { cutoffDate })
-      .execute();
+    // wait_time_predictions is a hypertable partitioned on createdAt with
+    // compression after 14 days; rows this old live in compressed chunks, and a
+    // plain DELETE aborts once it decompresses more than
+    // timescaledb.max_tuples_decompressed_per_dml_transaction (100k) tuples.
+    // Lift the limit locally for this one bounded nightly cleanup.
+    const rows: Array<{ affected: string }> =
+      await this.predictionRepository.manager.transaction(async (em) => {
+        await em.query(
+          `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0`,
+        );
+        return em.query(
+          `WITH del AS (
+             DELETE FROM wait_time_predictions
+             WHERE "predictionType" = $1 AND "predictedTime" < $2
+             RETURNING 1
+           ) SELECT count(*)::text AS affected FROM del`,
+          [predictionType, cutoffDate],
+        );
+      });
 
-    return result.affected || 0;
+    return Number(rows?.[0]?.affected ?? 0);
   }
 
   /**
@@ -1381,6 +1400,17 @@ export class MLService {
       return 0;
     }
 
+    // Scope the delete to chunks the planner can prove are uncompressed: the
+    // hypertable is partitioned on createdAt and compressed after 14 days, but
+    // this predicate only filtered on predictedTime, so the DELETE scanned every
+    // chunk and died with "tuple decompression limit exceeded" on parks whose
+    // stale rows had been compressed — those parks then NEVER got fresh daily
+    // predictions again (the stale rows stayed, failing every night). Rows older
+    // than the window are superseded duplicates; readers pick the freshest
+    // createdAt and the nightly cleanup-old job removes them.
+    const createdAfter = new Date(now);
+    createdAfter.setDate(createdAfter.getDate() - 13);
+
     const result = await this.predictionRepository
       .createQueryBuilder()
       .delete()
@@ -1388,6 +1418,7 @@ export class MLService {
       .andWhere("predictionType = :predictionType", { predictionType })
       .andWhere("predictedTime >= :startTime", { startTime })
       .andWhere("predictedTime <= :endTime", { endTime })
+      .andWhere('"createdAt" >= :createdAfter', { createdAfter })
       .execute();
 
     return result.affected || 0;

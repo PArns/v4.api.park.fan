@@ -6,6 +6,51 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — generate-daily silently failing for ~87 of 139 live parks (2026-06-10)
+
+Live diagnosis (injected one-off `generate-daily` Bull job, watched the logs): two
+independent bugs starved most parks of fresh CatBoost daily predictions — Magic Kingdom
+had none since 2026-04-10, a large cluster (HK Disneyland, Universal Singapore, Kings
+Dominion, …) since ~2026-05-24. Only ~53 parks/night succeeded.
+
+- **`storePredictions` bind-parameter overflow** (`ml.service.ts`): one multi-row INSERT
+  for a big park (60 attractions × 365 days × 11 columns ≈ 240k params) exceeds the
+  Postgres wire-protocol limit of 65535 bind parameters → driver fails with
+  `bind message has N parameter formats but 0 parameters` (N = total mod 65536).
+  Fix: `repository.save(entities, { chunk: 1000 })`.
+- **`deduplicatePredictions` TimescaleDB decompression abort** (`ml.service.ts`): the
+  hypertable is partitioned on `createdAt` (compress_after 14d) but the dedupe DELETE
+  filtered only on `predictedTime`, so it scanned every chunk and died with
+  `tuple decompression limit exceeded` (100k tuples/transaction) on parks whose stale
+  forward rows had been compressed — a permanent failure loop (the stale rows could
+  never be deleted, so every night failed again, before storePredictions even ran).
+  Fix: dedupe scoped to `createdAt >= now() - 13 days` (uncompressed chunks only;
+  compressed-batch min/max metadata on predictedTime+createdAt skips the rest).
+  `deleteOldPredictions` now lifts the limit via
+  `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0` (bounded
+  nightly cleanup; native 90d retention policy exists as well).
+- **One-time remediation executed on the live DB**: 4.46M superseded compressed forward
+  rows purged in 4 batched transactions (~30s total), so the nightly jobs start clean.
+
+### Changed — TFT daily horizon 30 → 45 days (2026-06-10 re-eval)
+
+Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively:
+
+- **Live matched scoreboard (14d, strict lead-1)**: TFT beats CatBoost on every segment —
+  ALL 8.1/−0.1 vs 11.9/−4.1, busy(P90≥40) 16.1/−7.1 vs 27.4/−25.2, headliner 11.6/−0.1
+  vs 17.3/−9.0 (MAE/bias).
+- **Lead degradation is shallow**: TFT MAE 8.2 (lead 1-2) → 9.3 (lead 10-13); TFT at
+  lead 10-13 still beats CatBoost at lead 1-2.
+- **Horizon backtests** (`nf-service/backtest_horizon.py`, headliners): h=45
+  (BASE 2026-04-26) lead 31-45 ALL 15.3/−3.2, busy≥40 20.8/−11.9 — better than CatBoost
+  at lead 1. h=60 (BASE 2026-04-11) lead 46-60 ALL 17.6/+7.5, busy≥40 19.2/+1.0 — also
+  viable, deferred until ~8 months of history (overall bias from the thinner window).
+- Series maturity: headliner median 168 operating-day points (was 72 at the h=30 gate).
+- Changes: `NF_HORIZON=45` (nf-service config), `getTftDailyPredictions`/
+  `getServingDailyPredictions` defaults 30 → 45 (`ml.service.ts`). CatBoost now serves
+  only day 46-365 + intraday. Intraday re-run (Shanghai) confirms TFT still has no busy
+  edge there (busy≥60 22.9/−14.1 vs persistence 19.7/−0.5) — intraday stays CatBoost.
+
 ### Changed — Peak-vs-median crowd level (corrects PR #46)
 
 - **Crowd-level semantic switched again — now peak-vs-median** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `calendar.service.ts`). Baseline is now **P50** (median, "typical wait") instead of P90; current value is **P90 of a short window** (20 min live, P90-of-slot-P90s for calendar days). The previous P90-vs-P90 design (PR #46) was mathematically apples-to-apples but methodologically off: P90 baseline is "an exceptionally busy day in the last 18 months", so most days landed in "very_low" / "low" because they didn't touch that ceiling. Peak-vs-median reads 100% when the current peak matches a typical wait, 150%+ when the queue is materially above typical — matches user intuition. Threshold ladder is unchanged. See [Crowd Levels](analytics/crowd-levels.md) for the full design.
