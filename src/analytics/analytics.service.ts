@@ -5442,6 +5442,9 @@ export class AnalyticsService {
       savings: r.savings,
       rideByMinutesAfterOpen: r.rideByMinutesAfterOpen,
       bestSlotMinutesAfterOpen: r.bestSlotMinutesAfterOpen,
+      bestSlotWait: r.bestSlotWait,
+      endOfDayWorth: r.endOfDayWorth,
+      endOfDaySavings: r.endOfDaySavings,
       byDaytype: r.byDaytype,
       windowDays: r.windowDays,
       sampleDays: r.sampleDays,
@@ -5474,6 +5477,9 @@ export class AnalyticsService {
     savings: number | string;
     rideByMinutesAfterOpen: number;
     bestSlotMinutesAfterOpen: number;
+    bestSlotWait: number | string;
+    endOfDayWorth: boolean;
+    endOfDaySavings: number | string;
     byDaytype: RopeDropStored["byDaytype"];
   }): RopeDropStored {
     return {
@@ -5485,6 +5491,9 @@ export class AnalyticsService {
       savings: Number(r.savings),
       rideByMinutesAfterOpen: r.rideByMinutesAfterOpen,
       bestSlotMinutesAfterOpen: r.bestSlotMinutesAfterOpen,
+      bestSlotWait: Number(r.bestSlotWait),
+      endOfDayWorth: r.endOfDayWorth,
+      endOfDaySavings: Number(r.endOfDaySavings),
       byDaytype: r.byDaytype,
     };
   }

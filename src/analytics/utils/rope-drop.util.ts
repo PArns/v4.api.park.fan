@@ -32,6 +32,18 @@ export interface RopeDropThresholds {
   strengthPeakFloor: number;
   /** strength 'high': savings floor. */
   strengthSavingsFloor: number;
+  /**
+   * Minutes before a day's last recorded slot that are dropped as unreliable.
+   * Parks stop admitting to the queue shortly before closing (e.g. ~17:55 for an
+   * 18:00 close), so the final slots show an artificially draining line — never a
+   * real "come back later" trough. Guarded out of every per-day computation.
+   */
+  closingGuardMinutes: number;
+  /**
+   * Fraction of the (guarded) operating day after which the trough counts as
+   * "end of day". The end-of-day recommendation only fires past this point.
+   */
+  eveningFraction: number;
 }
 
 export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
@@ -42,6 +54,8 @@ export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
   worthSavingsFloor: 45,
   strengthPeakFloor: 90,
   strengthSavingsFloor: 60,
+  closingGuardMinutes: 30,
+  eveningFraction: 0.6,
 };
 
 const BIN_MINUTES = 15;
@@ -56,6 +70,9 @@ export interface RopeDropComputeResult {
   savings: number;
   rideByMinutesAfterOpen: number;
   bestSlotMinutesAfterOpen: number;
+  bestSlotWait: number;
+  endOfDayWorth: boolean;
+  endOfDaySavings: number;
   byDaytype: { weekend: RopeDropDayBucket; weekday: RopeDropDayBucket };
   windowDays: number;
   sampleDays: number;
@@ -68,6 +85,33 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0
     ? (sorted[mid - 1] + sorted[mid]) / 2
     : sorted[mid];
+}
+
+/**
+ * Drop the slots within `guardMinutes` of a day's last recorded slot.
+ *
+ * The tail of the operating day is unreliable: parks stop letting guests into
+ * the queue shortly before closing, so those slots show a draining line rather
+ * than the real demand. Using the last recorded slot as a closing proxy, we
+ * trim that tail so it can never be mistaken for an evening "come back later"
+ * trough. The opening slots (the rope-drop signal) are untouched.
+ */
+function trimClosingTail(
+  day: RopeDropDayInput,
+  guardMinutes: number,
+): RopeDropDayInput {
+  let lastMao = -Infinity;
+  for (const s of day.slots) {
+    if (s.minutesAfterOpen >= 0 && s.minutesAfterOpen > lastMao) {
+      lastMao = s.minutesAfterOpen;
+    }
+  }
+  if (!Number.isFinite(lastMao)) return day;
+  const cutoff = lastMao - guardMinutes;
+  return {
+    ...day,
+    slots: day.slots.filter((s) => s.minutesAfterOpen <= cutoff),
+  };
 }
 
 /** Max P90 across a day's slots (the daily peak). */
@@ -123,10 +167,16 @@ export function computeRopeDrop(
 ): RopeDropComputeResult | null {
   if (days.length === 0) return null;
 
+  // Guard out the unreliable pre-closing tail of every day up front, so it can
+  // never contaminate the shape trough, the levels or the day-length estimate.
+  const guardedDays = days.map((d) =>
+    trimClosingTail(d, thresholds.closingGuardMinutes),
+  );
+
   // --- Shape layer: opening-relative ratio curve, pooled over ALL history ---
   // Accumulate p90/day_peak per 15-min bin (only on meaningful days).
   const ratiosByBin = new Map<number, number[]>();
-  for (const day of days) {
+  for (const day of guardedDays) {
     const peak = dayPeak(day);
     if (peak < thresholds.shapeMinDayPeak) continue;
     for (const s of day.slots) {
@@ -168,7 +218,7 @@ export function computeRopeDrop(
   }
 
   // --- Level layer: absolute minutes on the trailing window ---
-  const windowDays = days.filter((d) => d.date >= windowStart);
+  const windowDays = guardedDays.filter((d) => d.date >= windowStart);
   const weekend = bucketLevels(
     windowDays.filter((d) => d.dow === 0 || d.dow === 6),
   );
@@ -205,6 +255,30 @@ export function computeRopeDrop(
       ? "high"
       : "moderate";
 
+  // Absolute wait at the day's trough (the "come back later" payoff): the pooled
+  // shape ratio at the best slot resolved against the busy-day peak (shape×level,
+  // the same two-layer composition the model uses elsewhere). Capped at openWait
+  // so the trough is never reported as worse than rope-dropping.
+  const bestSlotWait = Math.min(
+    headline.openWait,
+    Math.round(minRatio * headline.busyPeak),
+  );
+
+  // End-of-day verdict: is this ride better saved for late in the day than
+  // rope-dropped? Only when the trough actually falls in the back of the
+  // (closing-guarded) operating day and waiting there beats the busy peak by the
+  // same savings floor rope drop uses. `endOfDaySavings` mirrors `savings` but
+  // measured against the evening trough instead of the opening wait.
+  const dayLength = curve[curve.length - 1].bin;
+  const bestSlotIsEvening =
+    dayLength > 0 &&
+    bestSlotMinutesAfterOpen >= thresholds.eveningFraction * dayLength;
+  const endOfDaySavings = Math.max(0, headline.busyPeak - bestSlotWait);
+  const endOfDayWorth =
+    bestSlotIsEvening &&
+    headline.busyPeak >= thresholds.worthPeakFloor &&
+    endOfDaySavings >= thresholds.worthSavingsFloor;
+
   return {
     worth,
     strength,
@@ -214,6 +288,9 @@ export function computeRopeDrop(
     savings: headline.savings,
     rideByMinutesAfterOpen,
     bestSlotMinutesAfterOpen,
+    bestSlotWait,
+    endOfDayWorth,
+    endOfDaySavings,
     byDaytype: { weekend, weekday },
     windowDays: thresholds.windowDays,
     sampleDays,

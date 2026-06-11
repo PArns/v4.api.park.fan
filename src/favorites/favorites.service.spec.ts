@@ -64,6 +64,7 @@ describe("FavoritesService", () => {
     getAttractionSparklinesBatch: jest.fn().mockResolvedValue(new Map()),
     getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
     getLoadRating: jest.fn().mockReturnValue({ rating: "moderate" }),
+    getRopeDropForPark: jest.fn().mockResolvedValue(new Map()),
   };
   const mlService = {
     getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
@@ -182,6 +183,76 @@ describe("FavoritesService", () => {
       expect(attractionRepo.find).not.toHaveBeenCalled();
       expect(showRepo.find).not.toHaveBeenCalled();
       expect(restaurantRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Rope-drop enrichment", () => {
+    const validAttractionUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    it("attaches the ropeDrop recommendation on the attraction slow path", async () => {
+      // Attraction integrated cache misses (empty Redis) → slow path build.
+      attractionRepo.find.mockResolvedValueOnce([
+        {
+          id: validAttractionUuid,
+          name: "Seven Dwarfs Mine Train",
+          slug: "seven-dwarfs-mine-train",
+          parkId: validParkUuid,
+          latitude: null,
+          longitude: null,
+          park: {
+            id: validParkUuid,
+            name: "Magic Kingdom",
+            slug: "magic-kingdom",
+            timezone: "America/New_York",
+          },
+        },
+      ]);
+
+      // Today's opening time so the UTC instants resolve.
+      const opening = new Date("2026-06-11T13:00:00.000Z"); // 09:00 local EDT
+      parksService.getBatchSchedules.mockResolvedValueOnce({
+        today: new Map([[validParkUuid, [{ openingTime: opening }]]]),
+        next: new Map(),
+      });
+
+      const stored = {
+        worth: true,
+        strength: "high" as const,
+        confidence: "high" as const,
+        busyPeak: 95,
+        openWait: 20,
+        savings: 75,
+        rideByMinutesAfterOpen: 30,
+        bestSlotMinutesAfterOpen: 600,
+        bestSlotWait: 25,
+        endOfDayWorth: true,
+        endOfDaySavings: 70,
+        byDaytype: {
+          weekend: { openWait: 20, busyPeak: 95, savings: 75 },
+          weekday: { openWait: 15, busyPeak: 80, savings: 65 },
+        },
+      };
+      analyticsService.getRopeDropForPark.mockResolvedValueOnce(
+        new Map([[validAttractionUuid, stored]]),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      expect(analyticsService.getRopeDropForPark).toHaveBeenCalledWith(
+        validParkUuid,
+      );
+      const attraction = result.attractions[0];
+      expect(attraction.ropeDrop).toBeDefined();
+      expect(attraction.ropeDrop?.worth).toBe(true);
+      expect(attraction.ropeDrop?.savings).toBe(75);
+      // UTC instants resolved against today's opening (opening + offsets).
+      expect(attraction.ropeDrop?.rideByUtc).toBe("2026-06-11T13:30:00.000Z");
+      expect(attraction.ropeDrop?.bestSlotUtc).toBe("2026-06-11T23:00:00.000Z");
     });
   });
 
