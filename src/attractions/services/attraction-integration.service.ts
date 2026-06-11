@@ -467,6 +467,7 @@ export class AttractionIntegrationService {
           dto.ropeDrop = buildRopeDropInfo(
             ropeDropStored,
             rdTodayEntry?.openingTime ?? null,
+            rdTodayEntry?.closingTime ?? null,
           );
         }
 

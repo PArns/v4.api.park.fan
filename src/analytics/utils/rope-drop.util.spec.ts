@@ -221,4 +221,58 @@ describe("computeRopeDrop", () => {
     const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
     expect(r.windowDays).toBe(DEFAULT_ROPE_DROP_THRESHOLDS.windowDays);
   });
+
+  it("ignores low-support bins from rare extended-hours days", () => {
+    // 20 regular days (busyDay: ~510-min day, genuine trough at 510) plus 2
+    // extended-hours days whose deep-evening slots (810/825/840) only exist on
+    // those long days. Without the support floor the 810 bin (ratio 0.05) would
+    // win the trough — and "810 min after open" resolved against a regular
+    // day's opening lands hours past closing (the 23:45-on-a-21:00-close bug).
+    const longDay = (date: string, dow: number): RopeDropDayInput => ({
+      date,
+      dow,
+      slots: [
+        { minutesAfterOpen: 0, p90: 30 },
+        { minutesAfterOpen: 30, p90: 120 },
+        { minutesAfterOpen: 300, p90: 50 },
+        { minutesAfterOpen: 810, p90: 6 },
+        { minutesAfterOpen: 825, p90: 8 },
+        { minutesAfterOpen: 840, p90: 10 }, // last slot; 810 survives the closing guard
+      ],
+    });
+    const r = computeRopeDrop(
+      [...days(busyDay, 6, 20), ...days(longDay, 0, 2, "04")],
+      WINDOW_START,
+    )!;
+    // The trough stays on the typical day's curve, not the rare long-day tail.
+    expect(r.bestSlotMinutesAfterOpen).toBe(510);
+  });
+
+  it("falls back to all bins when no bin reaches the support floor", () => {
+    // Two days with disjoint slots — every bin has support 1 of 2 (< 50%...
+    // exactly at ceil(2*0.5)=1, so use three days with disjoint bins instead).
+    const dayAt = (
+      date: string,
+      dow: number,
+      offsets: number[],
+    ): RopeDropDayInput => ({
+      date,
+      dow,
+      slots: offsets.map((m, i) => ({
+        minutesAfterOpen: m,
+        p90: i === 0 ? 30 : 60,
+      })),
+    });
+    // 3 shape days, every bin supported by exactly 1 day (< ceil(3*0.5)=2) →
+    // the floor would empty the curve; the fallback keeps a recommendation.
+    const r = computeRopeDrop(
+      [
+        dayAt("2026-05-01", 6, [0, 60]),
+        dayAt("2026-05-02", 6, [120, 180]),
+        dayAt("2026-05-03", 6, [240, 300]),
+      ],
+      WINDOW_START,
+    );
+    expect(r).not.toBeNull();
+  });
 });

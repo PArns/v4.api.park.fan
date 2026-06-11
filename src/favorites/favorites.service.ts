@@ -711,15 +711,23 @@ export class FavoritesService {
             .get(attraction.parkId)
             ?.get(attraction.id);
           if (ropeDropStored) {
-            const opening = (
-              schedulesForBest.today.get(attraction.parkId) || []
-            ).find((e) => e.openingTime != null)?.openingTime;
-            const openingIso = opening
-              ? opening instanceof Date
-                ? opening.toISOString()
-                : String(opening)
-              : null;
-            dto.ropeDrop = buildRopeDropInfo(ropeDropStored, openingIso);
+            const todayEntries =
+              schedulesForBest.today.get(attraction.parkId) || [];
+            const opening = todayEntries.find(
+              (e) => e.openingTime != null,
+            )?.openingTime;
+            const closing = todayEntries.find(
+              (e) => e.closingTime != null,
+            )?.closingTime;
+            const toIso = (
+              v: Date | string | null | undefined,
+            ): string | null =>
+              v ? (v instanceof Date ? v.toISOString() : String(v)) : null;
+            dto.ropeDrop = buildRopeDropInfo(
+              ropeDropStored,
+              toIso(opening),
+              toIso(closing),
+            );
           }
         }
         if (attraction.park) {
