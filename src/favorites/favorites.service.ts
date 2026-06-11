@@ -19,6 +19,8 @@ import { PopularityService } from "../popularity/popularity.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionDto } from "../ml/dto";
 import { computeBestVisitTimes } from "../common/utils/best-visit-times.util";
+import { buildRopeDropInfo } from "../common/utils/rope-drop-info.util";
+import { RopeDropStored } from "../common/types/rope-drop.type";
 import { formatInParkTimezone } from "../common/utils/date.util";
 import {
   FavoritesResponseDto,
@@ -617,6 +619,7 @@ export class FavoritesService {
         p50Map,
         schedulesForBest,
         parkPredEntries,
+        ropeDropParkEntries,
       ] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
         this.analyticsService.getAttractionSparklinesBatch(sparkInput),
@@ -630,8 +633,20 @@ export class FavoritesService {
               .catch(() => [pid, [] as PredictionDto[]] as const),
           ),
         ),
+        // Rope-drop recommendations, one DB read per park (no N+1 per ride).
+        Promise.all(
+          missedParkIds.map((pid) =>
+            this.analyticsService
+              .getRopeDropForPark(pid)
+              .then((m) => [pid, m] as const)
+              .catch(() => [pid, new Map<string, RopeDropStored>()] as const),
+          ),
+        ),
       ]);
       const predsByPark = new Map<string, PredictionDto[]>(parkPredEntries);
+      const ropeDropByPark = new Map<string, Map<string, RopeDropStored>>(
+        ropeDropParkEntries,
+      );
       const nowIso = new Date().toISOString();
       for (const attraction of missedAttractions) {
         const dto = AttractionResponseDto.fromEntity(attraction);
@@ -688,6 +703,24 @@ export class FavoritesService {
             todayAttrPreds,
             closing ? closing.toISOString() : null,
           );
+        }
+        // Rope-drop recommendation (headliners only). UTC instants resolved
+        // against today's opening; offsets carry the truth when it's null.
+        if (attraction.parkId) {
+          const ropeDropStored = ropeDropByPark
+            .get(attraction.parkId)
+            ?.get(attraction.id);
+          if (ropeDropStored) {
+            const opening = (
+              schedulesForBest.today.get(attraction.parkId) || []
+            ).find((e) => e.openingTime != null)?.openingTime;
+            const openingIso = opening
+              ? opening instanceof Date
+                ? opening.toISOString()
+                : String(opening)
+              : null;
+            dto.ropeDrop = buildRopeDropInfo(ropeDropStored, openingIso);
+          }
         }
         if (attraction.park) {
           dto.url = buildAttractionUrl(attraction.park, attraction) || null;

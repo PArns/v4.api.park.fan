@@ -52,6 +52,23 @@ export interface RopeDropStored {
   rideByMinutesAfterOpen: number;
   /** Minutes after opening of the day's absolute lowest wait (often the evening). */
   bestSlotMinutesAfterOpen: number;
+  /**
+   * Expected wait (minutes) at that trough — the payoff for coming back later
+   * instead of rope-dropping. The pooled shape ratio at the best slot resolved
+   * against the busy-day peak, capped at `openWait`.
+   */
+  bestSlotWait: number;
+
+  // End-of-day verdict (the evening counterpart to rope drop).
+  /**
+   * Whether this ride is better saved for late in the day than rope-dropped:
+   * the trough falls in the back of the operating day and waiting there beats
+   * the busy peak by the savings floor. Pre-closing slots are excluded, so this
+   * never fires on the artificial near-closing line drain.
+   */
+  endOfDayWorth: boolean;
+  /** busyPeak − bestSlotWait — minutes saved by visiting at the evening trough. */
+  endOfDaySavings: number;
 
   /** Level breakdown by day type. */
   byDaytype: {

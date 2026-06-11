@@ -5,8 +5,10 @@ import {
 } from "./rope-drop.util";
 
 /**
- * A "busy" rope-drop day: opening wait 30, midday peak 120, evening trough 10.
- * Ratio curve: bin0=0.25, bin15=0.50, bin30=1.0, bin45=1.0, bin600=0.083.
+ * A "busy" rope-drop day: opening wait 30, midday peak 120, a genuine evening
+ * trough at 510 (wait 20), then a closing drain at 540 (wait 3) that the closing
+ * guard must discard. Ratio curve (pre-guard): bin0=0.25, bin15=0.50, bin30=1.0,
+ * bin45=1.0, bin300=0.417, bin480=0.208, bin510=0.167, bin540=0.025.
  */
 function busyDay(date: string, dow: number): RopeDropDayInput {
   return {
@@ -17,7 +19,10 @@ function busyDay(date: string, dow: number): RopeDropDayInput {
       { minutesAfterOpen: 15, p90: 60 },
       { minutesAfterOpen: 30, p90: 120 },
       { minutesAfterOpen: 45, p90: 120 },
-      { minutesAfterOpen: 600, p90: 10 },
+      { minutesAfterOpen: 300, p90: 50 },
+      { minutesAfterOpen: 480, p90: 25 },
+      { minutesAfterOpen: 510, p90: 20 }, // genuine evening trough
+      { minutesAfterOpen: 540, p90: 3 }, // closing drain — must be guarded out
     ],
   };
 }
@@ -30,7 +35,8 @@ function quietDay(date: string, dow: number): RopeDropDayInput {
     slots: [
       { minutesAfterOpen: 0, p90: 10 },
       { minutesAfterOpen: 30, p90: 30 },
-      { minutesAfterOpen: 600, p90: 5 },
+      { minutesAfterOpen: 300, p90: 15 },
+      { minutesAfterOpen: 330, p90: 5 },
     ],
   };
 }
@@ -77,8 +83,44 @@ describe("computeRopeDrop", () => {
 
   it("picks the absolute best slot (evening) by minimum ratio", () => {
     const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
-    // Evening trough (600) has the lowest ratio (0.083), below the open bin (0.25).
-    expect(r.bestSlotMinutesAfterOpen).toBe(600);
+    // Genuine evening trough at 510 (ratio 0.167) wins — the 540 closing-drain
+    // slot (ratio 0.025) is guarded out, so it can't steal the trough.
+    expect(r.bestSlotMinutesAfterOpen).toBe(510);
+  });
+
+  it("guards out the pre-closing drain so it is never the trough", () => {
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    // The 540 drain (wait 3) is within the closing guard of the last slot.
+    expect(r.bestSlotMinutesAfterOpen).not.toBe(540);
+    // The reported trough wait reflects the genuine evening low (~20), not ~3.
+    expect(r.bestSlotWait).toBe(20);
+    expect(r.bestSlotWait).toBeLessThanOrEqual(r.openWait);
+  });
+
+  it("flags a busy ride with a real evening trough as end-of-day worth", () => {
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    // Trough at 510 is past 60% of the guarded day (510) → counts as end-of-day,
+    // and busyPeak − bestSlotWait = 100 clears the savings floor.
+    expect(r.endOfDayWorth).toBe(true);
+    expect(r.endOfDaySavings).toBe(r.busyPeak - r.bestSlotWait);
+  });
+
+  it("does not flag end-of-day when the trough is in the morning", () => {
+    // Open IS the trough; busy all afternoon, no evening low.
+    const morningTrough = (date: string, dow: number): RopeDropDayInput => ({
+      date,
+      dow,
+      slots: [
+        { minutesAfterOpen: 0, p90: 20 },
+        { minutesAfterOpen: 60, p90: 120 },
+        { minutesAfterOpen: 300, p90: 110 },
+        { minutesAfterOpen: 480, p90: 100 },
+        { minutesAfterOpen: 510, p90: 90 },
+      ],
+    });
+    const r = computeRopeDrop(days(morningTrough, 6, 20), WINDOW_START)!;
+    expect(r.bestSlotMinutesAfterOpen).toBe(0); // trough is at open
+    expect(r.endOfDayWorth).toBe(false);
   });
 
   it("still flags an always-busy flagship ride (high open, big savings)", () => {

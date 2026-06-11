@@ -75,6 +75,17 @@ export class AttractionRopeDrop {
   @Column({ type: "int" })
   bestSlotMinutesAfterOpen: number;
 
+  // Absolute wait (minutes) at the trough — the "come back later" payoff.
+  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
+  bestSlotWait: number;
+
+  // End-of-day verdict (evening counterpart to rope drop).
+  @Column({ type: "boolean", default: false })
+  endOfDayWorth: boolean;
+
+  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
+  endOfDaySavings: number;
+
   // Level breakdown by day type.
   @Column({ type: "jsonb" })
   byDaytype: {
