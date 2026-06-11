@@ -44,6 +44,16 @@ export interface RopeDropThresholds {
    * "end of day". The end-of-day recommendation only fires past this point.
    */
   eveningFraction: number;
+  /**
+   * Minimum share of shape-contributing days a 15-min bin must cover to enter
+   * the shape curve. Parks vary their hours through the year (e.g. summer
+   * 08:00–22:00 vs. regular 10:00–18:00), so the far bins only exist on the
+   * long days. Without this floor those rare-day bins can win the trough and
+   * the offset then resolves PAST closing on a regular day (e.g. "best slot
+   * 825 min after open" → 23:45 for a 10:00–21:00 day). The floor keeps the
+   * curve describing the typical operating day.
+   */
+  shapeBinMinSupport: number;
 }
 
 export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
@@ -56,6 +66,7 @@ export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
   strengthSavingsFloor: 60,
   closingGuardMinutes: 30,
   eveningFraction: 0.6,
+  shapeBinMinSupport: 0.5,
 };
 
 const BIN_MINUTES = 15;
@@ -176,9 +187,11 @@ export function computeRopeDrop(
   // --- Shape layer: opening-relative ratio curve, pooled over ALL history ---
   // Accumulate p90/day_peak per 15-min bin (only on meaningful days).
   const ratiosByBin = new Map<number, number[]>();
+  let shapeDayCount = 0;
   for (const day of guardedDays) {
     const peak = dayPeak(day);
     if (peak < thresholds.shapeMinDayPeak) continue;
+    shapeDayCount++;
     for (const s of day.slots) {
       if (s.minutesAfterOpen < 0) continue;
       const binStart =
@@ -192,7 +205,22 @@ export function computeRopeDrop(
 
   if (ratiosByBin.size === 0) return null;
 
-  const bins = Array.from(ratiosByBin.keys()).sort((a, b) => a - b);
+  // Keep only bins present on a meaningful share of shape days (each day
+  // contributes at most ~one slot per 15-min bin, so sample count ≈ day
+  // support). Bins past the typical closing exist only on extended-hours days
+  // and would otherwise resolve to instants after a regular day's close.
+  const minSupport = Math.max(
+    1,
+    Math.ceil(shapeDayCount * thresholds.shapeBinMinSupport),
+  );
+  let bins = Array.from(ratiosByBin.keys())
+    .filter((bin) => ratiosByBin.get(bin)!.length >= minSupport)
+    .sort((a, b) => a - b);
+  if (bins.length === 0) {
+    // Degenerate data (no bin reaches the floor) — fall back to everything
+    // rather than dropping the recommendation outright.
+    bins = Array.from(ratiosByBin.keys()).sort((a, b) => a - b);
+  }
   const curve = bins.map((bin) => ({
     bin,
     ratio: median(ratiosByBin.get(bin)!),

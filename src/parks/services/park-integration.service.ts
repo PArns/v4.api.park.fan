@@ -512,11 +512,17 @@ export class ParkIntegrationService {
         this.analyticsService.getRopeDropForPark(park.id),
       ]);
 
-      // Resolve rope-drop UTC instants against today's opening (single value).
+      // Resolve rope-drop UTC instants against today's opening (single value);
+      // closing clamps offsets from longer historical days into today's hours.
       const ropeDropOpeningIso = todaySchedule?.openingTime
         ? todaySchedule.openingTime instanceof Date
           ? todaySchedule.openingTime.toISOString()
           : String(todaySchedule.openingTime)
+        : null;
+      const ropeDropClosingIso = todaySchedule?.closingTime
+        ? todaySchedule.closingTime instanceof Date
+          ? todaySchedule.closingTime.toISOString()
+          : String(todaySchedule.closingTime)
         : null;
       const ropeDropHeadliners: ParkWithAttractionsDto["ropeDropHeadliners"] =
         [];
@@ -783,6 +789,7 @@ export class ParkIntegrationService {
           attraction.ropeDrop = buildRopeDropInfo(
             ropeDropStored,
             ropeDropOpeningIso,
+            ropeDropClosingIso,
           );
           if (ropeDropStored.worth && ropeDropStored.strength) {
             ropeDropHeadliners.push({
