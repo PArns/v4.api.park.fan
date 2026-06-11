@@ -246,9 +246,16 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         return 0;
       }
 
+      // Serial (batch 1) with a 2.5s pause: a single force-refreshed park build is
+      // already heavy (5 months of per-ride-day CTEs over queue_data + a cold daily
+      // ML call), and two of them in parallel saturated disk IO — every concurrent
+      // query stalled uniformly for 24-48s in the 08:00/20:00 warmup windows
+      // (slow-query log 2026-06-11). Serializing halves the peak IO pressure and
+      // the pause lets queued user queries drain between parks; the only cost is
+      // wall time on a 2×/day background job.
       const warmedCount = await this.processBatch(
         parkIds,
-        2,
+        1,
         "CalendarWarmup",
         async ({ id }) => {
           const park = await this.parkRepository.findOne({
@@ -259,6 +266,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
           await this.warmupCalendarForPark(park, true);
           return true;
         },
+        2500,
       );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);

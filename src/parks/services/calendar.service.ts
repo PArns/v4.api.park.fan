@@ -174,7 +174,7 @@ export class CalendarService {
           );
           return [];
         }),
-      // Serving path: TFT for the near-term (≤30d headliners), CatBoost for the
+      // Serving path: TFT for the near-term (≤45d headliners), CatBoost for the
       // long tail. Calendar + yearly share this so their crowd levels agree.
       this.mlService.getServingDailyPredictions(park.id).catch((err) => {
         this.logger.warn(
