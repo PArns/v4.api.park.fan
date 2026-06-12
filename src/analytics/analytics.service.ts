@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
+import { safeJsonParse } from "../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -277,7 +279,7 @@ export class AnalyticsService {
     }
 
     // Try to fetch from Redis first (cache-first strategy)
-    const cacheKeys = parkIds.map((id) => `park:occupancy:${id}`);
+    const cacheKeys = parkIds.map((id) => CacheKeys.parkOccupancy(id));
     const cachedValues = await this.redis.mget(...cacheKeys);
 
     for (let i = 0; i < parkIds.length; i++) {
@@ -295,22 +297,33 @@ export class AnalyticsService {
     }
 
     // For parks not in cache, calculate on-demand using EXISTING function
-    // This is rare if warmup works, but provides accurate fallback
+    // This is rare if warmup works, but provides accurate fallback.
+    // Chunks of 5 in parallel: each calculateParkOccupancy fires several
+    // heavy queue_data queries, so unbounded parallelism over a cold list
+    // would saturate the DB (same reasoning as the warmup batch size),
+    // while the old one-at-a-time loop made a cold country listing linear
+    // in park count on the request path.
     const missingParkIds = parkIds.filter((id) => !resultMap.has(id));
     if (missingParkIds.length > 0) {
       this.logger.verbose(
         `Computing occupancy for ${missingParkIds.length} parks (cache miss)`,
       );
-      for (const parkId of missingParkIds) {
-        try {
-          const occupancy = await this.calculateParkOccupancy(parkId);
-          resultMap.set(parkId, occupancy);
-        } catch (error) {
-          this.logger.warn(
-            `Failed to calculate occupancy for ${parkId}`,
-            error,
-          );
-        }
+      const CHUNK_SIZE = 5;
+      for (let i = 0; i < missingParkIds.length; i += CHUNK_SIZE) {
+        const chunk = missingParkIds.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (parkId) => {
+            try {
+              const occupancy = await this.calculateParkOccupancy(parkId);
+              resultMap.set(parkId, occupancy);
+            } catch (error) {
+              this.logger.warn(
+                `Failed to calculate occupancy for ${parkId}`,
+                error,
+              );
+            }
+          }),
+        );
       }
     }
 
@@ -1210,11 +1223,13 @@ export class AnalyticsService {
     }
     const startOfDay = resolvedStartTime;
 
-    // Try cache first
+    // Try cache first (safeJsonParse: corrupt entry = miss, rebuild below)
     const cacheKey = `park:statistics:${parkId}`;
-    const cached = await this.redis.get(cacheKey);
+    const cached = safeJsonParse<ParkStatisticsDto>(
+      await this.redis.get(cacheKey),
+    );
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
 
     // OPTIMIZATION: Use ParkDailyStats for "avg_wait_today" and "max_wait_today"
@@ -1452,7 +1467,10 @@ export class AnalyticsService {
       ? Math.max(0, totalAttractions - explicitlyClosedCount)
       : 0;
 
-    // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly)
+    // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly).
+    // NOTE: `park:typical-peak:` (with hyphen) holds the typical peak HOUR
+    // ("HH:00" string) — distinct from `park:typicalpeak:` (no hyphen) in
+    // cacheTypicalDayPeak, which holds the typical-day peak WAIT (number).
     const typicalPeakKey = `park:typical-peak:${parkId}`;
     let typicalPeakHour = await this.redis.get(typicalPeakKey);
 
@@ -2252,14 +2270,18 @@ export class AnalyticsService {
     // computeTrend is always run live because it depends on currentSpotWait which
     // varies per caller and must not bleed between cached results.
     const bucketCacheKey = `analytics:trend:buckets:${attractionId}:${queueType}`;
-    const cachedBuckets = await this.redis.get(bucketCacheKey);
+    const cachedBuckets = safeJsonParse<{
+      avgLastHour: number | null;
+      avgTwoToOne: number | null;
+      avgThreeToTwo: number | null;
+    }>(await this.redis.get(bucketCacheKey));
 
     let avgLastHour: number | null;
     let avgTwoToOne: number | null;
     let avgThreeToTwo: number | null;
 
     if (cachedBuckets) {
-      ({ avgLastHour, avgTwoToOne, avgThreeToTwo } = JSON.parse(cachedBuckets));
+      ({ avgLastHour, avgTwoToOne, avgThreeToTwo } = cachedBuckets);
     } else {
       const now = new Date();
       const threeHoursAgo = new Date(now.getTime() - 180 * 60 * 1000);
@@ -4317,6 +4339,10 @@ export class AnalyticsService {
    * recomputed by the daily cron). 2-day TTL so a single missed cron run
    * still leaves a usable value; callers fall back to the P90 baseline when
    * it's absent.
+   *
+   * NOTE: `park:typicalpeak:` (no hyphen) holds the typical-day peak WAIT
+   * (number) — distinct from `park:typical-peak:` (with hyphen) in
+   * getParkStatistics, which holds the typical peak HOUR ("HH:00" string).
    */
   async cacheTypicalDayPeak(parkId: string, value: number): Promise<void> {
     if (value > 0) {

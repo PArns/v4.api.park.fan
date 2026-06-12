@@ -175,9 +175,4 @@ export class StatsService {
     const index = Math.ceil(sorted.length * percentile) - 1;
     return sorted[Math.max(0, index)];
   }
-
-  /** @deprecated Use calculatePercentile(waitTimes, 0.9) */
-  private calculateP90(waitTimes: number[]): number {
-    return this.calculatePercentile(waitTimes, 0.9);
-  }
 }

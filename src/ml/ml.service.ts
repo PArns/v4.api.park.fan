@@ -754,10 +754,12 @@ export class MLService {
     // Separate cache key for yearly predictions (timezone-aware)
     const today = getCurrentDateInTimezone(park.timezone);
     const cacheKey = CacheKeys.mlParkPredictions(parkId, "yearly", today);
-    const cached = await this.redis.get(cacheKey);
+    const cached = safeJsonParse<BulkPredictionResponseDto>(
+      await this.redis.get(cacheKey),
+    );
 
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
 
     try {

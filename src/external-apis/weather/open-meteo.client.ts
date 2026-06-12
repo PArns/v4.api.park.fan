@@ -321,8 +321,12 @@ export class OpenMeteoClient {
     longitude: number,
     forecastDays: number = 2, // Default to 2 days (48h) enough for hourly prediction
   ): Promise<HourlyWeatherResponse> {
-    // Check cache first
-    const cacheKey = `weather:hourly:${latitude}:${longitude}`; // Simple key
+    // Round to 2 decimal places (~1km precision) like getDailyWeather/getNowcast,
+    // so parks sharing coordinates dedupe; forecastDays is part of the key so a
+    // caller asking for a longer horizon never gets a shorter cached one.
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    const cacheKey = `weather:hourly:${latR}:${lonR}:${forecastDays}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) {

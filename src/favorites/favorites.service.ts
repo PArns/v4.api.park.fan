@@ -439,7 +439,7 @@ export class FavoritesService {
       const [statusMap, occupancyMap, schedules, statisticsMap] =
         await Promise.all([
           this.parksService.getBatchParkStatus(missedIds),
-          this.analyticsService["getBatchParkOccupancy"](missedIds),
+          this.analyticsService.getBatchParkOccupancy(missedIds),
           this.parksService.getBatchSchedules(missedIds),
           this.analyticsService.getBatchParkStatistics(missedIds, context),
         ]);

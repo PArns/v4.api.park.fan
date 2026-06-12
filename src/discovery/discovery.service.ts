@@ -1,4 +1,5 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -19,6 +20,17 @@ import {
   ParkReferenceDto,
 } from "./dto/geo-structure.dto";
 import { ParksService } from "../parks/parks.service";
+import { safeJsonParse } from "../common/utils/json.util";
+
+/** Live per-park stats shared by the geo structure and country summaries. */
+interface ParkLiveStats {
+  isOpen: boolean;
+  avgWait: number;
+  operatingAttractions: number;
+  explicitlyClosedCount: number;
+  totalAttractions: number;
+  crowdLevel: number | null;
+}
 
 /**
  * Discovery Service
@@ -53,11 +65,13 @@ export class DiscoveryService {
    * @returns Complete geo structure
    */
   async getGeoStructure(): Promise<GeoStructureDto> {
-    // Try cache first
-    const cached = await this.redis.get(this.CACHE_KEY);
+    // Try cache first (safeJsonParse: corrupt entry = miss, rebuild below)
+    const cached = safeJsonParse<GeoStructureDto>(
+      await this.redis.get(this.CACHE_KEY),
+    );
     if (cached) {
       this.logger.debug("Returning cached geo structure");
-      return this.hydrateStructure(JSON.parse(cached));
+      return this.hydrateStructure(cached);
     }
 
     this.logger.log("Building geo structure from database");
@@ -410,23 +424,13 @@ export class DiscoveryService {
    *
    * @returns Map of Park ID -> Stats
    */
-  private async getLiveStats(): Promise<
-    Map<
-      string,
-      {
-        isOpen: boolean;
-        avgWait: number;
-        operatingAttractions: number;
-        explicitlyClosedCount: number;
-        totalAttractions: number;
-        crowdLevel: number | null;
-      }
-    >
-  > {
-    const cached = await this.redis.get(this.LIVE_STATS_CACHE_KEY);
+  private async getLiveStats(): Promise<Map<string, ParkLiveStats>> {
+    const cached = safeJsonParse<[string, ParkLiveStats][]>(
+      await this.redis.get(this.LIVE_STATS_CACHE_KEY),
+    );
     if (cached) {
       this.logger.debug("Returning cached live stats");
-      return new Map(JSON.parse(cached));
+      return new Map(cached);
     }
 
     this.logger.log("Fetching live park statistics");
@@ -501,17 +505,7 @@ export class DiscoveryService {
       LEFT JOIN park_stats stats ON stats."parkId" = p.id
     `);
 
-    const stats = new Map<
-      string,
-      {
-        isOpen: boolean;
-        avgWait: number;
-        operatingAttractions: number;
-        explicitlyClosedCount: number;
-        totalAttractions: number;
-        crowdLevel: number | null;
-      }
-    >();
+    const stats = new Map<string, ParkLiveStats>();
     for (const row of result) {
       stats.set(row.id, {
         isOpen: row.is_open,
@@ -528,7 +522,7 @@ export class DiscoveryService {
     // One MGET regardless of park count; ignored entries stay null.
     const parkIds = Array.from(stats.keys());
     if (parkIds.length > 0) {
-      const keys = parkIds.map((id) => `park:occupancy:${id}`);
+      const keys = parkIds.map((id) => CacheKeys.parkOccupancy(id));
       const cached = await this.redis.mget(...keys);
       parkIds.forEach((id, i) => {
         const raw = cached[i];
@@ -580,8 +574,10 @@ export class DiscoveryService {
     countrySlug: string,
   ): Promise<CountrySummaryDto | null> {
     const cacheKey = `discovery:country-summary:v1:${continentSlug}:${countrySlug}`;
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached) as CountrySummaryDto;
+    const cached = safeJsonParse<CountrySummaryDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
 
     const parks = await this.parkRepository.find({
       where: { continentSlug, countrySlug },

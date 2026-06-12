@@ -43,6 +43,20 @@ export const CacheKeys = {
   /** MIN/MAX operating date range per park. */
   parkOpDateRange: (parkId: string): string => `park:opdaterange:${parkId}`,
 
+  /**
+   * Live park occupancy snapshot (written by cache-warmup every 5 min;
+   * read by analytics, calendar, discovery).
+   */
+  parkOccupancy: (parkId: string): string => `park:occupancy:${parkId}`,
+
+  /**
+   * One cached calendar month (ym = YYYY-MM). Written/read by the calendar
+   * service; evicted by the 12h calendar warmup (includeHourly variant the
+   * frontend reads is "none").
+   */
+  calendarMonth: (parkId: string, ym: string, includeHourly: string): string =>
+    `calendar:month:${parkId}:${ym}:${includeHourly}`,
+
   /** Glob matching every schedule:* key of a park (parkId is the 3rd segment!). */
   scheduleParkPattern: (parkId: string): string => `schedule:*:${parkId}:*`,
 

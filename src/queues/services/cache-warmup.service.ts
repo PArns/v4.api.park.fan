@@ -191,7 +191,11 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // Month keys for every month in [-1, +3] (variant the FE reads: "none").
         for (let mm = fromM, yy = fromY; ; ) {
           evictKeys.push(
-            `calendar:month:${park.id}:${yy}-${String(mm).padStart(2, "0")}:none`,
+            CacheKeys.calendarMonth(
+              park.id,
+              `${yy}-${String(mm).padStart(2, "0")}`,
+              "none",
+            ),
           );
           if (yy === endY && mm === endM) break;
           mm += 1;
@@ -678,7 +682,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         try {
           const occupancy =
             await analyticsService.calculateParkOccupancy(parkId);
-          const cacheKey = `park:occupancy:${parkId}`;
+          const cacheKey = CacheKeys.parkOccupancy(parkId);
           await this.redis.setex(
             cacheKey,
             5 * 60, // 5 minutes TTL

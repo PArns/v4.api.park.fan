@@ -8,6 +8,20 @@ import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
+import { safeJsonParse } from "../../common/utils/json.util";
+
+/** Accuracy badge payload served by /attractions/:id/accuracy (Redis-cached). */
+export type AccuracyBadgeResult = {
+  badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
+  last30Days: {
+    mae: number;
+    mape: number;
+    rmse: number;
+    comparedPredictions: number;
+    totalPredictions: number;
+  };
+  message?: string;
+};
 
 /**
  * PredictionAccuracyService
@@ -668,21 +682,13 @@ export class PredictionAccuracyService {
   async getAttractionAccuracyWithBadge(
     attractionId: string,
     days: number = 30,
-  ): Promise<{
-    badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
-    last30Days: {
-      mae: number;
-      mape: number;
-      rmse: number;
-      comparedPredictions: number;
-      totalPredictions: number;
-    };
-    message?: string;
-  }> {
-    // L1: Redis cache
+  ): Promise<AccuracyBadgeResult> {
+    // L1: Redis cache (safeJsonParse: corrupt entry = miss, fall to L2)
     const cacheKey = `accuracy:badge:${attractionId}:${days}d`;
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    const cached = safeJsonParse<AccuracyBadgeResult>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
 
     // L2: pre-aggregated table (updated hourly by aggregate-stats cron)
     const preAggregated = await this.statsRepository.findOne({

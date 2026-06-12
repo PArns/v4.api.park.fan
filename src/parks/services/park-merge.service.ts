@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { CacheKeys } from "../../common/cache/cache-keys";
+import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
@@ -442,23 +442,7 @@ export class ParkMergeService {
 
   private async invalidateParkCaches(parkId: string): Promise<void> {
     try {
-      // Exact keys first, then glob patterns. The schedule keys have the
-      // parkId as their THIRD segment (schedule:today:<parkId>:<date>) —
-      // the old `schedule:${parkId}:*` pattern matched nothing, so the
-      // schedule cache survived every merge.
-      await this.redis.del(
-        CacheKeys.parkIntegrated(parkId),
-        CacheKeys.parkOpDateRange(parkId),
-      );
-
-      const patterns = [
-        CacheKeys.scheduleParkPattern(parkId),
-        CacheKeys.calendarMonthPattern(parkId),
-      ];
-      for (const pattern of patterns) {
-        const keys = await this.redis.keys(pattern);
-        if (keys.length > 0) await this.redis.del(...keys);
-      }
+      await invalidateParkCaches(this.redis, parkId);
     } catch (e) {
       this.logger.warn(
         `Failed to invalidate caches for park ${parkId}: ${(e as Error)?.message ?? e}`,

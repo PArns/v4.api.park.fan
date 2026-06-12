@@ -6,6 +6,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
+import { safeJsonParse } from "../common/utils/json.util";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { Park } from "../parks/entities/park.entity";
 import {
@@ -45,8 +46,10 @@ export class ParkHistoricalStatsService {
     // v2: occupancy-relative avgCrowdLevel + additive meta fields. The topN /
     // minSampleDays inputs change the payload, so they're part of the key.
     const cacheKey = `park:historical-stats:v2:${park.id}:${years}:${topN}:${minSampleDays}`;
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached) as ParkHistoricalStatsDto;
+    const cached = safeJsonParse<ParkHistoricalStatsDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
 
     const result = await this.compute(park, years, topN, minSampleDays);
     await this.redis.set(

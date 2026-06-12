@@ -375,30 +375,40 @@ export class AdminController {
     description: "Park cache flushed successfully",
   })
   async flushCache(): Promise<{ message: string; keysDeleted: number }> {
-    // Define park-related cache key patterns
+    // Park-related cache key patterns. Every entry must match a prefix that
+    // is actually written somewhere (see CacheKeys + inline keys) — the old
+    // list carried six prefixes that no code ever writes (parks:*,
+    // wait-times:*, occupancy:*, predictions:*, show:*, restaurant:*) while
+    // the real calendar/ML/favorites caches survived the flush.
+    //
+    // Deliberately NOT flushed (state, not cache): popularity:* (ranking),
+    // downtime:* (open downtime tracking), prediction:deviation:* (deviation
+    // tracking), ratelimit:* (circuit breakers), ml:accuracy:* and
+    // ml:last-accuracy-check (job markers).
     const patterns = [
       "schedule:*",
-      "park:*",
-      "parks:*",
-      "wait-times:*",
+      "park:*", // integrated, occupancy, statistics, baselines, …
+      "attraction:*", // integrated, history, baselines, ropedrop, last-seen
+      "calendar:*", // month caches + refresh-check markers
       "analytics:*",
-      "occupancy:*",
-      "predictions:*",
       "holiday:*",
-      "attraction:*",
-      "show:*",
-      "restaurant:*",
-      "weather:*",
+      "weather:*", // forecasts + sync:done markers (flush ⇒ next sync re-runs)
       "search:*",
       "discovery:*",
+      "favorites:*",
+      "parkfan:*", // latest queue snapshot + attraction tz cache
+      "accuracy:*", // prediction accuracy badges
+      "ml:park:*", // serving predictions (daily/hourly/yearly)
+      "ml:tft-daily:*",
+      "ml:active-attractions:*",
     ];
 
     let totalDeleted = 0;
 
-    // Fan out the 14 KEYS scans in parallel — they're independent and
+    // Fan out the KEYS scans in parallel — they're independent and
     // each hits a different namespace. The old loop serialised them at
-    // ~one round-trip per pattern (14 RTTs); Promise.all collapses that
-    // to a single batch wall-time.
+    // ~one round-trip per pattern; Promise.all collapses that to a
+    // single batch wall-time.
     const keysPerPattern = await Promise.all(
       patterns.map((p) => this.redis.keys(p)),
     );

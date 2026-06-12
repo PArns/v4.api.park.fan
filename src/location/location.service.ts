@@ -381,7 +381,7 @@ export class LocationService {
     const [statusMap, occupancyMap, schedules, operatingScheduleMap] =
       await Promise.all([
         this.parksService.getBatchParkStatus(missedIds),
-        this.analyticsService["getBatchParkOccupancy"](missedIds),
+        this.analyticsService.getBatchParkOccupancy(missedIds),
         this.batchFetchSchedules(missedIds),
         this.parksService.getBatchHasOperatingSchedule(missedIds),
       ]);

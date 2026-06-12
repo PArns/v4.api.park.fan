@@ -354,37 +354,6 @@ export class ConflictResolverService {
   }
 
   /**
-   * Add or merge entity into the merged entities map
-   * @deprecated Use findBestMatch and updateMergedEntry inside mergeEntities
-   */
-  private addOrMergeEntity(
-    merged: Map<string, MergedEntity>,
-    entity: any,
-    sourceName: string,
-  ): void {
-    const key = normalizeForMatching(entity.name);
-
-    if (merged.has(key)) {
-      // Entity exists: merge data
-      const existing = merged.get(key)!;
-      existing.sources.push(sourceName);
-
-      const sourceKey = this.getSourceKey(sourceName);
-      existing[`${sourceKey}Status`] = entity.status;
-      if (entity.waitTime != null) {
-        existing[`${sourceKey}WaitTime`] = entity.waitTime;
-      }
-    } else {
-      // New entity: add to map
-      merged.set(key, {
-        ...entity,
-        source: sourceName,
-        sources: [sourceName],
-      });
-    }
-  }
-
-  /**
    * Get short key for source name
    *
    * Maps full source names to abbreviated keys for temporary field names.

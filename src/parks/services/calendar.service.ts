@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../../common/cache/cache-keys";
+import { safeJsonParse } from "../../common/utils/json.util";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
@@ -89,18 +91,20 @@ export class CalendarService {
       toDate,
       park.timezone,
     );
-    const monthCacheKeys = monthsInRange.map(
-      (ym) => `calendar:month:${park.id}:${ym}:${includeHourly}`,
+    const monthCacheKeys = monthsInRange.map((ym) =>
+      CacheKeys.calendarMonth(park.id, ym, includeHourly),
     );
-    const monthCached = await Promise.all(
-      monthCacheKeys.map((k) => this.redis.get(k)),
-    );
+    // safeJsonParse so a corrupt month entry counts as a cache MISS (rebuilt
+    // by the partial-hit path below) instead of throwing a 500.
+    const monthCached = (
+      await Promise.all(monthCacheKeys.map((k) => this.redis.get(k)))
+    ).map((v) => safeJsonParse<CalendarDay[]>(v));
     if (monthCached.every((v) => v != null)) {
       this.logger.debug(
         `Calendar assembled from ${monthsInRange.length} month cache(s): ${fromStr}–${toStr}`,
       );
       return this.assembleFromMonthCaches(
-        monthCached as string[],
+        monthCached as CalendarDay[][],
         park,
         fromStr,
         toStr,
@@ -128,15 +132,15 @@ export class CalendarService {
         // one-month range can't re-enter this partial branch), which caches it.
         await this.buildCalendarResponse(park, mFrom, mTo, includeHourly);
       }
-      const refreshed = await Promise.all(
-        monthCacheKeys.map((k) => this.redis.get(k)),
-      );
+      const refreshed = (
+        await Promise.all(monthCacheKeys.map((k) => this.redis.get(k)))
+      ).map((v) => safeJsonParse<CalendarDay[]>(v));
       if (refreshed.every((v) => v != null)) {
         this.logger.debug(
           `Calendar assembled after building ${missingMonths.length} missing month(s): ${fromStr}–${toStr}`,
         );
         return this.assembleFromMonthCaches(
-          refreshed as string[],
+          refreshed as CalendarDay[][],
           park,
           fromStr,
           toStr,
@@ -318,7 +322,7 @@ export class CalendarService {
     // matches the park overview. calculateCrowdLevelForDate uses P50 of the whole day so far
     // (morning + afternoon averaged), while the park overview uses the current spot wait —
     // causing "moderate" on the calendar vs "high" in the overview on busy afternoons.
-    const occupancyRaw = await this.redis.get(`park:occupancy:${park.id}`);
+    const occupancyRaw = await this.redis.get(CacheKeys.parkOccupancy(park.id));
     if (occupancyRaw) {
       try {
         const occ = JSON.parse(occupancyRaw) as { current: number };
@@ -392,20 +396,19 @@ export class CalendarService {
   }
 
   /**
-   * Assemble a calendar response from per-month Redis caches (raw JSON strings, in
+   * Assemble a calendar response from per-month caches (already parsed, in
    * monthsInRange order), filtered to [fromStr, toStr]. Shared by the all-cached fast
    * path and the partial-hit path (after the missing months were built).
    */
   private assembleFromMonthCaches(
-    monthCachedRaw: string[],
+    monthCached: CalendarDay[][],
     park: Park,
     fromStr: string,
     toStr: string,
     today: string,
   ): IntegratedCalendarResponse {
     const allDays: CalendarDay[] = [];
-    for (const raw of monthCachedRaw) {
-      const days = JSON.parse(raw) as CalendarDay[];
+    for (const days of monthCached) {
       allDays.push(...days);
     }
     allDays.sort((a, b) => a.date.localeCompare(b.date));
@@ -474,7 +477,7 @@ export class CalendarService {
         `${ym}-${String(lastDay).padStart(2, "0")}`
       )
         continue;
-      const key = `calendar:month:${parkId}:${ym}:${includeHourly}`;
+      const key = CacheKeys.calendarMonth(parkId, ym, includeHourly);
       // Current month gets a shorter TTL than future months, but it does NOT need
       // to be 5 min: today's live crowd level is patched client-side via a
       // separate today-only fetch, and the underlying daily forecast only changes
