@@ -1,4 +1,5 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -528,7 +529,7 @@ export class DiscoveryService {
     // One MGET regardless of park count; ignored entries stay null.
     const parkIds = Array.from(stats.keys());
     if (parkIds.length > 0) {
-      const keys = parkIds.map((id) => `park:occupancy:${id}`);
+      const keys = parkIds.map((id) => CacheKeys.parkOccupancy(id));
       const cached = await this.redis.mget(...keys);
       parkIds.forEach((id, i) => {
         const raw = cached[i];

@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -277,7 +278,7 @@ export class AnalyticsService {
     }
 
     // Try to fetch from Redis first (cache-first strategy)
-    const cacheKeys = parkIds.map((id) => `park:occupancy:${id}`);
+    const cacheKeys = parkIds.map((id) => CacheKeys.parkOccupancy(id));
     const cachedValues = await this.redis.mget(...cacheKeys);
 
     for (let i = 0; i < parkIds.length; i++) {
@@ -1452,7 +1453,10 @@ export class AnalyticsService {
       ? Math.max(0, totalAttractions - explicitlyClosedCount)
       : 0;
 
-    // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly)
+    // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly).
+    // NOTE: `park:typical-peak:` (with hyphen) holds the typical peak HOUR
+    // ("HH:00" string) — distinct from `park:typicalpeak:` (no hyphen) in
+    // cacheTypicalDayPeak, which holds the typical-day peak WAIT (number).
     const typicalPeakKey = `park:typical-peak:${parkId}`;
     let typicalPeakHour = await this.redis.get(typicalPeakKey);
 
@@ -4317,6 +4321,10 @@ export class AnalyticsService {
    * recomputed by the daily cron). 2-day TTL so a single missed cron run
    * still leaves a usable value; callers fall back to the P90 baseline when
    * it's absent.
+   *
+   * NOTE: `park:typicalpeak:` (no hyphen) holds the typical-day peak WAIT
+   * (number) — distinct from `park:typical-peak:` (with hyphen) in
+   * getParkStatistics, which holds the typical peak HOUR ("HH:00" string).
    */
   async cacheTypicalDayPeak(parkId: string, value: number): Promise<void> {
     if (value > 0) {
