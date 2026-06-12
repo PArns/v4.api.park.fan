@@ -5,6 +5,7 @@ import Redis from "ioredis";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { buildAttractionUrl } from "../common/utils/url.util";
+import { safeJsonParse } from "../common/utils/json.util";
 
 export interface AttractionSitemapItem {
   url: string;
@@ -23,9 +24,11 @@ export class SitemapService {
   ) {}
 
   async getAttractionsSitemap(): Promise<AttractionSitemapItem[]> {
-    const cached = await this.redis.get(this.CACHE_KEY);
+    const cached = safeJsonParse<AttractionSitemapItem[]>(
+      await this.redis.get(this.CACHE_KEY),
+    );
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
 
     // Only select fields needed for URL building — no analytics, no status

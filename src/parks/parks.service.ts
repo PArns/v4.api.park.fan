@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
+import { safeJsonParse } from "../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { Park } from "./entities/park.entity";
@@ -557,10 +558,14 @@ export class ParksService {
               [ghostPark.id],
             );
 
+            // O(1) slug lookups instead of a linear .find() per ghost
+            // attraction (quadratic on parks with many attractions).
+            const existingBySlug = new Map<string, any>(
+              existingAttractions.map((a: any) => [a.slug, a]),
+            );
+
             for (const ghostAttr of ghostAttractions) {
-              const match = existingAttractions.find(
-                (a: any) => a.slug === ghostAttr.slug,
-              );
+              const match = existingBySlug.get(ghostAttr.slug);
 
               if (match) {
                 // COLLISION: Merge data, move mappings, delete ghost attraction
@@ -1229,12 +1234,10 @@ export class ParksService {
     timezone: string,
   ): Promise<Map<string, { openingTime: string; closingTime: string }>> {
     const cacheKey = `park:derivedHours:${parkId}:${fromDate}:${toDate}`;
-    const cached = await this.redis.get(cacheKey);
-    if (cached !== null) {
-      const parsed: Record<
-        string,
-        { openingTime: string; closingTime: string }
-      > = JSON.parse(cached);
+    const parsed = safeJsonParse<
+      Record<string, { openingTime: string; closingTime: string }>
+    >(await this.redis.get(cacheKey)); // corrupt entry = miss
+    if (parsed !== null) {
       return new Map(Object.entries(parsed));
     }
 
@@ -1952,8 +1955,8 @@ export class ParksService {
     const cacheKey = CacheKeys.scheduleToday(parkId, todayStr);
     const cached = await this.redis.get(cacheKey);
 
-    if (cached) {
-      const parsed = JSON.parse(cached) as any[]; // parsed from Redis string
+    const parsed = safeJsonParse<any[]>(cached); // corrupt entry = miss
+    if (parsed) {
       return parsed.map((entry) => ({
         ...entry,
         date: new Date(entry.date),
@@ -2001,14 +2004,18 @@ export class ParksService {
     const cached = await this.redis.get(cacheKey);
 
     if (cached) {
-      const parsed = JSON.parse(cached);
-      if (!parsed) return null;
-      return {
-        ...parsed,
-        date: new Date(parsed.date),
-        openingTime: parsed.openingTime ? new Date(parsed.openingTime) : null,
-        closingTime: parsed.closingTime ? new Date(parsed.closingTime) : null,
-      } as ScheduleEntry;
+      // "null" is the cached negative result (no upcoming operating day);
+      // a corrupt entry instead falls through and rebuilds from the DB.
+      if (cached === "null") return null;
+      const parsed = safeJsonParse<any>(cached);
+      if (parsed) {
+        return {
+          ...parsed,
+          date: new Date(parsed.date),
+          openingTime: parsed.openingTime ? new Date(parsed.openingTime) : null,
+          closingTime: parsed.closingTime ? new Date(parsed.closingTime) : null,
+        } as ScheduleEntry;
+      }
     }
 
     // Look ahead: from park's "tomorrow" up to 365 days (use date string for lower bound)
@@ -2291,11 +2298,10 @@ export class ParksService {
       getCurrentDateInTimezone(tz),
       days,
     );
-    const cached = await this.redis.get(cacheKey);
+    const cached = safeJsonParse<any[]>(await this.redis.get(cacheKey)); // corrupt entry = miss
 
     if (cached) {
-      const parsed = JSON.parse(cached) as any[];
-      return parsed.map((entry) => ({
+      return cached.map((entry) => ({
         ...entry,
         date: new Date(entry.date),
         openingTime: entry.openingTime ? new Date(entry.openingTime) : null,

@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
+import { safeJsonParse } from "../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between } from "typeorm";
 import { Redis } from "ioredis";
@@ -819,11 +820,12 @@ export class WeatherService {
 
     const cacheKey = CacheKeys.weatherForecast(parkId);
 
-    // Try cache first
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
+    // Try cache first (safeJsonParse: corrupt entry = miss, rebuild below)
+    const parsed = safeJsonParse<{ current: any; forecast: any[] }>(
+      await this.redis.get(cacheKey),
+    );
+    if (parsed) {
       // Deserialize dates properly
-      const parsed = JSON.parse(cached) as { current: any; forecast: any[] };
       if (parsed.current) parsed.current.date = new Date(parsed.current.date);
       parsed.forecast = parsed.forecast.map((f: any) => ({
         ...f,
