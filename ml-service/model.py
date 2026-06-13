@@ -115,8 +115,14 @@ class WaitTimeModel:
         # busy tail; it cannot use VirtEnsembles posterior sampling.
         _loss_fn = getattr(settings, "CATBOOST_LOSS_FUNCTION", "RMSEWithUncertainty")
         _posterior = getattr(settings, "CATBOOST_POSTERIOR_SAMPLING", True)
-        if _loss_fn.startswith("Quantile") or _loss_fn in ("MAE", "Huber"):
-            _eval_metric = _loss_fn if _loss_fn.startswith("Quantile") else "MAE"
+        # MultiQuantile (alpha=0.5,0.8,0.95) predicts several conditional quantiles
+        # at once → per-purpose serving (median for the wait display, a high quantile
+        # for the busy crowd-level). Like single Quantile it has no VirtEnsembles
+        # posterior. NOTE: "MultiQuantile" does NOT start with "Quantile", so it needs
+        # its own prefix in the tuple below.
+        _is_quantile = _loss_fn.startswith(("Quantile", "MultiQuantile"))
+        if _is_quantile or _loss_fn in ("MAE", "Huber"):
+            _eval_metric = _loss_fn if _is_quantile else "MAE"
             _posterior = False
         else:
             _eval_metric = _loss_fn
@@ -579,14 +585,71 @@ class WaitTimeModel:
             X_ordered, thread_count=settings.CATBOOST_INFERENCE_THREAD_COUNT
         )
 
-        # If model used RMSEWithUncertainty, predict returns (n_samples, 2)
-        if predictions.ndim == 2 and predictions.shape[1] == 2:
+        # Collapse multi-column predict() output to a single point prediction.
+        alphas = self._multiquantile_alphas()
+        if alphas and predictions.ndim == 2 and predictions.shape[1] == len(alphas):
+            # MultiQuantile: columns follow the alpha order. The point prediction is
+            # the MEDIAN quantile (closest alpha to 0.5) — the honest central estimate.
+            # Per-quantile access is via predict_quantiles().
+            med_idx = int(np.argmin([abs(a - 0.5) for a in alphas]))
+            predictions = predictions[:, med_idx]
+        elif predictions.ndim == 2 and predictions.shape[1] == 2:
+            # RMSEWithUncertainty: predict returns (n_samples, 2); [:,0] is the mean.
             predictions = predictions[:, 0]
 
         # Ensure no negative predictions
         predictions = np.maximum(predictions, 0)
 
         return predictions
+
+    def _multiquantile_alphas(self) -> list:
+        """Parse the alpha list from a MultiQuantile loss, e.g.
+        'MultiQuantile:alpha=0.5,0.8,0.95' -> [0.5, 0.8, 0.95]. Returns [] for any
+        other loss (single Quantile, RMSE, …). Cached per model instance."""
+        if self.model is None:
+            return []
+        cached = getattr(self, "_mq_alphas_cache", None)
+        if cached is not None:
+            return cached
+        alphas: list = []
+        try:
+            loss_fn = str(self.model.get_all_params().get("loss_function", ""))
+            if loss_fn.startswith("MultiQuantile") and "alpha=" in loss_fn:
+                raw = loss_fn.split("alpha=", 1)[1].split(":")[0]
+                alphas = [float(x) for x in raw.split(",") if x.strip()]
+        except Exception:
+            alphas = []
+        self._mq_alphas_cache = alphas
+        return alphas
+
+    def predict_quantiles(self, X: pd.DataFrame) -> Dict[float, np.ndarray]:
+        """For a MultiQuantile model: predict all trained quantiles at once.
+
+        Returns {alpha: predictions} (e.g. {0.5: [...], 0.8: [...], 0.95: [...]}),
+        non-negative. For non-MultiQuantile models returns {} — callers should fall
+        back to predict(). Lets the serving layer pick the right quantile per purpose
+        (median for the wait display, a high quantile for the busy crowd-level signal).
+        """
+        alphas = self._multiquantile_alphas()
+        if not alphas:
+            return {}
+        X = X.copy()
+        model_features = self.model_feature_columns or self.feature_columns
+        missing_cols = set(model_features) - set(X.columns)
+        if missing_cols:
+            defaults = self._get_default_feature_values()
+            for col in missing_cols:
+                if col in ["parkId", "attractionId"] or col in self.categorical_features:
+                    X.loc[:, col] = defaults.get(col, "UNKNOWN")
+                else:
+                    X.loc[:, col] = defaults.get(col, 0.0)
+        X_ordered = X[model_features].copy()
+        preds = self.model.predict(
+            X_ordered, thread_count=settings.CATBOOST_INFERENCE_THREAD_COUNT
+        )
+        preds = np.maximum(np.atleast_2d(preds), 0)
+        # Columns follow the alpha order in the loss string.
+        return {a: preds[:, i] for i, a in enumerate(alphas)}
 
     def predict_with_uncertainty(self, X: pd.DataFrame) -> Dict[str, np.ndarray]:
         """
