@@ -83,12 +83,24 @@ class Settings(BaseSettings):
     # tail (the model regresses busy days to the mean). Quantile disables the
     # (empirically near-zero) VirtEnsembles uncertainty. Env-gated so the nightly
     # cron is unaffected unless explicitly overridden.
-    # Production default = "q0.8w": predict the upper conditional quantile to fix
-    # the busy-tail under-prediction (champion RMSE bias was −15 min on busy days;
-    # α=0.8 → −4). Quantile has no VirtEnsembles uncertainty (the old intervals were
-    # collapsed to ~0.17 min anyway). Override to "RMSEWithUncertainty" to revert.
-    CATBOOST_LOSS_FUNCTION: str = "Quantile:alpha=0.8"
+    # Production default = "MultiQuantile:alpha=0.5,0.8,0.95" — predicts three
+    # conditional quantiles at once for PER-PURPOSE serving (predict.py):
+    #   - q0.5 (median) → the wait-time DISPLAY. Backtest (2026-06-13, 21d holdout,
+    #     392k slots): vs the old single q0.8, the median cut ALL MAE 5.15→3.93
+    #     (−24%) and quiet MAE 4.03→2.39 (−41%), and removed the +3.4-min quiet
+    #     over-read (bias +3.46→+0.60). The honest central estimate.
+    #   - q0.8 → the CROWD-LEVEL signal. Same backtest: q0.8 is near-perfectly
+    #     calibrated on busy (bias +0.62) — better than q0.95, which OVER-shoots
+    #     busy massively (bias +16.5). So the crowd quantile is 0.8, NOT 0.95.
+    # NOTE: the busy-tail MAE itself is inherent variance, not a bias a quantile can
+    # fix — measured & rejected (q0.95 made busy worse; a CatBoost+TFT daily ensemble
+    # also lost to TFT alone). See docs/ml/tft-vs-catboost-clean-comparison.md.
+    # Override to "Quantile:alpha=0.8" or "RMSEWithUncertainty" to revert.
+    CATBOOST_LOSS_FUNCTION: str = "MultiQuantile:alpha=0.5,0.8,0.95"
     CATBOOST_POSTERIOR_SAMPLING: bool = True  # only used for RMSEWithUncertainty
+    # Per-purpose serving quantiles (must be present in the MultiQuantile alpha list).
+    SERVING_WAIT_QUANTILE: float = 0.5  # median → honest wait display
+    SERVING_CROWD_QUANTILE: float = 0.8  # busy-calibrated → crowd-level signal
     # Busyness weighting: down-weight the ~72% quiet rows / up-weight busy rows so
     # the loss attends to the under-fit busy tail. Improves overall calibration on
     # top of the quantile lift (q0.7w/q0.8w had the best holdout MAE). Default ON.

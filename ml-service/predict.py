@@ -1906,33 +1906,63 @@ def predict_wait_times(
     if df_inference.empty:
         return []  # All days explicitly closed; filter_predictions_by_schedule would return [] anyway
 
-    # Predict with uncertainty estimation (only for OPERATING rows)
+    # Predict (only for OPERATING rows). Two regimes:
+    #  - MultiQuantile model → PER-PURPOSE serving: `predictions` is the MEDIAN
+    #    (honest wait display), `crowd_predictions` is q0.8 (busy-calibrated crowd
+    #    signal), uncertainty = (top quantile − median) spread.
+    #  - any other model → the legacy single-point + VirtEnsembles path, with the
+    #    crowd signal equal to the displayed prediction (unchanged behaviour).
+    crowd_predictions = None
+    quantiles = {}
     try:
-        uncertainty_results = model.predict_with_uncertainty(df_inference)
-        predictions = uncertainty_results["predictions"]
-        uncertainties = uncertainty_results["uncertainty"]
-        # A zero-width band means the model has no real uncertainty (e.g. a
-        # Quantile model, or a collapsed VirtEnsembles) → don't derive a
-        # (falsely high) model-confidence from it; use time-based confidence.
-        use_uncertainty = bool(np.nanmax(uncertainties) > 1e-6) if len(uncertainties) else False
-    except Exception as e:
-        # Fallback to regular predictions if uncertainty estimation fails
-        # Reduced logging - only log if it's a real issue
-        if "missing" not in str(e).lower():
-            print(f"⚠️  Uncertainty estimation failed: {e}")
-        predictions = model.predict(df_inference)
-        uncertainties = np.zeros(len(predictions))
-        use_uncertainty = False
+        quantiles = model.predict_quantiles(df_inference)
+    except Exception:
+        quantiles = {}
+
+    if quantiles:
+        def _pick(target: float):
+            a = min(quantiles, key=lambda x: abs(x - target))
+            return quantiles[a]
+
+        predictions = _pick(getattr(settings, "SERVING_WAIT_QUANTILE", 0.5))
+        crowd_predictions = _pick(getattr(settings, "SERVING_CROWD_QUANTILE", 0.8))
+        hi = quantiles[max(quantiles)]
+        uncertainties = np.maximum(hi - predictions, 0.0)
+        use_uncertainty = bool(np.nanmax(uncertainties) > 1e-6)
+    else:
+        try:
+            uncertainty_results = model.predict_with_uncertainty(df_inference)
+            predictions = uncertainty_results["predictions"]
+            uncertainties = uncertainty_results["uncertainty"]
+            # A zero-width band means the model has no real uncertainty (e.g. a
+            # Quantile model, or a collapsed VirtEnsembles) → don't derive a
+            # (falsely high) model-confidence from it; use time-based confidence.
+            use_uncertainty = bool(np.nanmax(uncertainties) > 1e-6) if len(uncertainties) else False
+        except Exception as e:
+            # Fallback to regular predictions if uncertainty estimation fails
+            # Reduced logging - only log if it's a real issue
+            if "missing" not in str(e).lower():
+                print(f"⚠️  Uncertainty estimation failed: {e}")
+            predictions = model.predict(df_inference)
+            uncertainties = np.zeros(len(predictions))
+            use_uncertainty = False
+    if crowd_predictions is None:
+        crowd_predictions = predictions
 
     # Format results (OPERATING and UNKNOWN rows; CLOSED never reach the client)
     results = []
     for i, (idx, row) in enumerate(df_inference.iterrows()):
         pred_wait = round_to_nearest_5(predictions[i])
+        # Crowd-level uses the (busy-calibrated) crowd quantile, which differs from
+        # the displayed median only for a MultiQuantile model; otherwise identical.
+        crowd_wait = round_to_nearest_5(crowd_predictions[i])
 
         # Enforce a minimum 10 min wait if the ride is considered operating by the model
         # or zero if the model thinks it's closed anyway.
         if row["status"] in ["UNKNOWN", "OPERATING"] and pred_wait > 0:
             pred_wait = max(10, pred_wait)
+        if row["status"] in ["UNKNOWN", "OPERATING"] and crowd_wait > 0:
+            crowd_wait = max(10, crowd_wait)
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600
@@ -1979,7 +2009,10 @@ def predict_wait_times(
             baseline = row.get("rolling_avg_7d", 30.0)
 
         if baseline > 0:
-            ratio = pred_wait / baseline
+            # Crowd level off the busy-calibrated crowd quantile (= pred_wait for
+            # non-MultiQuantile models), so the median display can read honestly low
+            # on quiet rides without dragging the crowd signal down.
+            ratio = crowd_wait / baseline
         else:
             ratio = 1.0  # Default if no baseline
 
