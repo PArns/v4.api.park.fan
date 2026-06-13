@@ -19,6 +19,7 @@ import { MLFeatureDriftService } from "../services/ml-feature-drift.service";
 import { MLAlertService } from "../services/ml-alert.service";
 import { MLAnomalyDetectionService } from "../services/ml-anomaly-detection.service";
 import { MLDriftMonitoringService } from "../services/ml-drift-monitoring.service";
+import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
 import { MLDriftDto } from "../dto/ml-drift.dto";
 
 /**
@@ -37,6 +38,7 @@ export class MLMonitoringController {
     private alertService: MLAlertService,
     private anomalyDetectionService: MLAnomalyDetectionService,
     private driftService: MLDriftMonitoringService,
+    private accuracyService: PredictionAccuracyService,
   ) {}
 
   // ==================== Drift Monitoring ====================
@@ -221,6 +223,32 @@ export class MLMonitoringController {
     @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
   ) {
     return await this.anomalyDetectionService.getAnomalyStats(days);
+  }
+
+  // ==================== TFT per-attraction accuracy ====================
+
+  /**
+   * Best/worst per-attraction performers for the TFT daily model.
+   * Mirrors the CatBoost best/worst board (insights.topPerformers in the ML
+   * dashboard) but scores TFT daily-peak forecasts against the realised daily
+   * P90, so the admin can see TFT quality per attraction alongside CatBoost.
+   */
+  @Get("tft/performers")
+  @ApiOperation({
+    summary: "Get best/worst TFT daily-forecast performers per attraction",
+    description:
+      "TFT predicts the daily peak; scored against realised daily P90. Same shape as the CatBoost best/worst board.",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    type: Number,
+    description: "Days to analyze (default: 14)",
+  })
+  async getTftPerformers(
+    @Query("days", new DefaultValuePipe(14), ParseIntPipe) days: number,
+  ) {
+    return await this.accuracyService.getTftTopBottomPerformers(days);
   }
 
   /**

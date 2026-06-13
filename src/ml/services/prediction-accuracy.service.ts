@@ -1503,6 +1503,100 @@ export class PredictionAccuracyService {
   }
 
   /**
+   * Per-attraction best/worst performers for the TFT DAILY model.
+   *
+   * CatBoost's getTopBottomPerformers scores hourly predictions out of
+   * prediction_accuracy; TFT instead forecasts the daily peak (tft_forecasts)
+   * and is scored against the realised daily P90 — the same contract the
+   * nf-forecast `score-comparison` processor uses. We mirror that scoring here
+   * but aggregate PER ATTRACTION, and reuse the same board hygiene as CatBoost:
+   * a stddev floor on the realised wait so flat shows/walk-on rides don't flood
+   * the "best" list with trivially-perfect 0-MAE non-rides.
+   */
+  async getTftTopBottomPerformers(
+    days: number = 14,
+    limit: number = 5,
+  ): Promise<{
+    topPerformers: Array<{
+      attractionId: string;
+      attractionName: string;
+      parkName: string;
+      mae: number;
+      predictionsCount: number;
+    }>;
+    bottomPerformers: Array<{
+      attractionId: string;
+      attractionName: string;
+      parkName: string;
+      mae: number;
+      predictionsCount: number;
+    }>;
+  }> {
+    const rows: Array<{
+      attractionId: string;
+      attractionName: string | null;
+      parkName: string | null;
+      mae: string;
+      predictionsCount: string;
+    }> = await this.accuracyRepository.query(
+      `
+      WITH actuals AS (
+        SELECT qd."attractionId" aid,
+               DATE(qd.timestamp AT TIME ZONE p.timezone) d,
+               PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") p90
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        JOIN parks p ON p.id = a."parkId"
+        WHERE qd.timestamp >= NOW() - ($1 || ' days')::interval
+          AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY'
+          AND qd."waitTime" >= 5
+        GROUP BY 1, 2
+        HAVING COUNT(*) >= 3
+      ),
+      tft AS (
+        SELECT DISTINCT ON (f.attraction_id, f.target_date)
+          f.attraction_id aid, f.target_date d, f.predicted_peak pred
+        FROM tft_forecasts f
+        WHERE f.target_date >= (CURRENT_DATE - $1::int)
+          AND f.forecast_date < f.target_date
+        ORDER BY f.attraction_id, f.target_date, f.forecast_date DESC
+      ),
+      scored AS (
+        SELECT t.aid, act.p90, t.pred
+        FROM tft t
+        JOIN actuals act ON act.aid = t.aid AND act.d = t.d
+        WHERE t.d < CURRENT_DATE
+      )
+      SELECT s.aid::text "attractionId", a.name "attractionName", p.name "parkName",
+             AVG(ABS(s.pred - s.p90)) mae,
+             COUNT(*)::int "predictionsCount"
+      FROM scored s
+      JOIN attractions a ON a.id = s.aid
+      JOIN parks p ON p.id = a."parkId"
+      GROUP BY s.aid, a.name, p.name
+      HAVING COUNT(*) >= 5
+         AND AVG(s.p90) >= 10
+         AND STDDEV_SAMP(s.p90) >= 8
+      ORDER BY mae ASC
+      `,
+      [days],
+    );
+
+    const sorted = rows.map((r) => ({
+      attractionId: r.attractionId,
+      attractionName: r.attractionName || "Unknown",
+      parkName: r.parkName || "Unknown",
+      mae: parseFloat(parseFloat(r.mae).toFixed(1)),
+      predictionsCount: parseInt(r.predictionsCount as unknown as string, 10),
+    }));
+
+    return {
+      topPerformers: sorted.slice(0, limit),
+      bottomPerformers: sorted.slice(-limit).reverse(),
+    };
+  }
+
+  /**
    * Get daily accuracy trends
    *
    * Shows how prediction accuracy varies over time (last N days)
