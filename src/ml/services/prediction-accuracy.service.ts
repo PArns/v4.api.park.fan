@@ -279,10 +279,9 @@ export class PredictionAccuracyService {
       }
 
       if (bestMatch) {
-        // MATCH FOUND
-        prediction.comparisonStatus = "COMPLETED";
-
         if (bestMatch.status === "OPERATING" && bestMatch.waitTime !== null) {
+          // MATCH FOUND — comparable: ride was operating with a real wait value
+          prediction.comparisonStatus = "COMPLETED";
           prediction.actualWaitTime = bestMatch.waitTime;
           prediction.wasUnplannedClosure = false;
           prediction.absoluteError = Math.abs(
@@ -294,15 +293,33 @@ export class PredictionAccuracyService {
           } else {
             prediction.percentageError = null;
           }
+          completed++;
+        } else if (bestMatch.status === "OPERATING") {
+          // Ride was OPEN but the source reported NO wait value (waitTime=null).
+          // This is NOT a closure — status-only parks (e.g. Chimelong and many
+          // Asian/water parks) report OPERATING without ever publishing a queue
+          // length. Counting it as an unplanned closure with full error (the old
+          // behaviour) wrongly inflated MAE and dragged "verified coverage" down
+          // (~37% of all "unplanned closures" were actually open-but-null rides).
+          // There is no ground truth to compare against, so leave it uncompared:
+          // PENDING until it times out, then MISSED (a genuine data gap), never
+          // a fabricated 0-wait COMPLETED row.
+          const timeSinceTarget = Date.now() - targetTimeMs;
+          if (timeSinceTarget > 2 * 60 * 60 * 1000) {
+            prediction.comparisonStatus = "MISSED";
+            missed++;
+          }
         } else {
-          // Unplanned Closure (predicted operating, but was closed/down)
+          // Genuine unplanned closure: predicted operating, but ride was
+          // CLOSED / DOWN / REFURBISHMENT at the target time.
+          prediction.comparisonStatus = "COMPLETED";
           prediction.wasUnplannedClosure = true;
           prediction.actualWaitTime = 0; // Effectively 0 wait time, but not "free"
           prediction.absoluteError = prediction.predictedWaitTime; // Full error
           prediction.percentageError = null;
           unplannedClosures++;
+          completed++;
         }
-        completed++;
       } else {
         // NO MATCH FOUND
         // Check timeout: If prediction is older than 2 hours, mark as MISSED
