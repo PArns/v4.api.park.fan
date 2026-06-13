@@ -6,6 +6,27 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — ML dashboard hygiene: best-board, MAE alert, daily breakdown (2026-06-13)
+
+- **"Best predictions" board de-polluted** (`prediction-accuracy.service.ts`
+  `getTopBottomPerformers`). It was dominated by 0.0-MAE non-rides — shows, walk-on/kiddie
+  rides and transport mis-ingested as attractions (Hall of Presidents, Mickey's PhilharMagic,
+  PEANUTS kiddie rides): their wait never varies (a 4D film "queues" a constant ~15 min), so
+  the model predicts the constant perfectly. Added a stddev floor (≥8) — real rides swing
+  widely (Taron 14.6, Manta 18.2, Wrath of Rakshasa 29.1) vs shows at 0-7 (Hall of Presidents
+  1.9, Magiezijn 0.0). Verified live: board now shows real rides at ~3.6-4.2 MAE. Display
+  filter only, no data deleted.
+- **Accuracy-degradation alert recalibrated** (`ml-alert.service.ts`). Threshold 8 min
+  (severity ladder 7/10/15) dated from the RMSE-loss era (MAE ~4-5); the current
+  Quantile(0.8) loss predicts the upper conditional quantile by design, so live MAE sits at a
+  structural ~10-12 and the alert fired permanently. Now 13 (severity 13/17/22) — catches a
+  real climb, not the q0.8 baseline. Honest fix for the quiet over-read remains MultiQuantile
+  serving.
+- **Daily breakdown shows n/a, not 0%** (`prediction-accuracy.service.ts`, `ml-dashboard.dto.ts`).
+  Per-type breakdown reported DAILY as 0% coverage / 0 MAE (reads as broken); daily predictions
+  are intentionally never scored against actuals. Now `mae`/`coveragePercent` are null with an
+  explicit `tracked: false` flag so the UI renders "n/a".
+
 ### Fixed — daily-prediction coverage + verified-coverage metric (2026-06-13)
 
 Follow-up to the 2026-06-10 generate-daily fix; coverage had plateaued at ~110/160.
