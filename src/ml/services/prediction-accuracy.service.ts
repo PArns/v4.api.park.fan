@@ -1234,6 +1234,24 @@ export class PredictionAccuracyService {
       where: { targetTime: Between(startDate, new Date()) },
     });
 
+    // "Verified coverage" = predictions whose outcome we actually checked against
+    // real operating data (comparison_status='COMPLETED'), over all predictions
+    // whose target time has passed. This is intentionally SEPARATE from the
+    // MAE-eligible `matchedCount` below: the old coverage number reused
+    // matchedCount, which excludes rides that were closed at the target time AND
+    // every slot whose actual wait was <5 min — so it conflated "did we verify
+    // this?" with "was the actual a meaningful non-trivial wait?", reporting ~54%
+    // when we had in fact checked ~80%+ of predictions against ground truth. A
+    // ride being closed (or quiet) when we looked IS a verification of coverage;
+    // it just isn't scored into MAE. Genuine data gaps (no sample found, or
+    // status-only parks that never publish a wait → MISSED) correctly stay out.
+    const completedPredictions = await this.accuracyRepository.count({
+      where: {
+        targetTime: Between(startDate, new Date()),
+        comparisonStatus: "COMPLETED",
+      },
+    });
+
     // 2. Get Aggregated Metrics for Matched Predictions
     // Calculate sums needed for MAE, RMSE, MAPE, R2
     // IMPROVEMENT: We now include wait times >= 0 in coverage calculation
@@ -1293,9 +1311,14 @@ export class PredictionAccuracyService {
       }
     }
 
+    // Coverage = verified-against-real-data (COMPLETED) / total. NOT matchedCount
+    // (MAE-eligible), which under-reports by treating ride closures and sub-5-min
+    // waits as "uncovered". See completedPredictions above.
     const coveragePercent =
       totalPredictions > 0
-        ? parseFloat(((matchedCount / totalPredictions) * 100).toFixed(1))
+        ? parseFloat(
+            ((completedPredictions / totalPredictions) * 100).toFixed(1),
+          )
         : 0;
 
     // 3. Get Unique Counts (Optimized)
