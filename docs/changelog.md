@@ -6,7 +6,16 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
-### Fixed — ML dashboard hygiene: best-board, MAE alert, daily breakdown (2026-06-13)
+### Fixed — ML dashboard hygiene: best-board, MAE alert, daily breakdown, anomalies (2026-06-13)
+
+- **Anomaly board de-noised** (`ml-anomaly-detection.service.ts`). `unexpected_closure` was 89%
+  of all anomalies (534/602 live), and ~90% of those were genuine ride closures during opening
+  hours (CLOSED/DOWN/REFURBISHMENT) — operational reality, not a model defect (the model
+  correctly predicted a wait for a ride that should have been running). It buried the ~68 real
+  model anomalies (large_error / extreme_value on genuine rides). Removed closure detection from
+  model-quality anomaly monitoring (enum kept for history); purged the 5883 existing closure
+  rows. Board now shows 68 actionable anomalies instead of 602.
+
 
 - **"Best predictions" board de-polluted** (`prediction-accuracy.service.ts`
   `getTopBottomPerformers`). It was dominated by 0.0-MAE non-rides — shows, walk-on/kiddie
