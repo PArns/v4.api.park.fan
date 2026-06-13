@@ -197,13 +197,36 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
 
       // Skip parks that are seasonally closed — generating daily predictions for
       // closed parks (e.g. Hansa-Park in winter) produces actual=0 vs predicted=15+
-      // which inflates MAE and wastes ML compute. Same filter as hourly generator.
+      // which inflates MAE and wastes ML compute.
+      //
+      // CRITICAL: this MUST mirror the hourly generator's 3-stage inclusion,
+      // otherwise parks whose source has no schedule (scheduleType=UNKNOWN) but
+      // are demonstrably open get dropped from the daily run. isParkOperatingToday
+      // falls back to a ride-data check, and the daily cron fires once at 01:00 UTC
+      // — local night/edge for many parks (Europe/Asia/Americas), so that check
+      // reads "closed" and the park silently gets 0 daily predictions while still
+      // getting thousands of hourly ones (hourly runs every 15 min with this same
+      // safety net). The activity net uses a 24h window here (not the hourly 2h)
+      // so it spans a full local operating day regardless of when the cron fires.
+      const parkIds = allParks.map((p) => p.id);
+      const statusMap = await this.parksService.getBatchParkStatus(parkIds);
+
       const parks: typeof allParks = [];
       for (const park of allParks) {
-        const shouldInclude = await this.parksService.isParkOperatingToday(
-          park.id,
-        );
-        if (shouldInclude) {
+        if (statusMap.get(park.id) === "OPERATING") {
+          parks.push(park);
+          continue;
+        }
+        if (await this.parksService.isParkOperatingToday(park.id)) {
+          parks.push(park);
+          continue;
+        }
+        // Safety net: a park active within the last 24h is in-season and should
+        // get daily predictions even if today's schedule is UNKNOWN/missing.
+        if (await this.parksService.hasRecentRideActivity(park.id, 24)) {
+          this.logger.log(
+            `Force-including park ${park.name} for daily predictions due to recent ride activity`,
+          );
           parks.push(park);
         }
       }

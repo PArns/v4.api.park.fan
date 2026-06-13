@@ -2584,8 +2584,11 @@ export class ParksService {
    * Used as a safety net to ensure active parks get predictions even if
    * the schedule says CLOSED.
    */
-  async hasRecentRideActivity(parkId: string): Promise<boolean> {
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  async hasRecentRideActivity(
+    parkId: string,
+    hoursBack: number = 2,
+  ): Promise<boolean> {
+    const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
 
     const result = await this.parkRepository.manager.query(
       `
@@ -2597,7 +2600,7 @@ export class ParksService {
         AND qd.status = 'OPERATING'
         AND qd."waitTime" >= 10
     `,
-      [parkId, twoHoursAgo],
+      [parkId, since],
     );
 
     const activeRides = parseInt(result[0]?.activeRides || "0", 10);

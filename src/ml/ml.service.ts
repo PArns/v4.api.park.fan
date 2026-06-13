@@ -1124,10 +1124,21 @@ export class MLService {
         }
 
         // 4. Skip if after last known operating date (only for seasonal parks)
+        // — BUT only when maxDate is genuinely in the past. maxDate is the last
+        // OPERATING *schedule* day, which reflects the schedule-sync horizon, not
+        // necessarily the season's end: a park that is open right now but whose
+        // source only publishes a schedule a few days out has maxDate ≈ today and
+        // would otherwise have its ENTIRE future calendar dropped (e.g. Energylandia
+        // — open daily, but 0 future OPERATING entries). Only when maxDate is days
+        // in the past has the park demonstrably stopped operating (real off-season,
+        // e.g. Hansa-Park in winter), so the skip is correct there. Future schedule
+        // gaps inside an active season are still caught by filter #2.
+        const todayInTz = getCurrentDateInTimezone(info.timezone);
         if (
           info.hasHistory &&
           info.isSeasonal &&
           info.maxDate &&
+          info.maxDate < todayInTz &&
           dateStr > info.maxDate
         ) {
           continue;
