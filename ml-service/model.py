@@ -205,10 +205,15 @@ class WaitTimeModel:
         print(f"   Best iteration: {best_iteration}")
         print(f"   Total trees: {tree_count}")
 
-        # Calculate metrics
+        # Calculate metrics. Collapse multi-column predict() output to a point
+        # prediction (same logic as WaitTimeModel.predict): MultiQuantile → median
+        # quantile column; RMSEWithUncertainty → the mean column.
         y_pred = self.model.predict(X_val[self.feature_columns])
-        # If model used RMSEWithUncertainty, predict returns (n_samples, 2)
-        if y_pred.ndim == 2 and y_pred.shape[1] == 2:
+        alphas = self._multiquantile_alphas()
+        if alphas and y_pred.ndim == 2 and y_pred.shape[1] == len(alphas):
+            med_idx = int(np.argmin([abs(a - 0.5) for a in alphas]))
+            y_pred = y_pred[:, med_idx]
+        elif y_pred.ndim == 2 and y_pred.shape[1] == 2:
             y_pred = y_pred[:, 0]
         metrics = self._calculate_metrics(y_val, y_pred)
 
