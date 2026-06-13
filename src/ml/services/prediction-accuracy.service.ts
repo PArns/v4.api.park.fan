@@ -10,6 +10,16 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 import { safeJsonParse } from "../../common/utils/json.util";
 
+/** Per-prediction-type accuracy breakdown. mae/coveragePercent are null when the
+ *  type is not scored against actuals (`tracked: false`) — e.g. daily predictions,
+ *  which span up to 365 days and are never compared, so 0% would read as broken. */
+type TypeBreakdown = {
+  mae: number | null;
+  totalPredictions: number;
+  coveragePercent: number | null;
+  tracked: boolean;
+};
+
 /** Accuracy badge payload served by /attractions/:id/accuracy (Redis-cached). */
 export type AccuracyBadgeResult = {
   badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
@@ -1216,12 +1226,8 @@ export class PredictionAccuracyService {
       uniqueParks: number;
     };
     byPredictionType: {
-      HOURLY: {
-        mae: number;
-        totalPredictions: number;
-        coveragePercent: number;
-      };
-      DAILY: { mae: number; totalPredictions: number; coveragePercent: number };
+      HOURLY: TypeBreakdown;
+      DAILY: TypeBreakdown;
     };
   }> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -1349,25 +1355,45 @@ export class PredictionAccuracyService {
       .groupBy("pa.predictionType")
       .getRawMany();
 
-    // Initialize Default
-    const byType = {
-      HOURLY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
-      DAILY: { mae: 0, totalPredictions: 0, coveragePercent: 0 },
+    // Initialize Default. mae/coverage are null (not 0) when a type isn't
+    // tracked against actuals: daily predictions span up to 365 days and are
+    // intentionally never compared, so reporting 0%/0min reads as "broken" on
+    // the dashboard. `tracked` lets the UI render "n/a" instead.
+    const byType: {
+      HOURLY: TypeBreakdown;
+      DAILY: TypeBreakdown;
+    } = {
+      HOURLY: {
+        mae: null,
+        totalPredictions: 0,
+        coveragePercent: null,
+        tracked: false,
+      },
+      DAILY: {
+        mae: null,
+        totalPredictions: 0,
+        coveragePercent: null,
+        tracked: false,
+      },
     };
 
     typeStatsRaw.forEach((row) => {
       const type = row.type ? row.type.toUpperCase() : "UNKNOWN";
       const total = parseInt(row.total || "0", 10);
       const matched = parseInt(row.matched || "0", 10);
-      const typeMae = parseFloat(parseFloat(row.mae || "0").toFixed(1));
-      const cov =
-        total > 0 ? parseFloat(((matched / total) * 100).toFixed(1)) : 0;
 
       if (type === "HOURLY" || type === "DAILY") {
+        // Tracked only if rows exist AND at least one was matched to an actual.
+        const tracked = total > 0 && matched > 0;
         byType[type as "HOURLY" | "DAILY"] = {
-          mae: typeMae,
+          mae: tracked
+            ? parseFloat(parseFloat(row.mae || "0").toFixed(1))
+            : null,
           totalPredictions: total,
-          coveragePercent: cov,
+          coveragePercent: tracked
+            ? parseFloat(((matched / total) * 100).toFixed(1))
+            : null,
+          tracked,
         };
       }
     });

@@ -185,9 +185,11 @@ export class SystemAccuracyOverallDto {
 export class PredictionTypeBreakdownDto {
   @ApiProperty({
     example: 9.8,
-    description: "Mean Absolute Error for this prediction type",
+    nullable: true,
+    description:
+      "Mean Absolute Error for this prediction type. null when this type is not tracked against actuals (see `tracked`).",
   })
-  mae: number;
+  mae: number | null;
 
   @ApiProperty({
     example: 30000,
@@ -197,9 +199,18 @@ export class PredictionTypeBreakdownDto {
 
   @ApiProperty({
     example: 88.2,
-    description: "Coverage percentage for this type (%)",
+    nullable: true,
+    description:
+      "Coverage percentage for this type (%). null when not tracked.",
   })
-  coveragePercent: number;
+  coveragePercent: number | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      "Whether this prediction type is compared against actuals. Daily predictions span up to 365 days, so they are intentionally NOT scored into accuracy — the UI should show 'n/a' rather than 0% for them.",
+  })
+  tracked: boolean;
 }
 
 export class AttractionPerformanceDto {
