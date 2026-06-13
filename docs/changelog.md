@@ -6,6 +6,22 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — TFT per-attraction board + MultiQuantile per-purpose serving (2026-06-13)
+
+- **TFT best/worst board** (`ml-monitoring.controller.ts` `GET /v1/ml/monitoring/tft/performers`,
+  `prediction-accuracy.service.ts` `getTftTopBottomPerformers`, frontend
+  `app/admin/ml/page.tsx`). TFT daily-peak forecasts scored against realised daily P90 per
+  attraction, same board hygiene as CatBoost (stddev≥8 floor). New "Per-attraction accuracy
+  (TFT daily)" section in /admin/ml next to the (renamed) CatBoost hourly board.
+- **MultiQuantile per-purpose serving** (`ml-service/config.py`, `model.py`, `predict.py`).
+  Loss → `MultiQuantile:alpha=0.5,0.8,0.95`; serving picks the quantile per purpose: the
+  wait DISPLAY uses the median (q0.5), the crowd-level uses q0.8. Backtest (21d, 392k slots):
+  median cut overall MAE −24% / quiet −41% and removed the +3.4-min quiet over-read; q0.8 is
+  busy-optimal (q0.95 over-shoots). Backward-compatible (falls back to the legacy path until a
+  MultiQuantile model is trained). **Finding: the busy-tail "worst predictions" are inherent
+  variance, not quantile- or ensemble-fixable** — q0.95 and a CatBoost+TFT daily mean both
+  measured worse than the status quo. See docs/ml/tft-vs-catboost-clean-comparison.md §6.6.
+
 ### Fixed — ML dashboard hygiene: best-board, MAE alert, daily breakdown, anomalies (2026-06-13)
 
 - **Anomaly board de-noised** (`ml-anomaly-detection.service.ts`). `unexpected_closure` was 89%

@@ -376,6 +376,40 @@ the training-holdout estimate (+2.7). This is the #1 CatBoost lever: probabilist
 multi-quantile serving (e.g. `MultiQuantile:alpha=0.5,0.8` — median for the wait
 display, q0.8 only for the crowd-level signal), measured against the champion gate.
 
+## 6.6 MultiQuantile per-purpose serving + ensemble test (2026-06-13)
+
+Two measured results, both decided against the original hopes:
+
+**MultiQuantile backtest** (`ml-service/backtest_multiquantile.py`, 21d holdout,
+392k 15-min slots, q0.8 champion vs MultiQuantile:0.5,0.8,0.95):
+
+| model | ALL MAE/bias | quiet<30 | mid | busy≥60 |
+|---|---|---|---|---|
+| champion q0.8 | 5.15/+3.39 | 4.03/+3.46 | 8.06/+3.74 | 13.99/+1.16 |
+| **MQ q0.5 (median)** | **3.93/−0.73** | **2.39/+0.60** | 7.93/−3.99 | 16.04/−11.98 |
+| MQ q0.8 | 5.04/+3.22 | 3.92/+3.34 | 7.94/+3.40 | 13.98/+0.62 |
+| MQ q0.95 | 8.94/+8.40 | 7.32/+7.18 | 13.28/+12.08 | 21.46/+16.46 |
+
+- **q0.95 does NOT fix the busy tail — it makes it worse** (busy 21.5 vs 14.0, bias
+  +16.5). q0.8 is already near-perfectly busy-calibrated (bias +0.62). The busy MAE is
+  **inherent variance of rare spikes, not a quantile-addressable bias.**
+- **The median is the real win**: ALL −24%, quiet −41%, and the +3.4-min quiet
+  over-read gone. → **Shipped per-purpose serving** (commit 3503e2c): display =
+  median (q0.5), crowd-level = q0.8 (busy-calibrated). NOT q0.95.
+
+**CatBoost+TFT daily ensemble** (SQL on live forecasts, no training, 21d):
+
+| seg | CatBoost | TFT | mean(CB,TFT) |
+|---|---|---|---|
+| all | 11.4/−3.6 | **8.0/+0.1** | 8.7/−1.7 |
+| busy≥40 | 26.8/−24.9 | **16.2/−7.0** | 18.9/−15.9 |
+| busy≥70 | 47.3/−46.8 | **25.7/−13.6** | 32.3/−30.2 |
+
+- **A naive average LOSES to TFT alone on every segment.** Both models under-predict
+  busy (same error direction), so the mean just blends biases — it doesn't cut variance.
+  → Ensemble rejected; the lever is **more TFT weight/horizon** (already doing: 30→45,
+  h=60 ~Aug), not averaging.
+
 ## 7. What to test next — and when
 
 | # | test | when / trigger | success metric |

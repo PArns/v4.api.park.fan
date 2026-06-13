@@ -668,9 +668,11 @@ def train_model(version: str = None) -> None:
             if "attractionId" in X_holdout.columns:
                 X_holdout["attractionId"] = X_holdout["attractionId"].astype(str)
             y_holdout_arr = df_holdout["waitTime"].values.astype(float)
-            h_pred = model.model.predict(X_holdout[feature_columns])
-            if h_pred.ndim == 2 and h_pred.shape[1] == 2:
-                h_pred = h_pred[:, 0]
+            # Use WaitTimeModel.predict (not the raw booster) so multi-column
+            # outputs collapse to a point prediction: MultiQuantile → median,
+            # RMSEWithUncertainty → mean. Raw predict() returns (n, n_quantiles)
+            # for MultiQuantile and crashes _calculate_metrics (1 != 3).
+            h_pred = model.predict(X_holdout)
             holdout_metrics = model._calculate_metrics(y_holdout_arr, h_pred)
             logger.info("📊 Chronological Hold-out Metrics (last 30 days, unseen):")
             logger.info(f"   MAE:              {holdout_metrics['mae']:.2f} minutes")

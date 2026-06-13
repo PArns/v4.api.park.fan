@@ -311,7 +311,11 @@ class WaitTimeModel:
         if "attractionId" in X.columns:
             X["attractionId"] = X["attractionId"].astype(str)
         y_pred = self.model.predict(X[self.feature_columns])
-        if y_pred.ndim == 2 and y_pred.shape[1] == 2:
+        alphas = self._multiquantile_alphas()
+        if alphas and y_pred.ndim == 2 and y_pred.shape[1] == len(alphas):
+            med_idx = int(np.argmin([abs(a - 0.5) for a in alphas]))
+            y_pred = y_pred[:, med_idx]
+        elif y_pred.ndim == 2 and y_pred.shape[1] == 2:
             y_pred = y_pred[:, 0]
         return self._calculate_metrics(y.values, y_pred)
 
