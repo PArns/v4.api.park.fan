@@ -40,7 +40,17 @@ export class MLAlertService {
       this.featureDriftService.detectFeatureDrift(7),
     ]);
     const mae = systemStats.overall.mae;
-    const MAE_THRESHOLD = 8;
+    // Calibrated for the Quantile(alpha=0.8) loss era (config.py
+    // CATBOOST_LOSS_FUNCTION). That loss predicts the UPPER conditional quantile
+    // by design, so it deliberately over-reads quiet slots (~92% of all slots) →
+    // overall live MAE sits at ~10-12 min as a structural baseline, not as
+    // degradation. The old threshold of 8 (and the 7/10/15 severity ladder) came
+    // from the RMSE-loss era when MAE was ~4-5, so it fired permanently. 13 keeps
+    // the alert useful (catches a real climb above the q0.8 baseline) without the
+    // constant false positive. The honest fix for the quiet over-read is
+    // MultiQuantile serving (median for the wait display, q0.8 for the crowd
+    // signal) — see docs/ml/tft-vs-catboost-clean-comparison.md §6.5.
+    const MAE_THRESHOLD = 13;
 
     // 1. Check accuracy degradation — MAE only, independent of coverage
     if (mae > MAE_THRESHOLD) {
@@ -241,9 +251,10 @@ export class MLAlertService {
   private determineSeverity(
     mae: number,
   ): "low" | "medium" | "high" | "critical" {
-    if (mae > 15) return "critical";
-    if (mae > 10) return "high";
-    if (mae > 7) return "medium";
+    // q0.8-era calibration (see MAE_THRESHOLD above): baseline live MAE ~10-12.
+    if (mae > 22) return "critical";
+    if (mae > 17) return "high";
+    if (mae > 13) return "medium";
     return "low";
   }
 

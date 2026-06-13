@@ -1442,6 +1442,17 @@ export class PredictionAccuracyService {
       .addGroupBy("p.name")
       .having("COUNT(*) >= :minPredictions", { minPredictions: 10 })
       .andHaving("AVG(pa.actualWaitTime) >= :minAvgWait", { minAvgWait: 10 })
+      // Exclude trivially-flat series (shows, walk-on/kiddie rides, transport)
+      // mis-ingested as attractions: their wait never varies (a 4D film "queues"
+      // a constant ~15 min = the show interval), so the model predicts the
+      // constant perfectly → 0.0 MAE that floods the "best predictions" board
+      // with non-rides. Real rides swing widely (stddev 14-29); shows sit at
+      // 0-7 (measured live: Hall of Presidents 1.9, Magiezijn 0.0, vs Taron
+      // 14.6, Manta 18.2). A stddev floor keeps the board to genuinely
+      // predicted rides without deleting any data.
+      .andHaving("STDDEV_SAMP(pa.actualWaitTime) >= :minStddev", {
+        minStddev: 8,
+      })
       .getRawMany();
 
     // Sort by MAE (ascending = best performers)
