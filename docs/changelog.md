@@ -6,6 +6,33 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — daily-prediction coverage + verified-coverage metric (2026-06-13)
+
+Follow-up to the 2026-06-10 generate-daily fix; coverage had plateaued at ~110/160.
+
+- **Daily park selection mirrored the hourly 3-stage net** (`prediction-generator.processor.ts`).
+  `handleGenerateDaily` filtered parks with `isParkOperatingToday()` only, while the hourly
+  generator also force-includes parks with recent ride activity. ~14 demonstrably-open parks
+  (Energylandia, Beto Carrero, Grona Lund, Universal Studios Orlando, Chimelong, Warner Bros.
+  Movie World, …) report no schedule (UNKNOWN), so the daily cron — running once at 01:00 UTC,
+  local night for many — read them as closed and gave them thousands of HOURLY but ZERO daily
+  predictions. Daily now uses the same net with a 24h activity window. Result: park selection
+  134 → 151, successful 110 → **125 parks / 4068 attractions**.
+- **Season-end filter loosened** (`ml.service.ts` storePredictions #4): only skips after the
+  last OPERATING schedule day when that day is genuinely in the past (real off-season), not when
+  it merely equals today (schedule-sync horizon). Energylandia (open daily, 0 future OPERATING
+  entries) was discarding its whole future calendar.
+- **"Verified coverage" metric corrected** (`prediction-accuracy.service.ts`). The homepage
+  widget read 54% (tripping the <80% alert); the real rate is ~80-96%. `coveragePercent` reused
+  the MAE-eligible count, which excludes ride closures and sub-5-min waits — conflating "did we
+  check this against reality?" with "was the actual a non-trivial wait?". Measured live: 95% of
+  the "uncovered" slots are rides closed/quiet *during opening hours* (the operating-hours filter
+  already works). Coverage is now `COMPLETED / total`, separate from the strict MAE filter.
+- **Open-but-null rides no longer counted as unplanned closures** (`prediction-accuracy.service.ts`).
+  Status-only parks (Chimelong = #1 most-popular, many Asian/water parks) report status=OPERATING
+  with waitTime=null; these were scored as closures with full error, inflating MAE and dragging
+  coverage down (~37% of all "unplanned closures"). They are now left uncompared (PENDING → MISSED).
+
 ### Fixed — generate-daily silently failing for ~87 of 139 live parks (2026-06-10)
 
 Live diagnosis (injected one-off `generate-daily` Bull job, watched the logs): two
