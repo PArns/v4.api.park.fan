@@ -205,35 +205,17 @@ export class MLAnomalyDetectionService {
         }
       }
 
-      // Check for unplanned closures
-      if (
-        pred.wasUnplannedClosure &&
-        !hasRecentAnomaly(
-          pred.attractionId,
-          "unexpected_closure",
-          pred.targetTime,
-        ) &&
-        !wasJustCreated(pred.attractionId, "unexpected_closure")
-      ) {
-        const anomaly = await this.createAnomaly({
-          attractionId: pred.attractionId,
-          anomalyType: "unexpected_closure",
-          severity: "medium",
-          predictedTime: pred.targetTime,
-          predictedWaitTime: pred.predictedWaitTime,
-          actualWaitTime: 0,
-          absoluteError,
-          confidence: null,
-          anomalyScore: 80, // High score for closures
-          reason: "Attraction was closed but model predicted operating",
-          featureValues: pred.features || null,
-          modelVersion: pred.modelVersion,
-        });
-        if (anomaly) {
-          anomalies.push(anomaly);
-          noteCreated(pred.attractionId, "unexpected_closure");
-        }
-      }
+      // NOTE: "unexpected_closure" anomalies were removed here. They flooded the
+      // anomaly board (89% of all anomalies: 534/602 live) and were almost all
+      // genuine ride closures during opening hours (CLOSED/DOWN/REFURBISHMENT) —
+      // an operational reality, NOT a model-quality problem: the model correctly
+      // predicted a wait for a ride that *should* have been running; the ride
+      // simply went down. Drowning the real model anomalies (large_error /
+      // extreme_value, ~68 on genuine rides) under closure noise made the board
+      // useless. Closures belong in operational monitoring, not model-quality
+      // anomaly detection. The enum value is kept for historical rows.
+      // (The status-only-park OPERATING+null mis-classification is fixed
+      // separately in prediction-accuracy.service compareWithActuals.)
     }
 
     this.logger.log(`Detected ${anomalies.length} anomalies`);
