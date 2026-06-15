@@ -554,9 +554,16 @@ export class AnalyticsService {
       trend = this.computeTrend(currentPeakWait, avgLastHour, avgPrevHour);
     }
 
-    // Comparison to typical peak — percentage difference vs baseline.
-    const diff = currentPeakWait - baseline;
-    const comparedToTypical = (diff / baseline) * 100;
+    // Comparison to typical: derived from the SAME basis as `current` so the
+    // two fields are always internally consistent (comparedToTypical =
+    // current − 100). Previously this used a park-level (currentPeakWait −
+    // P50) / P50 diff while `current` used the per-ride-P90 ratio aggregate —
+    // different denominators that produced contradictory pairs on the park
+    // page (e.g. current 204 %, comparedToTypical 42 %). Anchoring on
+    // occupancyPercentage fixes both paths: in the per-ride path it tracks
+    // ratioP90 × 100 − 100, and in the park-wide fallback it reduces exactly
+    // to the original (currentPeakWait − P50) / P50 × 100.
+    const comparedToTypical = occupancyPercentage - 100;
 
     // Determine status based on percentage difference
     let comparisonStatus: "higher" | "lower" | "typical" = "typical";

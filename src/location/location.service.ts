@@ -5,6 +5,7 @@ import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { formatInTimeZone } from "date-fns-tz";
 import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -204,6 +205,7 @@ export class LocationService {
       p50Baselines,
       analyticsMap,
       parkHasOperatingSchedule,
+      headlinerIds,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
@@ -214,6 +216,7 @@ export class LocationService {
       this.analyticsService.getBatchAttractionP50s(attractionIds),
       this.analyticsService.getBatchAttractionPercentilesToday(attractionIds),
       this.parksService.hasOperatingSchedule(parkId),
+      this.analyticsService.getHeadlinerAttractionIds(parkId),
     ]);
 
     const parkAnalytics = await this.analyticsService
@@ -236,9 +239,15 @@ export class LocationService {
       userLocation,
     );
 
+    // Month (1-based) in the park's timezone, used to evaluate seasonal
+    // availability against each attraction's seasonMonths.
+    const currentMonth = Number(
+      formatInTimeZone(new Date(), park.timezone || "UTC", "M"),
+    );
+
     // Build ride DTOs (no async needed inside map)
-    const rides: RideWithDistanceDto[] = attractionsWithDistance.map(
-      (attraction) => {
+    const rides: RideWithDistanceDto[] = attractionsWithDistance
+      .map((attraction) => {
         const queueData = latestQueueData.get(attraction.id);
         const analytics = analyticsMap.get(attraction.id) || null;
 
@@ -261,6 +270,19 @@ export class LocationService {
           }
         }
 
+        // Seasonal availability: only meaningful for seasonal attractions.
+        // seasonal-but-unknown-months → null (don't hide), mirroring
+        // ParkWithAttractionsDto / AttractionResponseDto semantics.
+        const isSeasonal = attraction.isSeasonal || false;
+        const seasonMonths = attraction.seasonMonths || null;
+        let isCurrentlyInSeason: boolean | null = null;
+        if (isSeasonal) {
+          isCurrentlyInSeason =
+            seasonMonths !== null && seasonMonths.length > 0
+              ? seasonMonths.includes(currentMonth)
+              : null;
+        }
+
         return {
           id: attraction.id,
           name: attraction.name,
@@ -272,6 +294,10 @@ export class LocationService {
               : null,
           status: queueData?.status || "CLOSED",
           crowdLevel,
+          isHeadliner: headlinerIds.has(attraction.id),
+          isSeasonal,
+          seasonMonths,
+          isCurrentlyInSeason,
           analytics: analytics
             ? {
                 p50: analytics.p50,
@@ -280,8 +306,11 @@ export class LocationService {
             : undefined,
           url: buildAttractionUrl(park, attraction) || "",
         };
-      },
-    );
+      })
+      // Hide rides that are definitively out of their operating season.
+      // Seasonal-but-unknown (null) and in-season (true) rides stay, marked
+      // via the isSeasonal / isCurrentlyInSeason fields above.
+      .filter((ride) => ride.isCurrentlyInSeason !== false);
 
     // Build park info
     const parkInfo: NearbyParkInfoDto = {

@@ -56,6 +56,38 @@ export class RideWithDistanceDto {
   crowdLevel?: CrowdLevel | null;
 
   @ApiProperty({
+    description:
+      "Whether this is a headliner (top) attraction for this park, based on historical wait-time data",
+    example: true,
+  })
+  isHeadliner: boolean;
+
+  @ApiProperty({
+    description: "Whether this attraction only operates during certain seasons",
+    example: false,
+  })
+  isSeasonal: boolean;
+
+  @ApiProperty({
+    description:
+      "Months (1–12) when this attraction typically operates. Null if not seasonal.",
+    required: false,
+    nullable: true,
+    type: [Number],
+  })
+  seasonMonths?: number[] | null;
+
+  @ApiProperty({
+    description:
+      "Whether the attraction is currently in its operating season. " +
+      "Null for non-seasonal attractions (or seasonal ones with unknown months). " +
+      "Rides that are definitively out of season (false) are omitted from the list.",
+    required: false,
+    nullable: true,
+  })
+  isCurrentlyInSeason?: boolean | null;
+
+  @ApiProperty({
     description: "Analytics data for the ride",
     required: false,
     nullable: true,
