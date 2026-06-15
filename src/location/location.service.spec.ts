@@ -45,6 +45,7 @@ describe("LocationService", () => {
     getParkStatistics: jest.fn().mockResolvedValue(null),
     getAttractionCrowdLevel: jest.fn().mockReturnValue("moderate"),
     getBatchParkOccupancy: jest.fn().mockResolvedValue(new Map()),
+    getHeadlinerAttractionIds: jest.fn().mockResolvedValue(new Set<string>()),
   };
   const parksService = {
     getBatchParkStatus: jest.fn().mockResolvedValue(new Map()),

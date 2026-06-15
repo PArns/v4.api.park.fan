@@ -246,6 +246,41 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(service.determineCrowdLevel(result.current)).toBe("high");
     });
 
+    it("keeps comparedToTypical on the same basis as current in the per-ride path", async () => {
+      // Regression: `current` (per-ride-P90 ratio × 100) and
+      // `comparedToTypical` (was park-level (peak − P50)/P50) used to be
+      // computed from different denominators, producing contradictory
+      // pairs like current 204 % / comparedToTypical 42 %. They must now
+      // always satisfy comparedToTypical === current − 100.
+      headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
+      parkP50Repo.findOne.mockResolvedValue({
+        parkId: "p1",
+        p50Baseline: 50,
+        confidence: "high",
+      });
+      redisStore.set(
+        "park:p50:p1",
+        JSON.stringify({ p50: 50, confidence: "high" }),
+      );
+      // Force the per-ride-ratio path: ratioP90 2.04 → current 204 %.
+      (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue({
+        ratioP90: 2.04,
+        averageCurrentWait: 102,
+        rideCount: 3,
+      });
+      // Trend buckets + active-attractions count (headliner path makes one
+      // trend query, then getActiveAttractionsCount via the query builder).
+      queueDataRepo.query.mockReset();
+      queueDataRepo.query.mockResolvedValue([]);
+
+      const result = await service.calculateParkOccupancy("p1");
+
+      expect(result.current).toBe(204);
+      expect(result.comparedToTypical).toBe(result.current - 100);
+      expect(result.comparedToTypical).toBe(104);
+      expect(result.comparisonStatus).toBe("higher");
+    });
+
     it("reads 'very_low' (<=60%) when the current peak is well below typical", async () => {
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
       parkP50Repo.findOne.mockResolvedValue({

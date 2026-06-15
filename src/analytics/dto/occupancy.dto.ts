@@ -18,7 +18,10 @@ export class OccupancyDto {
 
   @ApiProperty({
     description:
-      "Percentage difference from typical peak (P90 baseline; P50 fallback when no P90 row exists yet). E.g. +14 means 14% higher than a typical day's peak.",
+      "Percentage difference from typical, on the SAME basis as `current` " +
+      "(always equals `current` − 100). E.g. current 114 → +14 means 14% " +
+      "above a typical day. Use `current` for the absolute reading and this " +
+      "field for the signed delta — they will never contradict each other.",
     example: 14,
   })
   comparedToTypical: number;
@@ -32,7 +35,10 @@ export class OccupancyDto {
 
   @ApiProperty({
     description:
-      "Baseline peak wait time used for comparison (P90 minutes; P50 fallback when no P90 row exists yet). Field name retained for backward compatibility.",
+      "Typical-day baseline wait time (minutes) used for the comparison — " +
+      "the P50 median over the trailing window, NOT the 90th percentile. " +
+      "The `90thPercentile` name is a historical misnomer retained for " +
+      "backward compatibility.",
     example: 50,
   })
   baseline90thPercentile: number;
