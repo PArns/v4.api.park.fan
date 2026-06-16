@@ -128,6 +128,9 @@ describe("AnalyticsService", () => {
   const mockQueueDataAggregateRepository = {
     createQueryBuilder: jest.fn(() => createMockQueryBuilder()),
     find: jest.fn(),
+    manager: {
+      query: jest.fn().mockResolvedValue([]),
+    },
   };
 
   const mockParkDailyStatsRepository = {
@@ -497,6 +500,107 @@ describe("AnalyticsService", () => {
       expect(result.trend).toBe("stable");
       expect(result.recentAverage).toBeNull();
       expect(result.previousAverage).toBeNull();
+    });
+  });
+
+  describe("getAttractionTypicalWaits", () => {
+    it("splits daily-peak P50/P90 into weekday and weekend buckets", async () => {
+      mockRedis.get.mockResolvedValueOnce(null);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([
+        { is_weekend: false, typical: "30", busy: "55", sample_days: 142 },
+        { is_weekend: true, typical: "45", busy: "75", sample_days: 58 },
+      ]);
+
+      const result = await service.getAttractionTypicalWaits(
+        "attraction-123",
+        "Europe/Berlin",
+        "DE",
+      );
+
+      // roundToNearest5Minutes leaves multiples of 5 untouched
+      expect(result.weekday).toEqual({
+        typical: 30,
+        busy: 55,
+        sampleDays: 142,
+      });
+      expect(result.weekend).toEqual({ typical: 45, busy: 75, sampleDays: 58 });
+      expect(result.windowDays).toBe(365);
+      expect(result.displayable).toBe(true);
+
+      // Country-aware weekend days (Sat+Sun for DE) are passed to SQL
+      const sqlArgs =
+        mockQueueDataAggregateRepository.manager.query.mock.calls[0][1];
+      expect(sqlArgs[5]).toEqual([0, 6]);
+
+      // Result is cached for re-use
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        expect.stringContaining("attraction:typical-waits:v1:attraction-123"),
+        expect.any(String),
+        "EX",
+        24 * 60 * 60,
+      );
+    });
+
+    it("returns empty, non-displayable buckets when there is no data", async () => {
+      mockRedis.get.mockResolvedValueOnce(null);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([]);
+
+      const result = await service.getAttractionTypicalWaits(
+        "attraction-123",
+        "Europe/Berlin",
+        "DE",
+      );
+
+      expect(result.weekday).toEqual({
+        typical: null,
+        busy: null,
+        sampleDays: 0,
+      });
+      expect(result.weekend).toEqual({
+        typical: null,
+        busy: null,
+        sampleDays: 0,
+      });
+      expect(result.displayable).toBe(false);
+    });
+
+    it("serves a cached result without querying the database", async () => {
+      const cached = {
+        weekday: { typical: 20, busy: 40, sampleDays: 100 },
+        weekend: { typical: 30, busy: 50, sampleDays: 40 },
+        windowDays: 365,
+        dataFrom: "2025-06-16",
+        dataTo: "2026-06-15",
+        displayable: true,
+        generatedAt: "2026-06-16T03:00:00.000Z",
+      };
+      mockRedis.get.mockResolvedValueOnce(JSON.stringify(cached));
+
+      const result = await service.getAttractionTypicalWaits(
+        "attraction-123",
+        "Europe/Berlin",
+        "DE",
+      );
+
+      expect(result).toEqual(cached);
+      expect(
+        mockQueueDataAggregateRepository.manager.query,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("uses country-specific weekend days (Fri+Sat for the UAE)", async () => {
+      mockRedis.get.mockResolvedValueOnce(null);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([]);
+
+      await service.getAttractionTypicalWaits(
+        "attraction-123",
+        "Asia/Dubai",
+        "AE",
+      );
+
+      const sqlArgs =
+        mockQueueDataAggregateRepository.manager.query.mock.calls[0][1];
+      expect(sqlArgs[5]).toEqual([5, 6]);
     });
   });
 });

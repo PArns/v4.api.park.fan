@@ -14,6 +14,82 @@ import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 
 /**
+ * One weekday/weekend bucket of the typical-waits summary.
+ *
+ * Both values are derived from the distribution of *daily peak* waits (the
+ * day's highest hourly P90) across operating days in the bucket:
+ * - `typical` = P50 of those daily peaks → a normal day's peak wait
+ * - `busy`    = P90 of those daily peaks → a busy day's peak wait
+ */
+export class TypicalWaitBucketDto {
+  @ApiProperty({
+    example: 35,
+    nullable: true,
+    description:
+      "Typical day's peak wait in minutes (median of daily peaks). Null if no data.",
+  })
+  typical: number | null;
+
+  @ApiProperty({
+    example: 60,
+    nullable: true,
+    description:
+      "Busy day's peak wait in minutes (90th percentile of daily peaks). Null if no data.",
+  })
+  busy: number | null;
+
+  @ApiProperty({
+    example: 142,
+    description: "Number of operating days with data in this bucket",
+  })
+  sampleDays: number;
+}
+
+/**
+ * Typical-vs-busy peak waits, split by weekday and weekend.
+ * Weekend days are country-aware (e.g. Fri+Sat in the Gulf states).
+ */
+export class TypicalWaitsDto {
+  @ApiProperty({
+    type: TypicalWaitBucketDto,
+    description: "Stats over weekday (non-weekend) operating days",
+  })
+  weekday: TypicalWaitBucketDto;
+
+  @ApiProperty({
+    type: TypicalWaitBucketDto,
+    description: "Stats over weekend operating days (country-aware)",
+  })
+  weekend: TypicalWaitBucketDto;
+
+  @ApiProperty({
+    example: 365,
+    description: "Size of the look-back window in days",
+  })
+  windowDays: number;
+
+  @ApiProperty({ example: "2025-06-16", description: "Window start (park tz)" })
+  dataFrom: string;
+
+  @ApiProperty({ example: "2026-06-15", description: "Window end (park tz)" })
+  dataTo: string;
+
+  @ApiProperty({
+    example: true,
+    description:
+      "True when the total sample is large enough to display. Gate rendering " +
+      "on this instead of a client-side threshold.",
+  })
+  displayable: boolean;
+
+  @ApiProperty({
+    example: "2026-06-16T03:00:00.000Z",
+    description: "When this aggregate was computed (ISO 8601 UTC)",
+  })
+  generatedAt: string;
+}
+
+/**
  * Attraction Response DTO
  *
  * Used for API responses when returning attraction data.
@@ -222,6 +298,17 @@ export class AttractionResponseDto {
     type: [ScheduleItemDto],
   })
   schedule?: ScheduleItemDto[];
+
+  @ApiProperty({
+    description:
+      "Typical vs busy-day peak waits, split by weekday and weekend. " +
+      "Derived from the distribution of daily peak waits over a sliding window. " +
+      "Render only when `displayable` is true.",
+    required: false,
+    nullable: true,
+    type: TypicalWaitsDto,
+  })
+  typicalWaits?: TypicalWaitsDto | null;
 
   @ApiProperty({
     description:

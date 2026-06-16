@@ -54,6 +54,8 @@ import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
+import { getWeekendDaysForCountry } from "../date-features/constants/weekend-rules.constant";
+import type { TypicalWaitsDto } from "../attractions/dto/attraction-response.dto";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -4584,6 +4586,131 @@ export class AnalyticsService {
       .set(cacheKey, "0", "EX", NEGATIVE_BASELINE_TTL)
       .catch(() => undefined);
     return 0;
+  }
+
+  /**
+   * Typical vs busy-day peak waits for a single attraction, split into
+   * weekday and weekend buckets.
+   *
+   * Method (per bucket):
+   * 1. From the pre-computed hourly percentiles (`queue_data_aggregates`),
+   *    take each operating day's **peak** = MAX hourly P90 (the day's
+   *    headline wait), bucketed by day-of-week in the *park* timezone.
+   * 2. Over those daily peaks: `typical` = P50 (a normal day), `busy` = P90
+   *    (a busy day). Both percentiles come from one PERCENTILE_CONT pass.
+   *
+   * Weekend membership is country-aware (e.g. Fri+Sat in the Gulf states).
+   * Cached 24h — this is a multi-hundred-day scan and the inputs only change
+   * once a day when the percentile aggregates are rebuilt.
+   */
+  async getAttractionTypicalWaits(
+    attractionId: string,
+    timezone: string,
+    countryCode: string,
+  ): Promise<TypicalWaitsDto> {
+    const WINDOW_DAYS = 365; // one full seasonal cycle
+    const MIN_SAMPLES_PER_HOUR = 2; // drop noisy single-sample hours
+    const MIN_TOTAL_SAMPLE_DAYS = 20; // gate for `displayable`
+
+    const cacheKey = `attraction:typical-waits:v1:${attractionId}:${WINDOW_DAYS}`;
+    const cached = safeJsonParse<TypicalWaitsDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
+
+    const now = new Date();
+    const dataTo = formatInTimeZone(subDays(now, 1), timezone, "yyyy-MM-dd");
+    const dataFrom = formatInTimeZone(
+      subDays(now, WINDOW_DAYS),
+      timezone,
+      "yyyy-MM-dd",
+    );
+    // Bound the scan in UTC against the park-local date window.
+    const startUtc = fromZonedTime(`${dataFrom}T00:00:00`, timezone);
+    const endUtc = fromZonedTime(`${dataTo}T00:00:00`, timezone);
+    endUtc.setUTCDate(endUtc.getUTCDate() + 1); // inclusive of dataTo
+
+    const weekendDays = getWeekendDaysForCountry(countryCode);
+
+    const rows: Array<{
+      is_weekend: boolean;
+      typical: string | null;
+      busy: string | null;
+      sample_days: number;
+    }> = await this.queueDataAggregateRepository.manager.query(
+      `WITH daily AS (
+         SELECT
+           (qda.hour AT TIME ZONE $2)::date                  AS day,
+           EXTRACT(DOW FROM qda.hour AT TIME ZONE $2)::int   AS dow,
+           MAX(qda.p90)                                      AS day_peak
+         FROM queue_data_aggregates qda
+         WHERE qda."attractionId" = $1
+           AND qda.hour >= $3
+           AND qda.hour <  $4
+           AND qda."sampleCount" >= $5
+         GROUP BY day, dow
+       )
+       SELECT
+         (dow = ANY($6::int[]))                                   AS is_weekend,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY day_peak)    AS typical,
+         percentile_cont(0.9) WITHIN GROUP (ORDER BY day_peak)    AS busy,
+         COUNT(*)::int                                            AS sample_days
+       FROM daily
+       GROUP BY is_weekend`,
+      [
+        attractionId,
+        timezone,
+        startUtc.toISOString(),
+        endUtc.toISOString(),
+        MIN_SAMPLES_PER_HOUR,
+        weekendDays,
+      ],
+    );
+
+    const emptyBucket = (): TypicalWaitsDto["weekday"] => ({
+      typical: null,
+      busy: null,
+      sampleDays: 0,
+    });
+    const weekday = emptyBucket();
+    const weekend = emptyBucket();
+    for (const row of rows) {
+      const bucket = {
+        typical:
+          row.typical == null
+            ? null
+            : roundToNearest5Minutes(Number(row.typical)),
+        busy:
+          row.busy == null ? null : roundToNearest5Minutes(Number(row.busy)),
+        sampleDays: Number(row.sample_days),
+      };
+      if (row.is_weekend) {
+        weekend.typical = bucket.typical;
+        weekend.busy = bucket.busy;
+        weekend.sampleDays = bucket.sampleDays;
+      } else {
+        weekday.typical = bucket.typical;
+        weekday.busy = bucket.busy;
+        weekday.sampleDays = bucket.sampleDays;
+      }
+    }
+
+    const result: TypicalWaitsDto = {
+      weekday,
+      weekend,
+      windowDays: WINDOW_DAYS,
+      dataFrom,
+      dataTo,
+      displayable:
+        weekday.sampleDays + weekend.sampleDays >= MIN_TOTAL_SAMPLE_DAYS,
+      generatedAt: new Date().toISOString(),
+    };
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+
+    return result;
   }
 
   /**

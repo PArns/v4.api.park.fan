@@ -396,37 +396,59 @@ export class AttractionIntegrationService {
           return [] as HistoryDayDto[];
         });
 
+        // Typical-vs-busy peak waits by weekday/weekend (cached 24h).
+        // Independent of startTime, so it rides along in the batch below.
+        const typicalWaitsPromise = this.analyticsService
+          .getAttractionTypicalWaits(
+            attraction.id,
+            park.timezone,
+            park.countryCode,
+          )
+          .catch((err) => {
+            this.logger.warn(
+              `Failed to compute typical waits for attraction ${attraction.id}:`,
+              err,
+            );
+            return null;
+          });
+
         const startTime = await this.analyticsService.getEffectiveStartTime(
           attraction.parkId,
           park.timezone,
         );
 
-        const [statistics, history, scheduleEntries] = await Promise.all([
-          this.analyticsService.getAttractionStatistics(
-            attraction.id,
-            startTime,
-            park.timezone,
-          ),
-          historyPromise,
-          this.scheduleEntryRepository
-            .createQueryBuilder("schedule")
-            .where("schedule.parkId = :parkId", { parkId: attraction.parkId })
-            .andWhere("schedule.attractionId IS NULL")
-            .andWhere("schedule.date >= :startDate", {
-              startDate: startDateStr,
-            })
-            .andWhere("schedule.date <= :endDate", { endDate: endDateStr })
-            .orderBy("schedule.date", "ASC")
-            .addOrderBy("schedule.scheduleType", "ASC")
-            .getMany()
-            .catch((err) => {
-              this.logger.warn(
-                `Failed to fetch schedule for attraction ${attraction.id}:`,
-                err,
-              );
-              return [] as ScheduleEntry[];
-            }),
-        ]);
+        const [statistics, history, scheduleEntries, typicalWaits] =
+          await Promise.all([
+            this.analyticsService.getAttractionStatistics(
+              attraction.id,
+              startTime,
+              park.timezone,
+            ),
+            historyPromise,
+            this.scheduleEntryRepository
+              .createQueryBuilder("schedule")
+              .where("schedule.parkId = :parkId", {
+                parkId: attraction.parkId,
+              })
+              .andWhere("schedule.attractionId IS NULL")
+              .andWhere("schedule.date >= :startDate", {
+                startDate: startDateStr,
+              })
+              .andWhere("schedule.date <= :endDate", { endDate: endDateStr })
+              .orderBy("schedule.date", "ASC")
+              .addOrderBy("schedule.scheduleType", "ASC")
+              .getMany()
+              .catch((err) => {
+                this.logger.warn(
+                  `Failed to fetch schedule for attraction ${attraction.id}:`,
+                  err,
+                );
+                return [] as ScheduleEntry[];
+              }),
+            typicalWaitsPromise,
+          ]);
+
+        dto.typicalWaits = typicalWaits;
 
         dto.statistics = {
           avgWaitToday: statistics.avgWaitToday,
