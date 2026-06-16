@@ -46,6 +46,40 @@ export class TypicalWaitBucketDto {
 }
 
 /**
+ * One day-of-week bucket: the weekday/weekend bucket plus which day it is.
+ */
+export class DayOfWeekWaitDto extends TypicalWaitBucketDto {
+  @ApiProperty({
+    example: 6,
+    description: "Day of week (0=Sunday, 1=Monday, …, 6=Saturday)",
+  })
+  dayOfWeek: number;
+
+  @ApiProperty({
+    example: true,
+    description: "Whether this day counts as weekend in the park's country",
+  })
+  isWeekend: boolean;
+}
+
+/**
+ * The record peak wait over the look-back window, with the date it occurred.
+ */
+export class PeakWaitDto {
+  @ApiProperty({
+    example: 120,
+    description: "Highest daily peak wait in the window (minutes)",
+  })
+  value: number;
+
+  @ApiProperty({
+    example: "2025-08-09",
+    description: "Date the record peak occurred (YYYY-MM-DD, park timezone)",
+  })
+  date: string;
+}
+
+/**
  * Typical-vs-busy peak waits, split by weekday and weekend.
  * Weekend days are country-aware (e.g. Fri+Sat in the Gulf states).
  */
@@ -61,6 +95,21 @@ export class TypicalWaitsDto {
     description: "Stats over weekend operating days (country-aware)",
   })
   weekend: TypicalWaitBucketDto;
+
+  @ApiProperty({
+    type: [DayOfWeekWaitDto],
+    description:
+      "Per day-of-week breakdown (only days with data), ordered 0=Sun…6=Sat",
+  })
+  byDayOfWeek: DayOfWeekWaitDto[];
+
+  @ApiProperty({
+    type: PeakWaitDto,
+    nullable: true,
+    description:
+      "Record peak wait over the window with its date. Null if no data.",
+  })
+  peak: PeakWaitDto | null;
 
   @ApiProperty({
     example: 365,

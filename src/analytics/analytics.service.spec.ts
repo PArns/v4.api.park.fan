@@ -504,11 +504,15 @@ describe("AnalyticsService", () => {
   });
 
   describe("getAttractionTypicalWaits", () => {
-    it("splits daily-peak P50/P90 into weekday and weekend buckets", async () => {
+    it("computes weekday/weekend, per-weekday and record peak from daily peaks", async () => {
       mockRedis.get.mockResolvedValueOnce(null);
+      // Per-day peaks: 3 Mondays (dow 1) + 2 Saturdays (dow 6). DE weekend = Sat/Sun.
       mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([
-        { is_weekend: false, typical: "30", busy: "55", sample_days: 142 },
-        { is_weekend: true, typical: "45", busy: "75", sample_days: 58 },
+        { day: "2025-06-02", dow: 1, day_peak: "20" },
+        { day: "2025-06-09", dow: 1, day_peak: "30" },
+        { day: "2025-06-16", dow: 1, day_peak: "40" },
+        { day: "2025-06-07", dow: 6, day_peak: "50" },
+        { day: "2025-06-14", dow: 6, day_peak: "60" },
       ]);
 
       const result = await service.getAttractionTypicalWaits(
@@ -517,31 +521,43 @@ describe("AnalyticsService", () => {
         "DE",
       );
 
-      // roundToNearest5Minutes leaves multiples of 5 untouched
+      // Weekday peaks [20,30,40]: P50=30, P90=38→round5→40
       expect(result.weekday).toEqual({
         typical: 30,
-        busy: 55,
-        sampleDays: 142,
+        busy: 40,
+        sampleDays: 3,
       });
-      expect(result.weekend).toEqual({ typical: 45, busy: 75, sampleDays: 58 });
+      // Weekend peaks [50,60]: P50=55, P90=59→round5→60
+      expect(result.weekend).toEqual({ typical: 55, busy: 60, sampleDays: 2 });
+
+      // Per day-of-week, ordered ascending, with isWeekend flags
+      expect(result.byDayOfWeek).toEqual([
+        {
+          dayOfWeek: 1,
+          isWeekend: false,
+          typical: 30,
+          busy: 40,
+          sampleDays: 3,
+        },
+        { dayOfWeek: 6, isWeekend: true, typical: 55, busy: 60, sampleDays: 2 },
+      ]);
+
+      // Record peak = highest daily peak, with its date
+      expect(result.peak).toEqual({ value: 60, date: "2025-06-14" });
+
       expect(result.windowDays).toBe(365);
-      expect(result.displayable).toBe(true);
+      expect(result.displayable).toBe(false); // 5 days < 20 threshold
 
-      // Country-aware weekend days (Sat+Sun for DE) are passed to SQL
-      const sqlArgs =
-        mockQueueDataAggregateRepository.manager.query.mock.calls[0][1];
-      expect(sqlArgs[5]).toEqual([0, 6]);
-
-      // Result is cached for re-use
+      // Result is cached for re-use (v2 key)
       expect(mockRedis.set).toHaveBeenCalledWith(
-        expect.stringContaining("attraction:typical-waits:v1:attraction-123"),
+        expect.stringContaining("attraction:typical-waits:v2:attraction-123"),
         expect.any(String),
         "EX",
         24 * 60 * 60,
       );
     });
 
-    it("returns empty, non-displayable buckets when there is no data", async () => {
+    it("returns empty buckets, no peak and non-displayable when there is no data", async () => {
       mockRedis.get.mockResolvedValueOnce(null);
       mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([]);
 
@@ -561,13 +577,43 @@ describe("AnalyticsService", () => {
         busy: null,
         sampleDays: 0,
       });
+      expect(result.byDayOfWeek).toEqual([]);
+      expect(result.peak).toBeNull();
       expect(result.displayable).toBe(false);
+    });
+
+    it("classifies weekend country-aware (Fri+Sat for the UAE)", async () => {
+      mockRedis.get.mockResolvedValueOnce(null);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([
+        { day: "2025-06-05", dow: 4, day_peak: "10" }, // Thursday → weekday
+        { day: "2025-06-06", dow: 5, day_peak: "100" }, // Friday → weekend
+        { day: "2025-06-07", dow: 6, day_peak: "110" }, // Saturday → weekend
+      ]);
+
+      const result = await service.getAttractionTypicalWaits(
+        "attraction-123",
+        "Asia/Dubai",
+        "AE",
+      );
+
+      expect(result.weekday.sampleDays).toBe(1);
+      expect(result.weekend.sampleDays).toBe(2);
+      expect(result.byDayOfWeek.map((d) => [d.dayOfWeek, d.isWeekend])).toEqual(
+        [
+          [4, false],
+          [5, true],
+          [6, true],
+        ],
+      );
+      expect(result.peak).toEqual({ value: 110, date: "2025-06-07" });
     });
 
     it("serves a cached result without querying the database", async () => {
       const cached = {
         weekday: { typical: 20, busy: 40, sampleDays: 100 },
         weekend: { typical: 30, busy: 50, sampleDays: 40 },
+        byDayOfWeek: [],
+        peak: { value: 80, date: "2025-08-09" },
         windowDays: 365,
         dataFrom: "2025-06-16",
         dataTo: "2026-06-15",
@@ -586,21 +632,6 @@ describe("AnalyticsService", () => {
       expect(
         mockQueueDataAggregateRepository.manager.query,
       ).not.toHaveBeenCalled();
-    });
-
-    it("uses country-specific weekend days (Fri+Sat for the UAE)", async () => {
-      mockRedis.get.mockResolvedValueOnce(null);
-      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([]);
-
-      await service.getAttractionTypicalWaits(
-        "attraction-123",
-        "Asia/Dubai",
-        "AE",
-      );
-
-      const sqlArgs =
-        mockQueueDataAggregateRepository.manager.query.mock.calls[0][1];
-      expect(sqlArgs[5]).toEqual([5, 6]);
     });
   });
 });

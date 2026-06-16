@@ -277,6 +277,16 @@ describe("AttractionIntegrationService", () => {
       mockAnalyticsService.getAttractionTypicalWaits.mockResolvedValue({
         weekday: { typical: 30, busy: 55, sampleDays: 142 },
         weekend: { typical: 45, busy: 75, sampleDays: 58 },
+        byDayOfWeek: [
+          {
+            dayOfWeek: 6,
+            isWeekend: true,
+            typical: 45,
+            busy: 75,
+            sampleDays: 58,
+          },
+        ],
+        peak: { value: 120, date: "2025-08-09" },
         windowDays: 365,
         dataFrom: "2025-06-16",
         dataTo: "2026-06-15",
@@ -340,6 +350,11 @@ describe("AttractionIntegrationService", () => {
       );
       expect(result.typicalWaits?.weekday.typical).toBe(30);
       expect(result.typicalWaits?.weekend.busy).toBe(75);
+      expect(result.typicalWaits?.byDayOfWeek?.[0].dayOfWeek).toBe(6);
+      expect(result.typicalWaits?.peak).toEqual({
+        value: 120,
+        date: "2025-08-09",
+      });
       expect(result.typicalWaits?.displayable).toBe(true);
 
       // Verify prediction accuracy
