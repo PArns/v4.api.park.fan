@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Comma-separated park UUIDs to include. Empty = all parks (full panel).
     NF_PARK_IDS: str = ""
     # Daily-peak target percentile (matches the calendar peak-vs-peak contract).
+    # The training target y is the daily P90 of waitTime. Serving then takes the
+    # MEDIAN of the forecast distribution, so predicted_peak = E[daily-P90] (the
+    # expected/typical daily-peak), NOT a P90/upper quantile of the forecast itself.
     NF_TARGET_PERCENTILE: float = 0.9
     # Minimum wait filter (aligns with ml-service training rules).
     NF_MIN_WAIT: int = 5

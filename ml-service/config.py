@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # Per-purpose serving quantiles (must be present in the MultiQuantile alpha list).
     SERVING_WAIT_QUANTILE: float = 0.5  # median → honest wait display
     SERVING_CROWD_QUANTILE: float = 0.8  # busy-calibrated → crowd-level signal
+    # NOTE: alpha=0.95 is trained as HEADROOM for the uncertainty band ONLY
+    # (top quantile − median = the displayed uncertainty width in predict.py). It is
+    # intentionally NOT served as a crowd/display value — it over-shoots busy days
+    # massively (bias +16.5, see above). Do NOT wire 0.95 to the crowd level.
     # Busyness weighting: down-weight the ~72% quiet rows / up-weight busy rows so
     # the loss attends to the under-fit busy tail. Improves overall calibration on
     # top of the quantile lift (q0.7w/q0.8w had the best holdout MAE). Default ON.

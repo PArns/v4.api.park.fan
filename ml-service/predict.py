@@ -1926,6 +1926,10 @@ def predict_wait_times(
 
         predictions = _pick(getattr(settings, "SERVING_WAIT_QUANTILE", 0.5))
         crowd_predictions = _pick(getattr(settings, "SERVING_CROWD_QUANTILE", 0.8))
+        # The top trained quantile (alpha=0.95) is used ONLY here, as headroom for
+        # the uncertainty band — NOT as a served crowd/display value (it over-shoots
+        # busy days). quantiles are now monotonic per row (model.predict_quantiles),
+        # so hi >= median and the width can no longer silently collapse from crossing.
         hi = quantiles[max(quantiles)]
         uncertainties = np.maximum(hi - predictions, 0.0)
         use_uncertainty = bool(np.nanmax(uncertainties) > 1e-6)

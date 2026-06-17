@@ -657,8 +657,23 @@ class WaitTimeModel:
             X_ordered, thread_count=settings.CATBOOST_INFERENCE_THREAD_COUNT
         )
         preds = np.maximum(np.atleast_2d(preds), 0)
-        # Columns follow the alpha order in the loss string.
-        return {a: preds[:, i] for i, a in enumerate(alphas)}
+        # Columns follow the alpha order in the loss string, so column i -> alphas[i].
+        # CatBoost MultiQuantile fits each quantile independently and does NOT
+        # guarantee q0.5 <= q0.8 <= q0.95 per row — quantiles can "cross". A crossed
+        # row would let the crowd signal (q0.8) sit below the displayed median (q0.5)
+        # and collapse the uncertainty width (top - median) to 0. Enforce row-wise
+        # monotonic non-decreasing values in ASCENDING-ALPHA order via a cumulative
+        # max, then map each (now non-crossing) column back to its alpha. We sort by
+        # alpha explicitly rather than trusting the raw column order. The median pick
+        # (argmin|alpha-0.5|) and predict.py's _pick read individual alphas, so they
+        # are unaffected by the per-row clamp.
+        order = list(np.argsort(alphas))  # column indices, ascending alpha
+        preds_sorted = preds[:, order]
+        preds_sorted = np.maximum.accumulate(preds_sorted, axis=1)
+        out: Dict[float, np.ndarray] = {}
+        for sorted_pos, col in enumerate(order):
+            out[alphas[col]] = preds_sorted[:, sorted_pos]
+        return out
 
     def predict_with_uncertainty(self, X: pd.DataFrame) -> Dict[str, np.ndarray]:
         """

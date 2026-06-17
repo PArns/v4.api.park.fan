@@ -338,6 +338,11 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
     One row per (attraction, target_date, forecast_date=today). Re-running on the
     same day overwrites that day's forecast; past forecast_dates are immutable, so
     the genuine forward record (made before the target) is preserved for scoring.
+
+    `value_col` is the MEDIAN/point forecast column. Because the model's target is
+    the daily P90 (NF_TARGET_PERCENTILE), the persisted predicted_peak = E[daily-P90]
+    (the expected/typical daily-peak), NOT a P90/upper quantile of the forecast
+    distribution. It is scored against the realised daily P90 (apples-to-apples).
     """
     rows = yhat[["unique_id", "ds", value_col]].copy()
     rows = rows.rename(columns={"unique_id": "attraction_id", "ds": "target_date"})

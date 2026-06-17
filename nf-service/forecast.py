@@ -330,8 +330,15 @@ def train_and_forecast(version: str) -> pd.DataFrame:
 
 
 def _point_forecast_column(cols: list[str]) -> str | None:
-    """The TFT point/median forecast column. NeuralForecast names it after the model
-    (e.g. 'TFT', 'TFT-median'); fall back to the first TFT* column."""
+    """The TFT point/MEDIAN forecast column. NeuralForecast names it after the model
+    (e.g. 'TFT', 'TFT-median'); fall back to the first TFT* column.
+
+    Semantics: this column becomes `predicted_peak`. The training target y is the
+    daily P90 of waitTime (NF_TARGET_PERCENTILE), so this MEDIAN forecast is the
+    expected/typical daily-peak, i.e. predicted_peak = E[daily-P90]. It is the
+    CENTRAL forecast of a P90 target — NOT a P90/upper quantile of the forecast
+    distribution (those are the TFT '-lo-'/'-hi-' band columns). This is intentional:
+    it makes the day-by-day comparison to the realised daily P90 apples-to-apples."""
     for c in ("TFT", "TFT-median", "TFT-q-50", "TFT-loc"):
         if c in cols:
             return c
