@@ -41,7 +41,9 @@ interface ParkLiveStats {
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
-  private readonly CACHE_KEY = "discovery:geo:structure:v4"; // v4: added timezone to ParkReference
+  // Centralized so park merge/repair can bust it via invalidateParkCaches
+  // (the geo skeleton lists every park). v4: added timezone to ParkReference.
+  private readonly CACHE_KEY = CacheKeys.discoveryGeoStructure();
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
   private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes

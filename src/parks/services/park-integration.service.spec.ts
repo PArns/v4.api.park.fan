@@ -23,11 +23,12 @@ import type { CrowdLevel } from "../../common/types/crowd-level.type";
  * Focused coverage for the public ML-aggregation helper. ParkIntegrationService
  * is a 1500-line god-object whose hot path (`buildIntegratedResponse`)
  * touches ~15 dependencies; this file targets `aggregateDailyPredictions`
- * — a public, hot, pure-ish path used by yearly-predictions and the
- * calendar route. The recent peak-vs-peak refactor flipped its crowd-
- * level math from "median(predictions) / P50 baseline" to
- * "P90(predictions) / P90 baseline (P50 fallback)" — these tests pin
- * the new contract down.
+ * — a public, hot, pure-ish path used by yearly-predictions. Its crowd-
+ * level math mirrors the monthly calendar's future path (typical-day-peak
+ * regime): AVG of predicted headliner waits ÷ the typical-day-peak
+ * baseline, so the yearly and monthly calendars agree for the same date.
+ * A missing typical-day-peak → 'moderate' (no P50/P90 fallback). These
+ * tests pin that contract down.
  */
 describe("ParkIntegrationService › aggregateDailyPredictions", () => {
   let service: ParkIntegrationService;
@@ -45,8 +46,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
 
   const analyticsService = {
     getHeadlinerAttractionIds: jest.fn().mockResolvedValue(new Set<string>()),
-    getP90BaselineFromCache: jest.fn().mockResolvedValue(0),
-    getP50BaselineFromCache: jest.fn().mockResolvedValue(0),
+    getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
     determineCrowdLevel: jest.fn(determineCrowdLevel),
   };
 
@@ -110,55 +110,34 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       predictionType: "daily" as const,
     }));
 
-  describe("crowd level math (peak-vs-median)", () => {
-    it("uses the P50 baseline as the crowd-level denominator when present", async () => {
+  describe("crowd level math (typical-day-peak)", () => {
+    it("uses the typical-day-peak baseline as the crowd-level denominator", async () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      // P50 baseline = 50 (typical median wait); predicted P90 of
-      // [30, 50, 70] (sorted) at index floor(3*0.9)=2 → 70. 70/50 = 140%
-      // → "high" (predicted peak materially above typical median).
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(80);
+      // typical-day-peak = 50. AVG of [60, 80] = 70 → 70/50 = 140% → "high"
+      // (predicted day materially above a typical day's peak).
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
-        { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 30 },
-        { attractionId: "h1", date: "2026-06-13", hour: 13, wait: 50 },
-        { attractionId: "h1", date: "2026-06-13", hour: 14, wait: 70 },
+        { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 60 },
+        { attractionId: "h1", date: "2026-06-13", hour: 13, wait: 80 },
       ]);
 
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
       expect(day.crowdLevel).toBe("high");
-      // P90 cache call is irrelevant when P50 exists — but it's still
-      // read in parallel, no extra round-trip wasted.
+      expect(day.avgWaitTime).toBe(70);
       expect(day.date).toBe("2026-06-13");
     });
 
-    it("falls back to the P90 baseline when no P50 row exists yet", async () => {
+    it("defaults to 'moderate' when no typical-day-peak exists (no P50/P90 fallback)", async () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      // P50 = 0 (missing). P90 = 30 → fallback. Predicted P90 = 30 →
-      // 30/30 = 100% → "moderate".
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(0);
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(30);
-
-      const predictions = buildPredictions([
-        { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 30 },
-      ]);
-
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
-
-      expect(day.crowdLevel).toBe("moderate");
-    });
-
-    it("defaults to 'moderate' (100%) when no baseline at all is available", async () => {
-      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
-        new Set(["h1"]),
-      );
-      analyticsService.getP90BaselineFromCache.mockResolvedValueOnce(0);
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(0);
+      // Brand-new park: typical-day-peak = 0 → pct hard-coded to 100 →
+      // "moderate". There is deliberately no fallback to a P50/P90 baseline.
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(0);
 
       const predictions = buildPredictions([
         { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 99 },
@@ -166,8 +145,6 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
 
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
-      // No baseline → pct hard-coded to 100 → "moderate". This avoids
-      // showing a misleading rating for brand-new parks.
       expect(day.crowdLevel).toBe("moderate");
     });
   });
@@ -177,21 +154,21 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["headliner"]),
       );
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         // Headliner predicts a 70-min wait — high.
         { attractionId: "headliner", date: "2026-06-13", hour: 12, wait: 70 },
-        // Filler predicts walk-on — would drag the day's P90 down if
+        // Filler predicts walk-on — would drag the day's AVG down if
         // included. Excluded by the headliner filter.
         { attractionId: "filler", date: "2026-06-13", hour: 12, wait: 5 },
       ]);
 
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
-      // 70/50 = 140% → "high". If filler had leaked in, P90 of [5, 70]
-      // = 70 at idx floor(2*0.9)=1 → 70 too. But avgWaitTime would
-      // be 37 instead of 70 — that's the regression bait.
+      // Only the headliner counts: AVG = 70 → 70/50 = 140% → "high",
+      // avgWaitTime = 70. If filler had leaked in, AVG of [5, 70] = 37.5
+      // → 75% → "low" and avgWaitTime = 38 — that's the regression bait.
       expect(day.crowdLevel).toBe("high");
       expect(day.avgWaitTime).toBe(70);
     });
@@ -201,16 +178,16 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set<string>(),
       );
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
-        { attractionId: "a1", date: "2026-06-13", hour: 12, wait: 30 },
-        { attractionId: "a2", date: "2026-06-13", hour: 12, wait: 70 },
+        { attractionId: "a1", date: "2026-06-13", hour: 12, wait: 60 },
+        { attractionId: "a2", date: "2026-06-13", hour: 12, wait: 80 },
       ]);
 
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
-      expect(day.crowdLevel).toBe("high"); // 70/50 = 140%
+      expect(day.crowdLevel).toBe("high"); // AVG 70 / 50 = 140%
     });
   });
 
@@ -225,11 +202,9 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       ["very_high", "avoid"],
       ["extreme", "strongly_avoid"],
     ])("crowdLevel '%s' → recommendation '%s'", async (level, expected) => {
-      // Drive crowd level by choosing baseline + wait to hit the target
-      // bucket. baseline = 50, multipliers: very_low ≤ 60% (wait=30),
-      // low 61-89% (45), moderate 90-110% (50), high 111-150% (70),
-      // very_high 151-200% (90), extreme > 200% (110).
-      // baseline = 50. Pick a wait that lands cleanly in each bucket:
+      // Drive crowd level by choosing typical-day-peak + wait to hit the
+      // target bucket. A single headliner means AVG = wait. With
+      // typical-day-peak = 50, pick a wait that lands cleanly in each bucket:
       // very_low ≤60% (wait=30 → 60%), low 61-89% (44 → 88%),
       // moderate 90-110% (50 → 100%), high 111-150% (70 → 140%),
       // very_high 151-200% (95 → 190%), extreme >200% (110 → 220%).
@@ -244,7 +219,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         {
@@ -266,7 +241,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         // Intentionally out-of-order on input.
@@ -288,7 +263,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      analyticsService.getP50BaselineFromCache.mockResolvedValueOnce(50);
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
 
       const predictions = buildPredictions([
         {

@@ -978,10 +978,12 @@ export class CalendarService {
    * Aggregate per-attraction ML predictions into a date → CrowdLevel map
    * for future days.
    *
-   * Mirrors calculateCrowdLevelForDate (peak-vs-peak): the predicted
-   * headliner waits for the day, averaged across headliners, divided by
-   * the park P90 baseline. The caller passes the P90 baseline (or the P50
-   * baseline as a fallback when no P90 row exists yet).
+   * Mirrors calculateCrowdLevelForDate's future path: the predicted
+   * headliner waits for the day, averaged across headliners, divided by the
+   * typical-day-peak baseline the caller passes (median of daily peaks,
+   * headliner-only). 100% = a typical day. No P50/P90 fallback — when the
+   * typical-day-peak is absent (brand-new park) the load rating defaults to
+   * moderate.
    *
    * Known limitation: ML emits a single smoothed value per attraction per
    * day (not a real intra-day peak), so future days read more
@@ -1018,7 +1020,7 @@ export class CalendarService {
 
       // Predicted headliner waits averaged across headliners (every
       // headliner counts equally — same cross-ride aggregation as the
-      // past-day numerator and the P90 baseline) ÷ the P90 baseline.
+      // past-day numerator) ÷ the typical-day-peak baseline.
       // Reads as "tomorrow's predicted level vs a typical day's peak".
       // crowdLevel and peakLoad coincide here (one signal per predicted
       // day; there's no separate "average" predicted view).

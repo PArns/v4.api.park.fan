@@ -192,9 +192,9 @@ export class LocationService {
 
     const attractionIds = attractions.map((a) => a.id);
 
-    // P90 baselines (cache-backed; daily-cron populated) drive the
-    // peak-vs-peak crowd reading. P50 is fetched alongside as a fallback
-    // for attractions that don't have a P90 row yet.
+    // P50 baselines (cache-backed; daily-cron populated) drive the live
+    // ratio-vs-P50 crowd reading. P90 is fetched alongside as a fallback
+    // for attractions that don't have a P50 row yet (consumed P50-first).
     const [
       statusMap,
       startTime,

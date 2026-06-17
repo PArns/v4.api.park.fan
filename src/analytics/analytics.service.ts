@@ -331,12 +331,13 @@ export class AnalyticsService {
   }
 
   /**
-   * Calculate park occupancy based on 90th percentile of historical wait times
+   * Calculate park occupancy as a ratio against the P50 (median) baseline
    *
-   * **Occupancy Calculation:**
-   * - 100% = 90th percentile of typical wait times for this hour/weekday over last 1 year
-   * - Formula: (currentAvgWait / p90Baseline) * 100
-   * - Can exceed 100% on extremely busy days (e.g., 150% = 50% busier than typical P90)
+   * **Occupancy Calculation (ratio-vs-P50):**
+   * - 100% = the current short-window headliner peak matches the P50
+   *   (typical/median) wait for this park
+   * - Formula: (currentAvgWait / p50Baseline) * 100
+   * - Can exceed 100% on busy days (e.g., 150% = 50% busier than a typical day)
    *
    * **Timezone-Aware:**
    * - Uses park's timezone (not UTC) for hour/day-of-week calculation
@@ -3754,155 +3755,6 @@ export class AnalyticsService {
     return response;
   }
 
-  /**
-   * Get crowd level data for ML training
-   *
-   * Returns historical data with labels for model training.
-   * Exports data in a format suitable for the ML service.
-   *
-   * @param entityId - Park or attraction ID
-   * @param type - "park" or "attraction"
-   * @param fromDate - Start date (YYYY-MM-DD)
-   * @param toDate - End date (YYYY-MM-DD)
-   * @param timezone - Park timezone
-   * @returns Array of daily crowd level data for ML training
-   */
-  async getCrowdLevelTrainingData(
-    entityId: string,
-    type: "park" | "attraction",
-    fromDate: string,
-    toDate: string,
-    timezone: string,
-  ): Promise<
-    Array<{
-      date: string;
-      dayOfWeek: number;
-      avgWaitTime: number;
-      p90Baseline: number;
-      percentage: number;
-      crowdLevel: CrowdLevel;
-      confidence: "high" | "medium" | "low";
-    }>
-  > {
-    // ML training labels follow the same peak-vs-median semantic as the
-    // user-facing crowd level: P50 baseline. The model predicts wait
-    // times directly; the crowd-level baseline here only affects the
-    // labelled percentage exposed for evaluation.
-    let baseline = 0;
-    let confidence: "high" | "medium" | "low" = "low";
-    if (type === "park") {
-      baseline = await this.getP50BaselineFromCache(entityId);
-      if (baseline > 0) {
-        const rec = await this.parkP50BaselineRepository.findOne({
-          where: { parkId: entityId },
-        });
-        confidence = rec?.confidence || "low";
-      }
-    } else {
-      baseline = await this.getAttractionP50BaselineFromCache(entityId);
-      if (baseline > 0) {
-        const rec = await this.attractionP50BaselineRepository.findOne({
-          where: { attractionId: entityId },
-        });
-        confidence = rec?.confidence || "low";
-      }
-    }
-
-    // Query daily aggregates
-    const startDate = fromZonedTime(`${fromDate}T00:00:00`, timezone);
-    const endDate = fromZonedTime(`${toDate}T23:59:59`, timezone);
-
-    // Each day's "value" is its P90 (peak-of-day) so the % stays
-    // apples-to-apples with the P90 baseline. `avgWaitTime` in the
-    // response is still the P50 (kept under that name for backwards
-    // compatibility with downstream ML feature consumers); the model
-    // sees both the label percentage AND the underlying wait stats.
-    let dailyData: Array<{
-      date: string;
-      avgWait: number;
-      peakWait: number;
-      dayOfWeek: number;
-    }>;
-
-    if (type === "attraction") {
-      dailyData = await this.queueDataRepository.query(
-        `
-        SELECT
-          DATE(qd.timestamp AT TIME ZONE $2) as date,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "avgWait",
-          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as "peakWait",
-          EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
-        FROM queue_data qd
-        JOIN attractions a ON a.id = qd."attractionId"
-        LEFT JOIN schedule_entries se
-          ON se."parkId" = a."parkId"
-          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
-          AND se."attractionId" IS NULL
-        WHERE qd."attractionId" = $1::uuid
-          AND qd.timestamp >= $3
-          AND qd.timestamp <= $4
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 10
-          AND qd."queueType" = 'STANDBY'
-          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
-                 EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
-        ORDER BY date
-      `,
-        [entityId, timezone, startDate, endDate],
-      );
-    } else {
-      dailyData = await this.queueDataRepository.query(
-        `
-        SELECT
-          DATE(qd.timestamp AT TIME ZONE $2) as date,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "avgWait",
-          PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") as "peakWait",
-          EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2) as "dayOfWeek"
-        FROM queue_data qd
-        INNER JOIN attractions a ON qd."attractionId" = a.id
-        LEFT JOIN schedule_entries se
-          ON se."parkId" = a."parkId"
-          AND se.date = DATE(qd.timestamp AT TIME ZONE $2)
-          AND se."attractionId" IS NULL
-        WHERE a."parkId" = $1::uuid
-          AND qd.timestamp >= $3
-          AND qd.timestamp <= $4
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."waitTime" >= 10
-          AND qd."queueType" = 'STANDBY'
-          AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
-        GROUP BY DATE(qd.timestamp AT TIME ZONE $2),
-                 EXTRACT(DOW FROM qd.timestamp AT TIME ZONE $2)
-        ORDER BY date
-      `,
-        [entityId, timezone, startDate, endDate],
-      );
-    }
-
-    return dailyData.map((row) => {
-      const avgWait = parseFloat(String(row.avgWait));
-      const peakWait = parseFloat(String(row.peakWait || row.avgWait));
-      const percentage =
-        baseline > 0 ? Math.round((peakWait / baseline) * 100) : 50;
-
-      return {
-        date:
-          typeof row.date === "string"
-            ? row.date
-            : new Date(row.date).toISOString().split("T")[0],
-        dayOfWeek: parseInt(String(row.dayOfWeek), 10),
-        avgWaitTime: roundToNearest5Minutes(avgWait),
-        p90Baseline: baseline,
-        percentage,
-        crowdLevel: this.determineCrowdLevel(percentage),
-        confidence,
-      };
-    });
-  }
-
   // ==================================================================================
   // P50 BASELINE SYSTEM - HEADLINER IDENTIFICATION & CROWD LEVEL CALCULATION
   // ==================================================================================
@@ -3949,7 +3801,7 @@ export class AnalyticsService {
   /**
    * Identify headliner attractions for a park using 3-tier adaptive strategy
    *
-   * Tier 1 (Major Parks): Absolute thresholds (AVG > 15min, P90 > 25min)
+   * Tier 1 (Major Parks): Absolute thresholds (AVG > 20min, P90 > 30min)
    * Tier 2 (Medium Parks): Relative thresholds (Top 40%, P90 > 1.5x P50)
    * Tier 3 (Small Parks): Relative thresholds (Top 50% - median wait) (fallback)
    *
@@ -4344,8 +4196,9 @@ export class AnalyticsService {
   /**
    * Cache the park typical-day-peak baseline (Redis only — no schema change;
    * recomputed by the daily cron). 2-day TTL so a single missed cron run
-   * still leaves a usable value; callers fall back to the P90 baseline when
-   * it's absent.
+   * still leaves a usable value. When it's absent (brand-new park with no
+   * baseline) callers fall through to the neutral 'moderate' default —
+   * there is deliberately NO fallback to the P90 baseline.
    *
    * NOTE: `park:typicalpeak:` (no hyphen) holds the typical-day peak WAIT
    * (number) — distinct from `park:typical-peak:` (with hyphen) in
@@ -4473,6 +4326,19 @@ export class AnalyticsService {
 
     // Cache the typical-day-peak (calendar reference) with the same lifecycle.
     await this.cacheTypicalDayPeak(parkId, baseline.typicalDayPeak);
+
+    // The baselines just changed; evict the caches derived from them (park
+    // statistics + cached crowd levels) so they don't serve ratings computed
+    // against the old baseline until their own TTL lapses.
+    await this.redis
+      .del(CacheKeys.parkStatistics(parkId))
+      .catch(() => undefined);
+    const crowdKeys = await this.redis
+      .keys(CacheKeys.parkCrowdLevelPattern(parkId))
+      .catch(() => [] as string[]);
+    if (crowdKeys.length > 0) {
+      await this.redis.del(...crowdKeys).catch(() => undefined);
+    }
 
     this.logger.log(
       `Saved baselines for park ${parkId}: P50=${baseline.p50}min P90=${baseline.p90}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier})`,

@@ -475,10 +475,11 @@ export class ParkIntegrationService {
         park.timezone,
       );
 
-      // Batch fetch the per-attraction peak baseline (P90) for crowd-level
-      // rendering, plus P50 as a graceful fallback for attractions that
-      // don't have a P90 row yet. Both reads hit Redis/DB only, never the
-      // 548-day live PERCENTILE_CONT the old getBatchAttractionP90s ran.
+      // Batch fetch the per-attraction P50 (median) baseline that drives the
+      // live ratio-vs-P50 crowd reading, plus the P90 baseline as a graceful
+      // fallback for attractions without a P50 row yet (consumed P50-first
+      // below). Both reads hit Redis/DB only, never the 548-day live
+      // PERCENTILE_CONT the old getBatchAttractionP90s ran.
       const [
         attractionP90s,
         attractionP50s,
@@ -997,7 +998,8 @@ export class ParkIntegrationService {
 
         // "Typical wait" displayed for closed parks is the median baseline
         // (P50) — what a typical headliner wait looks like — matching the
-        // peak-vs-median crowd semantic used by every other surface.
+        // live ratio-vs-P50 regime (the calendar's daily/future surfaces use
+        // the typical-day-peak baseline instead).
         const typicalWait = await this.analyticsService.getP50BaselineFromCache(
           park.id,
         );
@@ -1008,7 +1010,7 @@ export class ParkIntegrationService {
             trend: "stable",
             comparedToTypical: 0,
             comparisonStatus: "closed",
-            baseline90thPercentile: typicalWait || 0, // P90 baseline (P50 fallback)
+            baseline90thPercentile: typicalWait || 0, // legacy field name; carries the P50 (median) baseline
             updatedAt: new Date().toISOString(),
             breakdown: {
               currentAvgWait: 0,
@@ -1273,13 +1275,18 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, p50Baseline] = await Promise.all([
+    const [headlinerIds, typicalDayPeak] = await Promise.all([
       this.analyticsService.getHeadlinerAttractionIds(parkId),
-      this.analyticsService.getP50BaselineFromCache(parkId),
+      this.analyticsService.getTypicalDayPeakFromCache(parkId),
     ]);
-    // crowdLevel is peak-vs-median; the P50 baseline ("typical wait")
-    // is the reference.
-    const baselineForCrowd = p50Baseline;
+    // Calendar-parity crowd level: AVG of predicted headliner waits ÷ the
+    // typical-day-peak baseline ("predicted level vs a typical day's peak").
+    // Same numerator (equal-weighted headliner mean) and denominator the
+    // monthly calendar's future path uses
+    // (CalendarService.buildPredictedCrowdLevels), so the yearly and monthly
+    // calendars agree for the same date. A missing typical-day-peak
+    // (brand-new park) → 'moderate'; there is NO P50/P90 fallback.
+    const baselineForCrowd = typicalDayPeak;
 
     const datesMap = new Map<string, PredictionDto[]>();
 
@@ -1304,7 +1311,6 @@ export class ParkIntegrationService {
     for (const [date, dailyPreds] of datesMap) {
       if (dailyPreds.length === 0) continue;
 
-      // Compute median of headliner predicted wait times
       const waits = dailyPreds
         .map((p) => p.predictedWaitTime)
         .filter((w) => w != null) as number[];
@@ -1313,24 +1319,13 @@ export class ParkIntegrationService {
       let avgWaitTime: number | undefined;
 
       if (waits.length > 0) {
-        // P90 of predicted waits — matches the peak-vs-peak crowd metric
-        // (and the existing peakLoad in calendar). For small N (typically
-        // <10 headliners), index Math.floor(n*0.9) gives an effective P90.
-        const sorted = [...waits].sort((a, b) => a - b);
-        const p90Idx = Math.min(
-          sorted.length - 1,
-          Math.floor(sorted.length * 0.9),
-        );
-        const predictedPeak = sorted[p90Idx];
-
-        avgWaitTime = Math.round(
-          waits.reduce((s, w) => s + w, 0) / waits.length,
-        );
+        // Raw mean drives the crowd math (calendar parity — no rounding
+        // before the ratio); the rounded value is for display only.
+        const meanWait = waits.reduce((s, w) => s + w, 0) / waits.length;
+        avgWaitTime = Math.round(meanWait);
 
         const pct =
-          baselineForCrowd > 0
-            ? Math.round((predictedPeak / baselineForCrowd) * 100)
-            : 100;
+          baselineForCrowd > 0 ? (meanWait / baselineForCrowd) * 100 : 100;
         crowdLevel = this.analyticsService.determineCrowdLevel(pct);
       } else {
         crowdLevel = "moderate";

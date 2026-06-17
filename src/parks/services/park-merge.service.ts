@@ -179,7 +179,14 @@ export class ParkMergeService {
       });
 
       result.success = true;
-      await this.invalidateParkCaches(winnerId);
+      // The winner now owns the loser's migrated attractions; evict their
+      // integrated/baseline caches (which embed park context) alongside the
+      // park-scoped caches.
+      const winnerAttractionIds: string[] = await this.dataSource
+        .query(`SELECT id FROM attractions WHERE "parkId" = $1`, [winnerId])
+        .then((rows: Array<{ id: string }>) => rows.map((r) => r.id))
+        .catch(() => [] as string[]);
+      await this.invalidateParkCaches(winnerId, winnerAttractionIds);
       await this.invalidateParkCaches(loserId);
     } catch (error) {
       const errorMessage =
@@ -440,9 +447,12 @@ export class ParkMergeService {
     }
   }
 
-  private async invalidateParkCaches(parkId: string): Promise<void> {
+  private async invalidateParkCaches(
+    parkId: string,
+    attractionIds: string[] = [],
+  ): Promise<void> {
     try {
-      await invalidateParkCaches(this.redis, parkId);
+      await invalidateParkCaches(this.redis, parkId, attractionIds);
     } catch (e) {
       this.logger.warn(
         `Failed to invalidate caches for park ${parkId}: ${(e as Error)?.message ?? e}`,

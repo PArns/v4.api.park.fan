@@ -203,6 +203,7 @@ export class PredictionAccuracyService {
 
     if (pendingPredictions.length === 0) {
       this.logger.log("✅ No pending predictions ready to compare");
+      await this.recordAccuracyCheck(0);
       return { newComparisons: 0 };
     }
 
@@ -404,7 +405,27 @@ export class PredictionAccuracyService {
     }
 
     // Return count of new comparisons for tracking
+    await this.recordAccuracyCheck(completed);
     return { newComparisons: completed };
+  }
+
+  /**
+   * Persist the "last accuracy check" marker the ML dashboard reads
+   * (MlDashboardService.getLastAccuracyCheck). Without it the dashboard always
+   * fabricated "checked just now, 0 new" because nothing ever wrote the key.
+   */
+  private async recordAccuracyCheck(
+    newComparisonsAdded: number,
+  ): Promise<void> {
+    await this.redis
+      .set(
+        "ml:last-accuracy-check",
+        JSON.stringify({
+          completedAt: new Date().toISOString(),
+          newComparisonsAdded,
+        }),
+      )
+      .catch(() => undefined);
   }
 
   /**

@@ -63,4 +63,72 @@ export const CacheKeys = {
   /** Glob matching the calendar month cache of a park. */
   calendarMonthPattern: (parkId: string): string =>
     `calendar:month:${parkId}:*`,
+
+  // ---------------------------------------------------------------------------
+  // Park-scoped analytics/derived caches. These mirror keys still built inline
+  // by their writers (analytics.service.ts, parks.service.ts,
+  // park-historical-stats.service.ts); they live here so the merge/repair
+  // invalidation path (invalidateParkCaches) can evict them without the string
+  // drift that previously orphaned the schedule cache. Keep the formats in
+  // sync with the writers.
+  // ---------------------------------------------------------------------------
+
+  /** Park statistics snapshot (5min TTL). Writer: analytics getParkStatistics. */
+  parkStatistics: (parkId: string): string => `park:statistics:${parkId}`,
+
+  /** Park P50 (median) baseline. Writer: analytics saveP50Baselines. */
+  parkP50: (parkId: string): string => `park:p50:${parkId}`,
+
+  /** Park P90 baseline (computed-for-free metadata). Writer: saveP50Baselines. */
+  parkP90: (parkId: string): string => `park:p90:${parkId}`,
+
+  /** Park typical-day-peak WAIT (calendar reference). Writer: cacheTypicalDayPeak. */
+  parkTypicalDayPeak: (parkId: string): string => `park:typicalpeak:${parkId}`,
+
+  /** Park typical peak HOUR ("HH:00"). Distinct from parkTypicalDayPeak. */
+  parkTypicalPeakHour: (parkId: string): string =>
+    `park:typical-peak:${parkId}`,
+
+  /** Whether a park is seasonal (24h). Writer: parks.service. */
+  parkIsSeasonal: (parkId: string): string => `park:isSeasonal:${parkId}`,
+
+  /** Headliner attraction set for a park (6h). Writer: analytics. */
+  analyticsHeadliners: (parkId: string): string =>
+    `analytics:headliners:${parkId}`,
+
+  /** Glob: every cached park crowd level (analytics:crowdlevel:park:<id>:<date>). */
+  parkCrowdLevelPattern: (parkId: string): string =>
+    `analytics:crowdlevel:park:${parkId}:*`,
+
+  /** Glob: the park historical-stats cache (park:historical-stats:v2:<id>:…). */
+  parkHistoricalStatsPattern: (parkId: string): string =>
+    `park:historical-stats:v2:${parkId}:*`,
+
+  /** Glob: the park derived-operating-hours cache (park:derivedHours:<id>:…). */
+  parkDerivedHoursPattern: (parkId: string): string =>
+    `park:derivedHours:${parkId}:*`,
+
+  /** Glob: every ML prediction cache (daily/yearly) of a park. */
+  mlParkPattern: (parkId: string): string => `ml:park:${parkId}:*`,
+
+  // --- Attraction-scoped derived caches (evicted when attractions migrate). ---
+
+  /** Attraction P50 (median) baseline. */
+  attractionP50: (attractionId: string): string =>
+    `attraction:p50:${attractionId}`,
+
+  /** Attraction P90 baseline (computed-for-free metadata). */
+  attractionP90: (attractionId: string): string =>
+    `attraction:p90:${attractionId}`,
+
+  /** Attraction rope-drop summary. */
+  attractionRopeDrop: (attractionId: string): string =>
+    `attraction:ropedrop:${attractionId}`,
+
+  /** Glob: an attraction's history cache (attraction:history:<id>:<days>). */
+  attractionHistoryPattern: (attractionId: string): string =>
+    `attraction:history:${attractionId}:*`,
+
+  /** The discovery geo-structure skeleton (continent/country/city/park tree). */
+  discoveryGeoStructure: (): string => "discovery:geo:structure:v4",
 } as const;

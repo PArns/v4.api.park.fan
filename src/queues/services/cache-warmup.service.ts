@@ -181,12 +181,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const toDate = new Date(`${toStr}T12:00:00.000Z`);
 
       if (force) {
-        // Evict the cold-path ML caches + the calendar month caches in range so the
+        // Evict the cold-path daily ML cache + the calendar month caches in range so the
         // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
         // the still-warm month cache and the 12h refresh would be a no-op).
+        // The yearly ML cache is intentionally NOT evicted: only the read path
+        // (getParkPredictionsYearly) rebuilds it, so evicting it here just left
+        // it cold until the next visitor paid the ~15s cold path. It refreshes
+        // via its own TTL instead.
         const evictKeys: string[] = [
           CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
-          CacheKeys.mlParkPredictions(park.id, "yearly", todayStr),
         ];
         // Month keys for every month in [-1, +3] (variant the FE reads: "none").
         for (let mm = fromM, yy = fromY; ; ) {
