@@ -785,15 +785,19 @@ export class AttractionIntegrationService {
         if (downCount > 0) downCountMap.set(todayStr, downCount);
       }
 
-      // Median baseline (P50) for utilization — typical-day reference.
-      // Per-day reading is the day's MAX hourly P90 (the day's actual peak),
-      // so the ratio reads as "today's peak vs typical median" — a
-      // peak-vs-median scale that calibrates against the existing threshold
-      // ladder (100% = matches typical median, 150%+ = elevated, 200%+ =
-      // extreme).
+      // Typical-day-peak baseline for utilization: the MEDIAN over operating
+      // days of the day's peak. The per-day reading (the day's P90 of in-hours
+      // hourly P90s) ÷ this typical day's peak reads as "today's peak vs a
+      // typical day's peak" — 100% = a normal day = moderate, calibrating
+      // against the threshold ladder (150%+ elevated, 200%+ extreme). Dividing
+      // by the P50 (median) instead inflated every normal day, because a day's
+      // peak is ~1.5-2× the median wait. No P50 fallback: when the
+      // typical-day-peak is absent (too little data) the day's rating is
+      // skipped (stays "closed").
       const attractionBaseline =
-        await this.analyticsService.getAttractionP50BaselineFromCache(
+        await this.analyticsService.getAttractionTypicalDayPeak(
           attractionId,
+          timezone,
         );
 
       // Build history entries for each day

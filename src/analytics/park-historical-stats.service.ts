@@ -5,7 +5,6 @@ import { subDays, subYears } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { safeJsonParse } from "../common/utils/json.util";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -22,6 +21,16 @@ import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 const SCHEMA_VERSION = 2;
 /** Default minimum sample days before the section is considered displayable. */
 const DEFAULT_MIN_SAMPLE_DAYS = 30;
+/** Drop noisy single-sample hours from the aggregate scan. */
+const MIN_SAMPLES_PER_HOUR = 2;
+
+/** One operating day's headliner-only values (peak + typical wait). */
+interface DayValue {
+  month: number;
+  dow: number;
+  dayValueP90: number;
+  dayValueP50: number;
+}
 
 @Injectable()
 export class ParkHistoricalStatsService {
@@ -29,8 +38,6 @@ export class ParkHistoricalStatsService {
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
 
   constructor(
-    @InjectRepository(ParkDailyStats)
-    private readonly dailyStatsRepo: Repository<ParkDailyStats>,
     @InjectRepository(QueueDataAggregate)
     private readonly aggregateRepo: Repository<QueueDataAggregate>,
     @Inject(REDIS_CLIENT)
@@ -82,30 +89,48 @@ export class ParkHistoricalStatsService {
       "yyyy-MM-dd",
     );
 
-    const [byMonthRaw, byDowRaw, topAttrRaw, typicalDayPeak] =
-      await Promise.all([
-        this.queryByMonth(park.id, startStr, endStr),
-        this.queryByDayOfWeek(park.id, startStr, endStr),
-        this.queryTopAttractions(park.id, startStr, endStr, topN),
-        this.queryTypicalDayPeak(park.id, startStr, endStr),
-      ]);
+    // Headliner-only, matching the calendar's crowd-level semantic (a park's
+    // crowd level is its headliners, not the family-ride dilution).
+    const headlinerIds = await this.getHeadlinerIds(park.id);
 
-    const byMonth: MonthStatDto[] = byMonthRaw.map((r) => ({
-      month: Number(r.month),
-      avgCrowdScore: this.toCrowdScore(Number(r.avg_wait_p50)),
-      avgCrowdLevel: this.toCrowdLevel(Number(r.avg_wait_p90), typicalDayPeak),
-      avgWaitP50: Math.round(Number(r.avg_wait_p50)),
-      avgWaitP90: Math.round(Number(r.avg_wait_p90)),
-      sampleDays: Number(r.sample_days),
+    const [dayValues, topAttrRaw] = await Promise.all([
+      this.queryHeadlinerDayValues(
+        park.id,
+        park.timezone,
+        startStr,
+        endStr,
+        headlinerIds,
+      ),
+      this.queryTopAttractions(park.id, startStr, endStr, topN),
+    ]);
+
+    // typical-day-peak = median over operating days of the day_value
+    // (AVG-of-headliner daily peaks). Computed from the SAME source as the
+    // numerators below, so a statistically typical day ≈ 100% = moderate.
+    const typicalDayPeak = this.median(dayValues.map((d) => d.dayValueP90));
+
+    const byMonth: MonthStatDto[] = this.groupAvg(
+      dayValues,
+      (d) => d.month,
+    ).map((g) => ({
+      month: g.key,
+      avgCrowdScore: this.toCrowdScore(g.avgP50),
+      avgCrowdLevel: this.toCrowdLevel(g.avgP90, typicalDayPeak),
+      avgWaitP50: Math.round(g.avgP50),
+      avgWaitP90: Math.round(g.avgP90),
+      sampleDays: g.sampleDays,
     }));
 
-    const byDayOfWeek: DayOfWeekStatDto[] = byDowRaw.map((r) => ({
-      dayOfWeek: Number(r.day_of_week),
-      avgCrowdScore: this.toCrowdScore(Number(r.avg_wait_p50)),
-      avgCrowdLevel: this.toCrowdLevel(Number(r.avg_wait_p90), typicalDayPeak),
-      avgWaitP50: Math.round(Number(r.avg_wait_p50)),
-      avgWaitP90: Math.round(Number(r.avg_wait_p90)),
-      sampleDays: Number(r.sample_days),
+    const byDayOfWeek: DayOfWeekStatDto[] = this.groupAvg(
+      dayValues,
+      (d) => d.dow,
+    ).map((g) => ({
+      dayOfWeek: g.key,
+      avgCrowdScore: this.toCrowdScore(g.avgP50),
+      avgCrowdLevel: this.toCrowdLevel(g.avgP90, typicalDayPeak),
+      avgWaitP50: Math.round(g.avgP50),
+      avgWaitP90: Math.round(g.avgP90),
+      sampleDays: g.sampleDays,
     }));
 
     const topAttractions: TopAttractionStatDto[] = topAttrRaw.map((r, i) => ({
@@ -117,7 +142,7 @@ export class ParkHistoricalStatsService {
       rank: i + 1,
     }));
 
-    const totalSampleDays = byMonth.reduce((sum, m) => sum + m.sampleDays, 0);
+    const totalSampleDays = dayValues.length;
 
     return {
       byMonth,
@@ -136,49 +161,74 @@ export class ParkHistoricalStatsService {
     };
   }
 
-  private async queryByMonth(
-    parkId: string,
-    startDate: string,
-    endDate: string,
-  ): Promise<Record<string, unknown>[]> {
-    // Column names are camelCase (TypeORM default, no naming strategy) — must be quoted.
-    return this.dailyStatsRepo.manager.query(
-      `SELECT
-         EXTRACT(MONTH FROM date::date)::int   AS month,
-         AVG("p50WaitTime")                    AS avg_wait_p50,
-         AVG("p90WaitTime")                    AS avg_wait_p90,
-         COUNT(*)::int                          AS sample_days
-       FROM park_daily_stats
-       WHERE "parkId" = $1::uuid
-         AND date BETWEEN $2 AND $3
-         AND "p50WaitTime" IS NOT NULL
-         AND "p90WaitTime" IS NOT NULL
-       GROUP BY month
-       ORDER BY month`,
-      [parkId, startDate, endDate],
+  /**
+   * Headliner attraction IDs for the park (as text, to match the text
+   * `attractionId` column on queue_data_aggregates). Empty ⇒ caller falls back
+   * to all attractions, mirroring the calendar's headliner fallback.
+   */
+  private async getHeadlinerIds(parkId: string): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.aggregateRepo.manager.query(
+      `SELECT "attractionId"::text AS id
+       FROM headliner_attractions
+       WHERE "parkId" = $1::uuid`,
+      [parkId],
     );
+    return rows.map((r) => r.id);
   }
 
-  private async queryByDayOfWeek(
+  /**
+   * One row per operating day: the headliner-only day_value = AVG across
+   * headliners of that ride's daily peak (P90 of the day's hourly P90s) and
+   * the day's typical wait (AVG of hourly P50s). Computed from the hourly
+   * pre-aggregation (queue_data_aggregates), restricted to headliners.
+   */
+  private async queryHeadlinerDayValues(
     parkId: string,
+    timezone: string,
     startDate: string,
     endDate: string,
-  ): Promise<Record<string, unknown>[]> {
-    return this.dailyStatsRepo.manager.query(
-      `SELECT
-         EXTRACT(DOW FROM date::date)::int     AS day_of_week,
-         AVG("p50WaitTime")                    AS avg_wait_p50,
-         AVG("p90WaitTime")                    AS avg_wait_p90,
-         COUNT(*)::int                          AS sample_days
-       FROM park_daily_stats
-       WHERE "parkId" = $1::uuid
-         AND date BETWEEN $2 AND $3
-         AND "p50WaitTime" IS NOT NULL
-         AND "p90WaitTime" IS NOT NULL
-       GROUP BY day_of_week
-       ORDER BY day_of_week`,
-      [parkId, startDate, endDate],
-    );
+    headlinerIds: string[],
+  ): Promise<DayValue[]> {
+    const rows: Array<Record<string, unknown>> =
+      await this.aggregateRepo.manager.query(
+        `WITH per_attraction_day AS (
+           SELECT
+             (qda.hour AT TIME ZONE $2)::date                     AS day,
+             qda."attractionId"                                   AS aid,
+             PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qda.p90) AS day_peak,
+             AVG(qda.p50)                                         AS day_typical
+           FROM queue_data_aggregates qda
+           WHERE qda."parkId" = $1
+             AND qda.hour >= $3::date
+             AND qda.hour <  ($4::date + INTERVAL '1 day')
+             AND qda."sampleCount" >= $5
+             AND ($6::text[] IS NULL OR qda."attractionId" = ANY($6))
+           GROUP BY day, aid
+         )
+         SELECT
+           EXTRACT(MONTH FROM day)::int AS month,
+           EXTRACT(DOW FROM day)::int   AS dow,
+           AVG(day_peak)                AS day_value_p90,
+           AVG(day_typical)             AS day_value_p50
+         FROM per_attraction_day
+         GROUP BY day
+         ORDER BY day`,
+        [
+          parkId,
+          timezone,
+          startDate,
+          endDate,
+          MIN_SAMPLES_PER_HOUR,
+          headlinerIds.length > 0 ? headlinerIds : null,
+        ],
+      );
+
+    return rows.map((r) => ({
+      month: Number(r.month),
+      dow: Number(r.dow),
+      dayValueP90: Number(r.day_value_p90),
+      dayValueP50: Number(r.day_value_p50),
+    }));
   }
 
   private async queryTopAttractions(
@@ -208,29 +258,43 @@ export class ParkHistoricalStatsService {
     );
   }
 
-  /**
-   * Park's typical-day-peak baseline = the median over operating days of the
-   * daily peak (P90) wait. This is the same denominator the calendar/daily
-   * crowd level uses (see crowd-level.type.ts), so historical and live
-   * classifications stay on one scale.
-   */
-  private async queryTypicalDayPeak(
-    parkId: string,
-    startDate: string,
-    endDate: string,
-  ): Promise<number> {
-    const rows: Record<string, unknown>[] =
-      await this.dailyStatsRepo.manager.query(
-        `SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY "p90WaitTime")
-                AS typical_day_peak
-         FROM park_daily_stats
-         WHERE "parkId" = $1::uuid
-           AND date BETWEEN $2 AND $3
-           AND "p90WaitTime" IS NOT NULL`,
-        [parkId, startDate, endDate],
-      );
-    const raw = rows[0]?.typical_day_peak;
-    return raw == null ? 0 : Number(raw);
+  /** Linear-interpolation median over an array (0 when empty). */
+  private median(values: number[]): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = (sorted.length - 1) / 2;
+    const lo = Math.floor(mid);
+    const hi = Math.ceil(mid);
+    return lo === hi ? sorted[lo] : (sorted[lo] + sorted[hi]) / 2;
+  }
+
+  /** Group day-values by a key (month / day-of-week) and average each bucket. */
+  private groupAvg(
+    rows: DayValue[],
+    keyOf: (d: DayValue) => number,
+  ): Array<{
+    key: number;
+    avgP50: number;
+    avgP90: number;
+    sampleDays: number;
+  }> {
+    const buckets = new Map<number, { p50: number; p90: number; n: number }>();
+    for (const d of rows) {
+      const k = keyOf(d);
+      const e = buckets.get(k) ?? { p50: 0, p90: 0, n: 0 };
+      e.p50 += d.dayValueP50;
+      e.p90 += d.dayValueP90;
+      e.n += 1;
+      buckets.set(k, e);
+    }
+    return [...buckets.entries()]
+      .map(([key, e]) => ({
+        key,
+        avgP50: e.p50 / e.n,
+        avgP90: e.p90 / e.n,
+        sampleDays: e.n,
+      }))
+      .sort((a, b) => a.key - b.key);
   }
 
   /**
@@ -247,10 +311,10 @@ export class ParkHistoricalStatsService {
 
   /**
    * Maps a period's average daily-peak wait to a CrowdLevel, occupancy-relative
-   * to the park's own typical-day-peak baseline (100% = a statistically typical
-   * day). Uses the same 6-tier thresholds as the live endpoint, so a structurally
-   * quiet park still reads "high" on its own busy days. Falls back to "moderate"
-   * when the park has no baseline yet (brand-new).
+   * to the park's typical-day-peak (100% = a statistically typical day). Same
+   * 6-tier thresholds + headliner-only definition as the calendar, so the two
+   * surfaces stay on one scale. Falls back to "moderate" when there's no
+   * baseline yet (brand-new park).
    */
   private toCrowdLevel(avgWaitP90: number, typicalDayPeak: number): CrowdLevel {
     if (!typicalDayPeak || typicalDayPeak <= 0) return "moderate";

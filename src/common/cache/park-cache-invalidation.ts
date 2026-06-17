@@ -50,6 +50,7 @@ export async function invalidateParkCaches(
       CacheKeys.attractionP50(id),
       CacheKeys.attractionP90(id),
       CacheKeys.attractionRopeDrop(id),
+      CacheKeys.attractionTypicalDayPeak(id),
     );
   }
 

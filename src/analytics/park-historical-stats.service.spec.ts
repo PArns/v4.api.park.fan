@@ -1,35 +1,57 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { ParkHistoricalStatsService } from "./park-historical-stats.service";
-import { ParkDailyStats } from "../stats/entities/park-daily-stats.entity";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Park } from "../parks/entities/park.entity";
 
 /**
- * Covers the v2 historical-stats contract:
- * - avgCrowdLevel is occupancy-relative (period peak ÷ typical-day-peak),
- *   using the same 6-tier thresholds as the live endpoint.
+ * Covers the v2 historical-stats contract (headliner-only, queue_data_aggregates):
+ * - avgCrowdLevel is occupancy-relative (period peak ÷ typical-day-peak), where
+ *   typical-day-peak = the MEDIAN over operating days of the day_value
+ *   (AVG-of-headliner daily peaks) — same source as the numerator, so a typical
+ *   day ≈ 100% = moderate.
  * - rank, windowYears, displayable, generatedAt, schemaVersion, topN.
  */
 describe("ParkHistoricalStatsService", () => {
   let service: ParkHistoricalStatsService;
   let redis: { get: jest.Mock; set: jest.Mock };
-  let dailyQuery: jest.Mock;
   let aggregateQuery: jest.Mock;
 
-  // Baseline (median daily peak) = 40 min, so occupancy% = p90 / 40 * 100.
-  // 20→50% very_low · 30→75% low · 40→100% moderate · 56→140% high ·
-  // 72→180% very_high · 100→250% extreme.
-  const TYPICAL_DAY_PEAK = 40;
+  const park = {
+    id: "park-uuid",
+    slug: "europa-park",
+    timezone: "Europe/Berlin",
+  } as Park;
 
-  const monthRows = [
-    { month: 1, avg_wait_p50: 10, avg_wait_p90: 20, sample_days: 20 }, // very_low
-    { month: 7, avg_wait_p50: 40, avg_wait_p90: 100, sample_days: 25 }, // extreme
-  ];
-  const dowRows = [
-    { day_of_week: 0, avg_wait_p50: 25, avg_wait_p90: 56, sample_days: 30 }, // high
-  ];
+  // Per-day rows. day_value_p90 set = 15×20, 15×40, 15×100 (45 days) → the
+  // median (typical-day-peak) is 40. So 20→50% very_low, 40→100% moderate,
+  // 100→250% extreme.
+  const makeDays = (
+    specs: Array<{
+      month: number;
+      dow: number;
+      p90: number;
+      p50: number;
+      n: number;
+    }>,
+  ) =>
+    specs.flatMap((s) =>
+      Array.from({ length: s.n }, () => ({
+        month: s.month,
+        dow: s.dow,
+        day_value_p90: s.p90,
+        day_value_p50: s.p50,
+      })),
+    );
+
+  const dayRows = makeDays([
+    { month: 1, dow: 1, p90: 20, p50: 10, n: 15 }, // very_low
+    { month: 4, dow: 0, p90: 40, p50: 20, n: 15 }, // moderate (the median)
+    { month: 7, dow: 4, p90: 100, p50: 40, n: 15 }, // extreme
+  ]);
+
+  const headlinerRows = [{ id: "a1" }, { id: "a2" }];
   const topRows = [
     {
       slug: "blue-fire",
@@ -47,34 +69,24 @@ describe("ParkHistoricalStatsService", () => {
     },
   ];
 
-  const park = {
-    id: "park-uuid",
-    slug: "europa-park",
-    timezone: "Europe/Berlin",
-  } as Park;
+  // All three raw queries hit the aggregate repo's manager; route by SQL.
+  const route =
+    (days: unknown[], headliners: unknown[], tops: unknown[]) =>
+    (sql: string) => {
+      if (sql.includes("headliner_attractions"))
+        return Promise.resolve(headliners);
+      if (sql.includes("per_attraction_day")) return Promise.resolve(days);
+      if (sql.includes("ORDER BY avg_p90 DESC")) return Promise.resolve(tops);
+      return Promise.resolve([]);
+    };
 
   beforeEach(async () => {
     redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn() };
-
-    // Both queryByMonth/queryByDayOfWeek/queryTypicalDayPeak hit the daily repo;
-    // route by inspecting the SQL.
-    dailyQuery = jest.fn((sql: string) => {
-      if (sql.includes("typical_day_peak")) {
-        return Promise.resolve([{ typical_day_peak: TYPICAL_DAY_PEAK }]);
-      }
-      if (sql.includes("MONTH")) return Promise.resolve(monthRows);
-      if (sql.includes("DOW")) return Promise.resolve(dowRows);
-      return Promise.resolve([]);
-    });
-    aggregateQuery = jest.fn().mockResolvedValue(topRows);
+    aggregateQuery = jest.fn(route(dayRows, headlinerRows, topRows));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ParkHistoricalStatsService,
-        {
-          provide: getRepositoryToken(ParkDailyStats),
-          useValue: { manager: { query: dailyQuery } },
-        },
         {
           provide: getRepositoryToken(QueueDataAggregate),
           useValue: { manager: { query: aggregateQuery } },
@@ -86,36 +98,35 @@ describe("ParkHistoricalStatsService", () => {
     service = module.get(ParkHistoricalStatsService);
   });
 
-  it("derives avgCrowdLevel occupancy-relative to the typical-day-peak baseline", async () => {
+  it("derives avgCrowdLevel relative to the typical-day-peak (median of daily peaks)", async () => {
     const result = await service.getParkHistoricalStats(park, 2);
 
-    const jan = result.byMonth.find((m) => m.month === 1)!;
-    const jul = result.byMonth.find((m) => m.month === 7)!;
-    expect(jan.avgCrowdLevel).toBe("very_low"); // 20/40 = 50%
-    expect(jul.avgCrowdLevel).toBe("extreme"); //  100/40 = 250%
-    expect(result.byDayOfWeek[0].avgCrowdLevel).toBe("high"); // 56/40 = 140%
+    expect(result.byMonth.find((m) => m.month === 1)!.avgCrowdLevel).toBe(
+      "very_low",
+    ); // 20/40 = 50%
+    expect(result.byMonth.find((m) => m.month === 4)!.avgCrowdLevel).toBe(
+      "moderate",
+    ); // 40/40 = 100%
+    expect(result.byMonth.find((m) => m.month === 7)!.avgCrowdLevel).toBe(
+      "extreme",
+    ); // 100/40 = 250%
+    expect(
+      result.byDayOfWeek.find((d) => d.dayOfWeek === 0)!.avgCrowdLevel,
+    ).toBe("moderate"); // 40/40 = 100%
   });
 
   it("keeps avgCrowdScore (1.0–5.0, P50-based) for backwards compatibility", async () => {
     const result = await service.getParkHistoricalStats(park, 2);
-    const jan = result.byMonth.find((m) => m.month === 1)!;
-    expect(jan.avgCrowdScore).toBe(1.0); // 10/10, clamped to >= 1.0
+    expect(result.byMonth.find((m) => m.month === 1)!.avgCrowdScore).toBe(1.0); // 10/10
   });
 
-  it("falls back to moderate when the park has no baseline", async () => {
-    dailyQuery.mockImplementation((sql: string) => {
-      if (sql.includes("typical_day_peak")) {
-        return Promise.resolve([{ typical_day_peak: null }]);
-      }
-      if (sql.includes("MONTH")) return Promise.resolve(monthRows);
-      if (sql.includes("DOW")) return Promise.resolve(dowRows);
-      return Promise.resolve([]);
-    });
+  it("returns empty sections (not a crash) when there is no headliner data", async () => {
+    aggregateQuery.mockImplementation(route([], [], []));
 
     const result = await service.getParkHistoricalStats(park, 2);
-    expect(result.byMonth.every((m) => m.avgCrowdLevel === "moderate")).toBe(
-      true,
-    );
+    expect(result.byMonth).toEqual([]);
+    expect(result.byDayOfWeek).toEqual([]);
+    expect(result.meta.displayable).toBe(false);
   });
 
   it("assigns a 1-based rank to top attractions", async () => {
@@ -124,11 +135,11 @@ describe("ParkHistoricalStatsService", () => {
     expect(result.topAttractions[0].attractionSlug).toBe("blue-fire");
   });
 
-  it("populates the additive meta fields", async () => {
+  it("populates meta (totalSampleDays = operating-day count)", async () => {
     const result = await service.getParkHistoricalStats(park, 3);
     expect(result.meta.windowYears).toBe(3);
     expect(result.meta.schemaVersion).toBe(2);
-    expect(result.meta.totalSampleDays).toBe(45); // 20 + 25
+    expect(result.meta.totalSampleDays).toBe(45);
     expect(result.meta.displayable).toBe(true); // 45 >= 30 (default)
     expect(() => new Date(result.meta.generatedAt).toISOString()).not.toThrow();
     expect(result.meta.parkSlug).toBe("europa-park");
@@ -139,9 +150,20 @@ describe("ParkHistoricalStatsService", () => {
     expect(result.meta.displayable).toBe(false); // 45 < 100
   });
 
+  it("restricts the day-values query to the park's headliner IDs", async () => {
+    await service.getParkHistoricalStats(park, 2);
+    const dayCall = aggregateQuery.mock.calls.find((c) =>
+      String(c[0]).includes("per_attraction_day"),
+    )!;
+    expect(dayCall[1]).toContainEqual(["a1", "a2"]);
+  });
+
   it("passes topN through to the top-attractions query", async () => {
     await service.getParkHistoricalStats(park, 2, 25);
-    const params = aggregateQuery.mock.calls[0][1] as unknown[];
+    const topCall = aggregateQuery.mock.calls.find((c) =>
+      String(c[0]).includes("ORDER BY avg_p90 DESC"),
+    )!;
+    const params = topCall[1] as unknown[];
     expect(params[params.length - 1]).toBe(25);
   });
 
@@ -156,7 +178,6 @@ describe("ParkHistoricalStatsService", () => {
 
     const result = await service.getParkHistoricalStats(park, 2);
     expect(result).toEqual(cached);
-    expect(dailyQuery).not.toHaveBeenCalled();
     expect(aggregateQuery).not.toHaveBeenCalled();
   });
 

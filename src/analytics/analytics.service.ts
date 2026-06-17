@@ -3561,7 +3561,9 @@ export class AnalyticsService {
     // written atomically with P50/P90, so a missing value means the park has
     // no baseline at all (brand-new) → the no-baseline default below applies.
     let baseline = 0;
-    let baselineType: "typical_day" | "p90" | "p50" = "typical_day";
+    // Always typical-day-peak now (park + attraction); kept as a union for the
+    // response contract and the numerator switch below.
+    const baselineType: "typical_day" | "p90" | "p50" = "typical_day";
     let baselineConfidence: "high" | "medium" | "low" = "low";
 
     if (type === "park") {
@@ -3574,21 +3576,17 @@ export class AnalyticsService {
         baselineConfidence = rec?.confidence || "low";
       }
     } else {
-      baseline = await this.getAttractionP90BaselineFromCache(entityId);
+      // Per-attraction calendar uses the attraction typical-day-peak (same
+      // regime as the park branch and the live attraction calendar in
+      // attraction-integration.service.ts), not P90→P50. No fallback: absent
+      // ⇒ no baseline yet ⇒ neutral default.
+      baseline = await this.getAttractionTypicalDayPeak(entityId, timezone);
       if (baseline > 0) {
-        const rec = await this.attractionP90BaselineRepository.findOne({
+        const rec = await this.attractionP50BaselineRepository.findOne({
           where: { attractionId: entityId },
+          select: ["confidence"],
         });
         baselineConfidence = rec?.confidence || "low";
-      } else {
-        baseline = await this.getAttractionP50BaselineFromCache(entityId);
-        baselineType = "p50";
-        if (baseline > 0) {
-          const rec = await this.attractionP50BaselineRepository.findOne({
-            where: { attractionId: entityId },
-          });
-          baselineConfidence = rec?.confidence || "low";
-        }
       }
     }
 
@@ -3712,13 +3710,11 @@ export class AnalyticsService {
     // crowdLevel: the day's peak ÷ the typical day's peak. 100% = this
     // day's peak matched a typical day's peak, >150% = noticeably busier
     // than typical. The numerator is the day's AVG-of-per-headliner-P90
-    // for both the typical-day-peak and the P90-baseline fallback; only the
-    // brand-new P50 fallback uses the P50 (median) numerator so that
-    // comparison stays apples-to-apples (median-vs-median).
+    // (both park and attraction now divide by a typical-day-peak baseline).
     let percentage = 0;
     let crowdLevel: CrowdLevel = "very_low";
     const hasData = dailyStats.p50 !== null && dailyStats.count > 0;
-    const dailyValue = baselineType === "p50" ? dailyStats.p50 : dailyStats.p90;
+    const dailyValue = dailyStats.p90;
 
     if (hasData && baseline > 0 && dailyValue !== null) {
       percentage = Math.round((dailyValue / baseline) * 100);
@@ -4452,6 +4448,70 @@ export class AnalyticsService {
       .set(cacheKey, "0", "EX", NEGATIVE_BASELINE_TTL)
       .catch(() => undefined);
     return 0;
+  }
+
+  /**
+   * Per-attraction typical-day-peak baseline = the MEDIAN over operating days
+   * of the day's peak (the P90 of that day's hourly P90s). The attraction-level
+   * analogue of the park typical-day-peak, and the correct denominator for the
+   * per-attraction calendar: a day's peak ÷ a typical day's peak ≈ 100% on a
+   * normal day. Dividing by P50 instead (the old behaviour) inflated every
+   * normal day, because a day's peak is ~1.5-2× the median wait.
+   *
+   * Computed on-demand from queue_data_aggregates (hourly P90s) and cached in
+   * Redis (24h). Returns 0 when there isn't enough data yet — callers then skip
+   * the rating rather than falling back to P50 (matches the park no-fallback
+   * rule).
+   */
+  async getAttractionTypicalDayPeak(
+    attractionId: string,
+    timezone: string,
+  ): Promise<number> {
+    const cacheKey = `attraction:typicalpeak:${attractionId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached !== null) return parseFloat(cached);
+
+    const WINDOW_DAYS = 548;
+    const MIN_SAMPLE_DAYS = 20;
+    const cutoff = subDays(new Date(), WINDOW_DAYS).toISOString();
+
+    const rows: Array<{
+      typical_day_peak: string | null;
+      sample_days: string;
+    }> = await this.queueDataAggregateRepository.manager.query(
+      `WITH per_day AS (
+         SELECT
+           (qda.hour AT TIME ZONE $2)::date                    AS day,
+           PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qda.p90) AS day_peak
+         FROM queue_data_aggregates qda
+         WHERE qda."attractionId" = $1
+           AND qda.hour >= $3
+           AND qda."sampleCount" >= 2
+         GROUP BY day
+       )
+       SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY day_peak) AS typical_day_peak,
+              COUNT(*)::int                                         AS sample_days
+       FROM per_day`,
+      [attractionId, timezone, cutoff],
+    );
+
+    const sampleDays = Number(rows[0]?.sample_days ?? 0);
+    const value =
+      sampleDays >= MIN_SAMPLE_DAYS && rows[0]?.typical_day_peak != null
+        ? parseFloat(rows[0].typical_day_peak)
+        : 0;
+
+    // Cache the value (or a 0 "not enough data" sentinel on a short TTL so a
+    // ride that accumulates data surfaces within ~6h).
+    await this.redis
+      .set(
+        cacheKey,
+        value.toString(),
+        "EX",
+        value > 0 ? 86400 : NEGATIVE_BASELINE_TTL,
+      )
+      .catch(() => undefined);
+    return value;
   }
 
   /**

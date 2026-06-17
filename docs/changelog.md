@@ -6,6 +6,31 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — per-attraction & historical-stats crowd-level calibration (2026-06-17)
+
+- **Per-attraction calendar divided a day's peak by the attraction P50 (median)**
+  (`attraction-integration.service.ts`), i.e. peak-vs-median — the same structural
+  miscalibration the park calendar already fixed: a day's peak is ~1.5-2× the
+  median, so a *normal* day read elevated. It now divides by a new per-attraction
+  **typical-day-peak** baseline (`AnalyticsService.getAttractionTypicalDayPeak` —
+  median over operating days of the day's peak, computed on-demand from
+  `queue_data_aggregates`, cached in Redis `attraction:typicalpeak:{id}`), so a
+  normal day ≈ 100% = `moderate`. No P50 fallback. The previously-uncalled
+  per-attraction branch of `calculateCrowdLevelForDate` was aligned to the same
+  baseline (no longer P90→P50). Migrated attractions' key is evicted on merge.
+- **`/historical-stats` used all-attraction `park_daily_stats`**, a different
+  baseline definition than the calendar, so the same day could read a different
+  crowd level on the two surfaces. It now computes **headliner-only** day-values
+  from `queue_data_aggregates` and a self-consistent typical-day-peak (median of
+  those day-values), matching the calendar's semantic (typical day ≈ 100%).
+- **Doc reconciliation** (`crowd-levels.md`): the park calendar `day_value` is the
+  raw-`queue_data` daily P90 (not hourly-slot P90s); documented the new
+  per-attraction typical-day-peak.
+- _(Deferred: switching `stats.service.ts` percentiles from nearest-rank to linear
+  is now moot for historical-stats — it no longer reads `park_daily_stats` — and
+  is entangled with the outlier-cap heuristic + its unit tests, so it's left as an
+  optional follow-up for the raw `/stats` endpoints.)_
+
 ### Fixed — P50/P90 consistency, cache invalidation, doc alignment (2026-06-17)
 
 - **Yearly predictions used the abandoned peak-vs-median regime**

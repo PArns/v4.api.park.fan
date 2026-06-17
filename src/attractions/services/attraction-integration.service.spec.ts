@@ -38,6 +38,9 @@ describe("AttractionIntegrationService", () => {
     getAttractionCrowdLevel: jest.fn(),
     getAttractionP50BaselineFromCache: jest.fn().mockResolvedValue(0),
     getAttractionP90BaselineFromCache: jest.fn().mockResolvedValue(0),
+    // Per-attraction typical-day-peak baseline (calendar denominator). 0 ⇒ the
+    // utilization path is skipped, same as the old P50-baseline-0 behaviour.
+    getAttractionTypicalDayPeak: jest.fn().mockResolvedValue(0),
     // Hourly history pre-aggregation reader — returns empty map by
     // default so the history path falls back to live today-only compute.
     getAttractionHourlyHistory: jest.fn().mockResolvedValue(new Map()),

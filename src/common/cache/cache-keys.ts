@@ -125,6 +125,10 @@ export const CacheKeys = {
   attractionRopeDrop: (attractionId: string): string =>
     `attraction:ropedrop:${attractionId}`,
 
+  /** Attraction typical-day-peak baseline (per-attraction calendar reference). */
+  attractionTypicalDayPeak: (attractionId: string): string =>
+    `attraction:typicalpeak:${attractionId}`,
+
   /** Glob: an attraction's history cache (attraction:history:<id>:<days>). */
   attractionHistoryPattern: (attractionId: string): string =>
     `attraction:history:${attractionId}:*`,
