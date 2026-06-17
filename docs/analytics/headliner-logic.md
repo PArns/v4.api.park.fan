@@ -1,6 +1,6 @@
 # Headliner Identification & Validation
 
-> **Context**: To calculate accurate Crowd Levels, we compare current wait times against a per-park baseline. Both the P50 (median) and P90 (peak) baselines are derived from "Headliner" attractions only — those best represent crowd flow. The user-facing crowd reading is peak-vs-peak (P90 ÷ P90 baseline); see [Crowd Levels](crowd-levels.md) for the full semantic.
+> **Context**: To calculate accurate Crowd Levels, we compare wait times against a per-park baseline. The P50 (median) and P90 (peak) baselines are derived from "Headliner" attractions only — those best represent crowd flow. The system runs two regimes: **live** occupancy is ratio-vs-P50 (current peak ÷ park P50 baseline), and the **calendar** is typical-day-peak (a day's averaged headliner P90 ÷ the typical-day-peak baseline). P50 + typical-day-peak are the references; P90 is computed for free but is no longer the crowd-level baseline. See [Crowd Levels](crowd-levels.md) for the full semantic.
 
 ## The 3-Tier Adaptive System
 
@@ -11,7 +11,6 @@ Parks vary wildly in size and ride composition. A "one-size-fits-all" rule for s
 
 - **Avg Wait**: > 20 minutes
 - **P90 Wait**: > 30 minutes
-- **Max Headliners**: 10 (top N by avg_wait if more qualify — prevents borderline rides diluting the baseline)
 - **Goal**: Select only the big mountains/coasters.
 
 ### Tier 2: Popular Rides (Regional Parks)
@@ -24,7 +23,7 @@ Parks vary wildly in size and ride composition. A "one-size-fits-all" rule for s
 ### Tier 3: Any Operating Ride (Small Parks)
 *Designed for Local Parks.*
 
-- **Avg Wait**: > 3 minutes
+- **Avg Wait**: Top 50% of all rides in the park (avg wait ≥ the park's median avg wait)
 - **Goal**: Used if < 3 rides found in Tier 1 & 2.
 
 ### Fallback Strategy (The "Nuclear Option")
@@ -77,4 +76,4 @@ When investigating "weird" crowd levels (e.g., "Very Low" when it looks busy):
    - `SELECT * FROM schedule_entries WHERE "parkId" = '...' AND date = CURRENT_DATE AND "scheduleType" = 'OPERATING'`
    - If missing, `calculateCrowdLevelForDate` and the wait-time history chart fall back to midnight–23:59, which includes pre-opening and post-closing data and can depress crowd levels.
 
-**Attraction-level baselines:** Per-ride P50 + P90 baselines are stored in `attraction_p50_baselines` / `attraction_p90_baselines` and used for ride crowd levels (load rating). P90 is the primary input for the user-facing reading; P50 stays as a fallback. See [Crowd Levels](crowd-levels.md) for the full architecture.
+**Attraction-level baselines:** Per-ride P50 + P90 baselines are stored in `attraction_p50_baselines` / `attraction_p90_baselines`. The live park reading divides each headliner's current peak by its **P50** baseline; the calendar averages each headliner's daily **P90** and divides by the typical-day-peak baseline. P90 is computed for free but is not itself the crowd-level reference. See [Crowd Levels](crowd-levels.md) for the full architecture.

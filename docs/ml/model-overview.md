@@ -6,7 +6,7 @@ The ML Service is a standalone Python application responsible for predicting wai
 
 ## Model Architecture
 
-- **Algorithm**: CatBoost Regressor (Gradient Boosting on Decision Trees)
+- **Algorithm**: CatBoost with a multi-quantile loss (`loss_function = MultiQuantile:alpha=0.5,0.8,0.95`, Gradient Boosting on Decision Trees). One model emits three quantiles: **q0.5** is served for the honest wait-time display, **q0.8** is served as the crowd-level signal (busy-calibrated), and **q0.95** is trained but not served.
 - **Problem Type**: Regression (Predicting wait time in minutes)
 - **Input Features**:
   - `day_of_week`: 0-6 (Mon-Sun)
@@ -19,7 +19,7 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `temperature`: Numerical (Celsius)
   - `temperature_deviation`: Difference from monthly average
   - `precipitation`: Current & Last 3 Hours (accumulated)
-  - `park_occupancy_pct`: Park-wide occupancy (current recent-peak / P90 baseline, 0–200%). P50 fallback when a park doesn't have a P90 baseline yet. Matches the API's user-facing crowd reading; training labels follow the same peak-vs-peak shape.
+  - `park_occupancy_pct`: Park-wide occupancy (current recent-peak ÷ **P50** baseline, 0–200%). Matches the API's live `getCurrentOccupancy` reading (ratio-vs-P50).
   - `wait_time_momentum`: Velocity of change over last 30 mins
   - `trend_7d`: Linear regression slope of last 7 days
   - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` and **capped** at `VOLATILITY_CAP_STD_MINUTES` (default 40 min) so it acts as a modifier; occupancy and time remain primary drivers.
@@ -44,7 +44,7 @@ The ML Service is a standalone Python application responsible for predicting wai
      - **Technical Heartbeats**: Filters `waitTime <= 5` if the *entire park's* median at that timestamp is also `<= 5` AND it is before 1 hour after park opening (dynamic per park). This preserves valid quiet day data during the rest of the day.
      - **Outliers**: Filters `waitTime > 500` (API glitches).
    - **Feature Engineering**: Holiday lookup, weather curves (sinusoidal), etc.
-   - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.60`): 60% of training rows have their `park_occupancy_pct` replaced with DOW×hour means to force learning from temporal/holiday signals.
+   - **Occupancy Dropout** (`OCCUPANCY_DROPOUT_RATE=0.50`): 50% of training rows have their `park_occupancy_pct` replaced with DOW×hour means to force learning from temporal/holiday signals.
 3. **Validation**: 
    - **Randomized Weekly Block Split**: To ensure robust validation during seasonal transitions (e.g., winter to spring), data is grouped into weekly blocks. 20% of these weeks are randomly selected for validation, while the rest are used for training. This ensures that both sets contain representative data from all operational phases.
    - **Metrics**: RMSE/MAE metrics are logged and stored in the database.
@@ -65,14 +65,14 @@ Content-Type: application/json
 }
 ```
 
-## Alignment with API (P90 + P50 & Occupancy)
+## Alignment with API (Occupancy & Baselines)
 
-The API switched its user-facing crowd-level metric from P50-vs-P50 (avg vs typical avg) to **P90-vs-P90 (peak vs typical peak)** in PR #46. The ML pipeline aligns with that change so predictions, labels and crowd-level chips all live in the same world.
+The API runs two crowd-level regimes — **live** is ratio-vs-P50 (current peak ÷ park P50 baseline) and the **calendar** is typical-day-peak (a day's averaged headliner P90 ÷ the typical-day-peak baseline). The ML pipeline aligns so predictions, the occupancy feature and crowd-level chips live in the same world.
 
-- **Park occupancy** at inference comes from `AnalyticsService.getCurrentOccupancy`, which now uses the **P90 (headliner) baseline** with P50 as a fallback. The ML service receives this as `featureContext.parkOccupancy` and uses it for `park_occupancy_pct` — semantically "today's recent peak experience ÷ typical-day peak".
-- **Training labels**: `getCrowdLevelTrainingData` labels each historical day with `day-P90 ÷ baseline-P90` (peak-vs-peak). When a P90 baseline isn't available the cron falls back to `day-P50 ÷ baseline-P50` so the math stays apples-to-apples.
-- **Crowd level on predictions**: the API forwards **both** `p50Baseline` and `p90Baseline` per request (`PredictionRequestDto`). Python should prefer P90 — P50 is kept for legacy/avg-shaped consumers and for periods where a P90 row hasn't been computed yet.
-- **Models retrain on the new labels at 06:00 daily**. Predictions made between the deploy and the next training cycle will still be on the old (P50-based) labels and recalibrate within ~1 cycle.
+- **Park occupancy** at inference comes from `AnalyticsService.getCurrentOccupancy`, which divides the current recent peak by the **P50 (headliner) baseline** (ratio-vs-P50). The ML service receives this as `featureContext.parkOccupancy` and uses it for `park_occupancy_pct`.
+- **Baselines forwarded per request**: the API sends `p50Baseline` and `typicalDayPeakBaseline` in `PredictionRequestDto`. (The old `p90Baseline` field was removed — Python never read it.)
+- **Crowd level on predictions**: in `predict.py` the crowd level for a predicted day is the predicted wait ÷ the **typical-day-peak baseline** (the calendar regime). `p50Baseline` covers the live/within-day path.
+- **Models retrain at 06:00 daily**. Predictions made between a deploy and the next training cycle recalibrate within ~1 cycle.
 
 See [Crowd Levels](../analytics/crowd-levels.md) §5 for the API-side contract.
 

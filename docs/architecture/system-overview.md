@@ -17,7 +17,7 @@ The core backend service responsible for:
 - Serving static data (parks, attractions)
 
 **Key Modules:**
-- `Analytics`: P50 + P90 baseline calculations, peak-vs-peak crowd levels (see [Crowd Levels](../analytics/crowd-levels.md))
+- `Analytics`: P50 + P90 baseline calculations, typical-day-peak (calendar) / ratio-vs-P50 (live) crowd levels (see [Crowd Levels](../analytics/crowd-levels.md))
 - `Queue Data`: Raw wait time ingestion
 - `ML`: Client for Python ML service
 - `Enrichment`: Aggregating data for responses

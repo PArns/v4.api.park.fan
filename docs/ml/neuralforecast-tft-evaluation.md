@@ -308,7 +308,7 @@ The current contract (`main.py` `PredictionResponse`): `predictedWaitTime` (int)
 | `predictedWaitTime` | point forecast (median of `DistributionLoss`), rounded to nearest 5 (existing rule) |
 | `confidence` | derived from interval width: `lo-90`/`hi-90` → same shape as VirtEnsembles `mean ± std` |
 | lower/upper bounds | `TFT-lo-90` / `TFT-hi-90` directly |
-| `crowdLevel` | unchanged — computed downstream from `predictedWaitTime` vs P50/P90 baselines |
+| `crowdLevel` | unchanged — computed downstream from `predictedWaitTime` vs the typical-day-peak baseline (P50 fallback). Note `predicted_peak` is the **median** of the forecast distribution of a daily-P90 target, i.e. E[daily-P90] — not the P90 of the forecast distribution. |
 | `modelVersion` | new TFT version string; **must register in `ml_models`** like CatBoost |
 
 **Integration shape:** the cleanest path keeps CatBoost as the live serving model and runs

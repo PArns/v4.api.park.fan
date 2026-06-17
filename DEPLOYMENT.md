@@ -51,12 +51,12 @@ BULL_PREFIX=parkfan
 
 # External APIs
 GOOGLE_API_KEY=<YOUR_GOOGLE_API_KEY>
-OPEN_WEATHER_API_KEY=<YOUR_OPENWEATHER_API_KEY>
+# Weather uses Open-Meteo (no API key required)
 
 # ML Service Configuration
 ML_SERVICE_URL=http://ml-service:8000
 MODEL_DIR=/app/models
-MODEL_VERSION=v1.0.0
+MODEL_VERSION=v1.1.0   # ml-service setting (Python ML service)
 ```
 
 > **Important**: Replace `<GENERATE_STRONG_PASSWORD>` with a secure password for PostgreSQL
@@ -140,7 +140,7 @@ After first deployment, you may want to seed the database:
 ```bash
 # Connect to your API container in Coolify terminal
 # Then run:
-npm run db:reset  # Only on first deployment!
+pnpm db:reset  # Only on first deployment!
 ```
 
 ### Monitor Queue Jobs

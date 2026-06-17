@@ -25,9 +25,9 @@ Short guide for frequent problems and how to fix them.
 
 **Symptom**: `occupancy.current` is 100% even when the park is quiet.
 
-**Cause**: Occupancy reads **(current recent peak / P90 baseline)** with a P50 fallback. If the baseline is wrong (e.g. “all attractions” P50 instead of headliner P90), the denominator is too low and occupancy is inflated. A second cause: the park has no row in `park_p90_baselines` yet (e.g. brand-new park) — the fallback chain returns 100 by design until the next cron run.
+**Cause**: Occupancy reads **(current recent peak / P50 baseline)** (ratio-vs-P50). If the baseline is wrong (e.g. an “all attractions” P50 instead of the headliner P50), the denominator is too low and occupancy is inflated. A second cause: the park has no row in `park_p50_baselines` yet (e.g. brand-new park) — the method returns 100 by design until the next cron run.
 
-**Fix**: Ensure the API uses `getP90BaselineFromCache(parkId)` for park occupancy (headliner P90 with P50 fallback). No manual fix needed if code is correct; if you see 100% on a quiet day, check that the P50/P90 baseline cron has run (`p50-park-baseline-cron` at 03:00) and `park_p90_baselines` has a sane row for that park.
+**Fix**: Ensure the API uses `getP50BaselineFromCache(parkId)` for park occupancy (headliner P50). No manual fix needed if code is correct; if you see 100% on a quiet day, check that the P50 baseline cron has run (`p50-park-baseline-cron` at 03:00) and `park_p50_baselines` has a sane row for that park.
 
 **See**: [Crowd Levels](../analytics/crowd-levels.md), [Caching Strategy](../architecture/caching-strategy.md).
 

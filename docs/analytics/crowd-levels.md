@@ -84,9 +84,9 @@ We identify "headliner" attractions per park using a **3-tier adaptive system** 
 
 | Tier | Criteria | Target Park Type |
 |------|----------|------------------|
-| **Tier 1** | Avg wait > 15m AND P90 > 25m | Major theme parks (Disney, Universal) |
+| **Tier 1** | Avg wait > 20m AND P90 > 30m | Major theme parks (Disney, Universal) |
 | **Tier 2** | Top 40% wait times AND P90 > 1.5× P50 | Regional parks (volatile) |
-| **Tier 3** | All attractions with avg wait > 3m | Small parks (consistent low waits) |
+| **Tier 3** | Top 50% wait times (avg wait ≥ park median) | Small parks (consistent low waits) |
 | **Fallback** | Top 5 attractions by P90 (avg ≥ 5) | Parks with sparse data or <3m waits |
 
 **Logic:**

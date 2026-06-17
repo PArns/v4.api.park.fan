@@ -6,6 +6,41 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — P50/P90 consistency, cache invalidation, doc alignment (2026-06-17)
+
+- **Yearly predictions used the abandoned peak-vs-median regime**
+  (`park-integration.service.ts` `aggregateDailyPredictions`): P90-of-predicted-headliner-waits
+  ÷ the **P50** baseline, while the monthly calendar's future path uses AVG-of-headliners ÷
+  **typical-day-peak**. The same future date therefore read systematically busier on the yearly
+  view (and for ≤10 headliners `floor(n*0.9)` was effectively the max). Now mirrors the calendar
+  (AVG ÷ typical-day-peak; missing baseline → 'moderate', no P50/P90 fallback) so yearly and
+  monthly agree.
+- **Park merge/repair left analytics & attraction caches stale.** `invalidateParkCaches`
+  (`park-cache-invalidation.ts`, keys centralized in `cache-keys.ts`) now also evicts
+  `park:statistics`, `park:p50/p90`, `park:typicalpeak`, `analytics:headliners`,
+  `analytics:crowdlevel:*`, `park:historical-stats`, `park:derivedHours`, `ml:park:*`, the migrated
+  attractions' `attraction:integrated`/baseline caches, and the `discovery:geo:structure` skeleton.
+- **Discovery geo-structure was never invalidated** (its invalidator had zero callers) — merge/repair
+  now bust it.
+- **Yearly ML cache was force-evicted by warmup but never re-warmed** (`cache-warmup.service.ts`),
+  guaranteeing a ~15 s cold path twice a day. Warmup no longer evicts it (TTL-refreshed instead).
+- **Baseline recompute didn't evict derived caches** (`analytics.service.ts` `saveP50Baselines`) —
+  now evicts `park:statistics` + cached crowd levels.
+- **ML dashboard "last accuracy check" was always fabricated** — `compareWithActuals` now persists
+  the `ml:last-accuracy-check` marker the dashboard reads.
+- **Non-crossing MultiQuantile** (`ml-service/model.py`): per-row quantiles are now sorted
+  monotonically so the crowd signal (q0.8) can't fall below the displayed median (q0.5) and the
+  uncertainty band can't silently collapse; `nf-service` `predicted_peak` semantics documented
+  (= E[daily-P90], a median forecast of a P90 target).
+- **Documentation realigned** to the two-regime model (live = ratio-vs-P50, calendar =
+  typical-day-peak; P90 no longer "primary"): schema, caching-strategy, system-overview,
+  headliner-logic, crowd-levels, model-overview, feature-engineering-concepts, common-issues,
+  neuralforecast-tft-evaluation. Fixed dead doc links, the nonexistent `OPEN_WEATHER_API_KEY`
+  (Open-Meteo needs no key), `inference.py`→`main.py`, npm→pnpm, and removed the unused
+  `@types/luxon`.
+- **Removed dead code** `getCrowdLevelTrainingData` and corrected stale "P90 baseline /
+  peak-vs-median" comments across analytics/calendar/location/park-integration.
+
 ### Added — TFT per-attraction board + MultiQuantile per-purpose serving (2026-06-13)
 
 - **TFT best/worst board** (`ml-monitoring.controller.ts` `GET /v1/ml/monitoring/tft/performers`,
@@ -134,7 +169,7 @@ Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively
 
 ### Changed — Peak-vs-peak crowd level (PR #46, since corrected)
 
-- **Crowd-level semantic across every user-facing surface switched from P50-vs-P50 (avg vs typical avg) to P90-vs-P90 (peak vs typical peak)** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `location.service.ts`, `search.service.ts`, `calendar.service.ts`, `ml.service.ts`). "How busy was today" is what users remember as the peak headliner experience, not the day's median — apples-to-apples math now matches that intuition. P50 stays available as a fallback for brand-new entities without a P90 row yet (still apples-to-apples, just an avg-vs-avg reading until the next cron). The threshold table (very_low / low / moderate / high / very_high / extreme) is unchanged, so the labels keep their meaning. See [P90 Crowd Levels](analytics/p90-crowd-levels.md) for the full architecture.
+- **Crowd-level semantic across every user-facing surface switched from P50-vs-P50 (avg vs typical avg) to P90-vs-P90 (peak vs typical peak)** (`analytics.service.ts`, `attraction-integration.service.ts`, `park-integration.service.ts`, `location.service.ts`, `search.service.ts`, `calendar.service.ts`, `ml.service.ts`). "How busy was today" is what users remember as the peak headliner experience, not the day's median — apples-to-apples math now matches that intuition. P50 stays available as a fallback for brand-new entities without a P90 row yet (still apples-to-apples, just an avg-vs-avg reading until the next cron). The threshold table (very_low / low / moderate / high / very_high / extreme) is unchanged, so the labels keep their meaning. See [Crowd Levels](analytics/crowd-levels.md) for the full architecture (this doc was renamed from `analytics/p90-crowd-levels.md` and rewritten for the current two-regime model).
 
 - **Park live occupancy now reads per-headliner MAX in the last 60 min, averaged across headliners** (`analytics.service.ts:getCurrentParkPeakWait`) — the live counterpart to the 548-day P90 baseline, with the same shape on both sides of the comparison.
 

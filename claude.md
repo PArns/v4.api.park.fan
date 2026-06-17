@@ -22,7 +22,6 @@
 
 ### 🏗️ Architecture & Infrastructure
 - [System Overview](docs/architecture/system-overview.md) - High-level component design.
-- [Search](docs/architecture/search.md) - In-process (primary) vs Postgres pg_trgm (fallback) matching, Redis result/index caches, tier ladder, typo tolerance (word-level Levenshtein + word_similarity 0.4).
 - [Job Queues & Processors](docs/architecture/job-queues.md) - Background BullMQ infrastructure.
 - [Data Ingestion](docs/architecture/data-ingestion.md) - Multi-source data pipelines.
 - [Schedule Sync & Calendar](docs/architecture/schedule-sync-and-calendar.md) - Opening hours sync (ThemeParks Wiki), on-demand refresh, calendar first-request slowness.
@@ -36,15 +35,12 @@
 - [Typical-Day-Peak Baseline](docs/analytics/crowd-level-typical-day-peak.md) - Calendar crowd calibration: a day's peak ÷ a typical day's peak (median of daily peaks). Why P90/P50 and pooled-P90 fail; ML alignment; deploy steps.
 - [Headliner Identification](docs/analytics/headliner-logic.md) - How attractions are selected for baselines.
 - [Sparklines](docs/analytics/sparklines.md) - Wait-time history for ride cards: two-layer API (`getBatchAttractionWaitTimeHistory` vs `getAttractionSparklinesBatch`), when to use which, and park-timezone handling.
-- [Data Recalculation & Correction Jobs](docs/analytics/data-recalculation.md) - Manual backfills for stats and baselines.
-- [Smart Gaps: Hours & Status Inference](docs/analytics/smart-gaps.md) - Algorithm for reconstructing historical hours and seasonal detection.
 
 ### 🤖 Machine Learning
 - [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
 - [Performance Optimizations](docs/ml/performance-optimizations.md) - ML service caching, query optimization, and vectorization (60-90% faster).
 - [Prediction Quality Issues](docs/ml/prediction-quality-issues.md) - Known bugs and fixes (5-min prediction bug, weekend underprediction, feature importance analysis).
 - [Training Roadmap](docs/ml/training-roadmap.md) - Next training steps, UNKNOWN park data strategy, known issues and fix plans.
-- [Busy-day Prediction Challenger](docs/ml/busy-day-prediction-challenger.md) - Living experiment: fixing busy/holiday future under-prediction (feature-forcing, sample-weighting, quantile/uncertainty levers). Champion/challenger log.
 - [TFT vs CatBoost — clean comparison & TFT optimization](docs/ml/tft-vs-catboost-clean-comparison.md) - **2026-05-30**: clean daily scoreboard (symmetric durable snapshot + matched population — the raw board overstated TFT), intraday 15-min nowcast backtest (TFT beats naive baselines but no busy-tail edge; occupancy hist_exog doesn't help; quantile-forcing does at a quiet cost), signal-not-force + feed-not-remove. Stage-2 settings/algo bake-off deferred.
 - [TFT vs CatBoost — daily forecast split](docs/ml/neuralforecast-tft-evaluation.md) - **PRODUCTION SPLIT (2026-05-24)**: TFT (nf-service) serves the near-term daily calendar (≤30d, headliners; ~2× better on busy peaks); CatBoost serves far-daily (31–365) + intraday 15-min slots. Loss=studentt (quantile + weather/holiday-dist/dow covariates measured & rejected). **Re-evaluate every few weeks** (next ~2026-06-14) as history grows. See the doc's "FINAL DECISION" section.
 
@@ -62,7 +58,6 @@
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
-- [API Performance & Cache Audit](docs/troubleshooting/api-performance-cache-audit.md) - **2026-06-01**: calendar cold-build (~15s) + DB saturation (227s CTE) diagnosis, Redis keyspace audit, prewarm/TTL fixes shipped, prioritized roadmap.
 - [DB Health Runbook](docs/troubleshooting/db-health-runbook.md) - Copy-paste SQL for table sizes, unused indexes, dead tuples, slow queries, OOM checks.
 
 ### 🚀 Deployment

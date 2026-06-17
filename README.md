@@ -65,7 +65,7 @@ All park objects include a `hasOperatingSchedule` boolean:
 - `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed from activity (past).
 
 ### 2. Historical Hour Reconstruction
-For past days without official data, the system reconstructs opening hours from ride activity. See the [Smart Gaps Documentation](docs/analytics/smart-gaps.md) for technical details.
+For past days without official data, the system reconstructs opening hours from ride activity.
 - **Opening Time**: First 15min window with >= 10% ride activity, rounded down.
 - **Closing Time**: Last 15min window with activity, rounded up.
 - **Rounding**: Both times are rounded to the **nearest full hour** for maximum plausibility.
@@ -82,6 +82,7 @@ The system automatically identifies "Seasonal Parks" (parks with winter gaps > 2
 ### Prerequisites
 
 - Node.js 20+
+- pnpm 11+ (`corepack enable` picks up the pinned `packageManager` version)
 - Docker & Docker Compose
 - Git
 
@@ -93,16 +94,16 @@ git clone https://github.com/PArns/v4.api.park.fan.git
 cd v4.api.park.fan
 
 # Install dependencies
-npm install
+pnpm install
 
 # Copy environment configuration
 cp .env.example .env
 
 # Start infrastructure (PostgreSQL + Redis)
-npm run docker:up
+pnpm docker:up
 
 # Start development server
-npm run dev
+pnpm dev
 ```
 
 ### Access Points
@@ -394,7 +395,7 @@ v4.api.park.fan/
 │   └── search/                    # Global search functionality
 ├── ml-service/                    # Python ML service (CatBoost)
 │   ├── train.py                   # Model training script
-│   ├── inference.py               # FastAPI prediction service
+│   ├── main.py                    # FastAPI prediction service
 │   ├── features.py                # Feature engineering
 │   └── db.py                      # Database connection
 ├── docker/                        # Docker configurations
@@ -409,19 +410,19 @@ v4.api.park.fan/
 
 ```bash
 # Start all services (PostgreSQL + Redis)
-npm run docker:up
+pnpm docker:up
 
 # Stop all services
-npm run docker:down
+pnpm docker:down
 
 # View logs
-npm run docker:logs
+pnpm docker:logs
 
 # Restart services
-npm run docker:restart
+pnpm docker:restart
 
 # Reset database (WARNING: deletes all data)
-npm run db:reset
+pnpm db:reset
 ```
 
 **Production Deployment:**
@@ -435,31 +436,31 @@ docker-compose -f docker-compose.production.yml up -d
 
 ```bash
 # Run unit tests
-npm run test
+pnpm test
 
 # Run e2e tests
-npm run test:e2e
+pnpm test:e2e
 
 # Run all tests with coverage
-npm run test:all:cov
+pnpm test:all:cov
 
 # Watch mode for development
-npm run test:watch
+pnpm test:watch
 
 # Specific test file
-npm run test -- wait-times.processor.spec.ts
+pnpm test wait-times.processor.spec.ts
 ```
 
 **Code Quality:**
 ```bash
 # Lint code
-npm run lint
+pnpm lint
 
 # Format code
-npm run format
+pnpm format
 
 # Type check
-npm run build
+pnpm build
 ```
 
 ---
@@ -506,8 +507,7 @@ BULL_PREFIX=parkfan
 # Google APIs (Geocoding, Places)
 GOOGLE_API_KEY=your_google_api_key
 
-# Weather Data
-OPEN_WEATHER_API_KEY=your_openweather_key
+# Weather Data: Open-Meteo (no API key required)
 
 # Data Sources (optional, for enhanced coverage)
 QUEUE_TIMES_API_KEY=              # Queue-Times.com
@@ -521,7 +521,7 @@ THEMEPARKS_API_KEY=               # ThemeParks.wiki
 ML_SERVICE_URL=http://localhost:8000        # Development
 # ML_SERVICE_URL=http://ml-service:8000     # Production (Docker)
 MODEL_DIR=/app/models                       # Model storage directory
-MODEL_VERSION=v1.1.0                        # Current model version
+MODEL_VERSION=v1.1.0                        # Current model version (ml-service setting)
 ```
 
 ### Sync & Processing
