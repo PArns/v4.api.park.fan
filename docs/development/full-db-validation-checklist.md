@@ -141,10 +141,14 @@ cached). Confirm `/nearby` output is unchanged vs the previous deploy for a fixe
 coordinate (refactor is behaviour-preserving). Verify no `location:*` key encodes a
 lat/lng.
 
-### C4. Single-flight (HIGH-5 subset)
-Cold-start (or `redis-cli DEL ml:park:$PARK:daily:$TODAY`) then fire ~10 concurrent
-requests to the calendar/yearly endpoint. **Pass:** the Python `/predict` service
-logs **one** inference for that park, not ten.
+### C4. Single-flight (HIGH-5)
+Covers `getServingDailyPredictions` (ML calendar/yearly) **and** discovery
+`getGeoStructure` / `getLiveStats`. For each: cold-start (or `redis-cli DEL` the
+relevant key — e.g. `ml:park:$PARK:daily:$TODAY`, `discovery:geo:structure:v4`,
+`discovery:live_stats:v1`) then fire ~10 concurrent requests. **Pass:** exactly
+**one** upstream rebuild (one Python `/predict` per park; one geo/live DB build),
+not ten. Reminder: single-flight is **in-process** — with N app instances expect
+up to N rebuilds, not 1.
 
 ### C5. `ml:last-accuracy-check` is written (MEDIUM-1)
 After the accuracy compare cron runs:
@@ -176,8 +180,8 @@ inflation) or a missing baseline.
 ---
 
 ## Known follow-ups (not blocking)
-- **Single-flight** on `getParkPredictions("daily")` + discovery
-  `getGeoStructure`/`getLiveStats` (need a method extraction first).
+- **Single-flight** on `getParkPredictions("daily")` (the only remaining hot path
+  — needs a larger method extraction; discovery + serving-daily are done).
 - **`analytics:headliners`** (6h TTL) isn't evicted when the headliner set is
   recomputed — stale up to 6h (bounded; merge/repair do evict it).
 - **`stats.service.ts` percentiles** are still nearest-rank (M3, deferred — moot

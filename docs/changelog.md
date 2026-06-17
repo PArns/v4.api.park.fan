@@ -83,8 +83,10 @@ so these never gated — but the suite was misleading.
   Busted on merge/repair + admin flush.
 - **No stampede guard on the ~15 s ML serving rebuild** — `getServingDailyPredictions` now
   single-flights concurrent cold rebuilds (calendar + yearly share one compute) via a new
-  `SingleFlight` util. (Follow-up: extend it to `getParkPredictions("daily")`, discovery
-  `getGeoStructure`/`getLiveStats`.)
+  `SingleFlight` util. Also extended to discovery `getGeoStructure` (geo-skeleton build) and
+  `getLiveStats` (the heavy live multi-CTE), each via an extracted `build*` method with an
+  in-flight cache re-check. (Remaining follow-up: `getParkPredictions("daily")`, which needs a
+  larger method extraction. Single-flight is in-process per instance — not cross-instance.)
 - **`getCountrySummary` 404 path hit the DB on every probe** — now negative-cached, so crawlers
   probing bogus continent/country slugs no longer re-query.
 - **Admin cache flush missed `ml:dashboard:*` and `location:*`** — added to the flush patterns.

@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { NegativeCache } from "../common/utils/negative-cache.util";
+import { SingleFlight } from "../common/utils/single-flight.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -52,6 +53,10 @@ export class DiscoveryService {
   // each probe doesn't re-hit the DB (the controller turns null into a 404,
   // which the HTTP layer can't cache).
   private readonly countrySummaryMisses = new NegativeCache(60 * 60 * 1000);
+  // Collapses concurrent cold rebuilds of the geo skeleton + live-stats CTE so a
+  // TTL lapse / cold start triggers one DB build, not one per request. Keyed by
+  // the respective cache key (CACHE_KEY / LIVE_STATS_CACHE_KEY).
+  private readonly flight = new SingleFlight();
 
   constructor(
     @InjectRepository(Park)
@@ -80,6 +85,27 @@ export class DiscoveryService {
       this.logger.debug("Returning cached geo structure");
       return this.hydrateStructure(cached);
     }
+
+    // Single-flight: concurrent cold rebuilds share one DB build instead of
+    // each running the full geo-skeleton query.
+    const structure = await this.flight.run(this.CACHE_KEY, () =>
+      this.buildGeoStructureSkeleton(),
+    );
+    return this.hydrateStructure(structure);
+  }
+
+  /**
+   * Build the geo skeleton from the DB and cache it (24h), returning the
+   * UN-hydrated structure (the caller applies fresh live stats). Wrapped by a
+   * single-flight in getGeoStructure so a cache miss triggers exactly one build.
+   */
+  private async buildGeoStructureSkeleton(): Promise<GeoStructureDto> {
+    // Re-check the cache inside the flight — a prior holder may have populated
+    // it while we waited.
+    const fresh = safeJsonParse<GeoStructureDto>(
+      await this.redis.get(this.CACHE_KEY),
+    );
+    if (fresh) return fresh;
 
     this.logger.log("Building geo structure from database");
 
@@ -237,8 +263,7 @@ export class DiscoveryService {
       `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks, ${structure.attractionCount} attractions`,
     );
 
-    // Apply Live Stats (Fresh)
-    return this.hydrateStructure(structure);
+    return structure;
   }
 
   /**
@@ -439,6 +464,25 @@ export class DiscoveryService {
       this.logger.debug("Returning cached live stats");
       return new Map(cached);
     }
+
+    // Single-flight: concurrent cold rebuilds share one heavy CTE query.
+    return this.flight.run(this.LIVE_STATS_CACHE_KEY, () =>
+      this.buildLiveStats(),
+    );
+  }
+
+  /**
+   * Run the heavy live-stats CTE, hydrate crowd levels, cache (5min) and return
+   * the per-park map. Wrapped by a single-flight in getLiveStats so a cache miss
+   * triggers exactly one query.
+   */
+  private async buildLiveStats(): Promise<Map<string, ParkLiveStats>> {
+    // Re-check the cache inside the flight — a prior holder may have populated
+    // it while we waited.
+    const fresh = safeJsonParse<[string, ParkLiveStats][]>(
+      await this.redis.get(this.LIVE_STATS_CACHE_KEY),
+    );
+    if (fresh) return new Map(fresh);
 
     this.logger.log("Fetching live park statistics");
 
