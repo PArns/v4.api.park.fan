@@ -372,6 +372,7 @@ describe("MLService", () => {
             predictedTime: new Date(`${nextWeek}T12:00:00Z`),
           }),
         ]),
+        { chunk: 1000 },
       );
     });
 

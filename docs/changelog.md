@@ -6,6 +6,24 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — green up the unit suite (stale ML specs) (2026-06-17)
+
+18 pre-existing failures in three ML specs were all **stale tests, not code bugs**
+(no service code changed; verified against the real wiring / recalibration commits):
+
+- `ml-dashboard.service.spec`: the Redis mock's `set: jest.fn()` returned
+  `undefined`, so `redis.set(...).catch(...)` in `getDashboard` threw. Real
+  `ioredis.set` returns a Promise → mock now `mockResolvedValue("OK")`.
+- `ml-alert.service.spec`: the MAE→severity ladder was recalibrated for the
+  q0.8-quantile era (commit on 2026-06-13; thresholds 8→**13/17/22**) but the spec
+  still asserted the RMSE-era values. Spec updated to the current thresholds.
+- `ml.service.spec` (`storePredictions`): the chunked save
+  `save(rows, { chunk: 1000 })` (stays under Postgres' 65535 bind-param limit)
+  made `toHaveBeenCalledWith(array)` fail on the extra arg. Assertion updated.
+
+Unit suite is now fully green (476 passed, 0 failed). Note: CI only runs CodeQL,
+so these never gated — but the suite was misleading.
+
 ### Fixed — per-attraction & historical-stats crowd-level calibration (2026-06-17)
 
 - **Per-attraction calendar divided a day's peak by the attraction P50 (median)**

@@ -44,7 +44,7 @@ describe("MLDashboardService", () => {
   const mlTrainingQueue = { add: jest.fn() };
   const redis = {
     get: jest.fn().mockResolvedValue(null),
-    set: jest.fn(),
+    set: jest.fn().mockResolvedValue("OK"),
   };
 
   beforeEach(async () => {
