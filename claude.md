@@ -38,6 +38,7 @@
 
 ### 🤖 Machine Learning
 - [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
+- [Quantile Serving & Calibration](docs/ml/quantile-serving-and-calibration.md) - **2026-06-17**: which quantile becomes which user-facing number (CatBoost q0.5 display / q0.8 crowd / q0.95 uncertainty-only), the non-crossing monotonic fix, `predicted_peak` = E[daily-P90] (median forecast of a P90 target, NOT P90-of-distribution), and the single-flight stampede guard on the serving rebuild.
 - [Performance Optimizations](docs/ml/performance-optimizations.md) - ML service caching, query optimization, and vectorization (60-90% faster).
 - [Prediction Quality Issues](docs/ml/prediction-quality-issues.md) - Known bugs and fixes (5-min prediction bug, weekend underprediction, feature importance analysis).
 - [Training Roadmap](docs/ml/training-roadmap.md) - Next training steps, UNKNOWN park data strategy, known issues and fix plans.
@@ -52,6 +53,7 @@
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
 - [Timezone Audit](docs/development/timezone-audit.md) - Audit of all time operations against park timezone (2026-02-08).
 - [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
+- [Full-DB Validation Checklist](docs/development/full-db-validation-checklist.md) - **2026-06-17**: post-deploy/staging checks for the P50/P90 + caching work — crowd-level calibration invariants, the new SQL (per-attraction & historical-stats typical-day-peak), cache invalidation, single-flight, quantile monotonicity. The dev/CI container has no DB, so these self-calibrating changes are verified against real parks here.
 
 ### 🖥️ Frontend
 - [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.

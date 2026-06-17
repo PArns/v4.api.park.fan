@@ -26,6 +26,12 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 - **Doc reconciliation** (`crowd-levels.md`): the park calendar `day_value` is the
   raw-`queue_data` daily P90 (not hourly-slot P90s); documented the new
   per-attraction typical-day-peak.
+- **New docs**: [`ml/quantile-serving-and-calibration.md`](ml/quantile-serving-and-calibration.md)
+  (the full quantile→display/crowd mapping + the monotonic / `predicted_peak` /
+  single-flight fixes) and
+  [`development/full-db-validation-checklist.md`](development/full-db-validation-checklist.md)
+  (the calibration invariants + SQL to verify against real parks, since the
+  dev/CI container has no DB).
 - _(Deferred: switching `stats.service.ts` percentiles from nearest-rank to linear
   is now moot for historical-stats — it no longer reads `park_daily_stats` — and
   is entangled with the outlier-cap heuristic + its unit tests, so it's left as an
