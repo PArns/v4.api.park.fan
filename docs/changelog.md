@@ -28,6 +28,17 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
   now evicts `park:statistics` + cached crowd levels.
 - **ML dashboard "last accuracy check" was always fabricated** — `compareWithActuals` now persists
   the `ml:last-accuracy-check` marker the dashboard reads.
+- **`/nearby` re-loaded every park from the DB on each request** (two full-table scans). It now
+  reuses a shared, user-INDEPENDENT park-coordinate index cached in Redis (`location:parkcoords:v1`);
+  the per-user distance computation and the nearby response itself stay per-request (never cached).
+  Busted on merge/repair + admin flush.
+- **No stampede guard on the ~15 s ML serving rebuild** — `getServingDailyPredictions` now
+  single-flights concurrent cold rebuilds (calendar + yearly share one compute) via a new
+  `SingleFlight` util. (Follow-up: extend it to `getParkPredictions("daily")`, discovery
+  `getGeoStructure`/`getLiveStats`.)
+- **`getCountrySummary` 404 path hit the DB on every probe** — now negative-cached, so crawlers
+  probing bogus continent/country slugs no longer re-query.
+- **Admin cache flush missed `ml:dashboard:*` and `location:*`** — added to the flush patterns.
 - **Non-crossing MultiQuantile** (`ml-service/model.py`): per-row quantiles are now sorted
   monotonically so the crowd signal (q0.8) can't fall below the displayed median (q0.5) and the
   uncertainty band can't silently collapse; `nf-service` `predicted_peak` semantics documented

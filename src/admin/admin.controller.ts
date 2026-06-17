@@ -401,6 +401,8 @@ export class AdminController {
       "ml:park:*", // serving predictions (daily/hourly/yearly)
       "ml:tft-daily:*",
       "ml:active-attractions:*",
+      "ml:dashboard:*", // ML dashboard snapshot (5min cache)
+      "location:*", // /nearby shared park-coordinate index
     ];
 
     let totalDeleted = 0;

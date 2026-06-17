@@ -36,6 +36,25 @@ import {
 } from "../common/utils/schedule.util";
 
 /**
+ * Lightweight, user-INDEPENDENT park record used for /nearby distance queries.
+ * Carries only what the distance sort and the response mapper need (incl. the
+ * slugs buildParkUrl reads), so the shared coordinate index stays small.
+ */
+interface ParkLocationEntry {
+  id: string;
+  name: string;
+  slug: string;
+  latitude: number;
+  longitude: number;
+  city: string | null;
+  country: string | null;
+  timezone: string;
+  continentSlug: string | null;
+  countrySlug: string | null;
+  citySlug: string | null;
+}
+
+/**
  * Location Service
  *
  * Handles location-based queries for parks and attractions.
@@ -136,37 +155,82 @@ export class LocationService {
   private async findNearestPark(
     userLocation: GeoCoordinate,
     radiusInMeters: number,
-  ): Promise<Park | null> {
-    // Get all parks with coordinates
-    const parks = await this.parkRepository.find({
-      where: {
-        latitude: Not(IsNull()),
-        longitude: Not(IsNull()),
-      },
-    });
+  ): Promise<ParkLocationEntry | null> {
+    // Shared cached coordinate index (not the per-user result) — see
+    // getParkLocationIndex.
+    const parks = await this.getParkLocationIndex();
 
     if (parks.length === 0) {
       return null;
     }
 
     // Calculate distances and find nearest within radius
-    const parksWithDistance = sortByDistance(
-      parks.map((p) => ({
-        ...p,
-        latitude: Number(p.latitude),
-        longitude: Number(p.longitude),
-      })),
-      userLocation,
-    );
-
-    const nearestPark = parksWithDistance[0];
+    const [nearestPark] = sortByDistance(parks, userLocation);
 
     if (nearestPark && nearestPark.distance <= radiusInMeters) {
-      // Return the original park (without the distance property)
-      return parks.find((p) => p.id === nearestPark.id) || null;
+      // Return the index entry (without the synthetic distance property).
+      return parks.find((p) => p.id === nearestPark.id) ?? null;
     }
 
     return null;
+  }
+
+  /**
+   * Load the shared, user-INDEPENDENT park coordinate index (id, slugs,
+   * lat/lng, city/country/timezone). Cached in Redis so /nearby doesn't
+   * re-load every park from the DB on every request — previously each request
+   * ran two full-table scans. The per-user distance computation and the nearby
+   * response itself are deliberately NOT cached; only this static list is.
+   * 10-min TTL plus eviction on merge/repair (invalidateParkCaches) bound
+   * staleness for new/renamed parks.
+   */
+  private async getParkLocationIndex(): Promise<ParkLocationEntry[]> {
+    const cacheKey = CacheKeys.parkLocationIndex();
+    const cached = await this.redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as ParkLocationEntry[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        // corrupt entry → fall through and rebuild
+      }
+    }
+
+    const rows = await this.parkRepository.find({
+      where: { latitude: Not(IsNull()), longitude: Not(IsNull()) },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        latitude: true,
+        longitude: true,
+        city: true,
+        country: true,
+        timezone: true,
+        continentSlug: true,
+        countrySlug: true,
+        citySlug: true,
+      },
+    });
+
+    const index: ParkLocationEntry[] = rows.map((p) => ({
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+      latitude: Number(p.latitude),
+      longitude: Number(p.longitude),
+      city: p.city ?? null,
+      country: p.country ?? null,
+      timezone: p.timezone,
+      continentSlug: p.continentSlug ?? null,
+      countrySlug: p.countrySlug ?? null,
+      citySlug: p.citySlug ?? null,
+    }));
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(index), "EX", 600)
+      .catch(() => undefined);
+    return index;
   }
 
   /**
@@ -358,13 +422,9 @@ export class LocationService {
     userLocation: GeoCoordinate,
     limit: number = 6,
   ): Promise<NearbyParksDto> {
-    // Get all parks with coordinates
-    const parks = await this.parkRepository.find({
-      where: {
-        latitude: Not(IsNull()),
-        longitude: Not(IsNull()),
-      },
-    });
+    // Shared cached coordinate index (not the per-user result) — see
+    // getParkLocationIndex.
+    const parks = await this.getParkLocationIndex();
 
     if (parks.length === 0) {
       return {
@@ -374,14 +434,7 @@ export class LocationService {
     }
 
     // Sort by distance and take top N
-    const sortedParks = sortByDistance(
-      parks.map((p) => ({
-        ...p,
-        latitude: Number(p.latitude),
-        longitude: Number(p.longitude),
-      })),
-      userLocation,
-    ).slice(0, limit);
+    const sortedParks = sortByDistance(parks, userLocation).slice(0, limit);
 
     // Fast path: read the prewarmed park:integrated cache (single MGET). All parks are
     // warmed every 5min, so this normally serves every nearby park directly from Redis —

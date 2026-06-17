@@ -1,5 +1,6 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
+import { NegativeCache } from "../common/utils/negative-cache.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -47,6 +48,10 @@ export class DiscoveryService {
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
   private readonly LIVE_STATS_TTL = 5 * 60; // 5 minutes
+  // Crawlers probe bogus continent/country slugs; remember the empty ones so
+  // each probe doesn't re-hit the DB (the controller turns null into a 404,
+  // which the HTTP layer can't cache).
+  private readonly countrySummaryMisses = new NegativeCache(60 * 60 * 1000);
 
   constructor(
     @InjectRepository(Park)
@@ -576,6 +581,9 @@ export class DiscoveryService {
     countrySlug: string,
   ): Promise<CountrySummaryDto | null> {
     const cacheKey = `discovery:country-summary:v1:${continentSlug}:${countrySlug}`;
+    const missKey = `${continentSlug}:${countrySlug}`;
+    if (this.countrySummaryMisses.has(missKey)) return null;
+
     const cached = safeJsonParse<CountrySummaryDto>(
       await this.redis.get(cacheKey),
     );
@@ -594,7 +602,10 @@ export class DiscoveryService {
       ],
     });
 
-    if (parks.length === 0) return null;
+    if (parks.length === 0) {
+      this.countrySummaryMisses.add(missKey);
+      return null;
+    }
 
     const parkIds = parks.map((p) => p.id);
     const cityCount = new Set(parks.map((p) => p.citySlug)).size;

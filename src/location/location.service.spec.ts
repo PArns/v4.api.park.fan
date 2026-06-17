@@ -75,10 +75,14 @@ describe("LocationService", () => {
         { provide: ParksService, useValue: parksService },
         { provide: PopularityService, useValue: popularityService },
         {
-          // Empty MGET → every park is a cache miss → exercises the batch fallback path
-          // these tests already mock.
+          // Empty GET/MGET → cache miss → exercises the DB + batch fallback
+          // path these tests already mock (incl. the park-coordinate index).
           provide: REDIS_CLIENT,
-          useValue: { mget: jest.fn().mockResolvedValue([]) },
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue(undefined),
+            mget: jest.fn().mockResolvedValue([]),
+          },
         },
       ],
     }).compile();

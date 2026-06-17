@@ -38,6 +38,8 @@ export async function invalidateParkCaches(
     CacheKeys.analyticsHeadliners(parkId),
     // The geo skeleton lists every park; a merge/repair changes it.
     CacheKeys.discoveryGeoStructure(),
+    // The /nearby coordinate index also lists every park.
+    CacheKeys.parkLocationIndex(),
   ];
 
   // Migrated attractions keep their IDs but their integrated payload embeds

@@ -1,6 +1,7 @@
 import { Injectable, Logger, HttpException, Inject } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { safeJsonParse } from "../common/utils/json.util";
+import { SingleFlight } from "../common/utils/single-flight.util";
 import { getMlServiceUrl } from "../config/ml-services.config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, MoreThan } from "typeorm";
@@ -54,6 +55,11 @@ export class MLService {
   // safety net with 1h overlap so the key never expires between two background refreshes,
   // while still self-healing a degraded/empty ML response within 13h instead of 25h.
   private readonly TTL_DAILY_PREDICTIONS = 13 * 60 * 60; // 13 hours
+
+  // Collapses concurrent cold rebuilds of the serving daily forecast (the
+  // ~15s CatBoost path) so a TTL lapse / warmup eviction triggers one compute,
+  // not one per concurrent request. Shared by the calendar and yearly views.
+  private readonly servingFlight = new SingleFlight();
 
   constructor(
     @InjectRepository(WaitTimePrediction)
@@ -871,27 +877,31 @@ export class MLService {
     parkId: string,
     tftDays = 45,
   ): Promise<BulkPredictionResponseDto> {
-    const base = await this.getParkPredictions(parkId, "daily");
-    let tft: PredictionDto[] = [];
-    try {
-      tft = await this.getTftDailyPredictions(parkId, tftDays);
-    } catch (e: unknown) {
-      this.logger.warn(
-        `TFT daily merge skipped for ${parkId}: ${e instanceof Error ? e.message : e}`,
-      );
-    }
-    if (tft.length === 0) return base;
+    // Single-flight: concurrent calendar/yearly requests that all miss the
+    // underlying cache share one CatBoost rebuild instead of stampeding it.
+    return this.servingFlight.run(`${parkId}:${tftDays}`, async () => {
+      const base = await this.getParkPredictions(parkId, "daily");
+      let tft: PredictionDto[] = [];
+      try {
+        tft = await this.getTftDailyPredictions(parkId, tftDays);
+      } catch (e: unknown) {
+        this.logger.warn(
+          `TFT daily merge skipped for ${parkId}: ${e instanceof Error ? e.message : e}`,
+        );
+      }
+      if (tft.length === 0) return base;
 
-    const key = (p: PredictionDto) =>
-      `${p.attractionId}|${p.predictedTime.slice(0, 10)}`;
-    const tftKeys = new Set(tft.map(key));
-    const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
-    const merged = [...tft, ...farCatboost];
-    return {
-      predictions: merged,
-      count: merged.length,
-      modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
-    };
+      const key = (p: PredictionDto) =>
+        `${p.attractionId}|${p.predictedTime.slice(0, 10)}`;
+      const tftKeys = new Set(tft.map(key));
+      const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
+      const merged = [...tft, ...farCatboost];
+      return {
+        predictions: merged,
+        count: merged.length,
+        modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
+      };
+    });
   }
 
   /**

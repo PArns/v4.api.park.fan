@@ -3539,7 +3539,9 @@ export class AnalyticsService {
     const cacheKey = `analytics:crowdlevel:${type}:${entityId}:${date}`;
     const cacheTTL = isToday ? 30 * 60 : 6 * 60 * 60; // 30 min for today, 6h for historical (reduced from 24h)
 
-    // Try cache first (but skip for today to ensure freshness within 30 min window)
+    // Read the cache in all cases. Today's freshness is bounded by the 30-min
+    // TTL above (not by skipping the read), and a baseline recompute also
+    // evicts these keys (see saveP50Baselines).
     const cached = await this.redis.get(cacheKey);
     if (cached) {
       try {

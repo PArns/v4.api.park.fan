@@ -131,4 +131,12 @@ export const CacheKeys = {
 
   /** The discovery geo-structure skeleton (continent/country/city/park tree). */
   discoveryGeoStructure: (): string => "discovery:geo:structure:v4",
+
+  /**
+   * Shared, user-INDEPENDENT index of park coordinates (+ slugs) for the
+   * /nearby distance queries. The per-user nearby RESULT is never cached —
+   * only this static list, so every request reuses it instead of re-loading
+   * every park from the DB. Busted on merge/repair (the park set changes).
+   */
+  parkLocationIndex: (): string => "location:parkcoords:v1",
 } as const;
