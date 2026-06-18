@@ -134,11 +134,33 @@ function dayPeak(day: RopeDropDayInput): number {
   return peak;
 }
 
-/** P90 of the first 15-min slot after opening (the rope-drop wait), or null. */
+/**
+ * P90 at the ride's opening (the rope-drop wait), or null when the day has no
+ * post-open slot at all.
+ *
+ * Anchored on the ride's **earliest reported slot**, NOT a fixed [0,15)-min
+ * window after PARK opening. Many parks stagger ride openings behind the gates
+ * — Phantasialand opens at 09:00 but its rides at 10:00, so the first slot is
+ * 45-180 min after park open. A fixed park-open window returned null for every
+ * such day, dropping the ride from `sampleDays` entirely (busyPeak=0 →
+ * worth=false). Using the first populated 15-min bin measures the wait when you
+ * can actually first ride, and is identical to the old behaviour for rides that
+ * do open with the park (earliest bin = 0).
+ */
 function openWaitForDay(day: RopeDropDayInput): number | null {
+  let earliestBin: number | null = null;
+  for (const s of day.slots) {
+    if (s.minutesAfterOpen < 0) continue;
+    const bin = Math.floor(s.minutesAfterOpen / BIN_MINUTES) * BIN_MINUTES;
+    if (earliestBin === null || bin < earliestBin) earliestBin = bin;
+  }
+  if (earliestBin === null) return null;
+
   let val: number | null = null;
   for (const s of day.slots) {
-    if (s.minutesAfterOpen >= 0 && s.minutesAfterOpen < BIN_MINUTES) {
+    if (s.minutesAfterOpen < 0) continue;
+    const bin = Math.floor(s.minutesAfterOpen / BIN_MINUTES) * BIN_MINUTES;
+    if (bin === earliestBin) {
       val = val === null ? s.p90 : Math.min(val, s.p90);
     }
   }

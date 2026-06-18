@@ -27,6 +27,30 @@ function busyDay(date: string, dow: number): RopeDropDayInput {
   };
 }
 
+/**
+ * A busy day on a ride that opens AFTER the park gates (Phantasialand-style:
+ * park opens 09:00, ride at 10:00). Same shape as busyDay but shifted so the
+ * first slot is 60 min after PARK open — there is deliberately NO slot in the
+ * [0,15) park-open window. The ride must still be ratable (openWait anchored on
+ * its earliest slot, not park open).
+ */
+function staggeredOpenDay(date: string, dow: number): RopeDropDayInput {
+  return {
+    date,
+    dow,
+    slots: [
+      { minutesAfterOpen: 60, p90: 30 }, // ride opening wait (earliest slot)
+      { minutesAfterOpen: 75, p90: 60 },
+      { minutesAfterOpen: 90, p90: 120 },
+      { minutesAfterOpen: 105, p90: 120 },
+      { minutesAfterOpen: 360, p90: 50 },
+      { minutesAfterOpen: 540, p90: 25 },
+      { minutesAfterOpen: 570, p90: 20 }, // genuine evening trough
+      { minutesAfterOpen: 600, p90: 3 }, // closing drain — guarded out
+    ],
+  };
+}
+
 /** A quiet day: peak only 30, open 10 — not worth rope-dropping. */
 function quietDay(date: string, dow: number): RopeDropDayInput {
   return {
@@ -73,6 +97,20 @@ describe("computeRopeDrop", () => {
     expect(r.busyPeak).toBe(120);
     expect(r.openWait).toBe(30);
     expect(r.savings).toBe(90);
+  });
+
+  it("rates a ride that opens after the park gates (staggered opening)", () => {
+    // 20 Saturdays where the ride only opens 60 min after PARK open (no slot in
+    // the [0,15) park-open window). Regression test for the bug that dropped
+    // every such day → sampleDays=0 → busyPeak=0 → worth=false (Phantasialand
+    // headliners like Taron, F.L.Y.).
+    const r = computeRopeDrop(days(staggeredOpenDay, 6, 20), WINDOW_START);
+    expect(r).not.toBeNull();
+    expect(r!.sampleDays).toBe(20);
+    expect(r!.openWait).toBe(30); // earliest slot (mao=60), not null
+    expect(r!.busyPeak).toBe(120);
+    expect(r!.savings).toBe(90);
+    expect(r!.worth).toBe(true);
   });
 
   it("computes rideBy at the 50%-of-peak crossing", () => {
@@ -203,17 +241,17 @@ describe("computeRopeDrop", () => {
     expect(lo.confidence).toBe("low");
   });
 
-  it("ignores days with no opening slot for the level layer", () => {
-    const noOpen: RopeDropDayInput = {
+  it("ignores a day with no operating (post-open) slot for the level layer", () => {
+    // A day with only a pre-open heartbeat and no operating reading at all has
+    // no opening wait → dropped. (A first slot AFTER park open is NOT this case
+    // — that's a staggered ride opening, covered above and now counted.)
+    const preOpenOnly: RopeDropDayInput = {
       date: "2026-05-25",
       dow: 6,
-      slots: [
-        { minutesAfterOpen: 60, p90: 120 },
-        { minutesAfterOpen: 600, p90: 10 },
-      ],
+      slots: [{ minutesAfterOpen: -60, p90: 5 }],
     };
-    const r = computeRopeDrop([...days(busyDay, 6, 20), noOpen], WINDOW_START)!;
-    // 20 valid days contribute; the no-open day is dropped.
+    const r = computeRopeDrop([...days(busyDay, 6, 20), preOpenOnly], WINDOW_START)!;
+    // 20 valid days contribute; the pre-open-only day is dropped.
     expect(r.sampleDays).toBe(20);
   });
 
