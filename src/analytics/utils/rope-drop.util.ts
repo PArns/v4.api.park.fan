@@ -54,6 +54,21 @@ export interface RopeDropThresholds {
    * curve describing the typical operating day.
    */
   shapeBinMinSupport: number;
+  /**
+   * Minutes after PARK open beyond which a ride's first slot is treated as a
+   * staggered ride opening (the ride opens after the gates — e.g. Phantasialand
+   * opens at 09:00, rides at 10:00). On such days the first measured slot is the
+   * wait for guests arriving at ride-open, NOT for the rope-dropper who queued
+   * during the gap and rides first — so it massively overstates their wait.
+   */
+  staggerThresholdMinutes: number;
+  /**
+   * Rope-drop open wait (minutes) assumed on a staggered-opening day: the
+   * rope-dropper queued ahead and rides among the first, so their wait is a
+   * near-walk-on floor rather than the (already-built) first-slot value. Caps
+   * the measured open wait so the savings reflect the real rope-drop payoff.
+   */
+  staggeredOpenWait: number;
 }
 
 export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
@@ -67,6 +82,8 @@ export const DEFAULT_ROPE_DROP_THRESHOLDS: RopeDropThresholds = {
   closingGuardMinutes: 30,
   eveningFraction: 0.6,
   shapeBinMinSupport: 0.5,
+  staggerThresholdMinutes: 30,
+  staggeredOpenWait: 10,
 };
 
 const BIN_MINUTES = 15;
@@ -147,7 +164,10 @@ function dayPeak(day: RopeDropDayInput): number {
  * can actually first ride, and is identical to the old behaviour for rides that
  * do open with the park (earliest bin = 0).
  */
-function openWaitForDay(day: RopeDropDayInput): number | null {
+function openWaitForDay(
+  day: RopeDropDayInput,
+  thresholds: RopeDropThresholds = DEFAULT_ROPE_DROP_THRESHOLDS,
+): number | null {
   let earliestBin: number | null = null;
   for (const s of day.slots) {
     if (s.minutesAfterOpen < 0) continue;
@@ -164,14 +184,26 @@ function openWaitForDay(day: RopeDropDayInput): number | null {
       val = val === null ? s.p90 : Math.min(val, s.p90);
     }
   }
+  if (val === null) return null;
+
+  // Staggered ride opening (the ride opens well after the park gates): the
+  // first measured slot is the wait for guests arriving at ride-open, not for
+  // the rope-dropper who queued during the gap and rides first. Cap it at the
+  // near-walk-on floor so the savings reflect the real rope-drop payoff.
+  if (earliestBin > thresholds.staggerThresholdMinutes) {
+    return Math.min(val, thresholds.staggeredOpenWait);
+  }
   return val;
 }
 
-function bucketLevels(days: RopeDropDayInput[]): RopeDropDayBucket {
+function bucketLevels(
+  days: RopeDropDayInput[],
+  thresholds: RopeDropThresholds = DEFAULT_ROPE_DROP_THRESHOLDS,
+): RopeDropDayBucket {
   const peaks: number[] = [];
   const opens: number[] = [];
   for (const day of days) {
-    const ow = openWaitForDay(day);
+    const ow = openWaitForDay(day, thresholds);
     const peak = dayPeak(day);
     if (ow === null || peak <= 0) continue;
     peaks.push(peak);
@@ -271,15 +303,17 @@ export function computeRopeDrop(
   const windowDays = guardedDays.filter((d) => d.date >= windowStart);
   const weekend = bucketLevels(
     windowDays.filter((d) => d.dow === 0 || d.dow === 6),
+    thresholds,
   );
   const weekday = bucketLevels(
     windowDays.filter((d) => d.dow >= 1 && d.dow <= 5),
+    thresholds,
   );
 
   // Headline = the busier bucket (the realistic full-day scenario).
   const headline = weekend.busyPeak >= weekday.busyPeak ? weekend : weekday;
   const sampleDays = windowDays.filter((d) => {
-    const ow = openWaitForDay(d);
+    const ow = openWaitForDay(d, thresholds);
     return ow !== null && dayPeak(d) > 0;
   }).length;
 

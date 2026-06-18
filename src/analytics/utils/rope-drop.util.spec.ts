@@ -107,9 +107,12 @@ describe("computeRopeDrop", () => {
     const r = computeRopeDrop(days(staggeredOpenDay, 6, 20), WINDOW_START);
     expect(r).not.toBeNull();
     expect(r!.sampleDays).toBe(20);
-    expect(r!.openWait).toBe(30); // earliest slot (mao=60), not null
+    // Staggered opening (first slot 60 min after PARK open) → open wait is
+    // floored to the rope-drop near-walk-on (10), not the first-slot p90 (30),
+    // because the rope-dropper queued during the gates→ride gap and rides first.
+    expect(r!.openWait).toBe(10);
     expect(r!.busyPeak).toBe(120);
-    expect(r!.savings).toBe(90);
+    expect(r!.savings).toBe(110);
     expect(r!.worth).toBe(true);
   });
 
