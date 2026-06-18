@@ -104,7 +104,6 @@ export class ConflictResolverService {
     const parkExternalId =
       wiki?.parkExternalId || qt?.parkExternalId || wz!.parkExternalId;
     const lands = qt?.lands || []; // Exclusive to Queue-Times
-    const crowdLevel = wz?.crowdLevel; // Exclusive to Wartezeiten
 
     // Resolve operating hours with fallback strategy
     const operatingHours = this.resolveOperatingHours(
@@ -130,7 +129,6 @@ export class ConflictResolverService {
       parkExternalId,
       entities: mergedEntities,
       lands,
-      crowdLevel,
       operatingHours,
       fetchedAt: new Date(),
     };

@@ -4,7 +4,6 @@ import {
   WartezeitenParkResponse,
   WartezeitenWaitTimeResponse,
   WartezeitenOpeningTimeResponse,
-  WartezeitenCrowdLevelResponse,
 } from "./wartezeiten.types";
 import { logRateLimitBlock } from "../../common/utils/file-logger.util";
 
@@ -319,34 +318,6 @@ export class WartezeitenClient {
 
     this.logger.debug(
       `✅ Fetched opening times for park: ${parkId} (opened_today: ${data[0]?.opened_today})`,
-    );
-    return data;
-  }
-
-  /**
-   * Get crowd level for a park
-   *
-   * @param parkId - Park ID or UUID
-   * @returns Crowd level data
-   *
-   * Cache: 5-10 minutes (per API docs)
-   */
-  async getCrowdLevel(parkId: string): Promise<WartezeitenCrowdLevelResponse> {
-    await this.enforceRateLimit();
-
-    this.logger.debug(`Fetching crowd level for park: ${parkId}`);
-
-    const data = await this.requestWithRetry<WartezeitenCrowdLevelResponse>(
-      "/v1/crowdlevel",
-      {
-        headers: {
-          park: parkId,
-        },
-      },
-    );
-
-    this.logger.debug(
-      `✅ Fetched crowd level for park: ${parkId} (${data.crowd_level})`,
     );
     return data;
   }

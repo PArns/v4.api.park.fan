@@ -51,14 +51,6 @@ export interface WartezeitenOpeningTimeResponse {
 }
 
 /**
- * Crowd level response from /v1/crowdlevel endpoint
- */
-export interface WartezeitenCrowdLevelResponse {
-  crowd_level: number; // Float (e.g., 56.67)
-  timestamp: string; // ISO 8601 timestamp
-}
-
-/**
  * API Error Response
  */
 export interface WartezeitenErrorResponse {

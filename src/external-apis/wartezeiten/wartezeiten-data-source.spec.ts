@@ -66,7 +66,6 @@ describe.skip("WartezeitenDataSource (Integration)", () => {
       expect(liveData.source).toBe("wartezeiten-app");
       expect(liveData.parkExternalId).toBe(parkUuid);
       expect(liveData.entities.length).toBeGreaterThan(0);
-      expect(liveData.crowdLevel).toBeDefined();
 
       const firstEntity = liveData.entities[0];
       expect(firstEntity).toHaveProperty("externalId");
@@ -75,7 +74,6 @@ describe.skip("WartezeitenDataSource (Integration)", () => {
       expect(firstEntity.entityType).toBe(EntityType.ATTRACTION);
 
       console.log(`✅ Fetched ${liveData.entities.length} entities`);
-      console.log(`✅ Crowd level: ${liveData.crowdLevel}`);
       console.log("Sample entity:", firstEntity);
     }, 15000);
 

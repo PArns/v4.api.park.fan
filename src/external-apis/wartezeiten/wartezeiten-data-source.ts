@@ -101,22 +101,11 @@ export class WartezeitenDataSource implements IDataSource {
   }
 
   async fetchParkLiveData(externalId: string): Promise<LiveDataResponse> {
-    // Fetch wait times (primary data)
+    // Fetch wait times (primary data). Crowd level was fetched here too but is
+    // consumed nowhere downstream — dropping it halves Wartezeiten request
+    // volume against the 85/min budget (the main driver of the constant
+    // 429 → 15-minute global blocks).
     const waitTimes = await this.client.getWaitTimes(externalId, "en");
-
-    // OPTIMIZATION: Fetch crowd level in parallel (if available)
-    // Crowd level changes less frequently but is valuable for enrichment
-    // We fetch it here to ensure it's available during live sync
-    let crowdLevel: number | undefined;
-    try {
-      const crowdData = await this.client.getCrowdLevel(externalId);
-      crowdLevel = crowdData.crowd_level;
-    } catch (error) {
-      // Crowd level is optional - don't fail if unavailable
-      this.logger.debug(
-        `Crowd level not available for park ${externalId}: ${error}`,
-      );
-    }
 
     const entities: EntityLiveData[] = waitTimes.map((attraction) => {
       const baseEntity: EntityLiveData = {
@@ -156,7 +145,6 @@ export class WartezeitenDataSource implements IDataSource {
       source: this.name,
       parkExternalId: externalId,
       entities,
-      crowdLevel, // Include crowd level if available
       // Note: operatingHours can be fetched separately via dedicated jobs
       fetchedAt: new Date(),
     };

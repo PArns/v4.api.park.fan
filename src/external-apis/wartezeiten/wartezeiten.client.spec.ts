@@ -141,26 +141,6 @@ describe("WartezeitenClient", () => {
     });
   });
 
-  describe("getCrowdLevel", () => {
-    it("should fetch crowd level successfully", async () => {
-      const mockCrowdLevel = {
-        crowd_level: 56.67,
-        timestamp: "2025-12-20T15:41:00+01:00",
-      };
-
-      mockAxiosInstance.get.mockResolvedValue({ data: mockCrowdLevel });
-
-      const result = await client.getCrowdLevel("phantasialand");
-
-      expect(result).toEqual(mockCrowdLevel);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/v1/crowdlevel", {
-        headers: {
-          park: "phantasialand",
-        },
-      });
-    });
-  });
-
   describe.skip("error handling", () => {
     it("should handle 404 errors", async () => {
       const error = {

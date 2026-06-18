@@ -89,7 +89,6 @@ export interface LiveDataResponse {
   parkExternalId: string;
   entities: EntityLiveData[];
   lands?: LandData[]; // Only if source supports lands
-  crowdLevel?: number; // Only if source supports crowd level (Wartezeiten)
   operatingHours?: OperatingWindow[]; // Park operating hours
   fetchedAt: Date;
 }

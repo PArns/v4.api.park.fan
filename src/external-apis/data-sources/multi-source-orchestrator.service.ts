@@ -243,14 +243,21 @@ export class MultiSourceOrchestrator {
               (error.message.includes("ENOTFOUND") ||
                 error.message.includes("ECONNREFUSED") ||
                 error.message.includes("ETIMEDOUT")));
+          // An active rate-limit block is an EXPECTED backoff, not an error: the
+          // client throws it fast (before any HTTP call) for every park while a
+          // source is globally blocked. Logging each one to the error file
+          // produced ~12k entries/day during Wartezeiten block windows. Treat it
+          // like a transient network condition — a single warn, no error file.
+          // (The 429 that triggers the block is still recorded once via the
+          // client's logRateLimitBlock.)
+          const isRateLimitBackoff =
+            error instanceof Error && /rate limit/i.test(error.message);
           const detail =
             error instanceof AggregateError && error.errors?.length
               ? error.errors.map((e: unknown) => String(e)).join(", ")
               : String(error);
-          if (isNetworkError) {
-            this.logger.warn(
-              `Network error fetching from ${sourceName}: ${detail}`,
-            );
+          if (isNetworkError || isRateLimitBackoff) {
+            this.logger.warn(`Skipping ${sourceName} (transient): ${detail}`);
           } else {
             this.logger.error(`Failed to fetch from ${sourceName}: ${detail}`);
             logExternalApiError(
