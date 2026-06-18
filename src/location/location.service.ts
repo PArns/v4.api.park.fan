@@ -270,6 +270,7 @@ export class LocationService {
       analyticsMap,
       parkHasOperatingSchedule,
       headlinerIds,
+      parkRatable,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
@@ -281,6 +282,7 @@ export class LocationService {
       this.analyticsService.getBatchAttractionPercentilesToday(attractionIds),
       this.parksService.hasOperatingSchedule(parkId),
       this.analyticsService.getHeadlinerAttractionIds(parkId),
+      this.analyticsService.isParkRatable(parkId),
     ]);
 
     const parkAnalytics = await this.analyticsService
@@ -324,13 +326,19 @@ export class LocationService {
           waitTime !== undefined &&
           queueData?.status === "OPERATING"
         ) {
-          const baseline =
-            p50Baselines.get(attraction.id) || p90Baselines.get(attraction.id);
-          if (baseline && baseline > 0) {
-            crowdLevel = this.analyticsService.getAttractionCrowdLevel(
-              waitTime,
-              baseline,
-            );
+          if (!parkRatable) {
+            // Parent park not ratable (< 30 operating days) → "unknown".
+            crowdLevel = "unknown";
+          } else {
+            const baseline =
+              p50Baselines.get(attraction.id) ||
+              p90Baselines.get(attraction.id);
+            if (baseline && baseline > 0) {
+              crowdLevel = this.analyticsService.getAttractionCrowdLevel(
+                waitTime,
+                baseline,
+              );
+            }
           }
         }
 
@@ -550,9 +558,10 @@ export class LocationService {
         analytics: occupancy
           ? {
               avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-              crowdLevel: this.analyticsService.determineCrowdLevel(
-                occupancy.current,
-              ),
+              // Gated at the source: "unknown" for a thin park (not ratable).
+              crowdLevel:
+                occupancy.crowdLevel ??
+                this.analyticsService.determineCrowdLevel(occupancy.current),
               occupancy: occupancy.current,
             }
           : undefined,

@@ -19,3 +19,16 @@ export function determineCrowdLevel(occupancy: number): CrowdLevel {
   if (occupancy <= 200) return "very_high";
   return "extreme";
 }
+
+/**
+ * Rate a numerator against a typical-day-peak baseline, returning `unknown`
+ * ("keine Prognose") when the baseline is missing/non-positive — which on the
+ * typical-day-peak surfaces means the park is not ratable (NULL typicalDayPeak,
+ * i.e. < 30 operating days). Replaces the old
+ * `baseline > 0 ? determineCrowdLevel((num / baseline) * 100) : "moderate"`
+ * pattern so thin-data parks never render a made-up `moderate`.
+ */
+export function rateOrUnknown(numerator: number, baseline: number): CrowdLevel {
+  if (!baseline || baseline <= 0) return "unknown";
+  return determineCrowdLevel((numerator / baseline) * 100);
+}

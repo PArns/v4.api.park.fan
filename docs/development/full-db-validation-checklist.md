@@ -21,6 +21,33 @@ The whole regime rests on **"a statistically typical day ≈ 100% = moderate"**.
 Validate the invariant, not a fixed distribution (real levels depend on
 conditions — promos, holidays).
 
+### A0. Thin-data gate (≥ 30 operating days → `unknown`)
+
+A park is "ratable" only with ≥ 30 operating days of headliner data. Invariant:
+**parks with < 30 operating days have `typicalDayPeak IS NULL` and read
+`unknown`, never `moderate`.** The single flag `park_p50_baselines."typicalDayPeak"
+IS NOT NULL` gates the crowd-level surfaces, ML training, and the reported
+aggregate MAE — they all key off it, so they cannot disagree.
+
+```sql
+-- Parks at 1–29 operating days are exactly the ones whose typicalDayPeak
+-- should be NULL after a baseline recompute.
+SELECT "parkId", "distinctDays", "typicalDayPeak"
+FROM park_p50_baselines
+WHERE "distinctDays" < 30
+ORDER BY "distinctDays";
+-- Count of gated (NULL) parks should be ~19; Europa-Park / Phantasialand
+-- (dense) must stay non-NULL.
+SELECT count(*) FROM park_p50_baselines WHERE "typicalDayPeak" IS NULL;
+```
+
+- Hit a thin park (e.g. Sesame Place) calendar / yearly / historical / ride /
+  live endpoints → `crowdLevel: "unknown"`, while raw wait-time minutes and the
+  numeric occupancy % stay intact. A dense park reads real levels.
+- ML: the next nightly train logs a lower included-park count
+  (`Training data spans N ratable parks` in `ml-service/db.py`); the dashboard
+  MAE no longer includes thin-park rides.
+
 ### A1. Park calendar — typical-day-peak (baseline sanity)
 ```sql
 -- typical-day-peak should sit between P50 and the pooled P90.

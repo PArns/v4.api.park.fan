@@ -17,6 +17,7 @@ import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
@@ -1320,15 +1321,14 @@ export class ParkIntegrationService {
 
       if (waits.length > 0) {
         // Raw mean drives the crowd math (calendar parity — no rounding
-        // before the ratio); the rounded value is for display only.
+        // before the ratio); the rounded value is for display only. A missing
+        // typical-day-peak (park not ratable, < 30 operating days) → "unknown".
         const meanWait = waits.reduce((s, w) => s + w, 0) / waits.length;
         avgWaitTime = Math.round(meanWait);
 
-        const pct =
-          baselineForCrowd > 0 ? (meanWait / baselineForCrowd) * 100 : 100;
-        crowdLevel = this.analyticsService.determineCrowdLevel(pct);
+        crowdLevel = rateOrUnknown(meanWait, baselineForCrowd);
       } else {
-        crowdLevel = "moderate";
+        crowdLevel = baselineForCrowd > 0 ? "moderate" : "unknown";
       }
 
       const avgConfidence =

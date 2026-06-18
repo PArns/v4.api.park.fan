@@ -1,5 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 
+import { CrowdLevel } from "../../common/types/crowd-level.type";
+
 export class OccupancyDto {
   @ApiProperty({
     description:
@@ -8,6 +10,26 @@ export class OccupancyDto {
     minimum: 0,
   })
   current: number;
+
+  @ApiProperty({
+    description:
+      "Gated crowd-level rating derived from `current`. Reads `unknown` " +
+      "('keine Prognose') when the park is not ratable yet (< 30 operating " +
+      "days of headliner data); otherwise one of the six occupancy tiers. " +
+      "The numeric `current` stays valid regardless — only this label flips.",
+    enum: [
+      "very_low",
+      "low",
+      "moderate",
+      "high",
+      "very_high",
+      "extreme",
+      "unknown",
+    ],
+    example: "high",
+    required: false,
+  })
+  crowdLevel?: CrowdLevel;
 
   @ApiProperty({
     description: "Park-wide trend direction based on last hour comparison",

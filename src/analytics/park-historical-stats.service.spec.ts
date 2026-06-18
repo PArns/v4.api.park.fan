@@ -115,6 +115,18 @@ describe("ParkHistoricalStatsService", () => {
     ).toBe("moderate"); // 40/40 = 100%
   });
 
+  it("reads 'unknown' from toCrowdLevel when there is no typical-day-peak baseline (not ratable)", () => {
+    // Private helper: a missing/zero baseline (< 30 operating days) must read
+    // "unknown" ("keine Prognose"), not a made-up "moderate".
+    const toCrowdLevel = (
+      service as unknown as {
+        toCrowdLevel: (avgWaitP90: number, typicalDayPeak: number) => string;
+      }
+    ).toCrowdLevel.bind(service);
+    expect(toCrowdLevel(40, 0)).toBe("unknown");
+    expect(toCrowdLevel(40, 40)).toBe("moderate");
+  });
+
   it("keeps avgCrowdScore (1.0–5.0, P50-based) for backwards compatibility", async () => {
     const result = await service.getParkHistoricalStats(park, 2);
     expect(result.byMonth.find((m) => m.month === 1)!.avgCrowdScore).toBe(1.0); // 10/10

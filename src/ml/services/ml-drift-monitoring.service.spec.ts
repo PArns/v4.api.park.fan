@@ -27,6 +27,8 @@ describe("MLDriftMonitoringService", () => {
 
   /** Build a QB stub that resolves getRawMany to the provided rows. */
   const stubQB = (rows: unknown[]) => ({
+    innerJoin: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     addSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),

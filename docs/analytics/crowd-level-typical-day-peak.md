@@ -18,6 +18,33 @@ crowdLevel = determineCrowdLevel(percentage)   // 60 / 89 / 110 / 150 / 200
 - 100% = a statistically typical day = `moderate`. Busy seasons (Wintertraum, Easter) reach `very_high`/`extreme`; quiet weekdays read `low`/`very_low`.
 - **Headliner-only** on both sides.
 
+## Thin-data gate (≥ 30 operating days) → `unknown`
+
+A median over a handful of days is noise. A park is only **ratable** once its
+typical-day-peak is supported by **≥ 30 operating days** of valid headliner
+data in the 548-day window:
+
+- `calculateTypicalDayPeak` returns `{ typicalDayPeak, operatingDays }` where
+  `operatingDays = COUNT(*)` of the `daily` CTE (the exact day-support of the
+  median). `calculateP50Baseline` forces `typicalDayPeak = 0` when
+  `operatingDays < MIN_BASELINE_OPERATING_DAYS` (30). `saveP50Baselines` maps
+  `0 → NULL`, and `cacheTypicalDayPeak` skips `0`, so a thin park ends up with
+  a **NULL column + no Redis key**.
+- **Single source of truth:** ratable ≡ `park_p50_baselines."typicalDayPeak" IS
+  NOT NULL`. Every NestJS consumer and the Python ML side key off this one flag.
+- Below the threshold, every derived crowd-level surface reads the explicit
+  **`unknown`** value ("keine Prognose / noch nicht genug Daten") — calendar
+  prognosis, yearly, historical-stats, per-attraction, and the live/"today"
+  rating. Helpers: `rateOrUnknown(numerator, baseline)` (typical-day-peak
+  surfaces) and `AnalyticsService.isParkRatable(parkId)` /
+  `getRatableParkIds(parkIds)` (live/occupancy surfaces).
+- P50/P90 stay computed and stored for a thin park — they still drive the live
+  ratio-vs-P50 signal and the ML `park_occupancy_pct` feature. Only the
+  *rating string* flips; the numeric occupancy % is untouched.
+- ML training (`ml-service/db.py`) and the reported aggregate MAE/accuracy
+  (`prediction-accuracy` / `ml-drift-monitoring`) `INNER JOIN park_p50_baselines
+  … typicalDayPeak IS NOT NULL`, excluding thin parks from both.
+
 ## Why we got here (the investigation)
 
 1. **Original bug:** recent commits used `day_P90 / P50_baseline` ("peak-vs-median"). For Phantasialand P90/P50 ≈ 51.6/30 ≈ 1.7×, so a *normal* day landed at ~170% = `very_high`. Live calendar (Apr–Jun) was 26% `extreme`, 0% `very_low` — a wall of red. The threshold ladder (90–110 = moderate) assumes the ratio ≈ 100% on a typical day; a peak ÷ median never does.
@@ -46,7 +73,7 @@ Distribution (90 days) ÷typical-day: very_low 8 / low 24 / moderate 17 / high 2
 - Baseline: `calculateTypicalDayPeak(parkId, headlinerIds)` — median over days of `AVG(per-ride daily P90)`.
 
 ### No fallback
-The typical-day-peak is computed and stored **atomically** with P50/P90 (`calculateP50Baseline` returns it; `saveP50Baselines` persists it). So it is present iff the park has a baseline at all. A missing value ⇒ brand-new park with no baseline ⇒ existing no-baseline default (`moderate`). There is **no** typical→P90→P50 fallback chain.
+The typical-day-peak is computed and stored **atomically** with P50/P90 (`calculateP50Baseline` returns it; `saveP50Baselines` persists it). So it is present iff the park is ratable (≥ 30 operating days). A missing value ⇒ brand-new or thin park ⇒ the crowd level reads **`unknown`** (see "Thin-data gate" above), NOT `moderate`. There is **no** typical→P90→P50 fallback chain.
 
 ### Storage
 - **DB column** `park_p50_baselines.typicalDayPeak` (nullable `numeric(10,2)`) — durable, written in the same upsert as P50.
@@ -57,12 +84,15 @@ The typical-day-peak is computed and stored **atomically** with P50/P90 (`calcul
 - **Calendar future (park):** `buildPredictedCrowdLevels` (calendar.service.ts) → AVG of predicted headliner waits ÷ typical-day-peak.
 - **ML / Python crowd level:** `ml.service.ts` passes `typicalDayPeakBaseline`; `ml-service/predict.py` divides predicted wait by it (fallback: p50 → rolling_avg_7d → 30). Keeps the yearly-predictions endpoint + stored `wait_time_predictions.crowdLevel` on the same scale as the calendar.
 
-### Deliberately UNCHANGED (point-in-time / live → ratio-vs-P50)
-- Live overview `calculateParkOccupancy` / `getCurrentOccupancy` (÷P50). Also the ML feature `park_occupancy_pct`.
+### Point-in-time / live → ratio-vs-P50 (numeric unchanged; rating gated)
+The numeric ratio-vs-P50 math below is **unchanged**. What changed: when the
+park isn't ratable, the *rating string* on these surfaces also flips to
+`unknown` (via `isParkRatable`), while the numeric occupancy % stays intact.
+- Live overview `calculateParkOccupancy` / `getCurrentOccupancy` (÷P50). The ML feature `park_occupancy_pct` is the raw number — untouched. `calculateParkOccupancy` now also emits a gated `crowdLevel` on the `OccupancyDto` (the single place park-level live consumers read).
 - Calendar "today" cell (uses the live signal — today is an incomplete day).
 - Hourly within-a-day predictions (median ÷ P50).
-- Attraction live ratings (÷ attraction P50).
-- Boundary rule: **daily aggregates = typical-day-peak; point-in-time/live = ratio-vs-P50.**
+- Attraction live ratings (÷ attraction P50), gated on the parent park's ratability.
+- Boundary rule: **daily aggregates = typical-day-peak; point-in-time/live = ratio-vs-P50.** Both read `unknown` when the park is not ratable.
 
 ### Role of P50 / P90 now
 - **P50:** still load-bearing — live occupancy, ML `park_occupancy_pct` feature, attraction live, training. **Keep.**

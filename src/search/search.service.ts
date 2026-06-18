@@ -1176,9 +1176,21 @@ export class SearchService implements OnModuleInit {
     let statusMap = new Map<string, { status: string }>();
     let p50Map = new Map<string, number>();
     let p90Map = new Map<string, number>();
+    // Parks that are ratable (≥ 30 operating days). The live attraction crowd
+    // reading reads "unknown" for attractions whose parent park isn't ratable.
+    let ratableParks = new Set<string>();
 
     if (operatingAttractionIds.length > 0) {
-      const [queueDataMap, p90s, p50s] = await Promise.all([
+      const operatingParkIds = Array.from(
+        new Set(
+          attractions
+            .filter(
+              (a) => a.park && parkStatusMap.get(a.park.id) === "OPERATING",
+            )
+            .map((a) => a.park!.id),
+        ),
+      );
+      const [queueDataMap, p90s, p50s, ratable] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(
           operatingAttractionIds,
         ),
@@ -1186,8 +1198,10 @@ export class SearchService implements OnModuleInit {
           operatingAttractionIds,
         ),
         this.analyticsService.getBatchAttractionP50s(operatingAttractionIds),
+        this.analyticsService.getRatableParkIds(operatingParkIds),
       ]);
       p90Map = p90s;
+      ratableParks = ratable;
 
       for (const [attractionId, queueDataList] of queueDataMap.entries()) {
         if (queueDataList.length === 0) continue;
@@ -1226,14 +1240,20 @@ export class SearchService implements OnModuleInit {
       // P50 (median baseline) drives the crowd reading — peak-vs-median
       // so the search list matches what users see on detail pages. P90
       // acts as a fallback for attractions whose P50 row hasn't been
-      // computed yet; beyond that we fall through to "moderate".
+      // computed yet; beyond that we fall through to "moderate". A thin
+      // parent park (not ratable, < 30 operating days) reads "unknown".
+      const parkRatable = attraction.park
+        ? ratableParks.has(attraction.park.id)
+        : false;
       const baseline = isParkOpen
         ? p50Map.get(attraction.id) || p90Map.get(attraction.id)
         : undefined;
 
-      const load = isParkOpen
-        ? this.getCrowdLevelForSearch(waitTime ?? undefined, baseline)
-        : null;
+      const load = !isParkOpen
+        ? null
+        : !parkRatable
+          ? "unknown"
+          : this.getCrowdLevelForSearch(waitTime ?? undefined, baseline);
 
       return {
         type: "attraction" as const,

@@ -153,6 +153,15 @@ def fetch_training_data(
             FROM queue_data qd
             INNER JOIN attractions a ON a.id = qd."attractionId"
             INNER JOIN parks p ON p.id = a."parkId"
+            -- Thin-data gate: only train on "ratable" parks — those with a
+            -- typical-day-peak baseline (≥ 30 operating days of valid headliner
+            -- data). park_p50_baselines.typicalDayPeak IS NULL marks the ~19
+            -- thin parks whose noisy median we exclude from training; this
+            -- automatically keeps them out of the train/val/holdout MAE/RMSE/R²
+            -- computed downstream (single source of truth, same flag NestJS uses).
+            INNER JOIN park_p50_baselines pb
+                ON pb."parkId" = a."parkId"
+                AND pb."typicalDayPeak" IS NOT NULL
             LEFT JOIN schedule_entries se
                 ON se."parkId" = a."parkId"
                 AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
@@ -220,6 +229,14 @@ def fetch_training_data(
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         query_time = time.time() - start_time
         print(f"   Query execution time: {query_time:.2f}s")
+
+        # Sanity guard: log the distinct ratable park count feeding training.
+        # Baselines run on the daily cron ahead of the train and ~118 parks
+        # have one, so the INNER JOIN on park_p50_baselines won't starve
+        # training — a sudden drop here flags a baseline-pipeline regression.
+        if not df.empty and "parkId" in df.columns:
+            park_count = df["parkId"].nunique()
+            print(f"   Training data spans {park_count} ratable parks")
 
         return convert_df_types(df)
 

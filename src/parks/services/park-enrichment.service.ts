@@ -207,9 +207,11 @@ export class ParkEnrichmentService {
           peakHourLocal: stats?.peakHourLocal || null,
           peakHourConfidence: stats?.peakHourConfidence ?? 0,
           peakHourSource: stats?.peakHourSource ?? null,
-          crowdLevel: this.analyticsService.determineCrowdLevel(
-            occupancy.current,
-          ),
+          // Gated at the source (calculateParkOccupancy): "unknown" for a thin
+          // park (not ratable). Legacy fallback derives from current.
+          crowdLevel:
+            occupancy.crowdLevel ??
+            this.analyticsService.determineCrowdLevel(occupancy.current),
           totalAttractions: stats?.totalAttractions || 0,
           operatingAttractions: stats?.operatingAttractions || 0,
           closedAttractions: stats?.closedAttractions || 0,

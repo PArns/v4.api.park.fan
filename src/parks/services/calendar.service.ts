@@ -31,6 +31,7 @@ import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { Holiday } from "../../holidays/entities/holiday.entity";
 import { PredictionDto } from "../../ml/dto";
 import { Redis } from "ioredis";
@@ -325,11 +326,18 @@ export class CalendarService {
     const occupancyRaw = await this.redis.get(CacheKeys.parkOccupancy(park.id));
     if (occupancyRaw) {
       try {
-        const occ = JSON.parse(occupancyRaw) as { current: number };
+        const occ = JSON.parse(occupancyRaw) as {
+          current: number;
+          crowdLevel?: CrowdLevel;
+        };
         if (typeof occ.current === "number" && occ.current > 0) {
-          const liveCrowdLevel = this.analyticsService.determineCrowdLevel(
-            occ.current,
-          ) as CrowdLevel;
+          // crowdLevel is gated at the source (calculateParkOccupancy): a thin
+          // park (not ratable) carries "unknown" here. Fall back to deriving
+          // from current only for legacy cache entries written before the
+          // field existed.
+          const liveCrowdLevel: CrowdLevel =
+            occ.crowdLevel ??
+            this.analyticsService.determineCrowdLevel(occ.current);
           const existing = prefetchedCrowdLevels.get(today);
           prefetchedCrowdLevels.set(today, {
             crowdLevel: liveCrowdLevel,
@@ -369,6 +377,7 @@ export class CalendarService {
           predictedCrowdLevels,
           isSeasonal,
           derivedHistoricalHours.get(dateStr) || null,
+          predictedBaseline > 0,
         );
       }),
     );
@@ -604,6 +613,7 @@ export class CalendarService {
     > = new Map(),
     isSeasonal: boolean = false,
     derivedHours: { openingTime: string; closingTime: string } | null = null,
+    ratable: boolean = true,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -800,24 +810,30 @@ export class CalendarService {
             dateStr,
             park.timezone,
           );
+        // Ratability honoured throughout: a thin park (not ratable) reads
+        // "unknown" rather than a made-up "moderate", and the per-attraction
+        // ML crowdLevel is not used as a fallback for it either.
+        const fallback: CrowdLevel = ratable ? "moderate" : "unknown";
+        const mlCrowd = ratable ? mlPrediction?.crowdLevel : undefined;
         inferredCrowdLevel = crowdData.hasData
           ? crowdData.crowdLevel
           : predictedCrowdLevels.get(dateStr)?.crowdLevel ||
-            mlPrediction?.crowdLevel ||
-            "moderate";
+            mlCrowd ||
+            fallback;
 
         peakLoad = crowdData.hasData
           ? crowdData.peakCrowdLevel
           : predictedCrowdLevels.get(dateStr)?.peakLoad ||
-            mlPrediction?.crowdLevel || // Fallback to normal crowdLevel if no P90
-            "moderate";
+            mlCrowd || // Fallback to normal crowdLevel if no P90
+            fallback;
       }
     } else {
       const predicted = predictedCrowdLevels.get(dateStr);
-      inferredCrowdLevel =
-        predicted?.crowdLevel || mlPrediction?.crowdLevel || "moderate";
+      const fallback: CrowdLevel = ratable ? "moderate" : "unknown";
+      const mlCrowd = ratable ? mlPrediction?.crowdLevel : undefined;
+      inferredCrowdLevel = predicted?.crowdLevel || mlCrowd || fallback;
 
-      peakLoad = predicted?.peakLoad || mlPrediction?.crowdLevel || "moderate";
+      peakLoad = predicted?.peakLoad || mlCrowd || fallback;
     }
 
     // Future UNKNOWN (no schedule): show ML crowd prediction; strictly past CLOSED → closed
@@ -928,7 +944,10 @@ export class CalendarService {
     // for per-hour predictions: 100% = predicted median matches a typical
     // wait. Falls through to a generic 25 min absolute floor for parks
     // with no baseline at all (brand-new park before the first cron).
-    const p50 = await this.analyticsService.getP50BaselineFromCache(park.id);
+    const [p50, ratable] = await Promise.all([
+      this.analyticsService.getP50BaselineFromCache(park.id),
+      this.analyticsService.isParkRatable(park.id),
+    ]);
     const baseline = p50 > 0 ? p50 : 25;
 
     // Aggregate (median)
@@ -938,7 +957,10 @@ export class CalendarService {
       waits.sort((a, b) => a - b);
       const median = waits[Math.floor(waits.length / 2)];
 
-      const { rating } = this.analyticsService.getLoadRating(median, baseline);
+      // Thin park (not ratable) → "unknown"; predictedWaitTime stays intact.
+      const rating: CrowdLevel = ratable
+        ? this.analyticsService.getLoadRating(median, baseline).rating
+        : "unknown";
 
       result.push({
         hour: parseInt(hour, 10),
@@ -1023,11 +1045,12 @@ export class CalendarService {
       // past-day numerator) ÷ the typical-day-peak baseline.
       // Reads as "tomorrow's predicted level vs a typical day's peak".
       // crowdLevel and peakLoad coincide here (one signal per predicted
-      // day; there's no separate "average" predicted view).
+      // day; there's no separate "average" predicted view). A missing
+      // baseline (park not ratable, < 30 operating days) → "unknown".
       const waits = headliners.map((p) => p.predictedWaitTime);
       const avgWait = waits.reduce((sum, w) => sum + w, 0) / waits.length;
 
-      const { rating } = this.analyticsService.getLoadRating(avgWait, baseline);
+      const rating = rateOrUnknown(avgWait, baseline);
       result.set(date, { crowdLevel: rating, peakLoad: rating });
     }
 

@@ -74,6 +74,15 @@ export class MLDriftMonitoringService {
   private async getDailyAccuracy(startDate: Date): Promise<DailyAccuracyDto[]> {
     const rows = await this.accuracyRepo
       .createQueryBuilder("pa")
+      // Match the training population's thin-data gate: only ratable parks
+      // (typical-day-peak baseline present) so liveMae compares like-for-like
+      // with trainingMae, which also excludes thin parks (ml-service/db.py).
+      .innerJoin("attractions", "a", "a.id = pa.attractionId")
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .select("DATE(pa.targetTime)", "date")
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "count")

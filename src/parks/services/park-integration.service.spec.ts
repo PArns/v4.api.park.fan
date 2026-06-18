@@ -131,12 +131,13 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       expect(day.date).toBe("2026-06-13");
     });
 
-    it("defaults to 'moderate' when no typical-day-peak exists (no P50/P90 fallback)", async () => {
+    it("reads 'unknown' when no typical-day-peak exists (park not ratable, no P50/P90 fallback)", async () => {
       analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
         new Set(["h1"]),
       );
-      // Brand-new park: typical-day-peak = 0 → pct hard-coded to 100 →
-      // "moderate". There is deliberately no fallback to a P50/P90 baseline.
+      // Thin/brand-new park: typical-day-peak = 0 → not ratable → "unknown"
+      // ("keine Prognose"), rather than a made-up "moderate". There is
+      // deliberately no fallback to a P50/P90 baseline.
       analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(0);
 
       const predictions = buildPredictions([
@@ -145,7 +146,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
 
       const [day] = await service.aggregateDailyPredictions(predictions, "p1");
 
-      expect(day.crowdLevel).toBe("moderate");
+      expect(day.crowdLevel).toBe("unknown");
     });
   });
 

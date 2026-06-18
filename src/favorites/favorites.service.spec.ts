@@ -65,6 +65,11 @@ describe("FavoritesService", () => {
     getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
     getLoadRating: jest.fn().mockReturnValue({ rating: "moderate" }),
     getRopeDropForPark: jest.fn().mockResolvedValue(new Map()),
+    // Park ratability gate — treat every queried park as ratable so the
+    // existing crowd-level assertions keep their pre-gate behaviour.
+    getRatableParkIds: jest
+      .fn()
+      .mockImplementation((ids: string[]) => Promise.resolve(new Set(ids))),
   };
   const mlService = {
     getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),

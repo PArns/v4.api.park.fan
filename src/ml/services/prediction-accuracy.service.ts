@@ -1287,6 +1287,14 @@ export class PredictionAccuracyService {
     const statsResult = await this.accuracyRepository
       .createQueryBuilder("pa")
       .innerJoin("attractions", "a", 'a.id = pa."attraction_id"')
+      // Thin-data gate: only aggregate ratable parks (typical-day-peak baseline
+      // present, ≥ 30 operating days). The INNER JOIN drops thin-park rows so
+      // the reported MAE/coverage excludes them — same flag as ML training.
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .leftJoin(
         "schedule_entries",
         "se",
@@ -1473,6 +1481,12 @@ export class PredictionAccuracyService {
       .createQueryBuilder("pa")
       .leftJoin("attractions", "a", "pa.attractionId = a.id")
       .leftJoin("parks", "p", "a.parkId = p.id")
+      // Thin-data gate: aggregate only ratable parks (typical-day-peak present).
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .select("pa.attractionId", "attractionId")
       .addSelect("a.name", "attractionName")
       .addSelect("p.name", "parkName")
@@ -1639,6 +1653,13 @@ export class PredictionAccuracyService {
     // Aggregate by date (GROUP BY)
     const results = await this.accuracyRepository
       .createQueryBuilder("pa")
+      // Thin-data gate: aggregate only ratable parks (typical-day-peak present).
+      .innerJoin("attractions", "a", "a.id = pa.attractionId")
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .select("DATE(pa.targetTime AT TIME ZONE 'UTC')", "date")
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "totalCount")
@@ -1695,6 +1716,13 @@ export class PredictionAccuracyService {
 
     const results = await this.accuracyRepository
       .createQueryBuilder("pa")
+      // Thin-data gate: aggregate only ratable parks (typical-day-peak present).
+      .innerJoin("attractions", "a", "a.id = pa.attractionId")
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .select("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE 'UTC')", "hour")
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "predictionsCount")
@@ -1739,6 +1767,13 @@ export class PredictionAccuracyService {
 
     const results = await this.accuracyRepository
       .createQueryBuilder("pa")
+      // Thin-data gate: aggregate only ratable parks (typical-day-peak present).
+      .innerJoin("attractions", "a", "a.id = pa.attractionId")
+      .innerJoin(
+        "park_p50_baselines",
+        "pb",
+        'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
+      )
       .select(
         "EXTRACT(DOW FROM pa.targetTime AT TIME ZONE 'UTC')",
         "day_of_week",

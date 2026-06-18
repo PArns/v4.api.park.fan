@@ -310,9 +310,20 @@ export class AttractionIntegrationService {
       p.predictedTime.startsWith(nowStr),
     );
 
+    // Ratability gate keys off the parent park (single source of truth): a
+    // thin park (< 30 operating days → NULL typicalDayPeak) emits "unknown"
+    // for every derived rating, including this live attraction crowd level.
+    const parkRatable = await this.analyticsService.isParkRatable(
+      attraction.parkId,
+    );
+
     let crowdLevel: CrowdLevel | "closed" | null = null;
     if (dto.effectiveStatus === "CLOSED") {
       crowdLevel = "closed";
+      dto.baseline = null;
+      dto.comparison = null;
+    } else if (!parkRatable) {
+      crowdLevel = "unknown";
       dto.baseline = null;
       dto.comparison = null;
     } else {
@@ -792,8 +803,8 @@ export class AttractionIntegrationService {
       // against the threshold ladder (150%+ elevated, 200%+ extreme). Dividing
       // by the P50 (median) instead inflated every normal day, because a day's
       // peak is ~1.5-2× the median wait. No P50 fallback: when the
-      // typical-day-peak is absent (too little data) the day's rating is
-      // skipped (stays "closed").
+      // typical-day-peak is absent (too little data, not ratable) a day that
+      // has queue data reads "unknown" rather than a made-up rating.
       const attractionBaseline =
         await this.analyticsService.getAttractionTypicalDayPeak(
           attractionId,
@@ -869,20 +880,27 @@ export class AttractionIntegrationService {
           // hits >150% (threshold "high"+); a quiet day sits around
           // 60-90% ("very_low" / "low").
           let utilization: CrowdLevel | "closed" = "closed";
-          if (inHoursSlots.length > 0 && attractionBaseline > 0) {
-            const p90Values = inHoursSlots
-              .map((h) => h.p90)
-              .sort((a, b) => a - b);
-            const idx = (p90Values.length - 1) * 0.9;
-            const lo = Math.floor(idx);
-            const hi = Math.ceil(idx);
-            const dayPeakWait =
-              p90Values[lo] * (1 - (idx - lo)) + p90Values[hi] * (idx - lo);
+          if (inHoursSlots.length > 0) {
+            if (attractionBaseline > 0) {
+              const p90Values = inHoursSlots
+                .map((h) => h.p90)
+                .sort((a, b) => a - b);
+              const idx = (p90Values.length - 1) * 0.9;
+              const lo = Math.floor(idx);
+              const hi = Math.ceil(idx);
+              const dayPeakWait =
+                p90Values[lo] * (1 - (idx - lo)) + p90Values[hi] * (idx - lo);
 
-            utilization = this.analyticsService.getAttractionCrowdLevel(
-              dayPeakWait,
-              attractionBaseline,
-            ) as CrowdLevel;
+              utilization = this.analyticsService.getAttractionCrowdLevel(
+                dayPeakWait,
+                attractionBaseline,
+              ) as CrowdLevel;
+            } else {
+              // Day has data but the attraction has no typical-day-peak
+              // baseline (not ratable, < 30 operating days) → "unknown"
+              // rather than masquerading as "closed".
+              utilization = "unknown";
+            }
           }
 
           // Build hourly P90 array (only for hours within operating hours)

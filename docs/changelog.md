@@ -6,6 +6,34 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — gate "thin-data" parks out of crowd levels, ML training & MAE (2026-06-18)
+
+Parks with **< 30 operating days** of valid headliner data were emitting a
+confident `moderate` crowd level from a median over a handful of days (Sesame
+Place from 1 day, Knoebels 3, Nigloland 3, …) and polluting ML training + the
+reported MAE. Now a park is "ratable" only with **≥ 30 operating days**; below
+that:
+
+- **Single source of truth:** `calculateTypicalDayPeak` returns the operating-day
+  count alongside the median; `calculateP50Baseline` forces `typicalDayPeak = 0`
+  (→ NULL column + no Redis key) below the threshold. Ratable ≡
+  `park_p50_baselines."typicalDayPeak" IS NOT NULL`.
+- **New `unknown` crowd level** ("keine Prognose"): every derived rating surface
+  reads `unknown` for a non-ratable park — calendar prognosis, yearly,
+  historical-stats, per-attraction, and the live/"today" rating. New helpers
+  `rateOrUnknown` (typical-day-peak surfaces) and `AnalyticsService.isParkRatable`
+  / `getRatableParkIds` (live/occupancy surfaces); `OccupancyDto` now carries a
+  gated `crowdLevel`. Raw wait-time minutes and the numeric occupancy %
+  (ML feature) are unchanged — only the rating string flips.
+- **ML training** (`ml-service/db.py`) and the **reported aggregate MAE/accuracy**
+  (`prediction-accuracy`, `ml-drift-monitoring`) `INNER JOIN park_p50_baselines …
+  typicalDayPeak IS NOT NULL`, excluding thin parks from both.
+- Frontend must render the new `unknown` enum value as
+  "Keine Prognose / noch nicht genug Daten".
+
+No schema change (`typicalDayPeak` is already nullable). The gate takes effect on
+the next `calculate-park-baselines` cron; ML exclusion on the next nightly train.
+
 ### Fixed — green up the unit suite (stale ML specs) (2026-06-17)
 
 18 pre-existing failures in three ML specs were all **stale tests, not code bugs**

@@ -46,6 +46,12 @@ describe("LocationService", () => {
     getAttractionCrowdLevel: jest.fn().mockReturnValue("moderate"),
     getBatchParkOccupancy: jest.fn().mockResolvedValue(new Map()),
     getHeadlinerAttractionIds: jest.fn().mockResolvedValue(new Set<string>()),
+    // Park ratability gate — default ratable so existing crowd-level
+    // assertions keep their pre-gate behaviour.
+    isParkRatable: jest.fn().mockResolvedValue(true),
+    getRatableParkIds: jest
+      .fn()
+      .mockImplementation((ids: string[]) => Promise.resolve(new Set(ids))),
   };
   const parksService = {
     getBatchParkStatus: jest.fn().mockResolvedValue(new Map()),

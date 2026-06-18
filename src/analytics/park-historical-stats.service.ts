@@ -15,7 +15,7 @@ import {
   TopAttractionStatDto,
 } from "./dto/park-historical-stats.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
-import { determineCrowdLevel } from "../common/utils/crowd-level.util";
+import { rateOrUnknown } from "../common/utils/crowd-level.util";
 
 /** Response schema version — bump when the contract changes (see DTO). */
 const SCHEMA_VERSION = 2;
@@ -313,11 +313,10 @@ export class ParkHistoricalStatsService {
    * Maps a period's average daily-peak wait to a CrowdLevel, occupancy-relative
    * to the park's typical-day-peak (100% = a statistically typical day). Same
    * 6-tier thresholds + headliner-only definition as the calendar, so the two
-   * surfaces stay on one scale. Falls back to "moderate" when there's no
-   * baseline yet (brand-new park).
+   * surfaces stay on one scale. Emits "unknown" when there's no baseline yet
+   * (park not ratable — < 30 operating days), rather than a made-up "moderate".
    */
   private toCrowdLevel(avgWaitP90: number, typicalDayPeak: number): CrowdLevel {
-    if (!typicalDayPeak || typicalDayPeak <= 0) return "moderate";
-    return determineCrowdLevel((avgWaitP90 / typicalDayPeak) * 100);
+    return rateOrUnknown(avgWaitP90, typicalDayPeak);
   }
 }

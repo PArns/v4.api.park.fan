@@ -97,6 +97,17 @@ export class AnalyticsService {
    */
   private readonly MIN_SAMPLE_SIZE_FOR_THRESHOLD = 3;
 
+  /**
+   * Minimum number of operating days (days with valid headliner wait data in
+   * the 548-day window) a park needs before its typical-day-peak baseline is
+   * trusted. Below this the median is noise (e.g. computed over 1–17 days), so
+   * `calculateP50Baseline` forces `typicalDayPeak = 0` → NULL column + no Redis
+   * key → the park is "not ratable" and every derived crowd level reads
+   * `unknown` instead of a made-up `moderate`. This single flag also gates the
+   * park out of ML training and the reported aggregate MAE/accuracy.
+   */
+  private readonly MIN_BASELINE_OPERATING_DAYS = 30;
+
   constructor(
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
@@ -396,6 +407,7 @@ export class AnalyticsService {
           );
 
     if (currentPeakWait === null) {
+      // No live data → no rating, and no baseline lookup on this hot branch.
       return {
         current: 0,
         trend: "stable",
@@ -442,6 +454,8 @@ export class AnalyticsService {
       }
       return {
         current: 50,
+        // No P50 baseline at all → brand-new/non-reporting park, never ratable.
+        crowdLevel: "unknown",
         trend: "stable",
         comparedToTypical: 0,
         comparisonStatus: "typical",
@@ -572,8 +586,17 @@ export class AnalyticsService {
       // >10% difference
       comparisonStatus = comparedToTypical > 0 ? "higher" : "lower";
     }
+
+    // Ratability gate (single source of truth): a thin park (< 30 operating
+    // days → NULL typicalDayPeak) reads `unknown` for the rating, while the
+    // numeric `current` occupancy is left untouched (still an ML feature).
+    const ratable = await this.isParkRatable(parkId);
+
     return {
       current: Math.round(occupancyPercentage),
+      crowdLevel: ratable
+        ? this.determineCrowdLevel(occupancyPercentage)
+        : "unknown",
       trend,
       comparedToTypical: Math.round(comparedToTypical),
       comparisonStatus,
@@ -2628,7 +2651,7 @@ export class AnalyticsService {
     current: number,
     baseline: number,
   ): {
-    rating: "very_low" | "low" | "moderate" | "high" | "very_high" | "extreme";
+    rating: CrowdLevel;
     baseline: number;
   } {
     // STRICT baseline-relative: no absolute threshold fallbacks.
@@ -3720,8 +3743,11 @@ export class AnalyticsService {
       percentage = Math.round((dailyValue / baseline) * 100);
       crowdLevel = this.determineCrowdLevel(percentage);
     } else if (hasData) {
-      crowdLevel = "moderate";
-      percentage = 100;
+      // We have day data but no typical-day-peak baseline → the park/attraction
+      // is not ratable (NULL typicalDayPeak, < 30 operating days). Emit
+      // "unknown" rather than a made-up "moderate".
+      crowdLevel = "unknown";
+      percentage = 0;
     }
 
     // peakCrowdLevel kept in the response shape for backwards compatibility
@@ -4122,13 +4148,30 @@ export class AnalyticsService {
     // Typical-day-peak: computed together with P50/P90 (same headliner set,
     // same window) so the three are always written atomically — the calendar
     // never needs to fall back to P90/P50.
-    const typicalDayPeak = await this.calculateTypicalDayPeak(
-      parkId,
-      headliners.map((h) => h.attractionId),
-    );
+    const { typicalDayPeak: rawTypicalDayPeak, operatingDays } =
+      await this.calculateTypicalDayPeak(
+        parkId,
+        headliners.map((h) => h.attractionId),
+      );
+
+    // Thin-data gate: a median over < 30 operating days is noise. Force it to 0
+    // so saveP50Baselines writes NULL and cacheTypicalDayPeak skips it — the
+    // park becomes "not ratable" and every derived crowd level reads `unknown`.
+    // P50/P90 (and confidence/distinctDays) stay intact: they still drive the
+    // live ML feature and the live "vs typical" ratio.
+    let typicalDayPeak = rawTypicalDayPeak;
+    if (
+      typicalDayPeak > 0 &&
+      operatingDays < this.MIN_BASELINE_OPERATING_DAYS
+    ) {
+      this.logger.log(
+        `Gating typical-day-peak for park ${parkId}: only ${operatingDays} operating days (< ${this.MIN_BASELINE_OPERATING_DAYS}) — typicalDayPeak set NULL (not ratable)`,
+      );
+      typicalDayPeak = 0;
+    }
 
     this.logger.log(
-      `Calculated baselines for park ${parkId}: P50=${p50}min P90=${p90}min typical-day-peak=${typicalDayPeak}min (samples: ${sampleCount}, days: ${distinctDays}, confidence: ${confidence}, tier: ${tier})`,
+      `Calculated baselines for park ${parkId}: P50=${p50}min P90=${p90}min typical-day-peak=${typicalDayPeak}min (samples: ${sampleCount}, days: ${distinctDays}, peak-days: ${operatingDays}, confidence: ${confidence}, tier: ${tier})`,
     );
 
     return {
@@ -4158,8 +4201,9 @@ export class AnalyticsService {
   async calculateTypicalDayPeak(
     parkId: string,
     headlinerIds: string[],
-  ): Promise<number> {
-    if (headlinerIds.length === 0) return 0;
+  ): Promise<{ typicalDayPeak: number; operatingDays: number }> {
+    if (headlinerIds.length === 0)
+      return { typicalDayPeak: 0, operatingDays: 0 };
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["timezone"],
@@ -4183,12 +4227,20 @@ export class AnalyticsService {
       daily AS (
         SELECT d, AVG(p90) AS day_val FROM per_ride_day GROUP BY d
       )
-      SELECT ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY day_val)::numeric, 2) AS typical_day_peak
+      SELECT ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY day_val)::numeric, 2) AS typical_day_peak,
+             COUNT(*)::int AS operating_days
       FROM daily
       `,
       [headlinerIds, timezone, cutoff],
     );
-    return rows[0]?.typical_day_peak ? parseFloat(rows[0].typical_day_peak) : 0;
+    // `daily` holds exactly one row per operating day, so operating_days is the
+    // precise day-support of the median we gate on.
+    return {
+      typicalDayPeak: rows[0]?.typical_day_peak
+        ? parseFloat(rows[0].typical_day_peak)
+        : 0,
+      operatingDays: rows[0]?.operating_days ?? 0,
+    };
   }
 
   /**
@@ -4237,6 +4289,35 @@ export class AnalyticsService {
       await this.cacheTypicalDayPeak(parkId, value);
     }
     return value;
+  }
+
+  /**
+   * Single source of truth for "is this park ratable?" — true once the park
+   * has a typical-day-peak baseline, i.e. ≥ 30 operating days of valid
+   * headliner data (typicalDayPeak IS NOT NULL). Below that the live/occupancy
+   * surfaces (which divide by P50, where a thin park's NULL typicalDayPeak is
+   * invisible) must emit `unknown` rather than a confident crowd level.
+   */
+  async isParkRatable(parkId: string): Promise<boolean> {
+    return (await this.getTypicalDayPeakFromCache(parkId)) > 0;
+  }
+
+  /**
+   * Batch variant of isParkRatable for list endpoints (search/location/
+   * discovery) that span many parks: returns the subset of `parkIds` that are
+   * ratable (typicalDayPeak IS NOT NULL) in a single query.
+   */
+  async getRatableParkIds(parkIds: string[]): Promise<Set<string>> {
+    if (parkIds.length === 0) return new Set();
+    const rows = await this.parkP50BaselineRepository.find({
+      where: { parkId: In(parkIds) },
+      select: ["parkId", "typicalDayPeak"],
+    });
+    return new Set(
+      rows
+        .filter((r) => r.typicalDayPeak != null && Number(r.typicalDayPeak) > 0)
+        .map((r) => r.parkId),
+    );
   }
 
   /**

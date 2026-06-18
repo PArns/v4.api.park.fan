@@ -457,9 +457,10 @@ export class FavoritesService {
           analytics: occupancy
             ? {
                 avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
-                crowdLevel: this.analyticsService.determineCrowdLevel(
-                  occupancy.current,
-                ),
+                // Gated at the source: "unknown" for a thin park (not ratable).
+                crowdLevel:
+                  occupancy.crowdLevel ??
+                  this.analyticsService.determineCrowdLevel(occupancy.current),
                 occupancy: occupancy.current,
               }
             : undefined,
@@ -620,6 +621,7 @@ export class FavoritesService {
         schedulesForBest,
         parkPredEntries,
         ropeDropParkEntries,
+        ratableParks,
       ] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
         this.analyticsService.getAttractionSparklinesBatch(sparkInput),
@@ -642,6 +644,9 @@ export class FavoritesService {
               .catch(() => [pid, new Map<string, RopeDropStored>()] as const),
           ),
         ),
+        // Which of these parks are ratable (≥ 30 operating days) — gates the
+        // live attraction crowd level to "unknown" for thin parks.
+        this.analyticsService.getRatableParkIds(missedParkIds),
       ]);
       const predsByPark = new Map<string, PredictionDto[]>(parkPredEntries);
       const ropeDropByPark = new Map<string, Map<string, RopeDropStored>>(
@@ -666,9 +671,17 @@ export class FavoritesService {
         }));
         const standby = dto.queues.find((q) => q.queueType === "STANDBY");
         const p50 = p50Map.get(attraction.id) || 0;
+        const parkRatable = attraction.parkId
+          ? ratableParks.has(attraction.parkId)
+          : false;
         dto.crowdLevel =
-          standby?.status === "OPERATING" && standby.waitTime != null && p50 > 0
-            ? this.analyticsService.getLoadRating(standby.waitTime, p50).rating
+          standby?.status === "OPERATING" && standby.waitTime != null
+            ? !parkRatable
+              ? "unknown"
+              : p50 > 0
+                ? this.analyticsService.getLoadRating(standby.waitTime, p50)
+                    .rating
+                : null
             : null;
         const history = sparklinesMap.get(attraction.id) || [];
         dto.statistics = {

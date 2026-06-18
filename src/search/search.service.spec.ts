@@ -80,6 +80,11 @@ describe("SearchService", () => {
     getBatchParkOccupancy: jest.fn().mockResolvedValue(new Map()),
     getAttractionCrowdLevel: jest.fn().mockReturnValue("moderate"),
     getParkCrowdLevel: jest.fn().mockReturnValue("moderate"),
+    // Park ratability gate — treat every queried park as ratable so the
+    // existing crowd-level assertions keep their pre-gate behaviour.
+    getRatableParkIds: jest
+      .fn()
+      .mockImplementation((ids: string[]) => Promise.resolve(new Set(ids))),
   };
   const mockQueueDataService = {
     findCurrentStatusByAttraction: jest.fn(),

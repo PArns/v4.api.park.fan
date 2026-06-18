@@ -13,6 +13,7 @@ import {
   TopParkSummaryDto,
 } from "./dto/country-summary.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { CrowdLevel } from "../common/types/crowd-level.type";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import {
   GeoStructureDto,
@@ -31,7 +32,9 @@ interface ParkLiveStats {
   operatingAttractions: number;
   explicitlyClosedCount: number;
   totalAttractions: number;
-  crowdLevel: number | null;
+  // Gated crowd-level label hydrated from the shared park:occupancy cache;
+  // "unknown" for thin parks (not ratable). null = no live occupancy yet.
+  crowdLevel: CrowdLevel | null;
 }
 
 /**
@@ -327,10 +330,7 @@ export class DiscoveryService {
                   closedAttractions:
                     stats.explicitlyClosedCount ?? stats.totalAttractions,
                   totalAttractions: stats.totalAttractions,
-                  crowdLevel:
-                    stats.crowdLevel !== null
-                      ? determineCrowdLevel(stats.crowdLevel)
-                      : undefined,
+                  crowdLevel: stats.crowdLevel ?? undefined,
                 },
               };
 
@@ -579,10 +579,18 @@ export class DiscoveryService {
         const raw = cached[i];
         if (!raw) return;
         try {
-          const occupancy = JSON.parse(raw) as { current?: number };
+          const occupancy = JSON.parse(raw) as {
+            current?: number;
+            crowdLevel?: CrowdLevel;
+          };
           if (typeof occupancy.current === "number") {
             const s = stats.get(id);
-            if (s) s.crowdLevel = occupancy.current;
+            // Prefer the gated crowdLevel written by calculateParkOccupancy
+            // ("unknown" for thin parks); fall back to deriving for legacy
+            // cache entries written before the field existed.
+            if (s)
+              s.crowdLevel =
+                occupancy.crowdLevel ?? determineCrowdLevel(occupancy.current);
           }
         } catch {
           // Malformed cache entry — leave crowdLevel null.

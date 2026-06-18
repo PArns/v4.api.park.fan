@@ -36,6 +36,9 @@ describe("AttractionIntegrationService", () => {
     getAttractionStatistics: jest.fn(),
     getEffectiveStartTime: jest.fn(),
     getAttractionCrowdLevel: jest.fn(),
+    // Park ratability gate — default ratable so the existing crowd-level
+    // assertions (moderate/etc.) keep their pre-gate behaviour.
+    isParkRatable: jest.fn().mockResolvedValue(true),
     getAttractionP50BaselineFromCache: jest.fn().mockResolvedValue(0),
     getAttractionP90BaselineFromCache: jest.fn().mockResolvedValue(0),
     // Per-attraction typical-day-peak baseline (calendar denominator). 0 ⇒ the

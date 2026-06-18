@@ -31,13 +31,20 @@
  *
  * **No calendar fallback:** the typical-day-peak is written atomically with
  * P50/P90 (park_p50_baselines.typicalDayPeak + Redis), so a missing value
- * means the park has no baseline at all (brand-new) → neutral default.
+ * means the park is not ratable yet → `unknown` (see below).
  *
  * **Thresholds (see determineCrowdLevel):**
  * - very_low: ≤ 60%   - low: 61-89%      - moderate: 90-110%
  * - high: 111-150%    - very_high: 151-200%   - extreme: > 200%
  *
- * **Final fallback (no baseline at all):** Returns 'moderate'.
+ * **`unknown` ("keine Prognose"):** emitted when a park is **not ratable** —
+ * it has no baseline / fewer than 30 operating days of valid headliner data
+ * (park_p50_baselines.typicalDayPeak IS NULL). A median over a handful of
+ * days is noise, so rather than render a made-up `moderate` we say so
+ * explicitly. `unknown` is produced ONLY by the no-baseline paths
+ * (rateOrUnknown / isParkRatable gate); `determineCrowdLevel`'s thresholds
+ * never return it. Frontend renders it as "Keine Prognose / noch nicht genug
+ * Daten".
  */
 export type CrowdLevel =
   | "very_low"
@@ -45,4 +52,5 @@ export type CrowdLevel =
   | "moderate"
   | "high"
   | "very_high"
-  | "extreme";
+  | "extreme"
+  | "unknown";
