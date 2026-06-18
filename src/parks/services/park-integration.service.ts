@@ -491,6 +491,7 @@ export class ParkIntegrationService {
         headlinerIds,
         storedPredictionsMap,
         ropeDropMap,
+        parkRatable,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
@@ -512,6 +513,11 @@ export class ParkIntegrationService {
         ),
         // One DB read for the whole park — no N+1 across attractions.
         this.analyticsService.getRopeDropForPark(park.id),
+        // Ratability gate: a thin parent park (< 30 operating days → NULL
+        // typicalDayPeak) reads "unknown" for its live attraction crowd
+        // levels too, consistent with the park-level crowdLevel and the
+        // other live surfaces (search/nearby/favorites/attraction-detail).
+        this.analyticsService.isParkRatable(park.id),
       ]);
 
       // Resolve rope-drop UTC instants against today's opening (single value);
@@ -609,16 +615,22 @@ export class ParkIntegrationService {
           // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
-            // P50 baseline when available, else P90 (same as attraction detail)
-            const baseline =
-              attractionP50s.get(attraction.id) ||
-              attractionP90s.get(attraction.id) ||
-              0;
-            const { rating } = this.analyticsService.getLoadRating(
-              wait,
-              baseline,
-            );
-            crowdLevel = rating;
+            if (!parkRatable) {
+              // Thin parent park (not ratable) → "unknown", matching the
+              // park-level crowdLevel and the other live surfaces.
+              crowdLevel = "unknown";
+            } else {
+              // P50 baseline when available, else P90 (same as attraction detail)
+              const baseline =
+                attractionP50s.get(attraction.id) ||
+                attractionP90s.get(attraction.id) ||
+                0;
+              const { rating } = this.analyticsService.getLoadRating(
+                wait,
+                baseline,
+              );
+              crowdLevel = rating;
+            }
           } else {
             // 2. Fallback to ML Prediction if no live data
             if (currentPred && currentPred.crowdLevel) {
@@ -671,7 +683,12 @@ export class ParkIntegrationService {
             attractionP90s.get(attraction.id) ||
             0;
 
-          if (wait !== undefined && wait !== null && baseline > 0) {
+          if (
+            parkRatable &&
+            wait !== undefined &&
+            wait !== null &&
+            baseline > 0
+          ) {
             const loadRating = this.analyticsService.getLoadRating(
               wait,
               baseline,
@@ -683,6 +700,7 @@ export class ParkIntegrationService {
               loadRating.rating,
             );
           } else {
+            // Not ratable (thin park) or no usable baseline → no comparison.
             attraction.baseline = null;
             attraction.comparison = null;
           }
