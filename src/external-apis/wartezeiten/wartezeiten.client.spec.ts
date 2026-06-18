@@ -39,6 +39,8 @@ describe("WartezeitenClient", () => {
             del: jest.fn().mockResolvedValue(1),
             incr: jest.fn().mockResolvedValue(1),
             expire: jest.fn().mockResolvedValue(1),
+            // even-spacing reservation Lua → 0ms wait (no spacing in tests)
+            eval: jest.fn().mockResolvedValue(0),
           },
         },
       ],
@@ -157,18 +159,19 @@ describe("WartezeitenClient", () => {
       );
     });
 
-    it("should handle 429 rate limit errors", async () => {
+    it("should handle 429 rate limit errors (short cooldown)", async () => {
       const error = {
         response: {
           status: 429,
           data: {},
+          headers: {},
         },
       };
 
       mockAxiosInstance.get.mockRejectedValue(error);
 
       await expect(client.getParks("en")).rejects.toThrow(
-        "Wartezeiten API: Rate limit exceeded",
+        "Wartezeiten API: 429 rate limit (cooling down",
       );
     });
 

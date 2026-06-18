@@ -34,9 +34,32 @@ export class WartezeitenClient {
   // Redis keys
   private readonly BLOCKED_KEY = "ratelimit:wartezeiten:blocked";
   private readonly COUNTER_KEY = "ratelimit:wartezeiten:counter";
+  private readonly SLOT_KEY = "ratelimit:wartezeiten:slot";
+  private readonly LAST_429_KEY = "ratelimit:wartezeiten:last429";
 
-  // Rate limiting state
-  private readonly maxRequestsPerMinute = 85; // Conservative limit (100 is absolute max)
+  // Rate-limit strategy. The API (Cloudflare-fronted) 429s on BURSTS — many
+  // requests in the same second via Promise.all — not on the per-minute total:
+  // we get 429'd with only ~13 requests in the window, and a single live probe
+  // returns 200 with no Retry-After header. So we (a) SPACE requests evenly to
+  // avoid presenting a same-second burst, and (b) on a 429 apply a SHORT
+  // cooldown (honouring Retry-After if the API ever sends one) instead of the
+  // old 15-minute self-lockout, which was a self-inflicted over-reaction.
+  private readonly requestSpacingMs = 750; // min gap between WZ requests (≈80/min)
+  private readonly maxSpacingWaitMs = 20000; // skip a request rather than stall longer
+  private readonly cooldownSeconds = 30; // self-cooldown after a 429 (tunable)
+
+  // Atomic even-spacing reservation (shared across concurrent callers): returns
+  // the ms to wait so this request starts ≥ previous slot + spacing. The PX
+  // expiry resets the slot after an idle gap so we never carry a stale backlog.
+  private readonly reserveSlotLua = `
+    local now = tonumber(ARGV[1])
+    local interval = tonumber(ARGV[2])
+    local last = tonumber(redis.call('GET', KEYS[1]) or '0')
+    local slot = now
+    if last + interval > now then slot = last + interval end
+    redis.call('SET', KEYS[1], slot, 'PX', 60000)
+    return slot - now
+  `;
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {
     this.client = axios.create({
@@ -58,37 +81,49 @@ export class WartezeitenClient {
    * calls during a block, which would extend the lock duration.
    */
   private async enforceRateLimit(): Promise<void> {
-    // 1. Check Global Redis Block (Penalty from 429)
-    const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
-    if (blockedUntil) {
+    // 1. Active self-cooldown from a recent 429 — fail fast (no HTTP call, so it
+    //    can't extend anything). Message includes "rate limit" so the
+    //    orchestrator treats it as an expected backoff, not an error.
+    const cooling = await this.redis.get(this.BLOCKED_KEY);
+    if (cooling) {
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
-      const nextRetrySeconds = ttl > 0 ? ttl : 0;
       throw new Error(
-        `Wartezeiten API: Global Rate Limit (blocked for ${nextRetrySeconds}s)`,
+        `Wartezeiten API: rate limit cooling down (${ttl > 0 ? ttl : 0}s left)`,
       );
     }
 
-    // 2. Distributed Counter (INCR pattern)
-    // Atomic increment and set TTL if new key
-    const currentCount = await this.redis.incr(this.COUNTER_KEY);
-    if (currentCount === 1) {
-      await this.redis.expire(this.COUNTER_KEY, 60);
-    }
+    // 2. Observability counter (per-minute) — NOT used for limiting anymore (the
+    //    spacer below does that); kept so the 429 log can report how many
+    //    requests were in the window when a burst tripped Cloudflare.
+    const windowCount = await this.redis.incr(this.COUNTER_KEY);
+    if (windowCount === 1) await this.redis.expire(this.COUNTER_KEY, 60);
 
-    // Check if we've hit the limit
-    if (currentCount > this.maxRequestsPerMinute) {
-      const ttl = await this.redis.ttl(this.COUNTER_KEY);
-      const waitTimeMs = ttl > 0 ? ttl * 1000 : 1000;
-
-      this.logger.warn(
-        `⏳ Wartezeiten Rate limit reached (${currentCount}/${this.maxRequestsPerMinute}). Waiting ${Math.ceil(waitTimeMs / 1000)}s...`,
+    // 3. Even-spacing reservation — spreads concurrent Promise.all requests so
+    //    we never present Cloudflare with a same-second burst (the actual 429
+    //    trigger). Atomic across callers via the Lua slot.
+    const waitMs = Number(
+      await this.redis.eval(
+        this.reserveSlotLua,
+        1,
+        this.SLOT_KEY,
+        Date.now().toString(),
+        this.requestSpacingMs.toString(),
+      ),
+    );
+    if (waitMs > this.maxSpacingWaitMs) {
+      // Too many requests queued this cycle — skip rather than stall the sync.
+      throw new Error(
+        `Wartezeiten API: rate limit spacing budget exceeded (would wait ${Math.ceil(
+          waitMs / 1000,
+        )}s)`,
       );
-
-      // Wait for the window to reset
-      await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
-
-      // After waiting, we must increment again in the new window
-      return this.enforceRateLimit();
+    }
+    if (waitMs > 0) {
+      // DEBUG: per-request spacing applied — lets us analyse queue/timing.
+      this.logger.debug(
+        `⏱️  WZ spacing: wait ${waitMs}ms (windowCount=${windowCount}, spacing=${this.requestSpacingMs}ms)`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
 
@@ -111,29 +146,75 @@ export class WartezeitenClient {
           );
         case 405:
           throw new Error("Wartezeiten API: Method not allowed");
-        case 429:
-          this.logger.error(
-            "🚨 Rate limit exceeded! Setting global block for 15 minutes.",
+        case 429: {
+          const headers = (error.response.headers ?? {}) as Record<
+            string,
+            unknown
+          >;
+          const retryAfterRaw = headers["retry-after"];
+          const retryAfterSeconds = retryAfterRaw
+            ? parseInt(String(retryAfterRaw), 10)
+            : NaN;
+          // Honour the API's Retry-After if it ever sends one (capped at 15min),
+          // else a SHORT self-cooldown — a live probe shows the API recovers
+          // immediately, so the old hard 15-min lockout was self-inflicted.
+          const cooldown =
+            Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+              ? Math.min(retryAfterSeconds, 900)
+              : this.cooldownSeconds;
+
+          await this.redis.set(this.BLOCKED_KEY, "true", "EX", cooldown);
+
+          // DEBUG timing data: window count, time since the previous 429
+          // (cooldown→resume→429 cadence), and the actual rate-limit response
+          // headers — so we can finally see whether the API signals a real
+          // penalty (Retry-After / X-RateLimit-*) or just bursts us on Cloudflare.
+          const now = Date.now();
+          const windowCount = await this.redis.get(this.COUNTER_KEY);
+          const prev429 = await this.redis.get(this.LAST_429_KEY);
+          await this.redis.set(this.LAST_429_KEY, now.toString(), "EX", 3600);
+          const secSinceLast429 = prev429
+            ? Math.round((now - parseInt(prev429, 10)) / 1000)
+            : null;
+
+          this.logger.warn(
+            `⏳ Wartezeiten 429 (burst). Cooling down ${cooldown}s. ` +
+              `retry-after=${retryAfterRaw ?? "none"} window=${windowCount ?? 0} ` +
+              `sinceLast429=${secSinceLast429 ?? "n/a"}s`,
           );
-          // Set global block in Redis for 15 minutes
-          await this.redis.set(this.BLOCKED_KEY, "true", "EX", 15 * 60);
 
-          const currentCount = await this.redis.get(this.COUNTER_KEY);
-
-          // Log to dedicated file
           logRateLimitBlock(
             "wartezeiten.app",
-            15,
-            "429 Too Many Requests - API rate limit exceeded",
+            Math.round(cooldown / 60),
+            "429 Too Many Requests",
             {
-              requestsThisWindow: currentCount ? parseInt(currentCount, 10) : 0,
-              maxRequestsPerMinute: this.maxRequestsPerMinute,
+              cooldownSeconds: cooldown,
+              requestsThisWindow: windowCount ? parseInt(windowCount, 10) : 0,
+              requestSpacingMs: this.requestSpacingMs,
+              secondsSinceLast429: secSinceLast429,
+              retryAfterHeader: retryAfterRaw ?? null,
+              rateLimitHeaders: {
+                limit:
+                  headers["x-ratelimit-limit"] ??
+                  headers["ratelimit-limit"] ??
+                  null,
+                remaining:
+                  headers["x-ratelimit-remaining"] ??
+                  headers["ratelimit-remaining"] ??
+                  null,
+                reset:
+                  headers["x-ratelimit-reset"] ??
+                  headers["ratelimit-reset"] ??
+                  null,
+              },
+              cfRay: headers["cf-ray"] ?? null,
             },
           );
 
           throw new Error(
-            "Wartezeiten API: Rate limit exceeded (blocked for 15 minutes)",
+            `Wartezeiten API: 429 rate limit (cooling down ${cooldown}s)`,
           );
+        }
         default:
           throw new Error(
             `Wartezeiten API error (${status}): ${data?.message || error.message}`,
