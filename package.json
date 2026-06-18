@@ -64,7 +64,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "slugify": "^1.6.9",
-    "tar": "^7.5.15",
+    "tar": "^7.5.16",
     "transliteration": "^2.6.1",
     "typeorm": "^0.3.30",
     "uuid": "^14.0.0"
