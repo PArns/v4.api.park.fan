@@ -48,6 +48,7 @@ describe("AttractionIntegrationService", () => {
     // default so the history path falls back to live today-only compute.
     getAttractionHourlyHistory: jest.fn().mockResolvedValue(new Map()),
     getRopeDropFromCache: jest.fn().mockResolvedValue(null),
+    getAttractionTypicalWaits: jest.fn().mockResolvedValue(null),
   };
 
   const mockMLService = {
@@ -257,6 +258,7 @@ describe("AttractionIntegrationService", () => {
         country: "Germany",
         city: "Test City",
         timezone: "Europe/Berlin",
+        countryCode: "DE",
       });
 
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
@@ -277,6 +279,26 @@ describe("AttractionIntegrationService", () => {
         new Date("2025-12-15T00:00:00Z"),
       );
       mockAnalyticsService.getAttractionCrowdLevel.mockReturnValue("moderate");
+
+      mockAnalyticsService.getAttractionTypicalWaits.mockResolvedValue({
+        weekday: { typical: 30, busy: 55, sampleDays: 142 },
+        weekend: { typical: 45, busy: 75, sampleDays: 58 },
+        byDayOfWeek: [
+          {
+            dayOfWeek: 6,
+            isWeekend: true,
+            typical: 45,
+            busy: 75,
+            sampleDays: 58,
+          },
+        ],
+        peak: { value: 120, date: "2025-08-09" },
+        windowDays: 365,
+        dataFrom: "2025-06-16",
+        dataTo: "2026-06-15",
+        displayable: true,
+        generatedAt: "2026-06-16T03:00:00.000Z",
+      });
 
       // Mock prediction accuracy
       mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
@@ -324,6 +346,23 @@ describe("AttractionIntegrationService", () => {
       expect(result.statistics?.avgWaitToday).toBe(30);
       expect(result.statistics?.peakWaitToday).toBe(50);
 
+      // Verify typical-vs-busy waits (weekday/weekend split)
+      expect(
+        mockAnalyticsService.getAttractionTypicalWaits,
+      ).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+      );
+      expect(result.typicalWaits?.weekday.typical).toBe(30);
+      expect(result.typicalWaits?.weekend.busy).toBe(75);
+      expect(result.typicalWaits?.byDayOfWeek?.[0].dayOfWeek).toBe(6);
+      expect(result.typicalWaits?.peak).toEqual({
+        value: 120,
+        date: "2025-08-09",
+      });
+      expect(result.typicalWaits?.displayable).toBe(true);
+
       // Verify prediction accuracy
       expect(result.predictionAccuracy?.badge).toBe("gold");
 
@@ -354,6 +393,7 @@ describe("AttractionIntegrationService", () => {
         country: "Germany",
         city: "Test City",
         timezone: "Europe/Berlin",
+        countryCode: "DE",
       });
 
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
@@ -431,6 +471,7 @@ describe("AttractionIntegrationService", () => {
         country: "Germany",
         city: "Test City",
         timezone: "Europe/Berlin",
+        countryCode: "DE",
       });
 
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
@@ -518,6 +559,7 @@ describe("AttractionIntegrationService", () => {
         country: "Germany",
         city: "Test City",
         timezone: "Europe/Berlin",
+        countryCode: "DE",
       });
 
       mockAnalyticsService.getAttractionStatistics.mockResolvedValue({

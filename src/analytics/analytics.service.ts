@@ -54,6 +54,8 @@ import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
+import { getWeekendDaysForCountry } from "../date-features/constants/weekend-rules.constant";
+import type { TypicalWaitsDto } from "../attractions/dto/attraction-response.dto";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -4593,6 +4595,160 @@ export class AnalyticsService {
       )
       .catch(() => undefined);
     return value;
+  }
+
+  /**
+   * Typical vs busy-day peak waits for a single attraction.
+   *
+   * Method:
+   * 1. From the pre-computed hourly percentiles (`queue_data_aggregates`),
+   *    take each operating day's **peak** = MAX hourly P90 (the day's
+   *    headline wait), tagged with its day-of-week in the *park* timezone.
+   * 2. Over a set of daily peaks: `typical` = P50 (a normal day),
+   *    `busy` = P90 (a busy day). Computed for the weekday and weekend
+   *    buckets, and for each individual day-of-week.
+   * 3. `peak` = the single highest daily peak in the window, with the date
+   *    it occurred (the record wait over the look-back year).
+   *
+   * Weekend membership is country-aware (e.g. Fri+Sat in the Gulf states).
+   * One DB scan; percentiles are derived in JS (linear interpolation,
+   * matching PostgreSQL percentile_cont). Cached 24h — the inputs only
+   * change once a day when the percentile aggregates are rebuilt.
+   */
+  async getAttractionTypicalWaits(
+    attractionId: string,
+    timezone: string,
+    countryCode: string,
+  ): Promise<TypicalWaitsDto> {
+    const WINDOW_DAYS = 365; // one full seasonal cycle
+    const MIN_SAMPLES_PER_HOUR = 2; // drop noisy single-sample hours
+    const MIN_TOTAL_SAMPLE_DAYS = 20; // gate for `displayable`
+
+    const cacheKey = `attraction:typical-waits:v2:${attractionId}:${WINDOW_DAYS}`;
+    const cached = safeJsonParse<TypicalWaitsDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
+
+    const now = new Date();
+    const dataTo = formatInTimeZone(subDays(now, 1), timezone, "yyyy-MM-dd");
+    const dataFrom = formatInTimeZone(
+      subDays(now, WINDOW_DAYS),
+      timezone,
+      "yyyy-MM-dd",
+    );
+    // Bound the scan in UTC against the park-local date window.
+    const startUtc = fromZonedTime(`${dataFrom}T00:00:00`, timezone);
+    const endUtc = fromZonedTime(`${dataTo}T00:00:00`, timezone);
+    endUtc.setUTCDate(endUtc.getUTCDate() + 1); // inclusive of dataTo
+
+    const weekendDays = new Set(getWeekendDaysForCountry(countryCode));
+
+    // One row per operating day: its peak (max hourly P90) + day-of-week.
+    const rows: Array<{ day: string; dow: number; day_peak: string }> =
+      await this.queueDataAggregateRepository.manager.query(
+        `SELECT
+           (qda.hour AT TIME ZONE $2)::date::text             AS day,
+           EXTRACT(DOW FROM qda.hour AT TIME ZONE $2)::int    AS dow,
+           MAX(qda.p90)                                       AS day_peak
+         FROM queue_data_aggregates qda
+         WHERE qda."attractionId" = $1
+           AND qda.hour >= $3
+           AND qda.hour <  $4
+           AND qda."sampleCount" >= $5
+         GROUP BY day, dow
+         ORDER BY day`,
+        [
+          attractionId,
+          timezone,
+          startUtc.toISOString(),
+          endUtc.toISOString(),
+          MIN_SAMPLES_PER_HOUR,
+        ],
+      );
+
+    const daily = rows.map((r) => ({
+      date: r.day,
+      dow: Number(r.dow),
+      peak: Number(r.day_peak),
+    }));
+
+    // Bucket = {typical: P50, busy: P90} over a set of daily peaks.
+    const bucketOf = (peaks: number[]): TypicalWaitsDto["weekday"] => {
+      if (peaks.length === 0) {
+        return { typical: null, busy: null, sampleDays: 0 };
+      }
+      const sorted = [...peaks].sort((a, b) => a - b);
+      return {
+        typical: roundToNearest5Minutes(this.percentileCont(sorted, 0.5)),
+        busy: roundToNearest5Minutes(this.percentileCont(sorted, 0.9)),
+        sampleDays: peaks.length,
+      };
+    };
+
+    const weekday = bucketOf(
+      daily.filter((d) => !weekendDays.has(d.dow)).map((d) => d.peak),
+    );
+    const weekend = bucketOf(
+      daily.filter((d) => weekendDays.has(d.dow)).map((d) => d.peak),
+    );
+
+    // Per day-of-week (only days with data), ordered 0=Sun..6=Sat.
+    const byDayOfWeek: TypicalWaitsDto["byDayOfWeek"] = [];
+    for (let dow = 0; dow <= 6; dow++) {
+      const peaks = daily.filter((d) => d.dow === dow).map((d) => d.peak);
+      if (peaks.length === 0) continue;
+      byDayOfWeek.push({
+        dayOfWeek: dow,
+        isWeekend: weekendDays.has(dow),
+        ...bucketOf(peaks),
+      });
+    }
+
+    // Record peak over the window, with the date it occurred. On ties, the
+    // most recent date wins (daily is sorted ascending, so >= keeps the last).
+    let record: { peak: number; date: string } | null = null;
+    for (const d of daily) {
+      if (record === null || d.peak >= record.peak) {
+        record = { peak: d.peak, date: d.date };
+      }
+    }
+    const peak: TypicalWaitsDto["peak"] = record
+      ? { value: roundToNearest5Minutes(record.peak), date: record.date }
+      : null;
+
+    const result: TypicalWaitsDto = {
+      weekday,
+      weekend,
+      byDayOfWeek,
+      peak,
+      windowDays: WINDOW_DAYS,
+      dataFrom,
+      dataTo,
+      displayable: daily.length >= MIN_TOTAL_SAMPLE_DAYS,
+      generatedAt: new Date().toISOString(),
+    };
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+
+    return result;
+  }
+
+  /**
+   * Linear-interpolation percentile over an ascending-sorted array, matching
+   * PostgreSQL's percentile_cont semantics. `q` in [0, 1].
+   */
+  private percentileCont(sortedAsc: number[], q: number): number {
+    const n = sortedAsc.length;
+    if (n === 0) return 0;
+    if (n === 1) return sortedAsc[0];
+    const rank = q * (n - 1);
+    const lo = Math.floor(rank);
+    const hi = Math.ceil(rank);
+    if (lo === hi) return sortedAsc[lo];
+    return sortedAsc[lo] + (rank - lo) * (sortedAsc[hi] - sortedAsc[lo]);
   }
 
   /**

@@ -14,6 +14,131 @@ import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 
 /**
+ * One weekday/weekend bucket of the typical-waits summary.
+ *
+ * Both values are derived from the distribution of *daily peak* waits (the
+ * day's highest hourly P90) across operating days in the bucket:
+ * - `typical` = P50 of those daily peaks → a normal day's peak wait
+ * - `busy`    = P90 of those daily peaks → a busy day's peak wait
+ */
+export class TypicalWaitBucketDto {
+  @ApiProperty({
+    example: 35,
+    nullable: true,
+    description:
+      "Typical day's peak wait in minutes (median of daily peaks). Null if no data.",
+  })
+  typical: number | null;
+
+  @ApiProperty({
+    example: 60,
+    nullable: true,
+    description:
+      "Busy day's peak wait in minutes (90th percentile of daily peaks). Null if no data.",
+  })
+  busy: number | null;
+
+  @ApiProperty({
+    example: 142,
+    description: "Number of operating days with data in this bucket",
+  })
+  sampleDays: number;
+}
+
+/**
+ * One day-of-week bucket: the weekday/weekend bucket plus which day it is.
+ */
+export class DayOfWeekWaitDto extends TypicalWaitBucketDto {
+  @ApiProperty({
+    example: 6,
+    description: "Day of week (0=Sunday, 1=Monday, …, 6=Saturday)",
+  })
+  dayOfWeek: number;
+
+  @ApiProperty({
+    example: true,
+    description: "Whether this day counts as weekend in the park's country",
+  })
+  isWeekend: boolean;
+}
+
+/**
+ * The record peak wait over the look-back window, with the date it occurred.
+ */
+export class PeakWaitDto {
+  @ApiProperty({
+    example: 120,
+    description: "Highest daily peak wait in the window (minutes)",
+  })
+  value: number;
+
+  @ApiProperty({
+    example: "2025-08-09",
+    description: "Date the record peak occurred (YYYY-MM-DD, park timezone)",
+  })
+  date: string;
+}
+
+/**
+ * Typical-vs-busy peak waits, split by weekday and weekend.
+ * Weekend days are country-aware (e.g. Fri+Sat in the Gulf states).
+ */
+export class TypicalWaitsDto {
+  @ApiProperty({
+    type: TypicalWaitBucketDto,
+    description: "Stats over weekday (non-weekend) operating days",
+  })
+  weekday: TypicalWaitBucketDto;
+
+  @ApiProperty({
+    type: TypicalWaitBucketDto,
+    description: "Stats over weekend operating days (country-aware)",
+  })
+  weekend: TypicalWaitBucketDto;
+
+  @ApiProperty({
+    type: [DayOfWeekWaitDto],
+    description:
+      "Per day-of-week breakdown (only days with data), ordered 0=Sun…6=Sat",
+  })
+  byDayOfWeek: DayOfWeekWaitDto[];
+
+  @ApiProperty({
+    type: PeakWaitDto,
+    nullable: true,
+    description:
+      "Record peak wait over the window with its date. Null if no data.",
+  })
+  peak: PeakWaitDto | null;
+
+  @ApiProperty({
+    example: 365,
+    description: "Size of the look-back window in days",
+  })
+  windowDays: number;
+
+  @ApiProperty({ example: "2025-06-16", description: "Window start (park tz)" })
+  dataFrom: string;
+
+  @ApiProperty({ example: "2026-06-15", description: "Window end (park tz)" })
+  dataTo: string;
+
+  @ApiProperty({
+    example: true,
+    description:
+      "True when the total sample is large enough to display. Gate rendering " +
+      "on this instead of a client-side threshold.",
+  })
+  displayable: boolean;
+
+  @ApiProperty({
+    example: "2026-06-16T03:00:00.000Z",
+    description: "When this aggregate was computed (ISO 8601 UTC)",
+  })
+  generatedAt: string;
+}
+
+/**
  * Attraction Response DTO
  *
  * Used for API responses when returning attraction data.
@@ -222,6 +347,17 @@ export class AttractionResponseDto {
     type: [ScheduleItemDto],
   })
   schedule?: ScheduleItemDto[];
+
+  @ApiProperty({
+    description:
+      "Typical vs busy-day peak waits, split by weekday and weekend. " +
+      "Derived from the distribution of daily peak waits over a sliding window. " +
+      "Render only when `displayable` is true.",
+    required: false,
+    nullable: true,
+    type: TypicalWaitsDto,
+  })
+  typicalWaits?: TypicalWaitsDto | null;
 
   @ApiProperty({
     description:
