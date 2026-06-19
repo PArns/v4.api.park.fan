@@ -11,6 +11,8 @@ import { ScheduleItemDto } from "../dto/schedule-item.dto";
 import { ParkWaitTimesResponse } from "../types/park-wait-times.type";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
+import { WeatherWarningsService } from "../weather-warnings.service";
+import { WeatherWarningDto } from "../dto/weather-warning.dto";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
@@ -78,6 +80,7 @@ export class ParkIntegrationService {
   constructor(
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
+    private readonly weatherWarningsService: WeatherWarningsService,
     private readonly attractionsService: AttractionsService,
     private readonly showsService: ShowsService,
     private readonly restaurantsService: RestaurantsService,
@@ -187,6 +190,7 @@ export class ParkIntegrationService {
       mlPredictionsResult,
       nextSchedule,
       parkHasOperatingSchedule,
+      weatherWarnings,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 16),
@@ -194,6 +198,7 @@ export class ParkIntegrationService {
       this.mlService.getParkPredictions(park.id, "hourly").catch(() => null),
       this.parksService.getNextSchedule(park.id).catch(() => null),
       this.parksService.hasOperatingSchedule(park.id),
+      this.weatherWarningsService.getActiveWarnings(park.id).catch(() => []),
     ]);
     const hourlyRes = mlPredictionsResult;
 
@@ -224,6 +229,7 @@ export class ParkIntegrationService {
       forecast: weatherData.forecast
         .slice(0, 16)
         .map((w) => WeatherItemDto.fromEntity(w)),
+      warnings: weatherWarnings.map((w) => WeatherWarningDto.fromEntity(w)),
     };
     dto.schedule = schedule.map((s) => ScheduleItemDto.fromEntity(s));
 

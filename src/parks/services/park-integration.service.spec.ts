@@ -2,6 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { ParkIntegrationService } from "./park-integration.service";
 import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
+import { WeatherWarningsService } from "../weather-warnings.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
@@ -65,6 +66,10 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         // Constructor takes 15 deps — most are unused on this path.
         { provide: ParksService, useValue: {} },
         { provide: WeatherService, useValue: {} },
+        {
+          provide: WeatherWarningsService,
+          useValue: { getActiveWarnings: jest.fn().mockResolvedValue([]) },
+        },
         { provide: AttractionsService, useValue: {} },
         { provide: ShowsService, useValue: {} },
         { provide: RestaurantsService, useValue: {} },

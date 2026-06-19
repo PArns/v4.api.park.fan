@@ -29,6 +29,8 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue, // Phase 6.2: Combined
     @InjectQueue("weather") private weatherQueue: Queue,
+    @InjectQueue("weather-warnings")
+    private weatherWarningsQueue: Queue,
     @InjectQueue("weather-historical")
     private weatherHistoricalQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
@@ -222,6 +224,25 @@ export class QueueSchedulerService implements OnModuleInit {
         {
           repeat: { cron: "0 */6 * * *" },
           jobId: "weather-current-cron",
+        },
+      );
+    }
+
+    // Weather warnings: every 15 minutes (severe-weather warnings change fast,
+    // unlike the 12h forecast). MeteoGate → DWD/MeteoAlarm, German+EU parks.
+    const hasWeatherWarningsCron = await this.hasRepeatableJob(
+      this.weatherWarningsQueue,
+      "weather-warnings-cron",
+      "*/15 * * * *",
+    );
+
+    if (!hasWeatherWarningsCron) {
+      await this.weatherWarningsQueue.add(
+        "sync-warnings",
+        {},
+        {
+          repeat: { cron: "*/15 * * * *" },
+          jobId: "weather-warnings-cron",
         },
       );
     }

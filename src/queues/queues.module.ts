@@ -10,6 +10,7 @@ import { ParkMetadataProcessor } from "./processors/park-metadata.processor";
 import { ChildrenMetadataProcessor } from "./processors/children-metadata.processor";
 import { WaitTimesProcessor } from "./processors/wait-times.processor";
 import { WeatherProcessor } from "./processors/weather.processor";
+import { WeatherWarningsProcessor } from "./processors/weather-warnings.processor";
 import { HolidaysProcessor } from "./processors/holidays.processor";
 import { WeatherHistoricalProcessor } from "./processors/weather-historical.processor";
 import { MLTrainingProcessor } from "./processors/ml-training.processor";
@@ -109,6 +110,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
       { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
       { name: "entity-mappings" }, // Phase 6.6.3: Multi-source mappings
       { name: "weather" },
+      { name: "weather-warnings" },
       { name: "weather-historical" },
       { name: "holidays" },
       { name: "ml-training" },
@@ -191,6 +193,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
     WaitTimesProcessor,
     WeatherProcessor,
+    WeatherWarningsProcessor,
     WeatherHistoricalProcessor,
     HolidaysProcessor,
     MLTrainingProcessor,

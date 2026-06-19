@@ -21,6 +21,8 @@ import {
 } from "@nestjs/swagger";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
+import { WeatherWarningsService } from "./weather-warnings.service";
+import { WeatherWarningDto } from "./dto/weather-warning.dto";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
@@ -77,6 +79,7 @@ export class ParksController {
   constructor(
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
+    private readonly weatherWarningsService: WeatherWarningsService,
     private readonly attractionsService: AttractionsService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly showsService: ShowsService,
@@ -640,7 +643,10 @@ export class ParksController {
       );
     }
 
-    const nowcast = await this.weatherService.getNowcast(park.id);
+    const [nowcast, warnings] = await Promise.all([
+      this.weatherService.getNowcast(park.id),
+      this.weatherWarningsService.getActiveWarnings(park.id).catch(() => []),
+    ]);
 
     if (!nowcast) {
       throw new NotFoundException(
@@ -663,7 +669,7 @@ export class ParksController {
       res.setHeader("Vary", "Accept-Encoding");
     }
 
-    return WeatherNowcastDto.fromNowcast(
+    const dto = WeatherNowcastDto.fromNowcast(
       {
         id: park.id,
         name: park.name,
@@ -672,6 +678,8 @@ export class ParksController {
       },
       nowcast,
     );
+    dto.warnings = warnings.map((w) => WeatherWarningDto.fromEntity(w));
+    return dto;
   }
 
   /**

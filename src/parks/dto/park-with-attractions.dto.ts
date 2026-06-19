@@ -1,6 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { Park } from "../entities/park.entity";
 import { WeatherItemDto } from "./weather-item.dto";
+import { WeatherWarningDto } from "./weather-warning.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
@@ -469,6 +470,8 @@ export class ParkWithAttractionsDto {
       isDay: boolean | null;
     } | null;
     forecast: WeatherItemDto[];
+    /** Active severe-weather warnings (empty when none). */
+    warnings?: WeatherWarningDto[];
   };
 
   // Content

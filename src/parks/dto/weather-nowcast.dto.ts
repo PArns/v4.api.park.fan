@@ -1,6 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 import type { ParkNowcast } from "../weather.service";
+import { WeatherWarningDto } from "./weather-warning.dto";
 import {
   OPEN_METEO_ATTRIBUTION,
   WeatherAttributionDto,
@@ -89,6 +90,15 @@ export class WeatherNowcastDto {
     example: "2026-05-21T14:13:12.000Z",
   })
   nextUpdateAt: string;
+
+  @ApiProperty({
+    description:
+      "Active severe-weather warnings for the park (empty when none). Source: " +
+      "MeteoGate (DWD/MeteoAlarm). German + English variants; pick per locale.",
+    type: () => [WeatherWarningDto],
+    required: false,
+  })
+  warnings?: WeatherWarningDto[];
 
   @ApiProperty({
     description:

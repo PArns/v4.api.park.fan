@@ -4,6 +4,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ParksController } from "./parks.controller";
 import { ParksService } from "./parks.service";
 import { WeatherService } from "./weather.service";
+import { WeatherWarningsService } from "./weather-warnings.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
@@ -12,6 +13,7 @@ import { ParkRepairService } from "./services/park-repair.service";
 import { ParkMergeService } from "./services/park-merge.service";
 import { Park } from "./entities/park.entity";
 import { WeatherData } from "./entities/weather-data.entity";
+import { WeatherWarning } from "./entities/weather-warning.entity";
 import { ScheduleEntry } from "./entities/schedule-entry.entity";
 import { ThemeParksModule } from "../external-apis/themeparks/themeparks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
@@ -38,6 +40,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     TypeOrmModule.forFeature([
       Park,
       WeatherData,
+      WeatherWarning,
       ScheduleEntry,
       AttractionAccuracyStats,
       ExternalEntityMapping,
@@ -63,6 +66,7 @@ import { PopularityModule } from "../popularity/popularity.module";
   providers: [
     ParksService,
     WeatherService,
+    WeatherWarningsService,
     ParkIntegrationService,
     ParkEnrichmentService,
     CalendarService,
@@ -73,6 +77,7 @@ import { PopularityModule } from "../popularity/popularity.module";
   exports: [
     ParksService,
     WeatherService,
+    WeatherWarningsService,
     ParkIntegrationService,
     TypeOrmModule, // CRITICAL: Export TypeOrmModule so other modules can inject ParkRepository
     ParkEnrichmentService,
