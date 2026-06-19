@@ -253,7 +253,10 @@ describe("computeRopeDrop", () => {
       dow: 6,
       slots: [{ minutesAfterOpen: -60, p90: 5 }],
     };
-    const r = computeRopeDrop([...days(busyDay, 6, 20), preOpenOnly], WINDOW_START)!;
+    const r = computeRopeDrop(
+      [...days(busyDay, 6, 20), preOpenOnly],
+      WINDOW_START,
+    )!;
     // 20 valid days contribute; the pre-open-only day is dropped.
     expect(r.sampleDays).toBe(20);
   });
