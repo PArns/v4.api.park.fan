@@ -48,6 +48,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
+    @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
   ) {}
@@ -714,6 +715,26 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "15 5 * * *", // Daily at 5:15am
           },
           jobId: "rope-drop-cron",
+        },
+      );
+    }
+
+    // Typical-waits: daily at 5:30 AM (after rope-drop at 5:15 + the hourly-history
+    // / percentile rebuild). Precomputes P50/P90 peak-wait stats per headliner so
+    // the park response (SSR ride-page shell) serves them without a percentile scan.
+    const hasTypicalWaitsCron = await this.hasRepeatableJob(
+      this.typicalWaitsQueue,
+      "typical-waits-cron",
+    );
+    if (!hasTypicalWaitsCron) {
+      await this.typicalWaitsQueue.add(
+        "calculate-typical-waits",
+        {},
+        {
+          repeat: {
+            cron: "30 5 * * *", // Daily at 5:30am
+          },
+          jobId: "typical-waits-cron",
         },
       );
     }

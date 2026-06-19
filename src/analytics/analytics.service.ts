@@ -26,6 +26,7 @@ import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
+import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.entity";
 import {
   OccupancyDto,
   ParkStatisticsDto,
@@ -151,6 +152,8 @@ export class AnalyticsService {
     private attractionHourlyHistoryRepository: Repository<AttractionHourlyHistory>,
     @InjectRepository(AttractionRopeDrop)
     private attractionRopeDropRepository: Repository<AttractionRopeDrop>,
+    @InjectRepository(AttractionTypicalWaits)
+    private attractionTypicalWaitsRepository: Repository<AttractionTypicalWaits>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -5749,5 +5752,98 @@ export class AnalyticsService {
   /** Count of rope-drop rows — used by the post-deploy bootstrap force-run. */
   async countRopeDropRows(): Promise<number> {
     return this.attractionRopeDropRepository.count();
+  }
+
+  // ───────────────────────────── Typical waits ─────────────────────────────
+  // Precomputed P50/P90 peak-wait stats per headliner, stored so the park
+  // response (and the SSR ride-page shell) can serve them without a percentile
+  // scan. Mirrors the rope-drop precompute above.
+
+  /**
+   * Compute typical-waits for a park's tier1/tier2 headliners by reusing the
+   * per-attraction aggregate (`getAttractionTypicalWaits`, 24h-cached). Returns
+   * only the displayable ones — the rows worth persisting for the park response.
+   */
+  async computeTypicalWaitsForPark(
+    parkId: string,
+    timezone: string,
+    countryCode: string,
+  ): Promise<Map<string, TypicalWaitsDto>> {
+    const rows: Array<{ attractionId: string }> =
+      await this.queueDataRepository.query(
+        `SELECT "attractionId" FROM headliner_attractions
+         WHERE "parkId" = $1::uuid AND tier IN ('tier1', 'tier2')`,
+        [parkId],
+      );
+
+    const result = new Map<string, TypicalWaitsDto>();
+    for (const { attractionId } of rows) {
+      try {
+        const tw = await this.getAttractionTypicalWaits(
+          attractionId,
+          timezone,
+          countryCode,
+        );
+        if (tw.displayable) result.set(attractionId, tw);
+      } catch {
+        // skip attractions whose aggregate can't be computed
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Persist a park's typical-waits (one row per displayable headliner): upsert
+   * the current set, then drop rows that are no longer displayable.
+   */
+  async saveTypicalWaitsBatch(
+    parkId: string,
+    results: Map<string, TypicalWaitsDto>,
+  ): Promise<number> {
+    const now = new Date();
+    const rows = Array.from(results.entries()).map(([attractionId, data]) => ({
+      attractionId,
+      parkId,
+      displayable: true,
+      data,
+      updatedAt: now,
+    }));
+
+    if (rows.length > 0) {
+      await this.attractionTypicalWaitsRepository.upsert(rows, [
+        "attractionId",
+      ]);
+    }
+
+    // Drop rows for this park that are no longer in the displayable set.
+    const existing = await this.attractionTypicalWaitsRepository.find({
+      where: { parkId },
+      select: ["attractionId"],
+    });
+    const stale = existing
+      .map((e) => e.attractionId)
+      .filter((id) => !results.has(id));
+    if (stale.length > 0) {
+      await this.attractionTypicalWaitsRepository.delete(stale);
+    }
+
+    return rows.length;
+  }
+
+  /** Batch typical-waits lookup for a whole park (park integration / SSR). */
+  async getTypicalWaitsForPark(
+    parkId: string,
+  ): Promise<Map<string, TypicalWaitsDto>> {
+    const rows = await this.attractionTypicalWaitsRepository.find({
+      where: { parkId },
+    });
+    const map = new Map<string, TypicalWaitsDto>();
+    for (const row of rows) map.set(row.attractionId, row.data);
+    return map;
+  }
+
+  /** Count of typical-waits rows — used by the post-deploy bootstrap force-run. */
+  async countTypicalWaitsRows(): Promise<number> {
+    return this.attractionTypicalWaitsRepository.count();
   }
 }

@@ -24,6 +24,7 @@ import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
+import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { GeoipModule } from "../geoip/geoip.module";
@@ -158,6 +159,15 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
           lockRenewTime: 300000, // renew every 5 min
         },
       },
+      {
+        // Typical-waits: per-headliner aggregate reads across all parks — same
+        // stall headroom as rope-drop.
+        name: "typical-waits",
+        settings: {
+          lockDuration: 600000,
+          lockRenewTime: 300000,
+        },
+      },
     ),
 
     // Feature modules for processors
@@ -207,6 +217,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     RopeDropProcessor, // Rope-drop recommendations (daily)
+    TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)
     GeoipUpdateProcessor,
     NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
   ],

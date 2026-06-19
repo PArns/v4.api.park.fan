@@ -21,6 +21,7 @@ import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
 import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
+import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 describe("AnalyticsService", () => {
@@ -256,6 +257,15 @@ describe("AnalyticsService", () => {
         {
           provide: getRepositoryToken(AttractionHourlyHistory),
           useValue: mockAttractionHourlyHistoryRepository,
+        },
+        {
+          provide: getRepositoryToken(AttractionTypicalWaits),
+          useValue: {
+            find: jest.fn().mockResolvedValue([]),
+            count: jest.fn().mockResolvedValue(0),
+            upsert: jest.fn(),
+            delete: jest.fn(),
+          },
         },
         {
           provide: getRepositoryToken(AttractionRopeDrop),

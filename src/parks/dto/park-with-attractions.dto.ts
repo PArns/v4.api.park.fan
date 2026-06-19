@@ -8,6 +8,7 @@ import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
+import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -168,6 +169,15 @@ export class ParkAttractionDto {
     nullable: true,
   })
   ropeDrop?: RopeDropInfo | null;
+
+  @ApiProperty({
+    description:
+      "Precomputed typical (P50) vs busy (P90) peak-wait stats. Present only for " +
+      "displayable headliners — lets the SSR ride-page shell render them.",
+    required: false,
+    nullable: true,
+  })
+  typicalWaits?: TypicalWaitsDto | null;
 }
 
 export class ParkShowDto {

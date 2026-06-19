@@ -39,6 +39,7 @@ export class QueueBootstrapService implements OnModuleInit {
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
+    @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectRepository(Park) private parkRepository: Repository<Park>,
     @InjectRepository(AttractionP50Baseline)
     private p50Repository: Repository<AttractionP50Baseline>,
@@ -339,6 +340,42 @@ export class QueueBootstrapService implements OnModuleInit {
       }
     } catch (e) {
       this.logger.warn(`Failed to trigger rope-drop: ${e}`);
+    }
+
+    // Typical-waits backfill — same gate as rope-drop: force one run when the
+    // table is empty (first deploy of this feature / after a wipe), else the
+    // daily 5:30 cron maintains it.
+    try {
+      const twRows = await this.parkRepository.query(
+        `SELECT 1 FROM attraction_typical_waits LIMIT 1`,
+      );
+      const twEmpty = twRows.length === 0;
+      const twJobActive = await this.isJobActiveOrWaiting(
+        this.typicalWaitsQueue,
+        "calculate-typical-waits",
+      );
+
+      if (twEmpty && !twJobActive) {
+        await this.typicalWaitsQueue.add(
+          "calculate-typical-waits",
+          {},
+          {
+            priority: 7,
+            jobId: "bootstrap-typical-waits",
+            removeOnComplete: true,
+            delay: 420000, // 7min — after the rope-drop backfill
+          },
+        );
+        this.logger.log(
+          "✅ Boot: typical-waits queued (table empty — one-time backfill)",
+        );
+      } else {
+        this.logger.debug(
+          "⏭️  Boot: typical-waits skipped (populated → daily cron maintains it)",
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`Failed to trigger typical-waits: ${e}`);
     }
   }
 
