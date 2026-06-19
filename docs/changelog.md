@@ -6,6 +6,28 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — severe-weather warnings (MeteoGate → DWD/MeteoAlarm) (2026-06-19)
+
+Official severe-weather warnings on the weather response. Open-Meteo provides
+forecast data only (our existing "nowcast alert" is self-derived), so warnings
+come from a new `WeatherWarningSource` (MeteoGate `api.meteogate.eu/warnings`,
+EUMETNET → MeteoAlarm/national services; DWD for Germany), ~40 European
+countries, auth via `METEOALARM_API_TOKEN`.
+
+- `MeteoGateWarningsClient`: per-country EDR `locations` query (trailing-24h
+  `datetime`, filters by `sent`), dedupe the CAP index by `alertId`, fetch the
+  CAP as **JSON** (no XML), parse de/en `info`; Redis cache + circuit-breaker +
+  singleflight, fail-soft.
+- `weather_warnings` entity (per park × alert) + `WeatherWarningsService`:
+  group parks by country, `expires > now` filter, park↔area matching (bbox →
+  exact point-in-polygon), atomic per-country replace.
+- `weather-warnings` cron every 15 min.
+- Exposed as `warnings: WeatherWarningDto[]` on the embedded park `weather`
+  object **and** the live `/weather/nowcast` (German + English).
+- Frontend guide: [docs/frontend/weather-warnings.md](frontend/weather-warnings.md).
+
+Production needs `METEOALARM_API_TOKEN` in the Coolify env.
+
 ### Docs — frontend guide for the ride P50/P90 stats (`typicalWaits`) (2026-06-19)
 
 Added [docs/frontend/ride-typical-waits.md](frontend/ride-typical-waits.md): how
