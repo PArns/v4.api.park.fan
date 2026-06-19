@@ -6,6 +6,17 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Docs — frontend guide for the ride P50/P90 stats (`typicalWaits`) (2026-06-19)
+
+Added [docs/frontend/ride-typical-waits.md](frontend/ride-typical-waits.md): how
+to consume the typical-vs-busy peak-wait stats on the attraction detail endpoint
+(`GET …/attractions/:attractionSlug` → `typicalWaits`). Documents the shape
+(`weekday`/`weekend` buckets = P50/P90 of daily peaks, `byDayOfWeek`, record
+`peak`), the `displayable` gate (≥ 20 operating days — render on this, not a
+client threshold), country-aware weekends, the 365-day window, and 24h
+freshness. The feature itself shipped 2026-06-18 (per-weekday + typical-vs-busy
+peak waits on the ride route).
+
 ### Added — gate "thin-data" parks out of crowd levels, ML training & MAE (2026-06-18)
 
 Parks with **< 30 operating days** of valid headliner data were emitting a
