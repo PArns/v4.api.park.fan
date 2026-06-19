@@ -124,8 +124,8 @@ export class BrightSkyWarningsClient {
         headlineEn: a.headline_en ?? undefined,
         description: a.description_de ?? undefined,
         descriptionEn: a.description_en ?? undefined,
-        instruction: a.instruction_de ?? undefined,
-        instructionEn: a.instruction_en ?? undefined,
+        instruction: cleanInstruction(a.instruction_de),
+        instructionEn: cleanInstruction(a.instruction_en),
         areas: [
           {
             description: areaName,
@@ -142,6 +142,25 @@ export class BrightSkyWarningsClient {
 function capitalize(s?: string | null): string | undefined {
   if (!s) return undefined;
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Drop DWD's auto-translation boilerplate instruction. Their English heat
+ * warnings carry no real advice — just a disclaimer ("…automatically generated
+ * product. The manually created original text warning is only available in
+ * German…"). Showing that as "safety advice" is misleading, so suppress it (the
+ * German instruction has the genuine advice and is kept).
+ */
+function cleanInstruction(s?: string | null): string | undefined {
+  if (!s) return undefined;
+  const low = s.toLowerCase();
+  if (
+    low.includes("automatically generated product") ||
+    low.includes("only available in german")
+  ) {
+    return undefined;
+  }
+  return s;
 }
 
 // --- minimal upstream shape (only the fields we read) ---

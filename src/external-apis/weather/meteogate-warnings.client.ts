@@ -231,9 +231,16 @@ export class MeteoGateWarningsClient implements WeatherWarningSource {
     if (!cap || cap.status !== "Actual") return null; // skip test/system/cancel
 
     const byLang = this.indexInfoByLanguage(cap.info ?? []);
-    const de = byLang.get("de") ?? cap.info?.[0];
+    // Prefer German, then English — never the issuing country's local language
+    // (a Dutch KNMI warning then reads English for our de/en users, not Dutch).
+    const de = byLang.get("de") ?? byLang.get("en") ?? cap.info?.[0];
     const en = byLang.get("en");
     if (!de) return null;
+
+    // MeteoAlarm emits a CAP message per awareness type even when there is NO
+    // warning (awareness_level "green", e.g. "Geen waarschuwingen"). Those are
+    // all-clears, not warnings — skip them (else a park gets ~7 noise entries).
+    if (isNoWarning(de)) return null;
 
     const areas = this.buildAreas(feats, cap);
 
@@ -378,10 +385,23 @@ interface CapInfo {
   headline?: string;
   description?: string;
   instruction?: string;
+  parameter?: { valueName?: string; value?: string }[];
   area?: {
     areaDesc?: string;
     geocode?: { valueName?: string; value?: string }[];
   }[];
+}
+
+/**
+ * MeteoAlarm tags each CAP message with an `awareness_level` parameter,
+ * e.g. "1; green; Minor" (no warning) … "4; red; Extreme". The green level is
+ * an all-clear ("Geen waarschuwingen"), not a real warning, so we drop it.
+ */
+function isNoWarning(info: CapInfo): boolean {
+  const level = info.parameter?.find(
+    (p) => p.valueName === "awareness_level",
+  )?.value;
+  return !!level && /green/i.test(level);
 }
 
 /** Compute [west, south, east, north] from a (bbox) Polygon's outer ring. */
