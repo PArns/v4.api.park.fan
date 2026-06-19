@@ -28,6 +28,15 @@ countries, auth via `METEOALARM_API_TOKEN`.
 
 Production needs `METEOALARM_API_TOKEN` in the Coolify env.
 
+**Follow-up (same day):** MeteoGate's German feed was found to lag badly (it
+served only expired DE alerts while DWD had an active EXTREME-HEAT warning for
+Brühl/Phantasialand). German parks now use **Bright Sky (DWD direct, no key,
+point-based)** — warnings come pre-matched to a park's warncell (no
+point-in-polygon); MeteoGate stays for the rest of Europe. Also added **segment
+de-duplication**: services that slice one warning into many hourly CAP alerts
+(same event/area/severity, walking `expires`) are collapsed to one row spanning
+the full window (e.g. Toverland 34 → one per distinct event).
+
 ### Docs — frontend guide for the ride P50/P90 stats (`typicalWaits`) (2026-06-19)
 
 Added [docs/frontend/ride-typical-waits.md](frontend/ride-typical-waits.md): how

@@ -4,6 +4,7 @@ import { In, MoreThan, Repository } from "typeorm";
 import { WeatherWarning } from "./entities/weather-warning.entity";
 import { ParksService } from "./parks.service";
 import { MeteoGateWarningsClient } from "../external-apis/weather/meteogate-warnings.client";
+import { BrightSkyWarningsClient } from "../external-apis/weather/brightsky-warnings.client";
 import { SourceWeatherWarning } from "../external-apis/weather/weather-warning.types";
 import { bboxContains, pointInPolygon } from "../common/utils/geo.util";
 
@@ -17,11 +18,17 @@ interface ParkPoint {
 /**
  * Syncs and serves severe-weather warnings per park.
  *
- * The source ({@link MeteoGateWarningsClient}) returns a country's active
- * warnings with their affected areas; here we match each park to the area(s)
- * that contain it (bbox pre-filter + exact point-in-polygon) and persist one
- * row per park × alert. Warnings are non-critical — failures are logged and
- * skipped, never thrown.
+ * Two sources, picked per country:
+ * - **Germany → Bright Sky (DWD direct)**: point-based, returns the warncell's
+ *   warnings already matched to a park's lat/lon. MeteoGate's German feed lags
+ *   and drops low levels, so DWD-direct is authoritative for DE parks.
+ * - **Rest of Europe → MeteoGate**: a country index whose areas we match to
+ *   each park (bbox pre-filter + exact point-in-polygon).
+ *
+ * Either way we persist one row per park × alert, deduplicating the hourly
+ * "segment" warnings some services emit (same event/area/severity sliced by
+ * the hour) into one entry spanning the full window. Warnings are non-critical
+ * — failures are logged and skipped, never thrown.
  */
 @Injectable()
 export class WeatherWarningsService {
@@ -32,6 +39,7 @@ export class WeatherWarningsService {
     private readonly warningRepo: Repository<WeatherWarning>,
     private readonly parksService: ParksService,
     private readonly warningSource: MeteoGateWarningsClient,
+    private readonly brightSky: BrightSkyWarningsClient,
   ) {}
 
   /** Currently-active stored warnings for a park (read path). */
@@ -80,13 +88,22 @@ export class WeatherWarningsService {
 
     for (const [cc, countryParks] of byCountry) {
       try {
-        const warnings = await this.warningSource.getActiveWarnings(cc);
-        const active = warnings.filter(
-          (w) => w.expires && new Date(w.expires) > now,
-        );
-        activeWarnings += active.length;
+        let rows: Partial<WeatherWarning>[];
+        if (cc === "DE") {
+          // DWD direct, point-based: warnings come pre-matched to each park.
+          const collected = await this.collectBrightSky(countryParks);
+          activeWarnings += collected.active;
+          rows = collected.rows;
+        } else {
+          const warnings = await this.warningSource.getActiveWarnings(cc);
+          const active = warnings.filter(
+            (w) => w.expires && new Date(w.expires) > now,
+          );
+          activeWarnings += active.length;
+          rows = await this.matchParks(cc, countryParks, active);
+        }
 
-        const rows = await this.matchParks(cc, countryParks, active);
+        rows = this.dedupeWarnings(rows);
         parkRows += rows.length;
 
         // Atomic replace: a park's warning set is fully rebuilt each sync so a
@@ -148,6 +165,59 @@ export class WeatherWarningsService {
     }
 
     return Array.from(matches.values()).flatMap((m) => Array.from(m.values()));
+  }
+
+  /** Bright Sky (DWD): query each park's point; warnings come pre-matched. */
+  private async collectBrightSky(
+    parks: ParkPoint[],
+  ): Promise<{ rows: Partial<WeatherWarning>[]; active: number }> {
+    const results = await Promise.all(
+      parks.map((p) =>
+        this.brightSky
+          .getActiveWarningsForPoint(p.lat, p.lon)
+          .then((ws) => ({ p, ws }))
+          .catch(() => ({ p, ws: [] as SourceWeatherWarning[] })),
+      ),
+    );
+
+    const rows: Partial<WeatherWarning>[] = [];
+    let active = 0;
+    for (const { p, ws } of results) {
+      active += ws.length;
+      for (const w of ws)
+        rows.push(this.toRow(p.id, w, w.areas[0]?.description));
+    }
+    return { rows, active };
+  }
+
+  /**
+   * Collapse "segment" duplicates: some services (e.g. KNMI via MeteoGate)
+   * slice one warning into many hourly CAP alerts — same event/area/severity,
+   * only `expires` walks forward. Keep one row per (park, event, severity,
+   * area), using the latest segment as the representative and widening the
+   * window to [earliest onset, latest expires].
+   */
+  private dedupeWarnings(
+    rows: Partial<WeatherWarning>[],
+  ): Partial<WeatherWarning>[] {
+    const groups = new Map<string, Partial<WeatherWarning>>();
+    for (const r of rows) {
+      const key = `${r.parkId}|${r.event}|${r.severity ?? ""}|${r.area ?? ""}`;
+      const cur = groups.get(key);
+      if (!cur) {
+        groups.set(key, { ...r });
+        continue;
+      }
+      const rExp = r.expires?.getTime() ?? 0;
+      const curExp = cur.expires?.getTime() ?? 0;
+      const winner = rExp > curExp ? { ...r } : { ...cur };
+      const onsets = [cur.onset, r.onset]
+        .filter((d): d is Date => d instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime());
+      if (onsets.length) winner.onset = onsets[0];
+      groups.set(key, winner);
+    }
+    return Array.from(groups.values());
   }
 
   private toRow(
