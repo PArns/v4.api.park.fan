@@ -37,6 +37,14 @@ import { dedupePollEntities } from "../../common/utils/dedupe-poll-entities.util
 export class WaitTimesProcessor {
   private readonly logger = new Logger(WaitTimesProcessor.name);
 
+  // Wartezeiten's real per-IP rate limit is ~12 requests/min (not the
+  // documented 100). With more WZ parks than that, syncing them all each 5-min
+  // burst trips a 429 after ~12 and — with the fixed popularity order — the
+  // same popular parks always won while the rest never updated. So we sync only
+  // the N stalest WZ parks per cycle and rotate the rest in (see
+  // selectStaleWartezeitenParks).
+  private readonly WZ_PER_CYCLE_BUDGET = 10;
+
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectRepository(QueueData)
@@ -84,6 +92,12 @@ export class WaitTimesProcessor {
         return indexA - indexB;
       });
 
+      // Wartezeiten staleness rotation: pick the stalest WZ parks to sync this
+      // cycle so we stay under the ~12/min API limit, and every WZ park gets
+      // refreshed over a few cycles instead of the popular ~12 always winning.
+      const wzEligible =
+        await this.selectStaleWartezeitenParks(prioritizedParks);
+
       // Counters
       let savedAttractions = 0;
       let savedShows = 0;
@@ -106,7 +120,9 @@ export class WaitTimesProcessor {
                 parkExternalIdMap.set("themeparks-wiki", park.wikiEntityId);
               if (park.queueTimesEntityId)
                 parkExternalIdMap.set("queue-times", park.queueTimesEntityId);
-              if (park.wartezeitenEntityId)
+              // Only sync Wartezeiten for the stalest parks this cycle
+              // (rotation budget) — the rest are picked up in a later cycle.
+              if (park.wartezeitenEntityId && wzEligible.has(park.id))
                 parkExternalIdMap.set(
                   "wartezeiten-app",
                   park.wartezeitenEntityId,
@@ -355,6 +371,49 @@ export class WaitTimesProcessor {
       this.logger.error("❌ Wait times sync failed", error);
       throw error;
     }
+  }
+
+  /**
+   * Staleness rotation for Wartezeiten. The WZ API's real per-IP limit is
+   * ~12 requests/min, so we sync only the WZ_PER_CYCLE_BUDGET stalest WZ parks
+   * each cycle (oldest last-attempt first; never-synced counts as stalest),
+   * stamp their attempt time so they rotate to the back, and let the rest come
+   * in over later cycles. Every WZ park is refreshed every
+   * ~ceil(wzParks / budget) cycles, with no 429s — instead of the fixed
+   * popularity order letting the top ~12 always win while the rest never update.
+   * Returns the set of park IDs to sync WZ for this cycle.
+   */
+  private async selectStaleWartezeitenParks(
+    parks: Array<{ id: string; wartezeitenEntityId?: string | null }>,
+  ): Promise<Set<string>> {
+    const wzParks = parks.filter((p) => p.wartezeitenEntityId);
+    if (wzParks.length <= this.WZ_PER_CYCLE_BUDGET) {
+      return new Set(wzParks.map((p) => p.id));
+    }
+    const lastSyncs = await this.redis.mget(
+      ...wzParks.map((p) => `wz:lastsync:${p.id}`),
+    );
+    const ordered = wzParks
+      .map((p, i) => ({
+        id: p.id,
+        ts: lastSyncs[i] ? Number(lastSyncs[i]) : 0,
+      }))
+      .sort((a, b) => a.ts - b.ts) // oldest (or never-synced=0) first
+      .slice(0, this.WZ_PER_CYCLE_BUDGET);
+
+    // Stamp the attempt time so the selected parks rotate to the back of the
+    // queue next cycle (24h TTL so a long outage doesn't freeze the rotation).
+    const now = Date.now().toString();
+    const pipeline = this.redis.pipeline();
+    for (const o of ordered) {
+      pipeline.set(`wz:lastsync:${o.id}`, now, "EX", 86400);
+    }
+    await pipeline.exec();
+
+    this.logger.log(
+      `🔁 Wartezeiten rotation: ${ordered.length}/${wzParks.length} stalest parks this cycle (~12/min API limit)`,
+    );
+    return new Set(ordered.map((o) => o.id));
   }
 
   private async processAttractionLiveData(
