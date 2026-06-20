@@ -30,8 +30,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
 import { PopularityService } from "../popularity/popularity.service";
-import { createWriteStream, mkdirSync, WriteStream } from "fs";
-import { dirname } from "path";
+import { logToFile } from "../common/utils/file-logger.util";
 
 interface ParkIndexData {
   id: string;
@@ -71,6 +70,25 @@ interface RestaurantIndexEntry {
   park?: ParkIndexData | null;
 }
 
+/**
+ * Per-entry values derived from `name` once at index (re)build, so the
+ * in-process fuzzy scan doesn't recompute them for every entry on every
+ * keystroke. The big win is `tri` (trigram Set): without it `trgmSim` rebuilt
+ * a Set for all ~11k entries (and the query) per search.
+ *
+ * Held in a WeakMap keyed by the entry object — never on the entry itself — so
+ * it stays out of the Redis-serialized index and is GC'd when an entry is
+ * replaced on refresh.
+ */
+interface EntryPre {
+  lc: string; // name.toLowerCase()
+  norm: string; // lc with non-alphanumerics stripped
+  tri: Set<string>; // trigrams of lc
+  words: string[]; // lc split on non-alphanumerics (wordFuzzyMatch input)
+  wordsWs: string[]; // lc split on whitespace (tier-2 word-prefix check)
+  extraLc: string | null; // secondary field lowercased (attraction landName)
+}
+
 @Injectable()
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
@@ -90,15 +108,15 @@ export class SearchService implements OnModuleInit {
   private topAttractionIdSet = new Set<string>();
   private topParkIdSet = new Set<string>();
   private indexReady = false;
+  // Precomputed per-entry scoring data (see EntryPre). Populated by
+  // enrichIndexes() on every (re)build; getPre() lazily fills any gaps.
+  private readonly entryPre = new WeakMap<object, EntryPre>();
 
   // Slow-search diagnostics: searches whose total time meets/exceeds this
-  // threshold (ms) get one JSON line appended to a dedicated log file. The
-  // write is buffered and fire-and-forget so it never blocks the response.
+  // threshold (ms) get one JSON line written via logToFile, which date-stamps,
+  // size-rotates and purges old files (same as every other diagnostic log).
   private readonly slowSearchThresholdMs =
     Number(process.env.SLOW_SEARCH_THRESHOLD_MS) || 300;
-  private readonly slowSearchLogPath =
-    process.env.SLOW_SEARCH_LOG_PATH || "logs/slow-search.log";
-  private slowSearchStream?: WriteStream | null;
 
   constructor(
     @InjectRepository(Park)
@@ -524,34 +542,12 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
-   * Lazily open (and memoize) the append stream for the slow-search log.
-   * Returns null if the file can't be opened so logging never throws on the
-   * request path. Stream writes are buffered, so this is non-blocking.
-   */
-  private getSlowSearchStream(): WriteStream | null {
-    if (this.slowSearchStream !== undefined) return this.slowSearchStream;
-    try {
-      mkdirSync(dirname(this.slowSearchLogPath), { recursive: true });
-      const stream = createWriteStream(this.slowSearchLogPath, { flags: "a" });
-      stream.on("error", (err) =>
-        this.logger.warn(`slow-search log write failed: ${err}`),
-      );
-      this.slowSearchStream = stream;
-    } catch (err) {
-      this.logger.warn(`slow-search log init failed: ${err}`);
-      this.slowSearchStream = null;
-    }
-    return this.slowSearchStream;
-  }
-
-  /**
-   * Append one JSON line describing a slow search. Fire-and-forget: the
-   * buffered stream write returns immediately and never blocks the response.
+   * Write one JSON line describing a slow search to the date-stamped,
+   * size-rotated `slow-search` log (logToFile handles rotation + purge and
+   * swallows its own errors, so this never throws on the request path).
    */
   private logSlowSearch(entry: Record<string, unknown>): void {
-    const stream = this.getSlowSearchStream();
-    if (!stream) return;
-    stream.write(`${JSON.stringify(entry)}\n`);
+    logToFile("slow-search", entry);
   }
 
   /**
@@ -1688,6 +1684,7 @@ export class SearchService implements OnModuleInit {
         ]);
         this.topParkIdSet = new Set(topParkIds);
         this.topAttractionIdSet = new Set(topAttractionIds);
+        this.enrichIndexes();
         this.indexReady = true;
         this.logger.log(
           `✅ Search index loaded from Redis (${this.parkIndex.length} parks, ` +
@@ -1735,6 +1732,7 @@ export class SearchService implements OnModuleInit {
       this.restaurantIndex = restaurants;
       this.topParkIdSet = new Set(topParkIds);
       this.topAttractionIdSet = new Set(topAttractionIds);
+      this.enrichIndexes();
       this.indexReady = true;
 
       const serializedParks = JSON.stringify(parks);
@@ -1958,12 +1956,67 @@ export class SearchService implements OnModuleInit {
 
   private trgmSim(a: string, b: string): number {
     if (!a || !b) return 0;
-    const at = this.buildTrigrams(a);
-    const bt = this.buildTrigrams(b);
+    return this.trgmSimSets(this.buildTrigrams(a), this.buildTrigrams(b));
+  }
+
+  /** Jaccard over two prebuilt trigram sets (iterates the smaller one). */
+  private trgmSimSets(at: Set<string>, bt: Set<string>): number {
     if (at.size === 0 || bt.size === 0) return 0;
+    const [small, big] = at.size <= bt.size ? [at, bt] : [bt, at];
     let shared = 0;
-    for (const t of at) if (bt.has(t)) shared++;
+    for (const t of small) if (big.has(t)) shared++;
     return shared / (at.size + bt.size - shared);
+  }
+
+  /** Derive an entry's reusable scoring fields from its display name. */
+  private buildEntryPre(name: string, extra?: string | null): EntryPre {
+    const lc = name.toLowerCase();
+    return {
+      lc,
+      norm: lc.replace(/[^a-z0-9]/g, ""),
+      tri: this.buildTrigrams(lc),
+      words: lc.split(/[^a-z0-9]+/).filter(Boolean),
+      wordsWs: lc.split(/\s+/).filter(Boolean),
+      extraLc: extra ? extra.toLowerCase() : null,
+    };
+  }
+
+  /** The same derivation for a search query (computed once per search). */
+  private buildQueryPre(q: string): {
+    lc: string;
+    norm: string;
+    tri: Set<string>;
+    words: string[];
+  } {
+    const lc = q.toLowerCase();
+    return {
+      lc,
+      norm: lc.replace(/[^a-z0-9]/g, ""),
+      tri: this.buildTrigrams(lc),
+      words: lc.split(/[^a-z0-9]+/).filter(Boolean),
+    };
+  }
+
+  /** Cached per-entry scoring data, computed on first use if enrich missed it. */
+  private getPre(entry: { name: string; landName?: string | null }): EntryPre {
+    let pre = this.entryPre.get(entry);
+    if (!pre) {
+      pre = this.buildEntryPre(entry.name, entry.landName ?? null);
+      this.entryPre.set(entry, pre);
+    }
+    return pre;
+  }
+
+  /** Precompute EntryPre for every index entry after a (re)build. */
+  private enrichIndexes(): void {
+    for (const e of this.parkIndex)
+      this.entryPre.set(e, this.buildEntryPre(e.name));
+    for (const e of this.attractionIndex)
+      this.entryPre.set(e, this.buildEntryPre(e.name, e.landName));
+    for (const e of this.showIndex)
+      this.entryPre.set(e, this.buildEntryPre(e.name));
+    for (const e of this.restaurantIndex)
+      this.entryPre.set(e, this.buildEntryPre(e.name));
   }
 
   /** Levenshtein distance with early exit once it provably exceeds `max`. */
@@ -2004,33 +2057,34 @@ export class SearchService implements OnModuleInit {
     });
   }
 
-  private scoreEntry(
-    name: string,
-    extra: string | null | undefined,
-    q: string,
-    qNorm: string,
+  /**
+   * Score one entry against a query using precomputed `pre` data and the
+   * once-per-search query fields. Tier semantics are identical to the previous
+   * scoreEntry(); only the redundant per-entry recomputation is removed.
+   */
+  private scoreEntryPre(
+    pre: EntryPre,
     qLower: string,
+    qNorm: string,
+    qTri: Set<string>,
+    qWords: string[],
   ): { matches: boolean; tier: number; sim: number } {
-    const nameLower = name.toLowerCase();
-    const nameNorm = name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-    const sim = this.trgmSim(nameLower, qLower);
+    const sim = this.trgmSimSets(pre.tri, qTri);
 
-    if (nameLower === qLower) return { matches: true, tier: 0, sim };
-    if (qNorm && nameNorm === qNorm) return { matches: true, tier: 1, sim };
-    if (nameLower.startsWith(qLower)) return { matches: true, tier: 2, sim };
-    if (nameLower.split(/\s+/).some((w) => w.startsWith(qLower)))
+    if (pre.lc === qLower) return { matches: true, tier: 0, sim };
+    if (qNorm && pre.norm === qNorm) return { matches: true, tier: 1, sim };
+    if (pre.lc.startsWith(qLower)) return { matches: true, tier: 2, sim };
+    if (pre.wordsWs.some((w) => w.startsWith(qLower)))
       return { matches: true, tier: 2, sim };
-    if (nameLower.includes(qLower)) return { matches: true, tier: 3, sim };
-    if (qNorm && nameNorm.includes(qNorm))
+    if (pre.lc.includes(qLower)) return { matches: true, tier: 3, sim };
+    if (qNorm && pre.norm.includes(qNorm))
       return { matches: true, tier: 4, sim };
-    if (extra && extra.toLowerCase().includes(qLower))
+    if (pre.extraLc && pre.extraLc.includes(qLower))
       return { matches: true, tier: 5, sim };
     if (sim >= 0.3) return { matches: true, tier: 6, sim };
     // Typo tolerance (e.g. "epuc" → "epic"): every query word must fuzzy-match a name word.
     // Ranked below the trigram tier since it's the loosest signal.
-    const nameWords = nameLower.split(/[^a-z0-9]+/).filter(Boolean);
-    const qWords = qLower.split(/[^a-z0-9]+/).filter(Boolean);
-    if (this.wordFuzzyMatch(nameWords, qWords))
+    if (this.wordFuzzyMatch(pre.words, qWords))
       return { matches: true, tier: 7, sim };
 
     return { matches: false, tier: 99, sim: 0 };
@@ -2040,12 +2094,22 @@ export class SearchService implements OnModuleInit {
     q: string,
     limit: number,
   ): AttractionIndexEntry[] {
-    const qLower = q.toLowerCase();
-    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const {
+      lc: qLower,
+      norm: qNorm,
+      tri: qTri,
+      words: qWords,
+    } = this.buildQueryPre(q);
     type Scored = { entry: AttractionIndexEntry; tier: number; sim: number };
     const scored: Scored[] = [];
     for (const entry of this.attractionIndex) {
-      const r = this.scoreEntry(entry.name, entry.landName, q, qNorm, qLower);
+      const r = this.scoreEntryPre(
+        this.getPre(entry),
+        qLower,
+        qNorm,
+        qTri,
+        qWords,
+      );
       if (r.matches) {
         const popular = this.topAttractionIdSet.has(entry.id);
         scored.push({
@@ -2060,12 +2124,22 @@ export class SearchService implements OnModuleInit {
   }
 
   private searchShowsInProcess(q: string, limit: number): ShowIndexEntry[] {
-    const qLower = q.toLowerCase();
-    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const {
+      lc: qLower,
+      norm: qNorm,
+      tri: qTri,
+      words: qWords,
+    } = this.buildQueryPre(q);
     type Scored = { entry: ShowIndexEntry; tier: number; sim: number };
     const scored: Scored[] = [];
     for (const entry of this.showIndex) {
-      const r = this.scoreEntry(entry.name, null, q, qNorm, qLower);
+      const r = this.scoreEntryPre(
+        this.getPre(entry),
+        qLower,
+        qNorm,
+        qTri,
+        qWords,
+      );
       if (r.matches) scored.push({ entry, tier: r.tier, sim: r.sim });
     }
     scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
@@ -2076,12 +2150,22 @@ export class SearchService implements OnModuleInit {
     q: string,
     limit: number,
   ): RestaurantIndexEntry[] {
-    const qLower = q.toLowerCase();
-    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const {
+      lc: qLower,
+      norm: qNorm,
+      tri: qTri,
+      words: qWords,
+    } = this.buildQueryPre(q);
     type Scored = { entry: RestaurantIndexEntry; tier: number; sim: number };
     const scored: Scored[] = [];
     for (const entry of this.restaurantIndex) {
-      const r = this.scoreEntry(entry.name, null, q, qNorm, qLower);
+      const r = this.scoreEntryPre(
+        this.getPre(entry),
+        qLower,
+        qNorm,
+        qTri,
+        qWords,
+      );
       if (r.matches) scored.push({ entry, tier: r.tier, sim: r.sim });
     }
     scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
@@ -2095,25 +2179,26 @@ export class SearchService implements OnModuleInit {
    * 5 other). dmetaphone is approximated by the trigram threshold.
    */
   private searchParksInProcess(q: string, limit: number): ParkIndexData[] {
-    const qLower = q.toLowerCase();
-    const qNorm = q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-    const qWords = qLower.split(/[^a-z0-9]+/).filter(Boolean);
+    const {
+      lc: qLower,
+      norm: qNorm,
+      tri: qTri,
+      words: qWords,
+    } = this.buildQueryPre(q);
     type Scored = { entry: ParkIndexData; tier: number; sim: number };
     const scored: Scored[] = [];
 
     for (const park of this.parkIndex) {
-      const nameLower = park.name.toLowerCase();
-      const nameNorm = park.name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const pre = this.getPre(park);
+      const nameLower = pre.lc;
+      const nameNorm = pre.norm;
       const cityLower = (park.city || "").toLowerCase();
       const countryLower = (park.country || "").toLowerCase();
       const continentLower = (park.continent || "").toLowerCase();
-      const sim = this.trgmSim(nameLower, qLower);
-      // Word-level typo tolerance ("epuc" → "epic") — same as scoreEntry's tier 7. parks
-      // use this bespoke matcher (not scoreEntry), so it needs the check explicitly.
-      const fuzzyWord = this.wordFuzzyMatch(
-        nameLower.split(/[^a-z0-9]+/).filter(Boolean),
-        qWords,
-      );
+      const sim = this.trgmSimSets(pre.tri, qTri);
+      // Word-level typo tolerance ("epuc" → "epic") — same as scoreEntryPre's
+      // tier 7. parks use this bespoke matcher, so it needs the check explicitly.
+      const fuzzyWord = this.wordFuzzyMatch(pre.words, qWords);
 
       const matches =
         nameLower.includes(qLower) ||
