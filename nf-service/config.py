@@ -28,16 +28,17 @@ class Settings(BaseSettings):
     NF_WINDOW_DAYS: int = 730  # ~2 years of history for the daily model
 
     # --- Model config ---
-    # Forecast horizon (days) = 45: TFT serves the calendar's daily crowd levels
-    # (days 1-45); CatBoost serves day 46-365 + intraday. Raised from 30 on
-    # 2026-06-10: per-headliner history matured (median 168 operating-day points vs
-    # 72 at the original gate), and the horizon backtest (backtest_horizon.py,
-    # BASE=2026-04-26 h=45) showed TFT at lead 31-45 (ALL MAE 15.3, busy>=40
-    # 20.8/-11.9) still beats CatBoost at lead 1 (17.3 / 27.7/-25.3). h=60 also
-    # passed (lead 46-60 ALL 17.6, busy 19.2/+1.0) but with +7.5 overall bias from
-    # the thinner training window — revisit 60 when history reaches ~8 months.
-    # Re-evaluate as history accumulates — the ceiling on h rises with coverage.
-    NF_HORIZON: int = 45
+    # Forecast horizon (days) = 60: TFT serves the calendar's daily crowd levels
+    # (days 1-60); CatBoost serves day 61-365 + intraday. Progression 30 → 45
+    # (2026-06-10) → 60 (2026-06-20). The h=60 re-eval (backtest_horizon.py,
+    # BASE=2026-04-20 END=2026-06-19 H=60, 948 headliners / 39.6k points) showed
+    # the NEW far leads do not degrade: lead 46-60 ALL MAE 15.2/+4.4, busy>=40
+    # 16.8/-2.8, busy>=70 24.6/-11.2 — on par with the nearer buckets and well
+    # under CatBoost at lead 1 (17.3 / 27.7/-25.3 / 45.4/-44.9). The summer
+    # operating season matured headliner history past the earlier ~8-month gate,
+    # and the prior thin-window bias (+7.5 at the 2026-06-10 h=60 probe) is gone
+    # (+4.4). Re-evaluate as history accumulates — the ceiling on h rises with it.
+    NF_HORIZON: int = 60
     # Context window (days). Kept at ~90 to match the ~150d of daily history we
     # actually have — 365 would be almost all start-padding (see challenger doc).
     NF_INPUT_SIZE: int = 90

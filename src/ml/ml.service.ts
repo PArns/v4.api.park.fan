@@ -769,7 +769,7 @@ export class MLService {
     }
 
     try {
-      // Serving path: TFT near-term (≤45d headliners) merged over CatBoost long tail,
+      // Serving path: TFT near-term (≤60d headliners) merged over CatBoost long tail,
       // same source as the calendar so the two views' crowd levels agree.
       const response = await this.getServingDailyPredictions(parkId);
 
@@ -810,7 +810,7 @@ export class MLService {
    */
   async getTftDailyPredictions(
     parkId: string,
-    days = 45,
+    days = 60,
   ): Promise<PredictionDto[]> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -875,7 +875,7 @@ export class MLService {
    */
   async getServingDailyPredictions(
     parkId: string,
-    tftDays = 45,
+    tftDays = 60,
   ): Promise<BulkPredictionResponseDto> {
     // Single-flight: concurrent calendar/yearly requests that all miss the
     // underlying cache share one CatBoost rebuild instead of stampeding it.
