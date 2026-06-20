@@ -40,6 +40,12 @@ import { generateSlug } from "../../common/utils/slug.util";
 @Index("idx_park_city_trgm", { synchronize: false })
 @Index("idx_park_country_trgm", { synchronize: false })
 @Index("idx_park_continent_trgm", { synchronize: false })
+// GiST word-similarity index on `name` (the `<%` operator). Unlike the GIN
+// indexes above it sits on the bare `name` column, so without this declaration
+// TypeORM sync treats it as extraneous and drops it on every boot (it's then
+// recreated by SearchService). The functional `_normalized` indexes need no
+// such declaration — TypeORM ignores expression indexes.
+@Index("idx_park_name_word_trgm", { synchronize: false })
 export class Park {
   @PrimaryGeneratedColumn("uuid")
   id: string;
