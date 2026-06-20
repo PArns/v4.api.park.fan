@@ -1241,11 +1241,19 @@ export class ParksService {
       return new Map(Object.entries(parsed));
     }
 
+    // Past days come from the pre-aggregated attraction_hourly_history (one
+    // immutable row per attraction/day, slots already bucketed to 15-min in
+    // park-local time) — that avoids a wide scan of the compressed queue_data
+    // hypertable (the old single-source version took up to ~25s on a busy
+    // park/season). Only *today* (not yet rolled up into the history table) is
+    // derived from raw queue_data, which is a single recent — uncompressed —
+    // day and so stays cheap. Validated as bit-identical to the old query on
+    // the two highest-volume parks (Europa-Park, Phantasialand).
     const results = await this.scheduleRepository.manager.query(
       `
       WITH park_rides AS (
-        SELECT id 
-        FROM attractions 
+        SELECT id
+        FROM attractions
         WHERE "parkId" = $1
           AND name NOT ILIKE '%bar%'
           AND name NOT ILIKE '%snack%'
@@ -1258,31 +1266,56 @@ export class ParksService {
       park_info AS (
         SELECT COUNT(*) as total_attr FROM park_rides
       ),
-      windowed_activity AS (
-        SELECT 
+      -- Past days: pre-aggregated 15-min slots (park-local "HH:MM").
+      hist_activity AS (
+        SELECT
+          h.date as "date",
+          (s->>'time_slot') as "slot",
+          COUNT(DISTINCT h."attractionId") as "active_count"
+        FROM attraction_hourly_history h
+        CROSS JOIN LATERAL jsonb_array_elements(h.slots) s
+        WHERE h."attractionId" IN (SELECT id FROM park_rides)
+          AND h.date >= $2::date
+          AND h.date <= $3::date
+          AND h.date < (now() AT TIME ZONE $4)::date
+        GROUP BY 1, 2
+      ),
+      -- Today only: raw queue_data, restricted to today's (uncompressed) chunk.
+      today_activity AS (
+        SELECT
           (q.timestamp AT TIME ZONE $4)::date as "date",
-          date_trunc('hour', q.timestamp AT TIME ZONE $4) + (date_part('minute', q.timestamp AT TIME ZONE $4)::int / 15 * interval '15 min') as "window",
+          to_char(
+            date_trunc('hour', q.timestamp AT TIME ZONE $4)
+              + (date_part('minute', q.timestamp AT TIME ZONE $4)::int / 15 * interval '15 min'),
+            'HH24:MI'
+          ) as "slot",
           COUNT(DISTINCT q."attractionId") FILTER (WHERE q."waitTime" >= 5) as "active_count"
         FROM queue_data q
         WHERE q."attractionId" IN (SELECT id FROM park_rides)
-          AND q.timestamp >= ($2::date AT TIME ZONE $4)
-          AND q.timestamp <= ($3::date AT TIME ZONE $4 + INTERVAL '1 day')
+          AND (now() AT TIME ZONE $4)::date >= $2::date
+          AND (now() AT TIME ZONE $4)::date <= $3::date
+          AND q.timestamp >= ((now() AT TIME ZONE $4)::date AT TIME ZONE $4)
         GROUP BY 1, 2
       ),
+      activity AS (
+        SELECT * FROM hist_activity
+        UNION ALL
+        SELECT * FROM today_activity
+      ),
       daily_bounds AS (
-        SELECT 
+        SELECT
           "date",
-          MIN("window") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "first_window",
-          MAX("window") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "last_window"
-        FROM windowed_activity
+          MIN("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "first_slot",
+          MAX("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "last_slot"
+        FROM activity
         GROUP BY 1
       )
-      SELECT 
+      SELECT
         "date",
-        date_trunc('hour', "first_window") as "derived_open",
-        date_trunc('hour', "last_window" + INTERVAL '59 minutes') as "derived_close"
+        date_trunc('hour', "date"::timestamp + "first_slot"::time) as "derived_open",
+        date_trunc('hour', "date"::timestamp + "last_slot"::time + INTERVAL '59 minutes') as "derived_close"
       FROM daily_bounds
-      WHERE "first_window" IS NOT NULL AND "last_window" IS NOT NULL
+      WHERE "first_slot" IS NOT NULL AND "last_slot" IS NOT NULL
     `,
       [parkId, fromDate, toDate, timezone],
     );
