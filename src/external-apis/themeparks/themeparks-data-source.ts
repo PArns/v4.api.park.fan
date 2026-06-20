@@ -10,6 +10,7 @@ import {
 } from "../data-sources/interfaces/data-source.interface";
 import { ThemeParksClient } from "./themeparks.client";
 import { EntityType as TPEntityType } from "./themeparks.types";
+import { THEMEPARKS_EXCLUSIONS } from "./themeparks.exclusions";
 
 /**
  * ThemeParks.wiki Data Source
@@ -42,6 +43,15 @@ export class ThemeParksDataSource implements IDataSource {
     // For each destination, fetch detailed parks
     for (const destination of destinations.destinations) {
       for (const parkSummary of destination.parks) {
+        // Skip excluded park ids (duplicate/erroneous Wiki entries) before we
+        // even fetch the entity — keeps them out of matching/creation entirely.
+        if (THEMEPARKS_EXCLUSIONS.includes(parkSummary.id)) {
+          this.logger.debug(
+            `Skipping excluded Wiki park ${parkSummary.name} (${parkSummary.id})`,
+          );
+          continue;
+        }
+
         // Fetch detailed park entity to get location/timezone
         try {
           const parkEntity = await this.client.getEntity(parkSummary.id);
