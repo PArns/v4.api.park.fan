@@ -56,6 +56,7 @@ HIDDEN = int(os.getenv("BT_HIDDEN", "64"))       # doc default 128
 # Production config.py already uses NF_WINDOW_DAYS=730. The real limiter is input_size.
 WINDOW_DAYS = int(os.getenv("BT_WINDOW_DAYS", "548"))
 WINDOWS_BATCH = int(os.getenv("BT_WB", "128"))   # lower for larger hidden (GPU mem)
+WB_FLOOR = int(os.getenv("BT_WB_FLOOR", "16"))   # OOM auto-fallback won't go below this
 BASE_HOUR_LOCAL = 11  # anchor each base at 11:00 local
 
 # Postgres bins to local 15-min slots: date_bin('15 minutes', ts_local, origin)
@@ -229,18 +230,46 @@ def main():
         loss_obj = HuberMQLoss(level=[80, 90])
     else:
         loss_obj = DistributionLoss(distribution="StudentT", level=[80, 90])
-    common = dict(
-        h=HORIZON, input_size=INPUT_SIZE, futr_exog_list=exog, scaler_type="robust",
-        loss=loss_obj,
-        max_steps=MAX_STEPS, start_padding_enabled=True,
-        batch_size=8, windows_batch_size=WINDOWS_BATCH, inference_windows_batch_size=WINDOWS_BATCH,
-        enable_progress_bar=False)
-    if hist:
-        common["hist_exog_list"] = hist
-    nf = NeuralForecast(models=[TFT(**common, hidden_size=HIDDEN, learning_rate=1e-3)], freq=SLOT)
-    print(f"training TFT (15-min) on {len(train_panel)} rows "
-          f"({train_panel['available_mask'].mean():.2f} available)…", flush=True)
-    nf.fit(df=train_panel[cols])
+    def _build(wb: int):
+        common = dict(
+            h=HORIZON, input_size=INPUT_SIZE, futr_exog_list=exog, scaler_type="robust",
+            loss=loss_obj,
+            max_steps=MAX_STEPS, start_padding_enabled=True,
+            batch_size=8, windows_batch_size=wb, inference_windows_batch_size=wb,
+            enable_progress_bar=False)
+        if hist:
+            common["hist_exog_list"] = hist
+        return NeuralForecast(
+            models=[TFT(**common, hidden_size=HIDDEN, learning_rate=1e-3)], freq=SLOT)
+
+    # Auto-fallback on CUDA OOM: the TFT attention matrix scales with
+    # windows_batch_size (× input_size²), so on an out-of-memory error halve it
+    # and retry — down to WB_FLOOR — clearing the CUDA cache between attempts.
+    # inference_windows_batch_size is rebuilt to match, so prediction shrinks too.
+    # Keeps the harness from hard-failing as the 15-min panel grows.
+    import gc
+    import torch
+
+    wb = WINDOWS_BATCH
+    nf = None
+    while True:
+        try:
+            print(f"training TFT (15-min) on {len(train_panel)} rows "
+                  f"({train_panel['available_mask'].mean():.2f} available, "
+                  f"windows_batch_size={wb})…", flush=True)
+            nf = _build(wb)
+            nf.fit(df=train_panel[cols])
+            break
+        except RuntimeError as e:  # torch.OutOfMemoryError subclasses RuntimeError
+            if "out of memory" not in str(e).lower() or wb <= WB_FLOOR:
+                raise
+            nf = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            new_wb = max(WB_FLOOR, wb // 2)
+            print(f"  ⚠️  CUDA OOM at windows_batch_size={wb} — "
+                  f"retrying at {new_wb}", flush=True)
+            wb = new_wb
 
     def tcol(cs):
         for x in cs:
