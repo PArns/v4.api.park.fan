@@ -52,3 +52,19 @@ export const getThrottleBypassKeys = (): string[] =>
     .split(",")
     .map((key) => key.trim())
     .filter((key) => key.length > 0);
+
+/**
+ * Optional origin-verification secret. The throttle key trusts the
+ * Cloudflare-set client-IP headers (CF-Connecting-IP / X-Forwarded-For) to
+ * identify the real client — but those are forgeable by anyone reaching the
+ * origin directly (e.g. on the LAN), letting an attacker rotate the value per
+ * request to evade the limit. When `CF_ORIGIN_SECRET` is set (paired with a
+ * Cloudflare Transform Rule / cloudflared that adds the matching header), the
+ * guard only trusts those headers if the secret header matches; otherwise it
+ * keys on the real connection IP. No-op (current behaviour) until configured.
+ */
+export const getCfOriginSecretHeader = (): string =>
+  (process.env.CF_ORIGIN_SECRET_HEADER ?? "x-cf-origin-secret").toLowerCase();
+
+export const getCfOriginSecret = (): string =>
+  process.env.CF_ORIGIN_SECRET ?? "";

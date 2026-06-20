@@ -53,6 +53,45 @@ describe("CfThrottlerGuard", () => {
     });
   });
 
+  describe("getTracker — header hardening", () => {
+    it("ignores a non-IP CF-Connecting-IP (no unbounded buckets)", async () => {
+      const key = await callGetTracker({
+        headers: { "cf-connecting-ip": "not-an-ip-" + Math.random() },
+        ip: "172.16.0.1",
+      });
+      expect(key).toBe("172.16.0.1");
+    });
+
+    it("ignores a non-IP X-Forwarded-For hop", async () => {
+      const key = await callGetTracker({
+        headers: { "x-forwarded-for": "garbage, 10.0.0.1" },
+        ip: "172.16.0.1",
+      });
+      expect(key).toBe("172.16.0.1");
+    });
+
+    it("ignores CF-Connecting-IP without the configured origin secret", async () => {
+      process.env.CF_ORIGIN_SECRET = "s3cr3t";
+      const key = await callGetTracker({
+        headers: { "cf-connecting-ip": "203.0.113.7" }, // no secret header
+        ip: "172.16.0.1",
+      });
+      expect(key).toBe("172.16.0.1");
+    });
+
+    it("trusts CF-Connecting-IP when the origin secret matches", async () => {
+      process.env.CF_ORIGIN_SECRET = "s3cr3t";
+      const key = await callGetTracker({
+        headers: {
+          "cf-connecting-ip": "203.0.113.7",
+          "x-cf-origin-secret": "s3cr3t",
+        },
+        ip: "172.16.0.1",
+      });
+      expect(key).toBe("203.0.113.7");
+    });
+  });
+
   describe("shouldSkip — bypass allow-list", () => {
     it("skips when the bypass header carries a configured key", async () => {
       process.env.THROTTLE_BYPASS_KEYS = "secret-a, secret-b";
