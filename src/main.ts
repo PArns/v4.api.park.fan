@@ -3,6 +3,7 @@ import { NestExpressApplication } from "@nestjs/platform-express";
 import { Logger, ValidationPipe, LogLevel } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 import compression from "compression";
+import helmet from "helmet";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
@@ -76,6 +77,17 @@ async function bootstrap(): Promise<void> {
   // hop (egress + latency) and covers any non-CDN/direct API consumer.
   // Threshold keeps tiny payloads uncompressed (compression overhead > win).
   app.use(compression({ threshold: 1024 }));
+
+  // Security response headers (HSTS, X-Content-Type-Options: nosniff, frameguard,
+  // Referrer-Policy, …). CSP and COEP are disabled: this is a JSON API and the
+  // only HTML surface is the Swagger UI at /api, which helmet's default CSP/COEP
+  // would break. Defense-in-depth in addition to whatever Cloudflare adds.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
 
   // Custom X-Powered-By header
   app.disable("x-powered-by");
