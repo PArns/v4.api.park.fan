@@ -36,6 +36,11 @@ import { PopularityService } from "../../popularity/popularity.service";
 export class CacheWarmupService implements OnApplicationBootstrap {
   private readonly logger = new Logger(CacheWarmupService.name);
   private readonly CACHE_FRESHNESS_THRESHOLD = 2 * 60; // 2 minutes in seconds
+  // Keep warmup-built calendar month caches alive until the next 12h warmup.
+  // buildCalendarResponse caches them at CALENDAR_CACHE_TTL (15–30 min), which
+  // expires ~11.5h before the next warmup — so the best-days widget then hits a
+  // cold rebuild. 13h spans the 12h cadence with a buffer.
+  private readonly WARMUP_MONTH_TTL = 13 * 60 * 60;
   private statsWarmupRunning = false;
 
   constructor(
@@ -180,6 +185,25 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const fromDate = new Date(`${fromStr}T12:00:00.000Z`);
       const toDate = new Date(`${toStr}T12:00:00.000Z`);
 
+      // The "none" month-cache keys for every month in [-1, +3] — the variant the
+      // FE calendar/best-days widget reads (the proxy forwards includeHourly=none).
+      const monthKeys: string[] = [];
+      for (let mm = fromM, yy = fromY; ; ) {
+        monthKeys.push(
+          CacheKeys.calendarMonth(
+            park.id,
+            `${yy}-${String(mm).padStart(2, "0")}`,
+            "none",
+          ),
+        );
+        if (yy === endY && mm === endM) break;
+        mm += 1;
+        if (mm > 12) {
+          mm = 1;
+          yy += 1;
+        }
+      }
+
       if (force) {
         // Evict the cold-path daily ML cache + the calendar month caches in range so the
         // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
@@ -188,26 +212,12 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // (getParkPredictionsYearly) rebuilds it, so evicting it here just left
         // it cold until the next visitor paid the ~15s cold path. It refreshes
         // via its own TTL instead.
-        const evictKeys: string[] = [
-          CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
-        ];
-        // Month keys for every month in [-1, +3] (variant the FE reads: "none").
-        for (let mm = fromM, yy = fromY; ; ) {
-          evictKeys.push(
-            CacheKeys.calendarMonth(
-              park.id,
-              `${yy}-${String(mm).padStart(2, "0")}`,
-              "none",
-            ),
-          );
-          if (yy === endY && mm === endM) break;
-          mm += 1;
-          if (mm > 12) {
-            mm = 1;
-            yy += 1;
-          }
-        }
-        await this.redis.del(...evictKeys).catch(() => undefined);
+        await this.redis
+          .del(
+            CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
+            ...monthKeys,
+          )
+          .catch(() => undefined);
       }
 
       // Warm the SAME variant the frontend park page requests (includeHourly="none").
@@ -220,6 +230,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         toDate,
         "none",
       );
+
+      // Keep the freshly-warmed month caches alive until the next 12h warmup.
+      // buildCalendarResponse stores them at CALENDAR_CACHE_TTL (15–30 min), which
+      // would expire ~11.5h before the next warmup and leave the best-days widget's
+      // far month (current+2) cold for almost the whole cycle. expire() is a no-op
+      // for any month key that wasn't (re)built, so this never resurrects nothing.
+      await Promise.all(
+        monthKeys.map((k) => this.redis.expire(k, this.WARMUP_MONTH_TTL)),
+      ).catch(() => undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.debug(`Calendar warmup skipped for ${park.slug}: ${msg}`);
