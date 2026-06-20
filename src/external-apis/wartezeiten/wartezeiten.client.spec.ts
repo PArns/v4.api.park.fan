@@ -191,6 +191,26 @@ describe("WartezeitenClient", () => {
     });
   });
 
+  // Exercises the response-interceptor error handler directly (the mock `get`
+  // doesn't run interceptors, which is why the describe.skip above is skipped).
+  describe("handleError message mapping", () => {
+    it("surfaces the WZ `error` field on 400 (not 'Unknown error')", async () => {
+      await expect(
+        mockAxiosInstance._errorHandler({
+          response: { status: 400, data: { error: "Invalid park" } },
+        }),
+      ).rejects.toThrow("Wartezeiten API: Invalid parameters - Invalid park");
+    });
+
+    it("falls back to `message` on 400 when `error` is absent", async () => {
+      await expect(
+        mockAxiosInstance._errorHandler({
+          response: { status: 400, data: { message: "bad id" } },
+        }),
+      ).rejects.toThrow("Wartezeiten API: Invalid parameters - bad id");
+    });
+  });
+
   describe("isHealthy", () => {
     it("should return true when API is accessible", async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: [] });

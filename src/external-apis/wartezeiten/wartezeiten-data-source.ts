@@ -84,7 +84,13 @@ export class WartezeitenDataSource implements IDataSource {
       }
 
       return {
-        externalId: park.uuid, // Use UUID (more stable than string ID)
+        // Use the string id (e.g. "phantasialand"), NOT the uuid. The WZ
+        // /v1/parks endpoint hands out a `uuid` that its own /v1/waitingtimes
+        // endpoint rejects with 400 {"error":"Invalid park"} for some parks
+        // (verified: Plopsaland Belgium, Universal Volcano Bay), while the
+        // string id is accepted for every park. The string id is WZ's canonical
+        // identifier (it's the documented `park` header value).
+        externalId: park.id,
         source: this.name,
         name: name,
         country: countryCode || park.land, // Convert to ISO code if possible

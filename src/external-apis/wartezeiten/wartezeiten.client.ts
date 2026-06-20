@@ -6,6 +6,7 @@ import {
   WartezeitenOpeningTimeResponse,
 } from "./wartezeiten.types";
 import { logRateLimitBlock } from "../../common/utils/file-logger.util";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * Wartezeiten.app API Client
@@ -65,6 +66,7 @@ export class WartezeitenClient {
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: 20000, // 20 seconds (increased to reduce timeout errors)
+      headers: { ...BROWSER_HEADERS },
     });
 
     // Add response interceptor for error handling
@@ -137,12 +139,14 @@ export class WartezeitenClient {
 
       switch (status) {
         case 400:
+          // WZ returns the reason in `error` (e.g. {"error":"Invalid park"}),
+          // not `message` — read both so the log isn't a useless "Unknown error".
           throw new Error(
-            `Wartezeiten API: Invalid parameters - ${data?.message || "Unknown error"}`,
+            `Wartezeiten API: Invalid parameters - ${data?.error || data?.message || "Unknown error"}`,
           );
         case 404:
           throw new Error(
-            `Wartezeiten API: No data for park - ${data?.message || "Not found"}`,
+            `Wartezeiten API: No data for park - ${data?.error || data?.message || "Not found"}`,
           );
         case 405:
           throw new Error("Wartezeiten API: Method not allowed");
