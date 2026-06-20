@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import axios, { AxiosInstance } from "axios";
 import { OpenHolidaysEntry } from "./open-holidays.types";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * OpenHolidays API Client
@@ -20,9 +21,7 @@ export class OpenHolidaysClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 15000,
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { ...BROWSER_HEADERS },
     });
   }
 

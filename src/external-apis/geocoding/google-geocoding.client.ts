@@ -9,6 +9,7 @@ import {
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { normalizeRegionCode } from "../../common/utils/region.util";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * Google Geocoding API Client
@@ -51,6 +52,7 @@ export class GoogleGeocodingClient {
 
     this.httpClient = axios.create({
       timeout: 20000, // 20 seconds (increased to reduce timeout errors)
+      headers: { ...BROWSER_HEADERS },
     });
   }
 

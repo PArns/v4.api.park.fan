@@ -3,6 +3,7 @@ import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { SourceWeatherWarning } from "./weather-warning.types";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * Bright Sky weather-warning client — DWD (Germany) direct.
@@ -37,6 +38,7 @@ export class BrightSkyWarningsClient {
     this.client = axios.create({
       baseURL: "https://api.brightsky.dev",
       timeout: 20000,
+      headers: { ...BROWSER_HEADERS },
     });
   }
 

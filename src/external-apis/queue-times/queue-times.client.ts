@@ -5,6 +5,7 @@ import {
   QueueTimesParkQueueData,
 } from "./queue-times.types";
 import { logExternalApiError } from "../../common/utils/file-logger.util";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 const TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
@@ -42,6 +43,7 @@ export class QueueTimesClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: TIMEOUT_MS,
+      headers: { ...BROWSER_HEADERS },
     });
   }
 

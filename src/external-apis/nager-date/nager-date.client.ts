@@ -5,6 +5,7 @@ import {
   NagerCountryInfo,
   NagerLongWeekend,
 } from "./nager-date.types";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * Nager.Date API Client
@@ -33,6 +34,7 @@ export class NagerDateClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 20000, // 20 seconds (increased to reduce timeout errors)
+      headers: { ...BROWSER_HEADERS },
     });
   }
 

@@ -1,7 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { fetchWithRetry } from "../../common/utils/fetch.util";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 import {
   DestinationsApiResponse,
@@ -23,20 +24,33 @@ import {
 export class ThemeParksClient {
   private readonly logger = new Logger(ThemeParksClient.name);
   private readonly baseUrl = "https://api.themeparks.wiki/v1";
+  private readonly client: AxiosInstance;
 
   // Redis key for distributed rate limiting
   private readonly BLOCKED_KEY = "ratelimit:themeparks:blocked";
 
-  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
+  // Retry policy for transient failures (5xx / network / timeout). 4xx are
+  // client errors and never retried; 429 sets the distributed block instead.
+  private readonly maxRetries = 3;
+  private readonly retryBackoffMs = 1000;
+
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {
+    this.client = axios.create({
+      baseURL: this.baseUrl,
+      timeout: 20000,
+      headers: { ...BROWSER_HEADERS },
+    });
+  }
 
   /**
-   * Helper to fetch with retry on 429 and network errors
+   * GET an API path and return the parsed JSON body, with retry on transient
+   * failures and a distributed 429 rate-limit block.
    *
-   * IMPORTANT: This method checks for blocks before making requests to prevent
-   * calls during a block, which would extend the lock duration.
+   * IMPORTANT: This method checks for an active block BEFORE making requests so
+   * we never call during a block, which would extend the lock duration.
    */
-  private async executeFetch(url: string): Promise<Response> {
-    // 1. Check Distributed Rate Limit
+  private async request<T>(path: string): Promise<T> {
+    // 1. Check distributed rate-limit block
     const blockedUntil = await this.redis.get(this.BLOCKED_KEY);
     if (blockedUntil) {
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
@@ -46,38 +60,53 @@ export class ThemeParksClient {
       );
     }
 
-    try {
-      const response = await fetchWithRetry(
-        url,
-        {},
-        {
-          retries: 3,
-          backoff: 1000,
-          timeout: 20000,
-        },
-      );
-
-      // Handle 429 specifically to set the global block
-      if (response.status === 429) {
-        const retryAfter = response.headers.get("Retry-After");
-        let unlockTime = 10; // Default 10s if unknown
-        if (retryAfter) {
-          const seconds = parseInt(retryAfter, 10);
-          if (!isNaN(seconds)) unlockTime = seconds;
-        }
-        await this.redis.set(this.BLOCKED_KEY, "true", "EX", unlockTime);
-        throw new Error(
-          `ThemeParks API: Rate limit exceeded (blocked for ${unlockTime}s)`,
-        );
+    let lastError: any;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delay = this.retryBackoffMs * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      return response;
-    } catch (err: any) {
-      this.logger.warn(
-        `ThemeParks API fetch failed for ${url}: ${err.message}`,
-      );
-      throw err;
+      try {
+        const response = await this.client.get<T>(path);
+        return response.data;
+      } catch (err: any) {
+        lastError = err;
+        const status = axios.isAxiosError(err)
+          ? err.response?.status
+          : undefined;
+
+        // 429 → set the distributed block (honouring Retry-After) and stop.
+        if (status === 429) {
+          const retryAfter = axios.isAxiosError(err)
+            ? (err.response?.headers?.["retry-after"] as string | undefined)
+            : undefined;
+          let unlockTime = 10; // Default 10s if unknown
+          const seconds = retryAfter ? parseInt(retryAfter, 10) : NaN;
+          if (!isNaN(seconds) && seconds > 0) unlockTime = seconds;
+          await this.redis.set(this.BLOCKED_KEY, "true", "EX", unlockTime);
+          throw new Error(
+            `ThemeParks API: Rate limit exceeded (blocked for ${unlockTime}s)`,
+          );
+        }
+
+        // Other 4xx are client errors — don't retry (e.g. far-future 404s).
+        if (status !== undefined && status >= 400 && status < 500) {
+          throw new Error(
+            `Failed to fetch ${path}: ${status} ${
+              err.response?.statusText ?? ""
+            }`.trim(),
+          );
+        }
+
+        // 5xx / network / timeout → fall through and retry.
+      }
     }
+
+    this.logger.warn(
+      `ThemeParks API fetch failed for ${path}: ${lastError?.message}`,
+    );
+    throw lastError;
   }
 
   /**
@@ -86,15 +115,7 @@ export class ThemeParksClient {
    * Fetches all destinations with their parks.
    */
   async getDestinations(): Promise<DestinationsApiResponse> {
-    const response = await this.executeFetch(`${this.baseUrl}/destinations`);
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch destinations: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    return this.request<DestinationsApiResponse>("/destinations");
   }
 
   /**
@@ -103,17 +124,7 @@ export class ThemeParksClient {
    * Fetches full entity data (park, attraction, etc.)
    */
   async getEntity(entityId: string): Promise<EntityResponse> {
-    const response = await this.executeFetch(
-      `${this.baseUrl}/entity/${entityId}`,
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch entity ${entityId}: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    return this.request<EntityResponse>(`/entity/${entityId}`);
   }
 
   /**
@@ -122,17 +133,7 @@ export class ThemeParksClient {
    * Fetches child entities (e.g., attractions for a park)
    */
   async getEntityChildren(entityId: string): Promise<EntityChildrenResponse> {
-    const response = await this.executeFetch(
-      `${this.baseUrl}/entity/${entityId}/children`,
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch children for ${entityId}: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    return this.request<EntityChildrenResponse>(`/entity/${entityId}/children`);
   }
 
   /**
@@ -141,16 +142,7 @@ export class ThemeParksClient {
    * Fetches live data for an entity (wait times, status, etc.)
    */
   async getLiveData(entityId: string): Promise<EntityLiveResponse> {
-    const url = `${this.baseUrl}/entity/${entityId}/live`;
-    const response = await this.executeFetch(url);
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch live data for ${entityId}: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    const rawData = await response.json();
+    const rawData = await this.request<any>(`/entity/${entityId}/live`);
 
     // Extract live data from the liveData array
     // API structure: { liveData: [{ queue, status, forecast, ... }] }
@@ -171,16 +163,7 @@ export class ThemeParksClient {
    * OPTIMIZATION: Use this for parks to get all attractions in one API call!
    */
   async getParkLiveData(parkId: string): Promise<EntityLiveResponse[]> {
-    const url = `${this.baseUrl}/entity/${parkId}/live`;
-    const response = await this.executeFetch(url);
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch park live data for ${parkId}: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    const rawData = await response.json();
+    const rawData = await this.request<any>(`/entity/${parkId}/live`);
 
     // Return the complete liveData array (all child entities)
     // API structure: { liveData: [{ id, status, queue, ... }, ...] }
@@ -194,17 +177,7 @@ export class ThemeParksClient {
    * Returns schedule for the next 30 days by default.
    */
   async getSchedule(entityId: string): Promise<{ schedule: any[] }> {
-    const response = await this.executeFetch(
-      `${this.baseUrl}/entity/${entityId}/schedule`,
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch schedule for ${entityId}: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
+    return this.request<{ schedule: any[] }>(`/entity/${entityId}/schedule`);
   }
 
   /**
@@ -219,17 +192,9 @@ export class ThemeParksClient {
     month: number,
   ): Promise<{ schedule: any[] }> {
     const monthStr = month.toString().padStart(2, "0");
-    const response = await this.executeFetch(
-      `${this.baseUrl}/entity/${entityId}/schedule/${year}/${monthStr}`,
+    return this.request<{ schedule: any[] }>(
+      `/entity/${entityId}/schedule/${year}/${monthStr}`,
     );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch schedule for ${entityId} (${year}/${monthStr}): ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.json();
   }
 
   /**

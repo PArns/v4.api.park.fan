@@ -8,6 +8,7 @@ import {
   WarningArea,
   WeatherWarningSource,
 } from "./weather-warning.types";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * MeteoGate weather-warning client.
@@ -104,7 +105,9 @@ export class MeteoGateWarningsClient implements WeatherWarningSource {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 20000,
-      headers: this.token ? { apikey: this.token } : {},
+      headers: this.token
+        ? { ...BROWSER_HEADERS, apikey: this.token }
+        : { ...BROWSER_HEADERS },
     });
     if (!this.token) {
       this.logger.warn(
@@ -227,7 +230,12 @@ export class MeteoGateWarningsClient implements WeatherWarningSource {
     if (!capUrl) return null;
 
     // CAP JSON lives on a presigned object store — fetch WITHOUT our apikey.
-    const cap = (await axios.get(capUrl, { timeout: 20000 })).data as CapAlert;
+    const cap = (
+      await axios.get(capUrl, {
+        timeout: 20000,
+        headers: { ...BROWSER_HEADERS },
+      })
+    ).data as CapAlert;
     if (!cap || cap.status !== "Actual") return null; // skip test/system/cancel
 
     const byLang = this.indexInfoByLanguage(cap.info ?? []);
@@ -331,7 +339,12 @@ export class MeteoGateWarningsClient implements WeatherWarningSource {
     }
     let geometry: { type?: string; coordinates?: unknown } | null = null;
     try {
-      const data = (await axios.get(url, { timeout: 20000 })).data as {
+      const data = (
+        await axios.get(url, {
+          timeout: 20000,
+          headers: { ...BROWSER_HEADERS },
+        })
+      ).data as {
         type?: string;
         geometry?: { type?: string; coordinates?: unknown };
         features?: { geometry?: { type?: string; coordinates?: unknown } }[];

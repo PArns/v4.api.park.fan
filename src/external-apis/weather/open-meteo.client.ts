@@ -4,6 +4,7 @@ import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { logRateLimitBlock } from "../../common/utils/file-logger.util";
+import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 
 /**
  * Open-Meteo Weather API Client
@@ -42,10 +43,6 @@ export class OpenMeteoClient {
   // matches it to keep upstream request volume low (~half Open-Meteo's ~15-min
   // refresh cadence).
   private readonly NOWCAST_CACHE_TTL = 30 * 60; // 30 minutes
-  // Neutral browser-like User-Agent. The default "axios/x" UA is an obvious bot
-  // signature that can get the shared free-tier IP rate-limited/blocked.
-  private readonly USER_AGENT =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
   // In-flight upstream requests keyed by cache key, for singleflight dedup.
   private readonly inflight = new Map<string, Promise<unknown>>();
 
@@ -56,9 +53,7 @@ export class OpenMeteoClient {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 20000, // 20 seconds (increased to reduce timeout errors)
-      headers: {
-        "User-Agent": this.USER_AGENT,
-      },
+      headers: { ...BROWSER_HEADERS },
     });
   }
 
