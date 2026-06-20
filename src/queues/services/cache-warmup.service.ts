@@ -41,6 +41,12 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   // expires ~11.5h before the next warmup — so the best-days widget then hits a
   // cold rebuild. 13h spans the 12h cadence with a buffer.
   private readonly WARMUP_MONTH_TTL = 13 * 60 * 60;
+  // Startup warmup pacing — gentle on the cold, just-restarted postgres so the
+  // top-parks warmup doesn't saturate the connection pool on boot (each park's
+  // calendar build fans out into many parallel queries).
+  private readonly STARTUP_WARMUP_DELAY_MS = 5000; // settle before first batch
+  private readonly STARTUP_WARMUP_BATCH_SIZE = 3; // parks built concurrently
+  private readonly STARTUP_WARMUP_BATCH_DELAY_MS = 1000; // gap between batches
   private statsWarmupRunning = false;
 
   constructor(
@@ -81,19 +87,30 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const topParkIds = await this.popularityService.getTopParks(20);
       if (topParkIds.length === 0) return;
 
+      // Let the just-restarted postgres settle first. On a fresh container its
+      // buffer cache is empty AND TypeORM's connection pool is cold, while boot
+      // also fires the fuzzy-index ensure + search-index load. Warming straight
+      // away piled onto that and saturated the 30-conn pool — trivial queries
+      // then queued for tens of seconds (post-deploy cold-start spike). A short
+      // delay lets the boot DB work finish and the pool establish.
+      await new Promise((r) => setTimeout(r, this.STARTUP_WARMUP_DELAY_MS));
+
       this.logger.log(
-        `🔥 Warming up top ${topParkIds.length} parks (priority, high concurrency)...`,
+        `🔥 Warming up top ${topParkIds.length} parks (staggered, cold-start friendly)...`,
       );
       // Priority warmup, but NOT forced: Redis persists across a deploy, so a park whose
       // integrated cache is still fresh (TTL > 2min) is skipped instead of re-fetched. This
       // is what stops a redeploy from re-warming everything and spiking DB/ML load — only
       // genuinely-cold parks get rebuilt.
+      // Low concurrency + inter-batch delay: each park's calendar build fans out into many
+      // parallel queries, so a big batch against the cold DB exhausts the pool. Smaller
+      // batches keep headroom for organic traffic and the boot-time index/search work.
       const warmed = await this.processBatch(
         topParkIds,
-        10,
+        this.STARTUP_WARMUP_BATCH_SIZE,
         "StartupWarmup",
         async (id) => this.warmupParkCache(id, false, true),
-        0,
+        this.STARTUP_WARMUP_BATCH_DELAY_MS,
       );
       this.logger.log(
         `✅ Initial startup warmup complete. ${warmed} parks ready.`,
