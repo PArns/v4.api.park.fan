@@ -333,13 +333,15 @@ export function logInfrastructureError(
  * Log API rate limit blocks
  */
 export function logRateLimitBlock(
-  apiName: string,
+  source: string,
   blockDurationMinutes: number,
   reason?: string,
   context?: Record<string, any>,
 ): void {
+  // `source` (not `apiName`) to match the field name used by logExternalApiError
+  // and the other diagnostic logs, so all log streams key the origin the same way.
   const logDetails: Record<string, any> = {
-    apiName,
+    source,
     blockDurationMinutes,
     reason,
     context,
