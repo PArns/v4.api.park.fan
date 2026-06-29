@@ -57,6 +57,8 @@
 
 ### 🖥️ Frontend
 - [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.
+- [Ride P50/P90 stats (`typicalWaits`)](docs/frontend/ride-typical-waits.md) - The typical (P50) vs busy (P90) peak-wait stats on the attraction detail endpoint: shape, `displayable` gate, weekday/weekend + per-day breakdown, record peak.
+- [Severe-weather warnings (`weather.warnings`)](docs/frontend/weather-warnings.md) - The `WeatherWarningDto[]` on the park weather + nowcast (MeteoGate/DWD): shape, de/en localization, severity→colour, validity, banner rendering, EU-only coverage.
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
