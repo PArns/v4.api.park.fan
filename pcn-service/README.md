@@ -38,7 +38,34 @@ and sensor gaps out of the loss (no spurious-zero training — the flaw that bro
 | `db.py` | park-local 15-min panel fetch (`date_bin`), median wait + `n_obs` + `down_count` |
 | `tensor.py` | **pure pandas/numpy** tensor assembly (no DB → unit-testable) |
 | `build_cross_ride_tensor.py` | CLI: build + print shape/density/occupancy per park; `--save` to `.npz` |
-| `test_tensor.py` | synthetic-panel unit tests (grid, masks, `park_occ`, ffill) |
+| `windowing.py` | pure-numpy lazy supervised windowing (context/horizon, baselines) |
+| `metrics.py` | masked MAE/bias by busy segment + lead bucket |
+| `backtest.py` | bake-off driver + `Model` protocol + `PersistenceModel`; rolling-origin, leakage-free |
+| `gp_stgnn.py` | **GP-STGNN** (AGCRN adaptive graph + probabilistic head), CUDA-first, `Model`-conformant |
+| `test_*.py` | 25 tests: tensor, windowing/metrics/driver, and torch-gated model smoke tests |
+
+## Bake-off & model
+
+`backtest.py` is the **offline instrument** (mirrors `nf-service/backtest_intraday_nowcast.py`):
+rolling-origin, train once on history strictly before the eval window, then predict each
+eval base forward — every candidate scored on the matched (ride, 15-min slot) population
+vs persistence + yesterday-same-slot, by busy segment and lead bucket. Any
+`backtest.Model` plugs in (the GP-STGNN, or STG4Traffic backbones).
+
+`gp_stgnn.py` is **"Ansatz 3"** (design doc §11.6): an AGCRN-style net whose **learned
+adjacency `A = softmax(ReLU(E·Eᵀ))` IS the shared park-wide crowd state** (no predefined
+graph), with **node-adaptive parameters** (per-ride dynamics) and a **probabilistic head**
+(quantile q0.5/q0.8/q0.9 for per-purpose serving, or Tweedie for the right-skew tail) —
+the honest fix for busy-tail under-prediction instead of a loss thumb.
+
+```bash
+# offline bake-off (persistence sanity; swap in GPSTGNNModel for the real run)
+python3 backtest.py --tensor models/crt_<park>.npz --input-size 480 --horizon 48
+```
+
+**CUDA:** the model auto-selects `cuda` when available; the Dockerfile installs the
+cu128 torch wheel for Blackwell (RTX 5080, sm_120). The model is small (≤~100 nodes/park)
+so 16 GB is ample with per-park batching; inference every 15 min is effectively free.
 
 ## Run
 
@@ -62,9 +89,11 @@ python3 build_cross_ride_tensor.py --limit 5 --save ./models   # build + save a 
 | `PCN_MIN_WAIT` | 5 | min STANDBY wait counted as a real observation |
 | `PCN_MIN_RIDES_OPEN` | 3 | rides reporting to call a slot "park open" |
 
-## Next (not in this phase)
+## Next
 
-1. **STG4Traffic bake-off** — feed this tensor to AGCRN / Graph WaveNet / MTGNN / DeepGLO +
-   a Chronos-Bolt zero-shot baseline, scored vs CatBoost-intraday + naive baselines.
-2. **GP-STGNN v1** — winning backbone + a peak-aware probabilistic head (SPADE / Tweedie).
-3. Shadow-serving behind the existing busy/headliner gate.
+1. **More backbones in the bake-off** — wrap Graph WaveNet / MTGNN / DeepGLO + a
+   Chronos-Bolt zero-shot baseline as `backtest.Model`s alongside the GP-STGNN.
+2. **CatBoost in the comparison** — score the live CatBoost intraday preds on the same
+   matched eval population (going-forward shadow; see design doc §12).
+3. **Shadow-serving** behind the existing busy/headliner gate (design doc §12):
+   durable `pcn_forecasts` snapshot + a scoring job mirroring `score-comparison`.

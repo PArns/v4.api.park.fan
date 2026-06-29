@@ -83,6 +83,23 @@ class CrossRideTensor:
             if self.park_open.any() else 0.0,
         }
 
+    @classmethod
+    def from_npz(cls, path: str) -> "CrossRideTensor":
+        z = np.load(path, allow_pickle=True)
+        return cls(
+            park_id=str(z["park_id"]),
+            ride_ids=list(z["ride_ids"]),
+            slots=pd.DatetimeIndex(z["slots"]),
+            wait_raw=z["wait_raw"],
+            wait_ffill=z["wait_ffill"],
+            obs_mask=z["obs_mask"],
+            down=z["down"],
+            park_open=z["park_open"],
+            park_occ=z["park_occ"],
+            features=z["features"],
+            channel_names=list(z["channel_names"]),
+        )
+
     def to_npz(self, path: str) -> None:
         np.savez_compressed(
             path,

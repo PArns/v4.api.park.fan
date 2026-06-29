@@ -561,8 +561,82 @@ bauen, dass es Known-Future kann — dann den unifizierten Multi-Horizon-Lauf ge
 3. **GP-STGNN v1:** Gewinner-Backbone + SPADE/Tweedie-Kopf + Known-Future-Exog. TouringPlans-
    Pretraining gegen das Historie-Problem prüfen.
 4. **Split-vs-Unified-Experiment:** den Horizont-Split gegen einen unifizierten GP-STGNN-Lauf messen.
-5. **Shadow-Serving + Gate** (unverändert §8): nichts flippt Produktion ohne Busy/Headliner-Gewinn.
+5. **Shadow-Serving + Gate (Phase 4, §12):** Going-Forward-Shadow neben CatBoost
+   (`pcn_forecasts` + `score-intraday-comparison` → `pcn_intraday_comparisons` → system-health),
+   gespiegelt an der bestehenden daily-Vergleichs-Mechanik. Nichts flippt Produktion ohne
+   Busy/Headliner-Gewinn (Gate §8).
 
 **Aufwand-Update:** Der STG4Traffic-Bake-off *senkt* den Eigenbau-Aufwand der frühen Phasen
 (fertige Implementierungen) — die ~6–10-Wochen-Schätzung (§7) bleibt, verschiebt sich aber von
 „selbst implementieren" zu „adaptieren + messen", was risikoärmer ist.
+
+---
+
+## 12. Shadow-Betrieb & Vergleich (Phase 4) — wie wir es heute schon machen
+
+> Anforderung: PCN/GP-STGNN soll **als Shadow** neben CatBoost laufen und sauber
+> vergleichbar sein. Gute Nachricht: dafür gibt es im System **bereits ein bewährtes
+> Muster** — wir spiegeln es 1:1, statt etwas Neues zu erfinden.
+
+### 12.1 Wie der Shadow-Vergleich heute funktioniert (Bestandsaufnahme)
+
+**Daily (TFT vs. CatBoost) — das saubere Vorbild:**
+
+| Baustein | Datei / Tabelle | Funktion |
+|---|---|---|
+| Durable Forward-Snapshots | `tft_forecasts`, `catboost_daily_forecasts` | **eine immutable Zeile pro (attraction, target_date, forecast_date)**; ein erneuter Lauf am selben Tag überschreibt nur die heutige Zeile, vergangene Forecast-Daten bleiben → der *echte* Forward-Record (vor dem Target erstellt) bleibt erhalten |
+| Scoring-Job | `nf-forecast.processor.ts` `score-comparison` (~08:00 UTC) | **INNER-Join** beider Modelle auf die gematchte `(attraction, target_date)`-Schnittmenge bei vergleichbarem Lead, gegen realisierten Tages-P90 |
+| Ergebnis-Tabelle | `model_comparisons` (Entity vorhanden) | PK `(target_date, model, segment)`; Segmente **all / busy (P90≥40) / headliner**; Felder `n, mae, bias, meanActual, meanPred, avgLeadDays` |
+| Sichtbarkeit | `/v1/admin/system-health` | liest die Segmente → Admin-Board |
+
+**Intraday (CatBoost live):** `wait_time_predictions` (`predictionType='hourly'`, 15-Min-Slots)
+→ `PredictionAccuracyService.compareWithActuals()` matcht gegen Ist-Werte → `prediction_accuracy`
+(+ aggregierte Stats/Badges).
+
+**Die entscheidende Lektion (aus den Docs):** Ein historischer Intraday-Backtest aus
+*gespeicherten* CatBoost-Preds ist **unmöglich** — der 15-Min-Dedup zerstört alle vergangenen
+Forward-Records außer dem letzten. → Der einzige saubere Intraday-Vergleich ist der
+**Going-Forward-Shadow**: beide Modelle speichern ihre Forward-Forecasts **durable** zum
+Inferenz-Zeitpunkt, gescort wird später gegen Ist.
+
+### 12.2 Zwei Instrumente — beide schon gebaut bzw. spezifiziert
+
+1. **Offline-Backtest (rückwärts):** `pcn-service/backtest.py` — Rolling-Origin, leakage-frei,
+   Kandidat vs. persistence/yesterday, segmentiert nach Busy + Lead. **✅ implementiert.** Das ist
+   das schnelle Iterations-Instrument (kein Warten auf Reifung).
+2. **Going-Forward-Shadow (vorwärts, produktionsnah):** das hier spezifizierte Phase-4-Stück —
+   das *belastbare* Urteil gegen die live CatBoost-Realität.
+
+### 12.3 PCN-Shadow — die konkrete Spezifikation (spiegelt §12.1)
+
+| Baustein | neu für PCN | mirror von |
+|---|---|---|
+| **Durable Snapshot** `pcn_forecasts` | eine immutable Zeile pro `(attraction, target_slot, origin_ts, quantile)` — geschrieben bei jeder PCN-Inferenz (alle 15 Min), `predicted_wait` je Quantil (q0.5/q0.8) | `tft_forecasts` (immutable per origin) |
+| **Co-Snapshot CatBoost** | CatBoosts live `wait_time_predictions` zum selben `origin_ts` durabel mitschreiben (oder direkt referenzieren), damit der Past-Dedup nicht zuschlägt | die going-forward-Shadow-Logik der Docs |
+| **Scoring-Job** `score-intraday-comparison` | INNER-Join PCN vs. CatBoost auf gematchte `(attraction, 15-min slot)` bei gleichem `origin`, gegen realisierten 15-Min-Median | `score-comparison` |
+| **Ergebnis-Tabelle** `pcn_intraday_comparisons` | PK `(target_date, model, segment, lead_bucket)`; Segmente **quiet<30 / mid / busy≥60**, Lead-Buckets **≤3h / 3–6h / >6h**; Felder wie `model_comparisons` | `model_comparisons` (+ Lead-Achse, weil intraday lead-sensitiv ist) |
+| **Sichtbarkeit** | `/v1/admin/system-health` um den Intraday-Block erweitern | bestehende system-health-Anbindung |
+
+**Serving-Pfad (Shadow = kein Nutzer-Impact):** PCN läuft im **Schatten** — es schreibt nur
+`pcn_forecasts`, CatBoost bleibt der servierte Champion. Erst wenn `pcn_intraday_comparisons`
+einen **Busy/Headliner-Gewinn ohne Quiet-Inflation** über ein ausreichendes Fenster zeigt
+(dieselbe Gate-Disziplin wie §8), wird ein Flip erwogen. Wiederverwendung der bestehenden
+`MLService`-Merge-Logik (heute „TFT near-term über CatBoost long-tail") für einen späteren
+graduellen Intraday-Flip.
+
+**CUDA / Betrieb:** PCN-Inferenz läuft auf der GPU (RTX 5080, cu128) und ist billig — die GPU
+ist ~99 % des Tages idle, also kann alle 15 Min mit dem aktuellen Zustand neu inferiert werden
+(genau das Re-Inferenz-Muster, das CatBoost intraday auch fährt), ohne CatBoost (CPU) zu berühren.
+
+### 12.4 Aufwand Phase 4
+
+| Stück | Aufwand |
+|---|---|
+| `pcn_forecasts` Snapshot + PCN-Inferenz-Hook (alle 15 Min, durable Write) | ~3–5 Tage |
+| `score-intraday-comparison`-Job + `pcn_intraday_comparisons` (mirror von `score-comparison`) | ~3–5 Tage |
+| system-health-Intraday-Block + Admin-Sichtbarkeit | ~2–3 Tage |
+| **Summe Phase 4** (Shadow lauffähig + vergleichbar) | **~2 Wochen** + Reifungsfenster |
+
+→ Reiht sich als **Phase 4** in die Roadmap (§11.7 Punkt 5) ein: *erst* offline-Bake-off-Gewinn
+(`backtest.py`), *dann* Going-Forward-Shadow zur Bestätigung gegen die Live-Realität, *dann* —
+nur bei Gate-Erfüllung — Flip-Entscheidung.
