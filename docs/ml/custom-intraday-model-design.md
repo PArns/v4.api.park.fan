@@ -45,6 +45,15 @@
   scheitert. → **Zwei Modellfamilien**, horizont-stratifiziert (siehe §10). Das eigene Bau-ROI liegt
   bei **PCN (intraday)**; Long-Term ist überwiegend ein **Daten-** (≥12 Mon) plus
   **Level×Shape-Dekompositions-**Problem, kein neues Architektur-Problem.
+- **Tiefenrecherche (§11) bestätigt die Diagnose und liefert „Ansatz 3":** Der Domänen-Stand der
+  Technik ist dünn und **niemand modelliert den geteilten Park-Crowd-Zustand** — das ist die offene
+  Front. Die *bewährte* Maschinerie dafür kommt aus der **Verkehrsvorhersage**: adaptiv-graph-lernende
+  STGNNs (AGCRN/Graph WaveNet/ST-LGSL) + Global-Local-Faktorisierung (DeepGLO) + multivariat-
+  probabilistischer Kopf (UQGNN). Damit wird PCN von hand-gerollter Cross-Attention zu einer
+  **forschungsgestützten Architektur** aufgewertet, in der der latente Crowd-Faktor ein *first-class-
+  Objekt* ist (§11.2). Für die Schiefe: SPADE/Tweedie/EP-Loss/GEV (§11.3). Level×Shape ist durch
+  curve-to-curve-Lastprognose belegt (§11.4). **Ehrliche Lücke:** „unified vs. split" und Foundation-
+  Models bei wenig Historie sind literaturseitig *nicht* entschieden (§11.5).
 
 ---
 
@@ -394,3 +403,161 @@ Datenreife (Zeit), nicht Compute.
 
 So bekommt ihr **zwei Modelle, zwei Ansätze** — korrekt nach dominantem Signal getrennt — ohne den
 Long-Term-Teil zu über-engineeren, wo ohnehin die Zeit (Datenreife) der bindende Faktor ist.
+
+---
+
+## 11. Tiefenrecherche-Synthese & iteriertes Konzept („Ansatz 3")
+
+> Quelle: strukturierte Tiefenrecherche (2026-06-29), 24 Quellen, 111 Claims extrahiert,
+> 25 adversarial verifiziert (24 bestätigt, 1 widerlegt). Alle Übertragungen aus Fremddomänen
+> (Verkehr/Energie/Retail) sind **methodische Inferenz, nicht empirisch an Wartezeiten validiert** —
+> das ist der Grund, warum die Backtest-Disziplin (§8) unverändert bindend bleibt.
+
+### 11.1 Was die Recherche über den Stand der Technik sagt
+
+- **Der Domänen-Stand der Technik ist erstaunlich dünn.** Belegt sind nur (a) eine grobe
+  Saison+Attraktion-**Regression** (touringplans-Daten, ~80 % der *Tages*-Varianz, ~15-Min-Fehler,
+  kein Time-of-Day) und (b) ein per-Ride **PINN/Kolmogorov**-Stochastikmodell (2026, kontinuierlicher
+  Markov-Prozess je Ride, probabilistisch). **Beide sind per-Ride und modellieren den geteilten
+  Park-Crowd-Zustand NICHT.** → Unser Cross-Serien-Crowd-Ansatz ist die **offene Front** des Feldes,
+  nicht ein gelöstes Problem — das stärkste Differenzierungsargument.
+  [UTSA-Regression](https://rrpress.utsa.edu/server/api/core/bitstreams/7a5a5ad0-eee3-4dbc-9aca-ae8ff36cceae/content),
+  [PINN/ERA 2026](https://aimspress.com/article/doi/10.3934/era.2026186)
+- **Neuer Daten-Hebel gegen unser Historie-Problem:** TouringPlans veröffentlicht einen **freien
+  WDW-Datensatz 2012–heute** mit *posted* UND *actual* Wartezeiten (vier Parks, monatlich
+  aktualisiert, explizit für ML). Tauglich als **Transfer-Learning-/Pretraining-Seed** und zum
+  Modellieren der posted-vs-actual-Lücke. (Caveat: andere Parks/Granularität als unser Korpus —
+  nur zum Vortrainieren, nicht zum direkten Servieren.)
+  [TouringPlans Dataset](https://touringplans.com/blog/disney-world-wait-times-available-for-data-science-and-machine-learning/)
+
+### 11.2 Der geteilte Crowd-Zustand — *so* baut man ihn (bewährte Bausteine)
+
+Die Recherche bestätigt: das fehlende Signal ist real, und die **Verkehrsvorhersage** hat die
+Maschinerie dafür schon gelöst — Zeitreihen ohne vorgegebenen Graphen, deren Kopplung *gelernt*
+werden muss. Das ist exakt unser Ride×Ride-Problem (kein physischer Graph zwischen Rides).
+
+| Baustein | Was es liefert | Übernahme für PCN |
+|---|---|---|
+| **AGCRN** — Data-Adaptive Graph Generation + **Node-Adaptive Parameter Learning** | lernt den Inter-Serien-Graphen *ohne* Vorgabe; pro-Ride-Parameter statt globalem Satz | **der gelernte Graph = der Park-Crowd-Zustand**; NAPL = unsere `Sensitivität(ride)` |
+| **Graph WaveNet** — self-adaptive adjacency via Node-Embeddings | versteckte Kopplung end-to-end gelernt | Alternative/Ergänzung zum Adjazenz-Lernen |
+| **ST-LGSL** — MLP+kNN Latent-Graph-Learner | latente Topologie aus Raum+Zeit-Dynamik | Variante für das Graph-Lernen |
+| **DeepGLO** — globale TCN-regularisierte **Matrix-Faktorisierung** + lokales Per-Serien-Netz | jede Serie = Linearkombination von k≪N Basis-Serien + lokale Dynamik | **die globale Low-Rank-Komponente IST der latente Park-Crowd-Faktor** — eleganter als Cross-Attention |
+| **UQGNN** — multivariat-probabilistisch (Mittelwert + Kovarianz) | Off-Diagonale = Cross-Ride-Co-Movement, Diagonale = per-Ride-Unsicherheit | **gemeinsamer** probabilistischer Kopf statt unabhängiger Punkt-Forecasts |
+| **STG4Traffic** — 16-Modell-Benchmark-Codebase (STGCN, DCRNN, GraphWaveNet, AGCRN, MTGNN, GMAN …) | fertige Vergleichsbasis | **direkt für unseren Bake-off** (statt selbst implementieren) |
+
+Quellen: [AGCRN](https://arxiv.org/pdf/2007.02842),
+[Graph WaveNet](https://arxiv.org/abs/1906.00121),
+[ST-LGSL](https://arxiv.org/pdf/2202.12586),
+[DeepGLO](https://arxiv.org/abs/1905.03806),
+[UQGNN (SIGSPATIAL'25)](https://arxiv.org/pdf/2508.08551),
+[STG4Traffic](https://github.com/trainingl/STG4Traffic).
+
+> **Schlüsselerkenntnis (DeepGLO):** Standard-Deep-Forecaster erzeugen *selbst trainiert auf allen
+> Serien* pro-Dimension-Vorhersagen, die hauptsächlich von der eigenen Vergangenheit der Serie
+> abhängen — exakt unser Problem mit TFT. Die **globale Faktorisierung** zwingt einen *geteilten*
+> Low-Rank-Zustand heraus. Das ist der Park-Crowd-Faktor als first-class-Objekt, ohne ihn von Hand
+> als Feature zu bauen.
+
+### 11.3 Die Schiefe — die Literatur verwirft Median/MSE
+
+Bestätigt, dass „kein Punkt-Forecast gewinnt beides" kein lokales Artefakt ist, sondern Konsens.
+Vier übernehmbare Hebel (statt nur Quantil-Daumen):
+
+- **SPADE (Amazon, NeurIPS 2024):** zerlegt in **zwei Aufgaben** — Peak-Events vs. Baseline —
+  mit maskierten Convolutions + Peak-Attention. Das *Gegenteil* einer unifizierten Regression.
+  [SPADE](https://arxiv.org/abs/2411.05852)
+- **Tweedie / TweedieGP (Compound-Poisson-Gamma):** rechtsschiefe positive Dichte; TweedieGP ist
+  **bestes Modell auf den 0.90–0.99-Quantilen** (genau die entscheidungsrelevanten Busy-Quantile).
+  ⚠️ Tweedies Null-Punktmasse passt eher zu intermittierender Nachfrage als zu stets-offenen Rides —
+  **die transferierbare Eigenschaft ist die Rechtsschiefe**, nicht die Null-Masse.
+  [TweedieGP](https://arxiv.org/html/2502.19086)
+- **Enhanced-Peak (EP) Loss:** adaptive, richtungsbewusste asymmetrische Strafe oberhalb einer
+  Fehlerschwelle (getrennte Unter-/Über-Schätzungsfaktoren). (Caveat: Einzelstudie, vom Erfinder
+  evaluiert, 2-1-Vote — als *eine* Option, nicht als gesetzt.)
+  [EP-Loss](https://www.mdpi.com/2571-9394/7/4/75)
+- **Nichtstationäre GEV-Ensembles (Extremwerttheorie):** rekursive Partitionierung des
+  Kovariatenraums, lokales GEV je Partition → Verteilungsparameter variieren mit Kovariaten.
+  Für den *Tail* der Busy-Spitzen, falls SPADE/Tweedie nicht reichen.
+  [GEV-Ensemble](https://arxiv.org/pdf/2506.01358)
+
+> Folgerung für PCN §4: der probabilistische Kopf wird konkret **SPADE-artige Peak/Baseline-
+> Trennung** ODER **Tweedie-Likelihood** (beides messbar im Bake-off), nicht eine vage „schiefe
+> Verteilung". Zweckgerechtes Quantil-Serving bleibt der Servier-Mechanismus.
+
+### 11.4 Level×Shape (Long-Term) ist belegt — aber als Analogie
+
+Die curve-to-curve-Lastprognose (Xu, Chen, Goude & Yao 2020) prognostiziert die **ganze Tageskurve
+funktional** mit gemeinsamen probabilistischen Bändern und stellt fest: **„das bloße Zusammenfügen
+einzeln prognostizierter Intervalle verliert sofort die Wahrscheinlichkeitsinterpretation"** und
+ignoriert die Inter-Slot-Abhängigkeit. → Das validiert unser **Level×Shape** (§10.1) als
+*prinzipiellen* Weg zu kohärenten Mehr-Slot-Tagesprognosen.
+[Curve-to-Curve (2020)](https://arxiv.org/pdf/2009.01595)
+**Caveat:** stützt den **Shape/Kurven-Mechanismus**, *nicht* die breitere Behauptung „zwei Modelle
+schlagen ein unifiziertes" — dafür gibt es keinen head-to-head (§11.5).
+
+### 11.5 Ehrliche Lücken (was die Recherche NICHT entschieden hat)
+
+1. **Unified vs. Split — kein direkter Beleg.** Keine überlebende Quelle hat *ein* unifiziertes
+   Multi-Horizon-Modell gegen *zwei* getrennte (Nowcast/Calendar) verglichen, noch
+   Mixture-of-Experts über die Lead-Zeit. → Unsere Zwei-Modell-Empfehlung ruht auf dem
+   **Signal-Argument** (live-state vs. known-future) + der Energy-Analogie, **nicht** auf einem
+   Benchmark. Das ist eine begründete Design-Entscheidung, kein bewiesener Fakt — und damit selbst
+   ein **Backtest-Experiment** (siehe Brücke unten).
+2. **Foundation-Models bei wenig Historie — offen.** Kein verifizierter Claim zu TimesFM/Chronos/
+   Moirai/TimeGPT/Lag-Llama auf ~2700 Serien mit nur 6–7 Mon. → Empfehlung: **Chronos-Bolt
+   zero-shot** als billige Baseline testen (kein Training, sofortige Vergleichszahl) und TouringPlans
+   als Pretraining-Seed prüfen. [Chronos-Bolt/AutoGluon](https://aws.amazon.com/blogs/machine-learning/fast-and-accurate-zero-shot-forecasting-with-chronos-bolt-and-autogluon/)
+3. **Single-GPU/RTX-5080-Machbarkeit — von der Literatur nicht beziffert.** Eigene Einordnung
+   (§6) bleibt gültig: AGCRN/Graph WaveNet trainieren Verkehrs-Benchmarks (PeMS, 300–880 Knoten)
+   problemlos auf *einer* GPU; unsere Parks haben ≤100 Rides/Knoten → deutlich kleiner. Per-Park-
+   Batching hält den VRAM klein. Blackwell-Stolperstein (CUDA 12.8+/PyTorch ≥2.7) unverändert.
+4. **Cross-Domain-Transfer unbewiesen.** Ob ein gelernter Latent-Graph wirklich einen sinnvollen
+   Park-Crowd-Faktor rekonstruiert, ist *Hypothese* → genau das misst der PoC.
+
+### 11.6 „Ansatz 3" — das iterierte, forschungsgestützte Intraday-Modell
+
+Die Recherche verschmilzt unsere drei PCN-Bausteine zu **einer** kohärenten, publizierten
+Architektur — nenne sie **GP-STGNN** (Graph-Probabilistic Spatio-Temporal Net). Statt
+hand-gerollter Cross-Attention:
+
+```
+1. Adaptive Graph Learning  (AGCRN-DAGG / GraphWaveNet self-adaptive)
+   → lernt den Ride×Ride-Kopplungsgraphen OHNE Vorgabe  = der Park-Crowd-Zustand
+2. Global-Local-Faktorisierung  (DeepGLO)
+   → globale Low-Rank-Basis  = latenter Crowd-Faktor (first-class);  lokal = Ride-Dynamik + Live-State
+3. Node-Adaptive Parameters  (AGCRN-NAPL)
+   → pro-Ride-Verhalten  = Sensitivität(ride)
+4. Known-Future-Kovariaten  (Kalender/Holiday/Wetter)  → als Exog eingespeist (TFT-Stärke mitgenommen)
+5. Multivariat-probabilistischer + peak-aware Kopf  (UQGNN-Kovarianz × SPADE/Tweedie)
+   → gemeinsame Unsicherheit + ehrliche Schiefe;  Serving zieht Quantil je Zweck
+```
+
+**Warum das besser ist als mein ursprünglicher PCN-Entwurf:** Der latente Crowd-Faktor ist kein
+angebauter Attention-Layer mehr, sondern ein **strukturell erzwungenes** Objekt (gelernter Graph /
+globale Faktorisierung) — genau das, was DeepGLO zeigt, dass Standardmodelle es sonst *nicht* lernen.
+Und alle Bausteine sind publiziert + es gibt eine Benchmark-Codebase (STG4Traffic), d. h. weniger
+Eigenbau-Risiko.
+
+**Bake-off-Plan (ersetzt Konzept C aus §3):** Über **STG4Traffic** AGCRN / Graph WaveNet / MTGNN /
+DeepGLO auf unserem Cross-Ride-Tensor gegen CatBoost-intraday + naive Baselines messen, mit
+SPADE/Tweedie-Kopf. Gewinner-Architektur → GP-STGNN v1.
+
+**Die Brücke (offene Frage 1 als Experiment):** Ein adaptive-graph-STGNN *kann* Known-Future-
+Kovariaten aufnehmen → theoretisch könnte **ein** Modell beide Horizonte bedienen (Mixture-of-
+Experts über die Lead-Zeit). Da die Literatur split-vs-unified nicht entscheidet, behandeln wir es
+als **explizites Backtest-Experiment**: Start mit dem Split (Signal-Argument), aber GP-STGNN so
+bauen, dass es Known-Future kann — dann den unifizierten Multi-Horizon-Lauf gegen den Split messen.
+
+### 11.7 Aktualisierte Roadmap (ersetzt §9 Punkt 1–2, Long-Term unverändert)
+
+1. **Daten-Pipeline (Phase 0):** Cross-Ride-Tensor (unverändert nötig — jetzt als STGNN-Knoten-Input).
+2. **Baseline-Sweep über STG4Traffic** (statt Eigenbau): AGCRN/GraphWaveNet/MTGNN/DeepGLO +
+   **Chronos-Bolt zero-shot** als Foundation-Baseline. Gegen CatBoost-intraday + naive Baselines.
+3. **GP-STGNN v1:** Gewinner-Backbone + SPADE/Tweedie-Kopf + Known-Future-Exog. TouringPlans-
+   Pretraining gegen das Historie-Problem prüfen.
+4. **Split-vs-Unified-Experiment:** den Horizont-Split gegen einen unifizierten GP-STGNN-Lauf messen.
+5. **Shadow-Serving + Gate** (unverändert §8): nichts flippt Produktion ohne Busy/Headliner-Gewinn.
+
+**Aufwand-Update:** Der STG4Traffic-Bake-off *senkt* den Eigenbau-Aufwand der frühen Phasen
+(fertige Implementierungen) — die ~6–10-Wochen-Schätzung (§7) bleibt, verschiebt sich aber von
+„selbst implementieren" zu „adaptieren + messen", was risikoärmer ist.
