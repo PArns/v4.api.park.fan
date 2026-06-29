@@ -90,6 +90,36 @@ class TorchSeqModel:
               for b in bases]  # each [L, N, C]
         return torch.tensor(np.stack(xs), dtype=torch.float32, device=self.device)
 
+    # VRAM budget for keeping the precomputed window stack resident on the GPU. One park
+    # is tiny vs the 16 GiB card; above this we fall back to pinned-host (still removes the
+    # per-step numpy gather). 4 GiB ≈ 6000 windows × 480 × 96 × C × 4B worst case.
+    _GPU_WINDOW_BUDGET = 4 * 1024 ** 3
+
+    def _precompute_windows(self, feats_scaled, wait_raw, target_mask, bases, L, H):
+        """Materialise the FULL training set once: context [W,L,N,C] + target/mask [W,N,H].
+
+        The recurrent encoder already pays L sequential GPU kernels per step; re-gathering
+        16 windows from CPU numpy AND transferring them every step on top of that forced a
+        host↔device sync that left the GPU ~half-idle. Building the stack once (vectorised,
+        same as the CatBoost feature prep) and keeping it GPU-resident makes each step a
+        pure on-device gather → the GPU stays fed. Falls back to pinned host memory if the
+        stack would blow the VRAM budget."""
+        X = torch.tensor(
+            np.stack([windowing.gather_context(feats_scaled, int(b), L).transpose(1, 0, 2)
+                      for b in bases]), dtype=torch.float32)        # [W, L, N, C]
+        Y = torch.tensor(
+            np.nan_to_num(np.stack([wait_raw[:, b + 1:b + 1 + H] for b in bases]))
+            / self._scale, dtype=torch.float32)                    # [W, N, H]
+        M = torch.tensor(
+            np.stack([target_mask[:, b + 1:b + 1 + H] for b in bases]),
+            dtype=torch.float32)                                   # [W, N, H]
+        if self.device == "cuda":
+            if X.element_size() * X.nelement() <= self._GPU_WINDOW_BUDGET:
+                return X.to(self.device), Y.to(self.device), M.to(self.device)
+            # Too big to stay resident → pin so per-step batch transfers are fast/async.
+            return X.pin_memory(), Y.pin_memory(), M.pin_memory()
+        return X, Y, M
+
     def _loss(self, out, y_t, m_t):
         if self.loss == "tweedie":
             mu = torch.nn.functional.softplus(out[..., 0])
@@ -118,20 +148,22 @@ class TorchSeqModel:
         if bases.size > self.max_train_windows:
             bases = rng.choice(bases, self.max_train_windows, replace=False)
 
+        X, Y, M = self._precompute_windows(
+            feats_scaled, wait_raw, target_mask, bases, L, H)
+        W = X.shape[0]
+
         self.net = self.build_net(N, C, H).to(self.device)
         opt = torch.optim.Adam(self.net.parameters(), lr=self.lr)
         self.net.train()
-        logger.info("%s: training on %s (%d windows, N=%d C=%d H=%d)",
-                    self.name, self.device, bases.size, N, C, H)
+        logger.info("%s: training on %s (%d windows, N=%d C=%d H=%d, data on %s)",
+                    self.name, self.device, W, N, C, H, X.device.type)
 
+        bs = min(self.batch_size, W)
         for step in range(self.max_steps):
-            idx = rng.choice(bases, min(self.batch_size, bases.size), replace=False)
-            x = self._batch(feats_scaled, idx, L)
-            y = np.stack([wait_raw[:, b + 1:b + 1 + H] for b in idx])
-            m = np.stack([target_mask[:, b + 1:b + 1 + H] for b in idx])
-            y_t = torch.tensor(np.nan_to_num(y) / self._scale,
-                               dtype=torch.float32, device=self.device)
-            m_t = torch.tensor(m, dtype=torch.float32, device=self.device)
+            sel = torch.as_tensor(rng.integers(0, W, size=bs), device=X.device)
+            x = X[sel].to(self.device, non_blocking=True)        # no-op if already resident
+            y_t = Y[sel].to(self.device, non_blocking=True)
+            m_t = M[sel].to(self.device, non_blocking=True)
             loss = self._loss(self.net(x), y_t, m_t)
             opt.zero_grad()
             loss.backward()

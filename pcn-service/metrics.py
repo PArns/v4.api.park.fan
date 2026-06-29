@@ -96,6 +96,11 @@ def format_table(scores: dict) -> str:
                 cells.append("—".rjust(width))
             else:
                 mae, bias, n = cell
-                cells.append(f"{mae:5.1f}/{bias:+5.1f}".rjust(width))
+                # n == 0 ⇒ the segment had no matched slots (e.g. no busy >=60 in the
+                # eval window); mae/bias are NaN, so show an empty marker, not "nan/+nan".
+                if n == 0:
+                    cells.append("·".rjust(width))
+                else:
+                    cells.append(f"{mae:5.1f}/{bias:+5.1f}".rjust(width))
         lines.append(f"{seg:<12}  " + "  ".join(cells))
     return "\n".join(lines)

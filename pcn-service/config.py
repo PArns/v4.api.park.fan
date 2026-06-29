@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     # --- Model / training (the bake-off winner; defaults = GP-STGNN, quantile) ---
     PCN_ARCH: str = "gpstgnn"          # 'gpstgnn' | 'graphwavenet' (graph) | 'localgru' (ablation)
     PCN_LOSS: str = "quantile"         # 'quantile' (per-purpose serving) | 'tweedie'
-    PCN_INPUT_SIZE: int = 480          # context slots (L) = 5 days of 15-min
+    # Context slots (L). The recurrent AGCRN encoder unrolls L SEQUENTIALLY, so L drives
+    # train time; 192 = 2 days of 15-min (96/day) keeps the recent trajectory + daily
+    # seasonality while ~2.5× faster than the old 5-day (480) context.
+    PCN_INPUT_SIZE: int = 192
     PCN_HORIZON: int = 48              # forecast slots (H) = 12 h
     PCN_HIDDEN_SIZE: int = 64
     PCN_MAX_STEPS: int = 500
