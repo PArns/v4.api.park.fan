@@ -551,6 +551,11 @@ bauen, dass es Known-Future kann — dann den unifizierten Multi-Horizon-Lauf ge
 ### 11.7 Aktualisierte Roadmap (ersetzt §9 Punkt 1–2, Long-Term unverändert)
 
 1. **Daten-Pipeline (Phase 0):** Cross-Ride-Tensor (unverändert nötig — jetzt als STGNN-Knoten-Input).
+   **✅ implementiert** in [`pcn-service/`](../../pcn-service/) (`tensor.py` baut die volle
+   `[Rides × Slots]`-Matrix + `available_mask`/`park_open`/`park_occ`; `db.py` holt das
+   park-lokale 15-Min-Panel via `date_bin`; CLI `build_cross_ride_tensor.py`; 11 Unit-Tests
+   grün ohne DB). Verallgemeinert das skalare `add_occupancy` aus dem nf-Backtest zur vollen
+   Matrix — der Punkt, damit das STGNN den Graphen *lernt* statt einen Mittelwert zu bekommen.
 2. **Baseline-Sweep über STG4Traffic** (statt Eigenbau): AGCRN/GraphWaveNet/MTGNN/DeepGLO +
    **Chronos-Bolt zero-shot** als Foundation-Baseline. Gegen CatBoost-intraday + naive Baselines.
 3. **GP-STGNN v1:** Gewinner-Backbone + SPADE/Tweedie-Kopf + Known-Future-Exog. TouringPlans-

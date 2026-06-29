@@ -68,6 +68,10 @@ ml-service/__pycache__/
 ml-service/catboost_info/
 ml-service/models/
 nf-service/__pycache__/
+pcn-service/__pycache__/
+pcn-service/.pytest_cache/
+pcn-service/models/
+*.npz
 
 *.bak
 *.bak*

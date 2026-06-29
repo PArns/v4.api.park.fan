@@ -1,0 +1,19 @@
+# PCN service — Phase 0 (cross-ride tensor pipeline).
+# Model deps (torch / STGNN libs) are added when the bake-off picks a backbone.
+
+# Data
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==23.0.1
+
+# Config
+pydantic==2.12.5
+pydantic-settings==2.11.0
+
+# Database (same pattern as ml-service / nf-service)
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Utilities
+python-dateutil==2.9.0.post0
+pytz==2025.2
