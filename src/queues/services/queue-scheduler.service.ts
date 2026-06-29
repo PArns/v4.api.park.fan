@@ -52,6 +52,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
+    @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -426,6 +427,55 @@ export class QueueSchedulerService implements OnModuleInit {
         {
           repeat: { cron: "0 * * * *" }, // hourly
           jobId: "pcn-score-cron",
+          attempts: 1,
+        },
+      );
+    }
+
+    // Shape day-curve shadow (design §6–8). Runs in the shadow — writes shape_forecasts /
+    // shape_comparisons only; CatBoost stays the served champion. Daily horizon, so the
+    // crons are daily and ordered AFTER the daily forecast (the level source) + a margin.
+    const hasShapeBuildCron = await this.hasRepeatableJob(
+      this.shapeShadowQueue,
+      "shape-build-cron",
+    );
+    if (!hasShapeBuildCron) {
+      await this.shapeShadowQueue.add(
+        "build-shape",
+        {},
+        {
+          repeat: { cron: "0 9 * * *" }, // 09:00 UTC — after the nightly daily forecast
+          jobId: "shape-build-cron",
+          attempts: 1,
+        },
+      );
+    }
+    const hasShapeForecastCron = await this.hasRepeatableJob(
+      this.shapeShadowQueue,
+      "shape-forecast-cron",
+    );
+    if (!hasShapeForecastCron) {
+      await this.shapeShadowQueue.add(
+        "forecast-shape",
+        {},
+        {
+          repeat: { cron: "30 9 * * *" }, // 09:30 UTC — after build
+          jobId: "shape-forecast-cron",
+          attempts: 1,
+        },
+      );
+    }
+    const hasShapeScoreCron = await this.hasRepeatableJob(
+      this.shapeShadowQueue,
+      "shape-score-cron",
+    );
+    if (!hasShapeScoreCron) {
+      await this.shapeShadowQueue.add(
+        "score-shape",
+        {},
+        {
+          repeat: { cron: "0 10 * * *" }, // 10:00 UTC — score matured forecasts
+          jobId: "shape-score-cron",
           attempts: 1,
         },
       );

@@ -1,6 +1,6 @@
 """Unit tests for the pure shape-profile assembly + render (no DB).
 
-    cd shape-service && python3 -m pytest test_profiles.py -q
+cd shape-service && python3 -m pytest test_profiles.py -q
 """
 
 import numpy as np
@@ -26,8 +26,7 @@ def _panel(days: int = 40, rides=("a", "b"), levels=(10, 30, 50, 70, 90)) -> pd.
             day = pd.Timestamp("2026-01-01") + pd.Timedelta(days=d)
             level = levels[d % len(levels)]
             for s in _OPEN:
-                rows.append({"unique_id": ride, "day": day, "slot": s,
-                             "y": level * _shape_val(s)})
+                rows.append({"unique_id": ride, "day": day, "slot": s, "y": level * _shape_val(s)})
     return pd.DataFrame(rows)
 
 
@@ -42,7 +41,7 @@ def test_builds_and_normalises_to_peak_one():
     curve, _ = prof.pick_curve("a", crowd=1, dow="week")
     # normalised by the daily peak → the busiest slot's mean fraction is ~1.0
     assert np.nanmax(curve) == pytest.approx(1.0, abs=1e-6)
-    assert curve[44] == pytest.approx(1.0, abs=1e-6)         # tent apex
+    assert curve[44] == pytest.approx(1.0, abs=1e-6)  # tent apex
     # NaN where the ride never operated (e.g. midnight) — no zero-fill
     assert np.isnan(curve[0])
 
@@ -57,7 +56,7 @@ def test_crowd_bucketing_from_level():
 
 def test_render_scales_shape_by_level():
     prof = _build()
-    curve = prof.render("a", level=60.0, dow_index=2)        # a Wednesday
+    curve = prof.render("a", level=60.0, dow_index=2)  # a Wednesday
     assert np.nanmax(curve) == pytest.approx(60.0, abs=1e-6)  # peak == level
     # the apex slot equals the level; an edge slot is ~0.2 of it
     assert curve[44] == pytest.approx(60.0, abs=1e-6)
@@ -87,17 +86,18 @@ def test_fallback_to_coarser_when_sparse():
 def test_daytype_conditioner_and_additive_render():
     # supply a daytype map (the holiday-driven second conditioner) and render additively.
     df = _panel()
-    dl = {pd.Timestamp(d).normalize(): ("wend" if pd.Timestamp(d).dayofweek >= 5 else "reg")
-          for d in df["day"].unique()}
-    prof = P.build_profiles(df, park_id="P", slot_count=96, day_label=dl,
-                            alpha=0.5, beta=0.6)
+    dl = {
+        pd.Timestamp(d).normalize(): ("wend" if pd.Timestamp(d).dayofweek >= 5 else "reg")
+        for d in df["day"].unique()
+    }
+    prof = P.build_profiles(df, park_id="P", slot_count=96, day_label=dl, alpha=0.5, beta=0.6)
     assert prof.alpha == 0.5 and prof.beta == 0.6
     # g_rd is now keyed by the daytype labels, not weekday buckets
     assert {k[1] for k in prof.g_rd} <= {"wend", "reg"}
     curve = prof.render_additive("a", level=60.0, dt_label="reg")
     # synthetic shape is level-invariant → deviations ~0 → additive form ≈ ride base (tent)
-    assert curve[44] == pytest.approx(60.0, abs=1e-6)         # apex == level
-    assert np.isnan(curve[0])                                 # not-open slot stays NaN
+    assert curve[44] == pytest.approx(60.0, abs=1e-6)  # apex == level
+    assert np.isnan(curve[0])  # not-open slot stays NaN
     # missing daytype cell → deviation falls back to 0 (ride base), still finite at apex
     assert np.isfinite(prof.render_additive("a", 60.0, "nonexistent")[44])
 
@@ -105,14 +105,24 @@ def test_daytype_conditioner_and_additive_render():
 def test_drops_non_operating_days_and_empty():
     # a near-empty day (one tiny slot) must not define a shape
     df = _panel(days=10, rides=("a",))
-    df = pd.concat([df, pd.DataFrame([{"unique_id": "a",
-                    "day": pd.Timestamp("2026-05-01"), "slot": 40, "y": 1.0}])],
-                   ignore_index=True)
+    df = pd.concat(
+        [
+            df,
+            pd.DataFrame(
+                [{"unique_id": "a", "day": pd.Timestamp("2026-05-01"), "slot": 40, "y": 1.0}]
+            ),
+        ],
+        ignore_index=True,
+    )
     prof = _build(df, min_day_peak=5, min_day_slots=8)
     assert prof is not None
     # the 1-slot/peak<5 day is excluded → ride 'a' day count unaffected by it
-    assert P.build_profiles(pd.DataFrame(columns=["unique_id", "day", "slot", "y"]),
-                            park_id="P", slot_count=96) is None
+    assert (
+        P.build_profiles(
+            pd.DataFrame(columns=["unique_id", "day", "slot", "y"]), park_id="P", slot_count=96
+        )
+        is None
+    )
 
 
 if __name__ == "__main__":

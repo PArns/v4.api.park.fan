@@ -28,6 +28,7 @@ import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { PcnShadowProcessor } from "./processors/pcn-shadow.processor";
+import { ShapeShadowProcessor } from "./processors/shape-shadow.processor";
 import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
@@ -150,6 +151,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
       { name: "geoip-update" }, // GeoLite2-City every 48h
       { name: "nf-training" }, // TFT train+forecast + TFT-vs-CatBoost scoreboard
       { name: "pcn-shadow" }, // PCN intraday shadow: train + forecast + score
+      { name: "shape-shadow" }, // Shape day-curve shadow: build + forecast + score
       {
         // Rope-drop: one LATERAL query per park over hourly-history slots +
         // pure aggregation. Lighter than p50-baseline (no fresh PERCENTILE
@@ -223,6 +225,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     GeoipUpdateProcessor,
     NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
     PcnShadowProcessor, // PCN intraday shadow: train + forecast + score
+    ShapeShadowProcessor, // Shape day-curve shadow: build + forecast + score
   ],
   exports: [BullModule], // Export for use in other modules
 })

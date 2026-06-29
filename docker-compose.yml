@@ -169,6 +169,44 @@ services:
       retries: 3
       start_period: 40s
 
+  shape-service:
+    build:
+      context: ./shape-service
+      dockerfile: Dockerfile
+    container_name: parkfan_shape_service
+    restart: unless-stopped
+    mem_limit: 2g # CPU-only NP additive+smooth (pure pandas/numpy)
+    ports:
+      - "8003:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: parkfan
+      DB_USER: parkfan
+      DB_PASSWORD: parkfan_dev_password
+      MODEL_DIR: /app/models
+      SHAPE_PARK_IDS: ${SHAPE_PARK_IDS:-}
+    volumes:
+      - shape-models:/app/models
+      - ./shape-service:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   api:
     build:
       context: .
@@ -189,6 +227,7 @@ services:
       ML_SERVICE_URL: http://ml-service:8000
       NF_SERVICE_URL: http://nf-service:8000
       PCN_SERVICE_URL: http://pcn-service:8000
+      SHAPE_SERVICE_URL: http://shape-service:8000
       BULL_PREFIX: parkfan
       NODE_ENV: development
     volumes:
@@ -219,6 +258,8 @@ volumes:
   nf-models:
     driver: local
   pcn-models:
+    driver: local
+  shape-models:
     driver: local
 
 networks:

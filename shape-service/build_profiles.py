@@ -50,7 +50,11 @@ def _sample(park_id: str) -> None:
             finite = curve[np.isfinite(curve)]
             logger.info(
                 "ride %s level=%.0f crowd=%d daytype=%-6s → %d open slots, peak=%.1f mean=%.1f",
-                ride, lvl, prof.level_to_crowd(ride, lvl), dt, finite.size,
+                ride,
+                lvl,
+                prof.level_to_crowd(ride, lvl),
+                dt,
+                finite.size,
                 float(np.nanmax(curve)) if finite.size else float("nan"),
                 float(np.nanmean(curve)) if finite.size else float("nan"),
             )
@@ -59,8 +63,9 @@ def _sample(park_id: str) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Shape profile builder (Phase 0)")
     ap.add_argument("parks", nargs="*")
-    ap.add_argument("--sample", action="store_true",
-                    help="render a sample curve for the first park in scope")
+    ap.add_argument(
+        "--sample", action="store_true", help="render a sample curve for the first park in scope"
+    )
     args = ap.parse_args()
     if args.sample:
         scope = pipeline.scope_park_ids(args.parks or None)

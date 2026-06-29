@@ -44,7 +44,7 @@ def forecast_park(park_id: str, version: str) -> int:
     tz = meta["timezone"]
     today = pd.Timestamp.now(tz=tz).normalize().tz_localize(None)
     horizon = settings.SHAPE_FORECAST_DAYS
-    lo = today + pd.Timedelta(days=1)                    # forecast FORWARD (from tomorrow)
+    lo = today + pd.Timedelta(days=1)  # forecast FORWARD (from tomorrow)
     hi = today + pd.Timedelta(days=horizon)
 
     levels = db.fetch_daily_levels(park_id, tz, lo.date(), hi.date())
@@ -62,15 +62,22 @@ def forecast_park(park_id: str, version: str) -> int:
         curve = prof.serve_curve(r.unique_id, float(r.level), dfn(day))
         for slot, val in enumerate(curve):
             if val == val and val > 0:  # not NaN, positive
-                rows.append({
-                    "aid": r.unique_id,
-                    "ts": (day + slot * step).to_pydatetime(),
-                    "od": origin,
-                    "pw": float(val),
-                })
+                rows.append(
+                    {
+                        "aid": r.unique_id,
+                        "ts": (day + slot * step).to_pydatetime(),
+                        "od": origin,
+                        "pw": float(val),
+                    }
+                )
     n = db.write_shape_forecasts(rows, version)
-    logger.info("park %s: wrote %d shape_forecasts (%d ride-days, horizon %dd)",
-                park_id, n, len(levels), horizon)
+    logger.info(
+        "park %s: wrote %d shape_forecasts (%d ride-days, horizon %dd)",
+        park_id,
+        n,
+        len(levels),
+        horizon,
+    )
     return n
 
 
@@ -83,12 +90,14 @@ def forecast_all(version: str, park_ids: list[str] | None = None) -> dict:
             total += forecast_park(pid, version)
         except Exception as e:  # noqa: BLE001
             logger.warning("park %s forecast failed: %s", pid, e)
-    logger.info("forecast done: %d rows across %d parks in %.1fs",
-                total, len(parks), time.time() - t0)
+    logger.info(
+        "forecast done: %d rows across %d parks in %.1fs", total, len(parks), time.time() - t0
+    )
     return {"rows": total, "parks": len(parks), "version": version}
 
 
 if __name__ == "__main__":
     import datetime as _dt
+
     ver = f"shape{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     forecast_all(ver, sys.argv[1:] or None)

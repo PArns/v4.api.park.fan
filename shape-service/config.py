@@ -30,14 +30,14 @@ class Settings(BaseSettings):
     SHAPE_WINDOW_DAYS: int = 548
 
     # --- Slot grid (must mirror the serving grid) ---
-    SHAPE_SLOT_MINUTES: int = 15        # 96 slots/day; CatBoost/nf bin to 15-min too
-    SHAPE_MIN_WAIT: int = 5             # min STANDBY wait to count as a real observation
+    SHAPE_SLOT_MINUTES: int = 15  # 96 slots/day; CatBoost/nf bin to 15-min too
+    SHAPE_MIN_WAIT: int = 5  # min STANDBY wait to count as a real observation
 
     # --- What counts as a shape-defining operating day ---
     # A day defines a ride's form only if it actually operated: a real daily peak and enough
     # slots. Near-empty/closed days would otherwise inject flat noise into the profile.
-    SHAPE_MIN_DAY_PEAK: int = 5         # daily peak (the normaliser) must be >= this
-    SHAPE_MIN_DAY_SLOTS: int = 8        # >= this many operating slots in the day
+    SHAPE_MIN_DAY_PEAK: int = 5  # daily peak (the normaliser) must be >= this
+    SHAPE_MIN_DAY_SLOTS: int = 8  # >= this many operating slots in the day
 
     # --- Conditioning ---
     # Day-of-week split: 'wend' = weekend vs weekday (robust default); 'full' = per-DOW.

@@ -65,7 +65,7 @@ def fetch_park_ids() -> list[str]:
 
 
 def park_timezone(park_id: str) -> str | None:
-    sql = text('SELECT timezone FROM parks WHERE id = :pid')
+    sql = text("SELECT timezone FROM parks WHERE id = :pid")
     with engine().connect() as c:
         df = pd.read_sql(sql, c, params={"pid": park_id})
     return None if df.empty else df["timezone"].iloc[0]
@@ -73,8 +73,10 @@ def park_timezone(park_id: str) -> str | None:
 
 def park_meta(park_id: str) -> dict | None:
     """timezone + country/region (for the holiday-driven daytype conditioner)."""
-    sql = text('SELECT timezone, "countryCode" AS country, "regionCode" AS region '
-               'FROM parks WHERE id = :pid')
+    sql = text(
+        'SELECT timezone, "countryCode" AS country, "regionCode" AS region '
+        "FROM parks WHERE id = :pid"
+    )
     with engine().connect() as c:
         df = pd.read_sql(sql, c, params={"pid": park_id})
     return None if df.empty else df.iloc[0].to_dict()
@@ -84,8 +86,9 @@ def fetch_holidays(country: str) -> pd.DataFrame:
     """Holiday dates for a country: date, region, holidayType (school | public | bridge |
     observance | bank). School holidays (ferien) are regional; the daytype builder filters
     to nationwide + the park's own region."""
-    sql = text('SELECT date, region, "holidayType" AS holiday_type '
-               'FROM holidays WHERE country = :c')
+    sql = text(
+        'SELECT date, region, "holidayType" AS holiday_type FROM holidays WHERE country = :c'
+    )
     with engine().connect() as c:
         df = pd.read_sql(sql, c, params={"c": country})
     if not df.empty:
@@ -131,9 +134,7 @@ def fetch_shape_panel(park_id: str, tz: str) -> pd.DataFrame:
         """
     )
     with engine().connect() as c:
-        df = pd.read_sql(
-            sql, c, params={"park": park_id, "tz": tz, "win": str(window)}
-        )
+        df = pd.read_sql(sql, c, params={"park": park_id, "tz": tz, "win": str(window)})
     if df.empty:
         return df
     df["day"] = pd.to_datetime(df["day"])
@@ -184,7 +185,7 @@ _DDL_SHAPE_COMPARISONS = text(
 def fetch_daily_levels(park_id: str, tz: str, lo_day, hi_day) -> pd.DataFrame:
     """Freshest DAILY forecast per (attraction, park-local day) in [lo_day, hi_day] — the
     LEVEL the shape expands. predictionType='daily' is one row/(ride, day) at 12:00 UTC."""
-    bin_day = f'(wp."predictedTime" AT TIME ZONE :tz)::date'
+    bin_day = '(wp."predictedTime" AT TIME ZONE :tz)::date'
     sql = text(
         f"""
         SELECT DISTINCT ON (wp."attractionId", {bin_day})
@@ -223,7 +224,7 @@ def write_shape_forecasts(rows: list[dict], version: str) -> int:
     with engine().begin() as c:
         c.execute(_DDL_SHAPE_FORECASTS)
         for i in range(0, len(rows), 5000):
-            c.execute(upsert, rows[i:i + 5000])
+            c.execute(upsert, rows[i : i + 5000])
     return len(rows)
 
 
@@ -275,14 +276,14 @@ def fetch_catboost_slots(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
     b = _BIN
     sql = text(
         f"""
-        SELECT DISTINCT ON (wp."attractionId", {b.replace('qd.timestamp', 'wp."predictedTime"')})
+        SELECT DISTINCT ON (wp."attractionId", {b.replace("qd.timestamp", 'wp."predictedTime"')})
             wp."attractionId"::text AS unique_id,
-            {b.replace('qd.timestamp', 'wp."predictedTime"')} AS target_slot,
+            {b.replace("qd.timestamp", 'wp."predictedTime"')} AS target_slot,
             wp."predictedWaitTime"::float AS cat_pred
         FROM wait_time_predictions wp JOIN attractions a ON a.id = wp."attractionId"
         WHERE a."parkId" = :park AND wp."predictionType" = 'hourly'
           AND wp."predictedTime" >= :lo AND wp."predictedTime" < :hi
-        ORDER BY wp."attractionId", {b.replace('qd.timestamp', 'wp."predictedTime"')}, wp."createdAt" DESC
+        ORDER BY wp."attractionId", {b.replace("qd.timestamp", 'wp."predictedTime"')}, wp."createdAt" DESC
         """
     )
     with engine().connect() as c:

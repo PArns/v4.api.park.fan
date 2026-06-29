@@ -21,9 +21,7 @@ def build_daytype_fn(holidays: pd.DataFrame, region: str | None):
         school = pubbr = set()
     else:
         reg = holidays[
-            holidays["region"].isna()
-            | (holidays["region"] == "")
-            | (holidays["region"] == region)
+            holidays["region"].isna() | (holidays["region"] == "") | (holidays["region"] == region)
         ]
         school = set(reg.loc[reg["holiday_type"] == "school", "date"])
         pubbr = set(reg.loc[reg["holiday_type"].isin(["public", "bridge"]), "date"])

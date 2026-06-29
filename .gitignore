@@ -79,3 +79,7 @@ pcn-service/models/
 !docs/
 !docs/**
 venv/
+
+# Python bytecode (all services)
+__pycache__/
+*.pyc

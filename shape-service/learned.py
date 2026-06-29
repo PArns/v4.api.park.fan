@@ -33,9 +33,14 @@ N_DAYFEATS = 5  # crowd + school/pub/wend/peak
 
 def _make_net(n_rides: int, slot_count: int, emb: int = 16, hidden: int = 128):
     import torch.nn as nn
+
     net = nn.Sequential(
-        nn.Linear(2 * emb + N_DAYFEATS, hidden), nn.ReLU(), nn.Dropout(0.1),
-        nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, 1),
+        nn.Linear(2 * emb + N_DAYFEATS, hidden),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(hidden, hidden),
+        nn.ReLU(),
+        nn.Linear(hidden, 1),
     )
     nn.init.zeros_(net[-1].weight)
     nn.init.zeros_(net[-1].bias)  # start at the anchor (delta = 0)
@@ -46,11 +51,21 @@ class LearnedShape:
     """Global anchor-and-correct shape model. `fit` early-stops on a validation array;
     `predict` returns the corrected normalised form per row."""
 
-    def __init__(self, n_rides: int, slot_count: int = 96, emb: int = 16,
-                 lr: float = 2e-3, weight_decay: float = 1e-5, patience: int = 15,
-                 max_epochs: int = 300, batch: int = 16384, seed: int = 0):
+    def __init__(
+        self,
+        n_rides: int,
+        slot_count: int = 96,
+        emb: int = 16,
+        lr: float = 2e-3,
+        weight_decay: float = 1e-5,
+        patience: int = 15,
+        max_epochs: int = 300,
+        batch: int = 16384,
+        seed: int = 0,
+    ):
         import torch
         import torch.nn as nn
+
         self.torch = torch
         torch.manual_seed(seed)
         self.dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -67,36 +82,46 @@ class LearnedShape:
 
     def _split(self, A):
         t = self.torch
-        return (t.tensor(A[:, 0], dtype=t.long, device=self.dev),
-                t.tensor(A[:, 1], dtype=t.long, device=self.dev),
-                t.tensor(A[:, 2:7], dtype=t.float32, device=self.dev),  # 5 day-features
-                t.tensor(A[:, 7], dtype=t.float32, device=self.dev),    # anchor
-                t.tensor(A[:, 8], dtype=t.float32, device=self.dev),    # y_norm
-                t.tensor(A[:, 9], dtype=t.float32, device=self.dev))    # level (loss weight)
+        return (
+            t.tensor(A[:, 0], dtype=t.long, device=self.dev),
+            t.tensor(A[:, 1], dtype=t.long, device=self.dev),
+            t.tensor(A[:, 2:7], dtype=t.float32, device=self.dev),  # 5 day-features
+            t.tensor(A[:, 7], dtype=t.float32, device=self.dev),  # anchor
+            t.tensor(A[:, 8], dtype=t.float32, device=self.dev),  # y_norm
+            t.tensor(A[:, 9], dtype=t.float32, device=self.dev),
+        )  # level (loss weight)
 
     def fit(self, train: np.ndarray, val: np.ndarray) -> dict:
         t = self.torch
         ri, sl, fx, anc, yn, lv = self._split(train)
         vri, vsl, vfx, vanc, vyn, vlv = self._split(val)
-        params = list(self.net.parameters()) + list(self.r_emb.parameters()) + \
-            list(self.s_emb.parameters())
+        params = (
+            list(self.net.parameters())
+            + list(self.r_emb.parameters())
+            + list(self.s_emb.parameters())
+        )
         opt = t.optim.Adam(params, lr=self.lr, weight_decay=self.wd)
         n, best, bad, best_sd = len(train), 1e18, 0, None
         for ep in range(self.max_epochs):
             self.net.train()
             perm = t.randperm(n, device=self.dev)
             for i in range(0, n, self.batch):
-                idx = perm[i:i + self.batch]
-                loss = (t.abs(self._forward(ri[idx], sl[idx], fx[idx], anc[idx]) - yn[idx])
-                        * lv[idx]).mean()
-                opt.zero_grad(); loss.backward(); opt.step()
+                idx = perm[i : i + self.batch]
+                loss = (
+                    t.abs(self._forward(ri[idx], sl[idx], fx[idx], anc[idx]) - yn[idx]) * lv[idx]
+                ).mean()
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
             self.net.eval()
             with t.no_grad():
                 vl = float((t.abs(self._forward(vri, vsl, vfx, vanc) - vyn) * vlv).mean())
             if vl < best - 1e-4:
                 best, bad = vl, 0
-                best_sd = {g: {k: v.detach().clone() for k, v in sd.items()}
-                           for g, sd in self._state().items()}
+                best_sd = {
+                    g: {k: v.detach().clone() for k, v in sd.items()}
+                    for g, sd in self._state().items()
+                }
             else:
                 bad += 1
                 if bad >= self.patience:
@@ -113,10 +138,14 @@ class LearnedShape:
             return self._forward(ri, sl, fx, anc).cpu().numpy()
 
     def _state(self):
-        return {"net": self.net.state_dict(), "r": self.r_emb.state_dict(),
-                "s": self.s_emb.state_dict()}
+        return {
+            "net": self.net.state_dict(),
+            "r": self.r_emb.state_dict(),
+            "s": self.s_emb.state_dict(),
+        }
 
     def _load(self, sd):
         # sd holds cloned tensors of the three sub-state-dicts
-        self.net.load_state_dict(sd["net"]); self.r_emb.load_state_dict(sd["r"])
+        self.net.load_state_dict(sd["net"])
+        self.r_emb.load_state_dict(sd["r"])
         self.s_emb.load_state_dict(sd["s"])

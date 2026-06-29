@@ -1,0 +1,24 @@
+# Shape service — Level×Shape day-curve expander (SHADOW). NP additive+smooth model needs
+# no torch (the learned upgrade in learned.py imports torch lazily, only if wired in later).
+
+# FastAPI & Server
+fastapi==0.127.0
+uvicorn[standard]==0.39.0
+gunicorn==23.0.0
+
+# Data
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==23.0.1
+
+# Config
+pydantic==2.12.5
+pydantic-settings==2.11.0
+
+# Database (same pattern as ml-/nf-/pcn-service)
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Utilities
+python-dateutil==2.9.0.post0
+pytz==2025.2

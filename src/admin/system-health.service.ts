@@ -43,6 +43,7 @@ export class SystemHealthService {
       tft,
       comparison,
       pcnComparison,
+      shapeComparison,
     ] = await Promise.all([
       this.safe("host", () => this.host()),
       this.safe("gpu", () => this.gpu()),
@@ -53,6 +54,7 @@ export class SystemHealthService {
       this.safe("tft", () => this.tft()),
       this.safe("comparison", () => this.comparison()),
       this.safe("pcnComparison", () => this.intradayComparison()),
+      this.safe("shapeComparison", () => this.shapeComparison()),
     ]);
     return {
       timestamp: new Date().toISOString(),
@@ -61,7 +63,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
-      ml: { catboost, tft, comparison, pcnComparison },
+      ml: { catboost, tft, comparison, pcnComparison, shapeComparison },
     };
   }
 
@@ -502,13 +504,88 @@ export class SystemHealthService {
     );
   }
 
-  /** Focused comparison board for a dedicated admin endpoint — both surfaces as plain
-   * SQL reads (no host/gpu/service round-trips), so a UI can poll it cheaply. */
+  /** Shape day-curve shadow board (Shape vs CatBoost on matched 15-min slots over the daily
+   * horizon). Same shape as the PCN board; verdict = Shape−CatBoost MAE delta per segment at
+   * lead 'all'. Owned by shape-service. */
+  private async shapeComparison(days = 30) {
+    const exists = await this.dataSource.query(
+      `SELECT to_regclass('public.shape_comparisons') AS t`,
+    );
+    if (!exists?.[0]?.t)
+      return { rows: [], verdict: [], note: "no shadow board yet" };
+    const rows = await this.dataSource.query(
+      `SELECT target_date AS "targetDate", model, segment,
+              lead_bucket AS "leadBucket", n,
+              round(mae::numeric, 1) AS mae,
+              round(bias::numeric, 1) AS bias,
+              round(mean_actual::numeric, 1) AS "meanActual",
+              round(mean_pred::numeric, 1) AS "meanPred"
+         FROM shape_comparisons
+        WHERE target_date >= (CURRENT_DATE - ($1)::int)
+        ORDER BY target_date DESC,
+                 CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
+                              WHEN 'mid' THEN 2 ELSE 3 END,
+                 lead_bucket, model
+        LIMIT 400`,
+      [days],
+    );
+    return {
+      rows,
+      verdict: this.challengerVerdict(rows, "shape"),
+      count: rows.length,
+    };
+  }
+
+  /** Generic challenger−CatBoost delta per segment (lead 'all'), n-weighted. */
+  private challengerVerdict(
+    rows: Array<{
+      segment: string;
+      leadBucket: string;
+      model: string;
+      n: number;
+      mae: number;
+    }>,
+    challenger: string,
+  ) {
+    const acc: Record<string, Record<string, { mw: number; n: number }>> = {};
+    for (const r of rows) {
+      if (r.leadBucket !== "all") continue;
+      const seg = (acc[r.segment] ??= {});
+      const m = (seg[r.model] ??= { mw: 0, n: 0 });
+      m.mw += Number(r.mae) * Number(r.n);
+      m.n += Number(r.n);
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for (const [segment, byModel] of Object.entries(acc)) {
+      const ch = byModel[challenger];
+      const cat = byModel["catboost"];
+      if (!ch?.n || !cat?.n) continue;
+      const chMae = ch.mw / ch.n;
+      const catMae = cat.mw / cat.n;
+      out.push({
+        segment,
+        n: Math.min(ch.n, cat.n),
+        challengerMae: Math.round(chMae * 10) / 10,
+        catboostMae: Math.round(catMae * 10) / 10,
+        delta: Math.round((catMae - chMae) * 10) / 10, // >0 ⇒ challenger better
+        challengerWins: catMae - chMae > 0,
+      });
+    }
+    const order: Record<string, number> = { busy: 0, all: 1, mid: 2, quiet: 3 };
+    return out.sort(
+      (a, b) =>
+        (order[a.segment as string] ?? 9) - (order[b.segment as string] ?? 9),
+    );
+  }
+
+  /** Focused comparison board for a dedicated admin endpoint — all surfaces as plain SQL
+   * reads (no host/gpu/service round-trips), so a UI can poll it cheaply. */
   async comparisonBoard(days = 14) {
-    const [daily, intraday] = await Promise.all([
+    const [daily, intraday, shape] = await Promise.all([
       this.safe("daily", () => this.comparison()),
       this.safe("intraday", () => this.intradayComparison(days)),
+      this.safe("shape", () => this.shapeComparison()),
     ]);
-    return { timestamp: new Date().toISOString(), daily, intraday };
+    return { timestamp: new Date().toISOString(), daily, intraday, shape };
   }
 }

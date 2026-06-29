@@ -205,6 +205,48 @@ services:
       - "coolify.version=1.0.0"
       - "coolify.type=service"
 
+  shape-service:
+    build:
+      context: ./shape-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_DATABASE:-parkfan}
+      DB_USER: ${DB_USERNAME:-parkfan}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MODEL_DIR: /app/models
+      SHAPE_PARK_IDS: ${SHAPE_PARK_IDS:-}
+    volumes:
+      - /data/parkfan/shape-models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    # CPU-only (NP additive+smooth is pure pandas/numpy); light footprint. Daily cron
+    # (build 09:00, forecast 09:30, score 10:00 UTC) after the daily-forecast level source.
+    mem_limit: 2g
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "coolify.managed=true"
+      - "coolify.version=1.0.0"
+      - "coolify.type=service"
+
   api:
     build:
       context: .
@@ -218,6 +260,7 @@ services:
       - ML_SERVICE_URL=http://ml-service:8000
       - NF_SERVICE_URL=http://nf-service:8000
       - PCN_SERVICE_URL=http://pcn-service:8000
+      - SHAPE_SERVICE_URL=http://shape-service:8000
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
       # Always use volume path so .env cannot override with ./data/... (which is not mounted)

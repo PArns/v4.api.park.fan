@@ -65,15 +65,15 @@ class ShapeProfiles:
     slot_count: int
     dow_mode: str
     min_obs: int
-    alpha: float = 0.5   # crowd-deviation shrinkage weight (additive render, §8a)
-    beta: float = 0.6    # daytype-deviation shrinkage weight
-    smooth: int = 0      # ±slots moving-average smoothing of the served form (§8c)
+    alpha: float = 0.5  # crowd-deviation shrinkage weight (additive render, §8a)
+    beta: float = 0.6  # daytype-deviation shrinkage weight
+    smooth: int = 0  # ±slots moving-average smoothing of the served form (§8c)
     thresholds: dict[str, np.ndarray] = field(default_factory=dict)  # ride -> crowd edges
     g_rcd: dict[tuple, Cell] = field(default_factory=dict)  # (ride, crowd, dow)
-    g_rc: dict[tuple, Cell] = field(default_factory=dict)   # (ride, crowd)
-    g_rd: dict[tuple, Cell] = field(default_factory=dict)   # (ride, dow)
-    g_r: dict[tuple, Cell] = field(default_factory=dict)    # (ride,)
-    g_park: Curve | None = None                             # park-wide ultimate fallback
+    g_rc: dict[tuple, Cell] = field(default_factory=dict)  # (ride, crowd)
+    g_rd: dict[tuple, Cell] = field(default_factory=dict)  # (ride, dow)
+    g_r: dict[tuple, Cell] = field(default_factory=dict)  # (ride,)
+    g_park: Curve | None = None  # park-wide ultimate fallback
 
     # -- serve helpers ------------------------------------------------------
     def level_to_crowd(self, ride: str, level: float) -> int:
@@ -131,8 +131,9 @@ class ShapeProfiles:
         crowd = self.level_to_crowd(ride, level)
         cdev = self._dev(self.g_rc, (ride, crowd), base)
         ddev = self._dev(self.g_rd, (ride, dt_label), base)
-        form = smooth_curve(np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0),
-                            self.smooth)
+        form = smooth_curve(
+            np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0), self.smooth
+        )
         form = np.where(np.isfinite(base), form, np.nan)
         return level * form
 
@@ -150,8 +151,9 @@ class ShapeProfiles:
         crowd = self.level_to_crowd(ride, peak_est)
         cdev = self._dev(self.g_rc, (ride, crowd), base)
         ddev = self._dev(self.g_rd, (ride, dt_label), base)
-        form = smooth_curve(np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0),
-                            self.smooth)
+        form = smooth_curve(
+            np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0), self.smooth
+        )
         fvals = form[np.isfinite(form)]
         scale = daily_level / fvals.mean() if fvals.size and fvals.mean() > 1e-6 else daily_level
         out = np.where(np.isfinite(base), scale * form, np.nan)
@@ -159,12 +161,14 @@ class ShapeProfiles:
 
     def save(self, path: str) -> None:
         import pickle
+
         with open(path, "wb") as f:
             pickle.dump(self, f)
 
     @staticmethod
     def load(path: str) -> "ShapeProfiles":
         import pickle
+
         with open(path, "rb") as f:
             return pickle.load(f)
 
@@ -248,8 +252,10 @@ def build_profiles(
     df["y_norm"] = df["y"] / df["level"]
     if day_label:
         df["dowb"] = df["day"].map(
-            lambda d: day_label.get(pd.Timestamp(d).normalize(),
-                                    dow_bucket(int(pd.Timestamp(d).dayofweek), dow_mode)))
+            lambda d: day_label.get(
+                pd.Timestamp(d).normalize(), dow_bucket(int(pd.Timestamp(d).dayofweek), dow_mode)
+            )
+        )
     else:
         df["dowb"] = df["day"].dt.dayofweek.map(lambda d: dow_bucket(int(d), dow_mode))
 
@@ -257,15 +263,18 @@ def build_profiles(
     thresholds: dict[str, np.ndarray] = {}
     for ride, sub in day_stats.groupby("unique_id", observed=True):
         thresholds[ride] = crowd_thresholds(sub["level"].to_numpy(dtype=float), n_buckets)
-    df["crowd"] = [
-        crowd_bucket(lv, thresholds[r])
-        for r, lv in zip(df["unique_id"], df["level"])
-    ]
+    df["crowd"] = [crowd_bucket(lv, thresholds[r]) for r, lv in zip(df["unique_id"], df["level"])]
 
     # 4. Averaged normalised curves at each fallback granularity (+ park-wide ultimate).
     prof = ShapeProfiles(
-        park_id=park_id, slot_count=slot_count, dow_mode=dow_mode, min_obs=min_obs,
-        alpha=alpha, beta=beta, smooth=smooth, thresholds=thresholds,
+        park_id=park_id,
+        slot_count=slot_count,
+        dow_mode=dow_mode,
+        min_obs=min_obs,
+        alpha=alpha,
+        beta=beta,
+        smooth=smooth,
+        thresholds=thresholds,
         g_rcd=_curves(df, ["unique_id", "crowd", "dowb"], slot_count),
         g_rc=_curves(df, ["unique_id", "crowd"], slot_count),
         g_rd=_curves(df, ["unique_id", "dowb"], slot_count),

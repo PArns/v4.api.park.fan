@@ -73,10 +73,20 @@ def _variant_curve(prof: P.ShapeProfiles, ride: str, crowd: int, dow: str, varia
 
 
 def run_backtest(
-    panel: pd.DataFrame, *, park_id: str, slot_count: int, eval_days: int = 14,
-    dow_mode: str = "wend", n_buckets: int = 3, min_day_peak: float = 5.0,
-    min_day_slots: int = 8, min_obs: int = 5, day_label: dict | None = None,
-    alpha: float = 0.5, beta: float = 0.6, smooth: int = 0,
+    panel: pd.DataFrame,
+    *,
+    park_id: str,
+    slot_count: int,
+    eval_days: int = 14,
+    dow_mode: str = "wend",
+    n_buckets: int = 3,
+    min_day_peak: float = 5.0,
+    min_day_slots: int = 8,
+    min_obs: int = 5,
+    day_label: dict | None = None,
+    alpha: float = 0.5,
+    beta: float = 0.6,
+    smooth: int = 0,
     variants=("park", "ride", "dow", "crowd", "crowd_dow", "additive"),
 ) -> pd.DataFrame:
     """Train on all-but-last-eval_days, score each variant on the held-out days. Returns a
@@ -91,9 +101,18 @@ def run_backtest(
     train = panel[panel["day"] < cutoff]
     ev = panel[panel["day"] >= cutoff]
     prof = P.build_profiles(
-        train, park_id=park_id, slot_count=slot_count, dow_mode=dow_mode,
-        n_buckets=n_buckets, min_day_peak=min_day_peak, min_day_slots=min_day_slots,
-        min_obs=min_obs, day_label=day_label, alpha=alpha, beta=beta, smooth=smooth,
+        train,
+        park_id=park_id,
+        slot_count=slot_count,
+        dow_mode=dow_mode,
+        n_buckets=n_buckets,
+        min_day_peak=min_day_peak,
+        min_day_slots=min_day_slots,
+        min_obs=min_obs,
+        day_label=day_label,
+        alpha=alpha,
+        beta=beta,
+        smooth=smooth,
     )
     if prof is None:
         return pd.DataFrame()
@@ -107,8 +126,9 @@ def run_backtest(
         if (ride,) not in prof.g_r and prof.g_park is None:
             continue
         crowd = prof.level_to_crowd(ride, peak)
-        dow = ((day_label.get(pd.Timestamp(day).normalize()) if day_label else None)
-               or P.dow_bucket(int(pd.Timestamp(day).dayofweek), dow_mode))
+        dow = (day_label.get(pd.Timestamp(day).normalize()) if day_label else None) or P.dow_bucket(
+            int(pd.Timestamp(day).dayofweek), dow_mode
+        )
         actual = np.full(slot_count, np.nan)
         actual[g["slot"].to_numpy(dtype=int)] = g["y"].to_numpy(dtype=float)
         obs = np.isfinite(actual)
@@ -126,13 +146,15 @@ def run_backtest(
         alld = np.concatenate(chunks) if chunks else np.array([])
         if alld.size == 0:
             continue
-        rows.append({"variant": v, "segment": seg, "n_slots": int(alld.size),
-                     "mae": float(alld.mean())})
+        rows.append(
+            {"variant": v, "segment": seg, "n_slots": int(alld.size), "mae": float(alld.mean())}
+        )
     return pd.DataFrame(rows)
 
 
 def main():
     import pipeline
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     ap = argparse.ArgumentParser(description="Shape backtest (form quality, given true level)")
     ap.add_argument("parks", nargs="*")
@@ -142,6 +164,7 @@ def main():
     import daytypes
     import db
     from config import get_settings
+
     s = get_settings()
     parks = pipeline.scope_park_ids(args.parks or None)
     frames = []
@@ -153,13 +176,21 @@ def main():
         day_label = None
         if meta.get("country"):
             day_label = daytypes.daytype_map(
-                db.fetch_holidays(meta["country"]), meta.get("region"), panel["day"])
+                db.fetch_holidays(meta["country"]), meta.get("region"), panel["day"]
+            )
         res = run_backtest(
-            panel, park_id=pid, slot_count=s.slots_per_day, eval_days=args.eval_days,
-            dow_mode=s.SHAPE_DOW_MODE, n_buckets=s.SHAPE_CROWD_BUCKETS,
-            min_day_peak=s.SHAPE_MIN_DAY_PEAK, min_day_slots=s.SHAPE_MIN_DAY_SLOTS,
-            min_obs=s.SHAPE_MIN_OBS_PER_CELL, day_label=day_label,
-            alpha=s.SHAPE_ALPHA_CROWD, beta=s.SHAPE_BETA_DAYTYPE,
+            panel,
+            park_id=pid,
+            slot_count=s.slots_per_day,
+            eval_days=args.eval_days,
+            dow_mode=s.SHAPE_DOW_MODE,
+            n_buckets=s.SHAPE_CROWD_BUCKETS,
+            min_day_peak=s.SHAPE_MIN_DAY_PEAK,
+            min_day_slots=s.SHAPE_MIN_DAY_SLOTS,
+            min_obs=s.SHAPE_MIN_OBS_PER_CELL,
+            day_label=day_label,
+            alpha=s.SHAPE_ALPHA_CROWD,
+            beta=s.SHAPE_BETA_DAYTYPE,
             smooth=s.SHAPE_SMOOTH_SLOTS,
         )
         if not res.empty:
@@ -170,13 +201,16 @@ def main():
         return
     allres = pd.concat(frames, ignore_index=True)
     # pool across parks: n-weighted MAE per variant × segment
-    pooled = (allres.assign(se=allres["mae"] * allres["n_slots"])
-              .groupby(["segment", "variant"], as_index=False)
-              .agg(n=("n_slots", "sum"), se=("se", "sum")))
+    pooled = (
+        allres.assign(se=allres["mae"] * allres["n_slots"])
+        .groupby(["segment", "variant"], as_index=False)
+        .agg(n=("n_slots", "sum"), se=("se", "sum"))
+    )
     pooled["mae"] = pooled["se"] / pooled["n"]
     order = {"all": 0, "busy>=60": 1, "mid30-59": 2, "quiet<30": 3}
-    pooled = pooled.sort_values(by=["segment", "mae"],
-                                key=lambda c: c.map(order) if c.name == "segment" else c)
+    pooled = pooled.sort_values(
+        by=["segment", "mae"], key=lambda c: c.map(order) if c.name == "segment" else c
+    )
     for seg in sorted(pooled["segment"].unique(), key=lambda x: order.get(x, 9)):
         sub = pooled[pooled["segment"] == seg]
         line = "  ".join(f"{r.variant}={r.mae:.2f}(n{int(r.n)})" for r in sub.itertuples())

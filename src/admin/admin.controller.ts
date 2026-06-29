@@ -55,6 +55,7 @@ export class AdminController {
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
+    @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -311,6 +312,37 @@ export class AdminController {
     }
     const job = await this.pcnShadowQueue.add(jobName, {}, { priority: 10 });
     return { message: `PCN ${action} job queued`, jobId: job.id.toString() };
+  }
+
+  /**
+   * Manually trigger the Shape day-curve shadow jobs (queue → shape-shadow processor →
+   * shape-service). `build` is the bring-up trigger (persist profiles); then `forecast`
+   * writes shape_forecasts and `score` writes the shape_comparisons board.
+   */
+  @Post("shape/:action")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger a Shape shadow job (build | forecast | score)",
+    description:
+      "Enqueues the matching shape-shadow job. 'build' persists the additive+smooth " +
+      "profiles; 'forecast' writes shape_forecasts; 'score' writes the board.",
+  })
+  @ApiResponse({ status: 202, description: "Shape job queued" })
+  async triggerShape(
+    @Param("action") action: string,
+  ): Promise<{ message: string; jobId: string }> {
+    const jobName = {
+      build: "build-shape",
+      forecast: "forecast-shape",
+      score: "score-shape",
+    }[action];
+    if (!jobName) {
+      throw new BadRequestException(
+        `Unknown Shape action '${action}' (expected build | forecast | score)`,
+      );
+    }
+    const job = await this.shapeShadowQueue.add(jobName, {}, { priority: 10 });
+    return { message: `Shape ${action} job queued`, jobId: job.id.toString() };
   }
 
   /**

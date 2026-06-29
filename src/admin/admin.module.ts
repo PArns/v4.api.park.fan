@@ -18,6 +18,7 @@ import { SystemHealthService } from "./system-health.service";
     BullModule.registerQueue({ name: "prediction-accuracy" }),
     BullModule.registerQueue({ name: "analytics" }),
     BullModule.registerQueue({ name: "pcn-shadow" }),
+    BullModule.registerQueue({ name: "shape-shadow" }),
   ],
   controllers: [AdminController],
   providers: [SystemHealthService],
