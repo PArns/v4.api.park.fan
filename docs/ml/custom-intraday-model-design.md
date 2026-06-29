@@ -39,6 +39,12 @@
 - **Aufwand:** ~**6–10 Wochen** fokussierter Arbeit bis zum schattenlaufenden, messbaren
   Modell (eine Person), plus laufende Datenakkumulation. Risiko über die bestehende
   Backtest-Harness (`backtest_intraday_nowcast.py`) eng kontrollierbar.
+- **Long-Term gehört in ein *zweites* Modell, nicht in dasselbe.** Das dominante Signal wechselt
+  mit dem Horizont: intraday entscheidet der **Live-Zustand**, long-term entscheiden **Known-Future-
+  Kovariaten** (Kalender/Holiday/Saison). Ein Modell für beides ist der Kompromiss, der heute schon
+  scheitert. → **Zwei Modellfamilien**, horizont-stratifiziert (siehe §10). Das eigene Bau-ROI liegt
+  bei **PCN (intraday)**; Long-Term ist überwiegend ein **Daten-** (≥12 Mon) plus
+  **Level×Shape-Dekompositions-**Problem, kein neues Architektur-Problem.
 
 ---
 
@@ -302,3 +308,89 @@ Quiet zu inflationieren.
 > **Leitprinzip (konsistent mit eurem „feed, don't force"):** Den Busy-Tail *nicht* per
 > Loss-Daumen erzwingen, sondern dem Modell das fehlende **Signal** (gelernter Park-Crowd-Zustand)
 > und die richtige **Verteilung** (ehrliche Schiefe, zweckgerecht serviert) geben.
+
+---
+
+## 10. Long-Term-Vorhersagen — die Zwei-Modell-Architektur
+
+**Grundprinzip: ein Modell pro Horizont-Regime, weil das dominante Signal mit dem Horizont
+wechselt.** Genau hier scheitern Ein-Modell-Ansätze (CatBoost *und* TFT) heute: dieselben
+autoregressiven Features, die intraday gold sind, degenerieren long-term zu „typischer letzter
+Wochentag" — und dieselben Kalender-Features, die long-term entscheidend sind, werden intraday vom
+Live-Zustand verdrängt. **Deshalb: zwei Modellfamilien, nicht eine.**
+
+| Horizont | dominantes Signal | Modell | Granularität |
+|---|---|---|---|
+| **0–24 h** (Nowcast) | **Live-Zustand** (Queue jetzt, Velocity, Park-Crowd heute) | **PCN** (§3–4) | 15-Min-Slots, Re-Inferenz alle 15 Min |
+| **~1–3 Tage** (Übergang) | gemischt | **Blend** PCN ⨯ Long-Term | täglich + Shape |
+| **1–365 Tage** (Calendar / Long-Term) | **Known-Future** (Kalender, Holiday, Saison, Events, Wetter-Klimatologie) | **LCM + Shape** (§10.1) | Tages-Level + gerenderte Tageskurve |
+
+Der Live-Zustand ist long-term **wertlos** (er ist nicht bekannt), die Known-Future-Kovariaten sind
+intraday **fast wertlos** (der heutige Holiday-Flag erklärt nicht, warum *diese Queue jetzt* 45 Min
+ist). Zwei Modelle ist also nicht Bequemlichkeit, sondern die korrekte Faktorisierung des Problems.
+
+### 10.1 Das Long-Term-Modell: Level × Shape (Dekomposition)
+
+15-Min-Slots 365 Tage vorauszusagen ist aussichtslos (und sinnlos — niemand will die Queue um
+14:15 in 7 Monaten). Die ehrliche Faktorisierung ist **Level × Shape**:
+
+1. **LCM — Long-term Crowd/Level-Modell:** „Wie voll wird Datum *D* für Ride *r*?" → **ein Wert pro
+   Ride-Tag** (Tages-Peak P90 / Crowd-Level), getrieben **rein von Known-Future**: Kalender,
+   Holiday/Schulferien je Region, Bridge-Days, Saison (Jahres-Seasonality), Event-Kalender,
+   Wetter-Klimatologie, geplante Öffnungszeiten. **Das ist genau die Stärke des bestehenden
+   TFT-Daily** (`nf-service`, heute bis 60 d geshippt, schlägt CatBoost auf Busy/Headliner). →
+   **Kein neues Architektur-Problem.** Der Hebel ist (a) **Horizont ausdehnen** (60 → 90 → 365),
+   limitiert durch Datenreife, und (b) Static-/Event-Kovariaten anreichern.
+2. **Shape-Modell — die Tageskurve:** gegeben ein Tages-Level, render die **typische 15-Min-/Stunden-
+   Kurve** für *diesen* Ride bei *diesem* Crowd-Level / DOW / Saison (Open-Ramp → Mittagspeak →
+   Abend). Ein kleines, gelerntes Profil-Modell (oder normalisierte historische Profile je
+   Ride×Crowd-Bucket). Billig, datensparsam, und es **bedient den gesamten Stack**: es expandiert
+   *jede* Tages-Level-Vorhersage (long-term ODER der Daily-Crowd-Forecast) in eine servierbare
+   Stundenkurve — und füllt damit genau die Lücke, die heute CatBoost für Tag 61–365 + intraday-Shape
+   notdürftig stopft.
+
+> **Warum das elegant ist:** Das LCM macht die *robuste, kalendergetriebene* Vorhersage (ein Wert,
+> wenig Rauschen, viel Signal). Das Shape-Modell macht die *datensparsame* Expansion auf die
+> Servier-Granularität. Beides zusammen ist weit dateneffizienter als ein Monster-Modell, das
+> 15-Min × 365 d direkt forecastet.
+
+### 10.2 Ehrliche Einordnung: Long-Term ist überwiegend ein Daten-Problem
+
+- Jahres-Seasonality kann ein Modell erst lernen, wenn es **einen vollen Zyklus gesehen** hat.
+  Aktuell ~6–7 Mon → **bei ~Dez 2026 ein volles Jahr.** Bis dahin ist der far-future-Horizont
+  fundamental durch Daten gedeckelt, **nicht** durch Architektur. Das deckt sich exakt mit eurer
+  Doku (h=60 deferred „wants ~8 months of history", Re-Test ~Aug).
+- Folgerung: **Nicht** jetzt einen schweren neuen Long-Term-Net bauen. Stattdessen: TFT-Daily als
+  LCM weiterführen, Horizont mit der Datenreife ausdehnen, das **Shape-Modell** als das eine neue
+  (kleine) Stück ergänzen, und den Blend (§10.3) sauber definieren. Der Bau-Aufwand fließt nach
+  **PCN (intraday)**, wo Architektur *tatsächlich* der Hebel ist.
+
+### 10.3 Übergangszone & geteilte Bausteine
+
+- **Blend (~1–3 Tage):** Wo beide Modelle gelten, gewichtet überblenden (PCN-Gewicht fällt mit dem
+  Lead, LCM-Gewicht steigt) — analog zu eurem heutigen Merge „TFT near-term über CatBoost long tail".
+- **Geteilte Konzepte:** Der **Park-Crowd-Zustand** ist in beiden Welten zentral — intraday als
+  *gelernte latente Größe* (PCN), long-term als *vorhergesagtes Tages-Crowd-Level* (LCM). Das
+  **Shape-Modell ist geteilte Infrastruktur** (expandiert jeden Level-Forecast). So bleiben die zwei
+  Modelle konzeptionell kohärent statt zwei Silos.
+
+### 10.4 Aufwand & Machbarkeit Long-Term-Track
+
+| Stück | Inhalt | Aufwand | RTX 5080 |
+|---|---|---|---|
+| LCM | TFT-Daily weiterführen; Horizont 60→90→365 mit Datenreife; Event-/Static-Kovariaten | **~1–2 Wo** (+ Warten auf Daten) | trivial (läuft heute ~6 Min/Nacht, oft sogar CPU-fähig) |
+| Shape-Modell | normalisierte Profile je Ride×Crowd×DOW×Saison, gelernt | **~1–2 Wo** | trivial (klein) |
+| Blend/Handoff | Lead-gewichtetes Überblenden PCN⨯LCM, Serving-Merge | **~1 Wo** | n/a |
+
+→ Der Long-Term-Track ist **deutlich billiger** als PCN und hardware-unkritisch. Das Nadelöhr ist
+Datenreife (Zeit), nicht Compute.
+
+**Gesamtbild der Roadmap:**
+
+1. **PCN (intraday)** — der eigentliche eigene Bau, höchstes ROI (§3–9).
+2. **LCM = TFT-Daily weiterführen** — Horizont mit Daten ausdehnen, kein neues Net.
+3. **Shape-Modell** — das eine neue kleine Stück, bedient beide Tracks.
+4. **Blend** — sauberer Lead-gewichteter Übergang.
+
+So bekommt ihr **zwei Modelle, zwei Ansätze** — korrekt nach dominantem Signal getrennt — ohne den
+Long-Term-Teil zu über-engineeren, wo ohnehin die Zeit (Datenreife) der bindende Faktor ist.
