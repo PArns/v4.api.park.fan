@@ -84,6 +84,24 @@ def test_fallback_to_coarser_when_sparse():
     assert tag_a in {"rcd", "rc", "rd"}
 
 
+def test_daytype_conditioner_and_additive_render():
+    # supply a daytype map (the holiday-driven second conditioner) and render additively.
+    df = _panel()
+    dl = {pd.Timestamp(d).normalize(): ("wend" if pd.Timestamp(d).dayofweek >= 5 else "reg")
+          for d in df["day"].unique()}
+    prof = P.build_profiles(df, park_id="P", slot_count=96, day_label=dl,
+                            alpha=0.5, beta=0.6)
+    assert prof.alpha == 0.5 and prof.beta == 0.6
+    # g_rd is now keyed by the daytype labels, not weekday buckets
+    assert {k[1] for k in prof.g_rd} <= {"wend", "reg"}
+    curve = prof.render_additive("a", level=60.0, dt_label="reg")
+    # synthetic shape is level-invariant → deviations ~0 → additive form ≈ ride base (tent)
+    assert curve[44] == pytest.approx(60.0, abs=1e-6)         # apex == level
+    assert np.isnan(curve[0])                                 # not-open slot stays NaN
+    # missing daytype cell → deviation falls back to 0 (ride base), still finite at apex
+    assert np.isfinite(prof.render_additive("a", 60.0, "nonexistent")[44])
+
+
 def test_drops_non_operating_days_and_empty():
     # a near-empty day (one tiny slot) must not define a shape
     df = _panel(days=10, rides=("a",))

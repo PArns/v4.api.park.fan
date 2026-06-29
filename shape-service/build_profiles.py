@@ -45,15 +45,15 @@ def _sample(park_id: str) -> None:
     logger.info("coverage: %s", prof.coverage())
     ride = next(iter(prof.g_r))[0]
     for lvl in (10.0, 40.0, 80.0):
-        curve = prof.render(ride, lvl, dow_index=5)  # a Saturday
-        _, tag = prof.shape(ride, lvl, 5)
-        finite = curve[np.isfinite(curve)]
-        logger.info(
-            "ride %s level=%.0f crowd=%d via %-4s → %d open slots, peak=%.1f mean=%.1f",
-            ride, lvl, prof.level_to_crowd(ride, lvl), tag, finite.size,
-            float(np.nanmax(curve)) if finite.size else float("nan"),
-            float(np.nanmean(curve)) if finite.size else float("nan"),
-        )
+        for dt in ("reg", "wend", "school"):
+            curve = prof.render_additive(ride, lvl, dt)  # the served additive model
+            finite = curve[np.isfinite(curve)]
+            logger.info(
+                "ride %s level=%.0f crowd=%d daytype=%-6s → %d open slots, peak=%.1f mean=%.1f",
+                ride, lvl, prof.level_to_crowd(ride, lvl), dt, finite.size,
+                float(np.nanmax(curve)) if finite.size else float("nan"),
+                float(np.nanmean(curve)) if finite.size else float("nan"),
+            )
 
 
 if __name__ == "__main__":

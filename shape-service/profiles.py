@@ -55,6 +55,8 @@ class ShapeProfiles:
     slot_count: int
     dow_mode: str
     min_obs: int
+    alpha: float = 0.5   # crowd-deviation shrinkage weight (additive render, §8a)
+    beta: float = 0.6    # daytype-deviation shrinkage weight
     thresholds: dict[str, np.ndarray] = field(default_factory=dict)  # ride -> crowd edges
     g_rcd: dict[tuple, Cell] = field(default_factory=dict)  # (ride, crowd, dow)
     g_rc: dict[tuple, Cell] = field(default_factory=dict)   # (ride, crowd)
@@ -88,10 +90,39 @@ class ShapeProfiles:
         return self.pick_curve(ride, crowd, dow_bucket(dow_index, self.dow_mode))
 
     def render(self, ride: str, level: float, dow_index: int) -> Curve:
-        """Servable per-slot wait curve = predicted level × normalised shape. NaN slots
-        (ride not typically open then) stay NaN."""
+        """Servable per-slot wait curve = predicted level × normalised shape (single finest
+        cell, fallback hierarchy). NaN slots (ride not typically open then) stay NaN."""
         curve, _ = self.shape(ride, level, dow_index)
         return level * curve
+
+    # -- additive-shrinkage render (the chosen Phase-1 model, design §8a) ----
+    def _ride_base(self, ride: str) -> Curve:
+        cell = self.g_r.get((ride,))
+        base = cell[0] if cell is not None else self.g_park
+        return base if base is not None else np.full(self.slot_count, np.nan)
+
+    def _dev(self, dct: dict, key: tuple, base: Curve) -> Curve:
+        """Deviation (cell − base); 0 where the cell is absent → falls back to base."""
+        cell = dct.get(key)
+        if cell is None:
+            return np.zeros(self.slot_count)
+        d = cell[0] - base
+        return np.where(np.isfinite(d), d, 0.0)
+
+    def render_additive(self, ride: str, level: float, dt_label: str) -> Curve:
+        """The served form: level × clip(ride_base + α·(crowd−base) + β·(daytype−base)).
+        Combines the crowd level and the weekend/holiday/ferien/bridge/season daytype
+        ADDITIVELY (each as a shrunk deviation from the ride's mean form) — data-efficient,
+        no multiplicative sparsity. Both deviations fall back to 0 when their cell is
+        missing. NaN base slots (ride not open then) stay NaN. `dt_label` must be the day's
+        daytype (see daytypes.py)."""
+        base = self._ride_base(ride)
+        crowd = self.level_to_crowd(ride, level)
+        cdev = self._dev(self.g_rc, (ride, crowd), base)
+        ddev = self._dev(self.g_rd, (ride, dt_label), base)
+        form = np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0)
+        form = np.where(np.isfinite(base), form, np.nan)
+        return level * form
 
     def coverage(self) -> dict:
         """Diagnostic summary: how many rides, and the fallback-tag mix over (ride, crowd,
@@ -131,11 +162,16 @@ def build_profiles(
     min_day_peak: float = 5.0,
     min_day_slots: int = 8,
     min_obs: int = 5,
+    day_label: dict | None = None,
+    alpha: float = 0.5,
+    beta: float = 0.6,
 ) -> ShapeProfiles | None:
     """Build the normalised-form profiles for one park's panel.
 
-    df columns: unique_id, day (datetime), slot (int), y (median wait). Returns None if no
-    day qualifies as shape-defining.
+    df columns: unique_id, day (datetime), slot (int), y (median wait). `day_label`, if
+    given, maps each day to a daytype label (school/pubhol/wend/peak/reg from daytypes.py)
+    used as the second conditioner (g_rd) and by render_additive; otherwise the second
+    conditioner is the weekend/weekday bucket. Returns None if no day qualifies.
     """
     if df.empty:
         return None
@@ -156,7 +192,12 @@ def build_profiles(
     # 2. Normalise each kept day's curve by its level (level-free form).
     df = df.merge(day_stats[["unique_id", "day", "level"]], on=["unique_id", "day"])
     df["y_norm"] = df["y"] / df["level"]
-    df["dowb"] = df["day"].dt.dayofweek.map(lambda d: dow_bucket(int(d), dow_mode))
+    if day_label:
+        df["dowb"] = df["day"].map(
+            lambda d: day_label.get(pd.Timestamp(d).normalize(),
+                                    dow_bucket(int(pd.Timestamp(d).dayofweek), dow_mode)))
+    else:
+        df["dowb"] = df["day"].dt.dayofweek.map(lambda d: dow_bucket(int(d), dow_mode))
 
     # 3. Per-ride crowd thresholds (terciles of that ride's daily peaks) + per-row bucket.
     thresholds: dict[str, np.ndarray] = {}
@@ -170,7 +211,7 @@ def build_profiles(
     # 4. Averaged normalised curves at each fallback granularity (+ park-wide ultimate).
     prof = ShapeProfiles(
         park_id=park_id, slot_count=slot_count, dow_mode=dow_mode, min_obs=min_obs,
-        thresholds=thresholds,
+        alpha=alpha, beta=beta, thresholds=thresholds,
         g_rcd=_curves(df, ["unique_id", "crowd", "dowb"], slot_count),
         g_rc=_curves(df, ["unique_id", "crowd"], slot_count),
         g_rd=_curves(df, ["unique_id", "dowb"], slot_count),

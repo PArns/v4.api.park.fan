@@ -71,6 +71,28 @@ def park_timezone(park_id: str) -> str | None:
     return None if df.empty else df["timezone"].iloc[0]
 
 
+def park_meta(park_id: str) -> dict | None:
+    """timezone + country/region (for the holiday-driven daytype conditioner)."""
+    sql = text('SELECT timezone, "countryCode" AS country, "regionCode" AS region '
+               'FROM parks WHERE id = :pid')
+    with engine().connect() as c:
+        df = pd.read_sql(sql, c, params={"pid": park_id})
+    return None if df.empty else df.iloc[0].to_dict()
+
+
+def fetch_holidays(country: str) -> pd.DataFrame:
+    """Holiday dates for a country: date, region, holidayType (school | public | bridge |
+    observance | bank). School holidays (ferien) are regional; the daytype builder filters
+    to nationwide + the park's own region."""
+    sql = text('SELECT date, region, "holidayType" AS holiday_type '
+               'FROM holidays WHERE country = :c')
+    with engine().connect() as c:
+        df = pd.read_sql(sql, c, params={"c": country})
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    return df
+
+
 def fetch_shape_panel(park_id: str, tz: str) -> pd.DataFrame:
     """Long panel for ONE park: one row per (ride, park-local day, slot-of-day) within the
     history window.

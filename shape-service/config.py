@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # rescales to whatever statistic the LCM predicts (peak/P90 factor) — see design §6.
     SHAPE_LEVEL_STAT: str = "peak"
 
+    # Additive-shrinkage render weights (grid-searched 2026-06-29, §8a): the served form is
+    # ride_base + α·(crowd_curve − base) + β·(daytype_curve − base). Both calendar factors
+    # (crowd + the weekend/holiday/ferien/bridge/season daytype) help additively; shrinking
+    # (<1) regularises the noisy per-cell deviations. β>α because daytype carries the most
+    # busy-tail signal. Multiplicative crowd×daytype and weather were tested and rejected
+    # (data-walled / no form signal).
+    SHAPE_ALPHA_CROWD: float = 0.5
+    SHAPE_BETA_DAYTYPE: float = 0.6
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

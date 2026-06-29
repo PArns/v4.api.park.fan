@@ -137,12 +137,33 @@ Shape-MAE **bei wahrem Tages-Level** (isoliert die Form), gepoolt; und Zell-Bese
    unter der Vertrauensschwelle. Das ist die **quantifizierte Datenwand für non-parametrisches
    Zell-Splitting**.
 
-**Folgerung:** Die Faktoren helfen, aber non-parametrische Zellen können sie nicht *gemeinsam* mit
-crowd nutzen (Sparsity). Der richtige Weg ist der **Phase-2 Learned-Shape**: crowd + Wochenende +
-Feiertag + Ferien + Brücke + Saison (+ später Wetter) als **Features** in ein kleines Modell (GBT/MLP
-mit Ride-Embedding), das Stärke teilt statt Daten zu zerteilen — keine Sparsity, alle Faktoren nutzbar.
-Das LCM (TFT-Daily) nutzt dieselben Faktoren bereits für das **Level** (FUTR_EXOG). Saison-Konditionierung
-(`peak`-Archetyp) ist erst mit vollem Jahreszyklus (~Dez 2026) voll lernbar.
+### 8b. Bake-off (2026-06-29): wie man die Faktoren *gemeinsam* nutzt
+
+Non-parametrische Zellen können crowd + daytype nicht multiplikativ kombinieren (Sparsity, oben).
+Getestet wurden drei Wege, beide Faktoren zu vereinen — gemessen am Shape-MAE bei wahrem Level,
+faire Common-Rows:
+
+| Kandidat | busy-MAE | Urteil |
+|---|---|---|
+| gelerntes MLP (ride-emb + slot-emb + Faktoren als Features) | 17.5 | **verliert** — kann ride-spezifische Busy-Form nicht memorieren |
+| gelerntes Residual (NP-crowd-Basis + gelernte Korrektur) | 18.6 | **verliert** — Tag-Faktor-Korrektur ist ride-spezifisch, globales Net **überfittet** |
+| **additive Shrinkage** `base + α·(crowd−base) + β·(daytype−base)` | **16.4** | **GEWINNER** |
+| Wetter (wet/dry) als 3. additiver Term | — | **abgelehnt** (optimales γ=0, jedes Gewicht verschlechtert) |
+
+**Gewähltes Phase-1-Modell:** die **additive Shrinkage** mit grid-gesuchten Gewichten **α=0.5 (crowd),
+β=0.6 (daytype)** → busy **16.4–16.7** vs crowd 17.0–17.3 (**−3.5%**) und daytype-allein 16.8 (−2.3%).
+Beide Faktoren tragen additiv bei; Shrinken (<1) regularisiert die verrauschten Per-Zell-Abweichungen.
+Implementiert als `ShapeProfiles.render_additive` (profiles.py); daytype aus `daytypes.py` (Holidays).
+
+**Warum kein gelerntes Modell:** Der Tag-Faktor-Form-Effekt ist **ride-spezifisch**; NP memoriert das pro
+Ride besser als ein globales Net es generalisiert, und das Net überfittet die Korrektur. Das ist *nicht*
+„Modell zu schwach", sondern die korrekte Erkenntnis: bei dieser Datenmenge schlägt die robuste,
+interpretierbare NP-Komposition das gelernte Modell. Ein gelerntes Modell wird erst mit deutlich mehr
+Daten (mehr Tage je Ride×Bedingung) konkurrenzfähig.
+
+**Datengrenze erreicht:** Wetter trägt keine Rest-Form (γ=0), feiner-NP ist data-walled, das gelernte
+Modell überfittet. Weitere Gewinne (Wetter-Form, feinere daytypes, echte Saison) brauchen **mehr
+Tage/Jahreszyklus** (~Dez 2026). Das LCM (TFT-Daily) nutzt dieselben Faktoren bereits fürs **Level**.
 
 ## 9. Ehrliche Einordnung
 

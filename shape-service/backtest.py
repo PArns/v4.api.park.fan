@@ -52,6 +52,12 @@ def _variant_curve(prof: P.ShapeProfiles, ride: str, crowd: int, dow: str, varia
     the shared park/ride fill applied by the caller)."""
     g_park = prof.g_park
     g_r = prof.g_r.get((ride,), (None,))[0]
+    if variant == "additive":
+        # the chosen model: ride_base + α·(crowd−base) + β·(daytype−base), shrunk (§8a).
+        base = prof._ride_base(ride)
+        cdev = prof._dev(prof.g_rc, (ride, crowd), base)
+        ddev = prof._dev(prof.g_rd, (ride, dow), base)
+        return np.clip(base + prof.alpha * cdev + prof.beta * ddev, 0.0, 2.0)
     table = {
         "park": prof.g_park,
         "ride": g_r,
@@ -68,11 +74,13 @@ def _variant_curve(prof: P.ShapeProfiles, ride: str, crowd: int, dow: str, varia
 def run_backtest(
     panel: pd.DataFrame, *, park_id: str, slot_count: int, eval_days: int = 14,
     dow_mode: str = "wend", n_buckets: int = 3, min_day_peak: float = 5.0,
-    min_day_slots: int = 8, min_obs: int = 5,
-    variants=("park", "ride", "dow", "crowd", "crowd_dow"),
+    min_day_slots: int = 8, min_obs: int = 5, day_label: dict | None = None,
+    alpha: float = 0.5, beta: float = 0.6,
+    variants=("park", "ride", "dow", "crowd", "crowd_dow", "additive"),
 ) -> pd.DataFrame:
     """Train on all-but-last-eval_days, score each variant on the held-out days. Returns a
-    tidy frame: variant × segment → (n_slots, mae)."""
+    tidy frame: variant × segment → (n_slots, mae). When `day_label` is given the second
+    conditioner (and the 'dow'/'additive' variants) use the daytype label, not weekday."""
     if panel.empty:
         return pd.DataFrame()
     days = np.sort(panel["day"].unique())
@@ -84,7 +92,7 @@ def run_backtest(
     prof = P.build_profiles(
         train, park_id=park_id, slot_count=slot_count, dow_mode=dow_mode,
         n_buckets=n_buckets, min_day_peak=min_day_peak, min_day_slots=min_day_slots,
-        min_obs=min_obs,
+        min_obs=min_obs, day_label=day_label, alpha=alpha, beta=beta,
     )
     if prof is None:
         return pd.DataFrame()
@@ -98,7 +106,8 @@ def run_backtest(
         if (ride,) not in prof.g_r and prof.g_park is None:
             continue
         crowd = prof.level_to_crowd(ride, peak)
-        dow = P.dow_bucket(int(pd.Timestamp(day).dayofweek), dow_mode)
+        dow = ((day_label.get(pd.Timestamp(day).normalize()) if day_label else None)
+               or P.dow_bucket(int(pd.Timestamp(day).dayofweek), dow_mode))
         actual = np.full(slot_count, np.nan)
         actual[g["slot"].to_numpy(dtype=int)] = g["y"].to_numpy(dtype=float)
         obs = np.isfinite(actual)
@@ -129,21 +138,27 @@ def main():
     ap.add_argument("--eval-days", type=int, default=14)
     args = ap.parse_args()
 
+    import daytypes
     import db
     from config import get_settings
     s = get_settings()
     parks = pipeline.scope_park_ids(args.parks or None)
     frames = []
     for pid in parks:
-        tz = db.park_timezone(pid)
-        if tz is None:
+        meta = db.park_meta(pid)
+        if meta is None or not meta.get("timezone"):
             continue
-        panel = db.fetch_shape_panel(pid, tz)
+        panel = db.fetch_shape_panel(pid, meta["timezone"])
+        day_label = None
+        if meta.get("country"):
+            day_label = daytypes.daytype_map(
+                db.fetch_holidays(meta["country"]), meta.get("region"), panel["day"])
         res = run_backtest(
             panel, park_id=pid, slot_count=s.slots_per_day, eval_days=args.eval_days,
             dow_mode=s.SHAPE_DOW_MODE, n_buckets=s.SHAPE_CROWD_BUCKETS,
             min_day_peak=s.SHAPE_MIN_DAY_PEAK, min_day_slots=s.SHAPE_MIN_DAY_SLOTS,
-            min_obs=s.SHAPE_MIN_OBS_PER_CELL,
+            min_obs=s.SHAPE_MIN_OBS_PER_CELL, day_label=day_label,
+            alpha=s.SHAPE_ALPHA_CROWD, beta=s.SHAPE_BETA_DAYTYPE,
         )
         if not res.empty:
             res["park_id"] = pid
