@@ -1,0 +1,6 @@
+# Conservative lint for shape-service: real bugs only (pyflakes + syntax), not style
+# noise. Mirrors pcn-service.
+line-length = 100
+
+[lint]
+select = ["F", "E9"]

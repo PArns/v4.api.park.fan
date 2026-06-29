@@ -1,0 +1,72 @@
+"""Settings for the Shape service (Tageskurven-Expansion — see
+docs/ml/shape-model-design.md).
+
+Reuses the same DB_* env vars as ml-/nf-/pcn-service so it points at the same Postgres
+without extra config. Phase 0 only needs the DB + the profile-shaping knobs; a learned
+candidate's hyperparameters land here once the bake-off (Phase 2) picks one.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    # Database (same names as ml-/nf-/pcn-service)
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str = "parkfan"
+    DB_PASSWORD: str = ""
+    DB_NAME: str = "parkfan"
+
+    MODEL_DIR: str = "/app/models"
+
+    # --- Scope ---
+    # Comma-separated park UUIDs. Empty = all parks. Profiles are ALWAYS per ride within a
+    # park (the daily form is a within-ride signal); this just selects which parks to build.
+    SHAPE_PARK_IDS: str = ""
+    # History window (days). 548 (~1.5y) is forward-compatible — caps at what exists today
+    # (~6-7mo) and auto-grows as history accumulates (same pattern as PCN/nf).
+    SHAPE_WINDOW_DAYS: int = 548
+
+    # --- Slot grid (must mirror the serving grid) ---
+    SHAPE_SLOT_MINUTES: int = 15        # 96 slots/day; CatBoost/nf bin to 15-min too
+    SHAPE_MIN_WAIT: int = 5             # min STANDBY wait to count as a real observation
+
+    # --- What counts as a shape-defining operating day ---
+    # A day defines a ride's form only if it actually operated: a real daily peak and enough
+    # slots. Near-empty/closed days would otherwise inject flat noise into the profile.
+    SHAPE_MIN_DAY_PEAK: int = 5         # daily peak (the normaliser) must be >= this
+    SHAPE_MIN_DAY_SLOTS: int = 8        # >= this many operating slots in the day
+
+    # --- Conditioning ---
+    # Day-of-week split: 'wend' = weekend vs weekday (robust default); 'full' = per-DOW.
+    SHAPE_DOW_MODE: str = "wend"
+    # Crowd buckets from terciles of EACH ride's own daily-peak distribution (quiet/mid/busy)
+    # — self-calibrating, needs no external crowd source. (Phase 0 fixes this at 3.)
+    SHAPE_CROWD_BUCKETS: int = 3
+    # A (ride, crowd, dow) cell is trusted only with >= this many distinct days; otherwise the
+    # render falls back to a coarser cell (see profiles.pick_curve).
+    SHAPE_MIN_OBS_PER_CELL: int = 5
+    # Statistic used to normalise each day's curve (the "level"). 'peak' = daily max. Serving
+    # rescales to whatever statistic the LCM predicts (peak/P90 factor) — see design §6.
+    SHAPE_LEVEL_STAT: str = "peak"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def park_ids(self) -> list[str]:
+        return [p.strip() for p in self.SHAPE_PARK_IDS.split(",") if p.strip()]
+
+    @property
+    def slots_per_day(self) -> int:
+        return (24 * 60) // self.SHAPE_SLOT_MINUTES
+
+    @property
+    def slot_freq(self) -> str:
+        return f"{self.SHAPE_SLOT_MINUTES}min"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
