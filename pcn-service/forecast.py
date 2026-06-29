@@ -51,6 +51,18 @@ def forecast_park(park_id: str, version: str) -> int:
     t = pipeline.build_park_tensor(park_id)
     if t is None:
         return 0
+    # Skip stale parks (seasonally closed / dead data) BEFORE loading the model + inferring:
+    # forecasting from a freshest slot that is hours/weeks old only writes rows whose target
+    # slots fall outside any future score window → unscoreable + pcn_forecasts bloat. The slot
+    # grid is park-local naive, so compare the latest slot to "now" in the park wall-clock.
+    tz = pipeline.park_timezone(park_id)
+    if tz is not None:
+        latest = pd.Timestamp(t.slots[-1])
+        age_h = (pd.Timestamp.now(tz=tz).tz_localize(None) - latest).total_seconds() / 3600.0
+        if age_h > settings.PCN_MAX_ORIGIN_AGE_HOURS:
+            logger.info("park %s: freshest slot %s is %.0fh stale (> %dh) — skip forecast",
+                        park_id, latest, age_h, settings.PCN_MAX_ORIGIN_AGE_HOURS)
+            return 0
     model = _load_model(park_id)
     if model is None:
         logger.warning("park %s: no trained model — run /train first", park_id)

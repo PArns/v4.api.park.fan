@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # Quantiles to PERSIST for shadow serving: q0.5 = displayed wait, q0.8 = crowd
     # signal (per-purpose serving, mirroring CatBoost's MultiQuantile split).
     PCN_SERVE_QUANTILES: str = "0.5,0.8"
+    # Skip forecasting a park whose freshest 15-min slot is older than this (hours).
+    # Seasonally-closed / dead-data parks have a stale latest slot (weeks/months old);
+    # forecasting forward from there only writes rows whose targets fall outside any future
+    # score window → unscoreable + pcn_forecasts bloat. 36h clears normal overnight/short
+    # gaps (≤~16h) with margin while catching genuinely stale parks.
+    PCN_MAX_ORIGIN_AGE_HOURS: int = 36
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
