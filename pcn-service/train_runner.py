@@ -37,8 +37,11 @@ def main() -> int:
         return 0
     except Exception as e:  # noqa: BLE001
         import traceback
+        # Full traceback to stderr (server log); the status file (read by /train/status)
+        # keeps only a short message so no stack trace reaches an HTTP client.
+        traceback.print_exc()
         _write({"is_training": False, "status": "failed", "version": version,
-                "error": f"{e}\n{traceback.format_exc()}"})
+                "error": str(e)})
         return 1
 
 

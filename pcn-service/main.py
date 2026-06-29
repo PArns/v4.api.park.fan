@@ -99,7 +99,10 @@ def gpu_stats():
             capture_output=True, text=True, timeout=5, check=True,
         ).stdout
     except Exception as e:  # noqa: BLE001
-        return {"available": False, "reason": f"nvidia-smi failed: {e}"}
+        # Log details server-side; don't leak the exception text to the HTTP client
+        # (CodeQL: information exposure through an exception).
+        logger.warning("nvidia-smi query failed: %s", e)
+        return {"available": False, "reason": "nvidia-smi query failed"}
     gpus = []
     for line in out.strip().splitlines():
         p = [c.strip() for c in line.split(",")]
@@ -154,9 +157,11 @@ def _run_job(kind: str, fn, **kwargs):
             _write(_JOB_STATUS, {"running": False, "kind": kind, "status": "completed",
                                  "result": res})
         except Exception as e:  # noqa: BLE001
-            import traceback
+            # Full traceback to the server log; the status file (surfaced by /status)
+            # keeps only a short message — no stack-trace exposure to clients.
+            logger.exception("%s job failed", kind)
             _write(_JOB_STATUS, {"running": False, "kind": kind, "status": "failed",
-                                 "error": f"{e}\n{traceback.format_exc()}"})
+                                 "error": str(e)})
 
     threading.Thread(target=_go, daemon=True).start()
     return {"status": f"{kind}_started"}
