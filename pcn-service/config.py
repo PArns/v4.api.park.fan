@@ -41,8 +41,13 @@ class Settings(BaseSettings):
     # ml-service operating-day heuristic (>=3 attractions), applied per 15-min slot.
     PCN_MIN_RIDES_OPEN: int = 3
 
-    # --- Model / training (the bake-off winner; defaults = GP-STGNN, quantile) ---
-    PCN_ARCH: str = "gpstgnn"          # 'gpstgnn' | 'graphwavenet' (graph) | 'localgru' (ablation)
+    # --- Model / training (the bake-off candidate; quantile serving) ---
+    # graphwavenet (dilated TCN, parallel over time) trains ~6× faster than the recurrent
+    # gpstgnn AND saturates the GPU (8.6s vs 54s/park, ~97% vs ~35% util → ~16min vs ~1.7h
+    # for 111 parks). gpstgnn unrolls L sequentially → GPU-launch bound. Busy-tail QUALITY
+    # is still arbitrated by run_bakeoff.py + the live shadow board; switch back via env if
+    # gpstgnn proves materially better on the busy segment.
+    PCN_ARCH: str = "graphwavenet"     # 'graphwavenet' (TCN) | 'gpstgnn' (RNN) | 'localgru' (ablation)
     PCN_LOSS: str = "quantile"         # 'quantile' (per-purpose serving) | 'tweedie'
     # Context slots (L). The recurrent AGCRN encoder unrolls L SEQUENTIALLY, so L drives
     # train time; 192 = 2 days of 15-min (96/day) keeps the recent trajectory + daily
