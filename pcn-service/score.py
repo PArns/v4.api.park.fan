@@ -109,41 +109,53 @@ def _matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
     if actuals.empty:
         return pd.DataFrame()
     cat = db.fetch_catboost_local(park_id, tz, lo_utc, hi_utc)
-
-    m = pcn.merge(actuals, on=["unique_id", "target_slot"], how="inner")
-    if not cat.empty:
-        m = m.merge(cat, on=["unique_id", "target_slot"], how="left")
-    else:
-        m["cat_pred"] = np.nan
+    if cat.empty:
+        # No CatBoost pred in this park's window → no fair head-to-head possible here.
+        return pd.DataFrame()
+    # INNER-join BOTH actuals and CatBoost: PCN and CatBoost are scored on exactly the SAME
+    # matched (attraction, 15-min slot) population, so their MAE/bias are comparable and n
+    # is identical (design doc §12 — a fair head-to-head). The previous LEFT-join on CatBoost
+    # kept PCN-only slots, producing misleading unequal-n cells across the two models.
+    m = (pcn.merge(actuals, on=["unique_id", "target_slot"], how="inner")
+            .merge(cat, on=["unique_id", "target_slot"], how="inner"))
     return m.rename(columns={"cat_pred": "catboost"})
 
 
-def score_park(park_id: str, lookback_hours: int = 24) -> int:
+def _park_matched(park_id: str, lookback_hours: int) -> pd.DataFrame:
     tz = pipeline.park_timezone(park_id)
     if tz is None:
-        return 0
-    m = _matched_frame(park_id, tz, lookback_hours)
-    if m.empty:
-        return 0
-    rows = aggregate_comparison(m, models=["pcn", "catboost"])
-    n = db.upsert_pcn_comparisons(rows)
-    logger.info("park %s: scored %d comparison rows (matched slots=%d)",
-                park_id, n, len(m))
-    return n
+        return pd.DataFrame()
+    return _matched_frame(park_id, tz, lookback_hours)
 
 
 def score_all(lookback_hours: int = 24, park_ids: list[str] | None = None) -> dict:
+    """Pool every park's matched (PCN q0.5 ⋈ actual ⋈ CatBoost) slots, then aggregate
+    ACROSS ALL PARKS into the global board in ONE upsert.
+
+    pcn_intraday_comparisons is keyed by (target_date, model, segment, lead_bucket) with NO
+    park dimension, so the rows MUST be pooled park-wide before the upsert. A per-park
+    upsert had each park overwrite the previous park's cells (last-writer-wins), so the
+    board reflected a single arbitrary park's slots instead of the whole estate."""
     parks = pipeline.scope_park_ids(park_ids)
     t0 = time.time()
-    total = 0
+    frames = []
     for pid in parks:
         try:
-            total += score_park(pid, lookback_hours)
+            m = _park_matched(pid, lookback_hours)
+            if not m.empty:
+                frames.append(m)
         except Exception as e:  # noqa: BLE001
             logger.warning("park %s scoring failed: %s", pid, e)
-    logger.info("scoring done: %d rows across %d parks in %.1fs",
-                total, len(parks), time.time() - t0)
-    return {"rows": total, "parks": len(parks)}
+    if not frames:
+        logger.info("scoring: 0 matched slots across %d parks in %.1fs",
+                    len(parks), time.time() - t0)
+        return {"rows": 0, "matched_slots": 0, "parks": len(parks)}
+    combined = pd.concat(frames, ignore_index=True)
+    rows = aggregate_comparison(combined, models=["pcn", "catboost"])
+    n = db.upsert_pcn_comparisons(rows)
+    logger.info("scoring done: %d board rows from %d matched slots across %d parks in %.1fs",
+                n, len(combined), len(parks), time.time() - t0)
+    return {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks)}
 
 
 if __name__ == "__main__":
