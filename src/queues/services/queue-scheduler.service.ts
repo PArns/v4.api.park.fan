@@ -51,6 +51,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
+    @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -372,6 +373,60 @@ export class QueueSchedulerService implements OnModuleInit {
           repeat: { cron: "0 7 * * *" }, // Daily at 07:00 UTC
           jobId: "nf-score-comparison-cron",
           attempts: 1, // idempotent upsert by (targetDate, model) — no retry needed
+        },
+      );
+    }
+
+    // PCN intraday shadow (design doc §12). Runs in the shadow — writes pcn_forecasts /
+    // pcn_intraday_comparisons only; CatBoost stays the served champion until a gate win.
+    // train-pcn at 08:30 UTC: AFTER TFT (~05:30) + CatBoost (~06:15) so the shared-GPU
+    // training spikes never overlap.
+    const hasPcnTrainCron = await this.hasRepeatableJob(
+      this.pcnShadowQueue,
+      "pcn-train-cron",
+    );
+    if (!hasPcnTrainCron) {
+      await this.pcnShadowQueue.add(
+        "train-pcn",
+        {},
+        {
+          repeat: { cron: "30 8 * * *" }, // Daily 08:30 UTC (after TFT + CatBoost)
+          jobId: "pcn-train-cron",
+          attempts: 1, // long, overlap-guarded — never retry-stack a 2nd train
+        },
+      );
+    }
+
+    // forecast-pcn every 15 min: re-infer with the current state → durable pcn_forecasts.
+    const hasPcnForecastCron = await this.hasRepeatableJob(
+      this.pcnShadowQueue,
+      "pcn-forecast-cron",
+      "*/15 * * * *",
+    );
+    if (!hasPcnForecastCron) {
+      await this.pcnShadowQueue.add(
+        "forecast-pcn",
+        {},
+        {
+          repeat: { cron: "*/15 * * * *" },
+          jobId: "pcn-forecast-cron",
+        },
+      );
+    }
+
+    // score-pcn hourly: score matured forecasts vs actuals + CatBoost (idempotent upsert).
+    const hasPcnScoreCron = await this.hasRepeatableJob(
+      this.pcnShadowQueue,
+      "pcn-score-cron",
+    );
+    if (!hasPcnScoreCron) {
+      await this.pcnShadowQueue.add(
+        "score-pcn",
+        {},
+        {
+          repeat: { cron: "0 * * * *" }, // hourly
+          jobId: "pcn-score-cron",
+          attempts: 1,
         },
       );
     }

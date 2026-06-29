@@ -655,20 +655,22 @@ nur bei Gate-Erfüllung — Flip-Entscheidung.
 | Bake-off + GP-STGNN/LocalGRU-Ablation | `run_bakeoff.py`, `gp_stgnn.py`, `backbones.py` | ✅ |
 | Deploy: `pcn-service` in docker-compose (Port 8002, `pcn-models`-Volume, cu128) | `docker-compose.yml`, `Dockerfile` | ✅ |
 
-**Verbleibend — NestJS-Wiring (live-berührend → bewusst als Spec, nicht blind verdrahtet,
-da hier nicht baubar/testbar):**
+**✅ NestJS-Wiring implementiert** (typecheck `nest build` grün, eslint sauber, 69
+Queue-/Admin-Specs grün):
 
-1. **Cron-Trigger** (`src/queues/services/queue-scheduler.service.ts`): drei repeatable
-   BullMQ-Jobs analog zu nf — `POST {PCN_SERVICE_URL}/forecast` alle 15 Min, `…/train`
-   nächtlich (~05:30, nach den P50-Baselines), `…/score` stündlich. `PCN_SERVICE_URL` ist
-   bereits in der `api`-Env der compose-Datei gesetzt.
-2. **Processor** (neu, analog `nf-forecast.processor.ts`): dünner HTTP-Aufruf der drei
-   Endpoints + Logging; keine eigene Logik (die lebt im Python-Service).
-3. **Admin-Sichtbarkeit** (`src/admin/system-health.service.ts`): `pcn_intraday_comparisons`
-   lesen (z. B. letzte `target_date`, Segmente busy/quiet × Lead) und neben dem
-   bestehenden `model_comparisons`-Block ausgeben — gleiche Darstellung wie der daily-Board.
+1. **Cron-Trigger** (`queue-scheduler.service.ts`, Queue `pcn-shadow`): `forecast-pcn`
+   alle 15 Min, `train-pcn` nächtlich **08:30 UTC** (bewusst NACH TFT ~05:30 + CatBoost
+   ~06:15 — kein GPU-Trainings-Overlap auf dem geteilten Host), `score-pcn` stündlich.
+2. **Processor** `pcn-shadow.processor.ts` (analog `nf-forecast.processor.ts`): dünne
+   HTTP-Trigger auf `{PCN_SERVICE_URL}/train|forecast|score`, Overlap-Guard + Poll bei
+   train, 409-Skip bei forecast/score. Registriert in `queues.module.ts`.
+3. **Admin-Sichtbarkeit** (`system-health.service.ts`): `pcnComparison()` liest
+   `pcn_intraday_comparisons` (Segmente all/busy/mid/quiet, Lead `all`) neben dem
+   `model_comparisons`-Board → `ml.pcnComparison` in `/v1/admin/system-health`.
+4. **Config**: `getPcnServiceUrl()` (`ml-services.config.ts`); `PCN_SERVICE_URL` in der
+   `api`-Env (compose).
 
-> Bewusste Grenze: Der Python-Service ist vollständig, isoliert (neue Tabellen via
-> `CREATE TABLE IF NOT EXISTS`, eigener Container) und getestet. Das NestJS-Wiring ändert
-> die *produktive* Job-Steuerung und ist hier nicht baubar/lauffähig — daher als präzise,
-> direkt anwendbare Spec übergeben statt ungetestet in den Live-Code geschrieben.
+> Der Python-Service bleibt isoliert (neue Tabellen via `CREATE TABLE IF NOT EXISTS`,
+> eigener Container); das NestJS-Wiring ist additiv (neue Queue/Processor/Cron + ein
+> read-only Health-Block) und wurde lokal gebaut, gelintet und gegen die bestehenden
+> Specs getestet.

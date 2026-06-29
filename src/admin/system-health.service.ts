@@ -33,17 +33,27 @@ export class SystemHealthService {
   ) {}
 
   async getHealth(): Promise<Record<string, unknown>> {
-    const [host, gpu, postgres, redis, freshness, catboost, tft, comparison] =
-      await Promise.all([
-        this.safe("host", () => this.host()),
-        this.safe("gpu", () => this.gpu()),
-        this.safe("postgres", () => this.postgres()),
-        this.safe("redis", () => this.redisStats()),
-        this.safe("freshness", () => this.freshness()),
-        this.safe("catboost", () => this.catboost()),
-        this.safe("tft", () => this.tft()),
-        this.safe("comparison", () => this.comparison()),
-      ]);
+    const [
+      host,
+      gpu,
+      postgres,
+      redis,
+      freshness,
+      catboost,
+      tft,
+      comparison,
+      pcnComparison,
+    ] = await Promise.all([
+      this.safe("host", () => this.host()),
+      this.safe("gpu", () => this.gpu()),
+      this.safe("postgres", () => this.postgres()),
+      this.safe("redis", () => this.redisStats()),
+      this.safe("freshness", () => this.freshness()),
+      this.safe("catboost", () => this.catboost()),
+      this.safe("tft", () => this.tft()),
+      this.safe("comparison", () => this.comparison()),
+      this.safe("pcnComparison", () => this.pcnComparison()),
+    ]);
     return {
       timestamp: new Date().toISOString(),
       host,
@@ -51,7 +61,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
-      ml: { catboost, tft, comparison },
+      ml: { catboost, tft, comparison, pcnComparison },
     };
   }
 
@@ -415,6 +425,29 @@ export class SystemHealthService {
                   CASE COALESCE(segment,'all') WHEN 'all' THEN 0 WHEN 'busy' THEN 1 ELSE 2 END,
                   model
          LIMIT 60`,
+    );
+    return { rows, count: rows.length };
+  }
+
+  /** PCN intraday shadow board (PCN vs CatBoost on matched 15-min slots, latest scored
+   * days). Owned by pcn-service; the headline rows are the per-segment 'all'-lead view. */
+  private async pcnComparison() {
+    const exists = await this.dataSource.query(
+      `SELECT to_regclass('public.pcn_intraday_comparisons') AS t`,
+    );
+    if (!exists?.[0]?.t) return { rows: [], note: "no shadow board yet" };
+    const rows = await this.dataSource.query(
+      `SELECT target_date AS "targetDate", model, segment,
+              lead_bucket AS "leadBucket", n,
+              round(mae::numeric, 1) AS mae,
+              round(bias::numeric, 1) AS bias
+         FROM pcn_intraday_comparisons
+        WHERE lead_bucket = 'all'
+        ORDER BY target_date DESC,
+                 CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
+                              WHEN 'mid' THEN 2 ELSE 3 END,
+                 model
+        LIMIT 60`,
     );
     return { rows, count: rows.length };
   }
