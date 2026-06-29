@@ -59,12 +59,24 @@ def test_localgru_ablation_runs():
     assert np.isfinite(pred).all()
 
 
-def test_registry_has_both_candidates():
+def test_registry_has_all_candidates():
     import backbones
     reg = backbones.build_registry(max_steps=2, hidden=8)
-    assert set(reg) == {"gpstgnn", "localgru"}
-    assert reg["gpstgnn"]().arch == "gpstgnn"
-    assert reg["localgru"]().arch == "localgru"
+    assert set(reg) == {"gpstgnn", "graphwavenet", "localgru"}
+    for name in reg:
+        assert reg[name]().arch == name
+
+
+def test_graphwavenet_runs():
+    import backbones
+    t = _tensor()
+    m = backbones.GraphWaveNetModel(loss="quantile", hidden=8, embed_dim=4, layers=2,
+                                    max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    pred = m.predict(t, ev, L=4, H=2)
+    assert pred.shape == (ev.size, len(t.ride_ids), 2)
+    assert np.isfinite(pred).all()
 
 
 def test_save_load_roundtrip(tmp_path):

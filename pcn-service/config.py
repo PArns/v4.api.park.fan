@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     PCN_MIN_RIDES_OPEN: int = 3
 
     # --- Model / training (the bake-off winner; defaults = GP-STGNN, quantile) ---
-    PCN_ARCH: str = "gpstgnn"          # 'gpstgnn' (graph) | 'localgru' (ablation)
+    PCN_ARCH: str = "gpstgnn"          # 'gpstgnn' | 'graphwavenet' (graph) | 'localgru' (ablation)
     PCN_LOSS: str = "quantile"         # 'quantile' (per-purpose serving) | 'tweedie'
     PCN_INPUT_SIZE: int = 480          # context slots (L) = 5 days of 15-min
     PCN_HORIZON: int = 48              # forecast slots (H) = 12 h
