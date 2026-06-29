@@ -30,7 +30,12 @@ settings = get_settings()
 app = FastAPI(title="Park Fan PCN Service", version="0.1.0")
 
 _TRAIN_STATUS = os.path.join(settings.MODEL_DIR, "pcn_training_status.json")
-_JOB_STATUS = os.path.join(settings.MODEL_DIR, "pcn_job_status.json")
+
+
+def _job_status_path(kind: str) -> str:
+    # PER-KIND lock: forecast (*/15) and score (hourly) both fire at :00, so a single
+    # shared lock would let forecast starve score every hour. Separate files = independent.
+    return os.path.join(settings.MODEL_DIR, f"pcn_job_{kind}.json")
 
 
 def _read(path: str, default: dict) -> dict:
@@ -118,8 +123,11 @@ def train_status():
 
 @app.get("/status")
 def job_status():
-    return {"train": _read(_TRAIN_STATUS, {"status": "idle"}),
-            "job": _read(_JOB_STATUS, {"status": "idle"})}
+    return {
+        "train": _read(_TRAIN_STATUS, {"status": "idle"}),
+        "forecast": _read(_job_status_path("forecast"), {"status": "idle"}),
+        "score": _read(_job_status_path("score"), {"status": "idle"}),
+    }
 
 
 @app.post("/train")
@@ -146,22 +154,23 @@ def train(req: TrainRequest):
 
 
 def _run_job(kind: str, fn, **kwargs):
-    """Run a light job (forecast/score) off the request thread with a shared status."""
-    if _read(_JOB_STATUS, {}).get("running"):
-        raise HTTPException(status_code=409, detail="A job is already running")
-    _write(_JOB_STATUS, {"running": True, "kind": kind, "status": "running"})
+    """Run a light job (forecast/score) off the request thread with a PER-KIND lock."""
+    path = _job_status_path(kind)
+    if _read(path, {}).get("running"):
+        raise HTTPException(status_code=409, detail=f"{kind} already running")
+    _write(path, {"running": True, "kind": kind, "status": "running"})
 
     def _go():
         try:
             res = fn(**kwargs)
-            _write(_JOB_STATUS, {"running": False, "kind": kind, "status": "completed",
-                                 "result": res})
+            _write(path, {"running": False, "kind": kind, "status": "completed",
+                          "result": res})
         except Exception as e:  # noqa: BLE001
             # Full traceback to the server log; the status file (surfaced by /status)
             # keeps only a short message — no stack-trace exposure to clients.
             logger.exception("%s job failed", kind)
-            _write(_JOB_STATUS, {"running": False, "kind": kind, "status": "failed",
-                                 "error": str(e)})
+            _write(path, {"running": False, "kind": kind, "status": "failed",
+                          "error": str(e)})
 
     threading.Thread(target=_go, daemon=True).start()
     return {"status": f"{kind}_started"}
