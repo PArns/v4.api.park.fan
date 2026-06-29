@@ -118,7 +118,8 @@ def gpu_stats():
             capture_output=True, text=True, timeout=5, check=True,
         ).stdout
     except Exception as e:  # noqa: BLE001
-        return {"available": False, "reason": f"nvidia-smi failed: {e}"}
+        logger.warning("nvidia-smi query failed: %s", e)
+        return {"available": False, "reason": "nvidia-smi query failed"}
 
     def _num(v):
         v = v.strip()
@@ -228,8 +229,10 @@ def run_forecast():
         return {"status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted)}
     except Exception as e:  # noqa: BLE001
         import traceback
-        logger.error("Forecast failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
+        # Full traceback to the server log; only a short message to the client
+        # (CodeQL: information exposure through an exception).
+        logger.error("Forecast failed: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/forecast/latest")
