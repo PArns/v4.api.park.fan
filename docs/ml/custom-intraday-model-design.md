@@ -640,3 +640,35 @@ ist ~99 % des Tages idle, also kann alle 15 Min mit dem aktuellen Zustand neu in
 → Reiht sich als **Phase 4** in die Roadmap (§11.7 Punkt 5) ein: *erst* offline-Bake-off-Gewinn
 (`backtest.py`), *dann* Going-Forward-Shadow zur Bestätigung gegen die Live-Realität, *dann* —
 nur bei Gate-Erfüllung — Flip-Entscheidung.
+
+### 12.5 Implementierungsstand & NestJS-Wiring (der eine reviewte Schritt)
+
+**✅ In `pcn-service/` gebaut & getestet (34 Tests grün, CUDA-first):**
+
+| Stück | Datei | Status |
+|---|---|---|
+| Durable `pcn_forecasts` (immutable per origin) + Writer/DDL | `db.py` | ✅ |
+| Shadow-Producer (re-inferenz → `pcn_forecasts`) | `forecast.py` | ✅ |
+| `pcn_intraday_comparisons` + Scorer (pcn ⋈ actual ⋈ CatBoost, segmentiert) | `db.py`, `score.py` | ✅ |
+| Per-Park-Training + Persistenz | `train.py`, `train_runner.py` | ✅ |
+| FastAPI-Service (`/health /gpu /train /forecast /score /status`) | `main.py` | ✅ |
+| Bake-off + GP-STGNN/LocalGRU-Ablation | `run_bakeoff.py`, `gp_stgnn.py`, `backbones.py` | ✅ |
+| Deploy: `pcn-service` in docker-compose (Port 8002, `pcn-models`-Volume, cu128) | `docker-compose.yml`, `Dockerfile` | ✅ |
+
+**Verbleibend — NestJS-Wiring (live-berührend → bewusst als Spec, nicht blind verdrahtet,
+da hier nicht baubar/testbar):**
+
+1. **Cron-Trigger** (`src/queues/services/queue-scheduler.service.ts`): drei repeatable
+   BullMQ-Jobs analog zu nf — `POST {PCN_SERVICE_URL}/forecast` alle 15 Min, `…/train`
+   nächtlich (~05:30, nach den P50-Baselines), `…/score` stündlich. `PCN_SERVICE_URL` ist
+   bereits in der `api`-Env der compose-Datei gesetzt.
+2. **Processor** (neu, analog `nf-forecast.processor.ts`): dünner HTTP-Aufruf der drei
+   Endpoints + Logging; keine eigene Logik (die lebt im Python-Service).
+3. **Admin-Sichtbarkeit** (`src/admin/system-health.service.ts`): `pcn_intraday_comparisons`
+   lesen (z. B. letzte `target_date`, Segmente busy/quiet × Lead) und neben dem
+   bestehenden `model_comparisons`-Block ausgeben — gleiche Darstellung wie der daily-Board.
+
+> Bewusste Grenze: Der Python-Service ist vollständig, isoliert (neue Tabellen via
+> `CREATE TABLE IF NOT EXISTS`, eigener Container) und getestet. Das NestJS-Wiring ändert
+> die *produktive* Job-Steuerung und ist hier nicht baubar/lauffähig — daher als präzise,
+> direkt anwendbare Spec übergeben statt ungetestet in den Live-Code geschrieben.

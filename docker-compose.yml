@@ -136,6 +136,39 @@ services:
       retries: 3
       start_period: 40s
 
+  pcn-service:
+    build:
+      context: ./pcn-service
+      dockerfile: Dockerfile
+    container_name: parkfan_pcn_service
+    restart: unless-stopped
+    shm_size: 2gb
+    mem_limit: 14g # host-safe ceiling; GP-STGNN trains per-park so peak stays modest
+    ports:
+      - "8002:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: parkfan
+      DB_USER: parkfan
+      DB_PASSWORD: parkfan_dev_password
+      MODEL_DIR: /app/models
+      PCN_PARK_IDS: ${PCN_PARK_IDS:-}
+    volumes:
+      - pcn-models:/app/models
+      - ./pcn-service:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - parkfan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   api:
     build:
       context: .
@@ -155,6 +188,7 @@ services:
       REDIS_PORT: 6379
       ML_SERVICE_URL: http://ml-service:8000
       NF_SERVICE_URL: http://nf-service:8000
+      PCN_SERVICE_URL: http://pcn-service:8000
       BULL_PREFIX: parkfan
       NODE_ENV: development
     volumes:
@@ -183,6 +217,8 @@ volumes:
   ml-models:
     driver: local
   nf-models:
+    driver: local
+  pcn-models:
     driver: local
 
 networks:

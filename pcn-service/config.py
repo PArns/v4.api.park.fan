@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     # ml-service operating-day heuristic (>=3 attractions), applied per 15-min slot.
     PCN_MIN_RIDES_OPEN: int = 3
 
+    # --- Model / training (the bake-off winner; defaults = GP-STGNN, quantile) ---
+    PCN_ARCH: str = "gpstgnn"          # 'gpstgnn' (graph) | 'localgru' (ablation)
+    PCN_LOSS: str = "quantile"         # 'quantile' (per-purpose serving) | 'tweedie'
+    PCN_INPUT_SIZE: int = 480          # context slots (L) = 5 days of 15-min
+    PCN_HORIZON: int = 48              # forecast slots (H) = 12 h
+    PCN_HIDDEN_SIZE: int = 64
+    PCN_MAX_STEPS: int = 500
+    # Quantiles to PERSIST for shadow serving: q0.5 = displayed wait, q0.8 = crowd
+    # signal (per-purpose serving, mirroring CatBoost's MultiQuantile split).
+    PCN_SERVE_QUANTILES: str = "0.5,0.8"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
@@ -51,6 +62,10 @@ class Settings(BaseSettings):
     def slot_freq(self) -> str:
         """Pandas offset alias for the slot grid, e.g. '15min'."""
         return f"{self.PCN_SLOT_MINUTES}min"
+
+    @property
+    def serve_quantiles(self) -> list[float]:
+        return [float(q) for q in self.PCN_SERVE_QUANTILES.split(",") if q.strip()]
 
 
 @lru_cache

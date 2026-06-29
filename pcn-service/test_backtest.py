@@ -124,6 +124,28 @@ def test_run_backtest_persistence_identity():
     assert "persist" in sc["ALL"] and "yest" in sc["ALL"]
 
 
+def test_pool_scores_is_n_weighted():
+    import run_bakeoff
+    parkA = {"ALL": {"m": (10.0, -2.0, 100), "persist": (12.0, -3.0, 100)}}
+    parkB = {"ALL": {"m": (20.0, +4.0, 300), "persist": (18.0, +1.0, 300)}}
+    pooled = run_bakeoff.pool_scores([parkA, parkB])
+    mae, bias, n = pooled["ALL"]["m"]
+    assert n == 400
+    # n-weighted: (10*100 + 20*300)/400 = 17.5 ; bias (-2*100 + 4*300)/400 = 2.5
+    assert mae == pytest.approx(17.5)
+    assert bias == pytest.approx(2.5)
+
+
+def test_pool_scores_skips_empty_and_nan():
+    import run_bakeoff
+    parks = [
+        {"busy >=60": {"m": (float("nan"), float("nan"), 0)}},
+        {"busy >=60": {"m": (15.0, -5.0, 50)}},
+    ]
+    pooled = run_bakeoff.pool_scores(parks)
+    assert pooled["busy >=60"]["m"] == (15.0, -5.0, 50)
+
+
 def test_npz_roundtrip_then_backtest(tmp_path):
     t = _make_tensor(days=10, freq="6h")
     p = tmp_path / "crt.npz"

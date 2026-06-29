@@ -23,6 +23,9 @@ COPY . .
 
 RUN mkdir -p /app/models
 
-# Batch/precompute tool, not a server. Default to building the tensor for all parks in
-# scope; override args at `docker run` (e.g. `backtest.py --tensor …` for the bake-off).
-ENTRYPOINT ["python3", "build_cross_ride_tensor.py"]
+EXPOSE 8000
+
+# FastAPI service (mirrors nf-service). Single worker: GPU training/inference is
+# memory-heavy and this is batch/precompute-oriented, not high-QPS. The batch tools
+# stay runnable via `docker exec <pcn> python3 {train,forecast,score,run_bakeoff}.py`.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--workers", "1", "--timeout-keep-alive", "120"]

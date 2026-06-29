@@ -48,6 +48,39 @@ def test_runs_through_backtest_harness():
     assert "persist" in res["scores"]["ALL"]
 
 
+def test_localgru_ablation_runs():
+    import backbones
+    t = _tensor()
+    m = backbones.LocalGRUModel(loss="quantile", hidden=8, max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    pred = m.predict(t, ev, L=4, H=2)
+    assert pred.shape == (ev.size, len(t.ride_ids), 2)
+    assert np.isfinite(pred).all()
+
+
+def test_registry_has_both_candidates():
+    import backbones
+    reg = backbones.build_registry(max_steps=2, hidden=8)
+    assert set(reg) == {"gpstgnn", "localgru"}
+    assert reg["gpstgnn"]().arch == "gpstgnn"
+    assert reg["localgru"]().arch == "localgru"
+
+
+def test_save_load_roundtrip(tmp_path):
+    t = _tensor()
+    m = gp_stgnn.GPSTGNNModel(loss="quantile", hidden=8, embed_dim=4,
+                              max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    p = tmp_path / "m.pt"
+    m.save(str(p), ride_ids=t.ride_ids)
+    m2 = gp_stgnn.GPSTGNNModel(loss="quantile", hidden=8, embed_dim=4).load(str(p))
+    import numpy as _np
+    _np.testing.assert_allclose(m.predict(t, ev, 4, 2), m2.predict(t, ev, 4, 2), rtol=1e-5)
+    assert m2.ride_ids == t.ride_ids
+
+
 def test_adaptive_adjacency_is_row_stochastic():
     # softmax(ReLU(E·Eᵀ)) rows sum to 1 — the learned park-crowd coupling.
     g = gp_stgnn.GPSTGNN(n_nodes=5, dim_in=3, hidden=4, embed_dim=4,

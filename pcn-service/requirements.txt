@@ -1,5 +1,10 @@
-# PCN service — Phase 0 (cross-ride tensor pipeline).
-# Model deps (torch / STGNN libs) are added when the bake-off picks a backbone.
+# PCN service — cross-ride tensor + GP-STGNN bake-off + shadow producer/scorer.
+# torch is installed separately in the Dockerfile (cu128 wheel for Blackwell).
+
+# FastAPI & Server
+fastapi==0.127.0
+uvicorn[standard]==0.39.0
+gunicorn==23.0.0
 
 # Data
 pandas==2.2.3

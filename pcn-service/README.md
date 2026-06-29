@@ -41,8 +41,16 @@ and sensor gaps out of the loss (no spurious-zero training — the flaw that bro
 | `windowing.py` | pure-numpy lazy supervised windowing (context/horizon, baselines) |
 | `metrics.py` | masked MAE/bias by busy segment + lead bucket |
 | `backtest.py` | bake-off driver + `Model` protocol + `PersistenceModel`; rolling-origin, leakage-free |
-| `gp_stgnn.py` | **GP-STGNN** (AGCRN adaptive graph + probabilistic head), CUDA-first, `Model`-conformant |
-| `test_*.py` | 25 tests: tensor, windowing/metrics/driver, and torch-gated model smoke tests |
+| `torch_model.py` | shared `TorchSeqModel` base (fit/predict/save/load/scaler/loss, CUDA-first) |
+| `gp_stgnn.py` | **GP-STGNN** (AGCRN adaptive graph + probabilistic head), `Model`-conformant |
+| `backbones.py` | `LocalGRUModel` (no-graph ablation) + candidate registry |
+| `run_bakeoff.py` | bake-off across parks → pooled segmented report (JSON) |
+| `pipeline.py` | shared DB→tensor step (train / forecast / bake-off) |
+| `train.py` / `train_runner.py` | nightly per-park training + persistence (subprocess runner) |
+| `forecast.py` | shadow producer: re-infer → durable `pcn_forecasts` |
+| `score.py` | shadow scorer: pcn vs actual vs CatBoost → `pcn_intraday_comparisons` |
+| `main.py` | FastAPI service (`/health` `/gpu` `/train` `/forecast` `/score` `/status`) |
+| `test_*.py` | 34 tests: tensor, windowing/metrics/driver, score aggregation, torch-gated model |
 
 ## Bake-off & model
 
@@ -89,11 +97,27 @@ python3 build_cross_ride_tensor.py --limit 5 --save ./models   # build + save a 
 | `PCN_MIN_WAIT` | 5 | min STANDBY wait counted as a real observation |
 | `PCN_MIN_RIDES_OPEN` | 3 | rides reporting to call a slot "park open" |
 
+## Service & shadow flow
+
+```bash
+# nightly: one GP-STGNN per park (CUDA), persisted to /app/models/pcn_<park>.pt
+curl -XPOST pcn-service:8000/train
+# every ~15 min: re-infer → durable pcn_forecasts (the shadow snapshot)
+curl -XPOST pcn-service:8000/forecast
+# periodically: score matured forecasts vs actuals + CatBoost → pcn_intraday_comparisons
+curl -XPOST pcn-service:8000/score
+```
+
+The going-forward shadow (design doc §12): `pcn_forecasts` is immutable per origin, so
+the genuine forward record survives for a fair head-to-head vs CatBoost. PCN never serves
+users until `pcn_intraday_comparisons` shows a busy/headliner win (gate §8).
+
 ## Next
 
-1. **More backbones in the bake-off** — wrap Graph WaveNet / MTGNN / DeepGLO + a
-   Chronos-Bolt zero-shot baseline as `backtest.Model`s alongside the GP-STGNN.
-2. **CatBoost in the comparison** — score the live CatBoost intraday preds on the same
-   matched eval population (going-forward shadow; see design doc §12).
-3. **Shadow-serving** behind the existing busy/headliner gate (design doc §12):
-   durable `pcn_forecasts` snapshot + a scoring job mirroring `score-comparison`.
+1. **NestJS wiring** (design doc §12.5): BullMQ cron → the three endpoints above; admin
+   `system-health` reads `pcn_intraday_comparisons`. (The one live-touching step — left
+   as a reviewed spec.)
+2. **More backbones** — Graph WaveNet / MTGNN / DeepGLO + a Chronos-Bolt zero-shot
+   baseline as `backtest.Model`s (drop-in via the registry).
+3. **Run the bake-off** on real parks once tensors build, pick the winning backbone +
+   loss, then let the shadow accumulate before any flip decision.
