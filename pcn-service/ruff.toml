@@ -1,0 +1,6 @@
+# Conservative lint for pcn-service: real bugs only (pyflakes + syntax), not style
+# noise. Keeps the signal high without churning the codebase on formatting opinions.
+line-length = 100
+
+[lint]
+select = ["F", "E9"]
