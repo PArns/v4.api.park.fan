@@ -113,6 +113,37 @@ Zwei getrennte Fehler, damit Shape isoliert vom Level beurteilt wird:
 - **Phase 2:** Learned-Shape-Kandidat + Bake-off.
 - **Phase 3:** Blend/Handoff PCN ⨯ (Level×Shape) sauber definieren (§10.3).
 
+## 8a. Phase-0-Befunde (Backtest 2026-06-29, 7 datenreiche Parks, 14d Holdout)
+
+Shape-MAE **bei wahrem Tages-Level** (isoliert die Form), gepoolt; und Zell-Besetzung über
+~6 Mon Historie:
+
+| Konditionierung | all | busy≥60 | mid | quiet | median Tage/Zelle |
+|---|---|---|---|---|---|
+| park (gröbste) | 7.47 | 19.10 | 9.93 | 3.03 | — |
+| ride (global form) | 6.67 | 17.45 | 8.54 | 2.76 | 50 |
+| **ride×crowd** | **6.58** | 17.29 | 8.69 | **2.58** | 18 |
+| ride×crowd×dow (feinste NP) | 6.77 | 17.96 | 8.90 | 2.62 | **9** (46% <10 Tage) |
+| **ride×daytype** (wend/feiertag/ferien/brücke/saison → 5 Archetypen) | 6.61 | **17.11** | **8.46** | 2.79 | — |
+| ride×crowd×daytype (multiplikativ) | 6.74 | 17.66 | 8.98 | 2.61 | — |
+
+**Drei harte Lehren:**
+1. **Ride-Form zählt** (park ≫ schlechter), **crowd ist der NP-Sweet-Spot** (knapp vor ride-global).
+2. **Die User-Faktoren (Wochenende/Feiertag/Ferien/Brücke/Saison) tragen ECHTES Form-Signal** —
+   als 5-Wege-`daytype` schlagen sie crowd **auf busy (17.11 vs 17.29) und mid (8.46 vs 8.69)**,
+   den Segmenten, die das Gate entscheiden.
+3. **NICHT multiplikativ kombinieren:** `crowd×dow` und `crowd×daytype` sind beide schlechter —
+   die feinste NP-Zelle hat median **9 Tage** (46% <10), Wetter/Holiday obendrauf → ~4–5 Tage →
+   unter der Vertrauensschwelle. Das ist die **quantifizierte Datenwand für non-parametrisches
+   Zell-Splitting**.
+
+**Folgerung:** Die Faktoren helfen, aber non-parametrische Zellen können sie nicht *gemeinsam* mit
+crowd nutzen (Sparsity). Der richtige Weg ist der **Phase-2 Learned-Shape**: crowd + Wochenende +
+Feiertag + Ferien + Brücke + Saison (+ später Wetter) als **Features** in ein kleines Modell (GBT/MLP
+mit Ride-Embedding), das Stärke teilt statt Daten zu zerteilen — keine Sparsity, alle Faktoren nutzbar.
+Das LCM (TFT-Daily) nutzt dieselben Faktoren bereits für das **Level** (FUTR_EXOG). Saison-Konditionierung
+(`peak`-Archetyp) ist erst mit vollem Jahreszyklus (~Dez 2026) voll lernbar.
+
 ## 9. Ehrliche Einordnung
 
 Klein, billig, **nicht** datengelimitet (Form ≠ Jahres-Saison), **geteilte Infrastruktur** für beide Tracks.
