@@ -77,7 +77,13 @@ def format_table(scores: dict) -> str:
     """Pretty-print the evaluate() result as MAE/bias per segment per model."""
     if not scores:
         return "(no scores)"
-    models = list(next(iter(scores.values())).keys())
+    # Union of columns across ALL segments — pooled results can drop a (segment, model)
+    # cell when it had no data, so a later segment may carry a model the first one lacks.
+    models: list[str] = []
+    for by_model in scores.values():
+        for m in by_model:
+            if m not in models:
+                models.append(m)
     width = max(len(m) for m in models)
     lines = []
     header = "  ".join(f"{m:>{width}}" for m in models)
@@ -85,7 +91,11 @@ def format_table(scores: dict) -> str:
     for seg, by_model in scores.items():
         cells = []
         for m in models:
-            mae, bias, n = by_model[m]
-            cells.append(f"{mae:5.1f}/{bias:+5.1f}".rjust(width))
+            cell = by_model.get(m)
+            if cell is None:
+                cells.append("—".rjust(width))
+            else:
+                mae, bias, n = cell
+                cells.append(f"{mae:5.1f}/{bias:+5.1f}".rjust(width))
         lines.append(f"{seg:<12}  " + "  ".join(cells))
     return "\n".join(lines)

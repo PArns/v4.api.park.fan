@@ -136,6 +136,18 @@ def test_pool_scores_is_n_weighted():
     assert bias == pytest.approx(2.5)
 
 
+def test_format_table_handles_missing_columns():
+    # pooled scores can drop a (segment, model) cell → a later segment may carry a model
+    # the first lacks; format_table must not KeyError.
+    scores = {
+        "ALL": {"a": (1.0, 0.0, 5), "b": (2.0, 0.0, 5)},
+        "busy >=60": {"a": (3.0, 0.0, 2)},  # 'b' absent here
+    }
+    out = metrics.format_table(scores)
+    assert "a" in out and "b" in out
+    assert "—" in out  # placeholder for the missing cell
+
+
 def test_pool_scores_skips_empty_and_nan():
     import run_bakeoff
     parks = [

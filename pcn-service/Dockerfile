@@ -7,6 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # PyTorch with CUDA 12.8 — REQUIRED for Blackwell sm_120 (RTX 5080). With

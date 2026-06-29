@@ -189,6 +189,16 @@ class TorchSeqModel:
 
     def load(self, path: str) -> "TorchSeqModel":
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        # Restore the TRAINED config before rebuilding the net, so build_net() and the
+        # head match the checkpoint even if this instance was constructed with different
+        # defaults (otherwise load_state_dict would mismatch silently).
+        cfg = ckpt.get("config", {})
+        self.loss = cfg.get("loss", self.loss)
+        self.quantiles = cfg.get("quantiles", self.quantiles)
+        self.tweedie_p = cfg.get("tweedie_p", self.tweedie_p)
+        self.hidden = cfg.get("hidden", self.hidden)
+        self.arch_kwargs = cfg.get("arch_kwargs", self.arch_kwargs)
+        self._median_q = self.quantiles.index(0.5) if 0.5 in self.quantiles else 0
         N, C, H = ckpt["dims"]
         self._scale = ckpt["scale"]
         self._dims = (N, C, H)

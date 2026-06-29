@@ -93,6 +93,22 @@ def test_save_load_roundtrip(tmp_path):
     assert m2.ride_ids == t.ride_ids
 
 
+def test_load_restores_trained_config(tmp_path):
+    # train with non-default hidden/embed_dim, then load into an instance built with the
+    # DEFAULTS — load() must restore the trained config so build_net matches the weights.
+    t = _tensor()
+    m = gp_stgnn.GPSTGNNModel(loss="quantile", hidden=8, embed_dim=4,
+                              max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    p = tmp_path / "m.pt"
+    m.save(str(p), ride_ids=t.ride_ids)
+    m2 = gp_stgnn.GPSTGNNModel().load(str(p))  # defaults hidden=64, embed_dim=10
+    assert m2.hidden == 8 and m2.arch_kwargs["embed_dim"] == 4
+    import numpy as _np
+    _np.testing.assert_allclose(m.predict(t, ev, 4, 2), m2.predict(t, ev, 4, 2), rtol=1e-5)
+
+
 def test_adaptive_adjacency_is_row_stochastic():
     # softmax(ReLU(E·Eᵀ)) rows sum to 1 — the learned park-crowd coupling.
     g = gp_stgnn.GPSTGNN(n_nodes=5, dim_in=3, hidden=4, embed_dim=4,

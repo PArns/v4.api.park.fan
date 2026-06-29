@@ -86,13 +86,17 @@ def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
 
 def _matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
     """Join matured PCN q0.5 forecasts ⋈ actuals ⋈ CatBoost on (attraction, slot)."""
+    # UTC window for the queue_data / wait_time_predictions queries: pass tz-AWARE
+    # datetimes (the columns are timestamptz) — matches backtest_intraday_nowcast and
+    # avoids a naive-vs-timestamptz comparison that depends on the session TZ.
     now_utc = pd.Timestamp.now(tz="UTC")
-    lo_utc = (now_utc - pd.Timedelta(hours=lookback_hours)).tz_localize(None)
-    hi_utc = now_utc.tz_localize(None)
+    lo_utc = (now_utc - pd.Timedelta(hours=lookback_hours)).to_pydatetime()
+    hi_utc = now_utc.to_pydatetime()
+    # Local window for pcn_forecasts.target_slot (a naive park-local `timestamp`).
     now_local = pd.Timestamp.now(tz=tz).tz_localize(None)
-    lo_local = now_local - pd.Timedelta(hours=lookback_hours)
+    lo_local = (now_local - pd.Timedelta(hours=lookback_hours)).to_pydatetime()
 
-    pcn = db.fetch_pcn_forecasts_window(park_id, lo_local, now_local)
+    pcn = db.fetch_pcn_forecasts_window(park_id, lo_local, now_local.to_pydatetime())
     if pcn.empty:
         return pd.DataFrame()
     pcn = pcn[np.isclose(pcn["quantile"], 0.5)]            # q0.5 = displayed wait
