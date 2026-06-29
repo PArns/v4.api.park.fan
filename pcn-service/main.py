@@ -98,10 +98,10 @@ def gpu_stats():
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5, check=True,
         ).stdout
-    except Exception as e:  # noqa: BLE001
-        # Log details server-side; don't leak the exception text to the HTTP client
-        # (CodeQL: information exposure through an exception).
-        logger.warning("nvidia-smi query failed: %s", e)
+    except Exception:  # noqa: BLE001
+        # Full traceback to the server log; don't leak the exception text to the HTTP
+        # client (CodeQL: information exposure through an exception).
+        logger.exception("nvidia-smi query failed")
         return {"available": False, "reason": "nvidia-smi query failed"}
     gpus = []
     for line in out.strip().splitlines():

@@ -117,8 +117,8 @@ def gpu_stats():
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5, check=True,
         ).stdout
-    except Exception as e:  # noqa: BLE001
-        logger.warning("nvidia-smi query failed: %s", e)
+    except Exception:  # noqa: BLE001
+        logger.exception("nvidia-smi query failed")
         return {"available": False, "reason": "nvidia-smi query failed"}
 
     def _num(v):
