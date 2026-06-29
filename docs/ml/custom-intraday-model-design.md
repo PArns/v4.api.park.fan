@@ -664,11 +664,20 @@ Queue-/Admin-Specs grün):
 2. **Processor** `pcn-shadow.processor.ts` (analog `nf-forecast.processor.ts`): dünne
    HTTP-Trigger auf `{PCN_SERVICE_URL}/train|forecast|score`, Overlap-Guard + Poll bei
    train, 409-Skip bei forecast/score. Registriert in `queues.module.ts`.
-3. **Admin-Sichtbarkeit** (`system-health.service.ts`): `pcnComparison()` liest
-   `pcn_intraday_comparisons` (Segmente all/busy/mid/quiet, Lead `all`) neben dem
-   `model_comparisons`-Board → `ml.pcnComparison` in `/v1/admin/system-health`.
-4. **Config**: `getPcnServiceUrl()` (`ml-services.config.ts`); `PCN_SERVICE_URL` in der
-   `api`-Env (compose).
+3. **Admin-Sichtbarkeit** (`system-health.service.ts`): `intradayComparison()` liest
+   `pcn_intraday_comparisons` (alle Segmente × Lead-Buckets) + ein **berechnetes Verdikt**
+   (PCN−CatBoost-MAE-Delta je Segment, n-gewichtet) → `ml.pcnComparison` in
+   `/v1/admin/system-health`.
+4. **Dedizierter Vergleichs-Endpunkt** `GET /v1/admin/ml-comparison?days=14`: leichte,
+   pollbare Sicht (nur 2 SQL-Reads, ohne Host/GPU/Service-Roundtrips) — daily
+   (`model_comparisons`) **+** intraday (Zeilen + Verdikt). Das adressiert, dass die
+   Boards vorher nur im schweren `system-health`-Blob hingen und es kein Verdikt/keine
+   Lead-Kurve gab.
+5. **Manuelle pcn-Trigger** `POST /v1/admin/pcn/{train|forecast|score}`: enqueuet den
+   jeweiligen `pcn-shadow`-Job. `train` ist der Bring-up-Trigger (der nächtliche Cron ist
+   08:30 — sonst existieren bis dahin keine Modelle).
+6. **Config**: `getPcnServiceUrl()` (`ml-services.config.ts`); `PCN_SERVICE_URL` in der
+   `api`-Env (dev + prod compose).
 
 > Der Python-Service bleibt isoliert (neue Tabellen via `CREATE TABLE IF NOT EXISTS`,
 > eigener Container); das NestJS-Wiring ist additiv (neue Queue/Processor/Cron + ein

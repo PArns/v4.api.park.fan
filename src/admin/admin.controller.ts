@@ -6,8 +6,10 @@ import {
   HttpStatus,
   Inject,
   Body,
+  Param,
   Query,
   HttpException,
+  BadRequestException,
   Logger,
 } from "@nestjs/common";
 import {
@@ -52,6 +54,7 @@ export class AdminController {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
+    @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -109,6 +112,29 @@ export class AdminController {
       })),
     );
     return { timestamp: new Date().toISOString(), queues: results };
+  }
+
+  /**
+   * Focused model-comparison board (daily TFT-vs-CatBoost + intraday PCN-vs-CatBoost).
+   *
+   * Unlike /system-health (host/gpu/postgres/redis + ML-service round-trips), this is
+   * just the two scoreboard SQL reads + a computed PCN−CatBoost verdict per segment, so
+   * a UI can poll it cheaply. `days` bounds the intraday window (default 14).
+   */
+  @Get("ml-comparison")
+  @ApiOperation({
+    summary: "Model comparison board (daily + intraday shadow) + verdict",
+    description:
+      "Light, pollable board: model_comparisons (TFT vs CatBoost) + " +
+      "pcn_intraday_comparisons (PCN vs CatBoost, all segments × lead buckets) with a " +
+      "computed PCN−CatBoost MAE delta per segment.",
+  })
+  @ApiResponse({ status: 200, description: "Comparison boards + verdict" })
+  async getMlComparison(
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    const n = Math.min(Math.max(parseInt(days ?? "14", 10) || 14, 1), 90);
+    return this.systemHealth.comparisonBoard(n);
   }
 
   /**
@@ -254,6 +280,37 @@ export class AdminController {
       message: "ML training job queued",
       jobId: job.id.toString(),
     };
+  }
+
+  /**
+   * Manually trigger the PCN intraday shadow jobs (queue → pcn-shadow processor →
+   * pcn-service). `train` is needed for bring-up (the nightly cron is 08:30 UTC, so the
+   * first models otherwise don't exist until then); `forecast`/`score` are for testing.
+   */
+  @Post("pcn/:action")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger a PCN shadow job (train | forecast | score)",
+    description:
+      "Enqueues the matching pcn-shadow job. 'train' (per-park GP-STGNN) is the " +
+      "bring-up trigger; 'forecast' writes pcn_forecasts; 'score' writes the board.",
+  })
+  @ApiResponse({ status: 202, description: "PCN job queued" })
+  async triggerPcn(
+    @Param("action") action: string,
+  ): Promise<{ message: string; jobId: string }> {
+    const jobName = {
+      train: "train-pcn",
+      forecast: "forecast-pcn",
+      score: "score-pcn",
+    }[action];
+    if (!jobName) {
+      throw new BadRequestException(
+        `Unknown PCN action '${action}' (expected train | forecast | score)`,
+      );
+    }
+    const job = await this.pcnShadowQueue.add(jobName, {}, { priority: 10 });
+    return { message: `PCN ${action} job queued`, jobId: job.id.toString() };
   }
 
   /**

@@ -52,7 +52,7 @@ export class SystemHealthService {
       this.safe("catboost", () => this.catboost()),
       this.safe("tft", () => this.tft()),
       this.safe("comparison", () => this.comparison()),
-      this.safe("pcnComparison", () => this.pcnComparison()),
+      this.safe("pcnComparison", () => this.intradayComparison()),
     ]);
     return {
       timestamp: new Date().toISOString(),
@@ -429,26 +429,86 @@ export class SystemHealthService {
     return { rows, count: rows.length };
   }
 
-  /** PCN intraday shadow board (PCN vs CatBoost on matched 15-min slots, latest scored
-   * days). Owned by pcn-service; the headline rows are the per-segment 'all'-lead view. */
-  private async pcnComparison() {
+  /** PCN intraday shadow board (PCN vs CatBoost on matched 15-min slots). Returns the
+   * scored rows (all segments × lead buckets) over the last `days` plus a computed
+   * VERDICT — the PCN−CatBoost MAE delta per segment at lead 'all', n-weighted over the
+   * window — so the gate question ("does PCN beat CatBoost on busy?") is answered
+   * directly instead of by eyeballing rows. Owned by pcn-service. */
+  private async intradayComparison(days = 14) {
     const exists = await this.dataSource.query(
       `SELECT to_regclass('public.pcn_intraday_comparisons') AS t`,
     );
-    if (!exists?.[0]?.t) return { rows: [], note: "no shadow board yet" };
+    if (!exists?.[0]?.t)
+      return { rows: [], verdict: [], note: "no shadow board yet" };
     const rows = await this.dataSource.query(
       `SELECT target_date AS "targetDate", model, segment,
               lead_bucket AS "leadBucket", n,
               round(mae::numeric, 1) AS mae,
-              round(bias::numeric, 1) AS bias
+              round(bias::numeric, 1) AS bias,
+              round(mean_actual::numeric, 1) AS "meanActual",
+              round(mean_pred::numeric, 1) AS "meanPred"
          FROM pcn_intraday_comparisons
-        WHERE lead_bucket = 'all'
+        WHERE target_date >= (CURRENT_DATE - ($1)::int)
         ORDER BY target_date DESC,
                  CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
                               WHEN 'mid' THEN 2 ELSE 3 END,
-                 model
-        LIMIT 60`,
+                 lead_bucket, model
+        LIMIT 400`,
+      [days],
     );
-    return { rows, count: rows.length };
+    return { rows, verdict: this.intradayVerdict(rows), count: rows.length };
+  }
+
+  /** PCN−CatBoost delta per segment (lead 'all'), n-weighted over the window. */
+  private intradayVerdict(
+    rows: Array<{
+      segment: string;
+      leadBucket: string;
+      model: string;
+      n: number;
+      mae: number;
+    }>,
+  ) {
+    // segment -> model -> {maeWeighted, n}
+    const acc: Record<string, Record<string, { mw: number; n: number }>> = {};
+    for (const r of rows) {
+      if (r.leadBucket !== "all") continue;
+      const seg = (acc[r.segment] ??= {});
+      const m = (seg[r.model] ??= { mw: 0, n: 0 });
+      m.mw += Number(r.mae) * Number(r.n);
+      m.n += Number(r.n);
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for (const [segment, byModel] of Object.entries(acc)) {
+      const pcn = byModel["pcn"];
+      const cat = byModel["catboost"];
+      if (!pcn?.n || !cat?.n) continue;
+      const pcnMae = pcn.mw / pcn.n;
+      const catMae = cat.mw / cat.n;
+      out.push({
+        segment,
+        n: Math.min(pcn.n, cat.n),
+        pcnMae: Math.round(pcnMae * 10) / 10,
+        catboostMae: Math.round(catMae * 10) / 10,
+        delta: Math.round((catMae - pcnMae) * 10) / 10, // >0 ⇒ PCN better
+        pcnWins: catMae - pcnMae > 0,
+      });
+    }
+    // busy first (where the gate lives), then headline ordering.
+    const order: Record<string, number> = { busy: 0, all: 1, mid: 2, quiet: 3 };
+    return out.sort(
+      (a, b) =>
+        (order[a.segment as string] ?? 9) - (order[b.segment as string] ?? 9),
+    );
+  }
+
+  /** Focused comparison board for a dedicated admin endpoint — both surfaces as plain
+   * SQL reads (no host/gpu/service round-trips), so a UI can poll it cheaply. */
+  async comparisonBoard(days = 14) {
+    const [daily, intraday] = await Promise.all([
+      this.safe("daily", () => this.comparison()),
+      this.safe("intraday", () => this.intradayComparison(days)),
+    ]);
+    return { timestamp: new Date().toISOString(), daily, intraday };
   }
 }
