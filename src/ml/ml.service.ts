@@ -14,6 +14,7 @@ import {
   formatInParkTimezone,
 } from "../common/utils/date.util";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
+import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { logMLServiceError } from "../common/utils/file-logger.util";
 import {
@@ -1313,7 +1314,91 @@ export class MLService {
       result.set(p.attractionId, list);
     }
 
+    if (this.servePcnIntraday && predictionType === "hourly") {
+      await this.applyPcnIntradayOverride(
+        [...result.values()].flat(),
+        startTime,
+      );
+    }
     return result;
+  }
+
+  /** Champion-swap flag: serve PCN's intraday 15-min forecast in place of CatBoost's
+   * `hourly` predictions (PCN beats CatBoost on the matched board). Default OFF —
+   * enable per env once the win is confirmed over a few days. Always falls back to
+   * CatBoost where PCN has no forecast (or the table/flag is absent). */
+  private get servePcnIntraday(): boolean {
+    return process.env.SERVE_PCN_INTRADAY === "true";
+  }
+
+  /** Freshest forward PCN q0.5 (displayed wait) per (attraction, slot) for upcoming slots,
+   * keyed by the slot's UTC ISO string (matching CatBoost's predictedTime). pcn_forecasts
+   * stores park-LOCAL naive slots, so `target_slot AT TIME ZONE tz` recovers the instant.
+   * Returns an empty map on any error (missing table / flag misuse) → pure CatBoost. */
+  private async getPcnIntradayWaits(
+    attractionIds: string[],
+    startTime?: Date,
+  ): Promise<Map<string, Map<string, number>>> {
+    const out = new Map<string, Map<string, number>>();
+    if (attractionIds.length === 0) return out;
+    try {
+      const rows: Array<{ aid: string; predicted_time: Date; wait: string }> =
+        await this.predictionRepository.manager.query(
+          `SELECT DISTINCT ON (f.attraction_id, f.target_slot)
+              f.attraction_id::text AS aid,
+              (f.target_slot AT TIME ZONE p.timezone) AS predicted_time,
+              f.predicted_wait AS wait
+           FROM pcn_forecasts f
+           JOIN attractions a ON a.id = f.attraction_id
+           JOIN parks p ON p.id = a."parkId"
+           WHERE f.attraction_id = ANY($1::uuid[])
+             AND f.quantile = 0.5
+             AND (f.target_slot AT TIME ZONE p.timezone) >= COALESCE($2, now())
+           ORDER BY f.attraction_id, f.target_slot, f.origin_slot DESC`,
+          [attractionIds, startTime ?? null],
+        );
+      for (const r of rows) {
+        const m = out.get(r.aid) ?? new Map<string, number>();
+        m.set(new Date(r.predicted_time).toISOString(), Number(r.wait));
+        out.set(r.aid, m);
+      }
+    } catch (e: unknown) {
+      this.logger.warn(
+        `PCN intraday override skipped: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+    return out;
+  }
+
+  /** Override matched hourly predictions in place with PCN's q0.5 wait, recomputing
+   * crowdLevel from the new wait against the carried baseline. Unmatched slots/attractions
+   * keep CatBoost (the fallback). Mutates `preds`. */
+  private async applyPcnIntradayOverride(
+    preds: PredictionDto[],
+    startTime?: Date,
+  ): Promise<void> {
+    const hourly = preds.filter((p) => p.predictionType === "hourly");
+    if (hourly.length === 0) return;
+    const ids = [...new Set(hourly.map((p) => p.attractionId))];
+    const pcn = await this.getPcnIntradayWaits(ids, startTime);
+    let overridden = 0;
+    for (const p of hourly) {
+      const wait = pcn.get(p.attractionId)?.get(p.predictedTime);
+      if (wait === undefined) continue;
+      p.predictedWaitTime = Math.round(wait);
+      if (p.baseline && p.baseline > 0) {
+        // determineCrowdLevel never returns "unknown" (we guard baseline>0), so it is a
+        // valid PredictionDto crowdLevel — narrow the wider CrowdLevel type with a cast.
+        p.crowdLevel = determineCrowdLevel(
+          (p.predictedWaitTime / p.baseline) * 100,
+        ) as PredictionDto["crowdLevel"];
+      }
+      p.modelVersion = `${p.modelVersion ?? "catboost"}+pcn`;
+      overridden++;
+    }
+    if (overridden > 0) {
+      this.logger.debug(`PCN intraday override: ${overridden}/${hourly.length} slots`);
+    }
   }
 
   /**
@@ -1326,17 +1411,19 @@ export class MLService {
     // Try stored predictions first for both hourly and daily.
     // Include the currently-active 15-min slot (timestamp may be up to 15 min in the past)
     // so "go now" can surface as a best-visit-time recommendation.
+    const startTime =
+      predictionType === "hourly" ? new Date(currentSlotStartMs()) : undefined;
     const stored = await this.getStoredPredictions(
       attractionId,
       predictionType,
-      predictionType === "hourly" ? new Date(currentSlotStartMs()) : undefined,
+      startTime,
     );
 
     if (stored.length > 0) {
       this.logger.debug(
         `Using ${stored.length} stored ${predictionType} predictions for ${attractionId}`,
       );
-      return stored.map((p) => ({
+      const dtos: PredictionDto[] = stored.map((p) => ({
         attractionId: p.attractionId,
         predictedTime: p.predictedTime.toISOString(),
         predictedWaitTime: p.predictedWaitTime,
@@ -1347,6 +1434,10 @@ export class MLService {
         modelVersion: p.modelVersion,
         status: p.status || undefined,
       }));
+      if (this.servePcnIntraday && predictionType === "hourly") {
+        await this.applyPcnIntradayOverride(dtos, startTime);
+      }
+      return dtos;
     }
 
     // Fall back to ML service (new ride or predictions expired)

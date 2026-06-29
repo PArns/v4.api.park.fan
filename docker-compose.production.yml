@@ -261,6 +261,10 @@ services:
       - NF_SERVICE_URL=http://nf-service:8000
       - PCN_SERVICE_URL=http://pcn-service:8000
       - SHAPE_SERVICE_URL=http://shape-service:8000
+      # Champion-swap: serve PCN's intraday 15-min forecast instead of CatBoost's hourly
+      # (CatBoost fallback where PCN has none). Default off — flip to "true" once the
+      # PCN-vs-CatBoost board win is confirmed over a few days.
+      - SERVE_PCN_INTRADAY=${SERVE_PCN_INTRADAY:-false}
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
       # Always use volume path so .env cannot override with ./data/... (which is not mounted)
