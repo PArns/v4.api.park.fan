@@ -379,8 +379,8 @@ export class QueueSchedulerService implements OnModuleInit {
 
     // PCN intraday shadow (design doc §12). Runs in the shadow — writes pcn_forecasts /
     // pcn_intraday_comparisons only; CatBoost stays the served champion until a gate win.
-    // train-pcn at 08:30 UTC: AFTER TFT (~05:30) + CatBoost (~06:15) so the shared-GPU
-    // training spikes never overlap.
+    // train-pcn at 08:30 UTC: after TFT (starts 03:00, ~2.5h) and CatBoost (starts 06:00,
+    // ~45min) have both finished, so the shared-GPU training spikes never overlap.
     const hasPcnTrainCron = await this.hasRepeatableJob(
       this.pcnShadowQueue,
       "pcn-train-cron",

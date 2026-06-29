@@ -14,8 +14,9 @@ const pcnServiceUrl = getPcnServiceUrl;
  * pcn_intraday_comparisons; CatBoost stays the served champion until the shadow shows a
  * busy/headliner win (design doc §12).
  *
- * - train-pcn: nightly per-park GP-STGNN training (GPU). Scheduled AFTER TFT (~05:30)
- *   and CatBoost (~06:15) so the GPU training spikes never overlap on the shared host.
+ * - train-pcn: nightly per-park GP-STGNN training (GPU). Scheduled at 08:30 UTC, after
+ *   TFT (starts 03:00, ~2.5h) and CatBoost (starts 06:00, ~45min) have both finished, so
+ *   the GPU training spikes never overlap on the shared host.
  *   Overlap-guarded + polled to completion.
  * - forecast-pcn: every 15 min — re-infer with the current state → durable pcn_forecasts
  *   (the going-forward shadow snapshot). Fire-and-trigger (the service runs it async).
