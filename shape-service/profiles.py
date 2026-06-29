@@ -23,6 +23,16 @@ Curve = np.ndarray
 Cell = tuple[Curve, int]  # (normalised curve, n_days that informed it)
 
 
+def smooth_curve(curve: Curve, win: int) -> Curve:
+    """±win-slot centred moving average over the OPERATING slots (NaN slots stay NaN and are
+    skipped). Denoises the per-slot mean-form (free busy-MAE drop, §8c)."""
+    if win <= 0:
+        return curve
+    s = pd.Series(curve)
+    fin = s.notna()
+    return s.where(~fin, s.rolling(2 * win + 1, center=True, min_periods=1).mean()).to_numpy()
+
+
 def dow_bucket(dow: int, mode: str) -> str:
     """0=Mon … 6=Sun (pandas convention). 'wend' = weekend/weekday; 'full' = per-DOW."""
     if mode == "full":
@@ -57,6 +67,7 @@ class ShapeProfiles:
     min_obs: int
     alpha: float = 0.5   # crowd-deviation shrinkage weight (additive render, §8a)
     beta: float = 0.6    # daytype-deviation shrinkage weight
+    smooth: int = 0      # ±slots moving-average smoothing of the served form (§8c)
     thresholds: dict[str, np.ndarray] = field(default_factory=dict)  # ride -> crowd edges
     g_rcd: dict[tuple, Cell] = field(default_factory=dict)  # (ride, crowd, dow)
     g_rc: dict[tuple, Cell] = field(default_factory=dict)   # (ride, crowd)
@@ -120,9 +131,51 @@ class ShapeProfiles:
         crowd = self.level_to_crowd(ride, level)
         cdev = self._dev(self.g_rc, (ride, crowd), base)
         ddev = self._dev(self.g_rd, (ride, dt_label), base)
-        form = np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0)
+        form = smooth_curve(np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0),
+                            self.smooth)
         form = np.where(np.isfinite(base), form, np.nan)
         return level * form
+
+    def serve_curve(self, ride: str, daily_level: float, dt_label: str) -> Curve:
+        """Absolute 15-min curve from a DAILY-mean-ish level (the served daily forecast,
+        which ≈ daily mean wait, not the peak). Builds the additive crowd⊕daytype FORM, then
+        scales it so its operating-slot mean equals `daily_level` — a statistic-agnostic
+        calibration (design §6). The crowd bucket uses a peak ESTIMATE (level × base
+        peak/mean ratio) so it matches the peak-based thresholds. NaN where not open."""
+        base = self._ride_base(ride)
+        bvals = base[np.isfinite(base)]
+        if bvals.size == 0 or bvals.mean() <= 1e-6:
+            return np.full(self.slot_count, np.nan)
+        peak_est = daily_level * (np.nanmax(base) / bvals.mean())
+        crowd = self.level_to_crowd(ride, peak_est)
+        cdev = self._dev(self.g_rc, (ride, crowd), base)
+        ddev = self._dev(self.g_rd, (ride, dt_label), base)
+        form = smooth_curve(np.clip(base + self.alpha * cdev + self.beta * ddev, 0.0, 2.0),
+                            self.smooth)
+        fvals = form[np.isfinite(form)]
+        scale = daily_level / fvals.mean() if fvals.size and fvals.mean() > 1e-6 else daily_level
+        out = np.where(np.isfinite(base), scale * form, np.nan)
+        return out
+
+    def save(self, path: str) -> None:
+        import pickle
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @staticmethod
+    def load(path: str) -> "ShapeProfiles":
+        import pickle
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    def operating_mean(self, ride: str) -> float:
+        """Mean of the ride's base form over its operating slots — used to calibrate a
+        daily LEVEL (≈ daily mean wait) to the served curve: scale = level / operating_mean
+        so the rendered curve's operating mean matches the daily forecast."""
+        base = self._ride_base(ride)
+        vals = base[np.isfinite(base)]
+        m = float(vals.mean()) if vals.size else float("nan")
+        return m if m and m > 1e-6 else float("nan")
 
     def coverage(self) -> dict:
         """Diagnostic summary: how many rides, and the fallback-tag mix over (ride, crowd,
@@ -165,6 +218,7 @@ def build_profiles(
     day_label: dict | None = None,
     alpha: float = 0.5,
     beta: float = 0.6,
+    smooth: int = 0,
 ) -> ShapeProfiles | None:
     """Build the normalised-form profiles for one park's panel.
 
@@ -211,7 +265,7 @@ def build_profiles(
     # 4. Averaged normalised curves at each fallback granularity (+ park-wide ultimate).
     prof = ShapeProfiles(
         park_id=park_id, slot_count=slot_count, dow_mode=dow_mode, min_obs=min_obs,
-        alpha=alpha, beta=beta, thresholds=thresholds,
+        alpha=alpha, beta=beta, smooth=smooth, thresholds=thresholds,
         g_rcd=_curves(df, ["unique_id", "crowd", "dowb"], slot_count),
         g_rc=_curves(df, ["unique_id", "crowd"], slot_count),
         g_rd=_curves(df, ["unique_id", "dowb"], slot_count),

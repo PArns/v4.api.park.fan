@@ -165,6 +165,26 @@ Daten (mehr Tage je Ride×Bedingung) konkurrenzfähig.
 Modell überfittet. Weitere Gewinne (Wetter-Form, feinere daytypes, echte Saison) brauchen **mehr
 Tage/Jahreszyklus** (~Dez 2026). Das LCM (TFT-Daily) nutzt dieselben Faktoren bereits fürs **Level**.
 
+### 8c. Glättung — der Gratis-Gewinn (2026-06-29, zweite Runde)
+
+Nach „Datenwand" weiter gesucht (zu Recht): die Per-Slot-Mean-Form ist **verrauscht** (jede Zelle
+mittelt ~18 Tage), aber benachbarte 15-Min-Slots sind glatt. Eine **±2-Slot (±30 min) gleitende
+Mittelung** der servierten Form senkt die MAE deutlich — **kostenlos**, ohne neue Daten:
+
+| | busy≥60 | all |
+|---|---|---|
+| additive, ungeglättet | 16.4 | 6.28 |
+| **additive + smooth ±2** | **16.0** | **6.19** |
+| crowd-Baseline | 17.3 | 6.58 |
+
+→ Das Finalmodell ist **smooth(ride_base + 0.5·crowd_dev + 0.6·daytype_dev)**, busy **16.0 vs 17.3
+crowd = −7.4%** (vorher −3.5%); gewinnt jetzt auf **allen** Segmenten inkl. quiet. `SHAPE_SMOOTH_SLOTS=2`.
+
+**Was getestet wurde (und nicht half):** EB-/hierarchische Shrinkage der crowd×daytype-Interaktion
+(bestes K minimal schlechter auf busy → die Interaktion trägt auch geschrumpft kein Signal). **Offen
+als nächster großer Hebel:** ein gelerntes Modell über ALLE Parks (nicht 7) mit Early-Stopping + NP-Form
+als Anker-Feature — der eigentliche ML-Test (der erste MLP war auf 7 Parks unterpowert).
+
 ## 9. Ehrliche Einordnung
 
 Klein, billig, **nicht** datengelimitet (Form ≠ Jahres-Saison), **geteilte Infrastruktur** für beide Tracks.

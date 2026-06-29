@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # (data-walled / no form signal).
     SHAPE_ALPHA_CROWD: float = 0.5
     SHAPE_BETA_DAYTYPE: float = 0.6
+    # Smooth the served form over ±N adjacent 15-min slots. The per-slot mean-form is noisy
+    # (each cell averages ~18 days); neighbouring slots are smooth, so a ±2-slot (±30 min)
+    # moving average denoises it for a free ~4% busy-MAE drop (backtest 2026-06-29).
+    SHAPE_SMOOTH_SLOTS: int = 2
+
+    # --- Shadow producer (Phase 1) ---
+    # How many forward days to render per run (matures over this many days for scoring).
+    SHAPE_FORECAST_DAYS: int = 14
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

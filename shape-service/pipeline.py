@@ -43,6 +43,7 @@ def build_park_profiles(park_id: str):
         day_label=day_label,
         alpha=settings.SHAPE_ALPHA_CROWD,
         beta=settings.SHAPE_BETA_DAYTYPE,
+        smooth=settings.SHAPE_SMOOTH_SLOTS,
     )
 
 

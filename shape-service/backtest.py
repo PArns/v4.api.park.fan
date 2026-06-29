@@ -53,11 +53,12 @@ def _variant_curve(prof: P.ShapeProfiles, ride: str, crowd: int, dow: str, varia
     g_park = prof.g_park
     g_r = prof.g_r.get((ride,), (None,))[0]
     if variant == "additive":
-        # the chosen model: ride_base + α·(crowd−base) + β·(daytype−base), shrunk (§8a).
+        # the chosen model: smooth(ride_base + α·(crowd−base) + β·(daytype−base)) (§8a/§8c).
         base = prof._ride_base(ride)
         cdev = prof._dev(prof.g_rc, (ride, crowd), base)
         ddev = prof._dev(prof.g_rd, (ride, dow), base)
-        return np.clip(base + prof.alpha * cdev + prof.beta * ddev, 0.0, 2.0)
+        form = np.clip(base + prof.alpha * cdev + prof.beta * ddev, 0.0, 2.0)
+        return P.smooth_curve(form, prof.smooth)
     table = {
         "park": prof.g_park,
         "ride": g_r,
@@ -75,7 +76,7 @@ def run_backtest(
     panel: pd.DataFrame, *, park_id: str, slot_count: int, eval_days: int = 14,
     dow_mode: str = "wend", n_buckets: int = 3, min_day_peak: float = 5.0,
     min_day_slots: int = 8, min_obs: int = 5, day_label: dict | None = None,
-    alpha: float = 0.5, beta: float = 0.6,
+    alpha: float = 0.5, beta: float = 0.6, smooth: int = 0,
     variants=("park", "ride", "dow", "crowd", "crowd_dow", "additive"),
 ) -> pd.DataFrame:
     """Train on all-but-last-eval_days, score each variant on the held-out days. Returns a
@@ -92,7 +93,7 @@ def run_backtest(
     prof = P.build_profiles(
         train, park_id=park_id, slot_count=slot_count, dow_mode=dow_mode,
         n_buckets=n_buckets, min_day_peak=min_day_peak, min_day_slots=min_day_slots,
-        min_obs=min_obs, day_label=day_label, alpha=alpha, beta=beta,
+        min_obs=min_obs, day_label=day_label, alpha=alpha, beta=beta, smooth=smooth,
     )
     if prof is None:
         return pd.DataFrame()
@@ -159,6 +160,7 @@ def main():
             min_day_peak=s.SHAPE_MIN_DAY_PEAK, min_day_slots=s.SHAPE_MIN_DAY_SLOTS,
             min_obs=s.SHAPE_MIN_OBS_PER_CELL, day_label=day_label,
             alpha=s.SHAPE_ALPHA_CROWD, beta=s.SHAPE_BETA_DAYTYPE,
+            smooth=s.SHAPE_SMOOTH_SLOTS,
         )
         if not res.empty:
             res["park_id"] = pid
