@@ -185,6 +185,28 @@ crowd = −7.4%** (vorher −3.5%); gewinnt jetzt auf **allen** Segmenten inkl. 
 als nächster großer Hebel:** ein gelerntes Modell über ALLE Parks (nicht 7) mit Early-Stopping + NP-Form
 als Anker-Feature — der eigentliche ML-Test (der erste MLP war auf 7 Parks unterpowert).
 
+### 8d. Gelerntes Modell, *richtig* — die echte Datengrenze (2026-06-29, dritte Runde)
+
+Der erste MLP-Versuch (§8b) verlor, aber er war verpfuscht: 7 Parks, kein Early-Stopping, kein
+NP-Anker. Richtig gemacht — **18 datenreiche Parks**, **NP-Form (additive+smooth) als Anker-Feature**
+(Residual-Korrektur, zero-init), **Early-Stopping** auf Val-Split, Dropout/Weight-Decay — **schlägt
+das gelernte Modell die NP:**
+
+| Modell (18-Park-Holdout, busy n=37k) | all | busy≥60 |
+|---|---|---|
+| NP additive+smooth | 6.80 | 11.79 |
+| **learned (anchor + day-feature correction)** | **6.62** | **11.46** (−2.8%) |
+| learned + NP-Komponenten als Extra-Features | 6.78 | 11.62 (**überfittet** — schlechter) |
+
+Der Gewinn (~2.8% busy) kommt aus dem **Pooling der Kalender-Faktor-Effekte über alle Rides** (was die
+per-Ride-NP nicht kann), verankert an der starken NP-Form. **Reichere Features überfitten** (Val besser,
+Eval schlechter) → **das ist die echte Datengrenze:** das einfache gelernte Modell ist der Sweet Spot,
+mehr Komplexität braucht mehr Tage. Gesamt-Progression busy (7-Park-Skala): crowd 17.3 → additive 16.4
+→ +smooth 16.0; plus die gelernte Korrektur ~−2.8% relativ. Implementiert in `learned.py` (bereit für
+die Shadow-Integration; das NP-additive+smooth bleibt die dependency-leichte servierte Baseline).
+
+**Lehre:** „Datenwand" erst rufen, nachdem man ML *richtig* ausgereizt hat (Skala + Early-Stop + Anker).
+
 ## 9. Ehrliche Einordnung
 
 Klein, billig, **nicht** datengelimitet (Form ≠ Jahres-Saison), **geteilte Infrastruktur** für beide Tracks.
