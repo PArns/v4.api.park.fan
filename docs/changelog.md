@@ -6,6 +6,17 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Docs — frontend guide for the ML model & API changes (2026-06-29)
+
+Frontend-facing summary of the per-horizon multi-model serving work: the new
+intraday **PCN** model (served behind `SERVE_PCN_INTRADAY`, default OFF, replaces
+CatBoost's hourly waits with CatBoost fallback) and the **Shape** shadow model.
+Key point for the frontend: **no contract change** — `crowdLevel`,
+`predictedWaitTime`, `avgWaitTime`, `source: "ml"` etc. keep the same shape; only
+the (better) numbers shift on the intraday path. The new endpoints
+(`GET /v1/admin/ml-comparison`, `POST /v1/admin/pcn|shape/:action`) are admin-only.
+Guide: [docs/frontend/ml-model-and-api-changes-2026-06-29.md](frontend/ml-model-and-api-changes-2026-06-29.md).
+
 ### Added — severe-weather warnings (MeteoGate → DWD/MeteoAlarm) (2026-06-19)
 
 Official severe-weather warnings on the weather response. Open-Meteo provides
