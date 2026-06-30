@@ -1334,7 +1334,15 @@ export class MLService {
   /** Freshest forward PCN q0.5 (displayed wait) per (attraction, slot) for upcoming slots,
    * keyed by the slot's UTC ISO string (matching CatBoost's predictedTime). pcn_forecasts
    * stores park-LOCAL naive slots, so `target_slot AT TIME ZONE tz` recovers the instant.
-   * Returns an empty map on any error (missing table / flag misuse) → pure CatBoost. */
+   * Returns an empty map on any error (missing table / flag misuse) → pure CatBoost.
+   *
+   * STALENESS GUARD: only consider forecasts written in the last `PCN_MAX_FORECAST_AGE_H`
+   * hours. PCN's whole edge is being a nowcaster (recent observations); a frozen producer
+   * (the 15-min forecast cron stalling — happened 2026-06-30, stuck lock) would otherwise keep
+   * serving 24h-old waits live instead of degrading to CatBoost. Under healthy operation the
+   * newest row is <15 min old, so this never fires; it only trips on a real outage. Bonus:
+   * stale-input parks (forecast skipped) auto-fall-back to CatBoost too. */
+  private static readonly PCN_MAX_FORECAST_AGE_H = 3;
   private async getPcnIntradayWaits(
     attractionIds: string[],
     startTime?: Date,
@@ -1353,9 +1361,10 @@ export class MLService {
            JOIN parks p ON p.id = a."parkId"
            WHERE f.attraction_id = ANY($1::uuid[])
              AND f.quantile = 0.5
+             AND f.created_at >= now() - ($3 || ' hours')::interval
              AND (f.target_slot AT TIME ZONE p.timezone) >= COALESCE($2, now())
            ORDER BY f.attraction_id, f.target_slot, f.origin_slot DESC`,
-          [attractionIds, startTime ?? null],
+          [attractionIds, startTime ?? null, MLService.PCN_MAX_FORECAST_AGE_H],
         );
       for (const r of rows) {
         const m = out.get(r.aid) ?? new Map<string, number>();
@@ -1397,7 +1406,9 @@ export class MLService {
       overridden++;
     }
     if (overridden > 0) {
-      this.logger.debug(`PCN intraday override: ${overridden}/${hourly.length} slots`);
+      this.logger.debug(
+        `PCN intraday override: ${overridden}/${hourly.length} slots`,
+      );
     }
   }
 
