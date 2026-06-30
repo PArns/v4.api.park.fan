@@ -71,6 +71,16 @@ def _reset_stale_lock():
         _write(_TRAIN_STATUS, {"is_training": False, "status": "idle",
                                "version": st.get("version"),
                                "error": "reset on startup (previous run interrupted)"})
+    # Per-kind forecast/score locks: a restart mid-job (deploy, OOM-kill) leaves
+    # {"running": true} on disk → every subsequent /forecast (or /score) 409s forever
+    # because nothing ever flips it back. A daemon worker thread can't survive the
+    # restart either, so the lock can only be released here. Self-heal on boot.
+    for kind in ("forecast", "score"):
+        path = _job_status_path(kind)
+        if _read(path, {}).get("running"):
+            logger.warning("Resetting stale %s lock (previous run interrupted)", kind)
+            _write(path, {"running": False, "kind": kind, "status": "idle",
+                          "error": "reset on startup (previous run interrupted)"})
 
 
 @app.get("/health")
