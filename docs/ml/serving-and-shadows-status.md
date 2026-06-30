@@ -7,7 +7,7 @@
 
 | Horizont | Serviertes Modell (Champion) | Challenger / Status |
 |---|---|---|
-| **Intraday 0–24 h** (15-Min) | CatBoost (`hourly`) → **PCN hinter Flag** | **PCN gewinnt** alle Segmente (busy 19.2 vs 25.0). Swap implementiert, **Flag `SERVE_PCN_INTRADAY` default OFF**. |
+| **Intraday 0–24 h** (15-Min) | **PCN** (Flag `SERVE_PCN_INTRADAY=true`, **LIVE**) | **PCN gewinnt** alle Segmente bei jedem Lead (gereift 29.06: busy 24.9 vs 26.2, all 8.3 vs 8.9). CatBoost-Fallback bei stale/fehlend (3h-Guard). |
 | **Daily ≤45–60 d** | **TFT** (gemerged) | live; TFT schlägt CatBoost daily (−39…46%). |
 | **Far-daily 61–365 d** | **CatBoost (Level)** | bleibt — TFT datengelimitet bis ~Dez 2026; Shape liefert kein Level. **Long-term weiter nötig.** |
 | **Intraday/far-daily Kurve** | CatBoost-Shape | **Shape-Modell** (Level×Shape) als Shadow — Board reift noch. |
@@ -23,10 +23,12 @@ dort nicht** — es rendert dessen Tages-Level in eine bessere 15-Min-Kurve (sp�
 - **Deployed & live**: pcn-service, arch=**graphwavenet** (6× schneller als gpstgnn, GPU-saturierend).
   Cron: train 08:30 / forecast `*/15` / score stündlich. Board: `pcn_intraday_comparisons`.
 - **Board (gereift, heute)**: PCN schlägt CatBoost auf **jedem** Segment (busy 19.2 vs 25.0, all 6.9 vs 8.8).
-- **Champion-Swap implementiert** (`ml.service.ts`): bei `SERVE_PCN_INTRADAY=true` ersetzt PCNs q0.5 die
+- **Champion-Swap LIVE** (`ml.service.ts`, `SERVE_PCN_INTRADAY=true` in prod): PCNs q0.5 ersetzt die
   CatBoost-`hourly`-Waits in beiden Read-Pfaden (`getStoredPredictions` + `getBatchStoredPredictions`),
-  crowdLevel aus dem neuen Wert neu gerechnet, **CatBoost-Fallback** wo PCN nichts hat. **Default OFF** —
-  erst nach ein paar Tagen bestätigtem Win einschalten.
+  crowdLevel aus dem neuen Wert neu gerechnet, **CatBoost-Fallback** wo PCN nichts hat **oder zu alt ist**
+  (Staleness-Guard `created_at < 3h`, commit 25e6aa5 — schützt vor eingefrorenem Forecast-Producer).
+- **Forecast-Lock-Bug gefixt (2026-06-30, commit 86dd17f)**: per-kind forecast/score-Locks froren bei
+  Restart-mitten-im-Job ein → Forecasts 24h still → pcn-service Startup heilt die Locks jetzt selbst.
 - Doc: [project_pcn_intraday_shadow](.) / `docs/ml/tft-vs-catboost-clean-comparison.md`.
 
 ## Shape — Level×Shape Tageskurve (SHADOW, frisch deployt)
@@ -52,8 +54,8 @@ dort nicht** — es rendert dessen Tages-Level in eine bessere 15-Min-Kurve (sp�
 
 ## Nächste Schritte
 
-1. **PCN-Swap scharfschalten**: nach ein paar Tagen stabilem Board `SERVE_PCN_INTRADAY=true` (Coolify-Env),
-   live beobachten, bei Bedarf sofort zurück (Flag).
+1. **PCN-Swap ist scharf** (`SERVE_PCN_INTRADAY=true`, live): Board über ein paar post-fix saubere Tage
+   beobachten (der 30.06 ist durch den Lock-Bug kontaminiert), bei Bedarf sofort zurück (Flag).
 2. **Shape-Board** in ~2–3 Tagen prüfen; wenn Shape CatBoost-Kurve schlägt → far-daily/intraday-Shape auf
    Shape umstellen (CatBoost-Level bleibt).
 3. **Shape learned-Modell** als Producer einwechseln (+2.8% busy), wenn der NP-Shadow validiert ist.
