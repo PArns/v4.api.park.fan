@@ -6,6 +6,19 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — PCN intraday model review (docs only) (2026-07-02)
+
+Full review of the new intraday stack (pcn-service, champion-swap serving path,
+shadow scorers, boards): [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-review.md).
+Key findings — P0: crowd-level recomputed from PCN q0.5 instead of q0.8 in the
+serving override; rolling-window scorer overwrites matured board days (pcn + shape,
+visible as lead-bucket N > "all" N); park-curve/calendar/deviation consumers bypass
+the PCN override. P1: `pcn_forecasts` has no retention while serving reads it per
+request; every 15-min forecast tick rebuilds the full 548-day tensor per park.
+P2: served GraphWaveNet receptive field is 4 slots (1 h) at layers=2 — the 192-slot
+context is architecturally unreachable; DOW/holiday/schedule/weather channels from
+the design doc are not in the tensor yet. No production code changed.
+
 ### Added — severe-weather warnings (MeteoGate → DWD/MeteoAlarm) (2026-06-19)
 
 Official severe-weather warnings on the weather response. Open-Meteo provides

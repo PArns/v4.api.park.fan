@@ -37,6 +37,7 @@
 - [Sparklines](docs/analytics/sparklines.md) - Wait-time history for ride cards: two-layer API (`getBatchAttractionWaitTimeHistory` vs `getAttractionSparklinesBatch`), when to use which, and park-timezone handling.
 
 ### 🤖 Machine Learning
+- [PCN Intraday Review](docs/ml/pcn-intraday-review.md) - **2026-07-02**: Befunde & Priorisierung zum neuen Intraday-Modell — Crowd-Level-Quantil-Regression im Champion-Swap (q0.5 statt q0.8), Scorer-Rolling-Window verzerrt die Shadow-Boards (pcn + shape), `pcn_forecasts` ohne Retention, 548-Tage-Fetch pro Forecast-Tick, GraphWaveNet-Receptive-Field = 1 h, fehlende DOW/Holiday/Wetter-Kanäle; plus allgemeine ML-Empfehlungen (KPIs aufs servierte Modell, Shape offline-vs-live reconcilen).
 - [Model Overview](docs/ml/model-overview.md) - CatBoost model, features, and training. Schedule/status behaviour: [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md).
 - [Quantile Serving & Calibration](docs/ml/quantile-serving-and-calibration.md) - **2026-06-17**: which quantile becomes which user-facing number (CatBoost q0.5 display / q0.8 crowd / q0.95 uncertainty-only), the non-crossing monotonic fix, `predicted_peak` = E[daily-P90] (median forecast of a P90 target, NOT P90-of-distribution), and the single-flight stampede guard on the serving rebuild.
 - [Performance Optimizations](docs/ml/performance-optimizations.md) - ML service caching, query optimization, and vectorization (60-90% faster).
