@@ -36,6 +36,7 @@ describe("MLDashboardService", () => {
     getTopBottomPerformers: jest.fn(),
     getHourlyAccuracyPatterns: jest.fn(),
     getDayOfWeekAccuracyPatterns: jest.fn(),
+    getServedIntradayAccuracy: jest.fn(),
   };
   const deviationService = {};
   const driftService = {
@@ -103,6 +104,14 @@ describe("MLDashboardService", () => {
     });
     accuracyService.getHourlyAccuracyPatterns.mockResolvedValue([]);
     accuracyService.getDayOfWeekAccuracyPatterns.mockResolvedValue([]);
+    accuracyService.getServedIntradayAccuracy.mockResolvedValue({
+      servedModel: "pcn",
+      mae: 6.1,
+      n: 39399,
+      catboostMae: 7.5,
+      delta: 1.4,
+      days: 7,
+    });
     driftService.getDriftMetrics.mockResolvedValue({
       currentDrift: 5,
       status: "healthy",
@@ -123,6 +132,11 @@ describe("MLDashboardService", () => {
       expect(result.model.current.version).toBe("v1");
       expect(result.model.current.fileSizeMB).toBe(2.3);
       expect(result.performance.live.badge).toBe("excellent"); // mae=5 → excellent
+      expect(result.performance.servedIntraday).toMatchObject({
+        servedModel: "pcn",
+        mae: 6.1,
+        delta: 1.4,
+      });
       expect(result.performance.drift!.status).toBe("healthy");
       expect(result.system.modelAge).toEqual(
         expect.objectContaining({
@@ -147,6 +161,17 @@ describe("MLDashboardService", () => {
 
       // Dashboard still resolves — drift just becomes null.
       expect(result.performance.drift).toBeNull();
+    });
+
+    it("survives served-intraday failure (PCN board absent → servedIntraday null)", async () => {
+      happyPathSetup();
+      accuracyService.getServedIntradayAccuracy.mockRejectedValue(
+        new Error("no pcn board"),
+      );
+
+      const result = await service.getDashboard();
+
+      expect(result.performance.servedIntraday).toBeNull();
     });
 
     it("survives ml-service `getModelInfo` failure (file size becomes null)", async () => {

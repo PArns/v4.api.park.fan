@@ -91,6 +91,60 @@ describe("PredictionAccuracyService", () => {
     service = module.get(PredictionAccuracyService);
   });
 
+  describe("getServedIntradayAccuracy — served (PCN) vs stored (CatBoost)", () => {
+    // to_regclass returns the table's regclass name when it exists, NULL otherwise.
+    const boardExists = () => [{ t: "pcn_intraday_comparisons" }];
+
+    it("returns the n-weighted PCN MAE with the CatBoost delta", async () => {
+      accuracyRepo.query
+        .mockResolvedValueOnce(boardExists())
+        .mockResolvedValueOnce([
+          { model: "pcn", n: "39399", mae: "6.12" },
+          { model: "catboost", n: "39399", mae: "7.48" },
+        ]);
+
+      const res = await service.getServedIntradayAccuracy(14);
+
+      expect(res).toEqual({
+        servedModel: "pcn",
+        mae: 6.1,
+        n: 39399,
+        catboostMae: 7.5,
+        delta: 1.4, // 7.5 − 6.1 ⇒ served beats the fallback
+        days: 14,
+      });
+    });
+
+    it("returns null (and skips the aggregate) when the board table is absent", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([{ t: null }]);
+
+      const res = await service.getServedIntradayAccuracy();
+
+      expect(res).toBeNull();
+      expect(accuracyRepo.query).toHaveBeenCalledTimes(1); // guard short-circuits
+    });
+
+    it("returns null when no PCN rows exist in-window (override inactive)", async () => {
+      accuracyRepo.query
+        .mockResolvedValueOnce(boardExists())
+        .mockResolvedValueOnce([{ model: "catboost", n: "100", mae: "7.0" }]);
+
+      expect(await service.getServedIntradayAccuracy()).toBeNull();
+    });
+
+    it("keeps delta/catboostMae null when CatBoost is absent from the window", async () => {
+      accuracyRepo.query
+        .mockResolvedValueOnce(boardExists())
+        .mockResolvedValueOnce([{ model: "pcn", n: "10", mae: "5.0" }]);
+
+      expect(await service.getServedIntradayAccuracy()).toMatchObject({
+        mae: 5,
+        catboostMae: null,
+        delta: null,
+      });
+    });
+  });
+
   describe("calculateAccuracyBadge — public ladder", () => {
     // The badge thresholds drive the prediction-quality UI on attraction
     // detail pages. A slide here = different chip shown to users.
