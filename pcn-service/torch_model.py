@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import metrics
 import windowing
 from tensor import CHANNELS
 
@@ -67,7 +68,11 @@ class TorchSeqModel:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.name = f"{self.arch}-{loss}"
         self._scale = 1.0
-        self._scale_idx = [CHANNELS.index(c) for c in _SCALE_CHANNELS]
+        # The channel list this model was TRAINED on (fixed at fit/load). Kept so a
+        # tensor built with newer, appended channels still serves an older checkpoint:
+        # predict paths select the trained channels BY NAME (see _model_features).
+        self.channels: list[str] = list(CHANNELS)
+        self._scale_idx = [self.channels.index(c) for c in _SCALE_CHANNELS]
         self._median_q = self.quantiles.index(0.5) if 0.5 in self.quantiles else 0
         self.net: nn.Module | None = None
         self._dims: tuple[int, int, int] | None = None  # (N, C, H)
@@ -84,6 +89,26 @@ class TorchSeqModel:
         f = features.copy()
         f[..., self._scale_idx] = f[..., self._scale_idx] / self._scale
         return f
+
+    def _set_channels(self, channels: list[str]) -> None:
+        self.channels = list(channels)
+        self._scale_idx = [self.channels.index(c) for c in _SCALE_CHANNELS]
+
+    def _model_features(self, t) -> np.ndarray:
+        """Tensor features reordered/sliced to the channels this model was trained on.
+        Channel evolution contract: new channels are APPENDED to tensor.CHANNELS, so an
+        older checkpoint keeps serving (it selects its own channels by name) until the
+        nightly retrain picks the new ones up. A trained channel missing from the tensor
+        is a hard error — silently zero-filling would skew the inputs."""
+        f = np.asarray(t.features, dtype=float)
+        names = list(getattr(t, "channel_names", CHANNELS))
+        if self.channels == names:
+            return f
+        missing = [c for c in self.channels if c not in names]
+        if missing:
+            raise RuntimeError(
+                f"{self.name}: tensor lacks trained channels {missing} — retrain needed")
+        return f[..., [names.index(c) for c in self.channels]]
 
     def _batch(self, feats_scaled, bases, L):
         xs = [windowing.gather_context(feats_scaled, int(b), L).transpose(1, 0, 2)
@@ -132,6 +157,7 @@ class TorchSeqModel:
         wait_raw = np.asarray(t.wait_raw, dtype=float)
         observed = np.asarray(t.obs_mask, dtype=float)
         target_mask = observed * np.asarray(t.park_open, dtype=float)[None, :]
+        self._set_channels(list(getattr(t, "channel_names", CHANNELS)))
         features = np.asarray(t.features, dtype=float)
         N, T, C = features.shape
         self._dims = (N, C, H)
@@ -177,7 +203,7 @@ class TorchSeqModel:
         if self.net is None:
             raise RuntimeError(f"{self.name} not fitted")
         self.net.eval()
-        x = self._batch(self._scaled(np.asarray(t.features, dtype=float)), eval_bases, L)
+        x = self._batch(self._scaled(self._model_features(t)), eval_bases, L)
         out = self.net(x)
         if self.loss == "tweedie":
             med = torch.nn.functional.softplus(out[..., 0])
@@ -189,17 +215,21 @@ class TorchSeqModel:
     def predict_quantiles(self, t, bases: np.ndarray, L: int, H: int) -> dict:
         """{quantile: [S, R, H]} for the served quantiles. For per-purpose serving:
         q0.5 = displayed wait, q0.8 = busy/crowd signal. Tweedie has no quantiles → it
-        returns {0.5: mean} (the expected value)."""
+        returns {0.5: mean} (the expected value). Quantiles are forced monotonic
+        (running max over ascending alpha) — the pinball heads are trained
+        independently and can cross, which would put the crowd signal below the
+        displayed wait."""
         if self.net is None:
             raise RuntimeError(f"{self.name} not fitted")
         self.net.eval()
-        x = self._batch(self._scaled(np.asarray(t.features, dtype=float)), bases, L)
+        x = self._batch(self._scaled(self._model_features(t)), bases, L)
         out = self.net(x)
         if self.loss == "tweedie":
             return {0.5: (torch.nn.functional.softplus(out[..., 0]).cpu().numpy()
                           * self._scale)}
-        return {q: (out[..., i].cpu().numpy() * self._scale)
-                for i, q in enumerate(self.quantiles)}
+        return metrics.enforce_quantile_monotonicity(
+            {q: (out[..., i].cpu().numpy() * self._scale)
+             for i, q in enumerate(self.quantiles)})
 
     # -- persistence --------------------------------------------------------
     def save(self, path: str, ride_ids=None) -> None:
@@ -216,7 +246,7 @@ class TorchSeqModel:
                 "arch_kwargs": self.arch_kwargs,
             },
             "ride_ids": list(ride_ids) if ride_ids is not None else None,
-            "channels": list(CHANNELS),
+            "channels": list(self.channels),
         }, path)
 
     def load(self, path: str) -> "TorchSeqModel":
@@ -231,6 +261,9 @@ class TorchSeqModel:
         self.hidden = cfg.get("hidden", self.hidden)
         self.arch_kwargs = cfg.get("arch_kwargs", self.arch_kwargs)
         self._median_q = self.quantiles.index(0.5) if 0.5 in self.quantiles else 0
+        # Restore the TRAINED channel list (older checkpoints predate appended channels;
+        # _model_features selects them by name from whatever tensor is passed in).
+        self._set_channels(ckpt.get("channels") or list(CHANNELS))
         N, C, H = ckpt["dims"]
         self._scale = ckpt["scale"]
         self._dims = (N, C, H)

@@ -74,5 +74,36 @@ def test_aggregate_drops_nan_actual_and_empty():
     assert score.aggregate_comparison(pd.DataFrame(), ["pcn"]) == []
 
 
+def test_full_day_window_covers_only_full_days():
+    """The full-day contract: with a 48h lookback the window starts at YESTERDAY 00:00
+    (the first fully-covered local day) — never mid-day — so per-target_date upserts
+    are always supersets of the previous write instead of shrinking slices."""
+    now = pd.Timestamp("2026-07-02 14:37")
+    lo, hi = score.full_day_window(now, 48, "15min")
+    assert lo == pd.Timestamp("2026-07-01 00:00")      # yesterday, complete
+    assert hi == pd.Timestamp("2026-07-02 14:30")      # current partial slot excluded
+    # 96h lookback (shape default) → last 3 full days
+    lo96, _ = score.full_day_window(now, 96, "15min")
+    assert lo96 == pd.Timestamp("2026-06-29 00:00")
+
+
+def test_full_day_window_never_starts_after_today():
+    """A short lookback (<24h) can't cover any full past day — the window degrades to
+    today-so-far instead of starting in the future."""
+    now = pd.Timestamp("2026-07-02 06:10")
+    lo, hi = score.full_day_window(now, 6, "15min")
+    assert lo == pd.Timestamp("2026-07-02 00:00")
+    assert hi == pd.Timestamp("2026-07-02 06:00")
+
+
+def test_full_day_window_at_midnight_run():
+    """Run right after midnight: yesterday just became a matured date and is still
+    fully covered by the 48h window (its final, complete rewrite)."""
+    now = pd.Timestamp("2026-07-03 00:05")
+    lo, hi = score.full_day_window(now, 48, "15min")
+    assert lo == pd.Timestamp("2026-07-02 00:00")
+    assert hi == pd.Timestamp("2026-07-03 00:00")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -98,6 +98,24 @@ def test_down_channel():
     np.testing.assert_array_equal(crt.features[2, :, di], [2, 0, 0, 0])  # c down @10:00
 
 
+def test_dow_channels_broadcast_and_weekend_flag():
+    # _scenario() is Mon 2026-06-01 → is_weekend 0; a Saturday panel → 1.
+    crt = tensor.build(_scenario(), min_rides_open=2)
+    wi = crt.channel_names.index("is_weekend")
+    np.testing.assert_array_equal(crt.features[..., wi], np.zeros((3, 4)))
+    dsi = crt.channel_names.index("dow_sin")
+    np.testing.assert_allclose(crt.features[0, :, dsi], np.sin(0.0))  # Monday = dow 0
+
+    sat = pd.DataFrame([_row("a", "2026-06-06 10:00", 10.0, 5),
+                        _row("b", "2026-06-06 10:00", 30.0, 4)])
+    crt_sat = tensor.build(sat, min_rides_open=1)
+    wsat = crt_sat.channel_names.index("is_weekend")
+    np.testing.assert_array_equal(crt_sat.features[..., wsat], np.ones((2, 1)))
+    # dow channels must sit AFTER the original 8 (append-only evolution contract —
+    # older checkpoints select their channels by prefix-compatible names).
+    assert CHANNELS.index("dow_sin") > CHANNELS.index("park_occ")
+
+
 def test_loss_mask_excludes_closed_and_gaps():
     crt = tensor.build(_scenario(), min_rides_open=2)
     # park open everywhere → loss_mask == obs_mask ; total observed = 3+4+1 = 8
@@ -124,6 +142,41 @@ def test_all_unobserved_interior_slot():
 def test_empty_panel():
     reg = tensor.regularize(pd.DataFrame(columns=["unique_id", "ds", "y", "n_obs", "down_count"]))
     assert reg.empty
+
+
+def test_align_ride_axis_reorders_fills_and_drops():
+    """Serving alignment: tensor ride axis → trained node order. Present rides keep
+    their rows (reordered), rides absent from the window become synthetic quiet nodes
+    (ride channels 0, shared time/park channels kept, flagged in the mask), and rides
+    unknown to the model are dropped (CatBoost fallback until retrain)."""
+    crt = tensor.build(_scenario(), park_id="P", min_rides_open=2)  # rides a, b, c
+    trained = ["b", "zombie", "a"]  # reordered, one long-dead ride, c dropped
+    aligned, present = tensor.align_ride_axis(crt, trained)
+
+    assert aligned.ride_ids == trained
+    np.testing.assert_array_equal(present, [True, False, True])
+    # present rides carry their original rows in the NEW order
+    bi, ai = crt.ride_ids.index("b"), crt.ride_ids.index("a")
+    np.testing.assert_allclose(aligned.features[0], crt.features[bi])
+    np.testing.assert_allclose(aligned.features[2], crt.features[ai])
+    # absent ride: ride-specific channels zeroed, shared channels preserved
+    for name in ("wait_ffill", "obs_mask", "down"):
+        ci = aligned.channel_names.index(name)
+        np.testing.assert_array_equal(aligned.features[1, :, ci], np.zeros(4))
+    for name in ("slot_sin", "hour_cos", "park_occ", "dow_cos", "is_weekend"):
+        ci = aligned.channel_names.index(name)
+        np.testing.assert_allclose(aligned.features[1, :, ci], crt.features[0, :, ci])
+    # wait_raw NaN for the absent ride; park-level arrays untouched
+    assert np.isnan(aligned.wait_raw[1]).all()
+    np.testing.assert_array_equal(aligned.park_open, crt.park_open)
+    assert not np.isnan(aligned.features).any()
+
+
+def test_align_ride_axis_identity_when_matching():
+    crt = tensor.build(_scenario(), min_rides_open=2)
+    aligned, present = tensor.align_ride_axis(crt, list(crt.ride_ids))
+    assert present.all()
+    np.testing.assert_allclose(aligned.features, crt.features)
 
 
 def test_npz_roundtrip(tmp_path):

@@ -117,5 +117,54 @@ def test_adaptive_adjacency_is_row_stochastic():
     assert torch.allclose(A.sum(1), torch.ones(5), atol=1e-5)
 
 
+def test_predict_quantiles_are_monotonic():
+    # Independently-trained pinball heads can cross; predict_quantiles must serve
+    # q0.5 <= q0.8 <= q0.9 (the crowd signal may never fall below the displayed wait).
+    t = _tensor()
+    m = gp_stgnn.GPSTGNNModel(loss="quantile", hidden=8, embed_dim=4,
+                              max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    q = m.predict_quantiles(t, ev, L=4, H=2)
+    assert (q[0.8] >= q[0.5]).all() and (q[0.9] >= q[0.8]).all()
+
+
+def test_channel_evolution_older_checkpoint_serves_newer_tensor(tmp_path):
+    """Append-only channel contract: a model trained on today's channels must produce
+    IDENTICAL predictions from a tensor that has extra channels appended later —
+    _model_features selects the trained channels by name (no retrain needed to keep
+    serving through a tensor upgrade)."""
+    from dataclasses import replace
+
+    t = _tensor()
+    m = gp_stgnn.GPSTGNNModel(loss="quantile", hidden=8, embed_dim=4,
+                              max_steps=3, batch_size=2)
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m.fit(t, train, L=4, H=2)
+    p = tmp_path / "m.pt"
+    m.save(str(p), ride_ids=t.ride_ids)
+
+    # Simulate a FUTURE tensor: one extra appended channel of noise.
+    extra = np.random.default_rng(0).normal(size=t.features.shape[:2] + (1,))
+    t_future = replace(
+        t,
+        features=np.concatenate([t.features, extra], axis=-1),
+        channel_names=list(t.channel_names) + ["future_x"],
+    )
+
+    m2 = gp_stgnn.GPSTGNNModel().load(str(p))
+    np.testing.assert_allclose(
+        m2.predict(t, ev, 4, 2), m2.predict(t_future, ev, 4, 2), rtol=1e-6)
+
+    # A tensor MISSING a trained channel must hard-fail (silent zero-fill would skew).
+    t_missing = replace(
+        t,
+        features=t.features[..., :-1],
+        channel_names=list(t.channel_names)[:-1],
+    )
+    with pytest.raises(RuntimeError, match="lacks trained channels"):
+        m2.predict(t_missing, ev, 4, 2)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

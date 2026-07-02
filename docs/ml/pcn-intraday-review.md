@@ -1,6 +1,8 @@
 # PCN-Intraday-Review — Befunde & Verbesserungsvorschläge (2026-07-02)
 
-> Status: **Review / Entscheidungsvorlage**. Kein Produktionscode geändert.
+> Status: **Review + Umsetzung**. Die Punkte 1–5 aus §7 sind im selben PR umgesetzt
+> (siehe §8 Umsetzungsstand); §7 Punkt 6–8 sind vorbereitet (Bake-off-Knobs, Kanal-
+> Evolutions-Contract), aber bewusst NICHT geflippt — der Bake-off entscheidet.
 > Scope: das neue Intraday-Modell (pcn-service + Champion-Swap + Shadow-Boards),
 > plus allgemeine ML-System-Empfehlungen. Grundlage: vollständiger Code-Read
 > (pcn-service, Serving-Pfad `ml.service.ts`, Scorer, NestJS-Wiring), die Live-Boards
@@ -348,3 +350,39 @@ Python-Modul zwischen pcn/shape ziehen.
 > Leitplanke unverändert: **nichts flippt ohne Busy/Headliner-Win auf sauberer
 > Evidenz** — Punkt 2 ist deshalb bewusst vor Punkt 6: erst das Messgerät
 > kalibrieren, dann am Modell drehen.
+
+---
+
+## 8. Umsetzungsstand (2026-07-02, gleicher PR)
+
+| §7 | Stück | Status |
+|---|---|---|
+| 1 | Crowd-Level aus PCN-q0.8 (`getPcnIntradayWaits` holt q0.5+q0.8; Crowd = max(q0.8, q0.5)) + Non-Crossing (`metrics.enforce_quantile_monotonicity` in `predict_quantiles`) | ✅ |
+| 2 | Full-Day-Contract in beiden Scorern (`full_day_window`: Lookback 48h/96h, nur voll abgedeckte lokale Tage, aktueller Teil-Slot ausgeschlossen) + Tests | ✅ (Board-Reset nötig, s.u.) |
+| 3 | Retention (`prune_pcn_forecasts` 14d / `prune_shape_forecasts` 30d, im Score-Job) + `created_at`-Index (Serving-Staleness-Filter & DELETE) | ✅ |
+| 4 | Inferenz-Fenster `PCN_FORECAST_WINDOW_DAYS=7` (Fallback auf volles Fenster bei dünnem Grid) + billiger `park_has_fresh_data`-Pre-Check VOR dem Panel-Fetch | ✅ |
+| 5 | Serving-Konsistenz: `getParkPredictions` (Park-Kurve + Kalender) wendet den Override nach dem Cache-Read an (Cache bleibt CatBoost-pur, 30-min-TTL); Deviation-Service misst gegen den servierten PCN-Wert (`getServedPcnWait`, geteilte Konstante `pcn-serving.constants.ts`); `LIMIT 400` → tagesproportional | ✅ |
+| 6 | RF-Bake-off: `PCN_GWN_LAYERS` (env) + `run_bakeoff.py --layers`; **Default bleibt 2** — erst Bake-off-Win, dann flippen | 🟡 vorbereitet |
+| 7 | Lead-Kurven-Scoring aus dem gespeicherten Fan | ⬜ offen |
+| 8 | Feature-Kanäle: `dow_sin/dow_cos/is_weekend` im Tensor (append-only) + **Kanal-Evolutions-Contract** (Checkpoint speichert Trainings-Kanäle, `_model_features` selektiert per Name → alte Modelle servieren bis zum Retrain weiter); Holiday/Schedule/Wetter | 🟡 DOW drin, Rest offen |
+
+**Einmaliger Board-Reset nach Deploy** (die vor dem Fix geschriebenen, gereiften
+Zeilen sind fenster-degradiert und nicht reparierbar; gestern + heute schreibt der
+nächste Stunden-Lauf vollständig neu):
+
+```sql
+DELETE FROM pcn_intraday_comparisons WHERE target_date < CURRENT_DATE;
+DELETE FROM shape_comparisons       WHERE target_date < CURRENT_DATE;
+```
+
+Danach **1–2 Wochen sauber reifen lassen**, bevor der PCN-Swap-Win als final bestätigt
+gilt (und bevor Shape offline-vs-live neu bewertet wird). Erwartung: die N pro Tag
+steigen um ein Vielfaches (volle Tage statt letzter Stunde), Buckets summieren sich
+exakt auf „all", und der Bias-Mix verschiebt sich (bisher abend-lastig).
+
+**Betriebs-Notizen:** (a) Beim ersten Score-Lauf nach Deploy löscht die Retention
+initial zig Millionen alter `pcn_forecasts`-Zeilen — der DELETE läuft über den neuen
+`created_at`-Index, kann aber einige Minuten dauern (einmalig; danach ~Stundentakt-
+kleine Batches). Optional vorab manuell in Batches löschen. (b) Nach dem nächtlichen
+Retrain (08:30) trainieren die Modelle auf den neuen 11 Kanälen; bis dahin servieren
+die alten Checkpoints unverändert über den Kanal-Contract.

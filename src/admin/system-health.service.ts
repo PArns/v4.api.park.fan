@@ -455,8 +455,10 @@ export class SystemHealthService {
                  CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
                               WHEN 'mid' THEN 2 ELSE 3 END,
                  lead_bucket, model
-        LIMIT 400`,
-      [days],
+        LIMIT $2`,
+      // 4 segments × 4 lead buckets × 2 models = 32 rows/day max; a flat LIMIT 400
+      // silently truncated the oldest day at days=14 and skewed the n-weighted verdict.
+      [days, (days + 1) * 32],
     );
     return { rows, verdict: this.intradayVerdict(rows), count: rows.length };
   }
@@ -526,8 +528,9 @@ export class SystemHealthService {
                  CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
                               WHEN 'mid' THEN 2 ELSE 3 END,
                  lead_bucket, model
-        LIMIT 400`,
-      [days],
+        LIMIT $2`,
+      // Same day-proportional bound as the PCN board (32 cells/day max + margin).
+      [days, (days + 1) * 32],
     );
     return {
       rows,

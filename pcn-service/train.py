@@ -32,7 +32,7 @@ def model_path(park_id: str) -> str:
 def _build_model():
     reg = backbones.build_registry(
         loss=settings.PCN_LOSS, hidden=settings.PCN_HIDDEN_SIZE,
-        max_steps=settings.PCN_MAX_STEPS,
+        max_steps=settings.PCN_MAX_STEPS, layers=settings.PCN_GWN_LAYERS,
     )
     return reg[settings.PCN_ARCH]()
 

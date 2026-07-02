@@ -65,6 +65,25 @@ class Settings(BaseSettings):
     # score window → unscoreable + pcn_forecasts bloat. 36h clears normal overnight/short
     # gaps (≤~16h) with margin while catching genuinely stale parks.
     PCN_MAX_ORIGIN_AGE_HOURS: int = 36
+    # Panel window (days) for the every-15-min FORECAST tick. Inference only needs the
+    # L-slot context (2 days) plus ffill warm-up — refetching the full PCN_WINDOW_DAYS
+    # history each tick re-aggregated ~1.5y of queue_data per park per run for nothing.
+    # Training keeps PCN_WINDOW_DAYS. Must comfortably exceed L slots (192 = 2 days).
+    PCN_FORECAST_WINDOW_DAYS: int = 7
+    # Scoring lookback (hours). Must be >= 48 so the hourly scorer's full-day contract
+    # holds: board rows are only (re)written from a window that fully covers their
+    # target_date — see score._matched_frame. (24h caused the rolling-window overwrite
+    # that degraded matured board days to their last hour.)
+    PCN_SCORE_LOOKBACK_HOURS: int = 48
+    # Prune pcn_forecasts rows whose created_at is older than this (days). Scoring reads
+    # only the last ~2 days of targets and serving the last 3h, so matured origins are
+    # dead weight at ~10^7 rows/day. 14d keeps enough for ad-hoc lead-curve analysis.
+    PCN_FORECAST_RETENTION_DAYS: int = 14
+    # Graph WaveNet temporal depth: receptive field = 1 + sum(2^i) over layers (kernel 2)
+    # → 2 layers = 4 slots (1h!), 6 = 64 slots (16h), 8 = 256 slots (64h > L). The served
+    # default keeps 2 until the bake-off arbitrates a deeper stack (quality gate, not a
+    # silent flip) — run run_bakeoff.py with PCN_GWN_LAYERS=8 vs 2 on busy MAE/bias.
+    PCN_GWN_LAYERS: int = 2
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

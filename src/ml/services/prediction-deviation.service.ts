@@ -4,6 +4,10 @@ import { Repository, Between } from "typeorm";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Redis } from "ioredis";
+import {
+  PCN_MAX_FORECAST_AGE_H,
+  servePcnIntraday,
+} from "../pcn-serving.constants";
 
 /**
  * Prediction Deviation Service
@@ -55,14 +59,18 @@ export class PredictionDeviationService {
         return { hasDeviation: false };
       }
 
+      // Champion-swap consistency: deviation must be measured against the wait the
+      // user actually SEES. When PCN serves intraday, the read paths override the
+      // stored CatBoost row with PCN's freshest q0.5 — comparing live waits against
+      // the hidden CatBoost number would flag deviations on values nobody is shown.
+      const servedWait =
+        (await this.getServedPcnWait(attractionId, prediction.predictedTime)) ??
+        prediction.predictedWaitTime;
+
       // Calculate deviations
-      const absoluteDeviation = Math.abs(
-        actualWaitTime - prediction.predictedWaitTime,
-      );
+      const absoluteDeviation = Math.abs(actualWaitTime - servedWait);
       const percentageDeviation =
-        prediction.predictedWaitTime > 0
-          ? (absoluteDeviation / prediction.predictedWaitTime) * 100
-          : 0;
+        servedWait > 0 ? (absoluteDeviation / servedWait) * 100 : 0;
 
       // Check thresholds
       const hasDeviation =
@@ -72,7 +80,7 @@ export class PredictionDeviationService {
       if (hasDeviation) {
         this.logger.debug(
           `Deviation detected for ${attractionId}: ` +
-            `predicted=${prediction.predictedWaitTime}min, ` +
+            `predicted=${servedWait}min, ` +
             `actual=${actualWaitTime}min, ` +
             `deviation=${absoluteDeviation.toFixed(1)}min (${percentageDeviation.toFixed(1)}%)`,
         );
@@ -82,7 +90,7 @@ export class PredictionDeviationService {
         hasDeviation,
         deviation: absoluteDeviation,
         percentageDeviation,
-        predictedWaitTime: prediction.predictedWaitTime,
+        predictedWaitTime: servedWait,
       };
     } catch (error) {
       const errorMessage =
@@ -214,6 +222,40 @@ export class PredictionDeviationService {
     }
 
     return resultMap;
+  }
+
+  /**
+   * The wait the serving layer actually shows for this slot when the PCN
+   * champion-swap is live: PCN's freshest forward q0.5 within the shared staleness
+   * guard (same selection as MLService.getPcnIntradayWaits). Returns null when the
+   * flag is off, PCN has no fresh forecast, or the table is absent — the caller
+   * falls back to the stored CatBoost value (exactly like the read paths do).
+   */
+  private async getServedPcnWait(
+    attractionId: string,
+    predictedTime: Date,
+  ): Promise<number | null> {
+    if (!servePcnIntraday()) return null;
+    try {
+      const rows: Array<{ wait: string }> =
+        await this.predictionRepository.manager.query(
+          `SELECT f.predicted_wait AS wait
+             FROM pcn_forecasts f
+             JOIN attractions a ON a.id = f.attraction_id
+             JOIN parks p ON p.id = a."parkId"
+            WHERE f.attraction_id = $1::uuid
+              AND f.quantile = 0.5
+              AND f.created_at >= now() - ($3 || ' hours')::interval
+              AND (f.target_slot AT TIME ZONE p.timezone) = $2
+            ORDER BY f.origin_slot DESC
+            LIMIT 1`,
+          [attractionId, predictedTime, PCN_MAX_FORECAST_AGE_H],
+        );
+      return rows.length > 0 ? Math.round(Number(rows[0].wait)) : null;
+    } catch {
+      // Missing table / transient DB error → CatBoost fallback, never a hard fail.
+      return null;
+    }
   }
 
   /**

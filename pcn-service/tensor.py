@@ -27,7 +27,13 @@ import pandas as pd
 # obs_mask   = 1 where a real operating wait existed (the loss target mask);
 # down       = DOWN-status count in the slot (pent-up-demand / reopening signal);
 # slot/hour sin·cos = time-of-day (shared across rides, broadcast per node);
-# park_occ   = the SCALAR cross-ride busyness baseline (what the STGNN must beat).
+# park_occ   = the SCALAR cross-ride busyness baseline (what the STGNN must beat);
+# dow sin·cos + is_weekend = day-of-week (design doc §4.3 known-future: weekday vs
+#   weekend day-shapes differ and a 2-day context can't tell Fri→Sat from Mon→Tue).
+#
+# EVOLUTION CONTRACT: only APPEND new channels. Checkpoints store the channel list
+# they were trained on and predict paths select those by name (TorchSeqModel.
+# _model_features), so an older model keeps serving until the nightly retrain.
 CHANNELS = [
     "wait_ffill",
     "obs_mask",
@@ -37,6 +43,9 @@ CHANNELS = [
     "hour_sin",
     "hour_cos",
     "park_occ",
+    "dow_sin",
+    "dow_cos",
+    "is_weekend",
 ]
 
 
@@ -161,15 +170,19 @@ def regularize(
 
 
 def _slot_time_features(slots: pd.DatetimeIndex) -> dict[str, np.ndarray]:
-    """Cyclic time-of-day at slot (96/day) and hour granularity — same for every ride
-    at a given slot, broadcast across nodes in the tensor."""
+    """Cyclic time-of-day at slot (96/day) and hour granularity, plus day-of-week —
+    same for every ride at a given slot, broadcast across nodes in the tensor."""
     slot_of_day = slots.hour * 4 + slots.minute // 15  # 0..95
     h = slots.hour.to_numpy().astype(float)
+    dow = slots.dayofweek.to_numpy().astype(float)     # 0=Mon .. 6=Sun
     return {
         "slot_sin": np.sin(2 * np.pi * slot_of_day / 96).to_numpy(),
         "slot_cos": np.cos(2 * np.pi * slot_of_day / 96).to_numpy(),
         "hour_sin": np.sin(2 * np.pi * h / 24),
         "hour_cos": np.cos(2 * np.pi * h / 24),
+        "dow_sin": np.sin(2 * np.pi * dow / 7),
+        "dow_cos": np.cos(2 * np.pi * dow / 7),
+        "is_weekend": (dow >= 5).astype(float),
     }
 
 
@@ -231,6 +244,9 @@ def assemble_tensor(
         "hour_sin": np.broadcast_to(tfeat["hour_sin"], (R, T)),
         "hour_cos": np.broadcast_to(tfeat["hour_cos"], (R, T)),
         "park_occ": occ_bcast,
+        "dow_sin": np.broadcast_to(tfeat["dow_sin"], (R, T)),
+        "dow_cos": np.broadcast_to(tfeat["dow_cos"], (R, T)),
+        "is_weekend": np.broadcast_to(tfeat["is_weekend"], (R, T)),
     }
     features = np.stack([ch[name] for name in CHANNELS], axis=-1).astype(float)
 
@@ -266,3 +282,67 @@ def build(
         park_id=park_id,
         min_rides_open=min_rides_open,
     )
+
+
+# Ride-specific channels zeroed for rides absent from the window; the remaining
+# channels (time encodings, park_occ) are identical across rides and are copied from
+# a present row, so absent nodes look like "reporting nothing" — the same signature
+# a dead ride has in a long-window tensor — rather than feeding garbage to the graph.
+_RIDE_CHANNELS = ("wait_ffill", "obs_mask", "down")
+
+
+def align_ride_axis(
+    t: CrossRideTensor, ride_ids: list[str]
+) -> tuple[CrossRideTensor, np.ndarray]:
+    """Reindex the tensor's ride axis to a TRAINED model's node order.
+
+    The net's node embeddings are positional, so inference feature rows must line up
+    with the training order exactly. Two drifts happen in production: (a) the short
+    forecast window omits rides that haven't reported recently (long-dead rides that
+    the 548-day training window still contained), and (b) the roster changes (new
+    rides). Both used to hard-skip the whole park until retrain; instead:
+
+      * rides in `ride_ids` missing from `t` become synthetic quiet rows (ride
+        channels 0 / wait NaN, shared time+park channels kept) — flagged absent in
+        the returned mask so callers do NOT persist their junk outputs;
+      * rides in `t` not in `ride_ids` are dropped (no node → they fall back to
+        CatBoost in serving until the nightly retrain adds them).
+
+    Returns (aligned tensor, present[R] bool mask in the trained order)."""
+    src = {uid: i for i, uid in enumerate(t.ride_ids)}
+    present = np.array([uid in src for uid in ride_ids], dtype=bool)
+    R2 = len(ride_ids)
+
+    def _take(arr: np.ndarray, fill: float) -> np.ndarray:
+        arr = np.asarray(arr, dtype=float)
+        out = np.full((R2,) + arr.shape[1:], fill, dtype=float)
+        for j, uid in enumerate(ride_ids):
+            i = src.get(uid)
+            if i is not None:
+                out[j] = arr[i]
+        return out
+
+    features = _take(t.features, 0.0)
+    if not present.all() and len(t.ride_ids) > 0:
+        # Shared (broadcast) channels are identical across rides → copy from row 0;
+        # only the ride-specific channels stay zeroed for absent rides.
+        template = np.asarray(t.features, dtype=float)[0].copy()   # [T, C]
+        for name in _RIDE_CHANNELS:
+            if name in t.channel_names:
+                template[:, t.channel_names.index(name)] = 0.0
+        features[~present] = template
+
+    aligned = CrossRideTensor(
+        park_id=t.park_id,
+        ride_ids=list(ride_ids),
+        slots=t.slots,
+        wait_raw=_take(t.wait_raw, np.nan),
+        wait_ffill=_take(t.wait_ffill, 0.0),
+        obs_mask=_take(t.obs_mask, 0.0),
+        down=_take(t.down, 0.0),
+        park_open=t.park_open,
+        park_occ=t.park_occ,
+        features=features,
+        channel_names=list(t.channel_names),
+    )
+    return aligned, present

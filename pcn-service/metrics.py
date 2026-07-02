@@ -18,6 +18,21 @@ BUSY_SEGMENTS = [
 ]
 
 
+def enforce_quantile_monotonicity(
+    qpreds: dict[float, np.ndarray],
+) -> dict[float, np.ndarray]:
+    """Sort the served quantiles into ascending-alpha order and apply a running max so
+    q0.5 <= q0.8 <= q0.9 per entry. Independently-trained pinball heads do NOT guarantee
+    non-crossing (same issue CatBoost MultiQuantile has — see
+    docs/ml/quantile-serving-and-calibration.md); a crossed row would let the crowd
+    signal (q0.8) fall below the displayed wait (q0.5). Mirrors ml-service's fix."""
+    if len(qpreds) <= 1:
+        return qpreds
+    alphas = sorted(qpreds)
+    stack = np.maximum.accumulate(np.stack([qpreds[a] for a in alphas]), axis=0)
+    return {a: stack[i] for i, a in enumerate(alphas)}
+
+
 def mae_bias(
     pred: np.ndarray, actual: np.ndarray, keep: np.ndarray
 ) -> tuple[float, float, int]:
@@ -70,6 +85,31 @@ def evaluate(
         _row(label, base & fn(actual))
     for label, hmask in lead_buckets.items():
         _row(label, base & np.broadcast_to(hmask, actual.shape))
+    return out
+
+
+def pool_scores(per_park: list[dict]) -> dict:
+    """Pool per-park {segment: {column: (mae, bias, n)}} into one table, weighting MAE
+    and bias by n (so big parks count more, empty segments are skipped). Pure numpy-free
+    aggregation — lives here (not run_bakeoff) so it is importable without torch."""
+    import math
+
+    acc: dict = {}
+    for park in per_park:
+        for seg, by in park.items():
+            for col, (mae, bias, n) in by.items():
+                if not n or math.isnan(mae):
+                    continue
+                a = acc.setdefault(seg, {}).setdefault(col, [0.0, 0.0, 0])
+                a[0] += mae * n
+                a[1] += bias * n
+                a[2] += n
+    out: dict = {}
+    for seg, by in acc.items():
+        out[seg] = {
+            col: (s[0] / s[2], s[1] / s[2], s[2]) if s[2] else (float("nan"), float("nan"), 0)
+            for col, s in by.items()
+        }
     return out
 
 

@@ -20,14 +20,15 @@ def park_timezone(park_id: str) -> str | None:
     return meta["timezone"].iloc[0]
 
 
-def build_park_tensor(park_id: str):
-    """Build the cross-ride tensor for one park over the configured window, or None if
-    the park has no attractions / no queue data in the window."""
+def build_park_tensor(park_id: str, window_days: int | None = None):
+    """Build the cross-ride tensor for one park over the configured window (or an
+    explicit override — the forecast tick passes its short inference window), or None
+    if the park has no attractions / no queue data in the window."""
     tz = park_timezone(park_id)
     if tz is None:
         logger.warning("park %s: no attractions", park_id)
         return None
-    panel = db.fetch_cross_ride_panel(park_id, tz)
+    panel = db.fetch_cross_ride_panel(park_id, tz, window_days=window_days)
     if panel.empty:
         logger.warning("park %s (tz=%s): no queue data in window", park_id, tz)
         return None

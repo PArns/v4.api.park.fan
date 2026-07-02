@@ -82,6 +82,25 @@ def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
     return rows
 
 
+def full_day_window(
+    now_local: pd.Timestamp, lookback_hours: int, slot_freq: str
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """(lo, hi) park-local scoring window honouring the FULL-DAY CONTRACT (same fix
+    as pcn-service score.py): the board upserts per target_date, so a date's cells may
+    only be (re)written from a window that covers the date COMPLETELY (so far) —
+    otherwise the rolling lookback degrades matured days run by run (the last write
+    kept only the tail of the day, and skipped n=0 cells went stale). lo = first
+    FULLY-covered local day (96h default → last 3 full days + today); hi = now floored
+    to the slot grid (the current slot's realised median is still partial)."""
+    hi = now_local.floor(slot_freq)
+    lo = min(
+        (now_local - pd.Timedelta(hours=lookback_hours)).normalize()
+        + pd.Timedelta(days=1),                       # first FULLY-covered local day
+        now_local.normalize(),                        # never later than today 00:00
+    )
+    return lo, hi
+
+
 def _park_matched(park_id: str, lookback_hours: int) -> pd.DataFrame:
     tz = db.park_timezone(park_id)
     if tz is None:
@@ -90,9 +109,10 @@ def _park_matched(park_id: str, lookback_hours: int) -> pd.DataFrame:
     lo_utc = (now_utc - pd.Timedelta(hours=lookback_hours)).to_pydatetime()
     hi_utc = now_utc.to_pydatetime()
     now_local = pd.Timestamp.now(tz=tz).tz_localize(None)
-    lo_local = (now_local - pd.Timedelta(hours=lookback_hours)).to_pydatetime()
+    lo_local, hi_local = full_day_window(now_local, lookback_hours, settings.slot_freq)
 
-    shape = db.fetch_shape_forecasts_window(park_id, lo_local, now_local.to_pydatetime())
+    shape = db.fetch_shape_forecasts_window(
+        park_id, lo_local.to_pydatetime(), hi_local.to_pydatetime())
     if shape.empty:
         return pd.DataFrame()
     shape = shape.rename(columns={"predicted_wait": "shape"})
@@ -126,22 +146,27 @@ def score_all(lookback_hours: int = 96, park_ids: list[str] | None = None) -> di
                 frames.append(m)
         except Exception as e:  # noqa: BLE001
             logger.warning("park %s scoring failed: %s", pid, e)
+    pruned = db.prune_shape_forecasts(settings.SHAPE_FORECAST_RETENTION_DAYS)
     if not frames:
         logger.info(
-            "scoring: 0 matched slots across %d parks in %.1fs", len(parks), time.time() - t0
+            "scoring: 0 matched slots across %d parks in %.1fs (pruned %d)",
+            len(parks), time.time() - t0, pruned,
         )
-        return {"rows": 0, "matched_slots": 0, "parks": len(parks)}
+        return {"rows": 0, "matched_slots": 0, "parks": len(parks), "pruned": pruned}
     combined = pd.concat(frames, ignore_index=True)
     rows = aggregate_comparison(combined, models=["shape", "catboost"])
     n = db.upsert_shape_comparisons(rows)
     logger.info(
-        "scoring done: %d board rows from %d matched slots across %d parks in %.1fs",
+        "scoring done: %d board rows from %d matched slots across %d parks in %.1fs "
+        "(pruned %d old forecasts)",
         n,
         len(combined),
         len(parks),
         time.time() - t0,
+        pruned,
     )
-    return {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks)}
+    return {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks),
+            "pruned": pruned}
 
 
 if __name__ == "__main__":

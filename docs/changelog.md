@@ -6,6 +6,35 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed/Changed — PCN intraday review fixes (serving, scorers, ops) (2026-07-02)
+
+Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-review.md)
+(§8 has the full status table + the one-time board-reset SQL):
+
+- **Crowd-level quantile fix (serving):** the PCN champion-swap override now derives
+  `crowdLevel` from PCN **q0.8** (display stays q0.5) — restoring the documented
+  per-purpose quantile split; pcn-service enforces quantile monotonicity in
+  `predict_quantiles` (mirrors CatBoost's non-crossing fix).
+- **Shadow scorers (pcn + shape): full-day contract.** Board rows are only (re)written
+  from windows that fully cover their target_date (`full_day_window`, lookback 48h/96h,
+  current partial slot excluded) — fixes the rolling-window overwrite that degraded
+  matured days to their last hour (visible as lead-bucket N sums > "all" N).
+  **One-time board reset required after deploy** (SQL in the review doc §8).
+- **Retention + index:** `pcn_forecasts` (14d) / `shape_forecasts` (30d) pruned in the
+  score jobs; `created_at` index supports the serving staleness filter + the DELETE.
+- **Forecast tick efficiency:** inference fetches `PCN_FORECAST_WINDOW_DAYS=7` instead
+  of the 548-day training window (fallback to full window for thin grids), and a cheap
+  bounded EXISTS pre-check skips stale parks BEFORE the panel fetch.
+- **Serving consistency:** the park-level hourly curve + calendar (`getParkPredictions`)
+  now apply the PCN override after the cache read (cache stays CatBoost-pure);
+  the deviation service measures against the actually-served PCN wait (shared
+  `pcn-serving.constants.ts`); admin board `LIMIT 400` → day-proportional.
+- **Model plumbing (no behavior flip):** channel-evolution contract (checkpoints store
+  their trained channel list; predict selects by name → tensor channels are append-only
+  and deploy-safe), new `dow_sin/dow_cos/is_weekend` tensor channels (picked up by the
+  next nightly retrain), `PCN_GWN_LAYERS` env + `run_bakeoff.py --layers` for the
+  receptive-field bake-off (served default stays 2 until a busy-segment win).
+
 ### Added — PCN intraday model review (docs only) (2026-07-02)
 
 Full review of the new intraday stack (pcn-service, champion-swap serving path,

@@ -28,6 +28,7 @@ import pandas as pd
 import backbones
 import db
 import pipeline
+import tensor as tns
 from config import get_settings
 from train import model_path
 
@@ -42,19 +43,28 @@ def _load_model(park_id: str):
         return None
     reg = backbones.build_registry(
         loss=settings.PCN_LOSS, hidden=settings.PCN_HIDDEN_SIZE,
-        max_steps=settings.PCN_MAX_STEPS,
+        max_steps=settings.PCN_MAX_STEPS, layers=settings.PCN_GWN_LAYERS,
     )
     return reg[settings.PCN_ARCH]().load(path)
 
 
 def forecast_park(park_id: str, version: str) -> int:
-    t = pipeline.build_park_tensor(park_id)
+    # Staleness pre-check BEFORE the panel fetch: seasonally-closed / dead-data parks
+    # used to pay the full history aggregation every tick just to be skipped afterwards.
+    # One bounded EXISTS query replaces that.
+    if not db.park_has_fresh_data(park_id, settings.PCN_MAX_ORIGIN_AGE_HOURS):
+        logger.info("park %s: no STANDBY data in %dh — skip forecast (pre-check)",
+                    park_id, settings.PCN_MAX_ORIGIN_AGE_HOURS)
+        return 0
+    # SHORT inference window: the model only consumes the L-slot context (2 days) +
+    # ffill warm-up; the training-sized window (~1.5y) re-aggregated the park's whole
+    # history every 15 minutes for nothing. The scale factor lives in the checkpoint.
+    t = pipeline.build_park_tensor(
+        park_id, window_days=settings.PCN_FORECAST_WINDOW_DAYS)
     if t is None:
         return 0
-    # Skip stale parks (seasonally closed / dead data) BEFORE loading the model + inferring:
-    # forecasting from a freshest slot that is hours/weeks old only writes rows whose target
-    # slots fall outside any future score window → unscoreable + pcn_forecasts bloat. The slot
-    # grid is park-local naive, so compare the latest slot to "now" in the park wall-clock.
+    # Defense-in-depth: the pre-check said "some fresh data exists", this checks the
+    # assembled grid's freshest slot too (park-local naive vs park wall-clock now).
     tz = pipeline.park_timezone(park_id)
     if tz is not None:
         latest = pd.Timestamp(t.slots[-1])
@@ -67,17 +77,35 @@ def forecast_park(park_id: str, version: str) -> int:
     if model is None:
         logger.warning("park %s: no trained model — run /train first", park_id)
         return 0
-    # The net's node order is fixed at train time; only forecast if the ride set matches
-    # (a changed roster needs a retrain, which the nightly /train provides).
-    if getattr(model, "ride_ids", None) != t.ride_ids:
-        logger.warning("park %s: ride set changed since training — skip until retrain",
-                       park_id)
-        return 0
 
     L, H = settings.PCN_INPUT_SIZE, settings.PCN_HORIZON
     if len(t.slots) <= L:
-        logger.warning("park %s: only %d slots — need > L=%d, skip", park_id, len(t.slots), L)
-        return 0
+        # Thin short-window grid (e.g. a park that just reopened after days closed):
+        # fall back to the full training window once — same cost as every tick paid
+        # before the short-window optimization, but only for this rare case.
+        t = pipeline.build_park_tensor(park_id)
+        if t is None or len(t.slots) <= L:
+            logger.warning("park %s: only %d slots — need > L=%d, skip",
+                           park_id, 0 if t is None else len(t.slots), L)
+            return 0
+
+    # The net's node order is fixed at train time → align the tensor's ride axis to
+    # it (tensor.align_ride_axis). Rides missing from the window become synthetic
+    # quiet nodes (their outputs are NOT persisted); new rides are dropped and fall
+    # back to CatBoost until the nightly retrain. A strict-equality skip here used to
+    # disable PCN for a whole park over any single roster/window drift.
+    trained = getattr(model, "ride_ids", None)
+    present = None
+    if trained and trained != t.ride_ids:
+        t, present = tns.align_ride_axis(t, trained)
+        if not present.any():
+            logger.warning("park %s: no trained ride present in the window — skip",
+                           park_id)
+            return 0
+        if not present.all():
+            logger.info("park %s: %d/%d trained rides in window (absent kept as "
+                        "quiet nodes, not persisted)",
+                        park_id, int(present.sum()), len(trained))
 
     base = len(t.slots) - 1                      # forecast from the latest slot
     qpreds = model.predict_quantiles(t, np.array([base]), L, H)
@@ -91,6 +119,8 @@ def forecast_park(park_id: str, version: str) -> int:
             continue
         mat = arr[0]                              # [R, H]
         for ri, uid in enumerate(t.ride_ids):
+            if present is not None and not present[ri]:
+                continue                          # absent ride → junk output, skip
             for h in range(H):
                 rows.append({
                     "aid": uid,

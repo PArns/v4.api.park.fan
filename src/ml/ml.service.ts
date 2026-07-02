@@ -25,6 +25,10 @@ import {
   PredictionDto,
 } from "./dto";
 import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
+import {
+  PCN_MAX_FORECAST_AGE_H,
+  servePcnIntraday as servePcnIntradayFlag,
+} from "./pcn-serving.constants";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -274,6 +278,17 @@ export class MLService {
         cachedData.count = cachedData.predictions.length;
       }
 
+      // Champion-swap consistency: the park-level hourly curve must show the SAME
+      // served waits as the per-attraction read paths (which apply the PCN override).
+      // Applied AFTER the cache read — the cache stays CatBoost-pure so PCN's 15-min
+      // re-inference stays fresh across the 30-min cache TTL.
+      if (this.servePcnIntraday && predictionType === "hourly") {
+        await this.applyPcnIntradayOverride(
+          cachedData.predictions ?? [],
+          new Date(currentSlotStartMs()),
+        );
+      }
+
       return cachedData;
     }
 
@@ -492,6 +507,15 @@ export class MLService {
           return predTime <= cutoffDate;
         });
         response.data.count = response.data.predictions.length;
+      }
+
+      // Champion-swap consistency (see the cached branch above): override AFTER the
+      // cache write, so the cached payload stays CatBoost-pure.
+      if (this.servePcnIntraday && predictionType === "hourly") {
+        await this.applyPcnIntradayOverride(
+          response.data.predictions ?? [],
+          new Date(currentSlotStartMs()),
+        );
       }
 
       return response.data;
@@ -1328,13 +1352,16 @@ export class MLService {
    * enable per env once the win is confirmed over a few days. Always falls back to
    * CatBoost where PCN has no forecast (or the table/flag is absent). */
   private get servePcnIntraday(): boolean {
-    return process.env.SERVE_PCN_INTRADAY === "true";
+    return servePcnIntradayFlag();
   }
 
-  /** Freshest forward PCN q0.5 (displayed wait) per (attraction, slot) for upcoming slots,
-   * keyed by the slot's UTC ISO string (matching CatBoost's predictedTime). pcn_forecasts
-   * stores park-LOCAL naive slots, so `target_slot AT TIME ZONE tz` recovers the instant.
-   * Returns an empty map on any error (missing table / flag misuse) → pure CatBoost.
+  /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
+   * the slot's UTC ISO string (matching CatBoost's predictedTime). Carries BOTH served
+   * quantiles per slot: q0.5 → `display` (the shown wait), q0.8 → `crowd` (the crowd
+   * signal) — mirroring the CatBoost per-purpose split
+   * (docs/ml/quantile-serving-and-calibration.md). pcn_forecasts stores park-LOCAL naive
+   * slots, so `target_slot AT TIME ZONE tz` recovers the instant. Returns an empty map
+   * on any error (missing table / flag misuse) → pure CatBoost.
    *
    * STALENESS GUARD: only consider forecasts written in the last `PCN_MAX_FORECAST_AGE_H`
    * hours. PCN's whole edge is being a nowcaster (recent observations); a frozen producer
@@ -1342,34 +1369,56 @@ export class MLService {
    * serving 24h-old waits live instead of degrading to CatBoost. Under healthy operation the
    * newest row is <15 min old, so this never fires; it only trips on a real outage. Bonus:
    * stale-input parks (forecast skipped) auto-fall-back to CatBoost too. */
-  private static readonly PCN_MAX_FORECAST_AGE_H = 3;
   private async getPcnIntradayWaits(
     attractionIds: string[],
     startTime?: Date,
-  ): Promise<Map<string, Map<string, number>>> {
-    const out = new Map<string, Map<string, number>>();
+  ): Promise<Map<string, Map<string, { display: number; crowd?: number }>>> {
+    const out = new Map<
+      string,
+      Map<string, { display: number; crowd?: number }>
+    >();
     if (attractionIds.length === 0) return out;
     try {
-      const rows: Array<{ aid: string; predicted_time: Date; wait: string }> =
-        await this.predictionRepository.manager.query(
-          `SELECT DISTINCT ON (f.attraction_id, f.target_slot)
-              f.attraction_id::text AS aid,
-              (f.target_slot AT TIME ZONE p.timezone) AS predicted_time,
-              f.predicted_wait AS wait
-           FROM pcn_forecasts f
-           JOIN attractions a ON a.id = f.attraction_id
-           JOIN parks p ON p.id = a."parkId"
-           WHERE f.attraction_id = ANY($1::uuid[])
-             AND f.quantile = 0.5
-             AND f.created_at >= now() - ($3 || ' hours')::interval
-             AND (f.target_slot AT TIME ZONE p.timezone) >= COALESCE($2, now())
-           ORDER BY f.attraction_id, f.target_slot, f.origin_slot DESC`,
-          [attractionIds, startTime ?? null, MLService.PCN_MAX_FORECAST_AGE_H],
-        );
+      const rows: Array<{
+        aid: string;
+        predicted_time: Date;
+        quantile: number;
+        wait: string;
+      }> = await this.predictionRepository.manager.query(
+        `SELECT DISTINCT ON (f.attraction_id, f.target_slot, f.quantile)
+            f.attraction_id::text AS aid,
+            (f.target_slot AT TIME ZONE p.timezone) AS predicted_time,
+            f.quantile AS quantile,
+            f.predicted_wait AS wait
+         FROM pcn_forecasts f
+         JOIN attractions a ON a.id = f.attraction_id
+         JOIN parks p ON p.id = a."parkId"
+         WHERE f.attraction_id = ANY($1::uuid[])
+           AND f.quantile IN (0.5, 0.8)
+           AND f.created_at >= now() - ($3 || ' hours')::interval
+           AND (f.target_slot AT TIME ZONE p.timezone) >= COALESCE($2, now())
+         ORDER BY f.attraction_id, f.target_slot, f.quantile, f.origin_slot DESC`,
+        [attractionIds, startTime ?? null, PCN_MAX_FORECAST_AGE_H],
+      );
       for (const r of rows) {
-        const m = out.get(r.aid) ?? new Map<string, number>();
-        m.set(new Date(r.predicted_time).toISOString(), Number(r.wait));
+        const m =
+          out.get(r.aid) ??
+          new Map<string, { display: number; crowd?: number }>();
+        const key = new Date(r.predicted_time).toISOString();
+        const entry = m.get(key) ?? { display: NaN };
+        if (Math.abs(Number(r.quantile) - 0.8) < 1e-6) {
+          entry.crowd = Number(r.wait);
+        } else {
+          entry.display = Number(r.wait);
+        }
+        m.set(key, entry);
         out.set(r.aid, m);
+      }
+      // A slot is servable only with a display (q0.5) value; drop crowd-only strays.
+      for (const m of out.values()) {
+        for (const [key, entry] of m) {
+          if (!Number.isFinite(entry.display)) m.delete(key);
+        }
       }
     } catch (e: unknown) {
       this.logger.warn(
@@ -1380,8 +1429,9 @@ export class MLService {
   }
 
   /** Override matched hourly predictions in place with PCN's q0.5 wait, recomputing
-   * crowdLevel from the new wait against the carried baseline. Unmatched slots/attractions
-   * keep CatBoost (the fallback). Mutates `preds`. */
+   * crowdLevel from PCN's q0.8 against the carried baseline (the same per-purpose
+   * quantile split CatBoost serves: median display, upper-quantile crowd signal).
+   * Unmatched slots/attractions keep CatBoost (the fallback). Mutates `preds`. */
   private async applyPcnIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
@@ -1392,14 +1442,18 @@ export class MLService {
     const pcn = await this.getPcnIntradayWaits(ids, startTime);
     let overridden = 0;
     for (const p of hourly) {
-      const wait = pcn.get(p.attractionId)?.get(p.predictedTime);
-      if (wait === undefined) continue;
-      p.predictedWaitTime = Math.round(wait);
+      const q = pcn.get(p.attractionId)?.get(p.predictedTime);
+      if (q === undefined) continue;
+      p.predictedWaitTime = Math.round(q.display);
       if (p.baseline && p.baseline > 0) {
+        // Crowd signal from q0.8 (fallback to display for rows written before q0.8
+        // serving); clamp to >= display — quantiles are monotonic going forward
+        // (pcn-service enforces it), but older stored rows may still cross.
+        const crowdWait = Math.max(q.crowd ?? q.display, q.display);
         // determineCrowdLevel never returns "unknown" (we guard baseline>0), so it is a
         // valid PredictionDto crowdLevel — narrow the wider CrowdLevel type with a cast.
         p.crowdLevel = determineCrowdLevel(
-          (p.predictedWaitTime / p.baseline) * 100,
+          (crowdWait / p.baseline) * 100,
         ) as PredictionDto["crowdLevel"];
       }
       p.modelVersion = `${p.modelVersion ?? "catboost"}+pcn`;
