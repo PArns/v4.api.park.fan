@@ -8,17 +8,27 @@ contract fix (PR #79, [review §8](docs/ml/pcn-intraday-review.md)) makes new wr
 correct, but the already-persisted matured rows are irreparably degraded and must be
 dropped once. Yesterday + today regenerate within the next hourly score run.
 
-- [ ] **After PR #79 is deployed**, run once against prod Postgres:
+> **✅ DEPLOYED & RESET 2026-07-02 16:15 UTC** (merge `727419f`). Verified against prod DB:
+> board reset ran (pcn −90 rows, shape −32); after the first fixed score run the leak is
+> gone — `sum(lead-buckets) == all` exactly for every (model, segment, date) on BOTH boards;
+> daily N jumped ~10–20× (pcn 21 268/day, shape 45 204/day vs ~1.9k before). Indexes were
+> pre-created `CONCURRENTLY` (both valid). Retention `pruned=0` — nothing older than 14d/30d
+> existed (tables only reached back to 06-29), so the feared backlog DELETE was a no-op.
+> First clean-board verdict: PCN still wins every segment (busy +5.85 ≈ the old +6.5);
+> Shape still loses every segment (busy −2.26) → §6b reconcile stays open, no Shape swap.
+> **Still pending below:** 1–2-week maturation, tomorrow's 08:30 UTC DOW-channel retrain, RF bake-off.
+
+- [x] **After PR #79 is deployed**, run once against prod Postgres: *(done 2026-07-02)*
 
   ```sql
   DELETE FROM pcn_intraday_comparisons WHERE target_date < CURRENT_DATE;
   DELETE FROM shape_comparisons       WHERE target_date < CURRENT_DATE;
   ```
 
-- [ ] Verify the next scored days are consistent: per (segment, date), the lead-bucket
+- [x] Verify the next scored days are consistent: per (segment, date), the lead-bucket
       `n` values must sum exactly to the `all` row, and daily N should jump ~10×+
-      (full days instead of the last hour).
-- [ ] **Optional but recommended BEFORE the first post-deploy forecast/score run:**
+      (full days instead of the last hour). *(verified 2026-07-02: excess=0 everywhere; N jumped ~10–20×)*
+- [x] **Optional but recommended BEFORE the first post-deploy forecast/score run:** *(done 2026-07-02 — both indexes built CONCURRENTLY, valid)*
       pre-create the new indexes without blocking writes (the in-code
       `CREATE INDEX IF NOT EXISTS` is non-concurrent — the first build over the
       accumulated backlog would block the producer for minutes):
@@ -30,11 +40,13 @@ dropped once. Yesterday + today regenerate within the next hourly score run.
       ON shape_forecasts (created_at);
   ```
 
-- [ ] Expect the first `/score` run to take longer once: the new retention prune
+- [x] Expect the first `/score` run to take longer once: the new retention prune
       (`pcn_forecasts` 14d / `shape_forecasts` 30d) deletes the accumulated backlog
       (order 10⁸ rows). If it times out, pre-delete manually in batches, e.g.
       `DELETE FROM pcn_forecasts WHERE created_at < now() - interval '14 days'`
       with a `LIMIT`-style loop (`ctid` batching) or during a quiet window.
+      *(N/A 2026-07-02: `pruned=0` — tables only reached back to 06-29, nothing >14d/30d yet.
+      Steady-state will cap ~120M rows / ~24 GB for `pcn_forecasts`; retention verified working.)*
 - [ ] Let the boards mature **1–2 weeks**, then re-confirm the PCN swap win
       (busy/headliner, no quiet inflation) and re-judge Shape offline-vs-live —
       no Shape producer swap before that.
