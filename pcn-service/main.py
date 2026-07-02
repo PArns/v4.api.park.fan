@@ -198,7 +198,9 @@ def run_forecast(req: JobRequest):
 
 @app.post("/score")
 def run_score(req: JobRequest):
-    """Score matured pcn_forecasts vs actuals + CatBoost → pcn_intraday_comparisons."""
+    """Score matured pcn_forecasts vs actuals + CatBoost → pcn_intraday_comparisons.
+    Default lookback comes from PCN_SCORE_LOOKBACK_HOURS (>=48h — the scorer's
+    full-day contract); also prunes forecasts past the retention window."""
     import score
     return _run_job("score", score.score_all,
-                    lookback_hours=req.lookback_hours or 24, park_ids=req.park_ids)
+                    lookback_hours=req.lookback_hours, park_ids=req.park_ids)

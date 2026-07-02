@@ -76,6 +76,24 @@ def test_evaluate_segments():
     assert sc2["ALL"]["m"][2] == 0
 
 
+def test_enforce_quantile_monotonicity_fixes_crossing():
+    # q0.8 crossed BELOW q0.5 on the second entry → running max lifts it to q0.5.
+    q = {
+        0.5: np.array([10.0, 20.0]),
+        0.8: np.array([15.0, 18.0]),
+        0.9: np.array([12.0, 25.0]),
+    }
+    fixed = metrics.enforce_quantile_monotonicity(q)
+    np.testing.assert_allclose(fixed[0.5], [10.0, 20.0])   # median untouched
+    np.testing.assert_allclose(fixed[0.8], [15.0, 20.0])   # lifted to q0.5
+    np.testing.assert_allclose(fixed[0.9], [15.0, 25.0])   # lifted to q0.8
+    # already-monotonic input passes through unchanged; single quantile is a no-op
+    mono = {0.5: np.array([1.0]), 0.8: np.array([2.0])}
+    out = metrics.enforce_quantile_monotonicity(mono)
+    np.testing.assert_allclose(out[0.8], [2.0])
+    assert metrics.enforce_quantile_monotonicity({0.5: np.array([3.0])})[0.5][0] == 3.0
+
+
 # ---------------------------------------------------------------- driver
 
 def _make_tensor(days=8, freq="6h", rides=("a", "b", "c")):
@@ -125,10 +143,9 @@ def test_run_backtest_persistence_identity():
 
 
 def test_pool_scores_is_n_weighted():
-    import run_bakeoff
     parkA = {"ALL": {"m": (10.0, -2.0, 100), "persist": (12.0, -3.0, 100)}}
     parkB = {"ALL": {"m": (20.0, +4.0, 300), "persist": (18.0, +1.0, 300)}}
-    pooled = run_bakeoff.pool_scores([parkA, parkB])
+    pooled = metrics.pool_scores([parkA, parkB])
     mae, bias, n = pooled["ALL"]["m"]
     assert n == 400
     # n-weighted: (10*100 + 20*300)/400 = 17.5 ; bias (-2*100 + 4*300)/400 = 2.5
@@ -149,12 +166,11 @@ def test_format_table_handles_missing_columns():
 
 
 def test_pool_scores_skips_empty_and_nan():
-    import run_bakeoff
     parks = [
         {"busy >=60": {"m": (float("nan"), float("nan"), 0)}},
         {"busy >=60": {"m": (15.0, -5.0, 50)}},
     ]
-    pooled = run_bakeoff.pool_scores(parks)
+    pooled = metrics.pool_scores(parks)
     assert pooled["busy >=60"]["m"] == (15.0, -5.0, 50)
 
 

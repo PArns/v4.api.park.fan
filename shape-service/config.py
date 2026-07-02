@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # --- Shadow producer (Phase 1) ---
     # How many forward days to render per run (matures over this many days for scoring).
     SHAPE_FORECAST_DAYS: int = 14
+    # Prune shape_forecasts rows whose created_at is older than this (days). Scoring
+    # reads targets from the last ~4 days across ALL origins (the lead buckets need
+    # origins up to SHAPE_FORECAST_DAYS before the target), so retention must exceed
+    # FORECAST_DAYS + the score window with margin: 30d does, comfortably.
+    SHAPE_FORECAST_RETENTION_DAYS: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

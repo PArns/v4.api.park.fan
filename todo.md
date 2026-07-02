@@ -1,5 +1,93 @@
 # TODO
 
+## PCN/Shape shadow boards — one-time reset + post-deploy steps (PR #79)
+
+**Context:** the pre-fix shadow scorers overwrote matured board days with ever-smaller
+rolling-window slices (visible live: lead-bucket N sums > the "all" row). The full-day
+contract fix (PR #79, [review §8](docs/ml/pcn-intraday-review.md)) makes new writes
+correct, but the already-persisted matured rows are irreparably degraded and must be
+dropped once. Yesterday + today regenerate within the next hourly score run.
+
+- [ ] **After PR #79 is deployed**, run once against prod Postgres:
+
+  ```sql
+  DELETE FROM pcn_intraday_comparisons WHERE target_date < CURRENT_DATE;
+  DELETE FROM shape_comparisons       WHERE target_date < CURRENT_DATE;
+  ```
+
+- [ ] Verify the next scored days are consistent: per (segment, date), the lead-bucket
+      `n` values must sum exactly to the `all` row, and daily N should jump ~10×+
+      (full days instead of the last hour).
+- [ ] **Optional but recommended BEFORE the first post-deploy forecast/score run:**
+      pre-create the new indexes without blocking writes (the in-code
+      `CREATE INDEX IF NOT EXISTS` is non-concurrent — the first build over the
+      accumulated backlog would block the producer for minutes):
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pcn_forecasts_created_at
+      ON pcn_forecasts (created_at);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_shape_forecasts_created_at
+      ON shape_forecasts (created_at);
+  ```
+
+- [ ] Expect the first `/score` run to take longer once: the new retention prune
+      (`pcn_forecasts` 14d / `shape_forecasts` 30d) deletes the accumulated backlog
+      (order 10⁸ rows). If it times out, pre-delete manually in batches, e.g.
+      `DELETE FROM pcn_forecasts WHERE created_at < now() - interval '14 days'`
+      with a `LIMIT`-style loop (`ctid` batching) or during a quiet window.
+- [ ] Let the boards mature **1–2 weeks**, then re-confirm the PCN swap win
+      (busy/headliner, no quiet inflation) and re-judge Shape offline-vs-live —
+      no Shape producer swap before that.
+- [ ] After the next nightly PCN retrain (08:30 UTC): models pick up the new
+      DOW channels (11 channels); spot-check `/status` + board that nothing regressed.
+- [ ] When boards are clean: run the receptive-field bake-off
+      (`run_bakeoff.py --layers 8` vs `--layers 2`, busy MAE/bias) — flip
+      `PCN_GWN_LAYERS` only on a busy-segment win (review §5a).
+
+## PCN/Shape — deferred model work (gated on a clean board, PR #79 review)
+
+Deliberately NOT shipped in PR #79 — code-side that PR is complete; these are
+model/quality experiments that must wait until the shadow boards have matured
+1–2 weeks on the fixed scorer (above), because each is judged on that board and
+"nothing flips production without a busy/headliner win on clean evidence".
+Rough order by ROI; each its own PR. Full rationale in
+[docs/ml/pcn-intraday-review.md](docs/ml/pcn-intraday-review.md) (§5–6, §8).
+
+- [ ] **Receptive-field bake-off (biggest lever)** — `run_bakeoff.py --layers 8`
+      vs `2` (also vs `gpstgnn`, which uses the full context as an RNN). Served
+      GraphWaveNet at `layers=2` only sees ~1h of the 192-slot context; flip
+      `PCN_GWN_LAYERS` only on a busy-segment win. (Also tracked as the last
+      post-deploy step above — this is the same experiment.)
+- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7): the scorer
+      currently joins only the freshest origin (≈15-min leads), so the quality of
+      the actually-served longer leads (3–12h, rest-of-day) is unmeasured. Join the
+      stored 48-slot fan at lead 1h/3h/6h vs actual + persistence baseline. A
+      CatBoost head-to-head at long lead additionally needs the design-doc §12.3
+      CatBoost co-snapshot (not implemented) — optional.
+- [ ] **Feature channels** (review §5b) — DOW already shipped (append-only, picked
+      up by the nightly retrain). Remaining, each through the bake-off, busy-MAE/bias
+      target: `is_holiday`/`is_school_break` (mirror ml-service `holiday_utils`),
+      schedule-relative time (minutes since open / to close), weather (the worst-MAE
+      list — Cheetah Hunt / Wolfpack Raft Slide / Manta — is a water/outdoor cluster).
+- [ ] **KPIs must follow the served model** (review §6a): "Live MAE 8.70" + the drift
+      warning (24.58/20) still measure CatBoost-stored, but PCN serves intraday. Point
+      the `prediction_accuracy` pipeline at the serving view (incl. PCN override) or
+      add a second "served" panel; split the drift monitor by horizon (CatBoost drift
+      is now a far-daily concern where it stays the sole level provider).
+- [ ] **Shape offline-vs-live reconcile** (review §6b): offline claimed −7.4% busy,
+      live board shows Shape losing everywhere (busy −3.9, bias −20). After the scorer
+      fix, re-read the board; then check whether the *level* Shape renders onto
+      under-shoots busy days (bias −20 smells like a level, not a curve, error). No
+      producer swap to `learned.py` before this is understood.
+- [ ] **Cheap experiments from the design doc** (§11.5): Chronos-Bolt zero-shot as a
+      foundation baseline (no training, instant comparison number) and TouringPlans
+      pretraining seed against the ~6–7-month history gap. Weekend-sized, clear signal.
+- [ ] **Per-park training hygiene** (review §5c): no validation split / early-stop
+      (fixed 500 steps for a 10-ride park and a 100-ride park alike); one robust
+      `_scale` per park (headliner + walk-on share a scale). Hold out the last day,
+      early-stop, log per-park final loss so degenerate park models are visible before
+      they serve.
+
 ## ML hourly_agg cache — post-deploy verification & follow-up
 
 **Context:** `fetch_recent_wait_times` (`ml-service/predict.py`, the `WITH hourly_agg ...` query)

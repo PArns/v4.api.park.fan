@@ -16,7 +16,6 @@ import argparse
 import glob
 import json
 import logging
-import math
 import os
 
 import backbones
@@ -45,26 +44,9 @@ def bakeoff_park(t, registry: dict, L: int, H: int, eval_days: int, base_hour: i
     return combined
 
 
-def pool_scores(per_park: list[dict]) -> dict:
-    """Pool per-park {segment: {column: (mae, bias, n)}} into one table, weighting MAE
-    and bias by n (so big parks count more, empty segments are skipped)."""
-    acc: dict = {}
-    for park in per_park:
-        for seg, by in park.items():
-            for col, (mae, bias, n) in by.items():
-                if not n or math.isnan(mae):
-                    continue
-                a = acc.setdefault(seg, {}).setdefault(col, [0.0, 0.0, 0])
-                a[0] += mae * n
-                a[1] += bias * n
-                a[2] += n
-    out: dict = {}
-    for seg, by in acc.items():
-        out[seg] = {
-            col: (s[0] / s[2], s[1] / s[2], s[2]) if s[2] else (float("nan"), float("nan"), 0)
-            for col, s in by.items()
-        }
-    return out
+# n-weighted cross-park pooling lives in metrics.pool_scores (torch-free, so the
+# aggregation is unit-testable without the model deps); re-exported for callers.
+pool_scores = metrics.pool_scores
 
 
 def _load_tensors(args):
@@ -112,10 +94,15 @@ def main():
     ap.add_argument("--base-hour", type=int, default=11)
     ap.add_argument("--max-steps", type=int, default=500)
     ap.add_argument("--loss", default="quantile", choices=["quantile", "tweedie"])
+    # Graph WaveNet temporal depth. Receptive field = 1 + sum(2^i): 2 layers see only
+    # 4 slots (1h) of the context; 8 layers see 256 (> L). THE bake-off knob for the
+    # "does a full-context TCN beat the 1h-RF one on busy?" question (review §5a).
+    ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--out", help="write the pooled report as JSON")
     args = ap.parse_args()
 
-    registry = backbones.build_registry(loss=args.loss, max_steps=args.max_steps)
+    registry = backbones.build_registry(
+        loss=args.loss, max_steps=args.max_steps, layers=args.layers)
     per_park, parks_done = [], []
     for t in _load_tensors(args):
         try:

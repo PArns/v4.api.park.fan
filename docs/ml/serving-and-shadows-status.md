@@ -1,5 +1,15 @@
 # Serving & Shadow-Modelle — Status-Snapshot (2026-06-29)
 
+> **Update 2026-07-02** ([Review](./pcn-intraday-review.md), Fixes im selben PR):
+> Crowd-Level im PCN-Swap kommt jetzt aus **q0.8** (war fälschlich q0.5) + Non-Crossing-
+> Guard; Park-Kurve/Kalender/Deviation folgen dem Override (vorher CatBoost am Swap
+> vorbei); **beide Shadow-Scorer** schreiben nur noch voll abgedeckte lokale Tage
+> (Full-Day-Contract — der 24h/96h-Rolling-Lookback hatte gereifte Board-Tage auf ihre
+> letzte Stunde degradiert; **einmaliger Board-Reset nötig**, SQL im Review §8, danach
+> 1–2 Wochen neu reifen lassen); `pcn_forecasts`/`shape_forecasts` mit Retention
+> (14d/30d) + `created_at`-Index; Forecast-Tick holt 7 Tage statt 548. Die Boards unten
+> zeigen den PRE-FIX-Stand.
+
 > Handoff-Stand der Multi-Modell-Architektur: drei Challenger (TFT, PCN, Shape) gegen CatBoost,
 > pro Horizont. Quelle: diese Session. Details in den verlinkten Docs.
 

@@ -88,9 +88,29 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
     return df
 
 
-def fetch_cross_ride_panel(park_id: str, tz: str) -> pd.DataFrame:
+def park_has_fresh_data(park_id: str, max_age_hours: int) -> bool:
+    """Cheap staleness pre-check: does the park have ANY recent STANDBY row? Bounded to
+    the recency window so it's chunk-pruned (no full-history MAX scan). Lets the
+    forecast tick skip seasonally-closed/dead parks BEFORE paying the panel fetch."""
+    sql = text(
+        """
+        SELECT 1
+        FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = :park AND qd."queueType" = 'STANDBY'
+          AND qd.timestamp >= NOW() - (:h || ' hours')::interval
+        LIMIT 1
+        """
+    )
+    with engine().connect() as c:
+        return c.execute(sql, {"park": park_id, "h": str(max_age_hours)}).first() is not None
+
+
+def fetch_cross_ride_panel(
+    park_id: str, tz: str, window_days: int | None = None
+) -> pd.DataFrame:
     """Long panel for ONE park: one row per (ride, 15-min local slot) within the
-    history window.
+    history window (default PCN_WINDOW_DAYS; the forecast tick passes its own short
+    PCN_FORECAST_WINDOW_DAYS — inference only needs the L-slot context).
 
     Columns:
       - unique_id  : attraction id (text)
@@ -106,7 +126,7 @@ def fetch_cross_ride_panel(park_id: str, tz: str) -> pd.DataFrame:
     downstream (the flaw that broke the 2026-05-23 hourly PoC was 0-filling).
     """
     minw = settings.PCN_MIN_WAIT
-    window = settings.PCN_WINDOW_DAYS
+    window = window_days or settings.PCN_WINDOW_DAYS
     real = f"qd.status = 'OPERATING' AND qd.\"waitTime\" >= {minw}"
     sql = text(
         f"""
@@ -159,6 +179,17 @@ _DDL_PCN_FORECASTS = text(
     """
 )
 
+# created_at index: (1) the NestJS serving override filters `created_at >= now()-3h`
+# (staleness guard) on every prediction read — without this the planner walks each
+# attraction's FULL forecast history via the PK; (2) the retention DELETE below prunes
+# by created_at. Kept next to the table DDL so a fresh DB gets both atomically.
+_DDL_PCN_FORECASTS_IDX = text(
+    """
+    CREATE INDEX IF NOT EXISTS idx_pcn_forecasts_created_at
+        ON pcn_forecasts (created_at)
+    """
+)
+
 _DDL_PCN_COMPARISONS = text(
     """
     CREATE TABLE IF NOT EXISTS pcn_intraday_comparisons (
@@ -200,9 +231,28 @@ def write_pcn_forecasts(rows: list[dict], version: str) -> int:
         r["ver"] = version
     with engine().begin() as c:
         c.execute(_DDL_PCN_FORECASTS)
+        c.execute(_DDL_PCN_FORECASTS_IDX)
         for i in range(0, len(rows), 5000):
             c.execute(upsert, rows[i : i + 5000])
     return len(rows)
+
+
+def prune_pcn_forecasts(retention_days: int) -> int:
+    """Delete forecast rows past the retention window (by created_at — bumped on
+    rewrite, so rows the producer still refreshes survive). Scoring reads ~2 days of
+    targets and serving the last 3h; everything older is unread bloat at ~10^7
+    rows/day. Called from the hourly score job. Returns deleted row count."""
+    sql = text(
+        """
+        DELETE FROM pcn_forecasts
+        WHERE created_at < now() - (:d || ' days')::interval
+        """
+    )
+    with engine().begin() as c:
+        c.execute(_DDL_PCN_FORECASTS)
+        c.execute(_DDL_PCN_FORECASTS_IDX)
+        res = c.execute(sql, {"d": str(retention_days)})
+    return int(res.rowcount or 0)
 
 
 def upsert_pcn_comparisons(rows: list[dict]) -> int:

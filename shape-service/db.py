@@ -163,6 +163,14 @@ _DDL_SHAPE_FORECASTS = text(
     """
 )
 
+# created_at index for the retention DELETE (and any recency-bounded read).
+_DDL_SHAPE_FORECASTS_IDX = text(
+    """
+    CREATE INDEX IF NOT EXISTS idx_shape_forecasts_created_at
+        ON shape_forecasts (created_at)
+    """
+)
+
 _DDL_SHAPE_COMPARISONS = text(
     """
     CREATE TABLE IF NOT EXISTS shape_comparisons (
@@ -223,9 +231,27 @@ def write_shape_forecasts(rows: list[dict], version: str) -> int:
     )
     with engine().begin() as c:
         c.execute(_DDL_SHAPE_FORECASTS)
+        c.execute(_DDL_SHAPE_FORECASTS_IDX)
         for i in range(0, len(rows), 5000):
             c.execute(upsert, rows[i : i + 5000])
     return len(rows)
+
+
+def prune_shape_forecasts(retention_days: int) -> int:
+    """Delete forecast rows past the retention window (by created_at). Scoring only
+    reads recent targets (all origins within SHAPE_FORECAST_DAYS), so anything older
+    is unread bloat. Called from the daily score job. Returns deleted row count."""
+    sql = text(
+        """
+        DELETE FROM shape_forecasts
+        WHERE created_at < now() - (:d || ' days')::interval
+        """
+    )
+    with engine().begin() as c:
+        c.execute(_DDL_SHAPE_FORECASTS)
+        c.execute(_DDL_SHAPE_FORECASTS_IDX)
+        res = c.execute(sql, {"d": str(retention_days)})
+    return int(res.rowcount or 0)
 
 
 def fetch_shape_forecasts_window(park_id: str, lo_local, hi_local) -> pd.DataFrame:
