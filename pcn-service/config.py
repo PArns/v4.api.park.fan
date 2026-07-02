@@ -80,10 +80,13 @@ class Settings(BaseSettings):
     # dead weight at ~10^7 rows/day. 14d keeps enough for ad-hoc lead-curve analysis.
     PCN_FORECAST_RETENTION_DAYS: int = 14
     # Graph WaveNet temporal depth: receptive field = 1 + sum(2^i) over layers (kernel 2)
-    # → 2 layers = 4 slots (1h!), 6 = 64 slots (16h), 8 = 256 slots (64h > L). The served
-    # default keeps 2 until the bake-off arbitrates a deeper stack (quality gate, not a
-    # silent flip) — run run_bakeoff.py with PCN_GWN_LAYERS=8 vs 2 on busy MAE/bias.
-    PCN_GWN_LAYERS: int = 2
+    # → 2 layers = 4 slots (1h!), 6 = 64 slots (16h), 8 = 256 slots (64h > L). Flipped
+    # 2→8 on 2026-07-02 after the bake-off (8 busy parks, input-size=192, quantile): gwn@8
+    # beat gwn@2 on EVERY segment/lead incl. busy (18.8 vs 20.1 MAE), beat the full-context
+    # gpstgnn RNN on busy (18.8 vs 19.4) at ~6× less compute, AND flipped the short-lead
+    # loss vs persistence (≤3h 9.8 vs 10.4). Serving-safe: load() honours each checkpoint's
+    # own trained arch_kwargs, so old layers=2 checkpoints keep serving until retrained.
+    PCN_GWN_LAYERS: int = 8
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
