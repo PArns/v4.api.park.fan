@@ -15,6 +15,12 @@ Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-
   `crowdLevel` from PCN **q0.8** (display stays q0.5) — restoring the documented
   per-purpose quantile split; pcn-service enforces quantile monotonicity in
   `predict_quantiles` (mirrors CatBoost's non-crossing fix).
+- **5-minute wait steps restored (serving):** the override served PCN's raw q0.5 via
+  `Math.round` → users saw 1-minute waits (e.g. "23 min") since the swap went live.
+  `roundServedWait` now mirrors ml-service `round_to_nearest_5` + the operating
+  min-10 rule at every serving boundary (read paths, park curve, deviation compare),
+  and the shadow scorer quantizes PCN's column the same way so the board compares
+  served-vs-served. `pcn_forecasts` stays raw.
 - **Shadow scorers (pcn + shape): full-day contract.** Board rows are only (re)written
   from windows that fully cover their target_date (`full_day_window`, lookback 48h/96h,
   current partial slot excluded) — fixes the rolling-window overwrite that degraded

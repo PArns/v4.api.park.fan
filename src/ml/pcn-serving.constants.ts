@@ -15,3 +15,19 @@ export const PCN_MAX_FORECAST_AGE_H = 3;
 export function servePcnIntraday(): boolean {
   return process.env.SERVE_PCN_INTRADAY === "true";
 }
+
+/**
+ * Serve-side wait rounding — the EXACT mirror of ml-service `predict.py`
+ * `round_to_nearest_5` + the operating min-10 rule (`predict.py` ~:1959-1969):
+ * half-up to 5-minute steps (2.5→5, 7.5→10), then a floor of 10 for anything
+ * positive. CatBoost applies this before storing, so every wait users ever saw is
+ * 0 or a 5er-step ≥10; PCN's raw q0.5 must go through the same boundary or the
+ * swap leaks 1-minute values into the UI. pcn_forecasts stays RAW on purpose —
+ * scoring wants precision; only serving (and the scorer's served-fairness column)
+ * quantizes. Slots reaching this code are always operating forecasts (CLOSED rows
+ * are never stored), so the min-10 rule applies unconditionally here.
+ */
+export function roundServedWait(value: number): number {
+  const rounded = Math.floor((value + 2.5) / 5) * 5;
+  return rounded > 0 ? Math.max(10, rounded) : 0;
+}

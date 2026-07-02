@@ -6,6 +6,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Redis } from "ioredis";
 import {
   PCN_MAX_FORECAST_AGE_H,
+  roundServedWait,
   servePcnIntraday,
 } from "../pcn-serving.constants";
 
@@ -251,7 +252,9 @@ export class PredictionDeviationService {
             LIMIT 1`,
           [attractionId, predictedTime, PCN_MAX_FORECAST_AGE_H],
         );
-      return rows.length > 0 ? Math.round(Number(rows[0].wait)) : null;
+      // Same serve-side quantization the read paths apply — the deviation must be
+      // measured against the exact number the user sees.
+      return rows.length > 0 ? roundServedWait(Number(rows[0].wait)) : null;
     } catch {
       // Missing table / transient DB error → CatBoost fallback, never a hard fail.
       return null;

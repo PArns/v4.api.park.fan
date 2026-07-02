@@ -84,6 +84,17 @@ def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
     return rows
 
 
+def serve_round(x: np.ndarray) -> np.ndarray:
+    """Serve-side wait quantization — mirror of ml-service round_to_nearest_5 + the
+    operating min-10 rule (and of the NestJS roundServedWait the PCN override uses).
+    CatBoost's stored preds are ALREADY quantized like this, so the board must score
+    PCN's raw q0.5 through the same boundary or the head-to-head compares a served
+    number against an unserved one (raw stays in pcn_forecasts on purpose)."""
+    x = np.asarray(x, dtype=float)
+    rounded = np.floor((x + 2.5) / 5.0) * 5.0
+    return np.where(rounded > 0, np.maximum(rounded, 10.0), 0.0)
+
+
 def full_day_window(
     now_local: pd.Timestamp, lookback_hours: int, slot_freq: str
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -130,6 +141,7 @@ def _matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
     if pcn.empty:
         return pd.DataFrame()
     pcn = pcn.rename(columns={"predicted_wait": "pcn"})
+    pcn["pcn"] = serve_round(pcn["pcn"].to_numpy())        # score what is SERVED
     pcn["lead_h"] = (pcn["target_slot"] - pcn["origin_slot"]) / pd.Timedelta(hours=1)
 
     actuals = db.fetch_actuals_local(park_id, tz, lo_utc, hi_utc)

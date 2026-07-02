@@ -18,6 +18,18 @@ dropped once. Yesterday + today regenerate within the next hourly score run.
 - [ ] Verify the next scored days are consistent: per (segment, date), the lead-bucket
       `n` values must sum exactly to the `all` row, and daily N should jump ~10×+
       (full days instead of the last hour).
+- [ ] **Optional but recommended BEFORE the first post-deploy forecast/score run:**
+      pre-create the new indexes without blocking writes (the in-code
+      `CREATE INDEX IF NOT EXISTS` is non-concurrent — the first build over the
+      accumulated backlog would block the producer for minutes):
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pcn_forecasts_created_at
+      ON pcn_forecasts (created_at);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_shape_forecasts_created_at
+      ON shape_forecasts (created_at);
+  ```
+
 - [ ] Expect the first `/score` run to take longer once: the new retention prune
       (`pcn_forecasts` 14d / `shape_forecasts` 30d) deletes the accumulated backlog
       (order 10⁸ rows). If it times out, pre-delete manually in batches, e.g.

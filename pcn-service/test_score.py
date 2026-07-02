@@ -74,6 +74,17 @@ def test_aggregate_drops_nan_actual_and_empty():
     assert score.aggregate_comparison(pd.DataFrame(), ["pcn"]) == []
 
 
+def test_serve_round_mirrors_catboost_serving():
+    """Parity with ml-service round_to_nearest_5 + min-10 (predict.py:1959-1969):
+    half-up 5er steps, floor of 10 for positive values, 0 stays 0. The board scores
+    PCN through the same boundary that serves it."""
+    import numpy as np
+
+    x = np.array([0.0, 2.4, 2.5, 7.2, 7.5, 12.4, 23.0, 34.7])
+    out = score.serve_round(x)
+    np.testing.assert_array_equal(out, [0, 0, 10, 10, 10, 10, 25, 35])
+
+
 def test_full_day_window_covers_only_full_days():
     """The full-day contract: with a 48h lookback the window starts at YESTERDAY 00:00
     (the first fully-covered local day) — never mid-day — so per-target_date upserts

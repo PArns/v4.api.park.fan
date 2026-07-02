@@ -27,6 +27,7 @@ import {
 import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
 import {
   PCN_MAX_FORECAST_AGE_H,
+  roundServedWait,
   servePcnIntraday as servePcnIntradayFlag,
 } from "./pcn-serving.constants";
 import { Park } from "../parks/entities/park.entity";
@@ -1444,12 +1445,17 @@ export class MLService {
     for (const p of hourly) {
       const q = pcn.get(p.attractionId)?.get(p.predictedTime);
       if (q === undefined) continue;
-      p.predictedWaitTime = Math.round(q.display);
+      // Same serve-side quantization CatBoost applies before storing (5er steps,
+      // min 10 when positive) — a plain Math.round leaked 1-minute waits into the UI.
+      p.predictedWaitTime = roundServedWait(q.display);
       if (p.baseline && p.baseline > 0) {
         // Crowd signal from q0.8 (fallback to display for rows written before q0.8
         // serving); clamp to >= display — quantiles are monotonic going forward
         // (pcn-service enforces it), but older stored rows may still cross.
-        const crowdWait = Math.max(q.crowd ?? q.display, q.display);
+        // roundServedWait is monotone, so the rounded crowd stays >= the display.
+        const crowdWait = roundServedWait(
+          Math.max(q.crowd ?? q.display, q.display),
+        );
         // determineCrowdLevel never returns "unknown" (we guard baseline>0), so it is a
         // valid PredictionDto crowdLevel — narrow the wider CrowdLevel type with a cast.
         p.crowdLevel = determineCrowdLevel(
@@ -1505,8 +1511,16 @@ export class MLService {
       return dtos;
     }
 
-    // Fall back to ML service (new ride or predictions expired)
-    return this.getAttractionPredictions(attractionId, predictionType);
+    // Fall back to ML service (new ride or predictions expired) — the served-model
+    // override applies here too, so the fallback path shows the same numbers.
+    const live = await this.getAttractionPredictions(
+      attractionId,
+      predictionType,
+    );
+    if (this.servePcnIntraday && predictionType === "hourly") {
+      await this.applyPcnIntradayOverride(live, startTime);
+    }
+    return live;
   }
 
   /**
