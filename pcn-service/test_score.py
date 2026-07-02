@@ -116,5 +116,44 @@ def test_full_day_window_at_midnight_run():
     assert hi == pd.Timestamp("2026-07-03 00:00")
 
 
+def _leadcurve_df():
+    return pd.DataFrame([
+        # 2026-06-01, forecast horizon 1h
+        {"target_slot": pd.Timestamp("2026-06-01 10:00"), "lead_bucket": "1h",
+         "actual": 10.0, "pcn": 12.0, "persist": 8.0},    # quiet
+        {"target_slot": pd.Timestamp("2026-06-01 10:15"), "lead_bucket": "1h",
+         "actual": 70.0, "pcn": 66.0, "persist": 50.0},   # busy
+        # 2026-06-01, horizon 3h — same target, longer lead, worse PCN
+        {"target_slot": pd.Timestamp("2026-06-01 10:00"), "lead_bucket": "3h",
+         "actual": 10.0, "pcn": 15.0, "persist": 8.0},    # quiet
+    ])
+
+
+def test_leadcurve_buckets_by_forced_horizon():
+    rows = score.aggregate_leadcurve(_leadcurve_df(), models=["pcn", "persist"])
+    d = pd.Timestamp("2026-06-01").date()
+    r1 = _row(rows, "pcn", "all", "1h")
+    assert r1["target_date"] == d and r1["n"] == 2
+    assert r1["mae"] == pytest.approx(3.0)     # mean(|12-10|, |66-70|)
+    r3 = _row(rows, "pcn", "all", "3h")
+    assert r3["n"] == 1 and r3["mae"] == pytest.approx(5.0)   # worse at longer lead
+    # persistence baseline on the SAME 1h population
+    p1 = _row(rows, "persist", "all", "1h")
+    assert p1["n"] == 2 and p1["mae"] == pytest.approx(11.0)  # mean(|8-10|, |50-70|)
+    # NO 'all' lead roll-up — only the forced horizons (each its own population)
+    assert {r["lead_bucket"] for r in rows} == {"1h", "3h"}
+
+
+def test_leadcurve_drops_nan_persist_per_model():
+    df = _leadcurve_df()
+    df.loc[0, "persist"] = float("nan")        # persist missing for the quiet 1h slot
+    rows = score.aggregate_leadcurve(df, models=["pcn", "persist"])
+    assert _row(rows, "pcn", "all", "1h")["n"] == 2          # pcn column still finite
+    assert _row(rows, "persist", "all", "1h")["n"] == 1      # NaN persist row dropped
+    assert _row(rows, "persist", "busy", "1h")["n"] == 1
+    assert _row(rows, "persist", "quiet", "1h") is None
+    assert score.aggregate_leadcurve(pd.DataFrame(), ["pcn"]) == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

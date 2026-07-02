@@ -42,6 +42,12 @@ _LEADS = [
     (">6h", lambda lh: lh > 6),
 ]
 
+# Lead-curve forecast horizons (hours). The scorer picks, per target, the origin made
+# ~L hours before it — measuring the longer leads the UI serves for rest-of-day, which
+# the freshest-origin main board never sees (its 3-6h/>6h buckets fill only from stale
+# producer phases). Persistence (wait unchanged from L hours ago) is the honest baseline.
+LEADCURVE_LEADS_H = [1.0, 3.0, 6.0]
+
 
 def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
     """Pure: from a matched frame (columns: target_slot, lead_h, actual, + one column
@@ -81,6 +87,47 @@ def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
                         "mean_actual": float(actual[keep].mean()),
                         "mean_pred": float(pred[keep].mean()),
                     })
+    return rows
+
+
+def aggregate_leadcurve(df: pd.DataFrame, models: list[str]) -> list[dict]:
+    """Pure: from a lead-curve matched frame (columns: target_slot, lead_bucket
+    (FORCED '1h'/'3h'/'6h'), actual, + one column per model) build
+    pcn_lead_curve_comparisons rows — per target_date × model × segment × lead_bucket.
+
+    Unlike aggregate_comparison, lead_bucket is a column (the forced forecast horizon
+    the origin was picked for), not derived from a natural lead — and there is no 'all'
+    lead roll-up (each L is scored on its own matched population, which differs per L)."""
+    if df.empty:
+        return []
+    df = df.dropna(subset=["actual"]).copy()
+    if df.empty:
+        return []
+    df["target_date"] = pd.to_datetime(df["target_slot"]).dt.date
+    rows: list[dict] = []
+    for (td, lead_bucket), g in df.groupby(["target_date", "lead_bucket"]):
+        actual = g["actual"].to_numpy(dtype=float)
+        for model in models:
+            if model not in g.columns:
+                continue
+            pred = g[model].to_numpy(dtype=float)
+            for seg_label, seg_fn in _SEGMENTS:
+                keep = seg_fn(actual) & np.isfinite(pred) & np.isfinite(actual)
+                n = int(keep.sum())
+                if n == 0:
+                    continue
+                d = pred[keep] - actual[keep]
+                rows.append({
+                    "target_date": td,
+                    "model": model,
+                    "segment": seg_label,
+                    "lead_bucket": lead_bucket,
+                    "n": n,
+                    "mae": float(np.abs(d).mean()),
+                    "bias": float(d.mean()),
+                    "mean_actual": float(actual[keep].mean()),
+                    "mean_pred": float(pred[keep].mean()),
+                })
     return rows
 
 
@@ -167,6 +214,76 @@ def _park_matched(park_id: str, lookback_hours: int) -> pd.DataFrame:
     return _matched_frame(park_id, tz, lookback_hours)
 
 
+def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
+    """Lead-curve matched frame: PCN@{1h,3h,6h} ⋈ actual@target, plus a persistence
+    baseline = actual @ (target − L). Same full-day window as the main scorer."""
+    now_utc = pd.Timestamp.now(tz="UTC")
+    # Widen the actuals window by the longest lead so persistence@6h at the window's
+    # first target still finds its (target − 6h) realised wait.
+    max_lead = max(LEADCURVE_LEADS_H) if LEADCURVE_LEADS_H else 0.0
+    lo_utc = (now_utc - pd.Timedelta(hours=lookback_hours + max_lead)).to_pydatetime()
+    hi_utc = now_utc.to_pydatetime()
+    now_local = pd.Timestamp.now(tz=tz).tz_localize(None)
+    lo_local, hi_local = full_day_window(now_local, lookback_hours, settings.slot_freq)
+
+    fan = db.fetch_pcn_leadcurve_window(
+        park_id, lo_local.to_pydatetime(), hi_local.to_pydatetime(), LEADCURVE_LEADS_H)
+    if fan.empty:
+        return pd.DataFrame()
+    fan["pcn"] = serve_round(fan["predicted_wait"].to_numpy())     # score what is SERVED
+    fan["lead_bucket"] = fan["target_lead_h"].map(lambda h: f"{int(round(h))}h")
+
+    actuals = db.fetch_actuals_local(park_id, tz, lo_utc, hi_utc)
+    if actuals.empty:
+        return pd.DataFrame()
+    m = fan.merge(actuals, on=["unique_id", "target_slot"], how="inner")   # truth @ target
+    if m.empty:
+        return pd.DataFrame()
+    # Persistence baseline: the realised wait L hours before the target (no-change nowcast).
+    persist_src = actuals.rename(
+        columns={"target_slot": "persist_slot", "actual": "persist"})
+    m["persist_slot"] = m["target_slot"] - pd.to_timedelta(m["target_lead_h"], unit="h")
+    m = m.merge(persist_src, on=["unique_id", "persist_slot"], how="left")
+    return m[["target_slot", "lead_bucket", "actual", "pcn", "persist"]]
+
+
+def _park_leadcurve(park_id: str, lookback_hours: int) -> pd.DataFrame:
+    tz = pipeline.park_timezone(park_id)
+    if tz is None:
+        return pd.DataFrame()
+    return _leadcurve_matched_frame(park_id, tz, lookback_hours)
+
+
+def score_leadcurve_all(
+    lookback_hours: int | None = None, park_ids: list[str] | None = None
+) -> dict:
+    """Pool every park's lead-curve matched slots and aggregate PCN@{1h,3h,6h} vs actual
+    + persistence into pcn_lead_curve_comparisons (one pooled upsert, like score_all).
+    Measures the longer leads the UI serves for rest-of-day — the main board's
+    freshest-origin join only ever sees ~15-min leads (§7.7)."""
+    lookback_hours = lookback_hours or settings.PCN_SCORE_LOOKBACK_HOURS
+    parks = pipeline.scope_park_ids(park_ids)
+    t0 = time.time()
+    frames = []
+    for pid in parks:
+        try:
+            m = _park_leadcurve(pid, lookback_hours)
+            if not m.empty:
+                frames.append(m)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("park %s lead-curve scoring failed: %s", pid, e)
+    if not frames:
+        logger.info("lead-curve: 0 matched slots across %d parks in %.1fs",
+                    len(parks), time.time() - t0)
+        return {"rows": 0, "matched_slots": 0, "parks": len(parks)}
+    combined = pd.concat(frames, ignore_index=True)
+    rows = aggregate_leadcurve(combined, models=["pcn", "persist"])
+    n = db.upsert_pcn_leadcurve(rows)
+    logger.info("lead-curve done: %d board rows from %d matched slots across %d parks "
+                "in %.1fs", n, len(combined), len(parks), time.time() - t0)
+    return {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks)}
+
+
 def score_all(lookback_hours: int | None = None, park_ids: list[str] | None = None) -> dict:
     """Pool every park's matched (PCN q0.5 ⋈ actual ⋈ CatBoost) slots, then aggregate
     ACROSS ALL PARKS into the global board in ONE upsert.
@@ -195,15 +312,24 @@ def score_all(lookback_hours: int | None = None, park_ids: list[str] | None = No
     if not frames:
         logger.info("scoring: 0 matched slots across %d parks in %.1fs (pruned %d)",
                     len(parks), time.time() - t0, pruned)
-        return {"rows": 0, "matched_slots": 0, "parks": len(parks), "pruned": pruned}
-    combined = pd.concat(frames, ignore_index=True)
-    rows = aggregate_comparison(combined, models=["pcn", "catboost"])
-    n = db.upsert_pcn_comparisons(rows)
-    logger.info("scoring done: %d board rows from %d matched slots across %d parks "
-                "in %.1fs (pruned %d old forecasts)",
-                n, len(combined), len(parks), time.time() - t0, pruned)
-    return {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks),
-            "pruned": pruned}
+        result = {"rows": 0, "matched_slots": 0, "parks": len(parks), "pruned": pruned}
+    else:
+        combined = pd.concat(frames, ignore_index=True)
+        rows = aggregate_comparison(combined, models=["pcn", "catboost"])
+        n = db.upsert_pcn_comparisons(rows)
+        logger.info("scoring done: %d board rows from %d matched slots across %d parks "
+                    "in %.1fs (pruned %d old forecasts)",
+                    n, len(combined), len(parks), time.time() - t0, pruned)
+        result = {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks),
+                  "pruned": pruned}
+    # Lead-curve board (§7.7) — best-effort, independent of the main board's success so a
+    # lead-curve failure never blocks the served-freshest swap-gate evidence.
+    try:
+        result["lead_curve"] = score_leadcurve_all(lookback_hours, park_ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lead-curve scoring failed: %s", e)
+        result["lead_curve"] = {"error": str(e)}
+    return result
 
 
 if __name__ == "__main__":

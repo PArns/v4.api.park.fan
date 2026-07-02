@@ -208,6 +208,29 @@ _DDL_PCN_COMPARISONS = text(
     """
 )
 
+# Lead-curve board — same shape, but lead_bucket is a FORCED forecast horizon
+# ('1h'|'3h'|'6h') instead of the natural freshest lead. Measures the quality of the
+# longer leads the UI actually serves for rest-of-day (the main board only ever scores
+# the freshest ~15-min origin). Separate table so the served-freshest swap gate stays
+# untouched. model IN ('pcn','persist') — persistence = the realised wait L hours before.
+_DDL_PCN_LEADCURVE = text(
+    """
+    CREATE TABLE IF NOT EXISTS pcn_lead_curve_comparisons (
+        target_date  date              NOT NULL,
+        model        varchar(16)       NOT NULL,  -- 'pcn' | 'persist'
+        segment      varchar(16)       NOT NULL,  -- 'all'|'quiet'|'mid'|'busy'
+        lead_bucket  varchar(16)       NOT NULL,  -- '1h'|'3h'|'6h'
+        n            int               NOT NULL,
+        mae          double precision  NOT NULL,
+        bias         double precision  NOT NULL,
+        mean_actual  double precision  NOT NULL,
+        mean_pred    double precision  NOT NULL,
+        created_at   timestamptz       NOT NULL DEFAULT now(),
+        PRIMARY KEY (target_date, model, segment, lead_bucket)
+    )
+    """
+)
+
 
 def write_pcn_forecasts(rows: list[dict], version: str) -> int:
     """Durable, immutable-per-origin upsert of forward 15-min forecasts. Re-running the
@@ -274,6 +297,70 @@ def upsert_pcn_comparisons(rows: list[dict]) -> int:
         c.execute(_DDL_PCN_COMPARISONS)
         c.execute(upsert, rows)
     return len(rows)
+
+
+def upsert_pcn_leadcurve(rows: list[dict]) -> int:
+    """Upsert lead-curve board rows (same shape as upsert_pcn_comparisons, own table)."""
+    if not rows:
+        return 0
+    upsert = text(
+        """
+        INSERT INTO pcn_lead_curve_comparisons
+            (target_date, model, segment, lead_bucket, n, mae, bias, mean_actual, mean_pred)
+        VALUES (:target_date, :model, :segment, :lead_bucket, :n, :mae, :bias,
+                :mean_actual, :mean_pred)
+        ON CONFLICT (target_date, model, segment, lead_bucket)
+        DO UPDATE SET n=EXCLUDED.n, mae=EXCLUDED.mae, bias=EXCLUDED.bias,
+                      mean_actual=EXCLUDED.mean_actual, mean_pred=EXCLUDED.mean_pred,
+                      created_at=now()
+        """
+    )
+    with engine().begin() as c:
+        c.execute(_DDL_PCN_LEADCURVE)
+        c.execute(upsert, rows)
+    return len(rows)
+
+
+def fetch_pcn_leadcurve_window(
+    park_id: str, lo_local, hi_local, leads_h: list[float]
+) -> pd.DataFrame:
+    """For each (attraction, target_slot in [lo,hi)) and each target lead L in `leads_h`,
+    pick the q0.5 forecast whose ORIGIN is closest to (target − L) — i.e. the genuine
+    L-hours-ahead forecast (within ±0.5h; targets without an L-back origin get no L-row).
+    Unlike fetch_pcn_forecasts_window (freshest origin only), this exposes the longer
+    leads the UI serves for rest-of-day, so their quality can be measured."""
+    if not leads_h:
+        return pd.DataFrame()
+    # leads_h are code-controlled floats — safe to inline as a VALUES list (text() can't
+    # bind a variable-length row set).
+    values = ", ".join(f"({float(h)})" for h in leads_h)
+    sql = text(
+        f"""
+        SELECT DISTINCT ON (f.attraction_id, f.target_slot, L.h)
+            f.attraction_id::text AS unique_id, f.target_slot, f.origin_slot,
+            L.h AS target_lead_h, f.predicted_wait,
+            EXTRACT(EPOCH FROM (f.target_slot - f.origin_slot)) / 3600.0 AS lead_h
+        FROM pcn_forecasts f
+        JOIN attractions a ON a.id = f.attraction_id
+        CROSS JOIN (VALUES {values}) AS L(h)
+        WHERE a."parkId" = :park
+          AND f.quantile = 0.5
+          AND f.target_slot >= :lo AND f.target_slot < :hi
+          AND f.origin_slot <= f.target_slot
+          AND EXTRACT(EPOCH FROM (f.target_slot - f.origin_slot)) / 3600.0
+              BETWEEN L.h - 0.5 AND L.h + 0.5
+        ORDER BY f.attraction_id, f.target_slot, L.h,
+                 abs(EXTRACT(EPOCH FROM (f.target_slot - f.origin_slot)) / 3600.0 - L.h)
+        """
+    )
+    with engine().connect() as c:
+        df = pd.read_sql(sql, c, params={"park": park_id, "lo": lo_local, "hi": hi_local})
+    if not df.empty:
+        df["target_slot"] = pd.to_datetime(df["target_slot"])
+        df["origin_slot"] = pd.to_datetime(df["origin_slot"])
+        df["target_lead_h"] = df["target_lead_h"].astype(float)
+        df["predicted_wait"] = df["predicted_wait"].astype(float)
+    return df
 
 
 def fetch_pcn_forecasts_window(park_id: str, lo_local, hi_local) -> pd.DataFrame:

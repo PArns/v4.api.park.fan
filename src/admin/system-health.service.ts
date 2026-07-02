@@ -44,6 +44,7 @@ export class SystemHealthService {
       comparison,
       pcnComparison,
       shapeComparison,
+      pcnLeadCurve,
     ] = await Promise.all([
       this.safe("host", () => this.host()),
       this.safe("gpu", () => this.gpu()),
@@ -55,6 +56,7 @@ export class SystemHealthService {
       this.safe("comparison", () => this.comparison()),
       this.safe("pcnComparison", () => this.intradayComparison()),
       this.safe("shapeComparison", () => this.shapeComparison()),
+      this.safe("pcnLeadCurve", () => this.leadCurveComparison()),
     ]);
     return {
       timestamp: new Date().toISOString(),
@@ -63,7 +65,14 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
-      ml: { catboost, tft, comparison, pcnComparison, shapeComparison },
+      ml: {
+        catboost,
+        tft,
+        comparison,
+        pcnComparison,
+        shapeComparison,
+        pcnLeadCurve,
+      },
     };
   }
 
@@ -581,14 +590,104 @@ export class SystemHealthService {
     );
   }
 
+  /** PCN lead-curve board (§7.7): PCN@{1h,3h,6h} vs a persistence baseline on matched
+   * slots. The main intraday board only scores the freshest ~15-min origin, so the
+   * quality of the LONGER leads the UI serves for rest-of-day was unmeasured. Verdict =
+   * PCN−persistence MAE delta per (horizon, segment). Owned by pcn-service. */
+  private async leadCurveComparison(days = 14) {
+    const exists = await this.dataSource.query(
+      `SELECT to_regclass('public.pcn_lead_curve_comparisons') AS t`,
+    );
+    if (!exists?.[0]?.t)
+      return { rows: [], verdict: [], note: "no lead-curve board yet" };
+    const rows = await this.dataSource.query(
+      `SELECT target_date AS "targetDate", model, segment,
+              lead_bucket AS "leadBucket", n,
+              round(mae::numeric, 1) AS mae,
+              round(bias::numeric, 1) AS bias,
+              round(mean_actual::numeric, 1) AS "meanActual",
+              round(mean_pred::numeric, 1) AS "meanPred"
+         FROM pcn_lead_curve_comparisons
+        WHERE target_date >= (CURRENT_DATE - ($1)::int)
+        ORDER BY target_date DESC, lead_bucket,
+                 CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
+                              WHEN 'mid' THEN 2 ELSE 3 END,
+                 model
+        LIMIT $2`,
+      // 3 leads × 4 segments × 2 models = 24 cells/day max (+ margin).
+      [days, (days + 1) * 24],
+    );
+    return { rows, verdict: this.leadCurveVerdict(rows), count: rows.length };
+  }
+
+  /** PCN−persistence MAE delta per (horizon, segment), n-weighted — does PCN's
+   * longer-lead forecast beat a naive no-change baseline? */
+  private leadCurveVerdict(
+    rows: Array<{
+      segment: string;
+      leadBucket: string;
+      model: string;
+      n: number;
+      mae: number;
+    }>,
+  ) {
+    // "lead|segment" -> model -> {mw, n}
+    const acc: Record<string, Record<string, { mw: number; n: number }>> = {};
+    for (const r of rows) {
+      const g = (acc[`${r.leadBucket}|${r.segment}`] ??= {});
+      const m = (g[r.model] ??= { mw: 0, n: 0 });
+      m.mw += Number(r.mae) * Number(r.n);
+      m.n += Number(r.n);
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for (const [key, byModel] of Object.entries(acc)) {
+      const [leadBucket, segment] = key.split("|");
+      const pcn = byModel["pcn"];
+      const persist = byModel["persist"];
+      if (!pcn?.n || !persist?.n) continue;
+      const pcnMae = pcn.mw / pcn.n;
+      const persistMae = persist.mw / persist.n;
+      out.push({
+        leadBucket,
+        segment,
+        n: Math.min(pcn.n, persist.n),
+        pcnMae: Math.round(pcnMae * 10) / 10,
+        persistMae: Math.round(persistMae * 10) / 10,
+        delta: Math.round((persistMae - pcnMae) * 10) / 10, // >0 ⇒ PCN beats persistence
+        pcnWins: persistMae - pcnMae > 0,
+      });
+    }
+    const leadOrder: Record<string, number> = { "1h": 0, "3h": 1, "6h": 2 };
+    const segOrder: Record<string, number> = {
+      all: 0,
+      busy: 1,
+      mid: 2,
+      quiet: 3,
+    };
+    return out.sort(
+      (a, b) =>
+        (leadOrder[a.leadBucket as string] ?? 9) -
+          (leadOrder[b.leadBucket as string] ?? 9) ||
+        (segOrder[a.segment as string] ?? 9) -
+          (segOrder[b.segment as string] ?? 9),
+    );
+  }
+
   /** Focused comparison board for a dedicated admin endpoint — all surfaces as plain SQL
    * reads (no host/gpu/service round-trips), so a UI can poll it cheaply. */
   async comparisonBoard(days = 14) {
-    const [daily, intraday, shape] = await Promise.all([
+    const [daily, intraday, shape, leadCurve] = await Promise.all([
       this.safe("daily", () => this.comparison()),
       this.safe("intraday", () => this.intradayComparison(days)),
       this.safe("shape", () => this.shapeComparison()),
+      this.safe("leadCurve", () => this.leadCurveComparison(days)),
     ]);
-    return { timestamp: new Date().toISOString(), daily, intraday, shape };
+    return {
+      timestamp: new Date().toISOString(),
+      daily,
+      intraday,
+      shape,
+      leadCurve,
+    };
   }
 }
