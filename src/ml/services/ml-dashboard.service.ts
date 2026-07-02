@@ -58,6 +58,7 @@ export class MLDashboardService {
       hourlyPatterns,
       weekdayPatterns,
       drift,
+      servedIntraday,
     ] = await Promise.all([
       this.mlModelService.getActiveModel(),
       this.mlModelService.getModelComparison(),
@@ -66,6 +67,7 @@ export class MLDashboardService {
       this.accuracyService.getHourlyAccuracyPatterns(30),
       this.accuracyService.getDayOfWeekAccuracyPatterns(30),
       this.getDriftMetrics(),
+      this.getServedIntradayAccuracy(),
     ]);
 
     if (!currentModelData) {
@@ -122,6 +124,7 @@ export class MLDashboardService {
           ...systemAccuracyStats.overall,
           badge: this.getBadge(systemAccuracyStats.overall.mae),
         },
+        servedIntraday,
         drift,
         improvement: modelComparison.improvement,
       },
@@ -147,6 +150,18 @@ export class MLDashboardService {
       return await this.driftService.getDriftMetrics(30);
     } catch (error) {
       this.logger.warn(`Could not fetch drift metrics: ${error}`);
+      return null;
+    }
+  }
+
+  // Catch-and-null like drift: the served-intraday number reads the PCN shadow
+  // board, which may be absent (fresh DB) — a failure there must not take down
+  // the whole dashboard.
+  private async getServedIntradayAccuracy() {
+    try {
+      return await this.accuracyService.getServedIntradayAccuracy(7);
+    } catch (error) {
+      this.logger.warn(`Could not fetch served intraday accuracy: ${error}`);
       return null;
     }
   }

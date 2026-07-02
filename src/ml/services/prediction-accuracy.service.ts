@@ -34,6 +34,29 @@ export type AccuracyBadgeResult = {
 };
 
 /**
+ * Served-intraday accuracy — the value users ACTUALLY get for 15-min slots.
+ *
+ * The champion-swap serves the PCN model (q0.5) for intraday, but
+ * `prediction_accuracy` only ever stores CatBoost predictions — so
+ * `getSystemAccuracyStats().byPredictionType.HOURLY` measures the CatBoost
+ * *fallback*, not the served product (docs/ml/pcn-intraday-review.md §6a). The
+ * PCN shadow board (`pcn_intraday_comparisons`) already scores the served value
+ * vs actuals on a matched (attraction, 15-min slot) population, with CatBoost
+ * scored on the same population for a fair head-to-head. `null` when the board
+ * table is absent (fresh DB / PCN not deployed) or no PCN rows exist in-window
+ * (override inactive → CatBoost IS the served intraday model).
+ */
+export type ServedIntradayAccuracy = {
+  servedModel: "pcn";
+  mae: number;
+  n: number;
+  catboostMae: number | null;
+  /** catboostMae − mae; > 0 ⇒ the served model beats the CatBoost fallback. */
+  delta: number | null;
+  days: number;
+};
+
+/**
  * PredictionAccuracyService
  *
  * Tracks prediction vs reality for model monitoring and continuous improvement
@@ -1440,6 +1463,54 @@ export class PredictionAccuracyService {
         uniqueParks: parseInt(uniqueParksResult.count || "0", 10),
       },
       byPredictionType: byType,
+    };
+  }
+
+  /**
+   * Served-intraday accuracy from the PCN shadow board (see the
+   * {@link ServedIntradayAccuracy} type). n-weighted MAE over the whole-day,
+   * all-lead cells (`segment='all'`, `lead_bucket='all'`) — the same matched
+   * population the admin PCN verdict uses, so `pcn` and `catboost` share `n`.
+   * Degrades to `null` (never throws) so callers can render the CatBoost number
+   * alone when PCN isn't serving.
+   */
+  async getServedIntradayAccuracy(
+    days: number = 7,
+  ): Promise<ServedIntradayAccuracy | null> {
+    // The board lives in the pcn-service's schema; on a fresh DB or before PCN
+    // is deployed the table doesn't exist — degrade to null rather than 500.
+    const reg = await this.accuracyRepository.query(
+      "SELECT to_regclass('public.pcn_intraday_comparisons') AS t",
+    );
+    if (!reg?.[0]?.t) return null;
+
+    // CURRENT_DATE − days matches the board's park-local `target_date` keying.
+    const rows: Array<{ model: string; n: string | null; mae: string | null }> =
+      await this.accuracyRepository.query(
+        `SELECT model, SUM(n) AS n, SUM(mae * n) / NULLIF(SUM(n), 0) AS mae
+           FROM pcn_intraday_comparisons
+          WHERE segment = 'all' AND lead_bucket = 'all'
+            AND target_date >= (CURRENT_DATE - $1::int)
+          GROUP BY model`,
+        [days],
+      );
+
+    const pcn = rows.find((r) => r.model === "pcn");
+    if (!pcn || pcn.mae == null) return null; // no served-PCN evidence in-window
+
+    const cat = rows.find((r) => r.model === "catboost");
+    const round1 = (v: number) => Math.round(v * 10) / 10;
+    const mae = round1(parseFloat(pcn.mae));
+    const catboostMae =
+      cat && cat.mae != null ? round1(parseFloat(cat.mae)) : null;
+
+    return {
+      servedModel: "pcn",
+      mae,
+      n: parseInt(pcn.n ?? "0", 10) || 0,
+      catboostMae,
+      delta: catboostMae != null ? round1(catboostMae - mae) : null,
+      days,
     };
   }
 

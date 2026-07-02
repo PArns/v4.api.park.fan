@@ -109,6 +109,10 @@ export class MLController {
       days,
       5,
     );
+    // Served-intraday MAE from the PCN board — `byPredictionType.HOURLY` above
+    // measures the CatBoost fallback, not what users are actually served.
+    const servedIntraday =
+      await this.accuracyService.getServedIntradayAccuracy(days);
 
     const badge = this.accuracyService.calculateAccuracyBadge(
       stats.overall.mae,
@@ -123,6 +127,7 @@ export class MLController {
         badgeMessage: badge.message,
       },
       byPredictionType: stats.byPredictionType,
+      servedIntraday,
       topPerformers: performers.topPerformers,
       bottomPerformers: performers.bottomPerformers,
     };

@@ -471,12 +471,54 @@ export class ModelSectionDto {
   trainingData: TrainingDataInfoDto;
 }
 
+export class ServedIntradayAccuracyDto {
+  @ApiProperty({
+    description: "Model actually served for 15-min slots",
+    example: "pcn",
+  })
+  servedModel: "pcn";
+
+  @ApiProperty({
+    description: "n-weighted MAE of the served intraday value vs actuals (min)",
+  })
+  mae: number;
+
+  @ApiProperty({
+    description: "Matched sample count (attraction × 15-min slot)",
+  })
+  n: number;
+
+  @ApiProperty({
+    description: "Matched CatBoost-fallback MAE on the same population (min)",
+    nullable: true,
+  })
+  catboostMae: number | null;
+
+  @ApiProperty({
+    description: "catboostMae − mae; > 0 ⇒ the served model beats the fallback",
+    nullable: true,
+  })
+  delta: number | null;
+
+  @ApiProperty({ description: "Look-back window in days" })
+  days: number;
+}
+
 export class PerformanceSectionDto {
   @ApiProperty({ description: "Training metrics (baseline)" })
   training: ModelTrainingMetricsDto;
 
   @ApiProperty({ description: "Live performance" })
   live: SystemAccuracyOverallDto;
+
+  @ApiProperty({
+    description:
+      "Served intraday accuracy (PCN champion-swap) — the value users actually " +
+      "get for 15-min slots; null when PCN is not serving. `live` and " +
+      "`insights.byPredictionType.HOURLY` measure the CatBoost fallback.",
+    nullable: true,
+  })
+  servedIntraday: ServedIntradayAccuracyDto | null;
 
   @ApiProperty({ description: "Model drift", nullable: true })
   drift: MLDriftDto | null;
