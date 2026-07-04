@@ -3,7 +3,11 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { MLModel } from "../entities/ml-model.entity";
-import { MLDriftDto, DailyAccuracyDto } from "../dto/ml-drift.dto";
+import {
+  MLDriftDto,
+  DailyAccuracyDto,
+  HorizonDriftDto,
+} from "../dto/ml-drift.dto";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 
 /**
@@ -41,25 +45,33 @@ export class MLDriftMonitoringService {
     }
 
     const trainingMae = activeModel.mae;
-    const dailyMetrics = await this.getDailyAccuracy(startDate);
+    // Only 'hourly' predictions are ever scored — daily/far-daily are tracked:false and
+    // never reach comparisonStatus='COMPLETED'. So this drift measures CatBoost's INTRADAY
+    // accuracy, which PCN now serves as the fallback (see byHorizon).
+    const dailyMetrics = await this.getDailyAccuracy(startDate, "hourly");
 
-    const recentMetrics = dailyMetrics.slice(-7);
-    const liveMae =
-      recentMetrics.length > 0
-        ? recentMetrics.reduce((sum, m) => sum + m.mae, 0) /
-          recentMetrics.length
-        : trainingMae;
-
+    const liveMae = this.recentLiveMae(dailyMetrics, trainingMae);
     const currentDrift = ((liveMae - trainingMae) / trainingMae) * 100;
+    const status = this.driftStatus(currentDrift);
 
-    let status: string;
-    if (currentDrift > this.DRIFT_CRITICAL_THRESHOLD) {
-      status = "critical";
-    } else if (currentDrift > this.DRIFT_WARNING_THRESHOLD) {
-      status = "warning";
-    } else {
-      status = "healthy";
-    }
+    const byHorizon: HorizonDriftDto[] = [
+      {
+        horizon: "hourly",
+        tracked: true,
+        currentDrift: parseFloat(currentDrift.toFixed(2)),
+        liveMae: parseFloat(liveMae.toFixed(2)),
+        status,
+        note: "CatBoost intraday accuracy. Intraday is now served by the PCN champion-swap, so this tracks the FALLBACK, not the served product — use the PCN board for served intraday quality.",
+      },
+      {
+        horizon: "daily",
+        tracked: false,
+        currentDrift: null,
+        liveMae: null,
+        status: "untracked",
+        note: "Far-daily (31–365d) predictions are never scored against actuals; CatBoost is the sole level provider here, but its accuracy is currently unmeasured.",
+      },
+    ];
 
     return {
       currentDrift: parseFloat(currentDrift.toFixed(2)),
@@ -68,11 +80,32 @@ export class MLDriftMonitoringService {
       trainingMae: parseFloat(trainingMae.toFixed(2)),
       liveMae: parseFloat(liveMae.toFixed(2)),
       dailyMetrics,
+      byHorizon,
     };
   }
 
-  private async getDailyAccuracy(startDate: Date): Promise<DailyAccuracyDto[]> {
-    const rows = await this.accuracyRepo
+  /** Mean MAE over the last 7 scored days (falls back to trainingMae on a cold start). */
+  private recentLiveMae(
+    dailyMetrics: DailyAccuracyDto[],
+    trainingMae: number,
+  ): number {
+    const recent = dailyMetrics.slice(-7);
+    return recent.length > 0
+      ? recent.reduce((sum, m) => sum + m.mae, 0) / recent.length
+      : trainingMae;
+  }
+
+  private driftStatus(currentDrift: number): string {
+    if (currentDrift > this.DRIFT_CRITICAL_THRESHOLD) return "critical";
+    if (currentDrift > this.DRIFT_WARNING_THRESHOLD) return "warning";
+    return "healthy";
+  }
+
+  private async getDailyAccuracy(
+    startDate: Date,
+    predictionType?: string,
+  ): Promise<DailyAccuracyDto[]> {
+    const qb = this.accuracyRepo
       .createQueryBuilder("pa")
       // Match the training population's thin-data gate: only ratable parks
       // (typical-day-peak baseline present) so liveMae compares like-for-like
@@ -100,9 +133,13 @@ export class MLDriftMonitoringService {
         maxWait: MAX_PLAUSIBLE_WAIT_TIME,
       })
       .groupBy("DATE(pa.targetTime)")
-      .orderBy("DATE(pa.targetTime)", "ASC")
-      .getRawMany();
+      .orderBy("DATE(pa.targetTime)", "ASC");
 
+    if (predictionType) {
+      qb.andWhere("pa.predictionType = :pt", { pt: predictionType });
+    }
+
+    const rows = await qb.getRawMany();
     return rows.map((r) => ({
       date: r.date,
       mae: parseFloat(parseFloat(r.mae).toFixed(2)),
