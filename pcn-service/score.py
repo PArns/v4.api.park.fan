@@ -167,6 +167,33 @@ def full_day_window(
     return lo, hi
 
 
+# Easternmost real park tz offset (Pacific/Auckland is +12/+13; +14 is the safe upper
+# bound). A local target_date ages out of the per-park window EAST→WEST, but the board is
+# pooled across parks with no park dimension — so a matured day re-scored late is rewritten
+# by only the still-in-window WESTERN subset, and aggregate_comparison's n=0-skip freezes
+# the dropped eastern cells stale (→ the leak + ~7% collapse seen live on 07-01/02). Freeze
+# a date once it has exited the easternmost park's window: past that point every remaining
+# write is a shrinking subset. Cutting at +14 freezes at ~D+1 10:00 UTC — after the
+# westernmost park (~−8) has finished the day and before any real park sheds it, so the
+# frozen row holds FULL cross-park coverage.
+_MAX_TZ_OFFSET_HOURS = 14
+
+
+def freeze_cutoff_date(lookback_hours: int, now_utc: pd.Timestamp | None = None):
+    """Oldest target_date still safe to (re)write. Older dates have left some park's window
+    and must stay frozen at their full-coverage state (see _MAX_TZ_OFFSET_HOURS)."""
+    now_utc = now_utc if now_utc is not None else pd.Timestamp.now(tz="UTC")
+    now_east = now_utc.tz_convert(None) + pd.Timedelta(hours=_MAX_TZ_OFFSET_HOURS)
+    lo, _ = full_day_window(now_east, lookback_hours, settings.slot_freq)
+    return lo.date()
+
+
+def _freeze_old_days(rows: list[dict], lookback_hours: int) -> list[dict]:
+    """Drop board rows for dates that have aged out of the easternmost park's window."""
+    cutoff = freeze_cutoff_date(lookback_hours)
+    return [r for r in rows if r["target_date"] >= cutoff]
+
+
 def _matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
     """Join matured PCN q0.5 forecasts ⋈ actuals ⋈ CatBoost on (attraction, slot),
     windowed by the full-day contract (see full_day_window)."""
@@ -277,7 +304,8 @@ def score_leadcurve_all(
                     len(parks), time.time() - t0)
         return {"rows": 0, "matched_slots": 0, "parks": len(parks)}
     combined = pd.concat(frames, ignore_index=True)
-    rows = aggregate_leadcurve(combined, models=["pcn", "persist"])
+    rows = _freeze_old_days(aggregate_leadcurve(combined, models=["pcn", "persist"]),
+                            lookback_hours)
     n = db.upsert_pcn_leadcurve(rows)
     logger.info("lead-curve done: %d board rows from %d matched slots across %d parks "
                 "in %.1fs", n, len(combined), len(parks), time.time() - t0)
@@ -315,7 +343,8 @@ def score_all(lookback_hours: int | None = None, park_ids: list[str] | None = No
         result = {"rows": 0, "matched_slots": 0, "parks": len(parks), "pruned": pruned}
     else:
         combined = pd.concat(frames, ignore_index=True)
-        rows = aggregate_comparison(combined, models=["pcn", "catboost"])
+        rows = _freeze_old_days(
+            aggregate_comparison(combined, models=["pcn", "catboost"]), lookback_hours)
         n = db.upsert_pcn_comparisons(rows)
         logger.info("scoring done: %d board rows from %d matched slots across %d parks "
                     "in %.1fs (pruned %d old forecasts)",
