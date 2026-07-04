@@ -101,6 +101,30 @@ def full_day_window(
     return lo, hi
 
 
+# Easternmost real park tz offset (+14 safe upper bound). The board is pooled across all
+# parks with no park dimension, so a local target_date ages out of the per-park window
+# EAST→WEST: a matured day re-scored late is rewritten by only the still-in-window WESTERN
+# subset, and aggregate_comparison's n=0-skip freezes the dropped eastern cells stale
+# (→ leak + collapse, same bug as pcn-service). Freeze a date once it leaves the
+# easternmost park's window; cutting at +14h freezes at full cross-park coverage.
+_MAX_TZ_OFFSET_HOURS = 14
+
+
+def freeze_cutoff_date(lookback_hours: int, now_utc: pd.Timestamp | None = None):
+    """Oldest target_date still safe to (re)write. Older dates have left some park's window
+    and must stay frozen at their full-coverage state (see _MAX_TZ_OFFSET_HOURS)."""
+    now_utc = now_utc if now_utc is not None else pd.Timestamp.now(tz="UTC")
+    now_east = now_utc.tz_convert(None) + pd.Timedelta(hours=_MAX_TZ_OFFSET_HOURS)
+    lo, _ = full_day_window(now_east, lookback_hours, settings.slot_freq)
+    return lo.date()
+
+
+def _freeze_old_days(rows: list[dict], lookback_hours: int) -> list[dict]:
+    """Drop board rows for dates that have aged out of the easternmost park's window."""
+    cutoff = freeze_cutoff_date(lookback_hours)
+    return [r for r in rows if r["target_date"] >= cutoff]
+
+
 def _park_matched(park_id: str, lookback_hours: int) -> pd.DataFrame:
     tz = db.park_timezone(park_id)
     if tz is None:
@@ -154,7 +178,8 @@ def score_all(lookback_hours: int = 96, park_ids: list[str] | None = None) -> di
         )
         return {"rows": 0, "matched_slots": 0, "parks": len(parks), "pruned": pruned}
     combined = pd.concat(frames, ignore_index=True)
-    rows = aggregate_comparison(combined, models=["shape", "catboost"])
+    rows = _freeze_old_days(
+        aggregate_comparison(combined, models=["shape", "catboost"]), lookback_hours)
     n = db.upsert_shape_comparisons(rows)
     logger.info(
         "scoring done: %d board rows from %d matched slots across %d parks in %.1fs "
