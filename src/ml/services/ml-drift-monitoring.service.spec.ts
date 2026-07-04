@@ -83,6 +83,33 @@ describe("MLDriftMonitoringService", () => {
       expect(result.trainingMae).toBe(5);
     });
 
+    it("splits drift by horizon: hourly tracked (= top-level), daily untracked (§6a-2)", async () => {
+      mlModelRepo.findOne.mockResolvedValue({ mae: 5, isActive: true });
+      accuracyRepo.createQueryBuilder.mockReturnValueOnce(
+        stubQB(
+          Array.from({ length: 7 }, (_, i) => ({
+            date: `2026-05-${10 + i}`,
+            mae: "6.25",
+            count: "100",
+          })),
+        ),
+      );
+
+      const result = await service.getDriftMetrics();
+
+      const hourly = result.byHorizon.find((h) => h.horizon === "hourly")!;
+      const daily = result.byHorizon.find((h) => h.horizon === "daily")!;
+      // hourly mirrors the (only-scored) top-level drift
+      expect(hourly.tracked).toBe(true);
+      expect(hourly.currentDrift).toBe(result.currentDrift);
+      expect(hourly.liveMae).toBe(result.liveMae);
+      // far-daily is never scored → surfaced honestly as untracked, not a fake 0
+      expect(daily.tracked).toBe(false);
+      expect(daily.status).toBe("untracked");
+      expect(daily.currentDrift).toBeNull();
+      expect(daily.liveMae).toBeNull();
+    });
+
     it("reports 'warning' when live MAE is 20-30% worse than training", async () => {
       mlModelRepo.findOne.mockResolvedValue({ mae: 5, isActive: true });
       // Live MAE = 6.25 → 25% worse than training (5) → "warning"

@@ -17,10 +17,46 @@ export class DailyAccuracyDto {
   predictionsCount: number;
 }
 
+export class HorizonDriftDto {
+  @ApiProperty({ enum: ["hourly", "daily"], description: "Serving horizon" })
+  horizon: "hourly" | "daily";
+
+  @ApiProperty({
+    description:
+      "false when this horizon is never scored against actuals (far-daily predictions " +
+      "span up to 365d and are intentionally not compared)",
+  })
+  tracked: boolean;
+
+  @ApiProperty({
+    nullable: true,
+    description: "Drift % vs training MAE (null if untracked)",
+  })
+  currentDrift: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: "Live MAE for this horizon (null if untracked)",
+  })
+  liveMae: number | null;
+
+  @ApiProperty({ enum: ["healthy", "warning", "critical", "untracked"] })
+  status: string;
+
+  @ApiProperty({
+    nullable: true,
+    description: "What this horizon's drift actually measures",
+  })
+  note: string | null;
+}
+
 export class MLDriftDto {
   @ApiProperty({
     example: 15.3,
-    description: "Current drift percentage vs training MAE",
+    description:
+      "Current drift % vs training MAE. NOTE: this is the HOURLY horizon (the only one " +
+      "scored) — CatBoost's intraday accuracy, which PCN now serves as the fallback. See " +
+      "byHorizon for the per-horizon split.",
   })
   currentDrift: number;
 
@@ -51,7 +87,15 @@ export class MLDriftDto {
 
   @ApiProperty({
     type: [DailyAccuracyDto],
-    description: "Daily accuracy metrics",
+    description: "Daily accuracy metrics (hourly horizon)",
   })
   dailyMetrics: DailyAccuracyDto[];
+
+  @ApiProperty({
+    type: [HorizonDriftDto],
+    description:
+      "Drift split by serving horizon. hourly = CatBoost intraday (served by the PCN " +
+      "fallback); daily = far-daily (31–365d), CatBoost's sole remaining role but unscored.",
+  })
+  byHorizon: HorizonDriftDto[];
 }
