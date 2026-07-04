@@ -155,5 +155,45 @@ def test_leadcurve_drops_nan_persist_per_model():
     assert score.aggregate_leadcurve(pd.DataFrame(), ["pcn"]) == []
 
 
+def test_freeze_cutoff_freezes_days_that_left_the_easternmost_window():
+    """A local date ages out of the per-park window east→west; the pooled board must stop
+    (re)writing it once the easternmost park sheds it, else it collapses to the western
+    subset. Cutoff = a +14h park's window start → today + the just-completed day stay
+    writable, older days freeze."""
+    # now 07-04 10:30 UTC → east 07-05 00:30 → full_day_window lo = 07-04.
+    now = pd.Timestamp("2026-07-04 10:30", tz="UTC")
+    assert score.freeze_cutoff_date(48, now_utc=now) == pd.Timestamp("2026-07-04").date()
+
+
+def test_freeze_cutoff_advances_after_a_day_matures_everywhere():
+    """07-02 stays writable through ~07-03 10:00 UTC (after the westernmost park finishes it,
+    before any real park sheds it), then freezes — capturing full cross-park coverage."""
+    lb = 48
+    d0702 = pd.Timestamp("2026-07-02").date()
+    assert (
+        score.freeze_cutoff_date(lb, now_utc=pd.Timestamp("2026-07-03 09:00", tz="UTC"))
+        <= d0702
+    )  # still writable
+    assert (
+        score.freeze_cutoff_date(lb, now_utc=pd.Timestamp("2026-07-03 11:00", tz="UTC"))
+        > d0702
+    )  # frozen
+
+
+def test_freeze_old_days_filter():
+    """_freeze_old_days drops rows below the live cutoff, keeps cutoff-and-newer."""
+    import datetime as _dt
+
+    cutoff = score.freeze_cutoff_date(48)          # a datetime.date
+    old = cutoff - _dt.timedelta(days=3)
+    rows = [
+        {"target_date": cutoff, "n": 1},
+        {"target_date": cutoff + _dt.timedelta(days=1), "n": 1},
+        {"target_date": old, "n": 1},
+    ]
+    kept = {r["target_date"] for r in score._freeze_old_days(rows, 48)}
+    assert old not in kept and cutoff in kept
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

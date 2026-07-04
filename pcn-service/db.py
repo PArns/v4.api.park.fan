@@ -293,8 +293,17 @@ def upsert_pcn_comparisons(rows: list[dict]) -> int:
                       created_at=now()
         """
     )
+    dates = sorted({r["target_date"] for r in rows})
     with engine().begin() as c:
         c.execute(_DDL_PCN_COMPARISONS)
+        # delete-and-replace the written dates: a plain upsert keeps cells from an earlier
+        # run whose (segment,lead) dropped to n=0 (aggregate_comparison skips them), freezing
+        # stale values → the pooled leak. Deleting the date first makes a day's board exactly
+        # this run's aggregate. Only touches dates in `rows`; frozen older dates are left be.
+        c.execute(
+            text("DELETE FROM pcn_intraday_comparisons WHERE target_date = ANY(:dates)"),
+            {"dates": dates},
+        )
         c.execute(upsert, rows)
     return len(rows)
 
@@ -315,8 +324,14 @@ def upsert_pcn_leadcurve(rows: list[dict]) -> int:
                       created_at=now()
         """
     )
+    dates = sorted({r["target_date"] for r in rows})
     with engine().begin() as c:
         c.execute(_DDL_PCN_LEADCURVE)
+        # delete-and-replace the written dates (same pooled-leak fix as the main board).
+        c.execute(
+            text("DELETE FROM pcn_lead_curve_comparisons WHERE target_date = ANY(:dates)"),
+            {"dates": dates},
+        )
         c.execute(upsert, rows)
     return len(rows)
 
