@@ -335,7 +335,15 @@ def upsert_shape_comparisons(rows: list[dict]) -> int:
                       created_at=now()
         """
     )
+    dates = sorted({r["target_date"] for r in rows})
     with engine().begin() as c:
         c.execute(_DDL_SHAPE_COMPARISONS)
+        # delete-and-replace the written dates: a plain upsert keeps cells from an earlier
+        # run whose (segment,lead) dropped to n=0 (aggregate_comparison skips them), freezing
+        # stale values → the pooled leak. Only touches dates in `rows`; frozen dates are left.
+        c.execute(
+            text("DELETE FROM shape_comparisons WHERE target_date = ANY(:dates)"),
+            {"dates": dates},
+        )
         c.execute(upsert, rows)
     return len(rows)
