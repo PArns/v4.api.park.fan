@@ -294,8 +294,12 @@ def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.D
     # realised wait (= persist), decaying to pure PCN by the horizon. Since origin =
     # target − lead, `persist` IS the value serving would blend with, so this measures the
     # exact served blend. NaN where persist is missing (dropped for this model downstream).
-    m["pcn_blend"] = persistence_blend(
+    blend = persistence_blend(
         m["pcn"].to_numpy(), m["persist"].to_numpy(), m["target_lead_h"].to_numpy())
+    # Where the scorer has no persist anchor (a data gap in actuals@origin), fall back to
+    # pure PCN — so pcn_blend is scored on the SAME population as pcn (a clean A/B, not a
+    # persist-present subset), and it mirrors serving, which always has the live anchor.
+    m["pcn_blend"] = np.where(np.isnan(blend), m["pcn"].to_numpy(), blend)
     return m[["target_slot", "lead_bucket", "actual", "pcn", "persist", "pcn_blend"]]
 
 
