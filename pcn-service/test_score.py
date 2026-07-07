@@ -155,6 +155,21 @@ def test_leadcurve_drops_nan_persist_per_model():
     assert score.aggregate_leadcurve(pd.DataFrame(), ["pcn"]) == []
 
 
+def test_persistence_blend():
+    """Blend decays from pure persistence (lead 0) to pure PCN (lead ≥ horizon), serve-rounded."""
+    import numpy as np
+
+    pcn = np.array([30.0, 30.0, 30.0, 30.0])
+    persist = np.array([20.0, 20.0, 20.0, 20.0])
+    lead = np.array([0.0, 1.5, 3.0, 6.0])          # horizon = 3h
+    out = score.persistence_blend(pcn, persist, lead, horizon_h=3.0)
+    # lead 0 → 20 (pure persist); 1.5h → 0.5·20+0.5·30=25; ≥3h → 30 (pure PCN)
+    np.testing.assert_array_equal(out, [20.0, 25.0, 30.0, 30.0])
+    # NaN persist (missing) → NaN blend (dropped for the pcn_blend model downstream)
+    assert np.isnan(score.persistence_blend(np.array([30.0]), np.array([np.nan]),
+                                            np.array([1.0]), horizon_h=3.0)[0])
+
+
 def test_freeze_cutoff_freezes_days_that_left_the_easternmost_window():
     """A local date ages out of the per-park window east→west; the pooled board must stop
     (re)writing it once the easternmost park sheds it, else it collapses to the western
