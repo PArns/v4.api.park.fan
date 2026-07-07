@@ -47,6 +47,11 @@ _LEADS = [
 # the freshest-origin main board never sees (its 3-6h/>6h buckets fill only from stale
 # producer phases). Persistence (wait unchanged from L hours ago) is the honest baseline.
 LEADCURVE_LEADS_H = [1.0, 3.0, 6.0]
+# Persistence-blend horizon (hours) for the shadow `pcn_blend` model: the weight on the
+# origin's realised wait decays 1→0 over this lead, so short-lead predictions fall back
+# toward "current wait" — which beats the raw PCN forecast at ≤1h (§7.7 review). Scored on
+# the board as a 3rd model BEFORE any serving change, so the blend is validated first.
+LEADCURVE_BLEND_HORIZON_H = 3.0
 
 
 def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
@@ -140,6 +145,20 @@ def serve_round(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     rounded = np.floor((x + 2.5) / 5.0) * 5.0
     return np.where(rounded > 0, np.maximum(rounded, 10.0), 0.0)
+
+
+def persistence_blend(pcn, persist, lead_h, horizon_h: float | None = None) -> np.ndarray:
+    """Blend the served PCN wait toward `persist` (the origin's realised wait) at short
+    lead: weight = max(0, 1 − lead/horizon), so lead 0 → pure persistence and lead ≥
+    horizon → pure PCN. Serve-rounded to mirror serving. Vectorized; NaN in either input
+    propagates (a missing persist ⇒ NaN blend, dropped for the pcn_blend model)."""
+    horizon_h = horizon_h or LEADCURVE_BLEND_HORIZON_H
+    lead = np.asarray(lead_h, dtype=float)
+    alpha = np.maximum(0.0, 1.0 - lead / horizon_h)
+    blended = alpha * np.asarray(persist, dtype=float) + (1.0 - alpha) * np.asarray(pcn, dtype=float)
+    # serve_round coerces NaN→0 (its np.where(nan>0) is False); keep NaN so a missing
+    # persist stays NaN and is dropped for the pcn_blend model, not scored as a 0 wait.
+    return np.where(np.isnan(blended), np.nan, serve_round(blended))
 
 
 def full_day_window(
@@ -271,7 +290,13 @@ def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.D
         columns={"target_slot": "persist_slot", "actual": "persist"})
     m["persist_slot"] = m["target_slot"] - pd.to_timedelta(m["target_lead_h"], unit="h")
     m = m.merge(persist_src, on=["unique_id", "persist_slot"], how="left")
-    return m[["target_slot", "lead_bucket", "actual", "pcn", "persist"]]
+    # Shadow persistence-blend (§7.7 follow-up): blend the served PCN toward the origin's
+    # realised wait (= persist), decaying to pure PCN by the horizon. Since origin =
+    # target − lead, `persist` IS the value serving would blend with, so this measures the
+    # exact served blend. NaN where persist is missing (dropped for this model downstream).
+    m["pcn_blend"] = persistence_blend(
+        m["pcn"].to_numpy(), m["persist"].to_numpy(), m["target_lead_h"].to_numpy())
+    return m[["target_slot", "lead_bucket", "actual", "pcn", "persist", "pcn_blend"]]
 
 
 def _park_leadcurve(park_id: str, lookback_hours: int) -> pd.DataFrame:
@@ -304,8 +329,9 @@ def score_leadcurve_all(
                     len(parks), time.time() - t0)
         return {"rows": 0, "matched_slots": 0, "parks": len(parks)}
     combined = pd.concat(frames, ignore_index=True)
-    rows = _freeze_old_days(aggregate_leadcurve(combined, models=["pcn", "persist"]),
-                            lookback_hours)
+    rows = _freeze_old_days(
+        aggregate_leadcurve(combined, models=["pcn", "persist", "pcn_blend"]),
+        lookback_hours)
     n = db.upsert_pcn_leadcurve(rows)
     logger.info("lead-curve done: %d board rows from %d matched slots across %d parks "
                 "in %.1fs", n, len(combined), len(parks), time.time() - t0)
