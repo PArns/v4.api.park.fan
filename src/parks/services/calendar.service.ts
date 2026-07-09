@@ -884,6 +884,10 @@ export class CalendarService {
       status,
       hours,
       crowdLevel,
+      // The ML forward prediction for this day (independent of the live override applied to
+      // `crowdLevel` for today). Lets the park hero show a true "forecast today" instead of
+      // the current live level. Undefined when no ML prediction / not ratable.
+      predictedCrowdLevel: predictedCrowdLevels.get(dateStr)?.crowdLevel,
       peakLoad,
       weather: weatherSummary,
       isToday: dateStr === today,
