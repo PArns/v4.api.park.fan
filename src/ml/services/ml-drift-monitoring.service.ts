@@ -1,6 +1,7 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { Redis } from "ioredis";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { MLModel } from "../entities/ml-model.entity";
 import {
@@ -9,6 +10,8 @@ import {
   HorizonDriftDto,
 } from "../dto/ml-drift.dto";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { safeJsonParse } from "../../common/utils/json.util";
 
 /**
  * ML Drift Monitoring Service
@@ -29,9 +32,25 @@ export class MLDriftMonitoringService {
     private accuracyRepo: Repository<PredictionAccuracy>,
     @InjectRepository(MLModel)
     private mlModelRepo: Repository<MLModel>,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
+  // Cached like the accuracy aggregations it reads (getDailyAccuracy → a DATE scan over
+  // prediction_accuracy). The dashboard caches its own getDriftMetrics call; this covers
+  // the standalone /drift/model endpoint. 30-min TTL — 30d drift barely moves intraday.
   async getDriftMetrics(days: number = 30): Promise<MLDriftDto> {
+    const cached = safeJsonParse<MLDriftDto>(
+      await this.redis.get(`ml:drift:${days}`).catch(() => null),
+    );
+    if (cached) return cached;
+    const dto = await this.computeDriftMetrics(days);
+    await this.redis
+      .set(`ml:drift:${days}`, JSON.stringify(dto), "EX", 1800)
+      .catch(() => undefined);
+    return dto;
+  }
+
+  private async computeDriftMetrics(days: number = 30): Promise<MLDriftDto> {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 

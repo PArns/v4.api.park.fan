@@ -73,6 +73,13 @@ export class PredictionAccuracyService {
   // 30min TTL keeps Redis fresh within one aggregate cycle.
   private readonly TTL_ACCURACY_BADGE = 30 * 60;
 
+  // 30-min read-through TTL for the system-wide accuracy aggregations (system stats +
+  // hour/DOW patterns), shared by the dashboard AND the standalone /accuracy/* endpoints.
+  // 7–30d rolling numbers that barely move intraday; these were the residual slow-query
+  // cluster once the dashboard payload cache landed — the standalone endpoints stayed
+  // uncached and each fired the multi-million-row prediction_accuracy scans on every poll.
+  private readonly TTL_ACCURACY_AGG = 30 * 60;
+
   constructor(
     @InjectRepository(PredictionAccuracy)
     private accuracyRepository: Repository<PredictionAccuracy>,
@@ -84,6 +91,26 @@ export class PredictionAccuracyService {
     private queueDataRepository: Repository<QueueData>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * Read-through Redis cache for an expensive aggregation. Cache miss → run compute();
+   * a throw propagates WITHOUT caching, so a transient DB failure doesn't get stuck.
+   */
+  private async cachedAgg<T>(
+    key: string,
+    ttlSec: number,
+    compute: () => Promise<T>,
+  ): Promise<T> {
+    const cached = safeJsonParse<T>(
+      await this.redis.get(key).catch(() => null),
+    );
+    if (cached !== null && cached !== undefined) return cached;
+    const value = await compute();
+    await this.redis
+      .set(key, JSON.stringify(value), "EX", ttlSec)
+      .catch(() => undefined);
+    return value;
+  }
 
   /**
    * Record predictions for accuracy tracking in a few multi-row upserts
@@ -1257,7 +1284,13 @@ export class PredictionAccuracyService {
    * @param {number} days - Number of days to analyze (default: 7)
    * @returns {Promise<SystemAccuracyStats>} System-wide accuracy statistics
    */
-  async getSystemAccuracyStats(days: number = 7): Promise<{
+  async getSystemAccuracyStats(days: number = 7) {
+    return this.cachedAgg(`accuracy:sys:${days}`, this.TTL_ACCURACY_AGG, () =>
+      this.computeSystemAccuracyStats(days),
+    );
+  }
+
+  private async computeSystemAccuracyStats(days: number = 7): Promise<{
     overall: {
       mae: number;
       rmse: number;
@@ -1776,7 +1809,15 @@ export class PredictionAccuracyService {
    * @param {number} days - Number of days to analyze (default: 30)
    * @returns {Promise<HourlyAccuracyPattern[]>} Accuracy by hour (0-23)
    */
-  async getHourlyAccuracyPatterns(days: number = 30): Promise<
+  async getHourlyAccuracyPatterns(days: number = 30) {
+    return this.cachedAgg(
+      `accuracy:hourly:${days}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeHourlyAccuracyPatterns(days),
+    );
+  }
+
+  private async computeHourlyAccuracyPatterns(days: number = 30): Promise<
     Array<{
       hour: number;
       mae: number;
@@ -1826,7 +1867,13 @@ export class PredictionAccuracyService {
    * @param {number} days - Number of days to analyze (default: 30)
    * @returns {Promise<DayOfWeekAccuracyPattern[]>} Accuracy by day of week
    */
-  async getDayOfWeekAccuracyPatterns(days: number = 30): Promise<
+  async getDayOfWeekAccuracyPatterns(days: number = 30) {
+    return this.cachedAgg(`accuracy:dow:${days}`, this.TTL_ACCURACY_AGG, () =>
+      this.computeDayOfWeekAccuracyPatterns(days),
+    );
+  }
+
+  private async computeDayOfWeekAccuracyPatterns(days: number = 30): Promise<
     Array<{
       dayOfWeek: number;
       dayName: string;

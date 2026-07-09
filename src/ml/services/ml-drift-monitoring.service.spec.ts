@@ -3,6 +3,7 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { MLModel } from "../entities/ml-model.entity";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * Coverage for the drift-monitoring service that decides whether the
@@ -49,6 +50,15 @@ describe("MLDriftMonitoringService", () => {
           useValue: accuracyRepo,
         },
         { provide: getRepositoryToken(MLModel), useValue: mlModelRepo },
+        {
+          // Cache always misses → computeDriftMetrics runs, so these tests exercise
+          // the real drift logic unchanged.
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue("OK"),
+          },
+        },
       ],
     }).compile();
 
