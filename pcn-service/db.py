@@ -179,10 +179,24 @@ _DDL_PCN_FORECASTS = text(
     """
 )
 
-# created_at index: (1) the NestJS serving override filters `created_at >= now()-3h`
-# (staleness guard) on every prediction read — without this the planner walks each
-# attraction's FULL forecast history via the PK; (2) the retention DELETE below prunes
-# by created_at. Kept next to the table DDL so a fresh DB gets both atomically.
+# Two pcn_forecasts indexes, created here so a fresh DB gets both atomically:
+#  (1) idx_pcn_forecasts_serving (attraction_id, created_at DESC) — THE serving-read index.
+#      The NestJS override reads `WHERE attraction_id = ANY(...) AND created_at >= now()-3h`,
+#      DISTINCT ON latest per (attraction, target_slot, quantile). Leading attraction_id + a
+#      created_at range prunes each attraction to just its recent rows; without it the planner
+#      BitmapANDs the ENTIRE 3h created_at window (~2M rows on the 100M-row table) against the
+#      PK and sorts — the #1 slow query (median ~600ms, p90 ~1.8s, ~345s DB-time/day) before it.
+#  (2) idx_pcn_forecasts_created_at (created_at) — still needed for the retention DELETE, which
+#      prunes by created_at ALONE (the composite above can't serve a created_at-only predicate).
+# NOTE: on the existing prod table (100M+ rows) idx_pcn_forecasts_serving was first built
+# CONCURRENTLY out of band; the plain CREATE here is a no-op there (IF NOT EXISTS) and instant
+# on a fresh/empty DB. Never let the startup path build it non-concurrently on a full table.
+_DDL_PCN_FORECASTS_SERVING_IDX = text(
+    """
+    CREATE INDEX IF NOT EXISTS idx_pcn_forecasts_serving
+        ON pcn_forecasts (attraction_id, created_at DESC)
+    """
+)
 _DDL_PCN_FORECASTS_IDX = text(
     """
     CREATE INDEX IF NOT EXISTS idx_pcn_forecasts_created_at
@@ -254,6 +268,7 @@ def write_pcn_forecasts(rows: list[dict], version: str) -> int:
         r["ver"] = version
     with engine().begin() as c:
         c.execute(_DDL_PCN_FORECASTS)
+        c.execute(_DDL_PCN_FORECASTS_SERVING_IDX)
         c.execute(_DDL_PCN_FORECASTS_IDX)
         for i in range(0, len(rows), 5000):
             c.execute(upsert, rows[i : i + 5000])
@@ -273,6 +288,7 @@ def prune_pcn_forecasts(retention_days: int) -> int:
     )
     with engine().begin() as c:
         c.execute(_DDL_PCN_FORECASTS)
+        c.execute(_DDL_PCN_FORECASTS_SERVING_IDX)
         c.execute(_DDL_PCN_FORECASTS_IDX)
         res = c.execute(sql, {"d": str(retention_days)})
     return int(res.rowcount or 0)
