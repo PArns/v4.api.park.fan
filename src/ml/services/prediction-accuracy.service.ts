@@ -101,7 +101,9 @@ export class PredictionAccuracyService {
     ttlSec: number,
     compute: () => Promise<T>,
   ): Promise<T> {
-    const cached = safeJsonParse<T>(await this.redis.get(key).catch(() => null));
+    const cached = safeJsonParse<T>(
+      await this.redis.get(key).catch(() => null),
+    );
     if (cached !== null && cached !== undefined) return cached;
     const value = await compute();
     await this.redis
@@ -1808,8 +1810,10 @@ export class PredictionAccuracyService {
    * @returns {Promise<HourlyAccuracyPattern[]>} Accuracy by hour (0-23)
    */
   async getHourlyAccuracyPatterns(days: number = 30) {
-    return this.cachedAgg(`accuracy:hourly:${days}`, this.TTL_ACCURACY_AGG, () =>
-      this.computeHourlyAccuracyPatterns(days),
+    return this.cachedAgg(
+      `accuracy:hourly:${days}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeHourlyAccuracyPatterns(days),
     );
   }
 
