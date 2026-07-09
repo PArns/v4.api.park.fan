@@ -29,12 +29,15 @@ export class MLDashboardService {
   ) {}
 
   async getDashboard(): Promise<MLDashboardDto> {
-    // Read-through cache: the dashboard fires 4 uncached aggregations over
-    // prediction_accuracy (~4.5M rows for the 30d patterns) per call and gets
-    // polled every few minutes by the admin UI — it was the top recurring
-    // entry in the slow-query log (~250 calls/day × ~1s each). The underlying
-    // accuracy data only changes with the 15-min compare cron, so a 5-min TTL
-    // costs no meaningful freshness.
+    // Read-through cache: buildDashboard fires ~7 aggregations over
+    // prediction_accuracy (10.8M rows; ~4.4M in the 30d COMPLETED window for the
+    // DOW/hour/daily patterns) — collectively the #1 slow-query cluster (~622s
+    // DB-time/day). The admin UI polls ~every 30 min, so the old 300s (5-min) TTL
+    // expired before every poll → every poll rebuilt the whole thing (48×/day).
+    // These are 7–30d rolling aggregates that move imperceptibly intraday (the
+    // 15-min compare cron only trickles in new matches), so a 1h TTL keeps most
+    // polls warm at zero meaningful freshness cost; acute issues surface via the
+    // separate /alerts endpoint, not here.
     const cacheKey = "ml:dashboard:v2";
     const cached = await this.redis.get(cacheKey).catch(() => null);
     const cachedDto = safeJsonParse<MLDashboardDto>(cached);
@@ -42,7 +45,7 @@ export class MLDashboardService {
 
     const dto = await this.buildDashboard();
     await this.redis
-      .set(cacheKey, JSON.stringify(dto), "EX", 300)
+      .set(cacheKey, JSON.stringify(dto), "EX", 3600)
       .catch(() => undefined);
     return dto;
   }
