@@ -158,6 +158,15 @@ export class CalendarDay {
 
   @ApiProperty({
     description:
+      "The ML FORWARD prediction for this day (predicted headliner peak ÷ typical-day-peak). " +
+      "Equals crowdLevel on future days; on TODAY it differs, because crowdLevel is overridden " +
+      "with the live occupancy — so surfaces can show a true 'forecast today' vs the live 'now'.",
+    required: false,
+  })
+  predictedCrowdLevel?: CrowdLevel;
+
+  @ApiProperty({
+    description:
       "Peak crowd level (P90) for this day (historical or predicted)",
     enum: [
       "very_low",
