@@ -47,10 +47,13 @@ _LEADS = [
 # the freshest-origin main board never sees (its 3-6h/>6h buckets fill only from stale
 # producer phases). Persistence (wait unchanged from L hours ago) is the honest baseline.
 LEADCURVE_LEADS_H = [1.0, 3.0, 6.0]
-# Persistence-blend horizon (hours) for the shadow `pcn_blend` model: the weight on the
-# origin's realised wait decays 1→0 over this lead, so short-lead predictions fall back
-# toward "current wait" — which beats the raw PCN forecast at ≤1h (§7.7 review). Scored on
-# the board as a 3rd model BEFORE any serving change, so the blend is validated first.
+# Persistence-blend shape (hours) for the shadow `pcn_blend` model. PIECEWISE, not a plain
+# linear ramp: the 07-13 review showed persistence wins BIG at ≤1h (busy 17.4 vs PCN 20.4)
+# but PCN wins at ≥3h — and a linear 1−lead/3 was too PCN-heavy at 1h (α=0.67, captured only
+# ~⅓ of persistence's edge). So hold FULL persistence weight up to _FULL_H, then decay 1→0
+# to _HORIZON_H (pure PCN beyond). Serves the better model at each lead. Scored on the board
+# BEFORE any serving change so the tuned shape is validated first.
+LEADCURVE_BLEND_FULL_H = 1.0
 LEADCURVE_BLEND_HORIZON_H = 3.0
 
 
@@ -147,14 +150,19 @@ def serve_round(x: np.ndarray) -> np.ndarray:
     return np.where(rounded > 0, np.maximum(rounded, 10.0), 0.0)
 
 
-def persistence_blend(pcn, persist, lead_h, horizon_h: float | None = None) -> np.ndarray:
+def persistence_blend(
+    pcn, persist, lead_h,
+    full_h: float | None = None, horizon_h: float | None = None,
+) -> np.ndarray:
     """Blend the served PCN wait toward `persist` (the origin's realised wait) at short
-    lead: weight = max(0, 1 − lead/horizon), so lead 0 → pure persistence and lead ≥
-    horizon → pure PCN. Serve-rounded to mirror serving. Vectorized; NaN in either input
-    propagates (a missing persist ⇒ NaN blend, dropped for the pcn_blend model)."""
+    lead. Weight α is PIECEWISE: 1 (pure persistence) up to `full_h`, then linear 1→0 over
+    [full_h, horizon_h], then 0 (pure PCN) beyond — i.e. serve the model that wins at each
+    lead (persistence ≤1h, PCN ≥3h). Serve-rounded to mirror serving. Vectorized; NaN in
+    either input propagates (a missing persist ⇒ NaN blend, dropped for the pcn_blend model)."""
+    full_h = full_h or LEADCURVE_BLEND_FULL_H
     horizon_h = horizon_h or LEADCURVE_BLEND_HORIZON_H
     lead = np.asarray(lead_h, dtype=float)
-    alpha = np.maximum(0.0, 1.0 - lead / horizon_h)
+    alpha = np.clip((horizon_h - lead) / (horizon_h - full_h), 0.0, 1.0)
     blended = alpha * np.asarray(persist, dtype=float) + (1.0 - alpha) * np.asarray(pcn, dtype=float)
     # serve_round coerces NaN→0 (its np.where(nan>0) is False); keep NaN so a missing
     # persist stays NaN and is dropped for the pcn_blend model, not scored as a 0 wait.
