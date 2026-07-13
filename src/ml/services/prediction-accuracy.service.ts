@@ -73,12 +73,13 @@ export class PredictionAccuracyService {
   // 30min TTL keeps Redis fresh within one aggregate cycle.
   private readonly TTL_ACCURACY_BADGE = 30 * 60;
 
-  // 30-min read-through TTL for the system-wide accuracy aggregations (system stats +
-  // hour/DOW patterns), shared by the dashboard AND the standalone /accuracy/* endpoints.
-  // 7–30d rolling numbers that barely move intraday; these were the residual slow-query
-  // cluster once the dashboard payload cache landed — the standalone endpoints stayed
-  // uncached and each fired the multi-million-row prediction_accuracy scans on every poll.
-  private readonly TTL_ACCURACY_AGG = 30 * 60;
+  // Read-through TTL for the system-wide accuracy aggregations (system stats + hour/DOW
+  // patterns), shared by the dashboard AND the standalone /accuracy/* endpoints. 7–30d
+  // rolling numbers that barely move intraday. 2h, NOT 30min: the admin monitor polls
+  // these ~hourly, so a sub-poll TTL missed on essentially every poll (the 07-13 review
+  // still saw ~17–23 slow hits/day per aggregation) — the cache only helped the dashboard
+  // path. A TTL comfortably ABOVE the poll interval is what actually lands the hits.
+  private readonly TTL_ACCURACY_AGG = 2 * 60 * 60;
 
   constructor(
     @InjectRepository(PredictionAccuracy)
