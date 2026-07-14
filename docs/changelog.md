@@ -6,6 +6,21 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — Calendar payload diet: influencingHolidays off by default (SEO/perf P1) (2026-07-14)
+
+`GET /v1/parks/{path}/calendar` no longer returns per-day `influencingHolidays`
+by default. That field was ~98% of the ~2.25 MB body and **no consumer of this
+endpoint reads it** (the header holiday panel reads
+`schedule[].influencingHolidays` from the **park** endpoint) — so the default
+calendar response (grid tab + per-month client fetches) shrinks ~50×, and Next's
+2 MB fetch-cache cap stops being a design constraint.
+
+- Opt back in with **`?include=influencingHolidays`** (comma-separated list for
+  future sections). Shape is otherwise unchanged.
+- Stripped at the response layer, so the per-month Redis cache stays a single
+  (full) variant — the win is the over-the-wire payload, and new day objects are
+  returned so the shared cache entry is never mutated.
+
 ### Added — Precomputed best-days endpoint (SEO/perf P0) (2026-07-14)
 
 New lean, precomputed endpoint that replaces the frontend's derivation of best-days /

@@ -187,7 +187,14 @@ export class CalendarDay {
   @ApiProperty({ type: () => [CalendarEvent], required: false })
   events?: CalendarEvent[];
 
-  @ApiProperty({ type: () => [InfluencingHoliday], required: false })
+  @ApiProperty({
+    type: () => [InfluencingHoliday],
+    required: false,
+    description:
+      "Neighbouring-region holidays influencing this day's crowds. OMITTED by " +
+      "default (it was ~98% of the payload and no consumer reads it here) — " +
+      "request it with `?include=influencingHolidays`.",
+  })
   influencingHolidays?: InfluencingHoliday[];
 
   @ApiProperty({

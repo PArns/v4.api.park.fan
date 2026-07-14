@@ -405,7 +405,9 @@ export class ParksController {
     description:
       "Returns unified calendar data combining schedule, weather forecasts, ML predictions, holidays, and events. " +
       "All dates are in the park's local timezone. Includes hourly predictions for today/tomorrow by default. " +
-      "Cache TTL: Dynamic (5 min for today/past, 1 hour for future) for optimal data freshness.",
+      "Per-day `influencingHolidays` (the neighbouring-region holidays that drive up crowds) are OMITTED by " +
+      "default — they were ~98% of the payload and no consumer of this endpoint reads them; opt back in with " +
+      "`?include=influencingHolidays`. Cache TTL: Dynamic (5 min for today/past, 1 hour for future).",
   })
   @ApiParam({
     name: "continent",
@@ -453,6 +455,15 @@ export class ParksController {
       "'none': no hourly data.",
     example: "today+tomorrow",
   })
+  @ApiQuery({
+    name: "include",
+    required: false,
+    description:
+      "Comma-separated list of optional, off-by-default sections to include. " +
+      "Currently only 'influencingHolidays' (per-day neighbouring-region holidays). " +
+      "Omit for the lean default payload.",
+    example: "influencingHolidays",
+  })
   @ApiExtraModels(IntegratedCalendarResponse)
   @ApiResponse({
     status: 200,
@@ -470,6 +481,7 @@ export class ParksController {
     @Query("to") to?: string,
     @Query("includeHourly")
     includeHourly?: "today+tomorrow" | "today" | "none" | "all",
+    @Query("include") include?: string,
     @Res({ passthrough: true }) res?: any,
   ): Promise<IntegratedCalendarResponse> {
     const park = await this.parksService.findByGeographicPath(
@@ -503,6 +515,26 @@ export class ParksController {
       toDate,
       includeHourly || "today+tomorrow",
     );
+
+    // Payload diet: per-day `influencingHolidays` was ~98% of this response
+    // (~2.25 MB) and NO consumer of this endpoint reads it (the header holiday
+    // panel reads schedule[].influencingHolidays from the PARK endpoint). Strip
+    // it by default; opt back in with ?include=influencingHolidays. Done at the
+    // response layer so the month cache stays a single (full) variant — the win
+    // is the over-the-wire payload (proxy + Next's 2 MB fetch-cache cap), not
+    // Redis size. New day objects, so the shared cache entry is never mutated.
+    const includedSections = (include ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!includedSections.includes("influencingHolidays")) {
+      response.days = response.days.map((d) => {
+        if (!d.influencingHolidays) return d;
+        const slim = { ...d };
+        delete slim.influencingHolidays;
+        return slim;
+      });
+    }
 
     // Set dynamic cache headers based on date range
     const { getCurrentDateInTimezone } =
