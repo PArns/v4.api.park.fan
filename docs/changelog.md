@@ -6,6 +6,32 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — Precomputed best-days endpoint (SEO/perf P0) (2026-07-14)
+
+New lean, precomputed endpoint that replaces the frontend's derivation of best-days /
+crowd-FAQ / header-forecast content from the ~2.25 MB `/calendar` response (of which
+~98 % is unused per-day `influencingHolidays`) plus its 10–20 s cold ML compute:
+
+- **`GET /v1/parks/{continent}/{country}/{city}/{parkSlug}/best-days`** — rolling
+  today → +90 days in the park timezone (optional `from`/`to`, capped at 90 days).
+  Returns only the projection the frontend keeps (`date`, `status`, `crowdLevel`,
+  `predictedCrowdLevel?`, `isHoliday`, `isSchoolVacation`, `isBridgeDay`) plus an
+  optional stats-quality `byDayOfWeek` aggregate. Target ≤ 15 KB.
+  ([DTO](../src/parks/dto/best-days-calendar.dto.ts) · [service](../src/parks/services/best-days.service.ts))
+- **Materialized, never lazy.** Served from a Redis snapshot (`best-days:<parkId>`,
+  26 h TTL) that the 12 h calendar warmup refreshes for every park — reusing the
+  already-warm month caches, so the request path is a single GET (p99 < 300 ms cold
+  and warm, no ML on request). Cache miss ⇒ `200` + empty `days` (frontend degrades);
+  unknown park ⇒ `404`. This is what lets the frontend drop its SSR seed-timeout guard.
+- **HTTP caching:** `public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400`
+  (Express weak ETag + 304 native), no auth variance → CDN-absorbed.
+- **On-change revalidation webhook:** after each calendar-warmup batch the backend fires
+  one batched `POST {REVALIDATE_URL} {tags:["best-days:<slug>", …]}` so the frontend
+  drops its day-long cache immediately. No-op unless `REVALIDATE_SECRET` is set (keeps
+  dev/test/CI from pinging production). ([service](../src/common/revalidation/revalidation.service.ts))
+- `byDayOfWeek` is populated best-effort from the 24 h `/stats` cache (read-only —
+  never triggers the slow 2-year aggregate); omitted when that cache is cold.
+
 ### Fixed/Changed — PCN intraday review fixes (serving, scorers, ops) (2026-07-02)
 
 Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-review.md)

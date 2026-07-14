@@ -26,6 +26,7 @@ import { WeatherWarningDto } from "./dto/weather-warning.dto";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { BestDaysService } from "./services/best-days.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
 import { ShowsService } from "../shows/shows.service";
@@ -48,6 +49,7 @@ import { OPEN_METEO_ATTRIBUTION } from "./dto/weather-attribution.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
 import { IntegratedCalendarResponse } from "./dto/integrated-calendar.dto";
+import { BestDaysResponse } from "./dto/best-days-calendar.dto";
 import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
@@ -92,6 +94,7 @@ export class ParksController {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly calendarService: CalendarService,
+    private readonly bestDaysService: BestDaysService,
     private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
@@ -515,6 +518,118 @@ export class ParksController {
       res.setHeader(
         "Cache-Control",
         `public, max-age=${cacheTTL}, s-maxage=${cacheTTL}`,
+      );
+    }
+
+    return response;
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/best-days
+   *
+   * Lean, precomputed best-days projection — the exact subset the frontend's
+   * best-days / crowd-FAQ / header-forecast blocks need (status, crowd level,
+   * holiday/vacation flags), served from a materialized Redis snapshot the
+   * daily forecast batch refreshes. NEVER triggers a lazy calendar/ML rebuild,
+   * so it is fast cold and warm (p99 < 300 ms) — which is what lets the
+   * frontend drop its SSR seed timeout guard.
+   *
+   * Window: rolling today → +90 days in the park's timezone (no params needed).
+   * Optional `from`/`to` (park timezone, capped at 90 days) slice the snapshot.
+   *
+   * @throws NotFoundException if park not found
+   * @throws BadRequestException if date format invalid or range > 90 days
+   */
+  @Get(":continent/:country/:city/:parkSlug/best-days")
+  @ApiOperation({
+    summary: "Get precomputed best-days projection (geo)",
+    description:
+      "Returns the lean best-days projection (status, crowd level, holiday/" +
+      "vacation flags per day + an optional weekday aggregate) for the rolling " +
+      "today → +90 day window in the park's timezone. Served from a materialized " +
+      "snapshot refreshed by the daily forecast batch — never a lazy ML compute. " +
+      "Cache: public, max-age=3600, stale-while-revalidate=86400.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "bruhl" })
+  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiQuery({
+    name: "from",
+    required: false,
+    description:
+      "Start date (YYYY-MM-DD) in park timezone. Defaults to today. " +
+      "Days outside the materialized today → +90d window are not returned.",
+    example: "2026-07-14",
+  })
+  @ApiQuery({
+    name: "to",
+    required: false,
+    description:
+      "End date (YYYY-MM-DD) in park timezone. Defaults to today + 90 days. " +
+      "Max range: 90 days.",
+    example: "2026-08-14",
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Best-days projection (empty days[] for parks without a snapshot)",
+    type: BestDaysResponse,
+  })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  @ApiResponse({ status: 400, description: "Invalid date range or format" })
+  async getBestDaysByGeographicPath(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Res({ passthrough: true }) res?: any,
+  ): Promise<BestDaysResponse> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    // Parse + validate the optional window (park timezone, capped at 90 days).
+    // Defaults (no params) resolve inside the service to today → +90d.
+    let fromStr: string | undefined;
+    let toStr: string | undefined;
+    if (from || to) {
+      const { parseDateRange, validateDateRange } =
+        await import("../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(from, to, {
+        timezone: park.timezone,
+        defaultFromDaysAgo: 0,
+        defaultToDaysAhead: 90,
+      });
+      validateDateRange(fromDate, toDate, 90);
+      fromStr = formatInParkTimezone(fromDate, park.timezone);
+      toStr = formatInParkTimezone(toDate, park.timezone);
+    }
+
+    const response = await this.bestDaysService.getBestDays(
+      park,
+      fromStr,
+      toStr,
+    );
+
+    // Long CDN cache with SWR: the snapshot is refreshed by the background
+    // batch (which fires an on-demand revalidation), so repeat traffic is
+    // absorbed by the CDN. Express emits a (weak) ETag + handles 304 natively.
+    if (res) {
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
       );
     }
 

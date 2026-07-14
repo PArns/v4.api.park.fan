@@ -57,6 +57,7 @@
 - [Full-DB Validation Checklist](docs/development/full-db-validation-checklist.md) - **2026-06-17**: post-deploy/staging checks for the P50/P90 + caching work — crowd-level calibration invariants, the new SQL (per-attraction & historical-stats typical-day-peak), cache invalidation, single-flight, quantile monotonicity. The dev/CI container has no DB, so these self-calibrating changes are verified against real parks here.
 
 ### 🖥️ Frontend
+- [Precomputed best-days endpoint (`/best-days`)](docs/frontend/best-days-endpoint.md) - Lean today→+90d projection (status/crowd/holiday flags + optional weekday aggregate) served from a materialized Redis snapshot the calendar warmup refreshes; p99 < 300 ms, CDN-cached, fires the on-change revalidation webhook.
 - [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.
 - [Ride P50/P90 stats (`typicalWaits`)](docs/frontend/ride-typical-waits.md) - The typical (P50) vs busy (P90) peak-wait stats on the attraction detail endpoint: shape, `displayable` gate, weekday/weekend + per-day breakdown, record peak.
 - [Severe-weather warnings (`weather.warnings`)](docs/frontend/weather-warnings.md) - The `WeatherWarningDto[]` on the park weather + nowcast (MeteoGate/DWD): shape, de/en localization, severity→colour, validity, banner rendering, EU-only coverage.

@@ -8,6 +8,7 @@ import { WeatherWarningsService } from "./weather-warnings.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
 import { ParkRepairService } from "./services/park-repair.service";
 import { ParkMergeService } from "./services/park-merge.service";
@@ -70,6 +71,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkIntegrationService,
     ParkEnrichmentService,
     CalendarService,
+    BestDaysService,
     ParkValidatorService,
     ParkRepairService,
     ParkMergeService,
@@ -82,6 +84,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     TypeOrmModule, // CRITICAL: Export TypeOrmModule so other modules can inject ParkRepository
     ParkEnrichmentService,
     CalendarService,
+    BestDaysService,
     ParkValidatorService,
     ParkRepairService,
     ParkMergeService,

@@ -49,6 +49,7 @@ import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays
 import { DiscoveryModule } from "../discovery/discovery.module";
 import { SearchModule } from "../search/search.module";
 import { RedisModule } from "../common/redis/redis.module";
+import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { StatsModule } from "../stats/stats.module";
 import { PopularityModule } from "../popularity/popularity.module";
 import { StatsProcessor } from "./processors/stats.processor";
@@ -196,6 +197,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     SearchModule,
     PopularityModule,
     RedisModule, // For cache warmup service
+    RevalidationModule, // Frontend on-demand revalidation (best-days webhook)
     GeoipModule,
   ],
   providers: [
