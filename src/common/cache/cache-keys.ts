@@ -57,6 +57,15 @@ export const CacheKeys = {
   calendarMonth: (parkId: string, ym: string, includeHourly: string): string =>
     `calendar:month:${parkId}:${ym}:${includeHourly}`,
 
+  /**
+   * Precomputed best-days snapshot (rolling today → +90d projection of the
+   * calendar). Materialized by the calendar warmup so the /best-days endpoint
+   * serves it with a single GET and never triggers a lazy ML rebuild. TTL is
+   * set > the warmup cadence so the snapshot survives between refreshes (and
+   * across deploys, since Redis persists). Written by BestDaysService.
+   */
+  bestDays: (parkId: string): string => `best-days:${parkId}`,
+
   /** Glob matching every schedule:* key of a park (parkId is the 3rd segment!). */
   scheduleParkPattern: (parkId: string): string => `schedule:*:${parkId}:*`,
 

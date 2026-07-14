@@ -15,6 +15,8 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { BestDaysService } from "../../parks/services/best-days.service";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
@@ -60,6 +62,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     private readonly parkIntegrationService: ParkIntegrationService,
     private readonly attractionIntegrationService: AttractionIntegrationService,
     private readonly calendarService: CalendarService,
+    private readonly bestDaysService: BestDaysService,
+    private readonly revalidationService: RevalidationService,
     private readonly discoveryService: DiscoveryService,
     private readonly searchService: SearchService,
     private readonly popularityService: PopularityService,
@@ -173,11 +177,13 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    *   month caches first, so the rebuild regenerates fresh predictions instead of just
    *   reading the still-warm cache. This is how the 12h background refresh actually
    *   refreshes the data (weather/model) while keeping users off the ~15s cold path.
+   * @returns the park slug when the best-days snapshot was materialized (for batched
+   *   frontend revalidation), or null on failure / when the calendar build was skipped.
    */
   private async warmupCalendarForPark(
     park: Park,
     force: boolean = false,
-  ): Promise<void> {
+  ): Promise<string | null> {
     try {
       const tz = park.timezone || "UTC";
       const todayStr = getCurrentDateInTimezone(tz);
@@ -256,9 +262,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       await Promise.all(
         monthKeys.map((k) => this.redis.expire(k, this.WARMUP_MONTH_TTL)),
       ).catch(() => undefined);
+
+      // Materialize the lean best-days snapshot (today → +90d) from the now-warm
+      // month caches — cheap (no extra ML), and it's what lets the /best-days
+      // endpoint serve a single Redis GET instead of the cold calendar path.
+      return this.bestDaysService.precomputeForPark(park);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.debug(`Calendar warmup skipped for ${park.slug}: ${msg}`);
+      return null;
     }
   }
 
@@ -296,6 +308,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // (slow-query log 2026-06-11). Serializing halves the peak IO pressure and
       // the pause lets queued user queries drain between parks; the only cost is
       // wall time on a 2×/day background job.
+      const revalidatedSlugs: string[] = [];
       const warmedCount = await this.processBatch(
         parkIds,
         1,
@@ -306,15 +319,31 @@ export class CacheWarmupService implements OnApplicationBootstrap {
             relations: ["influencingRegions"],
           });
           if (!park) return false;
-          await this.warmupCalendarForPark(park, true);
+          const slug = await this.warmupCalendarForPark(park, true);
+          if (slug) revalidatedSlugs.push(slug);
           return true;
         },
         2500,
       );
 
+      // One batched revalidation for every park whose best-days snapshot was just
+      // refreshed — the frontend drops its (day-long) best-days cache immediately
+      // instead of waiting out the TTL. No-op unless the webhook is configured.
+      if (revalidatedSlugs.length > 0) {
+        await this.revalidationService
+          .revalidateBestDays(revalidatedSlugs)
+          .catch((err) =>
+            this.logger.warn(
+              `Best-days revalidation failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            ),
+          );
+      }
+
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s`,
+        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s (best-days: ${revalidatedSlugs.length})`,
       );
       return warmedCount;
     } catch (error: unknown) {

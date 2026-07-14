@@ -44,15 +44,27 @@ export class ParkHistoricalStatsService {
     private readonly redis: Redis,
   ) {}
 
+  /**
+   * Redis key for a cached historical-stats payload. topN / minSampleDays
+   * change the payload, so they're part of the key (v2: occupancy-relative
+   * avgCrowdLevel + additive meta fields).
+   */
+  private statsCacheKey(
+    parkId: string,
+    years: number,
+    topN: number,
+    minSampleDays: number,
+  ): string {
+    return `park:historical-stats:v2:${parkId}:${years}:${topN}:${minSampleDays}`;
+  }
+
   async getParkHistoricalStats(
     park: Park,
     years: number,
     topN = 10,
     minSampleDays = DEFAULT_MIN_SAMPLE_DAYS,
   ): Promise<ParkHistoricalStatsDto> {
-    // v2: occupancy-relative avgCrowdLevel + additive meta fields. The topN /
-    // minSampleDays inputs change the payload, so they're part of the key.
-    const cacheKey = `park:historical-stats:v2:${park.id}:${years}:${topN}:${minSampleDays}`;
+    const cacheKey = this.statsCacheKey(park.id, years, topN, minSampleDays);
     const cached = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
     );
@@ -66,6 +78,28 @@ export class ParkHistoricalStatsService {
       this.CACHE_TTL,
     );
     return result;
+  }
+
+  /**
+   * Read-only accessor for the cached per-weekday aggregate, keyed like the
+   * default `/stats` request (years=2, topN=10, minSampleDays=30) that the
+   * endpoint + warmup populate.
+   *
+   * Returns `null` WITHOUT computing when the cache is cold — callers on a
+   * latency-sensitive background path (the best-days precompute) must never
+   * trigger the heavy 2-year percentile scan just to enrich an optional field.
+   */
+  async getCachedByDayOfWeek(park: Park): Promise<DayOfWeekStatDto[] | null> {
+    const cacheKey = this.statsCacheKey(
+      park.id,
+      2,
+      10,
+      DEFAULT_MIN_SAMPLE_DAYS,
+    );
+    const cached = safeJsonParse<ParkHistoricalStatsDto>(
+      await this.redis.get(cacheKey),
+    );
+    return cached?.byDayOfWeek ?? null;
   }
 
   private async compute(
