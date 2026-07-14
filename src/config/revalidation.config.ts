@@ -19,8 +19,9 @@ export function getRevalidateUrl(): string {
 }
 
 /**
- * Shared secret sent with every revalidation request (header
- * `x-revalidate-secret`). Empty ⇒ the webhook is disabled.
+ * Shared secret sent with every revalidation request as
+ * `Authorization: Bearer <secret>` (the scheme the frontend `/api/revalidate`
+ * expects). Empty ⇒ the webhook is disabled.
  */
 export function getRevalidateSecret(): string {
   return process.env.REVALIDATE_SECRET || "";

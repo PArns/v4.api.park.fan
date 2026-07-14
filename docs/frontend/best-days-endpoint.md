@@ -102,7 +102,7 @@ Config (see `.env.example`):
 | Env | Default | Notes |
 |-----|---------|-------|
 | `REVALIDATE_URL` | `https://park.fan/api/revalidate` | Frontend endpoint. |
-| `REVALIDATE_SECRET` | _(unset)_ | Sent as `x-revalidate-secret`. **Empty ⇒ webhook disabled** (dev/test/CI never ping production). |
+| `REVALIDATE_SECRET` | _(unset)_ | Sent as `Authorization: Bearer <secret>`. **Empty ⇒ webhook disabled** (dev/test/CI never ping production). |
 
 The webhook is best-effort — a failed POST is logged and never fails the warmup
 batch.

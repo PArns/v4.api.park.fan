@@ -6,8 +6,13 @@ import {
   isRevalidationEnabled,
 } from "../../config/revalidation.config";
 
-/** Max tags per POST so a full-fleet revalidation never sends a giant body. */
-const REVALIDATE_TAG_BATCH = 200;
+/**
+ * Max tags per POST. Capped at the frontend `/api/revalidate` limit
+ * (`MAX_ENTRIES = 50`) — it silently drops tags beyond that per request, so a
+ * larger batch would leave the overflow un-revalidated (~156 parks/warmup would
+ * otherwise lose ~106 tags). Keep in sync with the frontend limit.
+ */
+const REVALIDATE_TAG_BATCH = 50;
 
 /**
  * On-demand revalidation webhook client.
@@ -52,7 +57,10 @@ export class RevalidationService {
           url,
           { tags: batch },
           {
-            headers: { "x-revalidate-secret": secret },
+            // Frontend `/api/revalidate` authenticates via a Bearer token;
+            // any other scheme is rejected with 401 (and, since this client is
+            // best-effort, would silently no-op forever).
+            headers: { Authorization: `Bearer ${secret}` },
             timeout: 10_000,
           },
         );
