@@ -195,7 +195,6 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         fromM += 12;
         fromY -= 1;
       }
-      const fromStr = `${fromY}-${String(fromM).padStart(2, "0")}-01`;
       // To: last day of (current + 3 months)
       let endM = m + 3;
       let endY = y;
@@ -203,11 +202,6 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         endM -= 12;
         endY += 1;
       }
-      const lastDay = new Date(endY, endM, 0).getDate();
-      const toStr = `${endY}-${String(endM).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      const fromDate = new Date(`${fromStr}T12:00:00.000Z`);
-      const toDate = new Date(`${toStr}T12:00:00.000Z`);
-
       // The "none" month-cache keys for every month in [-1, +3] — the variant the
       // FE calendar/best-days widget reads (the proxy forwards includeHourly=none).
       const monthKeys: string[] = [];
@@ -255,12 +249,32 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // never hits) skipped precompute for EVERY park → all /best-days snapshots empty.
       // Logged at warn (not debug) so the underlying grid-build failure stays visible.
       try {
-        await this.calendarService.buildCalendarResponse(
-          park,
-          fromDate,
-          toDate,
-          "none",
-        );
+        // Build the grid MONTH BY MONTH, not as one −1..+3-month call. That full 5-month
+        // window's parallel per-(ride,day) CTE fan-out over queue_data exhausts the DB
+        // connection pool → "timeout exceeded when trying to connect" (the ≤90-day / 3-month
+        // read path never hits it). One month at a time keeps the concurrent-query count
+        // small and, being sequential, lets the pool drain between months; buildCalendar
+        // Response caches each full month, so the end state is identical. The first month
+        // pays the cold daily-ML rebuild (force-evicted above), the rest reuse the warm cache.
+        for (
+          let cy = fromY, cm = fromM;
+          cy < endY || (cy === endY && cm <= endM);
+        ) {
+          const first = `${cy}-${String(cm).padStart(2, "0")}-01`;
+          const lastDay = new Date(cy, cm, 0).getDate(); // cm is 1-based → last day of month cm
+          const last = `${cy}-${String(cm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+          await this.calendarService.buildCalendarResponse(
+            park,
+            new Date(`${first}T12:00:00.000Z`),
+            new Date(`${last}T12:00:00.000Z`),
+            "none",
+          );
+          cm += 1;
+          if (cm > 12) {
+            cm = 1;
+            cy += 1;
+          }
+        }
 
         // Keep the freshly-warmed month caches alive until the next 12h warmup.
         // buildCalendarResponse stores them at CALENDAR_CACHE_TTL (15–30 min), which
