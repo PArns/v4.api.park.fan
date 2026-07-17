@@ -293,20 +293,30 @@ def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.D
     m = fan.merge(actuals, on=["unique_id", "target_slot"], how="inner")   # truth @ target
     if m.empty:
         return pd.DataFrame()
-    # Persistence baseline: the realised wait L hours before the target (no-change nowcast).
+    # Persistence BASELINE model: the EXACT realised wait L hours before the target (the
+    # honest no-change nowcast). ~60% present — a gap wherever no ride was observed at that
+    # precise origin slot. Kept as-is; it's the reference the blend is measured against.
+    m["origin_slot"] = m["target_slot"] - pd.to_timedelta(m["target_lead_h"], unit="h")
     persist_src = actuals.rename(
-        columns={"target_slot": "persist_slot", "actual": "persist"})
-    m["persist_slot"] = m["target_slot"] - pd.to_timedelta(m["target_lead_h"], unit="h")
-    m = m.merge(persist_src, on=["unique_id", "persist_slot"], how="left")
-    # Shadow persistence-blend (§7.7 follow-up): blend the served PCN toward the origin's
-    # realised wait (= persist), decaying to pure PCN by the horizon. Since origin =
-    # target − lead, `persist` IS the value serving would blend with, so this measures the
-    # exact served blend. NaN where persist is missing (dropped for this model downstream).
+        columns={"target_slot": "origin_slot", "actual": "persist"})
+    m = m.merge(persist_src, on=["unique_id", "origin_slot"], how="left")
+    # Forward-filled SERVING anchor for the blend: the last observed wait AT OR BEFORE the
+    # origin slot (merge_asof backward). This — not the exact actual@origin — is what serving
+    # blends with (its live wait_ffill is present once a ride has ANY prior obs), so pcn_blend
+    # now measures the ~100%-coverage SERVED blend, not the 60%-coverage scorer artifact that
+    # capped the earlier §7.7 read. NaN only before a ride's first-ever observation.
+    anchor_src = actuals.rename(
+        columns={"target_slot": "obs_slot", "actual": "ffill_anchor"}
+    ).sort_values("obs_slot")
+    m = pd.merge_asof(
+        m.sort_values("origin_slot"), anchor_src,
+        left_on="origin_slot", right_on="obs_slot", by="unique_id",
+        direction="backward")
+    # Shadow persistence-blend (§7.7): blend the served PCN toward the ffill anchor, piecewise
+    # (full weight ≤ full_h, decaying to pure PCN by horizon). Fall back to pure PCN only when
+    # even the ffill anchor is missing (pre-first-obs) → same population as pcn (clean A/B).
     blend = persistence_blend(
-        m["pcn"].to_numpy(), m["persist"].to_numpy(), m["target_lead_h"].to_numpy())
-    # Where the scorer has no persist anchor (a data gap in actuals@origin), fall back to
-    # pure PCN — so pcn_blend is scored on the SAME population as pcn (a clean A/B, not a
-    # persist-present subset), and it mirrors serving, which always has the live anchor.
+        m["pcn"].to_numpy(), m["ffill_anchor"].to_numpy(), m["target_lead_h"].to_numpy())
     m["pcn_blend"] = np.where(np.isnan(blend), m["pcn"].to_numpy(), blend)
     return m[["target_slot", "lead_bucket", "actual", "pcn", "persist", "pcn_blend"]]
 
