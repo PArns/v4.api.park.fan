@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
+import { SingleFlight } from "../../common/utils/single-flight.util";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -46,6 +47,9 @@ const SNAPSHOT_TTL = 26 * 60 * 60;
 @Injectable()
 export class BestDaysService {
   private readonly logger = new Logger(BestDaysService.name);
+  // Collapses a cache-miss stampede: many /best-days reads for the same park within the
+  // on-demand rebuild window trigger ONE precompute, not N (the build is ~2s cold).
+  private readonly rebuildFlight = new SingleFlight();
 
   constructor(
     private readonly calendarService: CalendarService,
@@ -76,12 +80,28 @@ export class BestDaysService {
     // "today + 90d" risks a boundary off-by-one silently dropping the last day.
     const windowTo = toStr;
 
-    const snapshot = safeJsonParse<BestDaysResponse>(
+    let snapshot = safeJsonParse<BestDaysResponse>(
       await this.redis.get(CacheKeys.bestDays(park.id)),
     );
 
     if (!snapshot) {
-      // No snapshot yet — degrade gracefully (200 + empty days).
+      // No snapshot — the 12h warmup hasn't materialized it yet (or it lapsed / the
+      // warmup is failing). Rebuild ON-DEMAND (single-flighted) rather than serving
+      // empty: an empty 200 gets CDN-cached for an hour AND leaves "Prognose heute"
+      // blank, so this self-heals independently of the background warmup. The rebuild
+      // is the same working 90-day build precomputeForPark does; it stores the snapshot.
+      snapshot = safeJsonParse<BestDaysResponse>(
+        await this.rebuildFlight
+          .run(park.id, async () => {
+            await this.precomputeForPark(park);
+            return this.redis.get(CacheKeys.bestDays(park.id));
+          })
+          .catch(() => null),
+      );
+    }
+
+    if (!snapshot) {
+      // Rebuild failed too — degrade gracefully (200 + empty days).
       return {
         meta: {
           slug: park.slug,

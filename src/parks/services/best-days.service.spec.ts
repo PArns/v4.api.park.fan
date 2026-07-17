@@ -77,16 +77,51 @@ describe("BestDaysService", () => {
   });
 
   describe("getBestDays", () => {
-    it("degrades to an empty payload (no rebuild) on a cache miss", async () => {
-      redis.get.mockResolvedValue(null);
+    it("rebuilds on-demand on a cache miss and serves the materialized snapshot", async () => {
+      // Map-backed redis so the precompute's set is visible to getBestDays' re-read.
+      const store = new Map<string, string>();
+      redis.get.mockImplementation((k: string) =>
+        Promise.resolve(store.get(k) ?? null),
+      );
+      redis.set.mockImplementation((k: string, v: string) => {
+        store.set(k, v);
+        return Promise.resolve("OK");
+      });
+      calendarService.buildCalendarResponse.mockResolvedValue({
+        meta: { hasOperatingSchedule: true },
+        days: [
+          {
+            date: "2099-07-14",
+            status: "OPERATING",
+            crowdLevel: "high",
+            predictedCrowdLevel: "moderate",
+            isHoliday: false,
+            isSchoolVacation: false,
+            isBridgeDay: false,
+          },
+        ],
+      });
+
+      const res = await service.getBestDays(park);
+
+      // Miss ⇒ rebuild (no longer serves an empty payload the CDN would cache).
+      expect(calendarService.buildCalendarResponse).toHaveBeenCalled();
+      expect(res.days).toHaveLength(1);
+      expect(res.days[0].predictedCrowdLevel).toBe("moderate");
+    });
+
+    it("still degrades to empty days when the on-demand rebuild yields nothing", async () => {
+      redis.get.mockResolvedValue(null); // rebuild can't populate → stays empty
+      calendarService.buildCalendarResponse.mockRejectedValue(
+        new Error("build boom"),
+      );
 
       const res = await service.getBestDays(park);
 
       expect(res.days).toEqual([]);
       expect(res.meta.slug).toBe("phantasialand");
-      expect(res.meta.hasOperatingSchedule).toBe(false);
-      // Critical: never touches the calendar builder.
-      expect(calendarService.buildCalendarResponse).not.toHaveBeenCalled();
+      // The rebuild WAS attempted (precompute → builder), it just produced nothing.
+      expect(calendarService.buildCalendarResponse).toHaveBeenCalled();
     });
 
     it("reads the snapshot and slices it to the requested window", async () => {
