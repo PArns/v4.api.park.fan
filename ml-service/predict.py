@@ -798,7 +798,7 @@ def create_prediction_features(
             except Exception:
                 influencing_regions = []
 
-        park_influences_map[park_id] = influencing_regions[:3]  # Max 3
+        park_influences_map[park_id] = influencing_regions  # ALL (was [:3], dropped NL/BE etc.)
 
     # Add local date column for holiday matching
     df["local_date"] = df["local_timestamp"].dt.date
@@ -836,6 +836,16 @@ def create_prediction_features(
         for _, row in holidays_national.iterrows():
             holiday_type_lookup[row["lookup_key"]] = row["holiday_type"]
 
+        # Country-wide "any region" sets for null-region influencing entries (e.g. BE, whose
+        # school breaks are regional not nationwide). Mirrors features.py.
+        country_any_school = set()
+        country_any_public = set()
+        for _, row in holidays_df.iterrows():
+            if row["holiday_type"] == "school":
+                country_any_school.add((row["country"], row["date_only"]))
+            elif row["holiday_type"] in ("public", "bank", "bridge"):
+                country_any_public.add((row["country"], row["date_only"]))
+
     # Initialize holiday columns (vectorized)
     df["is_holiday_primary"] = 0
     df["is_school_holiday_primary"] = 0
@@ -844,6 +854,7 @@ def create_prediction_features(
     df["is_holiday_neighbor_3"] = 0
     df["holiday_count_total"] = 0
     df["school_holiday_count_total"] = 0
+    df["neighbor_school_holiday_count"] = 0
     df["is_school_holiday_any"] = 0
 
     if not holidays_df.empty:
@@ -914,22 +925,43 @@ def create_prediction_features(
         df["is_holiday_neighbor_2"] = (df["neighbor_2_type"] == "public").astype(int)
         df["is_holiday_neighbor_3"] = (df["neighbor_3_type"] == "public").astype(int)
 
-        # Calculate totals (vectorized)
-        df["holiday_count_total"] = (
-            df["is_holiday_primary"]
-            + df["is_holiday_neighbor_1"]
-            + df["is_holiday_neighbor_2"]
-            + df["is_holiday_neighbor_3"]
-        )
+        # Full aggregate over ALL influencing regions (fixes the 3-slot cap; null-region entry
+        # → country-wide 'any region' check). Mirrors features.py check_neighbor_holidays.
+        def _neighbor_counts(row):
+            date_str = row["date_str"]
+            local_date = row["local_date"]
+            school = 0
+            public = 0
+            seen = set()
+            for inf in park_influences_map.get(row["parkId"], []):
+                if not isinstance(inf, dict):
+                    continue
+                country = inf.get("countryCode", "")
+                region = normalize_region_code(inf.get("regionCode", "") or None) or ""
+                key = (country, region)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if region:
+                    t = holiday_type_lookup.get(
+                        f"{country}|{region}|{date_str}"
+                    ) or holiday_type_lookup.get(f"{country}||{date_str}")
+                    school += int(t == "school")
+                    public += int(t in ("public", "bank", "bridge"))
+                else:
+                    school += int((country, local_date) in country_any_school)
+                    public += int((country, local_date) in country_any_public)
+            return school, public
 
+        _counts = df.apply(_neighbor_counts, axis=1)
+        df["neighbor_school_holiday_count"] = _counts.apply(lambda x: x[0])
+        _neighbor_public = _counts.apply(lambda x: x[1])
+
+        # Totals — full influencing-region aggregate (not just the 3 legacy slots).
+        df["holiday_count_total"] = df["is_holiday_primary"] + _neighbor_public
         df["school_holiday_count_total"] = (
-            (df["primary_type"] == "school").astype(int)
-            + (df["neighbor_1_type"] == "school").astype(int)
-            + (df["neighbor_2_type"] == "school").astype(int)
-            + (df["neighbor_3_type"] == "school").astype(int)
+            df["is_school_holiday_primary"] + df["neighbor_school_holiday_count"]
         )
-
-        # "Any School Holiday" Logic (vectorized)
         df["is_school_holiday_any"] = (df["school_holiday_count_total"] > 0).astype(int)
 
         # Cleanup temporary columns

@@ -471,6 +471,11 @@ def add_holiday_features(
 
     holiday_map_regional = {}
     holiday_map_national = {}
+    # Country-wide "any region" sets: a country-level (null-region) influencing entry — e.g.
+    # Belgium, whose school breaks are REGIONAL (BE-DE/FR/NL), not nationwide — matches if ANY
+    # region of that country has the holiday that day. The national map alone misses it.
+    country_any_school = set()
+    country_any_public = set()
 
     if not holidays_df.empty:
         for _, row in holidays_df.iterrows():
@@ -486,85 +491,78 @@ def add_holiday_features(
                 # Normalize region code for consistent matching (handles both "DE-NW" and "NW")
                 normalized_region = normalize_region_code(h_region)
                 holiday_map_regional[(h_country, normalized_region, h_date)] = h_type
+            if h_type == "school":
+                country_any_school.add((h_country, h_date))
+            elif h_type in ("public", "bank", "bridge"):
+                country_any_public.add((h_country, h_date))
 
     def check_neighbor_holidays(row):
-        """Check holidays for influencing regions"""
-        neighbor_flags = [0, 0, 0]
-        neighbor_school_flags = [0, 0, 0]
-
+        """Aggregate holiday signals across ALL influencing regions. Fixes the old
+        raw_regions[:3] cap that silently dropped border parks' most important neighbours —
+        e.g. Phantasialand's NL-LI/NL-GE/BE sat in slots 4-6, so the Dutch/Belgian summer
+        break never counted. A country-level (null-region) entry — e.g. Belgium, whose school
+        breaks are REGIONAL not nationwide — falls back to a country-wide 'any region' check.
+        Returns (public_count, school_count, first-3 public flags for the legacy per-slot cols)."""
         date = row["date_local"]
-        if pd.isna(date):
-            return neighbor_flags, neighbor_school_flags
-
         raw_regions = row["influencingRegions"]
-        if not isinstance(raw_regions, list) or len(raw_regions) == 0:
-            return neighbor_flags, neighbor_school_flags
+        if pd.isna(date) or not isinstance(raw_regions, list) or not raw_regions:
+            return 0, 0, [0, 0, 0]
 
-        for i, region_def in enumerate(raw_regions[:3]):
-            try:
-                if not isinstance(region_def, dict):
-                    continue
+        public_count = 0
+        school_count = 0
+        slot_flags = [0, 0, 0]
+        seen = set()  # dedupe overlapping influencing regions
+        for i, region_def in enumerate(raw_regions):
+            if not isinstance(region_def, dict):
+                continue
+            n_country = region_def.get("countryCode")
+            n_region = region_def.get("regionCode")
+            norm = normalize_region_code(n_region) if n_region else None
+            key = (n_country, norm)
+            if key in seen:
+                continue
+            seen.add(key)
+            if norm:
+                n_type = holiday_map_regional.get(
+                    (n_country, norm, date)
+                ) or holiday_map_national.get((n_country, date))
+                is_school = int(n_type == "school")
+                is_public = int(n_type in ("public", "bank", "bridge"))
+            else:
+                # country-wide (null region): ANY region of the country on holiday that day
+                is_school = int((n_country, date) in country_any_school)
+                is_public = int((n_country, date) in country_any_public)
+            school_count += is_school
+            public_count += is_public
+            if i < 3:
+                slot_flags[i] = is_public
+        return public_count, school_count, slot_flags
 
-                n_country = region_def.get("countryCode")
-                n_region = region_def.get("regionCode")
-
-                n_type = None
-                # Check regional first (normalize region code for consistent matching)
-                if n_region:
-                    normalized_region = normalize_region_code(n_region)
-                    n_type = holiday_map_regional.get(
-                        (n_country, normalized_region, date)
-                    )
-
-                # Check national if no regional match
-                if not n_type:
-                    n_type = holiday_map_national.get((n_country, date))
-
-                neighbor_flags[i] = int(n_type in ["public", "bank", "bridge"])
-                neighbor_school_flags[i] = int(n_type == "school")
-            except Exception:
-                pass
-
-        return neighbor_flags, neighbor_school_flags
-
-    # Apply neighbor check (only processes influencing regions, not full row)
+    # Apply neighbor check (aggregate over ALL influencing regions, not just the first 3)
     neighbor_results = df.apply(check_neighbor_holidays, axis=1)
-    df["neighbor_flags"] = neighbor_results.apply(lambda x: x[0])
-    df["neighbor_school_flags"] = neighbor_results.apply(lambda x: x[1])
+    df["_neighbor_public_count"] = neighbor_results.apply(lambda x: x[0])
+    df["neighbor_school_holiday_count"] = neighbor_results.apply(lambda x: x[1])
+    _slot = neighbor_results.apply(lambda x: x[2])
+    df["is_holiday_neighbor_1"] = _slot.apply(lambda x: x[0])
+    df["is_holiday_neighbor_2"] = _slot.apply(lambda x: x[1])
+    df["is_holiday_neighbor_3"] = _slot.apply(lambda x: x[2])
 
-    # Assign neighbor features (vectorized)
-    df["is_holiday_neighbor_1"] = df["neighbor_flags"].apply(
-        lambda x: x[0] if len(x) > 0 else 0
-    )
-    df["is_holiday_neighbor_2"] = df["neighbor_flags"].apply(
-        lambda x: x[1] if len(x) > 1 else 0
-    )
-    df["is_holiday_neighbor_3"] = df["neighbor_flags"].apply(
-        lambda x: x[2] if len(x) > 2 else 0
-    )
-
-    # Totals (vectorized)
+    # Totals — now the FULL influencing-region aggregate, not just the first 3 slots.
     df["holiday_count_total"] = (
-        df["is_holiday_primary"]
-        + df["is_holiday_neighbor_1"]
-        + df["is_holiday_neighbor_2"]
-        + df["is_holiday_neighbor_3"]
+        df["is_holiday_primary"] + df["_neighbor_public_count"]
     )
-
-    df["school_holiday_count_total"] = df["is_school_holiday_primary"] + df[
-        "neighbor_school_flags"
-    ].apply(lambda x: sum(x) if isinstance(x, list) else 0)
-
+    df["school_holiday_count_total"] = (
+        df["is_school_holiday_primary"] + df["neighbor_school_holiday_count"]
+    )
     df["is_school_holiday_any"] = (
         (df["is_school_holiday_primary"] == 1)
-        | (df["school_holiday_count_total"] > df["is_school_holiday_primary"])
+        | (df["neighbor_school_holiday_count"] > 0)
     ).astype(int)
 
     # Clean up temporary columns
     df = df.drop(
         columns=[
-            "neighbor_flags",
-            "neighbor_school_flags",
+            "_neighbor_public_count",
             "primary_holiday_type_regional",
             "primary_holiday_type_national",
             "primary_holiday_type",
@@ -2153,6 +2151,7 @@ def get_feature_columns() -> List[str]:
         "is_holiday_neighbor_3",  # Border parks (Europa-Park → France, etc.)
         "holiday_count_total",
         "school_holiday_count_total",
+        "neighbor_school_holiday_count",  # school breaks across ALL influencing regions (cross-border driver)
         "is_school_holiday_any",  # Consolidated school holiday signal (matches inference)
         "is_bridge_day",  # Extended weekends
         "days_until_next_holiday",  # Days until arrival signal
