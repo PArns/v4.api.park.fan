@@ -247,29 +247,41 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // The month-cache key is `calendar:month:{parkId}:{ym}:{includeHourly}`, so warming
       // "today+tomorrow" populated a key the FE never reads → every real calendar request
       // missed the warmed cache and rebuilt from cold (incl. the ~15s cold daily ML call).
-      await this.calendarService.buildCalendarResponse(
-        park,
-        fromDate,
-        toDate,
-        "none",
-      );
+      //
+      // BEST-EFFORT + ISOLATED: this warms the −1..+3-month calendar GRID (a perf nicety).
+      // It must NEVER block the best-days precompute below — that (its own 90-day build)
+      // is what the user-facing "Prognose heute" reads. Until 2026-07-17 both lived in one
+      // try, so a grid-build throw (the ~150-day window trips a limit the ≤90-day read path
+      // never hits) skipped precompute for EVERY park → all /best-days snapshots empty.
+      // Logged at warn (not debug) so the underlying grid-build failure stays visible.
+      try {
+        await this.calendarService.buildCalendarResponse(
+          park,
+          fromDate,
+          toDate,
+          "none",
+        );
 
-      // Keep the freshly-warmed month caches alive until the next 12h warmup.
-      // buildCalendarResponse stores them at CALENDAR_CACHE_TTL (15–30 min), which
-      // would expire ~11.5h before the next warmup and leave the best-days widget's
-      // far month (current+2) cold for almost the whole cycle. expire() is a no-op
-      // for any month key that wasn't (re)built, so this never resurrects nothing.
-      await Promise.all(
-        monthKeys.map((k) => this.redis.expire(k, this.WARMUP_MONTH_TTL)),
-      ).catch(() => undefined);
+        // Keep the freshly-warmed month caches alive until the next 12h warmup.
+        // buildCalendarResponse stores them at CALENDAR_CACHE_TTL (15–30 min), which
+        // would expire ~11.5h before the next warmup and leave the best-days widget's
+        // far month (current+2) cold for almost the whole cycle. expire() is a no-op
+        // for any month key that wasn't (re)built, so this never resurrects nothing.
+        await Promise.all(
+          monthKeys.map((k) => this.redis.expire(k, this.WARMUP_MONTH_TTL)),
+        ).catch(() => undefined);
+      } catch (gridErr) {
+        const gm = gridErr instanceof Error ? gridErr.message : String(gridErr);
+        this.logger.warn(`Calendar grid warm failed for ${park.slug}: ${gm}`);
+      }
 
-      // Materialize the lean best-days snapshot (today → +90d) from the now-warm
-      // month caches — cheap (no extra ML), and it's what lets the /best-days
-      // endpoint serve a single Redis GET instead of the cold calendar path.
+      // Materialize the lean best-days snapshot (today → +90d) — INDEPENDENT of the grid
+      // warm above (does its own 90-day build), so it runs even when the grid build throws.
+      // This is what lets /best-days serve a single Redis GET instead of the cold path.
       return this.bestDaysService.precomputeForPark(park);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.debug(`Calendar warmup skipped for ${park.slug}: ${msg}`);
+      this.logger.warn(`Calendar warmup skipped for ${park.slug}: ${msg}`);
       return null;
     }
   }
