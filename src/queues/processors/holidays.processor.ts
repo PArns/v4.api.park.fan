@@ -150,6 +150,20 @@ export class HolidaysProcessor {
               `Failed to fetch school holidays for ${isoCode}: ${error}`,
             );
           }
+
+          // 2b. Fill the SUMMER gap for countries that publish the upcoming break
+          // only as single-day markers (IT/ES/IE): project last year's range
+          // forward. No-op for range-based countries (DE/NL/FR/…).
+          try {
+            totalHolidaysSaved +=
+              await this.holidaysService.synthesizeProjectedSummerHolidays(
+                isoCode,
+              );
+          } catch (error) {
+            this.logger.warn(
+              `Summer-holiday synthesis failed for ${isoCode}: ${error}`,
+            );
+          }
         } catch (error) {
           this.logger.error(
             `Failed to fetch holidays for ${isoCode}: ${error}`,
