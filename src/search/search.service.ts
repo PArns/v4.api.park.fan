@@ -1274,11 +1274,8 @@ export class SearchService implements OnModuleInit {
         resort: attraction.park?.destination?.name || null,
         status:
           (status as
-            | "OPERATING"
-            | "CLOSED"
-            | "DOWN"
-            | "REFURBISHMENT"
-            | null) || "CLOSED",
+            "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null) ||
+          "CLOSED",
         load,
         waitTime:
           waitTime !== null && waitTime !== undefined
