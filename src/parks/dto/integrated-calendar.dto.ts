@@ -56,8 +56,41 @@ export class WeatherSummary {
   @ApiProperty()
   tempMax: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      "Total precipitation for the day, in mm (legacy name; NOT a percentage).",
+  })
   rainChance: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Total precipitation for the day, in mm.",
+  })
+  precipitationMm?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Total snowfall for the day, in cm.",
+  })
+  snowMm?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Maximum wind speed for the day, in km/h.",
+  })
+  windMax?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Relative humidity (%), when available (live/today).",
+  })
+  humidity?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Apparent ('feels like') temperature, when available (today).",
+  })
+  apparentTemp?: number;
 }
 
 /**
@@ -144,17 +177,26 @@ export class HeadlinerWaitForecast {
  */
 export class HeadlinerForecast {
   @ApiProperty({
-    description: "Average expected wait across the park's headliners (minutes)",
-    example: 38,
+    description:
+      "Average wait across the park's headliners (minutes, rounded to 5).",
+    example: 40,
   })
   avgWait: number;
 
   @ApiProperty({
     description:
-      "Top headliner rides for this day, sorted by expected wait desc",
+      "Top headliner rides for this day, sorted by wait desc (minutes, rounded to 5).",
     type: () => [HeadlinerWaitForecast],
   })
   rides: HeadlinerWaitForecast[];
+
+  @ApiProperty({
+    required: false,
+    description:
+      "true = actual recorded averages for a PAST day; " +
+      "false/absent = ML forecast for today/future.",
+  })
+  actual?: boolean;
 }
 
 /**

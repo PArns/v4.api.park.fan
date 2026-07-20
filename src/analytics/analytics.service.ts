@@ -4777,6 +4777,69 @@ export class AnalyticsService {
   /**
    * Get full headliner entities for a park.
    */
+  /**
+   * Actual recorded per-attraction daily average waits over a date range
+   * (park timezone), for a given set of attractions (typically headliners).
+   *
+   * Powers the calendar detail panel's "average wait" figures on PAST days —
+   * the historical counterpart to the ML forecast shown on today/future days.
+   * One grouped query (STANDBY / OPERATING / plausible-wait filters mirror the
+   * headliner + baseline queries), scoped to the attraction set and the range.
+   *
+   * @returns Map<dateStr(YYYY-MM-DD), Array<{ attractionId, avg }>>
+   */
+  async getHeadlinerDailyAverages(
+    attractionIds: string[],
+    fromStr: string,
+    toStr: string,
+    timezone: string,
+  ): Promise<Map<string, { attractionId: string; avg: number }[]>> {
+    const result = new Map<string, { attractionId: string; avg: number }[]>();
+    if (attractionIds.length === 0) return result;
+
+    // [from, toExclusive) in UTC, derived from the park-timezone day bounds.
+    const from = fromZonedTime(`${fromStr}T00:00:00`, timezone);
+    const nextDay = new Date(`${toStr}T00:00:00Z`);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    const toExclusive = fromZonedTime(
+      `${nextDay.toISOString().slice(0, 10)}T00:00:00`,
+      timezone,
+    );
+
+    const rows: { attraction_id: string; d: string; avg_wait: string }[] =
+      await this.queueDataRepository.query(
+        `
+        SELECT qd."attractionId" AS attraction_id,
+               TO_CHAR(DATE(qd.timestamp AT TIME ZONE $2), 'YYYY-MM-DD') AS d,
+               AVG(qd."waitTime") AS avg_wait
+        FROM queue_data qd
+        WHERE qd."attractionId" = ANY($1::uuid[])
+          AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING'
+          AND qd."waitTime" >= 10
+          AND qd."waitTime" < 380
+          AND qd.timestamp >= $3
+          AND qd.timestamp < $4
+        GROUP BY qd."attractionId", DATE(qd.timestamp AT TIME ZONE $2)
+      `,
+        [
+          attractionIds,
+          timezone,
+          from.toISOString(),
+          toExclusive.toISOString(),
+        ],
+      );
+
+    for (const r of rows) {
+      const avg = parseFloat(r.avg_wait);
+      if (!Number.isFinite(avg)) continue;
+      const list = result.get(r.d);
+      if (list) list.push({ attractionId: r.attraction_id, avg });
+      else result.set(r.d, [{ attractionId: r.attraction_id, avg }]);
+    }
+    return result;
+  }
+
   async getHeadlinerAttractions(
     parkId: string,
   ): Promise<HeadlinerAttraction[]> {

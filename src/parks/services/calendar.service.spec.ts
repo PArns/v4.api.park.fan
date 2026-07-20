@@ -292,6 +292,64 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
       const result = call([], new Set<string>(), new Map());
       expect(result.size).toBe(0);
     });
+
+    it("rounds waits and the average to the nearest 5 minutes", () => {
+      const predictions = [
+        {
+          attractionId: "a",
+          predictedTime: "2026-06-13T10:00:00Z",
+          predictedWaitTime: 63,
+        },
+        {
+          attractionId: "b",
+          predictedTime: "2026-06-13T10:00:00Z",
+          predictedWaitTime: 47,
+        },
+      ];
+      const names = new Map([
+        ["a", "A"],
+        ["b", "B"],
+      ]);
+      const f = call(predictions, new Set(["a", "b"]), names).get("2026-06-13");
+      expect(f.rides.map((r: { waitTime: number }) => r.waitTime)).toEqual([
+        65, 45,
+      ]); // 63→65, 47→45
+      expect(f.avgWait).toBe(55); // mean 55 → 55
+    });
+  });
+
+  describe("buildHistoricalHeadlinerForecasts", () => {
+    it("builds actual (round-5) averages from recorded daily data", () => {
+      const daily = new Map([
+        [
+          "2026-06-10",
+          [
+            { attractionId: "a", avg: 52 },
+            { attractionId: "b", avg: 38 },
+          ],
+        ],
+      ]);
+      const names = new Map([
+        ["a", "Taron"],
+        ["b", "Chiapas"],
+      ]);
+      const out = (service as any).buildHistoricalHeadlinerForecasts(
+        daily,
+        names,
+      );
+      const f = out.get("2026-06-10");
+      expect(f.actual).toBe(true);
+      expect(
+        f.rides.map((r: { name: string; waitTime: number }) => [
+          r.name,
+          r.waitTime,
+        ]),
+      ).toEqual([
+        ["Taron", 50], // 52→50
+        ["Chiapas", 40], // 38→40
+      ]);
+      expect(f.avgWait).toBe(45); // mean 45 → 45
+    });
   });
 
   describe("neighborHolidayPriority", () => {
@@ -324,8 +382,9 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
     });
   });
 
-  describe("rankNeighborHolidays", () => {
-    const call = (raw: unknown[]) => (service as any).rankNeighborHolidays(raw);
+  describe("selectNeighborHolidays", () => {
+    const call = (raw: unknown[], parkCountry = "DE") =>
+      (service as any).selectNeighborHolidays(raw, parkCountry);
 
     it("dedupes by region+type keeping the strongest priority, sorts by priority", () => {
       const raw = [
@@ -361,14 +420,76 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
       expect(ranked[1].priority).toBe(2); // strongest kept, not the 3
     });
 
-    it("caps the list at 6 entries", () => {
-      const raw = Array.from({ length: 10 }, (_, i) => ({
+    it("caps DOMESTIC regions at NEIGHBOR_SAME_COUNTRY_MAX (3)", () => {
+      const raw = Array.from({ length: 8 }, (_, i) => ({
         name: `H${i}`,
         source: { countryCode: "DE", regionCode: `R${i}` },
         holidayType: "school",
-        priority: 1,
+        priority: i + 1,
       }));
-      expect(call(raw)).toHaveLength(6);
+      const out = call(raw, "DE");
+      expect(out).toHaveLength(3); // only the top-3 domestic states
+      expect(out.map((n: { name: string }) => n.name)).toEqual([
+        "H0",
+        "H1",
+        "H2",
+      ]);
+    });
+
+    it("ALWAYS surfaces foreign neighbouring countries even at low priority", () => {
+      const raw = [
+        // 3 domestic (fill the domestic quota) at the TOP of the ranking
+        {
+          name: "d1",
+          source: { countryCode: "DE", regionCode: "RP" },
+          holidayType: "school",
+          priority: 1,
+        },
+        {
+          name: "d2",
+          source: { countryCode: "DE", regionCode: "HE" },
+          holidayType: "school",
+          priority: 2,
+        },
+        {
+          name: "d3",
+          source: { countryCode: "DE", regionCode: "NI" },
+          holidayType: "school",
+          priority: 3,
+        },
+        // foreign, ranked BELOW the domestic quota — must still appear
+        {
+          name: "nl1",
+          source: { countryCode: "NL", regionCode: "LI" },
+          holidayType: "school",
+          priority: 4,
+        },
+        {
+          name: "nl2",
+          source: { countryCode: "NL", regionCode: "GE" },
+          holidayType: "school",
+          priority: 5,
+        },
+        {
+          name: "be",
+          source: { countryCode: "BE", regionCode: null },
+          holidayType: "school",
+          priority: 6,
+        },
+      ];
+      const out = call(raw, "DE");
+      const countries = out.map(
+        (n: { source: { countryCode: string } }) => n.source.countryCode,
+      );
+      expect(countries).toContain("NL");
+      expect(countries).toContain("BE");
+      // both NL provinces survive (frontend groups them under one country)
+      expect(
+        out.filter(
+          (n: { source: { countryCode: string } }) =>
+            n.source.countryCode === "NL",
+        ),
+      ).toHaveLength(2);
     });
   });
 });
