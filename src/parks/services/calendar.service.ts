@@ -15,6 +15,8 @@ import {
   OperatingHours,
   CalendarEvent,
   InfluencingHoliday,
+  HeadlinerForecast,
+  NeighborHoliday,
   WeatherSummary,
   HourlyPrediction,
 } from "../dto/integrated-calendar.dto";
@@ -41,6 +43,15 @@ import { Queue } from "bull";
 import { ParkStatus } from "../../common/types/status.type";
 
 const SCHEDULE_REFRESH_GAP_DAYS = 5; // Trigger refresh if schedule ends < 5 days from requested date
+
+// Only surface neighbouring-region holidays from the top-N influencing regions
+// (rank in park.influencingRegions, 1 = nearest/most important). Keeps the
+// calendar signal from drowning in summer, when nearly every region is on break.
+const NEIGHBOR_PRIORITY_THRESHOLD = 3;
+// Max neighbour holidays returned per day (already deduped + priority-sorted).
+const NEIGHBOR_HOLIDAYS_MAX = 6;
+// Max headliner rides listed per day in the forecast hint.
+const HEADLINER_FORECAST_TOP_N = 5;
 
 /**
  * Calendar Service
@@ -77,7 +88,10 @@ export class CalendarService {
     fromDate: Date,
     toDate: Date,
     includeHourly:
-      "today+tomorrow" | "today" | "none" | "all" = "today+tomorrow",
+      | "today+tomorrow"
+      | "today"
+      | "none"
+      | "all" = "today+tomorrow",
   ): Promise<IntegratedCalendarResponse> {
     const fromStr = formatInParkTimezone(fromDate, park.timezone);
     const toStr = formatInParkTimezone(toDate, park.timezone);
@@ -280,6 +294,18 @@ export class CalendarService {
       predictedBaseline,
     );
 
+    // Per-day headliner forecast (avg + top rides) — grounds the abstract crowd
+    // level in concrete "expected wait at THIS park" numbers. Needs display
+    // names, resolved once for the whole headliner set.
+    const headlinerNames = await this.attractionsService.getNamesByIds([
+      ...headlinerIdSet,
+    ]);
+    const headlinerForecastByDate = this.buildHeadlinerForecasts(
+      mlPredictions.predictions,
+      headlinerIdSet,
+      headlinerNames,
+    );
+
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
     const historicalDateStrs: string[] = [];
     const walk = new Date(fromDate);
@@ -375,6 +401,7 @@ export class CalendarService {
           isSeasonal,
           derivedHistoricalHours.get(dateStr) || null,
           predictedBaseline > 0,
+          headlinerForecastByDate.get(dateStr),
         );
       }),
     );
@@ -611,6 +638,7 @@ export class CalendarService {
     isSeasonal: boolean = false,
     derivedHours: { openingTime: string; closingTime: string } | null = null,
     ratable: boolean = true,
+    headlinerForecast?: HeadlinerForecast,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -687,6 +715,7 @@ export class CalendarService {
     // Build events array and influencing holidays
     const events: CalendarEvent[] = [];
     const influencingHolidays: InfluencingHoliday[] = [];
+    const neighborHolidaysRaw: NeighborHoliday[] = [];
     const seenEvents = new Set<string>();
 
     const dayHolidays = holidays.filter((h) => {
@@ -719,18 +748,32 @@ export class CalendarService {
         }
       } else {
         // Influencing but not local
+        const regionCode = h.region
+          ? normalizeRegionCode(h.region.split("-").pop() ?? null)
+          : null;
         influencingHolidays.push({
           name: h.name,
-          source: {
-            countryCode: h.country,
-            regionCode: h.region
-              ? normalizeRegionCode(h.region.split("-").pop() ?? null)
-              : null,
-          },
+          source: { countryCode: h.country, regionCode },
           holidayType: h.holidayType,
         });
+
+        // Priority-gated copy for the lean, default-on neighbour marker: keep
+        // only holidays from the park's top influencing regions (rank ≤ N).
+        const priority = this.neighborHolidayPriority(park, h);
+        if (priority <= NEIGHBOR_PRIORITY_THRESHOLD) {
+          neighborHolidaysRaw.push({
+            name: h.name,
+            source: { countryCode: h.country, regionCode },
+            holidayType: h.holidayType,
+            priority,
+          });
+        }
       }
     }
+
+    // Dedupe (same region + type can arrive from multiple raw rows), keep the
+    // strongest priority per key, sort by priority then name, and cap.
+    const neighborHolidays = this.rankNeighborHolidays(neighborHolidaysRaw);
 
     // status = ParkStatus (OPERATING | CLOSED | UNKNOWN); UNKNOWN = no schedule data yet
     let status: ParkStatus =
@@ -906,6 +949,12 @@ export class CalendarService {
       events: events.length > 0 ? events : undefined,
       influencingHolidays:
         influencingHolidays.length > 0 ? influencingHolidays : undefined,
+      // Concrete "what does this crowd level mean here" numbers — only while the
+      // park is (or may be) open; a CLOSED day has no meaningful expected wait.
+      headlinerForecast:
+        crowdLevel !== "closed" ? headlinerForecast : undefined,
+      neighborHolidays:
+        neighborHolidays.length > 0 ? neighborHolidays : undefined,
     };
 
     // Add hourly data if requested (uses pre-fetched list to avoid N+1 ML calls)
@@ -1056,6 +1105,97 @@ export class CalendarService {
     }
 
     return result;
+  }
+
+  /**
+   * Aggregate per-attraction ML predictions into a date → headliner-forecast map.
+   *
+   * For each future day: filter to the park's headliners, list the top rides by
+   * expected wait (named, capped to {@link HEADLINER_FORECAST_TOP_N}) and the
+   * average wait across all headliners. This is what turns "high" into "Taron
+   * ~55 min, Chiapas ~45 min, …" so a visitor can read the calibration directly.
+   */
+  private buildHeadlinerForecasts(
+    predictions: PredictionDto[],
+    headlinerIdSet: Set<string>,
+    names: Map<string, string>,
+  ): Map<string, HeadlinerForecast> {
+    const result = new Map<string, HeadlinerForecast>();
+    if (headlinerIdSet.size === 0) return result;
+
+    const byDate = new Map<string, PredictionDto[]>();
+    for (const p of predictions) {
+      if (!headlinerIdSet.has(p.attractionId)) continue;
+      const date = p.predictedTime.split("T")[0];
+      const list = byDate.get(date);
+      if (list) list.push(p);
+      else byDate.set(date, [p]);
+    }
+
+    for (const [date, preds] of byDate) {
+      if (preds.length === 0) continue;
+
+      // Average across ALL predicted headliners (matches the crowd-level numerator).
+      const avgWait = Math.round(
+        preds.reduce((sum, p) => sum + p.predictedWaitTime, 0) / preds.length,
+      );
+
+      // Top rides by expected wait — only those we can name (unnamed = noise).
+      const rides = preds
+        .filter((p) => names.has(p.attractionId))
+        .sort((a, b) => b.predictedWaitTime - a.predictedWaitTime)
+        .slice(0, HEADLINER_FORECAST_TOP_N)
+        .map((p) => ({
+          attractionId: p.attractionId,
+          name: names.get(p.attractionId)!,
+          waitTime: Math.round(p.predictedWaitTime),
+        }));
+
+      if (rides.length === 0) continue;
+      result.set(date, { avgWait, rides });
+    }
+
+    return result;
+  }
+
+  /**
+   * Influence rank of a neighbouring holiday: the 1-based position of its region
+   * in `park.influencingRegions` (which is ordered nearest/most-important first).
+   * A country-level config entry (regionCode null) matches any region of that
+   * country. Returns Infinity when the holiday's region isn't a configured
+   * influence at all.
+   */
+  private neighborHolidayPriority(park: Park, h: Holiday): number {
+    const regions = park.influencingRegions || [];
+    const holidayRegion = normalizeRegionCode(h.region);
+    let best = Infinity;
+    regions.forEach((reg, i) => {
+      if (reg.countryCode !== h.country) return;
+      const configRegion = normalizeRegionCode(reg.regionCode);
+      // country-level influence (null) matches any region; else exact match
+      if (configRegion === null || configRegion === holidayRegion) {
+        best = Math.min(best, i + 1);
+      }
+    });
+    return best;
+  }
+
+  /**
+   * Dedupe (region + type), keep the strongest priority per key, sort by
+   * priority then name, and cap to {@link NEIGHBOR_HOLIDAYS_MAX}.
+   */
+  private rankNeighborHolidays(raw: NeighborHoliday[]): NeighborHoliday[] {
+    const byKey = new Map<string, NeighborHoliday>();
+    for (const n of raw) {
+      const key = `${n.source.countryCode}|${n.source.regionCode ?? ""}|${n.holidayType}`;
+      const existing = byKey.get(key);
+      if (!existing || n.priority < existing.priority) {
+        byKey.set(key, n);
+      }
+    }
+    return [...byKey.values()]
+      .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
+      .slice(0, NEIGHBOR_HOLIDAYS_MAX);
   }
 
   /**
