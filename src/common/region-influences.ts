@@ -180,7 +180,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "AT", regionCode: "AT-NÖ" }, // Lower Austria (Surrounds Vienna)
   ],
 
-  // Lower Austria (Familypark)
+  // Lower Austria
   "AT-NÖ": [
     { countryCode: "AT", regionCode: "AT-WI" }, // Vienna
     { countryCode: "AT", regionCode: "AT-BL" }, // Burgenland
@@ -188,6 +188,15 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "AT", regionCode: "AT-OÖ" }, // Upper Austria
     { countryCode: "CZ", regionCode: "CZ-JM" }, // South Moravia
     { countryCode: "SK", regionCode: null }, // Slovakia
+  ],
+
+  // Burgenland (Familypark) — Austria's easternmost state: long Hungarian
+  // border + Bratislava (SK) ~50km. The country fallback [DE,CH,IT] misses both.
+  "AT-BL": [
+    { countryCode: "AT", regionCode: "AT-NÖ" }, // Lower Austria
+    { countryCode: "AT", regionCode: "AT-SM" }, // Styria
+    { countryCode: "HU", regionCode: null }, // Hungary (Sopron/Győr day-trippers)
+    { countryCode: "SK", regionCode: null }, // Slovakia (Bratislava region)
   ],
 
   // Upper Austria (Fantasiana)
@@ -228,6 +237,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "NL", regionCode: "NL-ZE" }, // Zeeland
     { countryCode: "NL", regionCode: "NL-GE" }, // Gelderland
     { countryCode: "NL", regionCode: "NL-ZH" }, // South Holland
+    { countryCode: "DE", regionCode: "DE-NW" }, // NRW — Efteling's biggest foreign catchment (day-trippers)
     { countryCode: "BE", regionCode: null }, // Belgium (Nationwide)
   ],
 
@@ -254,6 +264,7 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "NL", regionCode: "NL-GE" },
     { countryCode: "NL", regionCode: "NL-OV" }, // Overijssel
     { countryCode: "NL", regionCode: "NL-FR" }, // Friesland
+    { countryCode: "DE", regionCode: "DE-NW" }, // NRW — Walibi Holland's German day-trip segment
   ],
 
   // ==========================================
@@ -327,6 +338,8 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "IT", regionCode: "IT-TR" }, // Trentino-Alto Adige
     { countryCode: "IT", regionCode: "IT-LO" }, // Lombardy
     { countryCode: "IT", regionCode: "IT-ER" }, // Emilia-Romagna
+    { countryCode: "AT", regionCode: null }, // Austria — Veneto borders AT; Lake Garda/Gardaland draws heavy AT tourism
+    { countryCode: "DE", regionCode: null }, // Germany — Lake Garda is a major German holiday destination
   ],
 
   // Emilia-Romagna (Mirabilandia)
@@ -618,9 +631,11 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "DE", regionCode: "DE-SH" },
   ],
 
-  // North Denmark (Nordjylland)
+  // North Denmark (Nordjylland) — the Jutland west coast is a major German
+  // holiday area (Fårup Sommerland), same as its DK-82/DK-83 siblings.
   "DK-81": [
     { countryCode: "DK", regionCode: "DK-82" }, // Central Denmark
+    { countryCode: "DE", regionCode: "DE-SH" }, // Germany (Jutland-coast holidaymakers)
     { countryCode: "NO", regionCode: null }, // Norway (Ferry connection)
     { countryCode: "SE", regionCode: null }, // Sweden (Ferry connection)
   ],
