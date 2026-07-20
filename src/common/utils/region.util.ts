@@ -18,6 +18,11 @@ const REGION_ALIASES: Record<string, string> = {
   // Germany (DE)
   NRW: "NW", // Nordrhein-Westfalen
   NDS: "NI", // Niedersachsen
+  // United Kingdom (GB) — geocoding sometimes returns the full country name
+  // instead of the ISO 3166-2 subdivision code (e.g. Flamingo Land → "England").
+  England: "ENG",
+  Scotland: "SCT",
+  Wales: "WLS",
 };
 
 /**
