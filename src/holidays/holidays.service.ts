@@ -341,6 +341,105 @@ export class HolidaysService {
   }
 
   /**
+   * Synthesize projected SUMMER-holiday ranges.
+   *
+   * Some countries (IT, ES, IE) publish the upcoming summer break to OpenHolidays
+   * only as single-day "End of lessons" markers — not as a range — until the new
+   * school calendar is finalised. Range-based countries (DE/NL/FR/AT/CH/…) are
+   * unaffected. For each region that had a REAL summer range last year but only
+   * markers this year, we PROJECT last year's range forward by one year, so the
+   * summer break still shows as a proper multi-day school holiday.
+   *
+   * Data-driven — no locale-specific name matching: a region "needs" synthesis
+   * when its Jun–Sep day-count collapses from a full range (≥45 d) in the prior
+   * year to marker-only (<25 d) in the target year. Idempotent via a
+   * `synth-summer:` externalId, and a NO-OP for countries that already publish
+   * ranges (so it is safe to run for every synced country).
+   */
+  async synthesizeProjectedSummerHolidays(
+    countryCode: string,
+  ): Promise<number> {
+    const now = new Date().getUTCFullYear();
+    const MIN_RANGE_DAYS = 45; // a genuine summer range
+    const MAX_MARKER_DAYS = 25; // marker-only (needs projection)
+
+    const rows: {
+      region: string;
+      yr: string;
+      days: string;
+      mn: string;
+      mx: string;
+    }[] = await this.holidayRepository.query(
+      `SELECT region, EXTRACT(YEAR FROM date)::int AS yr,
+              COUNT(*)::int AS days,
+              TO_CHAR(MIN(date), 'YYYY-MM-DD') AS mn,
+              TO_CHAR(MAX(date), 'YYYY-MM-DD') AS mx
+         FROM holidays
+        WHERE country = $1 AND "holidayType" = 'school' AND region IS NOT NULL
+          AND EXTRACT(MONTH FROM date) BETWEEN 6 AND 9
+          AND EXTRACT(YEAR FROM date) BETWEEN $2 AND $3
+        GROUP BY region, yr`,
+      [countryCode, now - 1, now + 1],
+    );
+
+    const byRegion = new Map<
+      string,
+      Map<number, { days: number; mn: string; mx: string }>
+    >();
+    for (const r of rows) {
+      const y = parseInt(r.yr, 10);
+      if (!byRegion.has(r.region)) byRegion.set(r.region, new Map());
+      byRegion.get(r.region)!.set(y, {
+        days: parseInt(r.days, 10),
+        mn: r.mn,
+        mx: r.mx,
+      });
+    }
+
+    const toUpsert: HolidayInput[] = [];
+    for (const [region, years] of byRegion) {
+      // Only the CURRENT summer: projecting next year's too risks stale rows once
+      // the range-based countries publish their (real) next-year calendar.
+      {
+        const targetYear = now;
+        const cur = years.get(targetYear);
+        const prev = years.get(targetYear - 1);
+        if ((cur?.days ?? 0) >= MAX_MARKER_DAYS) continue; // already a real range
+        if (!prev || prev.days < MIN_RANGE_DAYS) continue; // no template to project
+
+        // Project the prior year's summer range forward by one year (same month/day).
+        const start = new Date(`${prev.mn}T00:00:00Z`);
+        const end = new Date(`${prev.mx}T00:00:00Z`);
+        start.setUTCFullYear(targetYear);
+        end.setUTCFullYear(targetYear);
+
+        const cursor = new Date(start);
+        while (cursor <= end) {
+          const dateStr = cursor.toISOString().split("T")[0];
+          toUpsert.push({
+            externalId: `synth-summer:${countryCode}:${region}:${dateStr}`,
+            date: new Date(`${dateStr}T00:00:00Z`),
+            name: "Summer Holidays",
+            localName: "Summer Holidays",
+            country: countryCode,
+            region,
+            holidayType: "school",
+            isNationwide: false,
+          });
+          cursor.setUTCDate(cursor.getUTCDate() + 1);
+        }
+      }
+    }
+
+    if (toUpsert.length === 0) return 0;
+    const saved = await this.saveRawHolidays(toUpsert);
+    this.logger.log(
+      `Synthesized ${saved} projected summer-holiday days for ${countryCode} (${byRegion.size} regions checked)`,
+    );
+    return saved;
+  }
+
+  /**
    * Get holidays for a specific country and date range
    *
    * @param countryCode - Country code
