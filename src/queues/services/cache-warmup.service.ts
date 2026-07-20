@@ -43,6 +43,11 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   // expires ~11.5h before the next warmup — so the best-days widget then hits a
   // cold rebuild. 13h spans the 12h cadence with a buffer.
   private readonly WARMUP_MONTH_TTL = 13 * 60 * 60;
+  // The CURRENT month (park timezone) is the only one whose data still shifts
+  // intraday (today's live level, current-day forecast) — and the one users
+  // check right after a deploy. Cap it at 2h so it never freezes on stale data
+  // for the full 13h cycle, while the stable past/future months keep the long TTL.
+  private readonly WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
   // Startup warmup pacing — gentle on the cold, just-restarted postgres so the
   // top-parks warmup doesn't saturate the connection pool on boot (each park's
   // calendar build fans out into many parallel queries).
@@ -205,7 +210,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // The "none" month-cache keys for every month in [-1, +3] — the variant the
       // FE calendar/best-days widget reads (the proxy forwards includeHourly=none).
       const monthKeys: string[] = [];
-      for (let mm = fromM, yy = fromY; ;) {
+      for (let mm = fromM, yy = fromY; ; ) {
         monthKeys.push(
           CacheKeys.calendarMonth(
             park.id,
@@ -281,8 +286,23 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // would expire ~11.5h before the next warmup and leave the best-days widget's
         // far month (current+2) cold for almost the whole cycle. expire() is a no-op
         // for any month key that wasn't (re)built, so this never resurrects nothing.
+        // EXCEPTION: the current month (park tz) gets a 2h cap — its data still moves
+        // intraday and it's what users check right after a deploy, so it must not
+        // stay frozen for the full 13h cycle. Stable past/future months keep 13h.
+        const currentMonthKey = CacheKeys.calendarMonth(
+          park.id,
+          `${y}-${String(m).padStart(2, "0")}`,
+          "none",
+        );
         await Promise.all(
-          monthKeys.map((k) => this.redis.expire(k, this.WARMUP_MONTH_TTL)),
+          monthKeys.map((k) =>
+            this.redis.expire(
+              k,
+              k === currentMonthKey
+                ? this.WARMUP_CURRENT_MONTH_TTL
+                : this.WARMUP_MONTH_TTL,
+            ),
+          ),
         ).catch(() => undefined);
       } catch (gridErr) {
         const gm = gridErr instanceof Error ? gridErr.message : String(gridErr);
