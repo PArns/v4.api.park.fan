@@ -156,15 +156,20 @@ def test_leadcurve_drops_nan_persist_per_model():
 
 
 def test_persistence_blend():
-    """Piecewise: pure persistence up to full_h, linear to pure PCN by horizon, serve-rounded."""
+    """Piecewise (anchor above the gate) + anchor gate + NaN handling, serve-rounded."""
     import numpy as np
 
     pcn = np.array([30.0, 30.0, 30.0, 30.0, 30.0])
-    persist = np.array([20.0, 20.0, 20.0, 20.0, 20.0])
-    lead = np.array([0.5, 1.0, 2.0, 3.0, 6.0])     # full_h = 1h, horizon = 3h
+    persist = np.array([70.0, 70.0, 70.0, 70.0, 70.0])  # above the 40 anchor gate
+    lead = np.array([0.5, 1.0, 2.0, 3.0, 6.0])          # full_h = 1h, horizon = 3h
     out = score.persistence_blend(pcn, persist, lead, full_h=1.0, horizon_h=3.0)
-    # ≤1h → pure persist (20); 2h → α=0.5 → 25; ≥3h → pure PCN (30)
-    np.testing.assert_array_equal(out, [20.0, 20.0, 25.0, 30.0, 30.0])
+    # ≤1h → pure persist (70); 2h → α=0.5 → 50; ≥3h → pure PCN (30)
+    np.testing.assert_array_equal(out, [70.0, 70.0, 50.0, 30.0, 30.0])
+    # Anchor gate: persist below gate_min → pure PCN regardless of lead
+    out_low = score.persistence_blend(
+        np.array([30.0, 30.0]), np.array([20.0, 39.0]), np.array([0.5, 1.0]), gate_min=40.0
+    )
+    np.testing.assert_array_equal(out_low, [30.0, 30.0])
     # NaN persist (missing) → NaN blend (dropped for the pcn_blend model downstream)
     assert np.isnan(score.persistence_blend(np.array([30.0]), np.array([np.nan]),
                                             np.array([1.0]))[0])
