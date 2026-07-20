@@ -55,6 +55,12 @@ LEADCURVE_LEADS_H = [1.0, 3.0, 6.0]
 # BEFORE any serving change so the tuned shape is validated first.
 LEADCURVE_BLEND_FULL_H = 1.0
 LEADCURVE_BLEND_HORIZON_H = 3.0
+# Anchor gate (minutes): only blend toward persistence where the anchor (the origin's
+# realised/last-observed wait) is at least this high. The 07-20 ffill-anchor read showed the
+# blend wins BIG on busy 1h (+1.3..+2.2) but slightly loses on `all` (−0.2..−0.35) — the drag
+# is quiet/sparse rides whose ffill anchor is stale. Gating on a real-wait anchor keeps those
+# pure PCN (no loss) while the ramping-to-busy rides still get the persistence win.
+LEADCURVE_BLEND_GATE_MIN = 40.0
 
 
 def aggregate_comparison(df: pd.DataFrame, models: list[str]) -> list[dict]:
@@ -153,17 +159,24 @@ def serve_round(x: np.ndarray) -> np.ndarray:
 def persistence_blend(
     pcn, persist, lead_h,
     full_h: float | None = None, horizon_h: float | None = None,
+    gate_min: float | None = None,
 ) -> np.ndarray:
     """Blend the served PCN wait toward `persist` (the origin's realised wait) at short
     lead. Weight α is PIECEWISE: 1 (pure persistence) up to `full_h`, then linear 1→0 over
     [full_h, horizon_h], then 0 (pure PCN) beyond — i.e. serve the model that wins at each
-    lead (persistence ≤1h, PCN ≥3h). Serve-rounded to mirror serving. Vectorized; NaN in
-    either input propagates (a missing persist ⇒ NaN blend, dropped for the pcn_blend model)."""
+    lead (persistence ≤1h, PCN ≥3h). ANCHOR-GATED: α is forced to 0 (pure PCN) where the
+    anchor `persist` < `gate_min`, so quiet/sparse rides (whose ffill anchor is often stale)
+    keep pure PCN while ramping-to-busy rides get the persistence win. Serve-rounded to mirror
+    serving. Vectorized; NaN in either input propagates (missing persist ⇒ NaN blend, dropped)."""
     full_h = full_h or LEADCURVE_BLEND_FULL_H
     horizon_h = horizon_h or LEADCURVE_BLEND_HORIZON_H
+    gate_min = LEADCURVE_BLEND_GATE_MIN if gate_min is None else gate_min
     lead = np.asarray(lead_h, dtype=float)
+    persist = np.asarray(persist, dtype=float)
     alpha = np.clip((horizon_h - lead) / (horizon_h - full_h), 0.0, 1.0)
-    blended = alpha * np.asarray(persist, dtype=float) + (1.0 - alpha) * np.asarray(pcn, dtype=float)
+    # Anchor gate: below a real-wait anchor, don't blend (quiet rides stay pure PCN).
+    alpha = np.where(persist >= gate_min, alpha, 0.0)
+    blended = alpha * persist + (1.0 - alpha) * np.asarray(pcn, dtype=float)
     # serve_round coerces NaN→0 (its np.where(nan>0) is False); keep NaN so a missing
     # persist stays NaN and is dropped for the pcn_blend model, not scored as a 0 wait.
     return np.where(np.isnan(blended), np.nan, serve_round(blended))
