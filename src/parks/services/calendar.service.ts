@@ -77,10 +77,7 @@ export class CalendarService {
     fromDate: Date,
     toDate: Date,
     includeHourly:
-      | "today+tomorrow"
-      | "today"
-      | "none"
-      | "all" = "today+tomorrow",
+      "today+tomorrow" | "today" | "none" | "all" = "today+tomorrow",
   ): Promise<IntegratedCalendarResponse> {
     const fromStr = formatInParkTimezone(fromDate, park.timezone);
     const toStr = formatInParkTimezone(toDate, park.timezone);

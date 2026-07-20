@@ -87,12 +87,7 @@ export class ParkAttractionDto {
     nullable: true,
   })
   comparison?:
-    | "much_lower"
-    | "lower"
-    | "typical"
-    | "higher"
-    | "much_higher"
-    | null;
+    "much_lower" | "lower" | "typical" | "higher" | "much_higher" | null;
 
   @ApiProperty({
     description: "Attraction statistics",
@@ -337,10 +332,7 @@ export class ParkStatisticsDto {
     nullable: true,
   })
   peakHourSource:
-    | "prediction"
-    | "observed_today"
-    | "historical_fallback"
-    | null;
+    "prediction" | "observed_today" | "historical_fallback" | null;
 
   @ApiProperty({
     description: "Crowd level",

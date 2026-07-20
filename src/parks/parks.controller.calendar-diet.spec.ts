@@ -71,8 +71,9 @@ describe("ParksController › /calendar payload diet", () => {
 
   beforeEach(async () => {
     calendarService = {
-      buildCalendarResponse: jest.fn().mockImplementation(
-        async (): Promise<IntegratedCalendarResponse> => ({
+      buildCalendarResponse: jest
+        .fn()
+        .mockImplementation(async (): Promise<IntegratedCalendarResponse> => ({
           meta: {
             slug: "phantasialand",
             timezone: "Europe/Berlin",
@@ -83,8 +84,7 @@ describe("ParksController › /calendar payload diet", () => {
             JSON.parse(JSON.stringify(dayWith)),
             JSON.parse(JSON.stringify(dayWithout)),
           ],
-        }),
-      ),
+        })),
     };
 
     const noop = {};
