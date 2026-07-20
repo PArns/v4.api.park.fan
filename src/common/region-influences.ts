@@ -272,12 +272,19 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   // ==========================================
 
   // Île-de-France (Disneyland Paris, Parc Astérix)
+  // Île-de-France (Disneyland Paris). NOT a border region, but Disneyland Paris
+  // is an INTERNATIONAL destination whose crowds track the school holidays of its
+  // core foreign markets (multi-day visitors), so those are modelled as influences.
   "FR-IF": [
     { countryCode: "FR", regionCode: "FR-HF" }, // Hauts-de-France
     { countryCode: "FR", regionCode: "FR-GE" }, // Grand Est
     { countryCode: "FR", regionCode: "FR-BF" }, // Bourgogne-Franche-Comté
     { countryCode: "FR", regionCode: "FR-CV" }, // Centre-Val de Loire
     { countryCode: "FR", regionCode: "FR-NO" }, // Normandie
+    { countryCode: "GB", regionCode: null }, // UK — Disneyland Paris' #1 foreign market
+    { countryCode: "BE", regionCode: null }, // Belgium
+    { countryCode: "NL", regionCode: null }, // Netherlands
+    { countryCode: "DE", regionCode: null }, // Germany
   ],
 
   // Grand Est (Walygator, Nigloland)
@@ -343,6 +350,8 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
   ],
 
   // Emilia-Romagna (Mirabilandia)
+  // Emilia-Romagna (Mirabilandia) — the Rimini/Ravenna Adriatic riviera is a big
+  // German/Austrian beach-holiday area, so their school holidays lift crowds.
   "IT-ER": [
     { countryCode: "IT", regionCode: "IT-VE" },
     { countryCode: "IT", regionCode: "IT-LO" },
@@ -350,6 +359,8 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "IT", regionCode: "IT-LI" }, // Liguria
     { countryCode: "IT", regionCode: "IT-TO" }, // Tuscany
     { countryCode: "IT", regionCode: "IT-MA" }, // Marche
+    { countryCode: "DE", regionCode: null }, // Germany (Adriatic riviera tourism)
+    { countryCode: "AT", regionCode: null }, // Austria (Adriatic riviera tourism)
   ],
 
   // ==========================================
@@ -362,6 +373,15 @@ export const REGION_INFLUENCES: Record<string, RegionInfluence[]> = {
     { countryCode: "PL", regionCode: "PL-SL" }, // Holy Cross
     { countryCode: "PL", regionCode: "PL-PD" }, // Subcarpathia
     { countryCode: "SK", regionCode: null }, // Slovakia
+  ],
+
+  // Małopolskie via the CURRENT ISO 3166-2 numeric code (geocoding emits "PL-12",
+  // not the deprecated alphabetic "PL-MA" above → the alpha key never matched).
+  // Energylandia (Zator) — near the Silesian/Czech border, Slovakia to the south.
+  "PL-12": [
+    { countryCode: "PL", regionCode: "PL-SL" }, // Silesia (neighbouring, high day-trip volume)
+    { countryCode: "SK", regionCode: null }, // Slovakia (borders Małopolskie)
+    { countryCode: "CZ", regionCode: null }, // Czechia (Ostrava region, ~100 km)
   ],
 
   // ==========================================
