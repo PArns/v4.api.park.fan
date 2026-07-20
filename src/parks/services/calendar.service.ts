@@ -44,14 +44,19 @@ import { ParkStatus } from "../../common/types/status.type";
 
 const SCHEDULE_REFRESH_GAP_DAYS = 5; // Trigger refresh if schedule ends < 5 days from requested date
 
-// Only surface neighbouring-region holidays from the top-N influencing regions
-// (rank in park.influencingRegions, 1 = nearest/most important). Keeps the
-// calendar signal from drowning in summer, when nearly every region is on break.
-const NEIGHBOR_PRIORITY_THRESHOLD = 3;
-// Max neighbour holidays returned per day (already deduped + priority-sorted).
-const NEIGHBOR_HOLIDAYS_MAX = 6;
+// Neighbour-holiday selection (rank = position in park.influencingRegions,
+// 1 = nearest/most important): keep the top-N regions of the PARK'S OWN country
+// (limits summer noise from many domestic states) but ALWAYS surface foreign
+// neighbouring COUNTRIES — a border park's cross-border day-trippers (NL/BE for
+// a Rhineland park) matter even when they rank below the domestic states.
+const NEIGHBOR_SAME_COUNTRY_MAX = 3;
+// Overall cap on neighbour holidays returned per day (deduped + priority-sorted).
+const NEIGHBOR_HOLIDAYS_MAX = 8;
 // Max headliner rides listed per day in the forecast hint.
 const HEADLINER_FORECAST_TOP_N = 5;
+
+// Round wait minutes to the nearest 5 — user-facing figures read cleaner in 5-min steps.
+const round5 = (min: number): number => Math.round(min / 5) * 5;
 
 /**
  * Calendar Service
@@ -306,6 +311,31 @@ export class CalendarService {
       headlinerNames,
     );
 
+    // PAST days (< today) show ACTUAL recorded averages instead of a forecast.
+    // Only query when the range actually reaches into the past, and only up to
+    // today (today itself keeps its live/forecast figures).
+    let historicalForecastByDate = new Map<string, HeadlinerForecast>();
+    if (fromStr < today && headlinerIdSet.size > 0) {
+      const histToStr = toStr < today ? toStr : today;
+      const dailyAverages = await this.analyticsService
+        .getHeadlinerDailyAverages(
+          [...headlinerIdSet],
+          fromStr,
+          histToStr,
+          park.timezone,
+        )
+        .catch((err) => {
+          this.logger.warn(
+            `Historical headliner averages unavailable for ${park.slug}: ${err.message}`,
+          );
+          return new Map<string, { attractionId: string; avg: number }[]>();
+        });
+      historicalForecastByDate = this.buildHistoricalHeadlinerForecasts(
+        dailyAverages,
+        headlinerNames,
+      );
+    }
+
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
     const historicalDateStrs: string[] = [];
     const walk = new Date(fromDate);
@@ -401,7 +431,10 @@ export class CalendarService {
           isSeasonal,
           derivedHistoricalHours.get(dateStr) || null,
           predictedBaseline > 0,
-          headlinerForecastByDate.get(dateStr),
+          // Past days: actual recorded averages; today/future: ML forecast.
+          dateStr < today
+            ? historicalForecastByDate.get(dateStr)
+            : headlinerForecastByDate.get(dateStr),
         );
       }),
     );
@@ -757,10 +790,11 @@ export class CalendarService {
           holidayType: h.holidayType,
         });
 
-        // Priority-gated copy for the lean, default-on neighbour marker: keep
-        // only holidays from the park's top influencing regions (rank ≤ N).
+        // Candidate for the neighbour marker — every CONFIGURED influencing
+        // region (rank < ∞). The final priority-aware selection (top domestic
+        // regions + all foreign countries) happens in selectNeighborHolidays.
         const priority = this.neighborHolidayPriority(park, h);
-        if (priority <= NEIGHBOR_PRIORITY_THRESHOLD) {
+        if (priority < Infinity) {
           neighborHolidaysRaw.push({
             name: h.name,
             source: { countryCode: h.country, regionCode },
@@ -771,9 +805,12 @@ export class CalendarService {
       }
     }
 
-    // Dedupe (same region + type can arrive from multiple raw rows), keep the
-    // strongest priority per key, sort by priority then name, and cap.
-    const neighborHolidays = this.rankNeighborHolidays(neighborHolidaysRaw);
+    // Dedupe + priority-rank, keeping the top domestic regions but always the
+    // foreign neighbouring countries (border-park cross-border drivers).
+    const neighborHolidays = this.selectNeighborHolidays(
+      neighborHolidaysRaw,
+      park.countryCode,
+    );
 
     // status = ParkStatus (OPERATING | CLOSED | UNKNOWN); UNKNOWN = no schedule data yet
     let status: ParkStatus =
@@ -906,7 +943,13 @@ export class CalendarService {
       };
     }
 
-    // Build weather summary
+    // Build weather summary. `rainChance` keeps its (misleading) legacy name =
+    // precipitation mm; the detail panel reads the explicit fields below.
+    const num = (v: unknown): number | undefined => {
+      if (v === null || v === undefined) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
     const weatherSummary: WeatherSummary | undefined = weather
       ? {
           condition: weather.weatherCode
@@ -915,6 +958,11 @@ export class CalendarService {
           tempMin: Number(weather.temperatureMin) ?? 0,
           tempMax: Number(weather.temperatureMax) ?? 0,
           rainChance: Number(weather.precipitationSum) ?? 0,
+          precipitationMm: num(weather.precipitationSum),
+          snowMm: num(weather.snowfallSum),
+          windMax: num(weather.windSpeedMax),
+          humidity: num(weather.humidity),
+          apparentTemp: num(weather.apparentTemperature),
           icon: weather.weatherCode ?? 0,
         }
       : undefined;
@@ -1136,7 +1184,7 @@ export class CalendarService {
       if (preds.length === 0) continue;
 
       // Average across ALL predicted headliners (matches the crowd-level numerator).
-      const avgWait = Math.round(
+      const avgWait = round5(
         preds.reduce((sum, p) => sum + p.predictedWaitTime, 0) / preds.length,
       );
 
@@ -1148,13 +1196,46 @@ export class CalendarService {
         .map((p) => ({
           attractionId: p.attractionId,
           name: names.get(p.attractionId)!,
-          waitTime: Math.round(p.predictedWaitTime),
+          waitTime: round5(p.predictedWaitTime),
         }));
 
       if (rides.length === 0) continue;
       result.set(date, { avgWait, rides });
     }
 
+    return result;
+  }
+
+  /**
+   * Build the PAST-day counterpart to {@link buildHeadlinerForecasts}: actual
+   * recorded per-attraction daily averages (from
+   * {@link AnalyticsService.getHeadlinerDailyAverages}) → same shape, marked
+   * `actual: true`. Same top-N + round-to-5 treatment as the forecast.
+   */
+  private buildHistoricalHeadlinerForecasts(
+    dailyAverages: Map<string, { attractionId: string; avg: number }[]>,
+    names: Map<string, string>,
+  ): Map<string, HeadlinerForecast> {
+    const result = new Map<string, HeadlinerForecast>();
+    for (const [date, entries] of dailyAverages) {
+      if (entries.length === 0) continue;
+
+      const avgWait = round5(
+        entries.reduce((sum, e) => sum + e.avg, 0) / entries.length,
+      );
+      const rides = entries
+        .filter((e) => names.has(e.attractionId))
+        .sort((a, b) => b.avg - a.avg)
+        .slice(0, HEADLINER_FORECAST_TOP_N)
+        .map((e) => ({
+          attractionId: e.attractionId,
+          name: names.get(e.attractionId)!,
+          waitTime: round5(e.avg),
+        }));
+
+      if (rides.length === 0) continue;
+      result.set(date, { avgWait, rides, actual: true });
+    }
     return result;
   }
 
@@ -1181,10 +1262,16 @@ export class CalendarService {
   }
 
   /**
-   * Dedupe (region + type), keep the strongest priority per key, sort by
-   * priority then name, and cap to {@link NEIGHBOR_HOLIDAYS_MAX}.
+   * Dedupe (region + type, keep strongest priority), then select: the top
+   * {@link NEIGHBOR_SAME_COUNTRY_MAX} regions of the park's OWN country plus
+   * ALL foreign neighbouring countries' regions (a border park's cross-border
+   * drivers must not be crowded out by domestic states), capped overall and
+   * priority-sorted. The frontend groups the result by country.
    */
-  private rankNeighborHolidays(raw: NeighborHoliday[]): NeighborHoliday[] {
+  private selectNeighborHolidays(
+    raw: NeighborHoliday[],
+    parkCountry: string,
+  ): NeighborHoliday[] {
     const byKey = new Map<string, NeighborHoliday>();
     for (const n of raw) {
       const key = `${n.source.countryCode}|${n.source.regionCode ?? ""}|${n.holidayType}`;
@@ -1193,9 +1280,22 @@ export class CalendarService {
         byKey.set(key, n);
       }
     }
-    return [...byKey.values()]
-      .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
-      .slice(0, NEIGHBOR_HOLIDAYS_MAX);
+
+    const sorted = [...byKey.values()].sort(
+      (a, b) => a.priority - b.priority || a.name.localeCompare(b.name),
+    );
+
+    const selected: NeighborHoliday[] = [];
+    let domestic = 0;
+    for (const n of sorted) {
+      if (selected.length >= NEIGHBOR_HOLIDAYS_MAX) break;
+      if (n.source.countryCode === parkCountry) {
+        if (domestic >= NEIGHBOR_SAME_COUNTRY_MAX) continue;
+        domestic++;
+      }
+      selected.push(n);
+    }
+    return selected;
   }
 
   /**
