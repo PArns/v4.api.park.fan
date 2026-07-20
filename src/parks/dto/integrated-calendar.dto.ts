@@ -118,6 +118,79 @@ export class HourlyPrediction {
 }
 
 /**
+ * A single headliner ride's expected wait for a calendar day.
+ */
+export class HeadlinerWaitForecast {
+  @ApiProperty({ description: "Attraction UUID" })
+  attractionId: string;
+
+  @ApiProperty({ description: "Attraction display name", example: "Taron" })
+  name: string;
+
+  @ApiProperty({
+    description: "Expected (predicted) standby wait for this day, in minutes",
+    example: 45,
+  })
+  waitTime: number;
+}
+
+/**
+ * Headliner forecast for a calendar day.
+ *
+ * Grounds the abstract crowd level ("high", "extreme", …) in concrete numbers:
+ * the top headliner rides and the wait a visitor should expect for THIS day at
+ * THIS park. Present only on days that carry per-attraction ML predictions
+ * (today + future); absent on completed/closed days.
+ */
+export class HeadlinerForecast {
+  @ApiProperty({
+    description: "Average expected wait across the park's headliners (minutes)",
+    example: 38,
+  })
+  avgWait: number;
+
+  @ApiProperty({
+    description:
+      "Top headliner rides for this day, sorted by expected wait desc",
+    type: () => [HeadlinerWaitForecast],
+  })
+  rides: HeadlinerWaitForecast[];
+}
+
+/**
+ * A neighbouring-region holiday that meets the calendar priority threshold.
+ *
+ * Distinct from the local `events`/holiday flags: these are holidays in a
+ * NEIGHBOURING region whose day-trippers drive up local crowds. Pre-ranked and
+ * capped so the default payload stays lean (the full, unranked list is still
+ * available via `?include=influencingHolidays`).
+ */
+export class NeighborHoliday {
+  @ApiProperty({ description: "English holiday name" })
+  name: string;
+
+  @ApiProperty({ description: "The neighbouring region this holiday is in" })
+  source: {
+    countryCode: string;
+    regionCode?: string | null;
+  };
+
+  @ApiProperty({
+    description: "Type of holiday",
+    enum: ["public", "school", "bank"],
+  })
+  holidayType: string;
+
+  @ApiProperty({
+    description:
+      "Influence rank: 1 = the nearest/most important influencing region. " +
+      "Lower = stronger crowd impact. Only the top-ranked regions are surfaced.",
+    example: 1,
+  })
+  priority: number;
+}
+
+/**
  * Calendar Day - unified structure
  */
 export class CalendarDay {
@@ -196,6 +269,26 @@ export class CalendarDay {
       "request it with `?include=influencingHolidays`.",
   })
   influencingHolidays?: InfluencingHoliday[];
+
+  @ApiProperty({
+    type: () => HeadlinerForecast,
+    required: false,
+    description:
+      "Expected headliner waits for this day (avg + top rides). Grounds the " +
+      "crowd level in concrete numbers. Present on days with ML predictions " +
+      "(today + future), absent on completed/closed days.",
+  })
+  headlinerForecast?: HeadlinerForecast;
+
+  @ApiProperty({
+    type: () => [NeighborHoliday],
+    required: false,
+    description:
+      "Priority-ranked, capped holidays in NEIGHBOURING regions (top influencing " +
+      "regions only) whose day-trippers raise local crowds. Default-on and lean; " +
+      "distinct from the local holiday flags. Sorted by priority (1 = strongest).",
+  })
+  neighborHolidays?: NeighborHoliday[];
 
   @ApiProperty({
     description:

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -35,6 +35,25 @@ export class AttractionsService {
    */
   getRepository(): Repository<Attraction> {
     return this.attractionRepository;
+  }
+
+  /**
+   * Resolve attraction display names for a set of IDs (lightweight id → name map).
+   *
+   * Used by the calendar to label per-day headliner forecasts without loading
+   * full attraction entities/relations. Missing IDs are simply absent from the map.
+   */
+  async getNamesByIds(ids: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (ids.length === 0) return result;
+    const rows = await this.attractionRepository.find({
+      where: { id: In(ids) },
+      select: ["id", "name"],
+    });
+    for (const row of rows) {
+      result.set(row.id, row.name);
+    }
+    return result;
   }
 
   /**
