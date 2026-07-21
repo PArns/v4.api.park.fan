@@ -3,3 +3,4 @@ export * from "./statistics.dto";
 export * from "./global-stats.dto";
 export * from "./geo-live-stats.dto";
 export * from "./ticker.dto";
+export * from "./global-best-times.dto";
