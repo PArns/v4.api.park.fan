@@ -35,6 +35,8 @@ import {
   ParkStatsItemDto,
   AttractionStatsItemDto,
   PeakHourSource,
+  GlobalBestTimesDto,
+  BestTimeBucketDto,
 } from "./dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { RopeDropStored } from "../common/types/rope-drop.type";
@@ -2767,6 +2769,176 @@ export class AnalyticsService {
       typicalWaitThisHour: enrichment.stats?.typicalWaitThisHour ?? null,
       currentVsTypical: enrichment.stats?.currentVsTypical ?? null,
     };
+  }
+
+  /**
+   * Global "best time to visit" aggregate across all parks — relative busyness by
+   * weekday and by month, over the last 24 months of `park_daily_stats`. Powers the
+   * frontend best-time-to-visit hub. Each park is normalised to its own average
+   * first (so a big park's long queues don't dominate a small park's), then the
+   * relative indices are averaged across parks. Cached 24h in Redis, mirroring
+   * DiscoveryService.getCountrySummary.
+   */
+  async getGlobalBestTimes(): Promise<GlobalBestTimesDto> {
+    const cacheKey = "analytics:best-times-global:v1";
+    const cached = safeJsonParse<GlobalBestTimesDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
+
+    const WINDOW_MONTHS = 24;
+    const MIN_PARK_SAMPLE_DAYS = 60; // a park needs this many operating days to contribute
+    const MIN_PARKS_TO_DISPLAY = 20;
+
+    const cutoff = new Date();
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - WINDOW_MONTHS);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const nowStr = new Date().toISOString().slice(0, 10);
+
+    // camelCase columns must be quoted (TypeORM default, no naming strategy).
+    // Postgres DOW: 0=Sunday … 6=Saturday; MONTH: 1..12.
+    const runQuery = async (extract: "MONTH" | "DOW") => {
+      const rows: Array<{
+        parkId: string;
+        bucket: string;
+        avg_p50: string;
+        n: string;
+      }> = await this.parkDailyStatsRepository.manager.query(
+        `SELECT "parkId",
+                EXTRACT(${extract} FROM date::date)::int AS bucket,
+                AVG("p50WaitTime")                       AS avg_p50,
+                COUNT(*)                                 AS n
+         FROM park_daily_stats
+         WHERE date >= $1 AND "p50WaitTime" IS NOT NULL
+         GROUP BY "parkId", bucket`,
+        [cutoffStr],
+      );
+      return rows;
+    };
+
+    const [monthRows, dowRows] = await Promise.all([
+      runQuery("MONTH"),
+      runQuery("DOW"),
+    ]);
+
+    // Per-park overall daily average (sample-weighted) — the normalisation
+    // denominator shared by both dimensions. Derived from the month rows.
+    const parkTotals = new Map<string, { sum: number; days: number }>();
+    for (const r of monthRows) {
+      const p50 = Number(r.avg_p50);
+      const n = Number(r.n);
+      if (!isFinite(p50) || !isFinite(n) || n <= 0) continue;
+      const t = parkTotals.get(r.parkId) ?? { sum: 0, days: 0 };
+      t.sum += p50 * n;
+      t.days += n;
+      parkTotals.set(r.parkId, t);
+    }
+    const parkMean = new Map<string, number>();
+    for (const [parkId, t] of parkTotals) {
+      if (t.days >= MIN_PARK_SAMPLE_DAYS && t.sum > 0) {
+        parkMean.set(parkId, t.sum / t.days);
+      }
+    }
+    const qualifyingParks = parkMean.size;
+
+    const reduce = (
+      rows: Array<{
+        parkId: string;
+        bucket: string;
+        avg_p50: string;
+        n: string;
+      }>,
+      size: number,
+      offset: number, // 0 for DOW (0..6), 1 for MONTH (1..12)
+    ): BestTimeBucketDto[] => {
+      const acc = new Map<
+        number,
+        { indices: number[]; p50Sum: number; days: number; parks: Set<string> }
+      >();
+      for (const r of rows) {
+        const mean = parkMean.get(r.parkId);
+        if (mean == null) continue; // park didn't qualify
+        const key = Number(r.bucket);
+        const p50 = Number(r.avg_p50);
+        const n = Number(r.n);
+        if (!isFinite(key) || !isFinite(p50) || !isFinite(n) || n <= 0)
+          continue;
+        const a = acc.get(key) ?? {
+          indices: [],
+          p50Sum: 0,
+          days: 0,
+          parks: new Set<string>(),
+        };
+        a.indices.push(p50 / mean);
+        a.p50Sum += p50 * n;
+        a.days += n;
+        a.parks.add(r.parkId);
+        acc.set(key, a);
+      }
+      const out: BestTimeBucketDto[] = [];
+      for (let i = 0; i < size; i++) {
+        const key = i + offset;
+        const a = acc.get(key);
+        if (!a || a.indices.length === 0) {
+          out.push({
+            key,
+            relativeIndex: 1,
+            crowdLevel: "unknown" as CrowdLevel,
+            avgWaitP50: 0,
+            sampleDays: 0,
+            parkCount: 0,
+          });
+          continue;
+        }
+        const relativeIndex =
+          a.indices.reduce((s, v) => s + v, 0) / a.indices.length;
+        out.push({
+          key,
+          relativeIndex: Math.round(relativeIndex * 1000) / 1000,
+          crowdLevel: this.relativeIndexToCrowdLevel(relativeIndex),
+          avgWaitP50: Math.round(a.p50Sum / a.days),
+          sampleDays: a.days,
+          parkCount: a.parks.size,
+        });
+      }
+      return out;
+    };
+
+    const byMonth = reduce(monthRows, 12, 1);
+    const byDayOfWeek = reduce(dowRows, 7, 0);
+
+    const totalSampleDays = [...parkMean.keys()].reduce(
+      (s, parkId) => s + (parkTotals.get(parkId)?.days ?? 0),
+      0,
+    );
+
+    const result: GlobalBestTimesDto = {
+      byDayOfWeek,
+      byMonth,
+      meta: {
+        windowMonths: WINDOW_MONTHS,
+        dataFrom: cutoffStr,
+        dataTo: nowStr,
+        parkCount: qualifyingParks,
+        totalSampleDays,
+        displayable: qualifyingParks >= MIN_PARKS_TO_DISPLAY,
+        generatedAt: new Date().toISOString(),
+        schemaVersion: 1,
+      },
+    };
+
+    await this.redis.set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60);
+    return result;
+  }
+
+  /** Maps a relative busyness index (1.0 = all-park average) to a crowd level. */
+  private relativeIndexToCrowdLevel(index: number): CrowdLevel {
+    if (index < 0.8) return "very_low";
+    if (index < 0.92) return "low";
+    if (index < 1.02) return "moderate";
+    if (index < 1.12) return "high";
+    if (index < 1.25) return "very_high";
+    return "extreme";
   }
 
   async getGlobalRealtimeStats(): Promise<GlobalStatsDto> {

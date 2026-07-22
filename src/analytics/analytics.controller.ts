@@ -1,7 +1,12 @@
 import { Controller, Get, UseInterceptors } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AnalyticsService } from "./analytics.service";
-import { GlobalStatsDto, GeoLiveStatsDto, TickerResponseDto } from "./dto";
+import {
+  GlobalStatsDto,
+  GeoLiveStatsDto,
+  TickerResponseDto,
+  GlobalBestTimesDto,
+} from "./dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
 @ApiTags("stats")
@@ -67,5 +72,24 @@ export class AnalyticsController {
   })
   async getTicker(): Promise<TickerResponseDto> {
     return this.analyticsService.getTickerData() as Promise<TickerResponseDto>;
+  }
+
+  @Get("best-times")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
+  @ApiOperation({
+    summary: "Global best time to visit theme parks",
+    description:
+      "Relative busyness across all tracked parks, aggregated by weekday and by month " +
+      "over the last 24 months. Each park is normalised to its own average first, so " +
+      "large and small parks count equally — the honest 'when is it quietest overall' " +
+      "signal for the best-time-to-visit hub. Cached for 24 hours.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Global relative busyness by weekday and month",
+    type: GlobalBestTimesDto,
+  })
+  async getBestTimes(): Promise<GlobalBestTimesDto> {
+    return this.analyticsService.getGlobalBestTimes();
   }
 }
