@@ -301,8 +301,13 @@ export class ChildrenMetadataProcessor {
       `📊 ${wikiAttractions.length}/${attractions.length} attractions have wiki entity documents`,
     );
 
-    const BATCH_SIZE = 10;
-    const BATCH_DELAY_MS = 250;
+    // Deliberately slow: ~4 requests/s stays under the wiki's per-IP rate
+    // limit (the first run at 10-parallel/250ms tripped a 429 after ~1k
+    // requests and the distributed block failed everything after it).
+    const BATCH_SIZE = 4;
+    const BATCH_DELAY_MS = 1000;
+    const RATE_LIMIT_RE = /blocked for (\d+)s/;
+    const MAX_ATTEMPTS = 5;
     let updated = 0;
     let failed = 0;
 
@@ -310,35 +315,48 @@ export class ChildrenMetadataProcessor {
       const batch = wikiAttractions.slice(i, i + BATCH_SIZE);
       await Promise.all(
         batch.map(async (attraction) => {
-          try {
-            const entity = await this.themeParksClient.getEntity(
-              attraction.externalId,
-            );
-            const toCm = (v: unknown): number | null =>
-              typeof v === "number" && v > 0 ? Math.round(v) : null;
-            const minHeight = toCm(entity.minimumHeight);
-            const maxHeight = toCm(entity.maximumHeight);
-            const mayGetWet =
-              typeof entity.mayGetWet === "boolean" ? entity.mayGetWet : null;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+              const entity = await this.themeParksClient.getEntity(
+                attraction.externalId,
+              );
+              const toCm = (v: unknown): number | null =>
+                typeof v === "number" && v > 0 ? Math.round(v) : null;
+              const minHeight = toCm(entity.minimumHeight);
+              const maxHeight = toCm(entity.maximumHeight);
+              const mayGetWet =
+                typeof entity.mayGetWet === "boolean" ? entity.mayGetWet : null;
 
-            const update: Partial<{
-              minimumHeight: number;
-              maximumHeight: number;
-              mayGetWet: boolean;
-            }> = {};
-            if (minHeight !== null && minHeight !== attraction.minimumHeight)
-              update.minimumHeight = minHeight;
-            if (maxHeight !== null && maxHeight !== attraction.maximumHeight)
-              update.maximumHeight = maxHeight;
-            if (mayGetWet !== null && mayGetWet !== attraction.mayGetWet)
-              update.mayGetWet = mayGetWet;
+              const update: Partial<{
+                minimumHeight: number;
+                maximumHeight: number;
+                mayGetWet: boolean;
+              }> = {};
+              if (minHeight !== null && minHeight !== attraction.minimumHeight)
+                update.minimumHeight = minHeight;
+              if (maxHeight !== null && maxHeight !== attraction.maximumHeight)
+                update.maximumHeight = maxHeight;
+              if (mayGetWet !== null && mayGetWet !== attraction.mayGetWet)
+                update.mayGetWet = mayGetWet;
 
-            if (Object.keys(update).length > 0) {
-              await repo.update(attraction.id, update);
-              updated++;
+              if (Object.keys(update).length > 0) {
+                await repo.update(attraction.id, update);
+                updated++;
+              }
+              return;
+            } catch (e) {
+              // The client surfaces 429s as "... (blocked for Xs)" — wait out
+              // the distributed block and retry instead of counting a failure.
+              const blockMatch =
+                e instanceof Error ? e.message.match(RATE_LIMIT_RE) : null;
+              if (blockMatch && attempt < MAX_ATTEMPTS) {
+                const waitS = Math.min(parseInt(blockMatch[1], 10) || 15, 120);
+                await this.sleep((waitS + 1) * 1000);
+                continue;
+              }
+              failed++; // individual entity failures shouldn't kill the run
+              return;
             }
-          } catch {
-            failed++; // individual entity failures shouldn't kill the run
           }
         }),
       );
