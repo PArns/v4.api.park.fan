@@ -19,6 +19,7 @@ import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-time
 import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks.exclusions";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
  * Children Metadata Processor (Combined)
@@ -50,6 +51,7 @@ export class ChildrenMetadataProcessor {
     @InjectQueue("entity-mappings")
     private entityMappingsQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private revalidationService: RevalidationService,
   ) {}
 
   @Process("fetch-all-children")
@@ -376,6 +378,12 @@ export class ChildrenMetadataProcessor {
     );
 
     await this.applyManualAttractionMetadata();
+
+    // The frontend caches the park/attraction structure payloads for a day
+    // (Vercel Data Cache, tags 'parks'/'attractions') — bust them so the new
+    // metadata (heights, RCDB ids) shows up without waiting out the TTL.
+    await this.revalidationService.revalidateTags(["parks", "attractions"]);
+
     this.logger.log("🎉 Attraction detail sync complete!");
   }
 
