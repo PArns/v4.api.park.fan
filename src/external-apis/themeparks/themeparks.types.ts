@@ -134,6 +134,9 @@ export interface EntityResponse {
   // Detailed fields (available in /entity/{id} but not /children)
   cuisines?: string[];
   attractionType?: string;
+  minimumHeight?: number; // Minimum rider height in cm
+  maximumHeight?: number; // Maximum rider height in cm (kiddie rides)
+  mayGetWet?: boolean; // Water rides
 }
 
 /**

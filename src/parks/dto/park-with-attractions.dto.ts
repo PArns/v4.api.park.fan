@@ -148,6 +148,40 @@ export class ParkAttractionDto {
   isCurrentlyInSeason?: boolean | null;
 
   @ApiProperty({
+    description: "Minimum rider height in cm. Null if unrestricted or unknown.",
+    example: 140,
+    required: false,
+    nullable: true,
+  })
+  minimumHeight?: number | null;
+
+  @ApiProperty({
+    description:
+      "Maximum rider height in cm (kiddie rides). Null if unrestricted or unknown.",
+    example: 150,
+    required: false,
+    nullable: true,
+  })
+  maximumHeight?: number | null;
+
+  @ApiProperty({
+    description: "Whether riders may get wet. Null = unknown (not 'dry').",
+    example: true,
+    required: false,
+    nullable: true,
+  })
+  mayGetWet?: boolean | null;
+
+  @ApiProperty({
+    description:
+      "RCDB (rcdb.com) database id for outbound links (https://rcdb.com/{id}.htm). Null for non-coasters or unmatched rides.",
+    example: 12723,
+    required: false,
+    nullable: true,
+  })
+  rcdbId?: number | null;
+
+  @ApiProperty({
     description:
       "Recommended visit time slots for today based on 15-min ML predictions. " +
       "Sorted by time. 'optimal' = global minimum wait, 'good' = within 40% of minimum.",
@@ -579,6 +613,10 @@ export class ParkWithAttractionsDto {
               isSeasonal,
               seasonMonths,
               isCurrentlyInSeason,
+              minimumHeight: attraction.minimumHeight ?? null,
+              maximumHeight: attraction.maximumHeight ?? null,
+              mayGetWet: attraction.mayGetWet ?? null,
+              rcdbId: attraction.rcdbId ?? null,
               // queue data, forecasts etc will be attached by service
             };
           })

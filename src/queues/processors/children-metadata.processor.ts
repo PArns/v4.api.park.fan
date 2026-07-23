@@ -12,6 +12,7 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { ThemeParksMapper } from "../../external-apis/themeparks/themeparks.mapper";
 import { EntityResponse } from "../../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
+import { MANUAL_ATTRACTION_METADATA } from "../../attractions/data/manual-attraction-metadata";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
@@ -258,6 +259,156 @@ export class ChildrenMetadataProcessor {
       this.logger.error("❌ Combined children metadata sync failed", error);
       throw error; // Bull will retry
     }
+  }
+
+  /**
+   * Attraction detail sync: minimum rider height + manual metadata overrides.
+   *
+   * The /children bulk endpoint used by fetch-all-children does NOT carry
+   * `minimumHeight` — only the per-entity document (GET /v1/entity/{id}) does.
+   * Height restrictions change rarely, so this runs as its own low-frequency
+   * job instead of bloating the daily children sync with ~5k extra requests.
+   *
+   * Afterwards MANUAL_ATTRACTION_METADATA is applied:
+   * - rcdbId is always taken from the seed (no upstream source exists)
+   * - minimumHeightCm only fills attractions the wiki left at NULL, so the
+   *   upstream value wins whenever the parks' own apps publish one
+   */
+  @Process("sync-attraction-details")
+  async handleSyncAttractionDetails(_job: Job): Promise<void> {
+    this.logger.log("📏 Starting attraction detail sync (minimumHeight)...");
+
+    const repo = this.attractionsService.getRepository();
+    const attractions = await repo.find({
+      select: [
+        "id",
+        "externalId",
+        "minimumHeight",
+        "maximumHeight",
+        "mayGetWet",
+      ],
+    });
+
+    // Only ThemeParks.wiki entities have per-entity documents (UUID ids);
+    // Queue-Times-only attractions (e.g. "qt-ride-8") are skipped.
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const wikiAttractions = attractions.filter((a) =>
+      UUID_RE.test(a.externalId),
+    );
+
+    this.logger.log(
+      `📊 ${wikiAttractions.length}/${attractions.length} attractions have wiki entity documents`,
+    );
+
+    const BATCH_SIZE = 10;
+    const BATCH_DELAY_MS = 250;
+    let updated = 0;
+    let failed = 0;
+
+    for (let i = 0; i < wikiAttractions.length; i += BATCH_SIZE) {
+      const batch = wikiAttractions.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (attraction) => {
+          try {
+            const entity = await this.themeParksClient.getEntity(
+              attraction.externalId,
+            );
+            const toCm = (v: unknown): number | null =>
+              typeof v === "number" && v > 0 ? Math.round(v) : null;
+            const minHeight = toCm(entity.minimumHeight);
+            const maxHeight = toCm(entity.maximumHeight);
+            const mayGetWet =
+              typeof entity.mayGetWet === "boolean" ? entity.mayGetWet : null;
+
+            const update: Partial<{
+              minimumHeight: number;
+              maximumHeight: number;
+              mayGetWet: boolean;
+            }> = {};
+            if (minHeight !== null && minHeight !== attraction.minimumHeight)
+              update.minimumHeight = minHeight;
+            if (maxHeight !== null && maxHeight !== attraction.maximumHeight)
+              update.maximumHeight = maxHeight;
+            if (mayGetWet !== null && mayGetWet !== attraction.mayGetWet)
+              update.mayGetWet = mayGetWet;
+
+            if (Object.keys(update).length > 0) {
+              await repo.update(attraction.id, update);
+              updated++;
+            }
+          } catch {
+            failed++; // individual entity failures shouldn't kill the run
+          }
+        }),
+      );
+
+      if (i % 500 === 0 && i > 0) {
+        this.logger.log(
+          `Progress: ${i}/${wikiAttractions.length} (${updated} updated, ${failed} failed)`,
+        );
+      }
+      if (i + BATCH_SIZE < wikiAttractions.length) {
+        await this.sleep(BATCH_DELAY_MS);
+      }
+    }
+
+    this.logger.log(
+      `📏 Wiki detail sync done: ${updated} heights updated, ${failed} failed`,
+    );
+
+    await this.applyManualAttractionMetadata();
+    this.logger.log("🎉 Attraction detail sync complete!");
+  }
+
+  /**
+   * Apply MANUAL_ATTRACTION_METADATA (RCDB ids from Wikidata P2751/CC0 and
+   * curated minimum heights for parks without upstream height data).
+   */
+  private async applyManualAttractionMetadata(): Promise<void> {
+    const repo = this.attractionsService.getRepository();
+    let rcdbApplied = 0;
+    let heightsApplied = 0;
+
+    for (const entry of MANUAL_ATTRACTION_METADATA) {
+      const attraction = await repo
+        .createQueryBuilder("attraction")
+        .innerJoin("attraction.park", "park")
+        .where("park.citySlug = :citySlug", { citySlug: entry.citySlug })
+        .andWhere("park.slug = :parkSlug", { parkSlug: entry.parkSlug })
+        .andWhere("attraction.slug = :attractionSlug", {
+          attractionSlug: entry.attractionSlug,
+        })
+        .select([
+          "attraction.id",
+          "attraction.minimumHeight",
+          "attraction.rcdbId",
+        ])
+        .getOne();
+
+      if (!attraction) continue; // slugs drift as parks rename rides — skip silently
+
+      const update: Partial<{
+        rcdbId: number;
+        minimumHeight: number;
+      }> = {};
+      if (entry.rcdbId && attraction.rcdbId !== entry.rcdbId) {
+        update.rcdbId = entry.rcdbId;
+        rcdbApplied++;
+      }
+      // Curated height is a FALLBACK — never overwrite an upstream value
+      if (entry.minimumHeightCm && attraction.minimumHeight === null) {
+        update.minimumHeight = entry.minimumHeightCm;
+        heightsApplied++;
+      }
+      if (Object.keys(update).length > 0) {
+        await repo.update(attraction.id, update);
+      }
+    }
+
+    this.logger.log(
+      `🔗 Manual metadata applied: ${rcdbApplied} RCDB ids, ${heightsApplied} fallback heights`,
+    );
   }
 
   /**
