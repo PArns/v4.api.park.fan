@@ -251,6 +251,23 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "Maximum rider height in cm (kiddie rides). Null if unrestricted or unknown.",
+    example: 150,
+    required: false,
+    nullable: true,
+  })
+  maximumHeight?: number | null;
+
+  @ApiProperty({
+    description: "Whether riders may get wet. Null = unknown (not 'dry').",
+    example: true,
+    required: false,
+    nullable: true,
+  })
+  mayGetWet?: boolean | null;
+
+  @ApiProperty({
+    description:
       "RCDB (rcdb.com) database id for outbound links (https://rcdb.com/{id}.htm). Null for non-coasters or unmatched rides.",
     example: 12723,
     required: false,
@@ -409,6 +426,8 @@ export class AttractionResponseDto {
       isSeasonal: attraction.isSeasonal || false,
       seasonMonths: attraction.seasonMonths || null,
       minimumHeight: attraction.minimumHeight ?? null,
+      maximumHeight: attraction.maximumHeight ?? null,
+      mayGetWet: attraction.mayGetWet ?? null,
       rcdbId: attraction.rcdbId ?? null,
       isCurrentlyInSeason: (() => {
         if (!attraction.isSeasonal) return null;

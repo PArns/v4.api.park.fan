@@ -85,6 +85,14 @@ export class Attraction {
   @Column({ name: "minimum_height", type: "int", nullable: true })
   minimumHeight: number | null;
 
+  // Maximum rider height in cm (kiddie rides). Rare upstream (~2% of rides).
+  @Column({ name: "maximum_height", type: "int", nullable: true })
+  maximumHeight: number | null;
+
+  // Whether riders may get wet (water rides). Null = unknown, not "dry".
+  @Column({ name: "may_get_wet", type: "boolean", nullable: true })
+  mayGetWet: boolean | null;
+
   // RCDB (rcdb.com) database ID for outbound links (https://rcdb.com/{id}.htm).
   // Sourced from Wikidata property P2751 (CC0) via MANUAL_ATTRACTION_METADATA —
   // linking to RCDB is explicitly permitted by their ToS, ingesting their data is not.

@@ -280,7 +280,13 @@ export class ChildrenMetadataProcessor {
 
     const repo = this.attractionsService.getRepository();
     const attractions = await repo.find({
-      select: ["id", "externalId", "minimumHeight"],
+      select: [
+        "id",
+        "externalId",
+        "minimumHeight",
+        "maximumHeight",
+        "mayGetWet",
+      ],
     });
 
     // Only ThemeParks.wiki entities have per-entity documents (UUID ids);
@@ -308,13 +314,27 @@ export class ChildrenMetadataProcessor {
             const entity = await this.themeParksClient.getEntity(
               attraction.externalId,
             );
-            const height =
-              typeof entity.minimumHeight === "number" &&
-              entity.minimumHeight > 0
-                ? Math.round(entity.minimumHeight)
-                : null;
-            if (height !== null && height !== attraction.minimumHeight) {
-              await repo.update(attraction.id, { minimumHeight: height });
+            const toCm = (v: unknown): number | null =>
+              typeof v === "number" && v > 0 ? Math.round(v) : null;
+            const minHeight = toCm(entity.minimumHeight);
+            const maxHeight = toCm(entity.maximumHeight);
+            const mayGetWet =
+              typeof entity.mayGetWet === "boolean" ? entity.mayGetWet : null;
+
+            const update: Partial<{
+              minimumHeight: number;
+              maximumHeight: number;
+              mayGetWet: boolean;
+            }> = {};
+            if (minHeight !== null && minHeight !== attraction.minimumHeight)
+              update.minimumHeight = minHeight;
+            if (maxHeight !== null && maxHeight !== attraction.maximumHeight)
+              update.maximumHeight = maxHeight;
+            if (mayGetWet !== null && mayGetWet !== attraction.mayGetWet)
+              update.mayGetWet = mayGetWet;
+
+            if (Object.keys(update).length > 0) {
+              await repo.update(attraction.id, update);
               updated++;
             }
           } catch {
