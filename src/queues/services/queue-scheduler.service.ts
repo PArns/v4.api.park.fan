@@ -193,6 +193,27 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Attraction detail sync (minimumHeight + manual RCDB/height metadata).
+    // Weekly is plenty — height restrictions are near-static — and it needs
+    // one wiki request per attraction (~5k), so it must not run daily.
+    const hasAttractionDetailsCron = await this.hasRepeatableJob(
+      this.childrenQueue,
+      "attraction-details-cron",
+    );
+
+    if (!hasAttractionDetailsCron) {
+      await this.childrenQueue.add(
+        "sync-attraction-details",
+        {},
+        {
+          repeat: {
+            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the 4am children sync
+          },
+          jobId: "attraction-details-cron",
+        },
+      );
+    }
+
     // Weather full sync: Every 12 hours (forecast + current)
     const hasWeatherFullCron = await this.hasRepeatableJob(
       this.weatherQueue,

@@ -228,6 +228,38 @@ export class AdminController {
   }
 
   /**
+   * Manually trigger attraction detail sync
+   *
+   * Syncs minimumHeight from ThemeParks.wiki per-entity documents and applies
+   * MANUAL_ATTRACTION_METADATA (RCDB ids, curated fallback heights).
+   */
+  @Post("sync-attraction-details")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger attraction detail sync",
+    description:
+      "Syncs minimum rider heights from ThemeParks.wiki entity documents (~1 request per attraction) and applies manual RCDB/height metadata",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Attraction detail sync job queued successfully",
+  })
+  async triggerAttractionDetailsSync(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const job = await this.childrenQueue.add(
+      "sync-attraction-details",
+      {},
+      { priority: 10 },
+    );
+    return {
+      message: "Attraction detail sync job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
    * Manually trigger park enrichment
    *
    * Enriches all parks with ISO country codes and influencing regions.

@@ -79,6 +79,18 @@ export class Attraction {
   @Column({ nullable: true })
   attractionType: string;
 
+  // Minimum rider height in cm. Synced from ThemeParks.wiki entity documents
+  // (which mirror the parks' own app APIs); manually-curated fallback values
+  // from MANUAL_ATTRACTION_METADATA fill parks the wiki doesn't cover (Disney).
+  @Column({ name: "minimum_height", type: "int", nullable: true })
+  minimumHeight: number | null;
+
+  // RCDB (rcdb.com) database ID for outbound links (https://rcdb.com/{id}.htm).
+  // Sourced from Wikidata property P2751 (CC0) via MANUAL_ATTRACTION_METADATA —
+  // linking to RCDB is explicitly permitted by their ToS, ingesting their data is not.
+  @Column({ name: "rcdb_id", type: "int", nullable: true })
+  rcdbId: number | null;
+
   @Column({ name: "is_seasonal", default: false })
   isSeasonal: boolean;
 

@@ -242,6 +242,23 @@ export class AttractionResponseDto {
   isCurrentlyInSeason?: boolean | null;
 
   @ApiProperty({
+    description: "Minimum rider height in cm. Null if unrestricted or unknown.",
+    example: 140,
+    required: false,
+    nullable: true,
+  })
+  minimumHeight?: number | null;
+
+  @ApiProperty({
+    description:
+      "RCDB (rcdb.com) database id for outbound links (https://rcdb.com/{id}.htm). Null for non-coasters or unmatched rides.",
+    example: 12723,
+    required: false,
+    nullable: true,
+  })
+  rcdbId?: number | null;
+
+  @ApiProperty({
     description: "Frontend URL to attraction",
     nullable: true,
     required: false,
@@ -391,6 +408,8 @@ export class AttractionResponseDto {
 
       isSeasonal: attraction.isSeasonal || false,
       seasonMonths: attraction.seasonMonths || null,
+      minimumHeight: attraction.minimumHeight ?? null,
+      rcdbId: attraction.rcdbId ?? null,
       isCurrentlyInSeason: (() => {
         if (!attraction.isSeasonal) return null;
         if (!attraction.seasonMonths || attraction.seasonMonths.length === 0)
