@@ -37,6 +37,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { persistenceBlendServe } from "./utils/persistence-blend.util";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
@@ -1440,21 +1441,35 @@ export class MLService {
     const hourly = preds.filter((p) => p.predictionType === "hourly");
     if (hourly.length === 0) return;
     const ids = [...new Set(hourly.map((p) => p.attractionId))];
-    const pcn = await this.getPcnIntradayWaits(ids, startTime);
+    const [pcn, anchors] = await Promise.all([
+      this.getPcnIntradayWaits(ids, startTime),
+      this.fetchCurrentWaits(ids), // §7.7 blend anchor: latest realised wait per attraction
+    ]);
+    const nowMs = (startTime ?? new Date()).getTime();
     let overridden = 0;
     for (const p of hourly) {
       const q = pcn.get(p.attractionId)?.get(p.predictedTime);
       if (q === undefined) continue;
+      // §7.7 anchor-gated persistence blend (validated on the shadow board: busy 1h +2.2..+2.8,
+      // aggregate ~neutral): at short lead the wait "L hours from now" is better predicted by
+      // "the wait now" than by the model, so blend the served q0.5 toward the current wait —
+      // decaying to pure PCN by 3h and only for rides with a real wait (the anchor gate).
+      const leadHours =
+        (new Date(p.predictedTime).getTime() - nowMs) / 3_600_000;
+      const displayWait = persistenceBlendServe(
+        q.display,
+        anchors.get(p.attractionId),
+        leadHours,
+      );
       // Same serve-side quantization CatBoost applies before storing (5er steps,
       // min 10 when positive) — a plain Math.round leaked 1-minute waits into the UI.
-      p.predictedWaitTime = roundServedWait(q.display);
+      p.predictedWaitTime = roundServedWait(displayWait);
       if (p.baseline && p.baseline > 0) {
-        // Crowd signal from q0.8 (fallback to display for rows written before q0.8
-        // serving); clamp to >= display — quantiles are monotonic going forward
-        // (pcn-service enforces it), but older stored rows may still cross.
-        // roundServedWait is monotone, so the rounded crowd stays >= the display.
+        // Crowd signal from q0.8 (fallback to the blended display for rows written before q0.8
+        // serving); clamp to >= the BLENDED display so the served display/crowd pair stays
+        // monotone (roundServedWait is monotone, so the rounded crowd stays >= the display).
         const crowdWait = roundServedWait(
-          Math.max(q.crowd ?? q.display, q.display),
+          Math.max(q.crowd ?? displayWait, displayWait),
         );
         // determineCrowdLevel never returns "unknown" (we guard baseline>0), so it is a
         // valid PredictionDto crowdLevel — narrow the wider CrowdLevel type with a cast.
@@ -1470,6 +1485,36 @@ export class MLService {
         `PCN intraday override: ${overridden}/${hourly.length} slots`,
       );
     }
+  }
+
+  /**
+   * Latest realised STANDBY wait per attraction (within the last 3h) — the anchor for the
+   * §7.7 persistence blend. Non-fatal: a missing anchor just leaves that ride's forecast raw.
+   */
+  private async fetchCurrentWaits(ids: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (ids.length === 0) return out;
+    try {
+      const rows = await this.queueDataRepository
+        .createQueryBuilder("q")
+        .distinctOn(["q.attractionId"])
+        .where("q.attractionId = ANY(:ids)", { ids })
+        .andWhere("q.timestamp >= :recent", {
+          recent: new Date(Date.now() - 3 * 60 * 60 * 1000),
+        })
+        .andWhere("q.queueType = :queueType", { queueType: QueueType.STANDBY })
+        .orderBy("q.attractionId")
+        .addOrderBy("q.timestamp", "DESC")
+        .getMany();
+      for (const r of rows) {
+        if (r.waitTime !== null && r.waitTime !== undefined) {
+          out.set(r.attractionId, r.waitTime);
+        }
+      }
+    } catch (err) {
+      this.logger.debug(`PCN blend anchor fetch failed: ${err}`);
+    }
+    return out;
   }
 
   /**
