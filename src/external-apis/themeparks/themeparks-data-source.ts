@@ -126,9 +126,9 @@ export class ThemeParksDataSource implements IDataSource {
         status: this.mapStatus(entity.status),
         waitTime: queueObj?.STANDBY?.waitTime ?? undefined,
         lastUpdated: entity.lastUpdated,
-        // CRITICAL FIX: Keep queue as object (not array) to preserve all queue type data
-        // The processor expects: { STANDBY: {...}, SINGLE_RIDER: {...}, etc }
-        // NOT an array: [{ queueType: 'STANDBY', ... }, ...]
+        // Queue must stay an object keyed by queue type
+        // ({ STANDBY: {...}, SINGLE_RIDER: {...}, … }) — QueueDataService
+        // iterates Object.keys(queue) to persist every queue type.
         queue:
           queueObj && Object.keys(queueObj).length > 0 ? queueObj : undefined,
         showtimes: entity.showtimes,

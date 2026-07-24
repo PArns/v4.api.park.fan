@@ -10,6 +10,7 @@ import {
   LiveStatus,
 } from "../data-sources/interfaces/data-source.interface";
 import { QueueTimesClient } from "./queue-times.client";
+import { QueueTimesRide } from "./queue-times.types";
 
 /**
  * Queue-Times.com Data Source
@@ -42,7 +43,7 @@ export class QueueTimesDataSource implements IDataSource {
       for (const park of group.parks) {
         // Optimization: Include rides in metadata if available for signature matching
         // Some groups might already have ride lists in this summary call
-        const attractions = ((park as any).rides || []).map((r: any) => ({
+        const attractions = (park.rides || []).map((r) => ({
           name: r.name,
           externalId: `qt-ride-${r.id}`,
         }));
@@ -103,7 +104,7 @@ export class QueueTimesDataSource implements IDataSource {
   }
 
   private transformRideToEntity(
-    ride: any,
+    ride: QueueTimesRide,
     landExternalId?: string,
   ): EntityLiveData {
     return {
