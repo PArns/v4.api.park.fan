@@ -56,6 +56,25 @@ export type ServedIntradayAccuracy = {
   days: number;
 };
 
+/** Best/worst-predicted attractions board (shared by the CatBoost hourly and TFT
+ *  daily performer endpoints). */
+export type TopBottomPerformers = {
+  topPerformers: Array<{
+    attractionId: string;
+    attractionName: string;
+    parkName: string;
+    mae: number;
+    predictionsCount: number;
+  }>;
+  bottomPerformers: Array<{
+    attractionId: string;
+    attractionName: string;
+    parkName: string;
+    mae: number;
+    predictionsCount: number;
+  }>;
+};
+
 /**
  * PredictionAccuracyService
  *
@@ -1563,22 +1582,20 @@ export class PredictionAccuracyService {
   async getTopBottomPerformers(
     days: number = 7,
     limit: number = 5,
-  ): Promise<{
-    topPerformers: Array<{
-      attractionId: string;
-      attractionName: string;
-      parkName: string;
-      mae: number;
-      predictionsCount: number;
-    }>;
-    bottomPerformers: Array<{
-      attractionId: string;
-      attractionName: string;
-      parkName: string;
-      mae: number;
-      predictionsCount: number;
-    }>;
-  }> {
+  ): Promise<TopBottomPerformers> {
+    // 7-day per-attraction MAE GROUP BY over ~1M rows (~2.7s), polled ~hourly by the
+    // admin monitor → cache at the shared aggregation TTL like the sibling boards.
+    return this.cachedAgg(
+      `accuracy:topbottom:${days}:${limit}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeTopBottomPerformers(days, limit),
+    );
+  }
+
+  private async computeTopBottomPerformers(
+    days: number = 7,
+    limit: number = 5,
+  ): Promise<TopBottomPerformers> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     // Query with JOIN to get attraction and park names
@@ -1656,22 +1673,20 @@ export class PredictionAccuracyService {
   async getTftTopBottomPerformers(
     days: number = 14,
     limit: number = 5,
-  ): Promise<{
-    topPerformers: Array<{
-      attractionId: string;
-      attractionName: string;
-      parkName: string;
-      mae: number;
-      predictionsCount: number;
-    }>;
-    bottomPerformers: Array<{
-      attractionId: string;
-      attractionName: string;
-      parkName: string;
-      mae: number;
-      predictionsCount: number;
-    }>;
-  }> {
+  ): Promise<TopBottomPerformers> {
+    // Heavy CTE (PERCENTILE_CONT over queue_data + tft_forecasts join); polled ~hourly
+    // by the admin monitor and stable within a day → cache at the shared aggregation TTL.
+    return this.cachedAgg(
+      `accuracy:tft-topbottom:${days}:${limit}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeTftTopBottomPerformers(days, limit),
+    );
+  }
+
+  private async computeTftTopBottomPerformers(
+    days: number = 14,
+    limit: number = 5,
+  ): Promise<TopBottomPerformers> {
     const rows: Array<{
       attractionId: string;
       attractionName: string | null;
@@ -1746,6 +1761,24 @@ export class PredictionAccuracyService {
    * @returns {Promise<DailyAccuracyTrend[]>} Daily accuracy breakdown
    */
   async getDailyAccuracyTrends(days: number = 30): Promise<
+    Array<{
+      date: string;
+      mae: number;
+      predictionsCount: number;
+      coveragePercent: number;
+    }>
+  > {
+    // Cache-guarded like the hourly/DOW/system aggregations: a 30-day GROUP BY over
+    // ~5M rows costs ~2.5s, and the admin monitor polls it ~hourly — so an uncached
+    // read missed on essentially every poll (the top slow-query cluster after #92).
+    return this.cachedAgg(
+      `accuracy:daily-trends:${days}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeDailyAccuracyTrends(days),
+    );
+  }
+
+  private async computeDailyAccuracyTrends(days: number = 30): Promise<
     Array<{
       date: string;
       mae: number;
