@@ -10,7 +10,13 @@ from sqlalchemy import text
 
 from model import WaitTimeModel
 from percentile_features import add_percentile_features
-from db import fetch_parks_metadata, get_db, fetch_holidays, convert_df_types
+from db import (
+    fetch_parks_metadata,
+    get_db,
+    fetch_holidays,
+    convert_df_types,
+    fetch_attraction_ids_for_park,
+)
 from config import get_settings
 from holiday_utils import normalize_region_code
 
@@ -2144,9 +2150,7 @@ def predict_for_park(
     Returns:
         List of predictions
     """
-    # TODO: Fetch attraction IDs for this park from database
-    # For now, placeholder
-    attraction_ids = []  # Would fetch from DB
+    attraction_ids = fetch_attraction_ids_for_park(park_id)
     park_ids = [park_id] * len(attraction_ids)
 
     if len(attraction_ids) == 0:

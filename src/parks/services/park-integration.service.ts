@@ -863,6 +863,7 @@ export class ParkIntegrationService {
 
       const now = new Date();
       const maxShowAgeMs = 48 * 60 * 60 * 1000; // 48 hours
+      const todayStr = getCurrentDateInTimezone(park.timezone);
 
       for (const show of dto.shows || []) {
         const liveData = showLiveDataMap.get(show.id);
@@ -884,12 +885,13 @@ export class ParkIntegrationService {
 
           const rawShowtimes = liveData.showtimes || [];
 
-          // FIX: Force project dates to Today if Operating (Fallback for ShowsService)
+          // Live showtimes can still carry a previous day's date (source APIs
+          // lag around midnight) — project them onto today's date in park-local
+          // time while the show is operating, as a fallback for ShowsService.
           const projectedShowtimes =
             show.status === "OPERATING" && rawShowtimes.length > 0
               ? rawShowtimes.map((st) => {
                   if (!st.startTime) return st;
-                  const todayStr = getCurrentDateInTimezone(park.timezone);
                   const currentDatePart = st.startTime.substring(0, 10);
                   return currentDatePart !== todayStr
                     ? { startTime: todayStr + st.startTime.substring(10) }

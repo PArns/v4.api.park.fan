@@ -150,11 +150,16 @@ async function bootstrap(): Promise<void> {
       });
     }
   } else {
-    // Development: Allow all origins for local testing
-    // SECURITY WARNING: Never deploy with this configuration to production
+    // Development: restrict to explicit CORS_ORIGINS or local dev hosts.
+    // No wildcard here — this branch also runs when NODE_ENV is accidentally
+    // unset in a deployed environment, so localhost is the widest default.
+    const devOrigins: (string | RegExp)[] =
+      allowedOrigins.length > 0
+        ? allowedOrigins
+        : [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/];
     app.enableCors({
-      origin: "*",
-      credentials: false, // SECURITY: Don't allow credentials with wildcard origin
+      origin: devOrigins,
+      credentials: false,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
     });

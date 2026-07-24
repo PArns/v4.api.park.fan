@@ -773,6 +773,34 @@ def fetch_prediction_errors_for_training(
         return pd.DataFrame()
 
 
+def fetch_attraction_ids_for_park(park_id: str) -> List[str]:
+    """
+    Fetch all attraction IDs belonging to a park.
+
+    Used by predict_for_park to expand a park-level prediction request into
+    per-attraction predictions.
+
+    Args:
+        park_id: Park ID (UUID string)
+
+    Returns:
+        List of attraction ID strings (empty if the park has no attractions
+        or is unknown). DB errors propagate to the caller.
+    """
+    query = text(
+        """
+        SELECT id::text
+        FROM attractions
+        WHERE "parkId"::text = :park_id
+        ORDER BY name
+    """
+    )
+
+    with get_db() as db:
+        result = db.execute(query, {"park_id": park_id})
+        return [row[0] for row in result]
+
+
 def fetch_attraction_baselines() -> pd.DataFrame:
     """
     Fetch pre-calculated P50 baselines for attractions.

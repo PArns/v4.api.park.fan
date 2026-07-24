@@ -24,6 +24,17 @@ export interface QueueTimesPark {
   latitude: string;
   longitude: string;
   timezone: string;
+  // Not part of the documented /parks.json response, but some park groups
+  // include a ride list in the summary — used for signature matching.
+  rides?: QueueTimesRideSummary[];
+}
+
+/**
+ * Minimal ride info optionally embedded in /parks.json park entries
+ */
+export interface QueueTimesRideSummary {
+  id: number;
+  name: string;
 }
 
 /**
