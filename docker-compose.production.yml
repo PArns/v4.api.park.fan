@@ -279,12 +279,21 @@ services:
       - /sys:/host/sys:ro
     ports:
       - "${PORT:-3000}:3000"
+    # api must NOT boot-gate on ml-service being *healthy*. ml-service (and
+    # nf-/pcn-service) run on the nvidia runtime on GPU hosts, so a host driver
+    # fault — e.g. NVML "Driver/library version mismatch" after an unattended
+    # driver update — makes their container task-creation fail and they never
+    # become healthy. When api waited on ml-service:service_healthy, that GPU
+    # fault took the whole site down (502 on every endpoint, api never started).
+    # ml-service is an HTTP dependency resolved per-request with graceful
+    # degradation, so api only needs the datastores up at boot; predictions
+    # recover on their own once ml-service is healthy again. Keep it OUT of
+    # depends_on entirely (short-form/service_started would still block on the
+    # failed task-creation and re-introduce the coupling).
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      ml-service:
         condition: service_healthy
     networks:
       - parkfan-network
