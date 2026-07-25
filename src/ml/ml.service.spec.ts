@@ -39,6 +39,9 @@ describe("MLService", () => {
   };
 
   // Mock Repositories
+  // Predictions are written through the query builder (insert().orIgnore()),
+  // so the spec captures the rows there instead of on save().
+  const insertedValues: Record<string, unknown>[][] = [];
   const mockPredictionRepository = {
     find: jest.fn(),
     save: jest.fn(),
@@ -48,9 +51,19 @@ describe("MLService", () => {
       orderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockReturnThis(),
-      execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      insert: jest.fn().mockReturnThis(),
+      into: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      values: jest.fn(function (this: unknown, v: Record<string, unknown>[]) {
+        insertedValues.push(v);
+        return this;
+      }),
+      execute: jest.fn().mockResolvedValue({ affected: 0, identifiers: [] }),
     })),
   };
+
+  /** All rows handed to insert().values() across chunks. */
+  const allInserted = () => insertedValues.flat();
 
   const mockQueueDataRepository = {
     findOne: jest.fn(),
@@ -360,6 +373,7 @@ describe("MLService", () => {
       mockPredictionRepository.save.mockImplementation((entities) =>
         Promise.resolve(entities),
       );
+      insertedValues.length = 0;
     });
 
     it("should store all predictions when park has no schedule history (e.g. Hellendoorn)", async () => {
@@ -372,7 +386,7 @@ describe("MLService", () => {
 
       await service.storePredictions(predictions);
 
-      expect(mockPredictionRepository.save).toHaveBeenCalledWith(
+      expect(allInserted()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             predictedTime: new Date(`${today}T12:00:00Z`),
@@ -384,7 +398,6 @@ describe("MLService", () => {
             predictedTime: new Date(`${nextWeek}T12:00:00Z`),
           }),
         ]),
-        { chunk: 1000 },
       );
     });
 
@@ -417,11 +430,11 @@ describe("MLService", () => {
 
       await service.storePredictions(predictions);
 
-      const saved = mockPredictionRepository.save.mock.calls[0][0];
+      const saved = allInserted();
       expect(saved).toHaveLength(2);
       expect(
-        saved.find((p: any) =>
-          p.predictedTime.toISOString().startsWith(tomorrow),
+        saved.find((p) =>
+          (p.predictedTime as Date).toISOString().startsWith(tomorrow),
         ),
       ).toBeUndefined();
     });
@@ -439,7 +452,7 @@ describe("MLService", () => {
 
       await service.storePredictions(predictions);
 
-      expect(mockPredictionRepository.save).not.toHaveBeenCalled();
+      expect(allInserted()).toHaveLength(0);
     });
   });
 });
