@@ -97,6 +97,9 @@ describe("PredictionAccuracyProcessor", () => {
     /**
      * Maps an aggregate row to the upsert payload by running the
      * processor against a synthetic single-row aggregate result.
+     *
+     * Rows are upserted in chunks, so the payload is an array — this returns
+     * the single row it contains.
      */
     const runForBadge = async (
       mae: number,
@@ -114,8 +117,9 @@ describe("PredictionAccuracyProcessor", () => {
 
       await processor.handleAggregateStats({} as Job);
 
-      const [payload] = statsRepo.upsert.mock.calls[0];
-      return payload as Record<string, unknown>;
+      const [rows] = statsRepo.upsert.mock.calls[0];
+      expect(Array.isArray(rows)).toBe(true);
+      return (rows as Record<string, unknown>[])[0];
     };
 
     it("emits 'insufficient_data' when fewer than 10 predictions were compared", async () => {
@@ -154,6 +158,29 @@ describe("PredictionAccuracyProcessor", () => {
       await runForBadge(7);
       const [, conflictPath] = statsRepo.upsert.mock.calls[0];
       expect(conflictPath).toEqual(["attractionId"]);
+    });
+
+    it("writes every attraction in one chunked upsert, not one per attraction", async () => {
+      // 2500 attractions → 3 chunks of ≤1000, NOT 2500 statements.
+      const rows = Array.from({ length: 2500 }, (_, i) => ({
+        attraction_id: `a-${i}`,
+        total_predictions: "100",
+        compared_predictions: "100",
+        mae: "6",
+      }));
+      accuracyRepo.query.mockResolvedValueOnce(rows);
+
+      await processor.handleAggregateStats({} as Job);
+
+      expect(statsRepo.upsert).toHaveBeenCalledTimes(3);
+      const written = statsRepo.upsert.mock.calls.flatMap(
+        ([chunk]) => chunk as unknown[],
+      );
+      expect(written).toHaveLength(2500);
+      // Chunks must stay under the Postgres parameter ceiling.
+      for (const [chunk] of statsRepo.upsert.mock.calls) {
+        expect((chunk as unknown[]).length).toBeLessThanOrEqual(1000);
+      }
     });
   });
 

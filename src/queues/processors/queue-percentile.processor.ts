@@ -345,28 +345,53 @@ export class QueuePercentileProcessor {
       `   🎃 Found ${zeroHistoryCandidates.length} zero-history seasonal candidates`,
     );
 
-    // Step 4: For each candidate, derive seasonMonths from all-time OPERATING history
-    // (zero-history candidates will have seasonMonths = null — unknown season)
-    for (const { attractionId } of allCandidates) {
-      const monthRows: { month: number }[] = await this.dataSource.query(
-        `SELECT DISTINCT EXTRACT(MONTH FROM q.timestamp AT TIME ZONE p.timezone)::int as month
-        FROM queue_data q
-        JOIN attractions a ON a.id = q."attractionId"
-        JOIN parks p ON p.id = a."parkId"
-        WHERE a.id = $1::uuid
-          AND q.status = 'OPERATING'
-          AND q.timestamp >= NOW() - INTERVAL '730 days'
-        ORDER BY month`,
-        [attractionId],
+    // Step 4: Derive seasonMonths for ALL candidates in ONE grouped query
+    // (zero-history candidates will have seasonMonths = null — unknown season).
+    //
+    // This used to run one 730-day queue_data scan PLUS one UPDATE per
+    // candidate. Against a hypertable of this size that per-candidate scan was
+    // by far the most expensive N+1 in the codebase; the work is identical when
+    // done as a single GROUP BY, and the write collapses into one UPDATE.
+    if (allCandidates.length > 0) {
+      const candidateIds = allCandidates.map((c) => c.attractionId);
+
+      const monthRows: { attractionId: string; months: number[] }[] =
+        await this.dataSource.query(
+          `SELECT a.id AS "attractionId",
+                  ARRAY_AGG(DISTINCT EXTRACT(MONTH FROM q.timestamp AT TIME ZONE p.timezone)::int) AS months
+           FROM queue_data q
+           JOIN attractions a ON a.id = q."attractionId"
+           JOIN parks p ON p.id = a."parkId"
+           WHERE a.id = ANY($1::uuid[])
+             AND q.status = 'OPERATING'
+             AND q.timestamp >= NOW() - INTERVAL '730 days'
+           GROUP BY a.id`,
+          [candidateIds],
+        );
+
+      const monthsById = new Map(
+        monthRows.map((r) => [
+          r.attractionId,
+          [...(r.months ?? [])].sort((a, b) => a - b),
+        ]),
       );
 
-      const seasonMonths =
-        monthRows.length > 0 ? monthRows.map((r) => r.month) : null;
+      // One UPDATE for every candidate. The payload is a single jsonb object
+      // (id → months) so there is no array-of-jsonb escaping to get wrong;
+      // a JSON `null` is mapped back to SQL NULL to match the previous write.
+      const payload: Record<string, number[] | null> = {};
+      for (const id of candidateIds) {
+        payload[id] = monthsById.get(id) ?? null;
+      }
 
-      await this.attractionRepository.update(attractionId, {
-        isSeasonal: true,
-        seasonMonths,
-      });
+      await this.dataSource.query(
+        `UPDATE attractions a
+         SET is_seasonal = true,
+             season_months = CASE WHEN v.value = 'null'::jsonb THEN NULL ELSE v.value END
+         FROM jsonb_each($1::jsonb) v
+         WHERE a.id = v.key::uuid`,
+        [JSON.stringify(payload)],
+      );
     }
 
     this.logger.log(
@@ -451,28 +476,45 @@ export class QueuePercentileProcessor {
       `   🔍 Found ${showCandidates.length} seasonal show candidates`,
     );
 
-    // Step S3: Derive seasonMonths from months where lastUpdated was fresh
-    for (const { showId } of showCandidates) {
-      const monthRows: { month: number }[] = await this.dataSource.query(
-        `SELECT DISTINCT
-          EXTRACT(MONTH FROM sld.timestamp AT TIME ZONE p.timezone)::int as month
-        FROM show_live_data sld
-        JOIN shows s ON s.id = sld."showId"
-        JOIN parks p ON p.id = s."parkId"
-        WHERE sld."showId" = $1
-          AND sld."lastUpdated" IS NOT NULL
-          AND (sld.timestamp - sld."lastUpdated") < INTERVAL '24 hours'
-        ORDER BY month`,
-        [showId],
+    // Step S3: Derive seasonMonths from months where lastUpdated was fresh —
+    // one grouped query + one UPDATE for all candidates (was: both per show).
+    if (showCandidates.length > 0) {
+      const showIds = showCandidates.map((c) => c.showId);
+
+      const monthRows: { showId: string; months: number[] }[] =
+        await this.dataSource.query(
+          `SELECT sld."showId" AS "showId",
+                  ARRAY_AGG(DISTINCT EXTRACT(MONTH FROM sld.timestamp AT TIME ZONE p.timezone)::int) AS months
+           FROM show_live_data sld
+           JOIN shows s ON s.id = sld."showId"
+           JOIN parks p ON p.id = s."parkId"
+           WHERE sld."showId" = ANY($1::uuid[])
+             AND sld."lastUpdated" IS NOT NULL
+             AND (sld.timestamp - sld."lastUpdated") < INTERVAL '24 hours'
+           GROUP BY sld."showId"`,
+          [showIds],
+        );
+
+      const monthsById = new Map(
+        monthRows.map((r) => [
+          r.showId,
+          [...(r.months ?? [])].sort((a, b) => a - b),
+        ]),
       );
 
-      const seasonMonths =
-        monthRows.length > 0 ? monthRows.map((r) => r.month) : null;
+      const payload: Record<string, number[] | null> = {};
+      for (const id of showIds) {
+        payload[id] = monthsById.get(id) ?? null;
+      }
 
-      await this.showRepository.update(showId, {
-        isSeasonal: true,
-        seasonMonths,
-      });
+      await this.dataSource.query(
+        `UPDATE shows s
+         SET is_seasonal = true,
+             season_months = CASE WHEN v.value = 'null'::jsonb THEN NULL ELSE v.value END
+         FROM jsonb_each($1::jsonb) v
+         WHERE s.id = v.key::uuid`,
+        [JSON.stringify(payload)],
+      );
     }
 
     this.logger.log(`✅ Shows: marked ${showCandidates.length} as seasonal.`);

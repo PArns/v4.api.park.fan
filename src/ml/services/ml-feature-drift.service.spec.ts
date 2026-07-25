@@ -177,10 +177,12 @@ describe("MLFeatureDriftService", () => {
 
       await service.detectFeatureDrift();
 
-      // One save per evaluated feature.
-      expect(featureDriftRepo.save).toHaveBeenCalledTimes(2);
-      const savedNames = featureDriftRepo.save.mock.calls.map(
-        ([row]) => (row as { featureName: string }).featureName,
+      // One row per evaluated feature, written in a single batched save()
+      // (not one INSERT per feature).
+      expect(featureDriftRepo.save).toHaveBeenCalledTimes(1);
+      const [savedRows] = featureDriftRepo.save.mock.calls[0];
+      const savedNames = (savedRows as { featureName: string }[]).map(
+        (row) => row.featureName,
       );
       expect(savedNames).toEqual(expect.arrayContaining(["f1", "f2"]));
     });

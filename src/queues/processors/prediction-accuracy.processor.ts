@@ -99,49 +99,68 @@ export class PredictionAccuracyProcessor {
         [ninetyDaysAgo, MAX_PLAUSIBLE_WAIT_TIME],
       );
 
-      let upsertCount = 0;
-      for (const row of results) {
-        const mae = parseFloat(row.mae) || 0;
-        const comparedPredictions = parseInt(row.compared_predictions) || 0;
-        const totalPredictions = parseInt(row.total_predictions) || 0;
+      // Build every row first, then write them in chunks. The per-attraction
+      // upsert this replaces issued one statement per attraction — thousands of
+      // round-trips for a job whose input is a single GROUP BY.
+      const statsRows = results.map(
+        (row: {
+          attraction_id: string;
+          mae: string;
+          compared_predictions: string;
+          total_predictions: string;
+        }) => {
+          const mae = parseFloat(row.mae) || 0;
+          const comparedPredictions = parseInt(row.compared_predictions) || 0;
+          const totalPredictions = parseInt(row.total_predictions) || 0;
 
-        // Calculate badge
-        let badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
-        let message: string | null = null;
+          // Calculate badge
+          let badge:
+            | "excellent"
+            | "good"
+            | "fair"
+            | "poor"
+            | "insufficient_data";
+          let message: string | null = null;
 
-        if (comparedPredictions < 10) {
-          badge = "insufficient_data";
-          message = `Need at least 10 compared predictions (currently ${comparedPredictions})`;
-        } else if (mae < 5) {
-          badge = "excellent";
-          message = "Predictions are highly accurate (±5 min average error)";
-        } else if (mae < 10) {
-          badge = "good";
-          message =
-            "Predictions are reliable for planning (±10 min average error)";
-        } else if (mae < 15) {
-          badge = "fair";
-          message =
-            "Predictions provide general guidance (±15 min average error)";
-        } else {
-          badge = "poor";
-          message = `Predictions need improvement (${Math.round(mae)} min average error)`;
-        }
+          if (comparedPredictions < 10) {
+            badge = "insufficient_data";
+            message = `Need at least 10 compared predictions (currently ${comparedPredictions})`;
+          } else if (mae < 5) {
+            badge = "excellent";
+            message = "Predictions are highly accurate (±5 min average error)";
+          } else if (mae < 10) {
+            badge = "good";
+            message =
+              "Predictions are reliable for planning (±10 min average error)";
+          } else if (mae < 15) {
+            badge = "fair";
+            message =
+              "Predictions provide general guidance (±15 min average error)";
+          } else {
+            badge = "poor";
+            message = `Predictions need improvement (${Math.round(mae)} min average error)`;
+          }
 
-        // Upsert into stats table
-        await this.statsRepository.upsert(
-          {
+          return {
             attractionId: row.attraction_id,
             mae: Math.round(mae * 10) / 10,
             comparedPredictions,
             totalPredictions,
             badge,
             message,
-          },
-          ["attractionId"],
-        );
-        upsertCount++;
+          };
+        },
+      );
+
+      // Keep each statement well under Postgres' 65535-parameter limit
+      // (6 columns per row → 1000 rows leaves ample headroom).
+      const CHUNK = 1000;
+      for (let i = 0; i < statsRows.length; i += CHUNK) {
+        await this.statsRepository.upsert(statsRows.slice(i, i + CHUNK), [
+          "attractionId",
+        ]);
       }
+      const upsertCount = statsRows.length;
 
       await this.redis.set(
         "ml:accuracy:last_aggregation",

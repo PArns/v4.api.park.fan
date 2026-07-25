@@ -1048,16 +1048,23 @@ export class MLService {
     // Get unique attraction IDs to look up their parkIds
     const attractionIds = [...new Set(predictions.map((p) => p.attractionId))];
 
-    // Fetch attractions with their parkIds
-    const attractions = await this.attractionRepository.find({
-      where: { id: In(attractionIds) },
-      select: ["id", "parkId"],
-    });
+    // Fetch attractions with their parkIds AND the park timezone in one go —
+    // the timezone used to be re-queried once per park further down.
+    const attractions = await this.attractionRepository
+      .createQueryBuilder("a")
+      .innerJoin("a.park", "p")
+      .select("a.id", "id")
+      .addSelect("a.parkId", "parkId")
+      .addSelect("p.timezone", "timezone")
+      .where("a.id IN (:...ids)", { ids: attractionIds })
+      .getRawMany<{ id: string; parkId: string; timezone: string | null }>();
 
-    // Create map: attractionId -> parkId
+    // Create map: attractionId -> parkId (+ parkId -> timezone)
     const attractionToPark = new Map<string, string>();
+    const parkTimezones = new Map<string, string>();
     for (const attraction of attractions) {
       attractionToPark.set(attraction.id, attraction.parkId);
+      parkTimezones.set(attraction.parkId, attraction.timezone || "UTC");
     }
 
     // Group predictions by parkId
@@ -1091,45 +1098,56 @@ export class MLService {
       }
     >();
 
-    for (const [parkId, parkPredictions] of predictionsByPark) {
-      // Get park info for seasonal gap detection
-      let info = parkInfoCache.get(parkId);
-      if (!info) {
-        const park = await this.parkRepository.findOne({
-          where: { id: parkId },
-          select: ["timezone"],
-        });
-        const timezone = park?.timezone || "UTC";
+    // Park info for every park at once. getOperatingDateRange / isParkSeasonal
+    // are Redis-cached read-throughs, so the concurrency here is cheap; what
+    // this removes is the sequential per-park round-trip chain.
+    await Promise.all(
+      [...predictionsByPark.keys()].map(async (parkId) => {
+        const timezone = parkTimezones.get(parkId) || "UTC";
         const [range, isSeasonal] = await Promise.all([
           this.parksService.getOperatingDateRange(parkId, timezone),
           this.parksService.isParkSeasonal(parkId),
         ]);
-        info = {
+        parkInfoCache.set(parkId, {
           hasHistory: !!(range.minDate && range.maxDate),
           minDate: range.minDate,
           maxDate: range.maxDate,
           isSeasonal,
           timezone,
-        };
-        parkInfoCache.set(parkId, info);
+        });
+      }),
+    );
+
+    // ONE schedule query for every park/date pair (was: one per park).
+    const allScheduleDates = [
+      ...new Set(predictions.map((p) => p.predictedTime.split("T")[0])),
+    ].map((d) => new Date(d + "T12:00:00Z"));
+
+    const allSchedules = allScheduleDates.length
+      ? await this.scheduleEntryRepository.find({
+          where: {
+            parkId: In([...predictionsByPark.keys()]),
+            date: In(allScheduleDates),
+          },
+        })
+      : [];
+
+    // parkId -> (park-local date string -> scheduleType)
+    const schedulesByPark = new Map<string, Map<string, ScheduleType>>();
+    for (const s of allSchedules) {
+      const timezone = parkInfoCache.get(s.parkId)?.timezone || "UTC";
+      let forPark = schedulesByPark.get(s.parkId);
+      if (!forPark) {
+        forPark = new Map<string, ScheduleType>();
+        schedulesByPark.set(s.parkId, forPark);
       }
+      forPark.set(formatInParkTimezone(s.date, timezone), s.scheduleType);
+    }
 
-      // Get unique dates for this park's predictions to batch schedule lookup
-      const dates = [
-        ...new Set(parkPredictions.map((p) => p.predictedTime.split("T")[0])),
-      ];
-      const schedules = await this.scheduleEntryRepository.find({
-        where: {
-          parkId,
-          date: In(dates.map((d) => new Date(d + "T12:00:00Z"))),
-        },
-      });
-
-      const scheduleMap = new Map<string, ScheduleType>();
-      schedules.forEach((s) => {
-        const dStr = formatInParkTimezone(s.date, info!.timezone);
-        scheduleMap.set(dStr, s.scheduleType);
-      });
+    for (const [parkId, parkPredictions] of predictionsByPark) {
+      const info = parkInfoCache.get(parkId)!;
+      const scheduleMap =
+        schedulesByPark.get(parkId) ?? new Map<string, ScheduleType>();
 
       for (const pred of parkPredictions) {
         const dateStr = pred.predictedTime.split("T")[0];

@@ -967,16 +967,20 @@ export class ParkIntegrationService {
     // Only fetch live analytics if park is operating, otherwise return zeroed values
     if (dto.status === "OPERATING") {
       try {
-        const startTime = await this.analyticsService.getEffectiveStartTime(
+        // Only getParkStatistics needs the start time, so it is awaited inside
+        // the group instead of blocking occupancy/percentiles ahead of it.
+        const startTimePromise = this.analyticsService.getEffectiveStartTime(
           park.id,
           park.timezone,
         );
         const [occupancy, statistics, percentiles] = await Promise.all([
           this.analyticsService.calculateParkOccupancy(park.id),
-          this.analyticsService.getParkStatistics(
-            park.id,
-            park.timezone,
-            startTime,
+          startTimePromise.then((startTime) =>
+            this.analyticsService.getParkStatistics(
+              park.id,
+              park.timezone,
+              startTime,
+            ),
           ),
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
@@ -1018,26 +1022,28 @@ export class ParkIntegrationService {
     } else {
       // Park is CLOSED - Fetch today's historical analytics and provide "Typical" values for context
       try {
-        const startTime = await this.analyticsService.getEffectiveStartTime(
+        // Same as the OPERATING branch: only getParkStatistics depends on the
+        // start time. The P50 baseline is independent of all three, so it joins
+        // the same group instead of being awaited afterwards.
+        const startTimePromise = this.analyticsService.getEffectiveStartTime(
           park.id,
           park.timezone,
         );
-        const [statistics, percentiles] = await Promise.all([
-          this.analyticsService.getParkStatistics(
-            park.id,
-            park.timezone,
-            startTime,
+        const [statistics, percentiles, typicalWait] = await Promise.all([
+          startTimePromise.then((startTime) =>
+            this.analyticsService.getParkStatistics(
+              park.id,
+              park.timezone,
+              startTime,
+            ),
           ),
           this.analyticsService.getParkPercentilesToday(park.id),
+          // "Typical wait" displayed for closed parks is the median baseline
+          // (P50) — what a typical headliner wait looks like — matching the
+          // live ratio-vs-P50 regime (the calendar's daily/future surfaces use
+          // the typical-day-peak baseline instead).
+          this.analyticsService.getP50BaselineFromCache(park.id),
         ]);
-
-        // "Typical wait" displayed for closed parks is the median baseline
-        // (P50) — what a typical headliner wait looks like — matching the
-        // live ratio-vs-P50 regime (the calendar's daily/future surfaces use
-        // the typical-day-peak baseline instead).
-        const typicalWait = await this.analyticsService.getP50BaselineFromCache(
-          park.id,
-        );
 
         dto.analytics = {
           occupancy: {

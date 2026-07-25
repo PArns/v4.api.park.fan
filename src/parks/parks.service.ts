@@ -1030,8 +1030,38 @@ export class ParksService {
       savedCount += toInsert.size;
     }
 
-    for (const update of toUpdate) {
-      await this.scheduleRepository.update(update.id, update.data);
+    if (toUpdate.length > 0) {
+      // One statement for every changed entry (was: one UPDATE per entry).
+      // The payload is a single jsonb object id → changed fields; `updatedAt`
+      // is set explicitly because raw SQL bypasses @UpdateDateColumn.
+      const payload: Record<string, unknown> = {};
+      for (const u of toUpdate) {
+        payload[u.id] = {
+          openingTime: u.data.openingTime ?? null,
+          closingTime: u.data.closingTime ?? null,
+          description: u.data.description ?? null,
+          purchases: u.data.purchases ?? null,
+          isHoliday: u.data.isHoliday ?? false,
+          holidayName: u.data.holidayName ?? null,
+          isBridgeDay: u.data.isBridgeDay ?? false,
+        };
+      }
+
+      await this.scheduleRepository.query(
+        `UPDATE schedule_entries s
+         SET "openingTime" = (v.value->>'openingTime')::timestamptz,
+             "closingTime" = (v.value->>'closingTime')::timestamptz,
+             "description" = v.value->>'description',
+             "purchases"   = CASE WHEN v.value->'purchases' = 'null'::jsonb
+                                  THEN NULL ELSE v.value->'purchases' END,
+             "isHoliday"   = (v.value->>'isHoliday')::boolean,
+             "holidayName" = v.value->>'holidayName',
+             "isBridgeDay" = (v.value->>'isBridgeDay')::boolean,
+             "updatedAt"   = NOW()
+         FROM jsonb_each($1::jsonb) v
+         WHERE s.id = v.key::uuid`,
+        [JSON.stringify(payload)],
+      );
     }
     savedCount += toUpdate.length;
 
