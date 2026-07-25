@@ -8,7 +8,6 @@ import {
   BeforeInsert,
 } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
-import { v4 as uuidv4 } from "uuid";
 
 /**
  * WaitTimePrediction Entity
@@ -20,7 +19,9 @@ import { v4 as uuidv4 } from "uuid";
 @Entity("wait_time_predictions")
 @Index(["attractionId", "predictedTime"])
 @Index(["predictionType", "createdAt"])
-@Index(["attractionId", "predictionType", "createdAt"]) // getStoredPredictions: WHERE attractionId=X AND predictionType=Y AND createdAt>=Z
+// ["attractionId", "predictionType", "createdAt"] is NOT declared separately —
+// it is the leftmost prefix of the primary key below, which serves
+// getStoredPredictions (WHERE attractionId=X AND predictionType=Y AND createdAt>=Z).
 // Removed (2026-07-25) — this is the heaviest-written table in the system
 // (~228k rows per prediction run), so every index is paid for on each insert:
 // - @Index(["modelVersion"]) — 335 MB across chunks for 4 lifetime scans. The
@@ -30,27 +31,31 @@ import { v4 as uuidv4 } from "uuid";
 //   both ["attractionId", "predictedTime"] and
 //   ["attractionId", "predictionType", "createdAt"].
 export class WaitTimePrediction {
-  // Composite Primary Key (required for TimescaleDB)
-  @PrimaryColumn("uuid")
-  id: string;
+  // NATURAL primary key (2026-07-25). The old surrogate key was (id uuid,
+  // createdAt): 822 MB — the largest index on the table — with ZERO scans,
+  // because nothing ever looks a prediction up by id. TimescaleDB requires the
+  // partition column (createdAt) in any unique index, so the surrogate key
+  // could not be narrowed; replacing it with the natural key removes the
+  // 822 MB index AND the 16-byte-per-row uuid column, and its leftmost prefix
+  // subsumes the former ["attractionId", "predictionType", "createdAt"] index
+  // (another 276 MB). Verified unique across all 24.66M rows before the switch.
+  @PrimaryColumn()
+  attractionId: string;
 
   @PrimaryColumn({ type: "timestamptz" })
-  createdAt: Date; // When prediction was made
+  createdAt: Date; // When prediction was made — also the partition column
 
-  @Column()
-  attractionId: string;
+  @PrimaryColumn({ type: "timestamptz" })
+  predictedTime: Date; // Time being predicted for
 
   @ManyToOne(() => Attraction)
   @JoinColumn({ name: "attractionId" })
   attraction: Attraction;
 
-  @Column({ type: "timestamptz" })
-  predictedTime: Date; // Time being predicted for
-
   @Column({ type: "int" })
   predictedWaitTime: number; // Predicted wait time in minutes
 
-  @Column({
+  @PrimaryColumn({
     type: "enum",
     enum: ["hourly", "daily"],
   })
@@ -95,10 +100,7 @@ export class WaitTimePrediction {
   features: Record<string, unknown>;
 
   @BeforeInsert()
-  generateId(): void {
-    if (!this.id) {
-      this.id = uuidv4();
-    }
+  defaultCreatedAt(): void {
     if (!this.createdAt) {
       this.createdAt = new Date();
     }

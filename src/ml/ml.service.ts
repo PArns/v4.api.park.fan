@@ -1229,12 +1229,30 @@ export class MLService {
     // 365 daily rows × 11 columns) exceeds the Postgres wire-protocol limit of
     // 65535 bind parameters — the driver then fails with "bind message has N
     // parameter formats but 0 parameters" and the whole park gets no predictions.
-    const savedPredictions = await this.predictionRepository.save(entities, {
-      chunk: 1000,
-    });
-    this.logger.debug(
-      `Stored ${savedPredictions.length} predictions in database`,
-    );
+    //
+    // insert() rather than save(): with the natural primary key every key column
+    // is populated up front, so save() could no longer tell a new row from an
+    // existing one and would issue an existence check per chunk. These rows are
+    // always new (deduplicatePredictions clears the range first). orIgnore()
+    // keeps a racing double-generation from failing a whole chunk — the previous
+    // surrogate key would have silently written a duplicate row instead.
+    const CHUNK = 1000;
+    let stored = 0;
+    for (let i = 0; i < entities.length; i += CHUNK) {
+      const result = await this.predictionRepository
+        .createQueryBuilder()
+        .insert()
+        .into(WaitTimePrediction)
+        // Cast: the builder's partial-entity type rejects the jsonb `features`
+        // column; these are fully built entities. Same workaround as the
+        // chunked upsert in prediction-accuracy.service.ts.
+
+        .values(entities.slice(i, i + CHUNK) as any)
+        .orIgnore()
+        .execute();
+      stored += result.identifiers?.length ?? 0;
+    }
+    this.logger.debug(`Stored ${stored} predictions in database`);
 
     // Record predictions for accuracy tracking (feedback loop).
     // No sampling — upsert on (attractionId, targetTime) ensures each future slot
@@ -1244,15 +1262,15 @@ export class MLService {
     // ONLY record hourly predictions — daily predictions span up to 365 days ahead
     // and can't be compared against actuals until those dates arrive, inflating
     // PENDING counts and skewing coverage metrics.
-    const validPredictionsForFeedback = savedPredictions.filter(
+    const validPredictionsForFeedback = entities.filter(
       (pred) =>
         pred.predictionType === "hourly" &&
         (pred.status === "OPERATING" || pred.status === null),
     );
 
-    if (validPredictionsForFeedback.length < savedPredictions.length) {
+    if (validPredictionsForFeedback.length < entities.length) {
       this.logger.debug(
-        `Filtering: Recording ${validPredictionsForFeedback.length}/${savedPredictions.length} predictions (excluding scheduled closures and daily predictions)`,
+        `Filtering: Recording ${validPredictionsForFeedback.length}/${entities.length} predictions (excluding scheduled closures and daily predictions)`,
       );
     }
 
