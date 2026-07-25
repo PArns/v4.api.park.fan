@@ -1621,6 +1621,102 @@ export class MLService {
   }
 
   /**
+   * Oldest `createdAt` still present for a prediction type, or null when there
+   * are none. Served by the ["predictionType", "createdAt"] index.
+   */
+  async getOldestPredictionCreatedAt(
+    predictionType: "hourly" | "daily",
+  ): Promise<Date | null> {
+    const rows: Array<{ oldest: Date | null }> =
+      await this.predictionRepository.manager.query(
+        `SELECT MIN("createdAt") AS oldest
+           FROM wait_time_predictions
+          WHERE "predictionType" = $1`,
+        [predictionType],
+      );
+    return rows?.[0]?.oldest ?? null;
+  }
+
+  /**
+   * Purges hourly predictions created before `cutoffDate`, one day-window at a
+   * time.
+   *
+   * Two things make this different from {@link deleteOldPredictions}:
+   *
+   * 1. It prunes on `createdAt`, the hypertable's PARTITION KEY, so Timescale
+   *    can exclude whole chunks. The old `predictedTime` predicate is unrelated
+   *    to the partitioning, so every chunk had to be opened and decompressed.
+   *    The substitution is safe for hourly only: measured lead time is ≤24h
+   *    (avg 1.7h), so a row created before `cutoff` can never have been
+   *    predicting for a time later than `cutoff + 24h` — the caller adds that
+   *    day of slack. Daily predictions run up to ~1 year ahead, where
+   *    `createdAt` says nothing about the target, so they keep the old path.
+   *
+   * 2. It works in bounded day-windows instead of one statement. Each window
+   *    touches one or two chunks, so a run cannot blow up into an unbounded
+   *    decompression — which matters most on the first pass, where a long-dead
+   *    cron has left a large backlog behind.
+   *
+   * Resumable: progress is the data itself, so an interrupted run simply
+   * continues from the oldest remaining window next time.
+   */
+  async purgeHourlyPredictionsBefore(
+    cutoffDate: Date,
+    options: { maxWindows?: number; timeBudgetMs?: number } = {},
+  ): Promise<{ deleted: number; windows: number; done: boolean }> {
+    const maxWindows = options.maxWindows ?? 20;
+    const timeBudgetMs = options.timeBudgetMs ?? 10 * 60 * 1000;
+    const startedAt = Date.now();
+
+    const oldest = await this.getOldestPredictionCreatedAt("hourly");
+    if (!oldest || oldest >= cutoffDate) {
+      return { deleted: 0, windows: 0, done: true };
+    }
+
+    // Align to a UTC day boundary so windows line up run over run.
+    let windowStart = new Date(
+      Date.UTC(
+        oldest.getUTCFullYear(),
+        oldest.getUTCMonth(),
+        oldest.getUTCDate(),
+      ),
+    );
+
+    let deleted = 0;
+    let windows = 0;
+
+    while (windowStart < cutoffDate && windows < maxWindows) {
+      if (Date.now() - startedAt > timeBudgetMs) break;
+
+      const nextStart = new Date(windowStart.getTime() + 24 * 60 * 60 * 1000);
+      const windowEnd = nextStart < cutoffDate ? nextStart : cutoffDate;
+
+      const rows: Array<{ affected: string }> =
+        await this.predictionRepository.manager.transaction(async (em) => {
+          await em.query(
+            `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0`,
+          );
+          return em.query(
+            `WITH del AS (
+               DELETE FROM wait_time_predictions
+               WHERE "predictionType" = 'hourly'
+                 AND "createdAt" >= $1
+                 AND "createdAt" < $2
+               RETURNING 1
+             ) SELECT count(*)::text AS affected FROM del`,
+            [windowStart, windowEnd],
+          );
+        });
+
+      deleted += Number(rows?.[0]?.affected ?? 0);
+      windows++;
+      windowStart = nextStart;
+    }
+
+    return { deleted, windows, done: windowStart >= cutoffDate };
+  }
+
+  /**
    * Deduplicate predictions for a park
    * Deletes existing predictions for the same time range before new generation
    *

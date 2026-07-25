@@ -28,6 +28,9 @@ describe("PredictionGeneratorProcessor", () => {
     deduplicatePredictions: jest.fn().mockResolvedValue(0),
     storePredictions: jest.fn().mockResolvedValue(undefined),
     deleteOldPredictions: jest.fn().mockResolvedValue(0),
+    purgeHourlyPredictionsBefore: jest
+      .fn()
+      .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
   };
 
   const parksService = {
@@ -194,29 +197,58 @@ describe("PredictionGeneratorProcessor", () => {
   });
 
   describe("cleanup-old (daily retention)", () => {
-    it("deletes both hourly (>7d) and daily (>90d) predictions and logs counts", async () => {
-      mlService.deleteOldPredictions
-        .mockResolvedValueOnce(12_000) // hourly
-        .mockResolvedValueOnce(3_500); // daily
+    it("purges hourly by createdAt in windows and daily by predictedTime", async () => {
+      mlService.purgeHourlyPredictionsBefore.mockResolvedValueOnce({
+        deleted: 12_000,
+        windows: 3,
+        done: true,
+      });
+      mlService.deleteOldPredictions.mockResolvedValueOnce(3_500); // daily
 
       await processor.handleCleanupOld({} as Job);
 
-      expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(2);
-      // First call: hourly with ~7-day cutoff.
-      const [type1, cutoff1] = mlService.deleteOldPredictions.mock.calls[0];
-      expect(type1).toBe("hourly");
-      expect(cutoff1).toBeInstanceOf(Date);
-      // Second call: daily with ~90-day cutoff.
-      const [type2, cutoff2] = mlService.deleteOldPredictions.mock.calls[1];
-      expect(type2).toBe("daily");
-      // The 90-day cutoff should be older than the 7-day one.
-      expect((cutoff2 as Date).getTime()).toBeLessThan(
-        (cutoff1 as Date).getTime(),
+      // Hourly goes through the windowed, partition-key-aligned purge...
+      expect(mlService.purgeHourlyPredictionsBefore).toHaveBeenCalledTimes(1);
+      const [hourlyCutoff] =
+        mlService.purgeHourlyPredictionsBefore.mock.calls[0];
+      expect(hourlyCutoff).toBeInstanceOf(Date);
+
+      // ...daily keeps the predictedTime path (lead time reaches ~1 year).
+      expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+      const [type, dailyCutoff] = mlService.deleteOldPredictions.mock.calls[0];
+      expect(type).toBe("daily");
+      expect((dailyCutoff as Date).getTime()).toBeLessThan(
+        (hourlyCutoff as Date).getTime(),
       );
     });
 
+    it("gives the hourly cutoff a day of slack over the 7-day target window", async () => {
+      await processor.handleCleanupOld({} as Job);
+
+      const [hourlyCutoff] =
+        mlService.purgeHourlyPredictionsBefore.mock.calls[0];
+      const ageDays =
+        (Date.now() - (hourlyCutoff as Date).getTime()) / 86_400_000;
+      // 8 days: an hourly row's target can sit up to 24h after its createdAt,
+      // so cutting at 7 days on createdAt would drop still-wanted targets.
+      expect(ageDays).toBeGreaterThan(7.9);
+      expect(ageDays).toBeLessThan(8.1);
+    });
+
+    it("does not fail when a backlog is left over for the next run", async () => {
+      mlService.purgeHourlyPredictionsBefore.mockResolvedValueOnce({
+        deleted: 5_000_000,
+        windows: 20,
+        done: false, // budget exhausted mid-backlog
+      });
+
+      await expect(
+        processor.handleCleanupOld({} as Job),
+      ).resolves.toBeUndefined();
+    });
+
     it("rethrows when delete fails — the cron job retries on next schedule", async () => {
-      mlService.deleteOldPredictions.mockRejectedValueOnce(
+      mlService.purgeHourlyPredictionsBefore.mockRejectedValueOnce(
         new Error("DB unavailable"),
       );
 

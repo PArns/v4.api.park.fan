@@ -21,7 +21,14 @@ import { v4 as uuidv4 } from "uuid";
 @Index(["attractionId", "predictedTime"])
 @Index(["predictionType", "createdAt"])
 @Index(["attractionId", "predictionType", "createdAt"]) // getStoredPredictions: WHERE attractionId=X AND predictionType=Y AND createdAt>=Z
-@Index(["modelVersion"])
+// Removed (2026-07-25) — this is the heaviest-written table in the system
+// (~228k rows per prediction run), so every index is paid for on each insert:
+// - @Index(["modelVersion"]) — 335 MB across chunks for 4 lifetime scans. The
+//   only `modelVersion` filter in the codebase queries ml_feature_stats, a
+//   different table, so nothing ever read this one.
+// - @Index() on attractionId — 225 MB, fully covered as the leftmost prefix of
+//   both ["attractionId", "predictedTime"] and
+//   ["attractionId", "predictionType", "createdAt"].
 export class WaitTimePrediction {
   // Composite Primary Key (required for TimescaleDB)
   @PrimaryColumn("uuid")
@@ -31,7 +38,6 @@ export class WaitTimePrediction {
   createdAt: Date; // When prediction was made
 
   @Column()
-  @Index()
   attractionId: string;
 
   @ManyToOne(() => Attraction)

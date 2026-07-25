@@ -603,6 +603,32 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Prediction Cleanup: Daily at 3:30am.
+    //
+    // This was missing entirely: PredictionGeneratorProcessor has handled
+    // "cleanup-old" on the "predictions" queue since it was written, but the
+    // only cleanup-old ever enqueued went to the "prediction-accuracy" queue
+    // (a different processor with a same-named handler). So hourly predictions
+    // were never pruned and only the 90-day Timescale chunk retention applied —
+    // 28M rows past their intended 7-day life had accumulated by 2026-07-25.
+    const hasPredictionCleanupCron = await this.hasRepeatableJob(
+      this.predictionsQueue,
+      "prediction-cleanup-cron",
+    );
+
+    if (!hasPredictionCleanupCron) {
+      await this.predictionsQueue.add(
+        "cleanup-old",
+        {},
+        {
+          repeat: {
+            cron: "30 3 * * *", // Daily at 3:30am, before the 4am accuracy cleanup
+          },
+          jobId: "prediction-cleanup-cron",
+        },
+      );
+    }
+
     // Queue Percentiles: Daily at 2am (after midnight + buffer)
     const hasPercentilesCron = await this.hasRepeatableJob(
       this.analyticsQueue,
