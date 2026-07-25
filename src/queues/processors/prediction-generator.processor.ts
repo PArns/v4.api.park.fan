@@ -312,16 +312,19 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     try {
       const now = new Date();
 
-      // Delete hourly predictions older than 7 days
+      // Hourly: keep 7 days of past targets. Pruned on createdAt (the partition
+      // key) in day-windows — see purgeHourlyPredictionsBefore. The cutoff gets
+      // one extra day of slack because a row's target can sit up to 24h after
+      // its createdAt, so "created before now-8d" cannot drop anything that was
+      // predicting for the last 7 days.
       const hourlyCutoff = new Date(now);
-      hourlyCutoff.setDate(hourlyCutoff.getDate() - 7);
+      hourlyCutoff.setDate(hourlyCutoff.getDate() - 8);
 
-      const deletedHourly = await this.mlService.deleteOldPredictions(
-        "hourly",
-        hourlyCutoff,
-      );
+      const hourly =
+        await this.mlService.purgeHourlyPredictionsBefore(hourlyCutoff);
 
-      // Delete daily predictions older than 90 days
+      // Delete daily predictions older than 90 days. Daily predictions are made
+      // up to a year ahead, so these must be selected by predictedTime.
       const dailyCutoff = new Date(now);
       dailyCutoff.setDate(dailyCutoff.getDate() - 90);
 
@@ -330,11 +333,21 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         dailyCutoff,
       );
 
-      const totalDeleted = deletedHourly + deletedDaily;
+      const totalDeleted = hourly.deleted + deletedDaily;
 
       this.logger.log(
-        `✅ Cleanup complete: Removed ${totalDeleted.toLocaleString()} old predictions (hourly: ${deletedHourly.toLocaleString()}, daily: ${deletedDaily.toLocaleString()})`,
+        `✅ Cleanup complete: Removed ${totalDeleted.toLocaleString()} old predictions ` +
+          `(hourly: ${hourly.deleted.toLocaleString()} in ${hourly.windows} day-window(s), ` +
+          `daily: ${deletedDaily.toLocaleString()})`,
       );
+
+      if (!hourly.done) {
+        // Expected while a backlog is being worked off; each run takes the
+        // oldest windows, so the next one continues where this stopped.
+        this.logger.log(
+          `ℹ️  Hourly backlog not fully cleared yet — continuing next run.`,
+        );
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
