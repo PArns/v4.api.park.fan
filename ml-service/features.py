@@ -538,8 +538,32 @@ def add_holiday_features(
                 slot_flags[i] = is_public
         return public_count, school_count, slot_flags
 
-    # Apply neighbor check (aggregate over ALL influencing regions, not just the first 3)
-    neighbor_results = df.apply(check_neighbor_holidays, axis=1)
+    # Apply neighbor check (aggregate over ALL influencing regions, not just the first 3).
+    #
+    # Evaluated once per unique (parkId, date_local) pair rather than once per
+    # row: the result depends on nothing else, because `influencingRegions` is
+    # a property of the park. A training frame has millions of rows but only a
+    # few thousand distinct park-days, so the row-wise apply repeated the exact
+    # same dict lookups thousands of times per park-day.
+    # See test_neighbor_holiday_features.py for the invariant this relies on.
+    _pair_cols = ["parkId", "date_local", "influencingRegions"]
+    _pairs = df[_pair_cols].drop_duplicates(subset=["parkId", "date_local"])
+
+    if _pairs.empty:
+        neighbor_results = pd.Series([], index=df.index, dtype=object)
+    else:
+        _pair_results = _pairs.apply(check_neighbor_holidays, axis=1)
+        _lookup = dict(
+            zip(zip(_pairs["parkId"], _pairs["date_local"]), _pair_results)
+        )
+        neighbor_results = pd.Series(
+            [
+                _lookup[key]
+                for key in zip(df["parkId"], df["date_local"])
+            ],
+            index=df.index,
+            dtype=object,
+        )
     df["_neighbor_public_count"] = neighbor_results.apply(lambda x: x[0])
     df["neighbor_school_holiday_count"] = neighbor_results.apply(lambda x: x[1])
     _slot = neighbor_results.apply(lambda x: x[2])

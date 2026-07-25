@@ -111,7 +111,7 @@ export class CalendarService {
     // safeJsonParse so a corrupt month entry counts as a cache MISS (rebuilt
     // by the partial-hit path below) instead of throwing a 500.
     const monthCached = (
-      await Promise.all(monthCacheKeys.map((k) => this.redis.get(k)))
+      monthCacheKeys.length > 0 ? await this.redis.mget(...monthCacheKeys) : []
     ).map((v) => safeJsonParse<CalendarDay[]>(v));
     if (monthCached.every((v) => v != null)) {
       this.logger.debug(
@@ -147,7 +147,7 @@ export class CalendarService {
         await this.buildCalendarResponse(park, mFrom, mTo, includeHourly);
       }
       const refreshed = (
-        await Promise.all(monthCacheKeys.map((k) => this.redis.get(k)))
+        monthCacheKeys.length > 0 ? await this.redis.mget(...monthCacheKeys) : []
       ).map((v) => safeJsonParse<CalendarDay[]>(v));
       if (refreshed.every((v) => v != null)) {
         this.logger.debug(

@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { randomUUID } from "crypto";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
@@ -15,6 +16,43 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+
+/** One attraction's already-fetched live payload, as handed to the batch writer. */
+export interface LiveDataBatchItem {
+  attractionId: string;
+  liveData: EntityLiveResponse;
+  source?: string;
+}
+
+/** A queue_data row the upstream payload could produce, before the delta check. */
+interface QueueCandidate {
+  attractionId: string;
+  queueType: QueueType;
+  data: Partial<QueueData>;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Revives a cached "latest" entry. A corrupt entry counts as a cache MISS
+ * (→ DB lookup) rather than throwing.
+ */
+function parseCachedLatest(raw: string | null): Partial<QueueData> | null {
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw);
+    return {
+      ...p,
+      returnStart: p.returnStart ? new Date(p.returnStart) : null,
+      returnEnd: p.returnEnd ? new Date(p.returnEnd) : null,
+      timestamp: p.timestamp ? new Date(p.timestamp) : null,
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Queue Data Service
@@ -89,55 +127,293 @@ export class QueueDataService {
     liveData: EntityLiveResponse,
     source?: string,
   ): Promise<number> {
-    let savedCount = 0;
+    const saved = await this.saveLiveDataBatch([
+      { attractionId, liveData, source },
+    ]);
+    return saved.get(attractionId) ?? 0;
+  }
 
+  /**
+   * Batched variant of {@link saveLiveData} for a whole poll cycle.
+   *
+   * The single-attraction path costs 1 Redis GET per queue type (plus a DB
+   * SELECT on a cache miss) and 1 INSERT + 1 Redis SET per written row — all
+   * strictly sequential, so a 60-ride park meant ~180 round-trips every 5
+   * minutes. This collapses an entire batch into:
+   *   1 MGET + at most 2 SELECTs (latest-on-miss, timezones)
+   *   + 1 bulk INSERT + 1 Redis pipeline.
+   *
+   * The delta decision itself is unchanged — {@link isSignificantChange} holds
+   * the exact rules the per-attraction path used, and `saveLiveData` now runs
+   * through this same code so the two can never drift apart.
+   *
+   * NOTE: upstream fetching stays sequential/rate-limited by the caller; this
+   * only batches what we do with an ALREADY fetched response.
+   *
+   * @returns attractionId → number of rows written for it
+   */
+  async saveLiveDataBatch(
+    items: LiveDataBatchItem[],
+  ): Promise<Map<string, number>> {
+    const savedByAttraction = new Map<string, number>();
+    if (items.length === 0) return savedByAttraction;
+
+    // One timestamp for the whole batch: these rows all describe the same
+    // upstream poll, and a shared value keeps the written entries comparable.
+    const now = new Date();
+
+    // Collapse to one candidate per (attraction, queueType). The sequential
+    // path compared a repeated entity against the row it had just written; here
+    // both would evaluate against the same "latest" and write twice, so the
+    // last one wins instead. dedupePollEntities already guards the poll path —
+    // this keeps the invariant true for any caller.
+    const byKey = new Map<string, QueueCandidate>();
+    for (const item of items) {
+      for (const candidate of this.buildQueueCandidates(
+        item.attractionId,
+        item.liveData,
+        item.source,
+      )) {
+        byKey.set(
+          `${candidate.attractionId}:${candidate.queueType}`,
+          candidate,
+        );
+      }
+    }
+    const candidates = [...byKey.values()];
+    if (candidates.length === 0) return savedByAttraction;
+
+    // ── 1. Latest known state per (attraction, queueType) — Redis first ──
+    const cachedRaw = await this.redis
+      .mget(
+        ...candidates.map((c) =>
+          this.latestCacheKey(c.attractionId, c.queueType),
+        ),
+      )
+      .catch(() => [] as (string | null)[]);
+
+    const latestPerCandidate: (Partial<QueueData> | null)[] = candidates.map(
+      (_, i) => parseCachedLatest(cachedRaw[i] ?? null),
+    );
+
+    // ── 2. Cache misses in ONE DISTINCT ON query (was: one SELECT each) ──
+    const missIdx = latestPerCandidate
+      .map((v, i) => (v === null ? i : -1))
+      .filter((i) => i >= 0);
+
+    if (missIdx.length > 0) {
+      const missAttractionIds = [
+        ...new Set(missIdx.map((i) => candidates[i].attractionId)),
+      ];
+      // Same 24h bound the per-attraction lookup used — it lets TimescaleDB
+      // exclude old chunks instead of walking each attraction's full history.
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      try {
+        const rows = await this.queueDataRepository
+          .createQueryBuilder("qd")
+          .where("qd.attractionId IN (:...ids)", { ids: missAttractionIds })
+          .andWhere("qd.timestamp >= :since", { since: oneDayAgo })
+          .distinctOn(["qd.attractionId", "qd.queueType"])
+          .orderBy("qd.attractionId", "ASC")
+          .addOrderBy("qd.queueType", "ASC")
+          .addOrderBy("qd.timestamp", "DESC")
+          .getMany();
+
+        const dbLatest = new Map<string, QueueData>(
+          rows.map((r) => [`${r.attractionId}:${r.queueType}`, r]),
+        );
+        for (const i of missIdx) {
+          const c = candidates[i];
+          latestPerCandidate[i] =
+            dbLatest.get(`${c.attractionId}:${c.queueType}`) ?? null;
+        }
+      } catch (error) {
+        // A failed lookup must not silently swallow the poll: treat every miss
+        // as "no previous data" (→ save), which is the safe direction.
+        this.logger.error(
+          `Batch latest-queue-data lookup failed: ${errorMessage(error)}`,
+        );
+      }
+    }
+
+    // ── 3. Timezones (only needed where a previous row exists) ──
+    const tzMap = await this.resolveTimezones([
+      ...new Set(
+        candidates
+          .filter((_, i) => latestPerCandidate[i]?.timestamp)
+          .map((c) => c.attractionId),
+      ),
+    ]);
+
+    // ── 4. Delta decision (pure, no I/O) ──
+    const toInsert: QueueData[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      const latest = latestPerCandidate[i];
+      const timezone = tzMap.get(c.attractionId) ?? "UTC";
+      if (!this.isSignificantChange(latest, c.data, c.queueType, timezone)) {
+        continue;
+      }
+      const entry = this.queueDataRepository.create(c.data);
+      // Set explicitly instead of relying on the @BeforeInsert hook so the
+      // written row is identical whether it goes through insert() or save().
+      entry.id = randomUUID();
+      entry.timestamp = now;
+      toInsert.push(entry);
+    }
+
+    if (toInsert.length === 0) return savedByAttraction;
+
+    // ── 5. One bulk INSERT (was: one save() per row) ──
+    const written = await this.insertQueueRows(toInsert);
+    if (written.length === 0) return savedByAttraction;
+
+    for (const entry of written) {
+      savedByAttraction.set(
+        entry.attractionId,
+        (savedByAttraction.get(entry.attractionId) ?? 0) + 1,
+      );
+    }
+
+    // ── 6. One pipeline for all cache writes (was: one SET per row) ──
+    const pipeline = this.redis.pipeline();
+    for (const entry of written) {
+      pipeline.set(
+        this.latestCacheKey(entry.attractionId, entry.queueType),
+        JSON.stringify(entry),
+        "EX",
+        this.LATEST_CACHE_TTL,
+      );
+    }
+    await pipeline
+      .exec()
+      .catch((e) =>
+        this.logger.debug(
+          `Redis latest-cache pipeline failed for ${written.length} entr${
+            written.length === 1 ? "y" : "ies"
+          }: ${errorMessage(e)}`,
+        ),
+      );
+
+    return savedByAttraction;
+  }
+
+  /**
+   * Bulk-insert with a per-row fallback: one malformed row must not cost the
+   * whole park's poll (the per-attraction path failed in isolation, and this
+   * keeps that property).
+   */
+  private async insertQueueRows(rows: QueueData[]): Promise<QueueData[]> {
+    try {
+      await this.queueDataRepository.insert(rows);
+      return rows;
+    } catch (error) {
+      this.logger.warn(
+        `Bulk queue_data insert of ${rows.length} row(s) failed (${errorMessage(
+          error,
+        )}) — retrying row by row`,
+      );
+      const written: QueueData[] = [];
+      for (const row of rows) {
+        try {
+          await this.queueDataRepository.insert(row);
+          written.push(row);
+        } catch (rowError) {
+          this.logger.error(
+            `❌ Failed to save ${row.queueType} queue data for ${row.attractionId}: ${errorMessage(rowError)}`,
+          );
+        }
+      }
+      return written;
+    }
+  }
+
+  /**
+   * attractionId → park timezone, Redis-first with a single DB fallback query.
+   */
+  private async resolveTimezones(
+    attractionIds: string[],
+  ): Promise<Map<string, string>> {
+    const tzMap = new Map<string, string>();
+    if (attractionIds.length === 0) return tzMap;
+
+    const cached = await this.redis
+      .mget(...attractionIds.map((id) => this.attractionTimezoneCacheKey(id)))
+      .catch(() => [] as (string | null)[]);
+
+    const missing: string[] = [];
+    attractionIds.forEach((id, i) => {
+      const tz = cached[i];
+      if (tz) tzMap.set(id, tz);
+      else missing.push(id);
+    });
+
+    if (missing.length === 0) return tzMap;
+
+    try {
+      const rows = await this.attractionRepository
+        .createQueryBuilder("a")
+        .innerJoin("a.park", "p")
+        .select("a.id", "id")
+        .addSelect("p.timezone", "timezone")
+        .where("a.id IN (:...ids)", { ids: missing })
+        .getRawMany<{ id: string; timezone: string | null }>();
+
+      const pipeline = this.redis.pipeline();
+      for (const row of rows) {
+        if (!row.timezone) continue;
+        tzMap.set(row.id, row.timezone);
+        pipeline.set(
+          this.attractionTimezoneCacheKey(row.id),
+          row.timezone,
+          "EX",
+          3600,
+        );
+      }
+      await pipeline.exec().catch(() => undefined);
+    } catch (error) {
+      // Falling back to UTC only affects the "new park-local day" check, which
+      // the >60min heartbeat rule covers shortly after anyway.
+      this.logger.debug(`Timezone lookup failed: ${errorMessage(error)}`);
+    }
+
+    return tzMap;
+  }
+
+  /**
+   * Maps one upstream live payload to the queue_data rows it could produce.
+   * Pure — no I/O, so both the single and the batch path share it verbatim.
+   */
+  private buildQueueCandidates(
+    attractionId: string,
+    liveData: EntityLiveResponse,
+    source?: string,
+  ): QueueCandidate[] {
     if (!liveData.queue) {
       // Record any explicit status change even without queue data.
       // Covers: CLOSED/DOWN/REFURBISHMENT (no queue expected) AND OPERATING for
       // attractions without posted wait times (walk-throughs, free-flow rides).
-      if (liveData.status) {
-        // Force a save for STANDBY queue to record the status change
-        const queueData: Partial<QueueData> = {
+      if (!liveData.status) return [];
+      return [
+        {
           attractionId,
           queueType: QueueType.STANDBY,
-          status: liveData.status,
-          dataSource: source || "themeparks-wiki",
-          lastUpdated: liveData.lastUpdated
-            ? new Date(liveData.lastUpdated)
-            : new Date(),
-          // Non-OPERATING statuses have 0 wait; OPERATING without queue has no posted time
-          waitTime: liveData.status !== "OPERATING" ? 0 : undefined,
-        };
-
-        const shouldSave = await this.shouldSaveQueueData(
-          attractionId,
-          QueueType.STANDBY,
-          queueData,
-        );
-        if (shouldSave) {
-          const queueEntry = this.queueDataRepository.create(queueData);
-          await this.queueDataRepository.save(queueEntry);
-
-          await this.redis
-            .set(
-              this.latestCacheKey(attractionId, QueueType.STANDBY),
-              JSON.stringify(queueEntry),
-              "EX",
-              this.LATEST_CACHE_TTL,
-            )
-            .catch((e) =>
-              this.logger.debug(
-                `Redis cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
-              ),
-            );
-          return 1;
-        }
-      }
-      // No queue data available (attraction might not have wait times)
-      return savedCount;
+          data: {
+            attractionId,
+            queueType: QueueType.STANDBY,
+            status: liveData.status,
+            dataSource: source || "themeparks-wiki",
+            lastUpdated: liveData.lastUpdated
+              ? new Date(liveData.lastUpdated)
+              : new Date(),
+            // Non-OPERATING statuses have 0 wait; OPERATING without queue has no posted time
+            waitTime: liveData.status !== "OPERATING" ? 0 : undefined,
+          },
+        },
+      ];
     }
 
-    // Process each queue type
+    const candidates: QueueCandidate[] = [];
     const queueTypes = Object.keys(liveData.queue) as QueueType[];
 
     for (const queueType of queueTypes) {
@@ -204,142 +480,10 @@ export class QueueDataService {
           break;
       }
 
-      // Check if we should save (delta strategy)
-      const shouldSave = await this.shouldSaveQueueData(
-        attractionId,
-        queueType,
-        queueData,
-      );
-
-      if (shouldSave) {
-        try {
-          // Use create() to ensure @BeforeInsert hooks are triggered
-          const queueEntry = this.queueDataRepository.create(queueData);
-          await this.queueDataRepository.save(queueEntry);
-          savedCount++;
-
-          // Update cache so the next shouldSaveQueueData call hits Redis, not DB.
-          // Scalar fields only — shouldSaveQueueData reads status/waitTime/timestamp;
-          // timezone falls back to the dedicated attractionTimezoneCacheKey written
-          // by the DB-miss path in shouldSaveQueueData.
-          await this.redis
-            .set(
-              this.latestCacheKey(attractionId, queueType),
-              JSON.stringify(queueEntry),
-              "EX",
-              this.LATEST_CACHE_TTL,
-            )
-            .catch((e) =>
-              this.logger.debug(
-                `Redis cache set failed for attraction ${attractionId} (${queueType}): ${e?.message ?? e}`,
-              ),
-            );
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          this.logger.error(
-            `❌ Failed to save ${queueType} queue data: ${errorMessage}`,
-          );
-        }
-      }
+      candidates.push({ attractionId, queueType, data: queueData });
     }
 
-    return savedCount;
-  }
-
-  /**
-   * Saves forecast data for an attraction from ThemeParks.wiki live API response.
-   *
-   * Strategy:
-   * - Keep ALL forecasts (historical + future) for ML model training
-   * - Update existing forecasts if prediction changes (to have correct data for the current day)
-   * - Never delete old forecasts (needed to compare predicted vs actual wait times)
-   *
-   * Use cases:
-   * - Training ML model: Compare ThemeParks.wiki forecasts against actual queue_data
-   * - Forecast accuracy tracking: Measure how good external predictions are
-   * - Weather correlation: Join with weather data to improve our own predictions
-   *
-   * @param attractionId - Our internal attraction ID (UUID)
-   * @param liveData - Live data from ThemeParks.wiki API containing forecast array
-   */
-  async saveForecastData(
-    attractionId: string,
-    liveData: EntityLiveResponse,
-  ): Promise<number> {
-    if (!liveData.forecast || liveData.forecast.length === 0) {
-      // Most attractions don't have forecast data, this is normal
-      return 0;
-    }
-
-    let savedCount = 0;
-    let updatedCount = 0;
-    let _skippedCount = 0;
-
-    const now = new Date();
-    const historicalForecasts: string[] = [];
-    const futureForecasts: string[] = [];
-
-    for (const forecast of liveData.forecast) {
-      const forecastData: Partial<ForecastData> = {
-        attractionId,
-        predictedTime: new Date(forecast.time),
-        predictedWaitTime: forecast.waitTime,
-        confidencePercentage: forecast.percentage || null,
-        source: "themeparks_wiki",
-      };
-
-      // Track historical vs future forecasts
-      if (forecastData.predictedTime! < now) {
-        historicalForecasts.push(forecast.time);
-      } else {
-        futureForecasts.push(forecast.time);
-      }
-
-      try {
-        // Upsert: Check if forecast for this exact time already exists
-        // We keep forecasts forever for ML training, just update if prediction changes
-        const existing = await this.forecastDataRepository.findOne({
-          where: {
-            attractionId,
-            predictedTime: forecastData.predictedTime,
-            source: "themeparks_wiki",
-          },
-        });
-
-        if (!existing) {
-          // Use create() to ensure @BeforeInsert hooks are triggered
-          const forecastEntry =
-            this.forecastDataRepository.create(forecastData);
-          await this.forecastDataRepository.save(forecastEntry);
-          savedCount++;
-        } else {
-          // Update if wait time prediction changed
-          // This ensures we have the latest/most accurate forecast for the current day
-          if (existing.predictedWaitTime !== forecastData.predictedWaitTime) {
-            // ForecastData has composite PK (id + createdAt), must provide both
-            await this.forecastDataRepository.update(
-              { id: existing.id, createdAt: existing.createdAt },
-              {
-                predictedWaitTime: forecastData.predictedWaitTime,
-                confidencePercentage: forecastData.confidencePercentage,
-              },
-            );
-            updatedCount++;
-          } else {
-            _skippedCount++;
-          }
-        }
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Failed to save forecast for ${forecast.time}: ${errorMessage}`,
-        );
-      }
-    }
-
-    return savedCount + updatedCount;
+    return candidates;
   }
 
   /**
@@ -351,77 +495,12 @@ export class QueueDataService {
    * - Status changed (OPERATING → CLOSED, etc.)
    * - Virtual queue return time windows changed
    */
-  private async shouldSaveQueueData(
-    attractionId: string,
-    queueType: QueueType,
+  private isSignificantChange(
+    latest: Partial<QueueData> | null,
     newData: Partial<QueueData>,
-  ): Promise<boolean> {
-    // Try Redis cache first — avoids a DB query on every sync cycle per attraction
-    const cacheKey = this.latestCacheKey(attractionId, queueType);
-    let latest: Partial<QueueData> | null = null;
-
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      try {
-        const p = JSON.parse(cached);
-        latest = {
-          ...p,
-          returnStart: p.returnStart ? new Date(p.returnStart) : null,
-          returnEnd: p.returnEnd ? new Date(p.returnEnd) : null,
-          timestamp: p.timestamp ? new Date(p.timestamp) : null,
-        };
-      } catch {
-        // Corrupted entry — fall through to DB
-      }
-    }
-
-    if (!latest) {
-      // Cache miss — query DB and warm the cache
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      latest = await this.queueDataRepository.findOne({
-        where: {
-          attractionId,
-          queueType,
-          timestamp: MoreThanOrEqual(oneDayAgo),
-        },
-        order: { timestamp: "DESC" },
-        select: [
-          "id", // Must include ID for composite primary key relation mapping
-          "status",
-          "waitTime",
-          "returnStart",
-          "returnEnd",
-          "timestamp",
-          "allocationStatus",
-          "currentGroupStart",
-          "currentGroupEnd",
-          "attractionId", // Need attraction ID for relation
-        ],
-        relations: ["attraction", "attraction.park"], // Load attraction and park
-      });
-      if (latest) {
-        await this.redis
-          .set(cacheKey, JSON.stringify(latest), "EX", this.LATEST_CACHE_TTL)
-          .catch((e) =>
-            this.logger.debug(
-              `Redis latest-cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
-            ),
-          );
-        // Cache the timezone separately so save-path cache entries (which lack
-        // the relation) can still perform timezone-aware date comparisons.
-        const tz = (latest as any).attraction?.park?.timezone;
-        if (tz) {
-          await this.redis
-            .set(this.attractionTimezoneCacheKey(attractionId), tz, "EX", 3600)
-            .catch((e) =>
-              this.logger.debug(
-                `Redis timezone-cache set failed for attraction ${attractionId}: ${e?.message ?? e}`,
-              ),
-            );
-        }
-      }
-    }
-
+    queueType: QueueType,
+    timezone: string,
+  ): boolean {
     // No previous data → save
     if (!latest) {
       return true;
@@ -480,17 +559,22 @@ export class QueueDataService {
     // Date changed → save (ensure at least one data point per day)
     // This fixes the issue where "Closed" status persists from yesterday and we ignore today's "Closed" update
     if (latest.timestamp) {
-      // Prefer the relation (present on DB-miss path), fall back to the
-      // dedicated timezone key (written on DB-miss, outlives the 10-min entity
-      // cache so save-path entries also get the correct timezone).
-      const timezone =
-        (latest as any).attraction?.park?.timezone ||
-        (await this.redis.get(this.attractionTimezoneCacheKey(attractionId))) ||
-        "UTC";
-      const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
-      const currentDateStr = getCurrentDateInTimezone(timezone);
-      if (latestDateStr !== currentDateStr) {
-        return true;
+      // `timezone` is resolved once per batch (Redis-first, single DB fallback)
+      // in resolveTimezones() — the caller passes the park timezone in, or "UTC"
+      // when it could not be determined.
+      //
+      // Guarded: a corrupt cached timestamp or timezone must not throw. This
+      // check runs inside a whole park's batch now, so an unguarded throw would
+      // cost every ride in that park its reading — the per-attraction path only
+      // ever lost one. The >60min heartbeat rule below still forces a write.
+      try {
+        const latestDateStr = formatInParkTimezone(latest.timestamp, timezone);
+        const currentDateStr = getCurrentDateInTimezone(timezone);
+        if (latestDateStr !== currentDateStr) {
+          return true;
+        }
+      } catch {
+        // fall through to the heartbeat rule
       }
     }
 

@@ -1,5 +1,6 @@
 import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Job, Queue } from "bull";
@@ -9,7 +10,10 @@ import { ParksService } from "../../parks/parks.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
-import { QueueDataService } from "../../queue-data/queue-data.service";
+import {
+  QueueDataService,
+  LiveDataBatchItem,
+} from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { CacheWarmupService } from "../services/cache-warmup.service";
@@ -224,25 +228,90 @@ export class WaitTimesProcessor {
                 );
               }
               if (pollEntities.length > 0) {
-                for (const entityLiveData of pollEntities) {
+                // Attractions are written as ONE batch per park: the upstream
+                // response is already in hand, so the per-entity Redis GET +
+                // INSERT + SET round-trips (~3 per ride, strictly sequential —
+                // ~180 for a 60-ride park, every 5 minutes) collapse into a
+                // single MGET + bulk INSERT + pipeline. Shows/restaurants keep
+                // the per-entity path (few per park, separate services).
+                const attractionEntities: EntityLiveData[] = [];
+                const otherEntities: EntityLiveData[] = [];
+                for (const e of pollEntities) {
+                  if (e.entityType === EntityType.ATTRACTION)
+                    attractionEntities.push(e);
+                  else otherEntities.push(e);
+                }
+
+                if (attractionEntities.length > 0) {
                   try {
-                    let savedCount = 0;
-                    switch (entityLiveData.entityType) {
-                      case EntityType.ATTRACTION: {
-                        const internalId = mappingLookup.get(
-                          `${entityLiveData.source}:${entityLiveData.externalId}`,
+                    const savedPerAttraction =
+                      await this.processAttractionLiveDataBatch(
+                        attractionEntities,
+                        mappingLookup,
+                        seenAttractionIds,
+                      );
+
+                    // Closing time for the downtime tracker (same for all rides
+                    // of this park — computed once instead of per entity).
+                    let closingTime: Date | undefined;
+                    if (liveData.operatingHours?.length) {
+                      const todayStr = getCurrentDateInTimezone(
+                        park.timezone || "UTC",
+                      );
+                      const todayWindow = liveData.operatingHours.find(
+                        (w) =>
+                          formatInParkTimezone(
+                            new Date(w.open),
+                            park.timezone || "UTC",
+                          ) === todayStr,
+                      );
+                      if (todayWindow?.close)
+                        closingTime = new Date(todayWindow.close);
+                    }
+
+                    for (const entityLiveData of attractionEntities) {
+                      const internalId = mappingLookup.get(
+                        `${entityLiveData.source}:${entityLiveData.externalId}`,
+                      );
+                      const savedCount = internalId
+                        ? (savedPerAttraction.get(internalId) ?? 0)
+                        : 0;
+                      if (savedCount === 0) continue;
+
+                      savedAttractions += savedCount;
+                      const src = entityLiveData.source || "unknown";
+                      sourceStats[src] = (sourceStats[src] || 0) + 1;
+
+                      // Downtime Tracking & Deviations (only for rides that
+                      // actually produced a row, as before).
+                      try {
+                        await this.trackDowntime(
+                          entityLiveData,
+                          mappingLookup,
+                          park.timezone,
+                          closingTime,
                         );
-                        if (internalId) {
-                          seenAttractionIds.add(internalId);
-                          await this.touchAttractionLastSeen(internalId);
-                        }
-                        savedCount = await this.processAttractionLiveData(
+                        await this.checkAndFlagDeviation(
                           entityLiveData,
                           mappingLookup,
                         );
-                        savedAttractions += savedCount;
-                        break;
+                      } catch (e) {
+                        this.logger.warn(
+                          `Failed post-save tracking for entity ${entityLiveData.externalId}: ${(e as Error)?.message ?? e}`,
+                        );
                       }
+                    }
+                  } catch (e) {
+                    this.logger.warn(
+                      `Failed to process ${attractionEntities.length} attraction entit(ies) for park ${park.name}: ${(e as Error)?.message ?? e}`,
+                    );
+                  }
+                }
+
+                for (const entityLiveData of otherEntities) {
+                  try {
+                    let savedCount = 0;
+                    switch (entityLiveData.entityType) {
                       case EntityType.SHOW:
                         savedCount = await this.processShowLiveData(
                           entityLiveData,
@@ -262,38 +331,6 @@ export class WaitTimesProcessor {
                     if (savedCount > 0) {
                       const src = entityLiveData.source || "unknown";
                       sourceStats[src] = (sourceStats[src] || 0) + 1;
-
-                      // Downtime Tracking & Deviations
-                      if (entityLiveData.entityType === EntityType.ATTRACTION) {
-                        let closingTime: Date | undefined;
-                        if (
-                          liveData.operatingHours &&
-                          liveData.operatingHours.length > 0
-                        ) {
-                          const todayStr = getCurrentDateInTimezone(
-                            park.timezone || "UTC",
-                          );
-                          const todayWindow = liveData.operatingHours.find(
-                            (w) =>
-                              formatInParkTimezone(
-                                new Date(w.open),
-                                park.timezone || "UTC",
-                              ) === todayStr,
-                          );
-                          if (todayWindow?.close)
-                            closingTime = new Date(todayWindow.close);
-                        }
-                        await this.trackDowntime(
-                          entityLiveData,
-                          mappingLookup,
-                          park.timezone,
-                          closingTime,
-                        );
-                        await this.checkAndFlagDeviation(
-                          entityLiveData,
-                          mappingLookup,
-                        );
-                      }
                     }
                   } catch (e) {
                     this.logger.warn(
@@ -432,6 +469,60 @@ export class WaitTimesProcessor {
   }
 
   /**
+   * Batch variant: writes a whole park's attraction readings in one go and
+   * stamps every last-seen key in a single Redis pipeline.
+   *
+   * Mutates `seenAttractionIds` with every resolved attraction — the caller
+   * uses it to decide whether reverse-reconciliation may run.
+   *
+   * @returns internal attractionId → rows written
+   */
+  private async processAttractionLiveDataBatch(
+    entities: EntityLiveData[],
+    mappingLookup: Map<string, string>,
+    seenAttractionIds: Set<string>,
+  ): Promise<Map<string, number>> {
+    const items: LiveDataBatchItem[] = [];
+    const lastSeenKeys: string[] = [];
+
+    for (const entityData of entities) {
+      const internalId = mappingLookup.get(
+        `${entityData.source}:${entityData.externalId}`,
+      );
+      if (!internalId) continue;
+      seenAttractionIds.add(internalId);
+      lastSeenKeys.push(this.attractionLastSeenKey(internalId));
+      items.push({
+        attractionId: internalId,
+        liveData: this.adaptEntityLiveData(entityData),
+        source: entityData.source,
+      });
+    }
+
+    if (items.length === 0) return new Map();
+
+    // One pipeline instead of one SET per attraction.
+    if (lastSeenKeys.length > 0) {
+      const now = Date.now().toString();
+      const pipeline = this.redis.pipeline();
+      for (const key of lastSeenKeys) {
+        pipeline.set(key, now, "EX", this.LAST_SEEN_TTL_SECONDS);
+      }
+      await pipeline
+        .exec()
+        .catch((e) =>
+          this.logger.debug(
+            `Failed to touch last-seen for ${lastSeenKeys.length} attraction(s): ${
+              (e as Error)?.message ?? e
+            }`,
+          ),
+        );
+    }
+
+    return this.queueDataService.saveLiveDataBatch(items);
+  }
+
+  /**
    * Redis key for "last seen in any upstream source".
    * Touched ONLY when an attraction appears in a real source feed — the
    * hourly heartbeat does NOT update it, so this is a reliable signal for
@@ -484,40 +575,49 @@ export class WaitTimesProcessor {
       attractionMeta.map((a) => [a.id, a.createdAt.getTime()]),
     );
 
-    let closedCount = 0;
-    for (const attraction of missing) {
-      const createdAt = createdAtMap.get(attraction.id) ?? now;
-      // Skip newly created attractions to avoid closing them before the
-      // first successful source fetch cycle has populated last-seen.
-      if (now - createdAt < this.STALE_THRESHOLD_MS) continue;
+    // Skip newly created attractions to avoid closing them before the
+    // first successful source fetch cycle has populated last-seen.
+    const graceFiltered = missing.filter(
+      (a) => now - (createdAtMap.get(a.id) ?? now) >= this.STALE_THRESHOLD_MS,
+    );
+    if (graceFiltered.length === 0) return 0;
 
-      const lastSeenRaw = await this.redis
-        .get(this.attractionLastSeenKey(attraction.id))
-        .catch(() => null);
-      const lastSeenMs = lastSeenRaw ? parseInt(lastSeenRaw, 10) : 0;
+    // One MGET instead of a GET per missing attraction.
+    const lastSeenValues = await this.redis
+      .mget(...graceFiltered.map((a) => this.attractionLastSeenKey(a.id)))
+      .catch(() => [] as (string | null)[]);
 
+    const toClose = graceFiltered.filter((_, i) => {
+      const raw = lastSeenValues[i];
+      const lastSeenMs = raw ? parseInt(raw, 10) : 0;
       // If we have a recent sighting (<24h), skip — probably a transient gap.
-      if (lastSeenMs && now - lastSeenMs < this.STALE_THRESHOLD_MS) continue;
+      return !(lastSeenMs && now - lastSeenMs < this.STALE_THRESHOLD_MS);
+    });
+    if (toClose.length === 0) return 0;
 
-      // No recent sighting → close. saveLiveData short-circuits to a
-      // status-only save when no queue is present, and shouldSaveQueueData
-      // deduplicates if we've already written CLOSED previously.
-      try {
-        const saved = await this.queueDataService.saveLiveData(
-          attraction.id,
-          {
+    // No recent sighting → close. saveLiveDataBatch short-circuits to a
+    // status-only row when no queue is present, and the delta check
+    // deduplicates if we've already written CLOSED previously.
+    let closedCount = 0;
+    try {
+      const saved = await this.queueDataService.saveLiveDataBatch(
+        toClose.map((attraction) => ({
+          attractionId: attraction.id,
+          liveData: {
             id: attraction.id,
             name: attraction.name,
             entityType: EntityType.ATTRACTION,
             status: LiveStatus.CLOSED,
             lastUpdated: new Date().toISOString(),
           },
-          "system-reconciliation",
-        );
-        if (saved > 0) closedCount++;
-      } catch (_e) {
-        // non-fatal; continue with remaining attractions
+          source: "system-reconciliation",
+        })),
+      );
+      for (const count of saved.values()) {
+        if (count > 0) closedCount++;
       }
+    } catch (_e) {
+      // non-fatal; the next cycle retries
     }
     return closedCount;
   }
@@ -840,23 +940,37 @@ export class WaitTimesProcessor {
             .addOrderBy("qd.timestamp", "DESC")
             .getMany();
           const latestMap = new Map(latestData.map((d) => [d.attractionId, d]));
-          for (const a of attractions) {
+
+          // Rides whose latest reading is missing or older than an hour are the
+          // only heartbeat candidates. Their last-seen keys are read in ONE
+          // MGET and the resulting rows written in ONE bulk INSERT, instead of
+          // a GET + INSERT per ride.
+          const candidates = attractions.filter((a) => {
             const last = latestMap.get(a.id);
-            if (!last || now.getTime() - last.timestamp.getTime() > 3600000) {
+            return !last || now.getTime() - last.timestamp.getTime() > 3600000;
+          });
+          if (candidates.length === 0) continue;
+
+          const lastSeenValues = await this.redis
+            .mget(...candidates.map((a) => this.attractionLastSeenKey(a.id)))
+            .catch(() => [] as (string | null)[]);
+
+          const heartbeatRows = candidates
+            .filter((_, i) => {
               // Skip heartbeat for attractions that haven't been seen in any
               // upstream source for >24h — the reverse-reconciliation step
               // has already written a CLOSED entry, and further heartbeats
               // would just re-stamp `lastUpdated=now` and mask staleness.
-              const lastSeenRaw = await this.redis
-                .get(this.attractionLastSeenKey(a.id))
-                .catch(() => null);
-              const lastSeenMs = lastSeenRaw ? parseInt(lastSeenRaw, 10) : 0;
-              const isStale =
-                !lastSeenMs ||
-                now.getTime() - lastSeenMs > this.STALE_THRESHOLD_MS;
-              if (isStale) continue;
-
-              const heartbeatEntry = this.queueDataRepository.create({
+              const raw = lastSeenValues[i];
+              const lastSeenMs = raw ? parseInt(raw, 10) : 0;
+              return (
+                !!lastSeenMs &&
+                now.getTime() - lastSeenMs <= this.STALE_THRESHOLD_MS
+              );
+            })
+            .map((a) => {
+              const last = latestMap.get(a.id);
+              const row = this.queueDataRepository.create({
                 attractionId: a.id,
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
@@ -864,9 +978,17 @@ export class WaitTimesProcessor {
                 dataSource: last ? last.dataSource : "system-heartbeat",
                 lastUpdated: now,
               });
-              await this.queueDataRepository.save(heartbeatEntry);
-              totalHeartbeats++;
-            }
+              // Set the composite PK explicitly rather than relying on the
+              // @BeforeInsert hook, so a bulk insert() writes the same row a
+              // save() would have.
+              row.id = randomUUID();
+              row.timestamp = now;
+              return row;
+            });
+
+          if (heartbeatRows.length > 0) {
+            await this.queueDataRepository.insert(heartbeatRows);
+            totalHeartbeats += heartbeatRows.length;
           }
         } catch (e) {
           this.logger.warn(

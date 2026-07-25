@@ -880,32 +880,44 @@ def create_prediction_features(
         )
         df["date_str"] = df["local_date"].astype(str)
 
-        # Primary key: country|region|date or country||date (if no region)
-        df["primary_key"] = df.apply(
-            lambda row: (
-                f"{row['park_country']}|{row['park_region']}|{row['date_str']}"
-                if row["park_region"]
-                else f"{row['park_country']}||{row['date_str']}"
-            ),
-            axis=1,
+        # Primary key: country|region|date or country||date (if no region).
+        # Pure string concatenation — done with vector ops instead of a
+        # row-wise apply.
+        df["primary_key"] = np.where(
+            df["park_region"].astype(bool),
+            df["park_country"] + "|" + df["park_region"] + "|" + df["date_str"],
+            df["park_country"] + "||" + df["date_str"],
         )
 
         # Neighbor keys: Extract from park_influences_map (region codes normalized)
-        def get_neighbor_key(row, index):
-            influences = park_influences_map.get(row["parkId"], [])
+        def get_neighbor_key(park_id, date_str, index):
+            influences = park_influences_map.get(park_id, [])
             if index < len(influences):
                 inf = influences[index]
                 country = inf.get("countryCode", "")
                 region = normalize_region_code(inf.get("regionCode", "") or None) or ""
                 if region:
-                    return f"{country}|{region}|{row['date_str']}"
+                    return f"{country}|{region}|{date_str}"
                 else:
-                    return f"{country}||{row['date_str']}"
+                    return f"{country}||{date_str}"
             return ""
 
-        df["neighbor_1_key"] = df.apply(lambda row: get_neighbor_key(row, 0), axis=1)
-        df["neighbor_2_key"] = df.apply(lambda row: get_neighbor_key(row, 1), axis=1)
-        df["neighbor_3_key"] = df.apply(lambda row: get_neighbor_key(row, 2), axis=1)
+        # All neighbor columns depend only on (parkId, local_date), so they are
+        # built once per unique pair and mapped back — a daily forecast frame is
+        # (attractions × dates) rows but only (dates) distinct pairs per park.
+        # Mirrors the same per-pair evaluation in features.py so the training
+        # and inference feature paths stay byte-identical.
+        _pair_keys = list(zip(df["parkId"], df["date_str"]))
+        _unique_pairs = list(dict.fromkeys(_pair_keys))
+
+        for _slot in range(3):
+            _slot_lookup = {
+                pair: get_neighbor_key(pair[0], pair[1], _slot)
+                for pair in _unique_pairs
+            }
+            df[f"neighbor_{_slot + 1}_key"] = [
+                _slot_lookup[pair] for pair in _pair_keys
+            ]
 
         # Map to holiday types
         df["primary_type"] = df["primary_key"].map(holiday_type_lookup)
@@ -933,13 +945,11 @@ def create_prediction_features(
 
         # Full aggregate over ALL influencing regions (fixes the 3-slot cap; null-region entry
         # → country-wide 'any region' check). Mirrors features.py check_neighbor_holidays.
-        def _neighbor_counts(row):
-            date_str = row["date_str"]
-            local_date = row["local_date"]
+        def _neighbor_counts(park_id, date_str, local_date):
             school = 0
             public = 0
             seen = set()
-            for inf in park_influences_map.get(row["parkId"], []):
+            for inf in park_influences_map.get(park_id, []):
                 if not isinstance(inf, dict):
                     continue
                 country = inf.get("countryCode", "")
@@ -959,9 +969,16 @@ def create_prediction_features(
                     public += int((country, local_date) in country_any_public)
             return school, public
 
-        _counts = df.apply(_neighbor_counts, axis=1)
-        df["neighbor_school_holiday_count"] = _counts.apply(lambda x: x[0])
-        _neighbor_public = _counts.apply(lambda x: x[1])
+        # Same per-pair evaluation as the neighbor keys above: `local_date` is
+        # what `date_str` was built from, so (parkId, date_str) is the full key.
+        _date_by_str = dict(zip(df["date_str"], df["local_date"]))
+        _counts_lookup = {
+            pair: _neighbor_counts(pair[0], pair[1], _date_by_str[pair[1]])
+            for pair in _unique_pairs
+        }
+        _counts = [_counts_lookup[pair] for pair in _pair_keys]
+        df["neighbor_school_holiday_count"] = [c[0] for c in _counts]
+        _neighbor_public = pd.Series([c[1] for c in _counts], index=df.index)
 
         # Totals — full influencing-region aggregate (not just the 3 legacy slots).
         df["holiday_count_total"] = df["is_holiday_primary"] + _neighbor_public

@@ -74,6 +74,7 @@ describe("MLService", () => {
   const mockAttractionRepository = {
     findOne: jest.fn(),
     find: jest.fn(),
+    createQueryBuilder: jest.fn(),
   };
 
   const mockScheduleEntryRepository = {
@@ -338,6 +339,17 @@ describe("MLService", () => {
     ];
 
     beforeEach(() => {
+      // storePredictions resolves attraction → park → timezone in ONE joined
+      // query, so the raw rows carry the timezone alongside the parkId.
+      mockAttractionRepository.createQueryBuilder.mockReturnValue({
+        innerJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn()
+          .mockResolvedValue([{ id: attractionId, parkId, timezone: "UTC" }]),
+      });
       mockAttractionRepository.find.mockResolvedValue([
         { id: attractionId, parkId },
       ]);
@@ -387,14 +399,17 @@ describe("MLService", () => {
       mockParksService.isParkSeasonal.mockResolvedValue(true);
       mockScheduleEntryRepository.find.mockResolvedValue([
         {
+          parkId,
           date: new Date(`${today}T12:00:00Z`),
           scheduleType: ScheduleType.OPERATING,
         },
         {
+          parkId,
           date: new Date(`${tomorrow}T12:00:00Z`),
           scheduleType: ScheduleType.CLOSED,
         },
         {
+          parkId,
           date: new Date(`${nextWeek}T12:00:00Z`),
           scheduleType: ScheduleType.OPERATING,
         },

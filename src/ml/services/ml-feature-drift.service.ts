@@ -179,6 +179,7 @@ export class MLFeatureDriftService {
       ksStatistic?: number;
       wassersteinDistance?: number;
     }> = [];
+    const driftRecords: MLFeatureDrift[] = [];
 
     for (const trainingStat of trainingStats) {
       const productionValues = productionFeatures[trainingStat.featureName];
@@ -237,7 +238,8 @@ export class MLFeatureDriftService {
         wassersteinDistance: parseFloat(wassersteinDistance.toFixed(4)),
       });
 
-      // Store drift record
+      // Collect the drift record; all of them are written in one save() below
+      // (this used to be one INSERT per feature, ~46 round-trips per run).
       const driftRecord = new MLFeatureDrift();
       driftRecord.modelVersion = modelVersion;
       driftRecord.featureName = trainingStat.featureName;
@@ -251,8 +253,11 @@ export class MLFeatureDriftService {
       driftRecord.status = status;
       driftRecord.productionSampleCount = productionValues.length;
       driftRecord.detectedAt = new Date();
+      driftRecords.push(driftRecord);
+    }
 
-      await this.featureDriftRepository.save(driftRecord);
+    if (driftRecords.length > 0) {
+      await this.featureDriftRepository.save(driftRecords);
     }
 
     const summary = {
