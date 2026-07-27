@@ -22,6 +22,7 @@ import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import { ManualMetadataService } from "../../attractions/services/manual-metadata.service";
 
 /**
  * Rows already matched during the current park's sync pass. A park can hold
@@ -63,6 +64,7 @@ export class ChildrenMetadataProcessor {
     private entityMappingsQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private revalidationService: RevalidationService,
+    private manualMetadata: ManualMetadataService,
   ) {}
 
   @Process("fetch-all-children")
@@ -406,7 +408,7 @@ export class ChildrenMetadataProcessor {
       `📏 Wiki detail sync done: ${updated} heights updated, ${failed} failed`,
     );
 
-    await this.applyManualAttractionMetadata();
+    await this.manualMetadata.apply();
 
     // The frontend caches the park/attraction structure payloads for a day
     // (Vercel Data Cache, tags 'parks'/'attractions') — bust them so the new
@@ -414,72 +416,6 @@ export class ChildrenMetadataProcessor {
     await this.revalidationService.revalidateTags(["parks", "attractions"]);
 
     this.logger.log("🎉 Attraction detail sync complete!");
-  }
-
-  /**
-   * Apply MANUAL_ATTRACTION_METADATA (RCDB ids from Wikidata P2751/CC0 and
-   * curated minimum heights for parks without upstream height data).
-   */
-  private async applyManualAttractionMetadata(): Promise<void> {
-    const repo = this.attractionsService.getRepository();
-    let rcdbApplied = 0;
-    let heightsApplied = 0;
-    let wetApplied = 0;
-
-    for (const entry of MANUAL_ATTRACTION_METADATA) {
-      const attraction = await repo
-        .createQueryBuilder("attraction")
-        .innerJoin("attraction.park", "park")
-        .where("park.citySlug = :citySlug", { citySlug: entry.citySlug })
-        .andWhere("park.slug = :parkSlug", { parkSlug: entry.parkSlug })
-        .andWhere("attraction.slug = :attractionSlug", {
-          attractionSlug: entry.attractionSlug,
-        })
-        .select([
-          "attraction.id",
-          "attraction.minimumHeight",
-          "attraction.rcdbId",
-          "attraction.mayGetWet",
-        ])
-        .getOne();
-
-      if (!attraction) continue; // slugs drift as parks rename rides — skip silently
-
-      const update: Partial<{
-        rcdbId: number;
-        minimumHeight: number;
-        minimumHeightUnit: "cm" | "in";
-        mayGetWet: boolean;
-      }> = {};
-      if (entry.rcdbId && attraction.rcdbId !== entry.rcdbId) {
-        update.rcdbId = entry.rcdbId;
-        rcdbApplied++;
-      }
-      // Curated height is a FALLBACK — never overwrite an upstream value
-      if (entry.minimumHeightCm && attraction.minimumHeight === null) {
-        update.minimumHeight = entry.minimumHeightCm;
-        // Curated US values were converted from inches; record that so the
-        // ride page can show the number the park itself puts on its signage.
-        update.minimumHeightUnit = entry.minimumHeightUnit ?? "cm";
-        heightsApplied++;
-      }
-      // Curated wet flag is a CORRECTION — it exists to overrule a wrong
-      // upstream value, so unlike the height it always wins.
-      if (
-        entry.mayGetWet !== undefined &&
-        attraction.mayGetWet !== entry.mayGetWet
-      ) {
-        update.mayGetWet = entry.mayGetWet;
-        wetApplied++;
-      }
-      if (Object.keys(update).length > 0) {
-        await repo.update(attraction.id, update);
-      }
-    }
-
-    this.logger.log(
-      `🔗 Manual metadata applied: ${rcdbApplied} RCDB ids, ${heightsApplied} fallback heights, ${wetApplied} wet-flag corrections`,
-    );
   }
 
   /**

@@ -58,6 +58,7 @@ export class AdminController {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
+    @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
@@ -872,6 +873,32 @@ export class AdminController {
         })),
       },
     };
+  }
+
+  /**
+   * Apply the curated attraction seed (RCDB ids, fallback heights, wet-flag
+   * corrections).
+   *
+   * Runs on its own queue in seconds. The attraction detail sweep also applies
+   * it, but only after ~7000 rate-limited wiki requests, so this is the way to
+   * make a seed change take effect now.
+   */
+  @Post("apply-manual-metadata")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Apply the curated attraction metadata seed",
+    description:
+      "Pure database work — no upstream calls. Heights only fill gaps; " +
+      "wet-flag entries overrule a wrong upstream value.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerManualMetadata(): Promise<{ message: string; jobId: string }> {
+    const job = await this.manualMetadataQueue.add(
+      "apply-seed",
+      {},
+      { priority: 1 },
+    );
+    return { message: "Manual metadata job queued", jobId: job.id.toString() };
   }
 
   /**

@@ -17,6 +17,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { PopularityModule } from "../popularity/popularity.module";
 import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
+import { ManualMetadataService } from "./services/manual-metadata.service";
 
 @Module({
   imports: [
@@ -38,11 +39,13 @@ import { AttractionMergeService } from "./services/attraction-merge.service";
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
+    ManualMetadataService,
   ],
   exports: [
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
+    ManualMetadataService,
   ],
 })
 export class AttractionsModule {}
