@@ -10,6 +10,7 @@ import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper"
 import { ParksService } from "../parks/parks.service";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
+import { findExistingAttraction } from "./utils/attraction-match.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 
 @Injectable()
@@ -111,14 +112,14 @@ export class AttractionsService {
       // do one SELECT and diff in memory.
       const existingForPark = await this.attractionRepository.find({
         where: { parkId: park.id },
-        select: ["id", "externalId", "slug"],
+        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
       });
-      const byExternalId = new Map(
-        existingForPark.map((a) => [a.externalId, a]),
-      );
       const usedSlugs = new Set(
         existingForPark.map((a) => a.slug).filter((s): s is string => !!s),
       );
+      // A row may only be claimed by one incoming attraction per pass —
+      // otherwise five rides called "Restroom" would all fold onto the first.
+      const claimedIds = new Set<string>();
 
       for (const attractionEntity of attractions) {
         const mappedData = this.themeParksMapper.mapAttraction(
@@ -130,8 +131,20 @@ export class AttractionsService {
         // without one — the old findOne() would have produced null too.
         const externalId = mappedData.externalId;
         if (!externalId) continue;
-        const existing = byExternalId.get(externalId);
+        // Match across sources, not just on our own externalId: the wiki
+        // reports a UUID for a ride Queue-Times already gave us as
+        // "qt-ride-12979". Keying on externalId alone is what created 147
+        // duplicate "-2" rows.
+        const existing = findExistingAttraction(
+          {
+            externalId,
+            name: mappedData.name!,
+            queueTimesEntityId: mappedData.queueTimesEntityId,
+          },
+          existingForPark.filter((a) => !claimedIds.has(a.id)),
+        );
         if (existing) {
+          claimedIds.add(existing.id);
           await this.attractionRepository.update(existing.id, {
             name: mappedData.name,
             latitude: mappedData.latitude,

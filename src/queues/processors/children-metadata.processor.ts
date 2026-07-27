@@ -14,12 +14,22 @@ import { EntityResponse } from "../../external-apis/themeparks/themeparks.types"
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { MANUAL_ATTRACTION_METADATA } from "../../attractions/data/manual-attraction-metadata";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
+import { findExistingAttraction } from "../../attractions/utils/attraction-match.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
 import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks.exclusions";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+
+/**
+ * Rows already matched during the current park's sync pass. A park can hold
+ * several rides with the same name (Wet'n'Wild has five "Restroom" rows), so
+ * the name fallback must never hand the same row to two incoming entities.
+ */
+interface SyncClaimContext {
+  claimed: Set<string>;
+}
 
 /**
  * Children Metadata Processor (Combined)
@@ -104,12 +114,13 @@ export class ChildrenMetadataProcessor {
                     park.queueTimesEntityId,
                   );
                   let qtAttractions = 0;
+                  const qtCtx: SyncClaimContext = { claimed: new Set() };
 
                   for (const entity of qtEntities) {
                     if (entity.entityType === "ATTRACTION") {
                       // Map QT entity to internal entity structure manually or via helper
                       // Since QT data is thinner, we use a simplified sync
-                      await this.syncQtAttraction(entity, park.id);
+                      await this.syncQtAttraction(entity, park.id, qtCtx);
                       qtAttractions++;
                     }
                   }
@@ -157,8 +168,13 @@ export class ChildrenMetadataProcessor {
               let parkRestaurants = 0;
 
               // Sync Attractions
+              const attractionCtx: SyncClaimContext = { claimed: new Set() };
               for (const attractionEntity of attractions) {
-                await this.syncAttraction(attractionEntity, park.id);
+                await this.syncAttraction(
+                  attractionEntity,
+                  park.id,
+                  attractionCtx,
+                );
                 parkAttractions++;
               }
 
@@ -443,18 +459,36 @@ export class ChildrenMetadataProcessor {
   private async syncAttraction(
     attractionEntity: EntityResponse,
     parkId: string,
+    ctx?: SyncClaimContext,
   ): Promise<void> {
     const mappedData = this.themeParksMapper.mapAttraction(
       attractionEntity,
       parkId,
     );
 
-    // Check if attraction exists (by externalId)
-    const existing = await this.attractionsService.getRepository().findOne({
-      where: { externalId: mappedData.externalId },
-    });
+    // Match within this park across all sources. `externalId` alone is
+    // source-scoped — the wiki's UUID never equals Queue-Times' "qt-ride-N"
+    // for the same physical ride — so keying on it created a second row for
+    // every ride both sources report. The old lookup was also global rather
+    // than park-scoped.
+    const existingAttractions = await this.attractionsService
+      .getRepository()
+      .find({
+        where: { parkId },
+        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+      });
+
+    const existing = findExistingAttraction(
+      {
+        externalId: mappedData.externalId!,
+        name: mappedData.name!,
+        queueTimesEntityId: mappedData.queueTimesEntityId,
+      },
+      existingAttractions.filter((a) => !ctx?.claimed.has(a.id)),
+    );
 
     if (existing) {
+      ctx?.claimed.add(existing.id);
       // Update existing attraction (keep existing slug)
       await this.attractionsService.getRepository().update(existing.id, {
         name: mappedData.name,
@@ -465,14 +499,6 @@ export class ChildrenMetadataProcessor {
     } else {
       // Generate unique slug for this park
       const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-
-      // Get all existing slugs for this park
-      const existingAttractions = await this.attractionsService
-        .getRepository()
-        .find({
-          where: { parkId },
-          select: ["slug"],
-        });
       const existingSlugs = existingAttractions.map((a) => a.slug);
 
       // Generate unique slug
@@ -587,17 +613,35 @@ export class ChildrenMetadataProcessor {
   /**
    * Sync a single attraction from Queue-Times (Simplified)
    */
-  private async syncQtAttraction(entity: any, parkId: string): Promise<void> {
+  private async syncQtAttraction(
+    entity: any,
+    parkId: string,
+    ctx?: SyncClaimContext,
+  ): Promise<void> {
     // Extract numeric Queue-Times ID (e.g., "8" from "qt-ride-8")
     const qtNumericId = extractQueueTimesNumericId(entity.externalId);
 
     // Check if attraction exists (by externalId)
-    // Note: QT externalId is different from Wiki
-    const existing = await this.attractionsService.getRepository().findOne({
-      where: { externalId: entity.externalId },
-    });
+    // QT externalId differs from the wiki's for the same ride, so match
+    // within the park across sources rather than on externalId alone.
+    const existingAttractions = await this.attractionsService
+      .getRepository()
+      .find({
+        where: { parkId },
+        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+      });
+
+    const existing = findExistingAttraction(
+      {
+        externalId: entity.externalId,
+        name: entity.name,
+        queueTimesEntityId: qtNumericId,
+      },
+      existingAttractions.filter((a) => !ctx?.claimed.has(a.id)),
+    );
 
     if (existing) {
+      ctx?.claimed.add(existing.id);
       // Update name and queueTimesEntityId if needed
       const updateData: any = {};
       if (existing.name !== entity.name) {
@@ -615,14 +659,6 @@ export class ChildrenMetadataProcessor {
     } else {
       // Generate slug
       const baseSlug = generateSlug(entity.name);
-
-      // Get existing slugs
-      const existingAttractions = await this.attractionsService
-        .getRepository()
-        .find({
-          where: { parkId },
-          select: ["slug"],
-        });
       const existingSlugs = existingAttractions.map((a) => a.slug);
       const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
 
