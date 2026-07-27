@@ -18,6 +18,7 @@ import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
 import { BestDaysService } from "./services/best-days.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { ParkRenameService } from "./services/park-rename.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Park } from "./entities/park.entity";
 
@@ -75,6 +76,7 @@ describe("ParksController › getBestDaysByGeographicPath", () => {
         { provide: ParkEnrichmentService, useValue: noop },
         { provide: CalendarService, useValue: noop },
         { provide: PopularityService, useValue: noop },
+        { provide: ParkRenameService, useValue: noop },
         { provide: REDIS_CLIENT, useValue: noop },
       ],
     }).compile();
