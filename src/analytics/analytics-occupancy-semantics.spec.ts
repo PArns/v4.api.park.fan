@@ -145,9 +145,9 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
     }).compile();
 
     service = module.get<AnalyticsService>(AnalyticsService);
-    // Force the legacy park-wide path. The per-ride-ratio path requires
+    // Force the legacy park-wide path. The headliner-load path requires
     // attraction-level P50 baselines and is exercised by dedicated tests.
-    (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue(null);
+    (service as any).getHeadlinerLoad = jest.fn().mockResolvedValue(null);
   });
 
   /**
@@ -256,12 +256,11 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(service.determineCrowdLevel(result.current)).toBe("high");
     });
 
-    it("keeps comparedToTypical on the same basis as current in the per-ride path", async () => {
-      // Regression: `current` (per-ride-P90 ratio × 100) and
-      // `comparedToTypical` (was park-level (peak − P50)/P50) used to be
-      // computed from different denominators, producing contradictory
-      // pairs like current 204 % / comparedToTypical 42 %. They must now
-      // always satisfy comparedToTypical === current − 100.
+    it("keeps comparedToTypical on the same basis as current in the headliner-load path", async () => {
+      // Regression: `current` and `comparedToTypical` used to be computed
+      // from different denominators, producing contradictory pairs like
+      // current 204 % / comparedToTypical 42 %. They must now always
+      // satisfy comparedToTypical === current − 100.
       headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
       parkP50Repo.findOne.mockResolvedValue({
         parkId: "p1",
@@ -272,10 +271,11 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
         "park:p50:p1",
         JSON.stringify({ p50: 50, confidence: "high" }),
       );
-      // Force the per-ride-ratio path: ratioP90 2.04 → current 204 %.
-      (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue({
-        ratioP90: 2.04,
+      // Force the headliner-load path: loadRatio 2.04 → current 204 %.
+      (service as any).getHeadlinerLoad = jest.fn().mockResolvedValue({
+        loadRatio: 2.04,
         averageCurrentWait: 102,
+        averageTypicalWait: 50,
         rideCount: 3,
       });
       // Trend buckets + active-attractions count (headliner path makes one
@@ -289,6 +289,44 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(result.comparedToTypical).toBe(result.current - 100);
       expect(result.comparedToTypical).toBe(104);
       expect(result.comparisonStatus).toBe("higher");
+    });
+
+    it("returns a breakdown that divides out to `current`", async () => {
+      // The park page renders currentAvgWait next to typicalAvgWait and the
+      // percentage side by side; they must be the same measurement. Before,
+      // typicalAvgWait was the park-wide P50 while `current` came from the
+      // per-ride aggregate, so the page could show "25 min now / 30 min
+      // typical" beside "+23 % busier than typical".
+      headlinerRepo.find.mockResolvedValue([{ attractionId: "h1" }]);
+      parkP50Repo.findOne.mockResolvedValue({
+        parkId: "p1",
+        p50Baseline: 50,
+        confidence: "high",
+      });
+      redisStore.set(
+        "park:p50:p1",
+        JSON.stringify({ p50: 50, confidence: "high" }),
+      );
+      // 240 min of queue across 9 rides whose baselines total 290.
+      (service as any).getHeadlinerLoad = jest.fn().mockResolvedValue({
+        loadRatio: 240 / 290,
+        averageCurrentWait: Math.round(240 / 9),
+        averageTypicalWait: 290 / 9,
+        rideCount: 9,
+      });
+      queueDataRepo.query.mockReset();
+      queueDataRepo.query.mockResolvedValue([]);
+
+      const result = await service.calculateParkOccupancy("p1");
+
+      expect(result.current).toBe(83);
+      expect(service.determineCrowdLevel(result.current)).toBe("low");
+      // Both rounded to the nearest 5: 26.7 → 25, 32.2 → 30. The displayed
+      // pair points the same way as the rating (below typical), unlike the
+      // old park-wide denominator.
+      expect(result.breakdown?.currentAvgWait).toBe(25);
+      expect(result.breakdown?.typicalAvgWait).toBe(30);
+      expect(result.comparisonStatus).toBe("lower");
     });
 
     it("reads 'very_low' (<=60%) when the current peak is well below typical", async () => {
@@ -309,6 +347,27 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
       expect(result.current).toBe(60);
       expect(result.comparisonStatus).toBe("lower");
       expect(service.determineCrowdLevel(result.current)).toBe("very_low");
+    });
+  });
+
+  describe("getLoadRating (no invented ratings)", () => {
+    it("returns 'unknown' when there is no baseline to rate against", () => {
+      // Previously "moderate" — indistinguishable, to a reader, from a
+      // measured typical day. Same rule rateOrUnknown applies elsewhere.
+      expect(service.getLoadRating(40, 0).rating).toBe("unknown");
+      expect(service.getLoadRating(40, -1).rating).toBe("unknown");
+      expect(service.getLoadRating(40, NaN).rating).toBe("unknown");
+    });
+
+    it("rates a walk-on as very_low rather than moderate", () => {
+      // A 0-minute wait against a real baseline is data, not missing data.
+      expect(service.getLoadRating(0, 50).rating).toBe("very_low");
+    });
+
+    it("maps the ratio onto the shared threshold ladder", () => {
+      expect(service.getLoadRating(50, 50).rating).toBe("moderate");
+      expect(service.getLoadRating(70, 50).rating).toBe("high");
+      expect(service.getLoadRating(40, 50).rating).toBe("low");
     });
   });
 

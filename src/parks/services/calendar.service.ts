@@ -1039,13 +1039,15 @@ export class CalendarService {
 
     // Per-park P50 baseline (median typical wait) is the right reference
     // for per-hour predictions: 100% = predicted median matches a typical
-    // wait. Falls through to a generic 25 min absolute floor for parks
-    // with no baseline at all (brand-new park before the first cron).
+    // wait. A park with no baseline at all (brand-new, before the first
+    // cron) gets no invented reference — the old generic 25-minute floor
+    // rated every such park against a number nobody measured. getLoadRating
+    // maps the absent baseline to "unknown" instead.
     const [p50, ratable] = await Promise.all([
       this.analyticsService.getP50BaselineFromCache(park.id),
       this.analyticsService.isParkRatable(park.id),
     ]);
-    const baseline = p50 > 0 ? p50 : 25;
+    const baseline = p50 > 0 ? p50 : 0;
 
     // Aggregate (median)
     const result: HourlyPrediction[] = [];

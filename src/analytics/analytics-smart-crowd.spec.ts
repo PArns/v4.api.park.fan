@@ -181,8 +181,9 @@ describe("Smart Crowd Level Logic", () => {
     // Mock Redis explicitly
     (service as any).redis = module.get(REDIS_CLIENT);
 
-    // Force legacy park-wide path; per-ride-ratio path is tested elsewhere.
-    (service as any).getPerHeadlinerRatios = jest.fn().mockResolvedValue(null);
+    // Force legacy park-wide path; the headliner-load path is tested in
+    // analytics-headliner-load.spec.ts.
+    (service as any).getHeadlinerLoad = jest.fn().mockResolvedValue(null);
 
     // Mock getDailyAverageWaitTime to return 20
     (service as any).getDailyAverageWaitTime = jest.fn().mockResolvedValue(20);
