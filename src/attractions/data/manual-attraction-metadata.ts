@@ -3523,4 +3523,98 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     attractionSlug: "river-rapids",
     mayGetWet: true,
   },
+
+  // --- Cedar Point ride heights -------------------------------------------
+  // ThemeParks.wiki carries no minimumHeight for Cedar Point at all — the
+  // field is absent from the entity documents, so the sync has nothing to
+  // read. Values below are each read off the ride's own page on
+  // sixflags.com (July 2026) and converted from inches; the aggregator
+  // summaries disagree (they list Iron Dragon at 48" where the park says 42").
+  // Rides with a lower "accompanied" minimum (Woodstock Express, Wilderness
+  // Run) are left out: the schema has one height field and recording the
+  // unaccompanied number for a kiddie coaster would read as too strict.
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "blue-streak",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "cedar-creek-mine-ride",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "corkscrew",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "gatekeeper",
+    minimumHeightCm: 132, // 52"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "gemini",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "iron-dragon",
+    minimumHeightCm: 107, // 42"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "magnum-xl-200",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "maverick",
+    minimumHeightCm: 132, // 52"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "millennium-force",
+    minimumHeightCm: 122, // 48"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "raptor",
+    minimumHeightCm: 137, // 54"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "rougarou",
+    minimumHeightCm: 137, // 54"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "steel-vengeance",
+    minimumHeightCm: 132, // 52"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "top-thrill-2",
+    minimumHeightCm: 132, // 52"
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "valravn",
+    minimumHeightCm: 132, // 52"
+  },
 ];

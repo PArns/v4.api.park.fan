@@ -41,3 +41,30 @@ describe("MANUAL_ATTRACTION_METADATA", () => {
     }
   });
 });
+
+describe("curated ride heights", () => {
+  const cedarPoint = MANUAL_ATTRACTION_METADATA.filter(
+    (e) => e.parkSlug === "cedar-point" && e.minimumHeightCm,
+  );
+
+  it("covers Cedar Point, whose upstream carries no height at all", () => {
+    // The wiki entity documents for Cedar Point have no minimumHeight field,
+    // so every one of its 75 rides sat at NULL.
+    expect(cedarPoint.length).toBeGreaterThanOrEqual(14);
+  });
+
+  it("stores heights in centimetres, matching the column", () => {
+    // Europa-Park's Silver Star is 140 in the DB for a 55" requirement.
+    for (const entry of cedarPoint) {
+      expect(entry.minimumHeightCm).toBeGreaterThan(90);
+      expect(entry.minimumHeightCm).toBeLessThan(200);
+    }
+  });
+
+  it("keeps Iron Dragon at the height the park publishes, not the aggregators", () => {
+    const ironDragon = cedarPoint.find(
+      (e) => e.attractionSlug === "iron-dragon",
+    );
+    expect(ironDragon?.minimumHeightCm).toBe(107); // 42", not the widely repeated 48"
+  });
+});
