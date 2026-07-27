@@ -12,7 +12,9 @@ import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
 import { ParkRepairService } from "./services/park-repair.service";
 import { ParkMergeService } from "./services/park-merge.service";
+import { ParkRenameService } from "./services/park-rename.service";
 import { Park } from "./entities/park.entity";
+import { ParkSlugAlias } from "./entities/park-slug-alias.entity";
 import { WeatherData } from "./entities/weather-data.entity";
 import { WeatherWarning } from "./entities/weather-warning.entity";
 import { ScheduleEntry } from "./entities/schedule-entry.entity";
@@ -40,6 +42,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     BullModule.registerQueue({ name: "park-metadata" }),
     TypeOrmModule.forFeature([
       Park,
+      ParkSlugAlias,
       WeatherData,
       WeatherWarning,
       ScheduleEntry,
@@ -75,6 +78,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkValidatorService,
     ParkRepairService,
     ParkMergeService,
+    ParkRenameService,
   ],
   exports: [
     ParksService,
@@ -88,6 +92,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkValidatorService,
     ParkRepairService,
     ParkMergeService,
+    ParkRenameService,
   ],
 })
 export class ParksModule {}

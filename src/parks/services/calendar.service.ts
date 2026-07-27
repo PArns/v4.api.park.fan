@@ -147,7 +147,9 @@ export class CalendarService {
         await this.buildCalendarResponse(park, mFrom, mTo, includeHourly);
       }
       const refreshed = (
-        monthCacheKeys.length > 0 ? await this.redis.mget(...monthCacheKeys) : []
+        monthCacheKeys.length > 0
+          ? await this.redis.mget(...monthCacheKeys)
+          : []
       ).map((v) => safeJsonParse<CalendarDay[]>(v));
       if (refreshed.every((v) => v != null)) {
         this.logger.debug(

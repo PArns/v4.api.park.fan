@@ -16,6 +16,10 @@ import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources
 import { ParkValidatorService } from "../../parks/services/park-validator.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { PopularityService } from "../../popularity/popularity.service";
+import {
+  ParkRenameService,
+  captureParkPath,
+} from "../../parks/services/park-rename.service";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -38,6 +42,7 @@ export class ParkMetadataProcessor {
     private parkValidatorService: ParkValidatorService,
     private cacheWarmupService: CacheWarmupService,
     private popularityService: PopularityService,
+    private parkRenameService: ParkRenameService,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
@@ -601,6 +606,9 @@ export class ParkMetadataProcessor {
       // Update name if changed
       // CRITICAL: Always use Wiki name if available, even if current name is longer
       // This ensures Wiki remains the source of truth for park names
+      // Snapshot the path BEFORE the slug is regenerated: a rename makes the old URL 404
+      // unless we record it as an alias and evict the caches that still advertise it.
+      const previousPath = captureParkPath(park);
       if (park.name !== bestName) {
         this.logger.verbose(
           `Updating park name: "${park.name}" -> "${bestName}" ` +
@@ -621,6 +629,7 @@ export class ParkMetadataProcessor {
       }
 
       await this.parkRepository.save(park);
+      await this.parkRenameService.handlePathChange(park, previousPath);
     }
 
     // 1. Create Wiki mapping
@@ -689,6 +698,7 @@ export class ParkMetadataProcessor {
     }
 
     if (park) {
+      const previousPath = captureParkPath(park);
       const needsUpdate = !park.wikiEntityId || park.name !== wiki.name;
 
       if (!park.wikiEntityId) {
@@ -707,6 +717,7 @@ export class ParkMetadataProcessor {
 
       if (needsUpdate) {
         await this.parkRepository.save(park);
+        await this.parkRenameService.handlePathChange(park, previousPath);
         this.logger.debug(
           `✓ Backfilled columns for wiki-only park: ${park.name}`,
         );
@@ -822,12 +833,14 @@ export class ParkMetadataProcessor {
           park.wikiEntityId = null;
         }
         // If park has Wiki ID, don't update name (Wiki name has priority)
+        const previousPath = captureParkPath(park);
         if (!park.wikiEntityId && park.name !== qt.name) {
           park.name = qt.name;
           park.slug = generateSlug(qt.name);
         }
         try {
           await this.parkRepository.save(park);
+          await this.parkRenameService.handlePathChange(park, previousPath);
         } catch (error: any) {
           if (error.message && error.message.includes("duplicate key")) {
             return;
@@ -907,6 +920,7 @@ export class ParkMetadataProcessor {
         park.wartezeitenEntityId = wz.externalId;
 
         // Only update name if park doesn't have Wiki ID (Wiki name has priority)
+        const previousPath = captureParkPath(park);
         if (shouldUpdateName) {
           park.name = cleanedWzName;
           park.slug = generateSlug(cleanedWzName);
@@ -914,6 +928,7 @@ export class ParkMetadataProcessor {
 
         try {
           await this.parkRepository.save(park);
+          await this.parkRenameService.handlePathChange(park, previousPath);
         } catch (error: any) {
           if (error.message && error.message.includes("duplicate key")) {
             return;
@@ -1180,7 +1195,18 @@ export class ParkMetadataProcessor {
       }
 
       if (needsUpdate) {
+        // Geocoding can rewrite citySlug/countrySlug/continentSlug, which are three quarters
+        // of the park's URL — same 404-and-stale-cache problem as a name change, so it goes
+        // through the same bookkeeping. `updates` is applied in the DB, so re-read the entity
+        // to compare against the path we captured before.
+        const previousPath = captureParkPath(park);
         await this.parksService.updateGeodata(park.id, updates);
+        const updated = await this.parkRepository.findOne({
+          where: { id: park.id },
+        });
+        if (updated) {
+          await this.parkRenameService.handlePathChange(updated, previousPath);
+        }
         geocodedCount++;
       } else if (!park.geocodingAttemptedAt) {
         // If no geocoding was performed and it was never attempted, mark it as attempted

@@ -19,7 +19,9 @@ import {
   ApiParam,
   ApiQuery,
 } from "@nestjs/swagger";
+import type { Response } from "express";
 import { ParksService } from "./parks.service";
+import { ParkRenameService } from "./services/park-rename.service";
 import { WeatherService } from "./weather.service";
 import { WeatherWarningsService } from "./weather-warnings.service";
 import { WeatherWarningDto } from "./dto/weather-warning.dto";
@@ -96,6 +98,7 @@ export class ParksController {
     private readonly calendarService: CalendarService,
     private readonly bestDaysService: BestDaysService,
     private readonly popularityService: PopularityService,
+    private readonly parkRenameService: ParkRenameService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -1578,13 +1581,19 @@ export class ParksController {
     description: "Park details",
     type: ParkWithAttractionsDto,
   })
+  @ApiResponse({
+    status: 301,
+    description:
+      "The park moved to a new path (upstream rename); follow the Location header",
+  })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-  ): Promise<ParkWithAttractionsDto> {
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ParkWithAttractionsDto | undefined> {
     const park = await this.parksService.findByGeographicPathWithRelations(
       continent,
       country,
@@ -1593,6 +1602,25 @@ export class ParksController {
     );
 
     if (!park) {
+      // Upstream renames regenerate a park's slug, which would turn every previously
+      // published URL into a 404 and drop its search ranking. ParkRenameService records the
+      // old path, so answer with a permanent redirect to the current one instead.
+      const canonical = await this.parkRenameService.resolveAlias({
+        continentSlug: continent,
+        countrySlug: country,
+        citySlug: city,
+        slug: parkSlug,
+      });
+
+      if (canonical) {
+        res.redirect(
+          301,
+          `/v1/parks/${canonical.continentSlug}/${canonical.countrySlug}/` +
+            `${canonical.citySlug}/${canonical.slug}`,
+        );
+        return undefined;
+      }
+
       throw new NotFoundException(
         `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
       );
