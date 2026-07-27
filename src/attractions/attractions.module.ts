@@ -15,6 +15,8 @@ import { HolidaysModule } from "../holidays/holidays.module";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { PopularityModule } from "../popularity/popularity.module";
+import { RevalidationModule } from "../common/revalidation/revalidation.module";
+import { AttractionMergeService } from "./services/attraction-merge.service";
 
 @Module({
   imports: [
@@ -29,9 +31,18 @@ import { PopularityModule } from "../popularity/popularity.module";
     QueueTimesModule,
     WartezeitenModule,
     HolidaysModule,
+    RevalidationModule,
   ],
   controllers: [],
-  providers: [AttractionsService, AttractionIntegrationService],
-  exports: [AttractionsService, AttractionIntegrationService],
+  providers: [
+    AttractionsService,
+    AttractionIntegrationService,
+    AttractionMergeService,
+  ],
+  exports: [
+    AttractionsService,
+    AttractionIntegrationService,
+    AttractionMergeService,
+  ],
 })
 export class AttractionsModule {}

@@ -26,6 +26,10 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { ParkValidatorService } from "../parks/services/park-validator.service";
 import { ParkRepairService } from "../parks/services/park-repair.service";
+import {
+  AttractionMergeService,
+  DuplicatePairReport,
+} from "../attractions/services/attraction-merge.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
@@ -61,6 +65,7 @@ export class AdminController {
     private readonly parkRepairService: ParkRepairService,
     private readonly parkMergeService: ParkMergeService,
     private readonly systemHealth: SystemHealthService,
+    private readonly attractionMergeService: AttractionMergeService,
   ) {}
 
   /**
@@ -864,6 +869,100 @@ export class AdminController {
         })),
       },
     };
+  }
+
+  /**
+   * List duplicate attraction rows inside a park.
+   *
+   * These come from the sync keying on a source-scoped externalId, so the same
+   * ride ends up as "x" and "x-2". Pairs are classified: a shared slug stem is
+   * NOT on its own evidence — one real pair holds two genuinely different
+   * rides — so only pairs whose names match (ignoring punctuation) or that
+   * share a Queue-Times id are marked safe to merge automatically.
+   */
+  @Get("duplicate-attractions")
+  @ApiOperation({
+    summary: "List duplicate attraction rows within parks",
+    description:
+      "Reports base/suffix slug pairs per park with the recommended winner, " +
+      "the slug that would survive, and whether the pair is safe to auto-merge.",
+  })
+  @ApiResponse({ status: 200, description: "Duplicate pairs with a verdict" })
+  async listDuplicateAttractions(): Promise<{
+    total: number;
+    safe: number;
+    needsReview: number;
+    pairs: DuplicatePairReport[];
+  }> {
+    const pairs = await this.attractionMergeService.findDuplicatePairs();
+    return {
+      total: pairs.length,
+      safe: pairs.filter((p) => p.safe).length,
+      needsReview: pairs.filter((p) => !p.safe).length,
+      pairs,
+    };
+  }
+
+  /**
+   * Merge duplicate attraction rows.
+   *
+   * Defaults to a dry run — pass dryRun:false to actually write. Pairs flagged
+   * for review are never merged, whatever the flags say.
+   */
+  @Post("merge-duplicate-attractions")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Merge duplicate attraction rows within parks",
+    description:
+      "Merges pairs proven to be the same ride, one transaction each. The " +
+      "surviving row takes the base slug (the URL in the sitemap) and inherits " +
+      "any metadata it was missing. Defaults to a dry run.",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        dryRun: {
+          type: "boolean",
+          description: "Report what would happen without writing",
+          default: true,
+        },
+        limit: {
+          type: "number",
+          description: "Merge at most this many pairs (useful for a first run)",
+        },
+        winnerId: {
+          type: "string",
+          description: "Merge exactly one pair: the row to keep",
+        },
+        loserId: {
+          type: "string",
+          description: "Merge exactly one pair: the row to remove",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Merge outcome" })
+  async mergeDuplicateAttractions(
+    @Body()
+    body: {
+      dryRun?: boolean;
+      limit?: number;
+      winnerId?: string;
+      loserId?: string;
+    } = {},
+  ): Promise<unknown> {
+    if (body.winnerId && body.loserId) {
+      return this.attractionMergeService.mergeAttractions(
+        body.winnerId,
+        body.loserId,
+      );
+    }
+
+    return this.attractionMergeService.mergeDuplicates({
+      dryRun: body.dryRun !== false,
+      limit: body.limit,
+    });
   }
 
   /**

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bull";
 import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
+import { AttractionsModule } from "../attractions/attractions.module";
 import { AdminController } from "./admin.controller";
 import { SystemHealthService } from "./system-health.service";
 
@@ -9,6 +10,7 @@ import { SystemHealthService } from "./system-health.service";
   imports: [
     RedisModule,
     ParksModule,
+    AttractionsModule,
     BullModule.registerQueue({ name: "holidays" }),
     BullModule.registerQueue({ name: "park-metadata" }),
     BullModule.registerQueue({ name: "park-enrichment" }),
