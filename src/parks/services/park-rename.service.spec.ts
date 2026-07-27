@@ -4,6 +4,7 @@ import { ParkRenameService, captureParkPath } from "./park-rename.service";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { Park } from "../entities/park.entity";
 import { CacheKeys } from "../../common/cache/cache-keys";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
  * ParkRenameService is what keeps an upstream park rename from silently 404ing the park.
@@ -14,11 +15,14 @@ import { CacheKeys } from "../../common/cache/cache-keys";
  * its park endpoint answered with 404 — that is how "Attractiepark Toverland" → "Toverland"
  * and "Magic Kingdom Park" → "Disney Magic Kingdom" took those parks off the site.
  *
- * These tests pin the three guarantees that prevent a repeat:
+ * These tests pin the guarantees that prevent a repeat:
  *   1. A changed path evicts the discovery geo skeleton (the key the frontend builds every
  *      park link, redirect and sitemap entry from).
  *   2. A changed path is recorded so the old URL can 301 instead of 404.
- *   3. An unchanged path does neither — the processor calls this on every save.
+ *   3. A changed path tells the FRONTEND to drop its own copy. Evicting our Redis only fixes
+ *      what we serve; Next.js caches the geo skeleton and the attraction sitemap for another
+ *      24 h, which is why sitemap-attractions.xml kept advertising the dead slugs for days.
+ *   4. An unchanged path does none of it — the processor calls this on every save.
  */
 describe("ParkRenameService", () => {
   const makePark = (over: Partial<Park> = {}): Park =>
@@ -42,6 +46,7 @@ describe("ParkRenameService", () => {
   let insertValues: jest.Mock;
   let aliasRepository: jest.Mocked<Repository<ParkSlugAlias>>;
   let redis: jest.Mocked<Redis>;
+  let revalidation: jest.Mocked<RevalidationService>;
   let service: ParkRenameService;
 
   beforeEach(() => {
@@ -68,7 +73,16 @@ describe("ParkRenameService", () => {
       findOne: jest.fn().mockResolvedValue(null),
     } as unknown as jest.Mocked<Repository<Park>>;
 
-    service = new ParkRenameService(aliasRepository, redis, parkRepository);
+    revalidation = {
+      revalidateTags: jest.fn().mockResolvedValue(true),
+    } as unknown as jest.Mocked<RevalidationService>;
+
+    service = new ParkRenameService(
+      aliasRepository,
+      redis,
+      parkRepository,
+      revalidation,
+    );
   });
 
   describe("handlePathChange", () => {
@@ -100,6 +114,14 @@ describe("ParkRenameService", () => {
       });
     });
 
+    it("tells the frontend to drop its geo-tagged caches", async () => {
+      await service.handlePathChange(makePark(), previousPath);
+
+      const tags = revalidation.revalidateTags.mock.calls.flat(2);
+      // `geo` is the one that matters: the frontend builds the sitemaps from it.
+      expect(tags).toContain("geo");
+    });
+
     it("does nothing when the path is unchanged", async () => {
       const park = makePark();
 
@@ -107,6 +129,7 @@ describe("ParkRenameService", () => {
 
       expect(insertValues).not.toHaveBeenCalled();
       expect(redis.del).not.toHaveBeenCalled();
+      expect(revalidation.revalidateTags).not.toHaveBeenCalled();
     });
 
     it("also fires when only a geo slug changed (city re-slug)", async () => {

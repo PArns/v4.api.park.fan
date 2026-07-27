@@ -4,6 +4,7 @@ import { Repository } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { Park } from "../entities/park.entity";
 
@@ -107,6 +108,7 @@ export class ParkRenameService implements OnModuleInit {
     private readonly redis: Redis,
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
+    private readonly revalidation: RevalidationService,
   ) {}
 
   /** Seeds {@link HISTORICAL_PARK_PATHS}. Idempotent; failures are logged, never fatal. */
@@ -195,6 +197,25 @@ export class ParkRenameService implements OnModuleInit {
     } catch (error) {
       this.logger.warn(
         `Could not invalidate caches after renaming park ${park.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    // Evicting our own Redis only fixes what WE serve. The frontend caches the geo skeleton and
+    // the attraction sitemap under the `geo` tag for 24 h of its own, so without this webhook a
+    // rename keeps being published at the dead path for another day — which is exactly how
+    // sitemap-attractions.xml ended up advertising 546 URLs under `attractiepark-toverland`,
+    // `magic-kingdom-park` and `disneys-hollywood-studios` days after those slugs stopped
+    // resolving. `geo` covers the structure + sitemap fetches, `parks`/`attractions` the page
+    // shells that embed the park's links.
+    // (revalidateTags is already best-effort internally; the guard keeps this method's
+    // "never throws" contract even if the client ever changes.)
+    try {
+      await this.revalidation.revalidateTags(["geo", "parks", "attractions"]);
+    } catch (error) {
+      this.logger.warn(
+        `Could not revalidate the frontend after renaming park ${park.id}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

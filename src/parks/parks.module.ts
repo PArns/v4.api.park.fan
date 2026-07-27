@@ -28,6 +28,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { MLModule } from "../ml/ml.module";
 import { GeocodingModule } from "../external-apis/geocoding/geocoding.module";
 import { RedisModule } from "../common/redis/redis.module";
+import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { WeatherModule } from "../external-apis/weather/weather.module";
 import { HolidaysModule } from "../holidays/holidays.module";
 import { QueueTimesModule } from "../external-apis/queue-times/queue-times.module";
@@ -59,6 +60,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     forwardRef(() => MLModule),
     GeocodingModule,
     RedisModule,
+    RevalidationModule,
     WeatherModule,
     StatsModule,
     PopularityModule,
