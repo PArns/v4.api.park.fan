@@ -1,5 +1,68 @@
 # TODO
 
+## Schedule times: 12-hour-clock rows need a curated override (2026-07-27)
+
+**Context:** `normalizeClosingTime` (PR "repair closing times whose date contradicts
+the opening") re-anchors a misdated closing time to the opening's park-local date.
+That fixes 178 rows, but 7 of them stay wrong in a way no generic rule can repair —
+the source reports `opens 15:00 / closes 12:00`, which is almost certainly a
+12-hour-clock error where 12:00 means **midnight**:
+
+| Park | Days | Reported | After re-anchoring |
+| --- | --- | --- | --- |
+| Six Flags Qiddiya City | 2026-04-17/24, 05-01/08/15 | 15:00 → 12:00 | 21 h day |
+| Kings Dominion | 2026-09-18, 09-25 (Haunt evenings) | 18:00 → 12:00 | 18 h day |
+
+Those windows are **right during the actual event hours and wrong overnight** — a
+strict improvement over the previous state (closing before opening ⇒ the park read
+CLOSED all evening), but still not the truth. Kings Dominion's dates are upcoming
+Halloween nights, so this has a real audience.
+
+**Why a generic fix is wrong here:** "reinterpret 12:00 as 00:00" would silently
+rewrite every legitimate noon closing (water parks and Christmas markets do close at
+noon). The distinguishing signal is `closing < opening`, which the normalizer has
+already consumed. Guessing further means inventing data.
+
+**How:**
+- Curate the affected park/date pairs the way ride heights are curated
+  (`src/attractions/data/manual-attraction-metadata.ts` is the pattern): an explicit
+  park + date + corrected closing time, applied in `saveScheduleData` after
+  `normalizeClosingTime`.
+- Or narrower: a per-park "source uses a 12-hour clock" flag, applied only when the
+  raw closing is `< opening` **and** lands at exactly 12:00.
+- Detect new cases with the audit query in `docs/troubleshooting/db-health-runbook.md`
+  style:
+
+  ```sql
+  SELECT p.name, s.date,
+         (s."openingTime" AT TIME ZONE p.timezone)::time AS opens,
+         (s."closingTime" AT TIME ZONE p.timezone)::time AS closes
+  FROM schedule_entries s JOIN parks p ON p.id = s."parkId"
+  WHERE s."closingTime" - s."openingTime" > interval '16 hours';
+  ```
+
+- Effort: ~half a day including the curated list.
+
+**Also still open from the same sweep:**
+
+- [ ] One `schedule_entries` row with an equal opening and closing (Universal Volcano
+      Bay, dated `1970-01-01`). Left untouched by design — rolling it forward would
+      invent a 24 h operating day. Decide whether to delete the sentinel row.
+- [ ] ~127 duplicate `(parkId, date, scheduleType, attractionId)` groups, unrelated to
+      the date repair (which deliberately scoped its dedupe to the days it touched).
+      There is **no unique index** on that tuple; adding one would need the duplicates
+      resolved first.
+- [ ] After the first schedule sync on the new code (daily 15:00 UTC), confirm no
+      **new** impossible windows appear — the repair proved the old rows are fixed,
+      not that the write path holds:
+
+  ```sql
+  SELECT count(*) FROM schedule_entries
+  WHERE "openingTime" IS NOT NULL AND "closingTime" IS NOT NULL
+    AND ("closingTime" < "openingTime"
+         OR "closingTime" > "openingTime" + interval '24 hours');
+  ```
+
 ## PCN/Shape shadow boards — one-time reset + post-deploy steps (PR #79)
 
 **Context:** the pre-fix shadow scorers overwrote matured board days with ever-smaller
