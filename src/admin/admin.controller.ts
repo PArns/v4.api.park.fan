@@ -57,6 +57,7 @@ export class AdminController {
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
+    @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
@@ -871,6 +872,32 @@ export class AdminController {
         })),
       },
     };
+  }
+
+  /**
+   * Trigger the Six Flags ride-height sync.
+   *
+   * ThemeParks.wiki carries no minimumHeight for the Six Flags and former
+   * Cedar Fair parks, so this reads it off the parks' own ride pages. Runs
+   * weekly on its own; this is for filling the gap on demand.
+   */
+  @Post("sync-six-flags-heights")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Fill missing ride heights from the Six Flags sites",
+    description:
+      "Queues a sweep over every attraction still missing a minimumHeight in " +
+      "a Six Flags or former Cedar Fair park. Gap-filling only — an existing " +
+      "height is never overwritten.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerSixFlagsHeights(): Promise<{ message: string; jobId: string }> {
+    const job = await this.sixFlagsHeightsQueue.add(
+      "sync-heights",
+      {},
+      { priority: 10 },
+    );
+    return { message: "Six Flags height sync queued", jobId: job.id.toString() };
   }
 
   /**

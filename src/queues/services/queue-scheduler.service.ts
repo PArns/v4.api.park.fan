@@ -28,6 +28,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue, // Phase 6.2: Combined
+    @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
     @InjectQueue("weather") private weatherQueue: Queue,
     @InjectQueue("weather-warnings")
     private weatherWarningsQueue: Queue,
@@ -189,6 +190,25 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 4 * * *", // Daily at 4am
           },
           jobId: "children-metadata-cron",
+        },
+      );
+    }
+
+    // Six Flags ride heights. Weekly: ThemeParks.wiki carries none for these
+    // parks, the numbers change a few times a year, and each run only looks at
+    // the rides still missing one, so the work shrinks by itself.
+    const hasSixFlagsHeightsCron = await this.hasRepeatableJob(
+      this.sixFlagsHeightsQueue,
+      "six-flags-heights-cron",
+    );
+
+    if (!hasSixFlagsHeightsCron) {
+      await this.sixFlagsHeightsQueue.add(
+        "sync-heights",
+        {},
+        {
+          repeat: { cron: "0 3 * * 1" }, // Mondays at 3am
+          jobId: "six-flags-heights-cron",
         },
       );
     }

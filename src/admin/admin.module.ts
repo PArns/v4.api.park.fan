@@ -17,6 +17,7 @@ import { SystemHealthService } from "./system-health.service";
     BullModule.registerQueue({ name: "ml-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
     BullModule.registerQueue({ name: "children-metadata" }),
+    BullModule.registerQueue({ name: "six-flags-heights" }),
     BullModule.registerQueue({ name: "prediction-accuracy" }),
     BullModule.registerQueue({ name: "analytics" }),
     BullModule.registerQueue({ name: "pcn-shadow" }),
