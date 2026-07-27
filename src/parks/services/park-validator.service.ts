@@ -309,15 +309,25 @@ export class ParkValidatorService {
         const p1 = allParks[i];
         const p2 = allParks[j];
 
-        if (
-          (p1.wikiEntityId && p1.wikiEntityId === p2.wikiEntityId) ||
-          (p1.queueTimesEntityId &&
-            p1.queueTimesEntityId === p2.queueTimesEntityId) ||
-          (p1.wartezeitenEntityId &&
-            p1.wartezeitenEntityId === p2.wartezeitenEntityId)
-        ) {
-          continue;
-        }
+        // Two rows pointing at the SAME upstream entity are the strongest
+        // duplicate signal there is — one external park cannot be two parks.
+        // This used to `continue` (skip the pair), which is what hid both
+        // real production duplicates: they shared a Queue-Times resp.
+        // Wartezeiten ID. Only `parks.externalId` is unique; these three
+        // columns are not, so shared values are both possible and damning.
+        const sharedWiki = !!(
+          p1.wikiEntityId && p1.wikiEntityId === p2.wikiEntityId
+        );
+        const sharedQueueTimes = !!(
+          p1.queueTimesEntityId &&
+          p1.queueTimesEntityId === p2.queueTimesEntityId
+        );
+        const sharedWartezeiten = !!(
+          p1.wartezeitenEntityId &&
+          p1.wartezeitenEntityId === p2.wartezeitenEntityId
+        );
+        const sharedEntityId =
+          sharedWiki || sharedQueueTimes || sharedWartezeiten;
 
         const sameCity = p1.city && p2.city && p1.city === p2.city;
         let geoProximity = false;
@@ -334,27 +344,34 @@ export class ParkValidatorService {
         const isDuplicate =
           (sameCity && nameSimilarity >= 0.85) ||
           (geoProximity && nameSimilarity >= 0.85) ||
-          (nameSimilarity >= 0.98 && (sameCity || geoProximity));
+          (nameSimilarity >= 0.98 && (sameCity || geoProximity)) ||
+          // Near-identical name + a shared upstream ID. Deliberately does NOT
+          // require geo or city: a broken geocode is what makes a ghost row a
+          // ghost, and it must not also shield it from detection. The shared
+          // ID is the verifier that keeps genuinely distinct same-name parks
+          // (Disneyland Paris vs Anaheim) out.
+          (nameSimilarity >= 0.95 && sharedEntityId);
 
         if (isDuplicate) {
           const reasons: string[] = [];
           if (sameCity) reasons.push("same city");
           if (geoProximity) reasons.push("geo proximity < 1km");
           if (nameSimilarity >= 0.98) reasons.push("very high name similarity");
+          if (sharedWiki) reasons.push("shared wiki ID");
+          if (sharedQueueTimes) reasons.push("shared queue-times ID");
+          if (sharedWartezeiten) reasons.push("shared wartezeiten ID");
 
           duplicates.push({
             park1: { id: p1.id, name: p1.name, city: p1.city },
             park2: { id: p2.id, name: p2.name, city: p2.city },
             score: nameSimilarity,
             reason: reasons.join(", "),
+            // "shared" means the same value on both rows — not merely that
+            // both rows happen to carry some ID of that kind.
             sharedEntityIds: {
-              wiki: p1.wikiEntityId !== null && p2.wikiEntityId !== null,
-              queueTimes:
-                p1.queueTimesEntityId !== null &&
-                p2.queueTimesEntityId !== null,
-              wartezeiten:
-                p1.wartezeitenEntityId !== null &&
-                p2.wartezeitenEntityId !== null,
+              wiki: sharedWiki,
+              queueTimes: sharedQueueTimes,
+              wartezeiten: sharedWartezeiten,
             },
           });
         }
