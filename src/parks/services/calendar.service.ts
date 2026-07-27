@@ -316,8 +316,8 @@ export class CalendarService {
     let historicalForecastByDate = new Map<string, HeadlinerForecast>();
     if (fromStr < today && headlinerIdSet.size > 0) {
       const histToStr = toStr < today ? toStr : today;
-      const dailyAverages = await this.analyticsService
-        .getHeadlinerDailyAverages(
+      const dailyPeaks = await this.analyticsService
+        .getHeadlinerDailyPeaks(
           [...headlinerIdSet],
           fromStr,
           histToStr,
@@ -325,12 +325,12 @@ export class CalendarService {
         )
         .catch((err) => {
           this.logger.warn(
-            `Historical headliner averages unavailable for ${park.slug}: ${err.message}`,
+            `Historical headliner peaks unavailable for ${park.slug}: ${err.message}`,
           );
-          return new Map<string, { attractionId: string; avg: number }[]>();
+          return new Map<string, { attractionId: string; peak: number }[]>();
         });
       historicalForecastByDate = this.buildHistoricalHeadlinerForecasts(
-        dailyAverages,
+        dailyPeaks,
         headlinerNames,
       );
     }
@@ -1209,29 +1209,31 @@ export class CalendarService {
 
   /**
    * Build the PAST-day counterpart to {@link buildHeadlinerForecasts}: actual
-   * recorded per-attraction daily averages (from
-   * {@link AnalyticsService.getHeadlinerDailyAverages}) → same shape, marked
-   * `actual: true`. Same top-N + round-to-5 treatment as the forecast.
+   * recorded per-attraction daily peaks (from
+   * {@link AnalyticsService.getHeadlinerDailyPeaks}) → same shape, marked
+   * `actual: true`. Same top-N + round-to-5 treatment as the forecast, and
+   * the same statistic (a day peak per ride, meaned across rides) so the two
+   * halves of the calendar are comparable across the today/tomorrow seam.
    */
   private buildHistoricalHeadlinerForecasts(
-    dailyAverages: Map<string, { attractionId: string; avg: number }[]>,
+    dailyPeaks: Map<string, { attractionId: string; peak: number }[]>,
     names: Map<string, string>,
   ): Map<string, HeadlinerForecast> {
     const result = new Map<string, HeadlinerForecast>();
-    for (const [date, entries] of dailyAverages) {
+    for (const [date, entries] of dailyPeaks) {
       if (entries.length === 0) continue;
 
       const avgWait = round5(
-        entries.reduce((sum, e) => sum + e.avg, 0) / entries.length,
+        entries.reduce((sum, e) => sum + e.peak, 0) / entries.length,
       );
       const rides = entries
         .filter((e) => names.has(e.attractionId))
-        .sort((a, b) => b.avg - a.avg)
+        .sort((a, b) => b.peak - a.peak)
         .slice(0, HEADLINER_FORECAST_TOP_N)
         .map((e) => ({
           attractionId: e.attractionId,
           name: names.get(e.attractionId)!,
-          waitTime: round5(e.avg),
+          waitTime: round5(e.peak),
         }));
 
       if (rides.length === 0) continue;

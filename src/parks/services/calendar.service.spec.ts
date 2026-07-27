@@ -319,13 +319,15 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
   });
 
   describe("buildHistoricalHeadlinerForecasts", () => {
-    it("builds actual (round-5) averages from recorded daily data", () => {
+    it("builds actual (round-5) figures from recorded daily peaks", () => {
+      // Recorded per-ride day PEAKS, matching the statistic the forecast
+      // side of the same field carries — see getHeadlinerDailyPeaks.
       const daily = new Map([
         [
           "2026-06-10",
           [
-            { attractionId: "a", avg: 52 },
-            { attractionId: "b", avg: 38 },
+            { attractionId: "a", peak: 52 },
+            { attractionId: "b", peak: 38 },
           ],
         ],
       ]);

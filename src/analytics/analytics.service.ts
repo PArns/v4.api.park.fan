@@ -5029,23 +5029,29 @@ export class AnalyticsService {
    * Get full headliner entities for a park.
    */
   /**
-   * Actual recorded per-attraction daily average waits over a date range
-   * (park timezone), for a given set of attractions (typically headliners).
+   * Actual recorded per-attraction daily PEAK waits (day-P90) over a date
+   * range (park timezone), for a given set of attractions (typically
+   * headliners).
    *
-   * Powers the calendar detail panel's "average wait" figures on PAST days —
+   * Powers the calendar detail panel's per-day wait figures on PAST days —
    * the historical counterpart to the ML forecast shown on today/future days.
+   * The forecast side is a day-peak proxy, so this side is a day-P90 rather
+   * than a day-average: the two land in the same response field and the same
+   * UI slot, and a mean-vs-peak mismatch there reads as the park getting
+   * busier next week when only the statistic changed.
+   *
    * One grouped query (STANDBY / OPERATING / plausible-wait filters mirror the
    * headliner + baseline queries), scoped to the attraction set and the range.
    *
-   * @returns Map<dateStr(YYYY-MM-DD), Array<{ attractionId, avg }>>
+   * @returns Map<dateStr(YYYY-MM-DD), Array<{ attractionId, peak }>>
    */
-  async getHeadlinerDailyAverages(
+  async getHeadlinerDailyPeaks(
     attractionIds: string[],
     fromStr: string,
     toStr: string,
     timezone: string,
-  ): Promise<Map<string, { attractionId: string; avg: number }[]>> {
-    const result = new Map<string, { attractionId: string; avg: number }[]>();
+  ): Promise<Map<string, { attractionId: string; peak: number }[]>> {
+    const result = new Map<string, { attractionId: string; peak: number }[]>();
     if (attractionIds.length === 0) return result;
 
     // [from, toExclusive) in UTC, derived from the park-timezone day bounds.
@@ -5057,12 +5063,20 @@ export class AnalyticsService {
       timezone,
     );
 
-    const rows: { attraction_id: string; d: string; avg_wait: string }[] =
+    // P90, not AVG: this feeds the calendar's per-day headliner figure, and
+    // the FUTURE side of that same field is a day-peak proxy (predict.py
+    // collapses the peak-window hours to a per-day MAX). Averaging the past
+    // days instead produced a step change at the today/tomorrow boundary —
+    // Phantasialand showed ~40 min for last week and ~65 for next week, most
+    // of which was the statistic changing rather than the park getting
+    // busier. A day-P90 per ride matches both the forecast side and the
+    // numerator calculateCrowdLevelForDate rates the day with.
+    const rows: { attraction_id: string; d: string; peak_wait: string }[] =
       await this.queueDataRepository.query(
         `
         SELECT qd."attractionId" AS attraction_id,
                TO_CHAR(DATE(qd.timestamp AT TIME ZONE $2), 'YYYY-MM-DD') AS d,
-               AVG(qd."waitTime") AS avg_wait
+               PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS peak_wait
         FROM queue_data qd
         WHERE qd."attractionId" = ANY($1::uuid[])
           AND qd."queueType" = 'STANDBY'
@@ -5082,11 +5096,11 @@ export class AnalyticsService {
       );
 
     for (const r of rows) {
-      const avg = parseFloat(r.avg_wait);
-      if (!Number.isFinite(avg)) continue;
+      const peak = parseFloat(r.peak_wait);
+      if (!Number.isFinite(peak)) continue;
       const list = result.get(r.d);
-      if (list) list.push({ attractionId: r.attraction_id, avg });
-      else result.set(r.d, [{ attractionId: r.attraction_id, avg }]);
+      if (list) list.push({ attractionId: r.attraction_id, peak });
+      else result.set(r.d, [{ attractionId: r.attraction_id, peak }]);
     }
     return result;
   }
