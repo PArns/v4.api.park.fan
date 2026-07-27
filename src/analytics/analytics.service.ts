@@ -413,8 +413,13 @@ export class AnalyticsService {
 
     if (currentPeakWait === null) {
       // No live data → no rating, and no baseline lookup on this hot branch.
+      // The rating has to be stated HERE rather than left undefined: callers
+      // do `occupancy.crowdLevel ?? <recompute from occupancy.current>`, and
+      // with current = 0 that recompute yields "very_low" — a fabricated
+      // reading for a park we have heard nothing from.
       return {
         current: 0,
+        crowdLevel: "unknown",
         trend: "stable",
         comparedToTypical: 0,
         comparisonStatus: "typical",
@@ -580,8 +585,8 @@ export class AnalyticsService {
     // P50) / P50 diff while `current` used the per-ride-P90 ratio aggregate —
     // different denominators that produced contradictory pairs on the park
     // page (e.g. current 204 %, comparedToTypical 42 %). Anchoring on
-    // occupancyPercentage fixes both paths: in the per-ride path it tracks
-    // ratioP90 × 100 − 100, and in the park-wide fallback it reduces exactly
+    // occupancyPercentage fixes both paths: in the headliner path it tracks
+    // loadRatio × 100 − 100, and in the park-wide fallback it reduces exactly
     // to the original (currentPeakWait − P50) / P50 × 100.
     const comparedToTypical = occupancyPercentage - 100;
 
@@ -636,9 +641,10 @@ export class AnalyticsService {
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
     // ML feature `park_occupancy_pct`. Kept on the simpler park-wide
-    // (avg latest ÷ park-P50) shape — not the per-ride-ratio P90 used
-    // by the user-facing crowd level. Trained models depend on this
-    // exact feature distribution; switching to per-ride ratios would
+    // (avg latest ÷ park-P50) shape — NOT the baseline-weighted mean
+    // (`getHeadlinerLoad`) that calculateParkOccupancy uses for the
+    // user-facing crowd level. Trained models depend on this exact
+    // feature distribution; adopting the weighted mean here would
     // require a retrain cycle. We DO simplify the fallback here:
     // P50 and P90 are written atomically by the daily cron, so when
     // P50 is missing P90 is missing too.
@@ -1238,9 +1244,6 @@ export class AnalyticsService {
   }
 
   /**
-   * Get count of currently operating attractions
-   */
-  /**
    * Collapse per-ride "today" rows (each ride's own average and maximum) to
    * the park pair the page renders: the mean of the per-ride averages and
    * the mean of the per-ride maxima.
@@ -1270,6 +1273,9 @@ export class AnalyticsService {
     };
   }
 
+  /**
+   * Get count of currently operating attractions
+   */
   private async getActiveAttractionsCount(parkId: string): Promise<number> {
     // Use 120 minutes (2 hours) to accommodate sync intervals
     const windowAgo = new Date(Date.now() - 120 * 60 * 1000);
@@ -3758,7 +3764,13 @@ export class AnalyticsService {
     waitTime: number | undefined,
     baseline: number | undefined,
   ): CrowdLevel | null {
-    if (!waitTime || waitTime === 0) return null;
+    // Only an ABSENT wait means "no data". A reported 0 against a real
+    // baseline is a walk-on — a measurement — and rates `very_low`, the same
+    // rule getLoadRating follows. Short-circuiting on 0 made this function
+    // disagree with getLoadRating for the identical (wait, baseline) pair, so
+    // the attraction payload could carry crowdLevel "unknown" next to a
+    // comparison of "much_lower".
+    if (waitTime == null) return null;
     if (baseline && baseline > 0) {
       const occupancy = (waitTime / baseline) * 100;
       return this.determineCrowdLevel(occupancy);

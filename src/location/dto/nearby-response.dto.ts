@@ -1,6 +1,9 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { ParkWithDistanceDto } from "../../common/dto/park-with-distance.dto";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
 /**
  * User location coordinates
@@ -48,7 +51,7 @@ export class RideWithDistanceDto {
 
   @ApiProperty({
     description: "Current crowd/wait level for the attraction",
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    enum: CROWD_LEVEL_VALUES,
     example: "moderate",
     required: false,
     nullable: true,

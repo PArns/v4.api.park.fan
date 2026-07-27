@@ -6,7 +6,10 @@ import {
 import { Attraction } from "../entities/attraction.entity";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { ForecastItemDto } from "../../queue-data/dto/forecast-response.dto";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_WITH_CLOSED_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
@@ -312,16 +315,11 @@ export class AttractionResponseDto {
   trend?: "up" | "down" | "stable" | null;
 
   @ApiProperty({
-    description: "Current crowd level badge",
-    enum: [
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-      "closed",
-    ],
+    description:
+      "Current crowd level badge. `unknown` when there is nothing to rate " +
+      "against (thin park, or no P50 baseline for this ride); `closed` when " +
+      "the ride is not operating.",
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     required: false,
     nullable: true,
   })

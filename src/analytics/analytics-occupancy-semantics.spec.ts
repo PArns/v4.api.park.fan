@@ -229,6 +229,11 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
 
       expect(result.current).toBe(0);
       expect(result.trend).toBe("stable");
+      // No live sample at all is the definition of "nothing to rate", so the
+      // branch must carry the rating itself. Leaving crowdLevel undefined let
+      // getParkStatistics fall through to determineCrowdLevel(0) and publish
+      // a fabricated "very_low" for a park we had heard nothing from.
+      expect(result.crowdLevel).toBe("unknown");
       // No baseline lookup is attempted on the no-data branch.
       expect(parkP50Repo.findOne).not.toHaveBeenCalled();
     });
@@ -407,12 +412,23 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
   describe("getAttractionCrowdLevel (baseline-agnostic mapping)", () => {
     it("returns null for missing wait time (no current data)", () => {
       expect(service.getAttractionCrowdLevel(undefined, 60)).toBeNull();
-      expect(service.getAttractionCrowdLevel(0, 60)).toBeNull();
+      expect(
+        service.getAttractionCrowdLevel(null as unknown as number, 60),
+      ).toBeNull();
+    });
+
+    it("rates a walk-on against a real baseline instead of calling it unknown", () => {
+      // 0 min with a REAL baseline is a measurement, not missing data — the
+      // same rule getLoadRating follows. Treating it as "no data" made the
+      // attraction payload contradict itself: crowdLevel "unknown" beside a
+      // comparison of "much_lower" derived from the very same pair.
+      expect(service.getAttractionCrowdLevel(0, 60)).toBe("very_low");
     });
 
     it("returns null when no baseline is available — caller decides the fallback", () => {
       expect(service.getAttractionCrowdLevel(40, 0)).toBeNull();
       expect(service.getAttractionCrowdLevel(40, undefined)).toBeNull();
+      expect(service.getAttractionCrowdLevel(0, 0)).toBeNull();
     });
 
     it("maps the peak-vs-peak ratio to the right CrowdLevel bucket", () => {

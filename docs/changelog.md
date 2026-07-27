@@ -6,6 +6,40 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — Close the remaining "invented rating" paths and the Swagger contract (2026-07-27)
+
+Review follow-up to the two entries below. The rule they established ("anything
+that cannot rate against a real baseline emits `unknown`") was stated more
+broadly in the docs than the code delivered.
+
+- **`statistics.crowdLevel` could still publish a fabricated `very_low`.**
+  `calculateParkOccupancy`'s no-live-data branch returned an `OccupancyDto`
+  with no `crowdLevel` at all, so the `occupancy.crowdLevel ?? getParkCrowdLevel(occupancy.current)`
+  fallback recomputed from `current = 0` → `very_low`, for a park we had heard
+  nothing from. That branch now states `crowdLevel: "unknown"` itself.
+- **A walk-on read as "no data".** `getAttractionCrowdLevel` short-circuited on
+  `waitTime === 0` *before* looking at the baseline, so a ride reporting 0 min
+  against a real P50 returned null → `"unknown"` — while `getLoadRating` rated
+  the identical pair `very_low`. The attraction payload therefore carried
+  `crowdLevel: "unknown"` next to `comparison: "much_lower"`. Only an absent
+  wait (`null`/`undefined`) is missing data now.
+- **`/v1/search` still invented ratings.** `getCrowdLevelForSearch` substituted
+  `"moderate"` for a null rating, and `getBatchLoadLevels` re-derived the tier
+  from `occupancy.current` instead of reading the gated `occupancy.crowdLevel`,
+  bypassing the ratability gate that every other surface honours.
+- **The published OpenAPI contract omitted `unknown`.** Several DTOs hand-wrote
+  a six-tier `enum:` while the API had been sending `unknown` for months, and
+  three declarations shared `enumName: "CrowdLevel"` with differing member
+  lists. All crowd-level enums now derive from `CROWD_LEVEL_VALUES` /
+  `CROWD_LEVEL_WITH_CLOSED_VALUES` in `common/types/crowd-level.type.ts`, so the
+  schema cannot drift from the TS union again.
+
+Also swept up: an orphaned JSDoc left over the wrong method, and two comments
+that the rename in the entry below had made false (`ratioP90` no longer exists;
+`getCurrentOccupancy` was described as using the formula it deliberately does
+*not* use — it stays park-wide `avg ÷ park-P50` because the trained models
+depend on that feature distribution).
+
 ### Fixed — Live park load measures the park, not its second-busiest ride (2026-07-27)
 
 The live park crowd level was the **P90 across the per-headliner ratios**

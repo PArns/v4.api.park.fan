@@ -376,4 +376,39 @@ describe("SearchService", () => {
       expect(result.results.some((r) => r.name === "Orlando")).toBe(true);
     });
   });
+
+  describe("crowd levels are never invented", () => {
+    it("emits 'unknown' for a ride with no baseline instead of 'moderate'", () => {
+      // getAttractionCrowdLevel returns null when there is nothing to rate
+      // against. Substituting "moderate" there put a fabricated tier on the
+      // search card — indistinguishable to a reader from a measured one.
+      mockAnalyticsService.getAttractionCrowdLevel.mockReturnValueOnce(null);
+
+      const level = (
+        service as never as {
+          getCrowdLevelForSearch: (w?: number, b?: number) => string | null;
+        }
+      ).getCrowdLevelForSearch(40, undefined);
+
+      expect(level).toBe("unknown");
+    });
+
+    it("prefers the gated park rating over recomputing it from the raw percentage", async () => {
+      // calculateParkOccupancy already applied the ratability gate. Deriving
+      // the tier again from occupancy.current bypasses it, which is exactly
+      // the bug fixed in getParkStatistics — search must not reintroduce it.
+      mockAnalyticsService.getBatchParkOccupancy.mockResolvedValueOnce(
+        new Map([["p1", { current: 130, crowdLevel: "unknown" }]]),
+      );
+
+      const loadMap = await (
+        service as never as {
+          getBatchLoadLevels: (ids: string[]) => Promise<Map<string, string>>;
+        }
+      ).getBatchLoadLevels(["p1"]);
+
+      expect(loadMap.get("p1")).toBe("unknown");
+      expect(mockAnalyticsService.getParkCrowdLevel).not.toHaveBeenCalled();
+    });
+  });
 });

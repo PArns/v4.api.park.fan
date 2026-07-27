@@ -1,6 +1,10 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { ParkStatus } from "../../common/types/status.type";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CROWD_LEVEL_WITH_CLOSED_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
 /**
  * Lean, precomputed best-days projection.
@@ -72,16 +76,7 @@ export class BestDayEntry {
     description:
       "Crowd level for the day. `closed` when the park is closed. On future " +
       "days this is the ML forecast; on today it is the live/last-computed level.",
-    enum: [
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-      "unknown",
-      "closed",
-    ],
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
   })
   crowdLevel: CrowdLevel | "closed";
 
@@ -91,7 +86,7 @@ export class BestDayEntry {
       "future days; on today it may differ (crowdLevel carries the live level). " +
       "Absent when the day is not ratable (thin park / no baseline).",
     required: false,
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    enum: CROWD_LEVEL_VALUES,
   })
   predictedCrowdLevel?: CrowdLevel;
 
