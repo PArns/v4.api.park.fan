@@ -13,6 +13,13 @@
  *   Values are non-copyrightable facts curated from the parks' official
  *   attraction pages (July 2026); the wiki value always wins when present.
  *
+ * - `mayGetWet`: CORRECTION for a wrong upstream flag. Unlike the two above
+ *   this always wins over ThemeParks.wiki, because it exists precisely to
+ *   overrule it. The wiki populates mayGetWet for only ~11 of ~7000
+ *   attractions, so a single wrong entry is highly visible on a ride page.
+ *   Only add one after checking the park's own attraction page — several
+ *   entries that look wrong are in fact correct (Efteling flags Symbolica).
+ *
  * Keyed by citySlug + parkSlug + attractionSlug because park slugs alone are
  * not globally unique (e.g. "disneyland-park" exists in Anaheim AND Paris).
  */
@@ -22,9 +29,19 @@ export interface ManualAttractionMetadata {
   attractionSlug: string;
   rcdbId?: number;
   minimumHeightCm?: number;
+  mayGetWet?: boolean;
 }
 
 export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
+  {
+    // S&S shot tower in the space-themed Andromeda Base. The park's own page
+    // lists "Thrill, Big Drops, Scary, Outdoor" and no water; ThemeParks.wiki
+    // reports mayGetWet=true, which is simply wrong.
+    citySlug: "genting-highlands",
+    parkSlug: "genting-skyworlds-theme-park",
+    attractionSlug: "terraform-tower-challenge",
+    mayGetWet: false,
+  },
   {
     citySlug: "agawam",
     parkSlug: "six-flags-new-england",

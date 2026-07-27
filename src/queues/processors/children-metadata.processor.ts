@@ -411,6 +411,7 @@ export class ChildrenMetadataProcessor {
     const repo = this.attractionsService.getRepository();
     let rcdbApplied = 0;
     let heightsApplied = 0;
+    let wetApplied = 0;
 
     for (const entry of MANUAL_ATTRACTION_METADATA) {
       const attraction = await repo
@@ -425,6 +426,7 @@ export class ChildrenMetadataProcessor {
           "attraction.id",
           "attraction.minimumHeight",
           "attraction.rcdbId",
+          "attraction.mayGetWet",
         ])
         .getOne();
 
@@ -433,6 +435,7 @@ export class ChildrenMetadataProcessor {
       const update: Partial<{
         rcdbId: number;
         minimumHeight: number;
+        mayGetWet: boolean;
       }> = {};
       if (entry.rcdbId && attraction.rcdbId !== entry.rcdbId) {
         update.rcdbId = entry.rcdbId;
@@ -443,13 +446,22 @@ export class ChildrenMetadataProcessor {
         update.minimumHeight = entry.minimumHeightCm;
         heightsApplied++;
       }
+      // Curated wet flag is a CORRECTION — it exists to overrule a wrong
+      // upstream value, so unlike the height it always wins.
+      if (
+        entry.mayGetWet !== undefined &&
+        attraction.mayGetWet !== entry.mayGetWet
+      ) {
+        update.mayGetWet = entry.mayGetWet;
+        wetApplied++;
+      }
       if (Object.keys(update).length > 0) {
         await repo.update(attraction.id, update);
       }
     }
 
     this.logger.log(
-      `🔗 Manual metadata applied: ${rcdbApplied} RCDB ids, ${heightsApplied} fallback heights`,
+      `🔗 Manual metadata applied: ${rcdbApplied} RCDB ids, ${heightsApplied} fallback heights, ${wetApplied} wet-flag corrections`,
     );
   }
 
