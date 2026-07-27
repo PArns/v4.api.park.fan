@@ -7,6 +7,7 @@ import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
  * A merge deletes the losing park, and that park's path was live and indexed:
@@ -39,6 +40,7 @@ describe("ParkMergeService — the loser's path", () => {
     transaction: jest.fn(async (fn: any) => fn(manager)),
     query: jest.fn().mockResolvedValue([]),
   };
+  const revalidation = { revalidateTags: jest.fn() };
   const redis = {
     keys: jest.fn().mockResolvedValue([]),
     del: jest.fn(),
@@ -66,6 +68,7 @@ describe("ParkMergeService — the loser's path", () => {
         { provide: getRepositoryToken(ExternalEntityMapping), useValue: {} },
         { provide: DataSource, useValue: dataSource },
         { provide: REDIS_CLIENT, useValue: redis },
+        { provide: RevalidationService, useValue: revalidation },
       ],
     }).compile();
 
@@ -100,5 +103,32 @@ describe("ParkMergeService — the loser's path", () => {
     expect(
       inserted.filter((i) => "citySlug" in i),
     ).toHaveLength(0);
+  });
+
+  it("tells the frontend to rebuild even when the path did not change", async () => {
+    // A merge removes a park and reparents its rides, so the geo tree, the
+    // park list and the attraction pages all change — regardless of whether
+    // the surviving park's own URL moved. Without this the frontend serves
+    // the deleted park for up to 24h.
+    manager.findOne.mockImplementation(async () =>
+      park({ id: "x", name: "IOA", citySlug: "orlando" }),
+    );
+
+    await service.mergeParks("winner", "loser");
+
+    expect(revalidation.revalidateTags).toHaveBeenCalledWith(
+      expect.arrayContaining(["geo", "parks", "attractions"]),
+    );
+  });
+
+  it("does not fail the merge when revalidation is unreachable", async () => {
+    manager.findOne.mockImplementation(async (_e: unknown, opts: any) =>
+      opts.where.id === "winner"
+        ? park({ id: "winner", name: "IOA", citySlug: "orlando" })
+        : park({ id: "loser", name: "IOA", citySlug: "tampa" }),
+    );
+    revalidation.revalidateTags.mockRejectedValueOnce(new Error("frontend down"));
+
+    await expect(service.mergeParks("winner", "loser")).resolves.toBeDefined();
   });
 });

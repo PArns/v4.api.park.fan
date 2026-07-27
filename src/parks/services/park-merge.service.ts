@@ -14,6 +14,7 @@ import {
 } from "../utils/merge-dependencies";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { Inject } from "@nestjs/common";
 import {
   calculateParkPriority as _calculateParkPriority,
@@ -48,6 +49,7 @@ export class ParkMergeService {
     private readonly mappingRepository: Repository<ExternalEntityMapping>,
     private readonly dataSource: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly revalidation: RevalidationService,
   ) {}
 
   /**
@@ -224,6 +226,27 @@ export class ParkMergeService {
         .catch(() => [] as string[]);
       await this.invalidateParkCaches(winnerId, winnerAttractionIds);
       await this.invalidateParkCaches(loserId);
+
+      // A merge removes a park and reparents its rides, so the geo tree, the
+      // park list and the attraction pages are all stale on the frontend —
+      // whether or not the surviving park's own URL moved. Rename already
+      // does this via handlePathChange; a same-path merge went unannounced
+      // and left the deleted park on the site for up to 24h.
+      try {
+        await this.revalidation.revalidateTags([
+          "geo",
+          "parks",
+          "attractions",
+        ]);
+      } catch (error) {
+        // The merge itself is committed; a webhook the frontend did not answer
+        // must not turn a successful merge into a failure.
+        this.logger.warn(
+          `Could not revalidate frontend after merging into ${winnerId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
