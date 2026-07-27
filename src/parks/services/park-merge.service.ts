@@ -5,6 +5,8 @@ import { DataSource, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
+import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
+import { captureParkPath, samePath } from "./park-rename.service";
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
@@ -187,6 +189,22 @@ export class ParkMergeService {
           winner.id,
           loser.id,
         );
+
+        // 5c. The loser's own path was live and indexed — the Tampa row for
+        // Universal Islands of Adventure served an empty page in six locales.
+        // Point it at the winner before the row disappears, or every one of
+        // those URLs becomes a 404 instead of a redirect.
+        const loserPath = captureParkPath(loser);
+        const winnerPath = captureParkPath(winner);
+        if (loserPath && winnerPath && !samePath(loserPath, winnerPath)) {
+          await manager
+            .createQueryBuilder()
+            .insert()
+            .into(ParkSlugAlias)
+            .values({ parkId: winner.id, ...loserPath })
+            .orIgnore()
+            .execute();
+        }
 
         // 6. Delete the loser park (now empty of related data)
         await manager.delete(Park, loser.id);

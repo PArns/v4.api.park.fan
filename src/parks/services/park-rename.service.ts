@@ -35,7 +35,7 @@ export function captureParkPath(park: Park): ParkGeoPath | null {
   };
 }
 
-function samePath(a: ParkGeoPath, b: ParkGeoPath): boolean {
+export function samePath(a: ParkGeoPath, b: ParkGeoPath): boolean {
   return (
     a.continentSlug === b.continentSlug &&
     a.countrySlug === b.countrySlug &&
