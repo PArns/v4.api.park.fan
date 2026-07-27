@@ -261,6 +261,117 @@ describe("FavoritesService", () => {
     });
   });
 
+  describe("Live status contract", () => {
+    const validAttractionUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    const attractionEntity = {
+      id: validAttractionUuid,
+      name: "Fēnix",
+      slug: "fenix",
+      parkId: validParkUuid,
+      latitude: null,
+      longitude: null,
+      park: {
+        id: validParkUuid,
+        name: "Toverland",
+        slug: "toverland",
+        timezone: "Europe/Amsterdam",
+      },
+    };
+
+    const standbyRow = (status: string, waitTime: number | null) => [
+      {
+        queueType: "STANDBY",
+        status,
+        waitTime,
+        timestamp: new Date("2026-07-27T17:50:13.826Z"),
+        lastUpdated: new Date("2026-07-27T17:50:13.826Z"),
+      },
+    ];
+
+    it("derives status from the live queue on the slow path instead of the CLOSED placeholder", async () => {
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([[validAttractionUuid, standbyRow("OPERATING", 5)]]),
+      );
+      parksService.getBatchParkStatus.mockResolvedValueOnce(
+        new Map([[validParkUuid, "OPERATING"]]),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      // `fromEntity` seeds status with a hardcoded "CLOSED" — the live
+      // queue is the only source of truth and must overwrite it.
+      const attraction = result.attractions[0];
+      expect(attraction.status).toBe("OPERATING");
+      expect(attraction.effectiveStatus).toBe("OPERATING");
+    });
+
+    it("reports a closed park as CLOSED even while the last queue row still says OPERATING", async () => {
+      // The real-world trigger: sources stop publishing at closing time, so
+      // the newest queue_data row keeps the ride's last OPERATING value.
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([[validAttractionUuid, standbyRow("OPERATING", 5)]]),
+      );
+      parksService.getBatchParkStatus.mockResolvedValueOnce(
+        new Map([[validParkUuid, "CLOSED"]]),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      const attraction = result.attractions[0];
+      // Raw status stays honest (that is what the source reported)…
+      expect(attraction.status).toBe("OPERATING");
+      // …but the park-aware status is what a card renders.
+      expect(attraction.effectiveStatus).toBe("CLOSED");
+      // And the crowd badge must not contradict it.
+      expect(attraction.crowdLevel).toBe("closed");
+    });
+
+    it("keeps effectiveStatus when the response comes from the integrated cache", async () => {
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      redisStore.set(
+        `attraction:integrated:${validAttractionUuid}`,
+        JSON.stringify({
+          id: validAttractionUuid,
+          name: "Fēnix",
+          slug: "fenix",
+          status: "OPERATING",
+          effectiveStatus: "CLOSED",
+          crowdLevel: "closed",
+          queues: [{ queueType: "STANDBY", status: "OPERATING", waitTime: 5 }],
+          park: {
+            id: validParkUuid,
+            name: "Toverland",
+            slug: "toverland",
+            timezone: "Europe/Amsterdam",
+          },
+        }),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      // Stripping it left the card with only the raw (park-blind) status.
+      expect(result.attractions[0].effectiveStatus).toBe("CLOSED");
+    });
+  });
+
   describe("Redis cache contract", () => {
     it("returns the cached response on a hit and skips all DB lookups", async () => {
       const cached = {

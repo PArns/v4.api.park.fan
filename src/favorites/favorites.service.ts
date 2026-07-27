@@ -18,6 +18,10 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionDto } from "../ml/dto";
+import {
+  QueueType,
+  LiveStatus,
+} from "../external-apis/themeparks/themeparks.types";
 import { computeBestVisitTimes } from "../common/utils/best-visit-times.util";
 import { buildRopeDropInfo } from "../common/utils/rope-drop-info.util";
 import { RopeDropStored } from "../common/types/rope-drop.type";
@@ -622,6 +626,7 @@ export class FavoritesService {
         parkPredEntries,
         ropeDropParkEntries,
         ratableParks,
+        parkStatusMap,
       ] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
         this.analyticsService.getAttractionSparklinesBatch(sparkInput),
@@ -647,6 +652,9 @@ export class FavoritesService {
         // Which of these parks are ratable (≥ 30 operating days) — gates the
         // live attraction crowd level to "unknown" for thin parks.
         this.analyticsService.getRatableParkIds(missedParkIds),
+        // Park status — the queue rows are a last-known value (sources stop
+        // publishing at closing time), so `effectiveStatus` needs the park.
+        this.parksService.getBatchParkStatus(missedParkIds),
       ]);
       const predsByPark = new Map<string, PredictionDto[]>(parkPredEntries);
       const ropeDropByPark = new Map<string, Map<string, RopeDropStored>>(
@@ -669,20 +677,54 @@ export class FavoritesService {
           estimatedWait: qd.estimatedWait ?? null,
           lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
         }));
+        const parkStatus: "OPERATING" | "CLOSED" =
+          (attraction.parkId
+            ? parkStatusMap.get(attraction.parkId)
+            : undefined) || "CLOSED";
+
+        // Free-flow attractions (playgrounds, water play areas) have no queue
+        // and are reported CLOSED by the source — same override the integrated
+        // path applies, so a cache miss doesn't flip the card's status.
+        if (attraction.openWithPark && parkStatus === "OPERATING") {
+          dto.queues = [
+            {
+              queueType: QueueType.STANDBY,
+              status: LiveStatus.OPERATING,
+              waitTime: 0,
+              state: null,
+              returnStart: null,
+              returnEnd: null,
+              price: null,
+              allocationStatus: null,
+              currentGroupStart: null,
+              currentGroupEnd: null,
+              estimatedWait: null,
+              lastUpdated: new Date().toISOString(),
+            },
+          ];
+        }
+
         const standby = dto.queues.find((q) => q.queueType === "STANDBY");
+        // `fromEntity` seeds a "CLOSED" placeholder (attractions carry no
+        // status column) — the live queue is the only source of truth.
+        dto.status = standby?.status ?? dto.queues[0]?.status ?? "CLOSED";
+        dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
+
         const p50 = p50Map.get(attraction.id) || 0;
         const parkRatable = attraction.parkId
           ? ratableParks.has(attraction.parkId)
           : false;
         dto.crowdLevel =
-          standby?.status === "OPERATING" && standby.waitTime != null
-            ? !parkRatable
-              ? "unknown"
-              : p50 > 0
-                ? this.analyticsService.getLoadRating(standby.waitTime, p50)
-                    .rating
-                : null
-            : null;
+          dto.effectiveStatus === "CLOSED"
+            ? "closed"
+            : standby?.status === "OPERATING" && standby.waitTime != null
+              ? !parkRatable
+                ? "unknown"
+                : p50 > 0
+                  ? this.analyticsService.getLoadRating(standby.waitTime, p50)
+                      .rating
+                  : null
+              : null;
         const history = sparklinesMap.get(attraction.id) || [];
         dto.statistics = {
           avgWaitToday: null,
@@ -793,7 +835,6 @@ export class FavoritesService {
         hourlyForecast: undefined,
         forecasts: undefined,
         predictionAccuracy: undefined,
-        effectiveStatus: undefined,
         latitude: integrated.latitude,
         longitude: integrated.longitude,
         park: integrated.park

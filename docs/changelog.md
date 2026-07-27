@@ -6,6 +6,29 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — Favorites: a closed park's rides no longer report OPEN and CLOSED at once (2026-07-27)
+
+`GET /v1/favorites` could describe the same ride two contradictory ways, which the
+frontend rendered as a green **OPEN** badge next to a red **CLOSED** one:
+
+- **`effectiveStatus` was stripped from the payload** (to save bytes), so the card
+  had no park-aware status left — only the raw `status`/`queues[].status`, which are
+  a *last-known* value. Sources stop publishing at closing time and `queue_data` only
+  gets a row on change, so a ride's newest row keeps saying `OPERATING` for hours
+  after the park shuts (measured: 132 rides across 9 closed parks at once). The
+  `crowdLevel`, however, *is* park-aware and already read `"closed"` → the two badges
+  disagreed. `effectiveStatus` is now part of the response again.
+- **The cache-miss path never assigned `status` at all**, leaving the hardcoded
+  `"CLOSED"` placeholder from `AttractionResponseDto.fromEntity` (attractions carry no
+  status column) next to live `OPERATING` queue data — visible even in *open* parks.
+  It now derives `status` from the live STANDBY queue, sets `effectiveStatus` from the
+  park status, gates `crowdLevel` to `"closed"` for a closed park, and mirrors the
+  integrated path's free-flow (`openWithPark`) override so a cache miss can't flip a
+  playground's status.
+
+Raw `status` and `queues[]` stay untouched (honest `lastUpdated`, honest history);
+`effectiveStatus` is the field a card should render.
+
 ### Fixed — Close the remaining "invented rating" paths and the Swagger contract (2026-07-27)
 
 Review follow-up to the two entries below. The rule they established ("anything
