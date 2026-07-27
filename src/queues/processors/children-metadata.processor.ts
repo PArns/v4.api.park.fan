@@ -15,6 +15,7 @@ import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { MANUAL_ATTRACTION_METADATA } from "../../attractions/data/manual-attraction-metadata";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { findExistingAttraction } from "../../attractions/utils/attraction-match.util";
+import { publishedHeightUnit } from "../../common/utils/height-unit.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
 import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks.exclusions";
@@ -298,13 +299,17 @@ export class ChildrenMetadataProcessor {
 
     const repo = this.attractionsService.getRepository();
     const attractions = await repo.find({
-      select: [
-        "id",
-        "externalId",
-        "minimumHeight",
-        "maximumHeight",
-        "mayGetWet",
-      ],
+      // The park comes along for countryCode: the wiki reports centimetres
+      // for everyone, but US parks publish the inch figure on their signage.
+      relations: ["park"],
+      select: {
+        id: true,
+        externalId: true,
+        minimumHeight: true,
+        maximumHeight: true,
+        mayGetWet: true,
+        park: { id: true, countryCode: true },
+      },
     });
 
     // Only ThemeParks.wiki entities have per-entity documents (UUID ids);
@@ -347,11 +352,19 @@ export class ChildrenMetadataProcessor {
 
               const update: Partial<{
                 minimumHeight: number;
+                minimumHeightUnit: "cm" | "in";
                 maximumHeight: number;
                 mayGetWet: boolean;
               }> = {};
-              if (minHeight !== null && minHeight !== attraction.minimumHeight)
+              if (minHeight !== null && minHeight !== attraction.minimumHeight) {
                 update.minimumHeight = minHeight;
+                // The wiki always hands us centimetres, but US parks publish
+                // inches — 122 here is the park's 48" sign. Record which
+                // number a ride page should show.
+                update.minimumHeightUnit = publishedHeightUnit(
+                  attraction.park?.countryCode,
+                );
+              }
               if (maxHeight !== null && maxHeight !== attraction.maximumHeight)
                 update.maximumHeight = maxHeight;
               if (mayGetWet !== null && mayGetWet !== attraction.mayGetWet)
