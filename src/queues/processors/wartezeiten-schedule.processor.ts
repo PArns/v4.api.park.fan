@@ -97,13 +97,16 @@ export class WartezeitenScheduleProcessor {
             const today = openingTimes[0];
 
             if (today.opened_today) {
-              // Validate that closingTime is after openingTime
+              // A closing time *before* the opening is a misdated past-midnight
+              // close, which saveScheduleData re-anchors — dropping the day here
+              // would cost those parks their schedule. An *equal* pair carries no
+              // window at all and cannot be repaired without inventing one.
               const openingTime = new Date(today.open_from);
               const closingTime = new Date(today.closed_from);
 
-              if (closingTime <= openingTime) {
+              if (closingTime.getTime() === openingTime.getTime()) {
                 this.logger.warn(
-                  `⚠️  Invalid schedule data for ${park.name}: closingTime (${today.closed_from}) is before or equal to openingTime (${today.open_from}). Skipping update.`,
+                  `⚠️  Invalid schedule data for ${park.name}: closingTime (${today.closed_from}) equals openingTime (${today.open_from}). Skipping update.`,
                 );
                 skipCount++;
                 continue;

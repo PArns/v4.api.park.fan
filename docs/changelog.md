@@ -6,6 +6,37 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — Misdated closing times no longer make a park read CLOSED while it is open (2026-07-27)
+
+A park's operating day is anchored to one calendar date, so the window between
+`openingTime` and `closingTime` must be greater than zero and at most 24 h.
+Sources break that in both directions and `saveScheduleData` stored it verbatim:
+
+- **Closing before opening.** ThemeParks.wiki stamps a past-midnight close with
+  the day's *own* date — Parque Warner Madrid publishes
+  `open 2026-07-27T12:00+02:00` / `close 2026-07-27T00:00+02:00`, putting the
+  close 12 h *before* the open. `isParkOpen` then reads CLOSED for the whole
+  day, every day: the park badge, `effectiveStatus` and every derived crowd
+  level said "closed" while rides reported 60-minute queues. 179 rows, 15 parks,
+  concentrated in September/October (Halloween events with post-midnight hours:
+  Cedar Point, Six Flags, SeaWorld, Carowinds, Kings Dominion/Island).
+- **Closing far after opening.** An overshot day or a typo'd year turned one
+  evening into a 34-hour (SeaWorld San Diego) or 3-year (Busch Gardens
+  Williamsburg) "operating day", so those days never closed.
+
+The time-of-day is the trustworthy part in every observed case, so
+`normalizeClosingTime` re-anchors it to the opening's park-local date and rolls
+it forward a day when that lands at or before opening (DST-safe: the local
+closing time is preserved, not a fixed 24 h offset). An *equal* opening and
+closing is left alone — rolling it forward would invent a 24-hour operating day
+out of a source that reported nothing.
+
+The Wartezeiten sync used to **drop** any day whose closing was at or before its
+opening, costing those parks their schedule; it now only skips the equal case
+and lets the normalizer repair the rest.
+
+Existing rows heal on the next daily schedule sync (15:00 UTC).
+
 ### Fixed — Favorites: a closed park's rides no longer report OPEN and CLOSED at once (2026-07-27)
 
 `GET /v1/favorites` could describe the same ride two contradictory ways, which the

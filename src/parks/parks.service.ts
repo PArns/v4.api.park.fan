@@ -22,6 +22,7 @@ import {
 } from "../common/utils/date.util";
 import { addDays, subDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
+import { normalizeClosingTime } from "../common/utils/operating-window.util";
 import {
   calculateHolidayInfo,
   HolidayEntry,
@@ -982,12 +983,25 @@ export class ParksService {
         park!.timezone,
       );
 
+      const openingTime = entry.openingTime
+        ? new Date(entry.openingTime)
+        : null;
+      // Sources misdate the closing time in both directions (a past-midnight
+      // close stamped with the day's own date reads as CLOSED all day; an
+      // overshot day or typo'd year never closes at all). The time-of-day is
+      // the trustworthy part — see normalizeClosingTime.
+      const closingTime = normalizeClosingTime(
+        openingTime,
+        entry.closingTime ? new Date(entry.closingTime) : null,
+        park!.timezone,
+      );
+
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
         date: dateObj,
         scheduleType,
-        openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
-        closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
+        openingTime,
+        closingTime,
         description: entry.description || null,
         purchases: entry.purchases || null,
         isHoliday: holidayInfo.isHoliday,

@@ -37,7 +37,8 @@
     "job:baselines-recalc": "ts-node scripts/trigger-baseline-recalculation.ts",
     "job:clear-calendar-cache": "ts-node scripts/clear-calendar-cache.ts",
     "job:children-sync": "ts-node scripts/trigger-children-sync.ts",
-    "job:clear-cache": "ts-node scripts/clear-cache.ts"
+    "job:clear-cache": "ts-node scripts/clear-cache.ts",
+    "repair:schedule-dates": "ts-node scripts/repair-schedule-dates.ts"
   },
   "dependencies": {
     "@elsikora/string-similarity": "^1.0.1",
