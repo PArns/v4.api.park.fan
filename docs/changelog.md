@@ -35,7 +35,20 @@ The Wartezeiten sync used to **drop** any day whose closing was at or before its
 opening, costing those parks their schedule; it now only skips the equal case
 and lets the normalizer repair the rest.
 
-Existing rows heal on the next daily schedule sync (15:00 UTC).
+Rows written before this fix were repaired in place on 2026-07-27 (178 windows
+re-anchored). Days in the past are never re-synced, so they would have stayed
+broken; `npm run repair:schedule-dates` (local script) reports and repairs both
+this and the older `date`-vs-`openingTime` mismatch.
+
+Two upstream problems this deliberately does **not** invent a fix for:
+
+- 7 rows read `opens 15:00 / closes 12:00` (Six Flags Qiddiya City, Kings
+  Dominion's September Haunt evenings) — almost certainly a 12-hour-clock error
+  at the source, where 12:00 means midnight. Re-anchoring makes them 18–21 h
+  days: right during the event hours, wrong overnight. A curated override would
+  be the real fix.
+- One row with an equal opening and closing (Universal Volcano Bay, dated
+  1970-01-01) is left untouched by design.
 
 ### Fixed — Favorites: a closed park's rides no longer report OPEN and CLOSED at once (2026-07-27)
 
