@@ -21,9 +21,15 @@
  *   is NOT used — it's inflated by the busiest season and compresses the
  *   top. Future/predicted days use the same baseline (AVG of predicted
  *   headliner waits ÷ typical-day-peak).
- * - **Park live occupancy (ratio-vs-P50):** current short-window peak
- *   ÷ park P50 baseline (headliner-only). Also consumed as an ML feature
- *   (getCurrentOccupancy). Deliberately NOT changing.
+ * - **Park live occupancy (ratio-vs-P50):** the **baseline-weighted mean**
+ *   across the headliners reporting in the last 60 min — Σ their current
+ *   waits ÷ Σ their P50 baselines (`getHeadlinerLoad`). Sum the minutes,
+ *   then divide; never a mean or percentile of the per-ride ratios. A
+ *   percentile across ratios is an extreme-value estimator — over a
+ *   ten-ride headliner set its P90 is just the second-busiest ride, it can
+ *   only push the reading up, and it lets a 10-minute-baseline ride outvote
+ *   a marquee. Falls back to avg-current ÷ park P50 when no per-ride
+ *   baselines exist. Also consumed as an ML feature (getCurrentOccupancy).
  * - **Calendar "today" cell (ratio-vs-P50):** uses the live signal,
  *   because today is an incomplete day.
  * - **Hourly within-a-day predictions (ratio-vs-P50):** per-hour median
@@ -41,10 +47,13 @@
  * it has no baseline / fewer than 30 operating days of valid headliner data
  * (park_p50_baselines.typicalDayPeak IS NULL). A median over a handful of
  * days is noise, so rather than render a made-up `moderate` we say so
- * explicitly. `unknown` is produced ONLY by the no-baseline paths
- * (rateOrUnknown / isParkRatable gate); `determineCrowdLevel`'s thresholds
- * never return it. Frontend renders it as "Keine Prognose / noch nicht genug
- * Daten".
+ * explicitly. It is also what every other "nothing to rate against" path
+ * emits: `rateOrUnknown`, the `isParkRatable` gate, `getLoadRating` with a
+ * missing/non-positive baseline, and the callers of `getAttractionCrowdLevel`
+ * when it returns null. `determineCrowdLevel`'s thresholds never return it —
+ * a 0-minute wait against a *real* baseline is a walk-on, not missing data,
+ * and reads `very_low`. Frontend renders `unknown` as "Keine Prognose / noch
+ * nicht genug Daten".
  */
 export type CrowdLevel =
   | "very_low"

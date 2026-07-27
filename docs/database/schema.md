@@ -61,7 +61,7 @@ Precomputed analytics are stored in dedicated tables and optionally mirrored in 
 |-------|---------|
 | `park_p50_baselines` | Park P50 baseline (headliner attractions only). **Primary** input for live occupancy / ratio-vs-P50; also stores `typicalDayPeak` (the **primary** calendar baseline). |
 | `park_p90_baselines` | Park P90 (peak) baseline. Computed for free alongside P50; **not** the crowd-level reference any more. |
-| `attraction_p50_baselines` | Per-attraction P50 baseline. **Primary** for live per-headliner ratios. |
+| `attraction_p50_baselines` | Per-attraction P50 baseline. **Primary** for the live park load (`Σ latest ÷ Σ P50` across headliners). |
 | `attraction_p90_baselines` | Per-attraction P90 (peak) baseline. Computed for free; **not** the crowd-level reference (feeds the per-ride daily P90 the calendar averages). |
 | `headliner_attractions` | Which attractions were selected as headliners per park (for baseline calculation). Also stores per-headliner `p50Wait548d` / `p90Wait548d` so park baselines are avg-of-per-headliner without a re-scan. |
 | `attraction_hourly_history` | Per-day per-attraction 15-min-slot P90/avg/sampleCount rollup (JSONB `slots` array). Read by the attraction history endpoint for past days; today is computed live against `queue_data`. |
