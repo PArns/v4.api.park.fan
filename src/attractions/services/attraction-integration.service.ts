@@ -342,9 +342,12 @@ export class AttractionIntegrationService {
               attraction.id,
             );
 
+          // No baseline for this ride (getAttractionCrowdLevel → null) means
+          // there is nothing to rate against; say so instead of defaulting to
+          // "moderate", which reads to a visitor as a measurement.
           crowdLevel =
             this.analyticsService.getAttractionCrowdLevel(wait, baseline) ||
-            "moderate";
+            "unknown";
 
           if (baseline > 0) {
             const loadRating = this.analyticsService.getLoadRating(
@@ -366,7 +369,7 @@ export class AttractionIntegrationService {
           );
           crowdLevel = currentPred?.crowdLevel
             ? (currentPred.crowdLevel as CrowdLevel)
-            : "moderate";
+            : "unknown";
           dto.baseline = null;
           dto.comparison = null;
         }

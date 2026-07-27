@@ -392,22 +392,20 @@ export class AnalyticsService {
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
 
-    // Live park crowd level — P90 across per-headliner ratios
-    // (latest_wait ÷ that-attraction's-P50). Computes "how stressed is
-    // the typical busy-headliner queue right now" rather than averaging
-    // ratios (which a single quiet ride can drag down to "very_low" even
-    // when a marquee ride is at its typical peak). Each ride contributes
-    // its LATEST sample in the last 60 min so we stay responsive when a
-    // queue drops, while still catching sparse-reporting headliners.
-    // Fall back to the park-wide MAX/avg pattern when per-ride P50s
-    // aren't available (brand-new park, all rides missing P50 rows).
-    const perRideRatios = await this.getPerHeadlinerRatios(
+    // Live park crowd level — total current headliner queue minutes ÷ the
+    // total typical (P50) minutes of those same rides. Reads as "the park
+    // is running at X% of a typical day". Each ride contributes its LATEST
+    // sample in the last 60 min so we stay responsive when a queue drops,
+    // while still catching sparse-reporting headliners. Fall back to the
+    // park-wide MAX/avg pattern when per-ride P50s aren't available
+    // (brand-new park, all rides missing P50 rows).
+    const headlinerLoad = await this.getHeadlinerLoad(
       parkId,
       headlinerIds.length > 0 ? headlinerIds : undefined,
     );
     const currentPeakWait =
-      perRideRatios !== null
-        ? perRideRatios.averageCurrentWait
+      headlinerLoad !== null
+        ? headlinerLoad.averageCurrentWait
         : await this.getCurrentParkPeakWait(
             parkId,
             headlinerIds.length > 0 ? headlinerIds : undefined,
@@ -415,8 +413,13 @@ export class AnalyticsService {
 
     if (currentPeakWait === null) {
       // No live data → no rating, and no baseline lookup on this hot branch.
+      // The rating has to be stated HERE rather than left undefined: callers
+      // do `occupancy.crowdLevel ?? <recompute from occupancy.current>`, and
+      // with current = 0 that recompute yields "very_low" — a fabricated
+      // reading for a park we have heard nothing from.
       return {
         current: 0,
+        crowdLevel: "unknown",
         trend: "stable",
         comparedToTypical: 0,
         comparisonStatus: "typical",
@@ -477,14 +480,14 @@ export class AnalyticsService {
       };
     }
 
-    // Occupancy: P90 across per-headliner (latest ÷ P50) ratios × 100 when
-    // we have per-ride baselines; falls back to avg current ÷ park-P50
-    // when we don't. 100% = the 90th-percentile-busiest headliner is at
-    // its typical wait. > 150% means even the busier rides are running
-    // materially above typical.
+    // Occupancy: Σ current headliner waits ÷ Σ their P50 baselines × 100
+    // when we have per-ride baselines; falls back to avg current ÷ park-P50
+    // when we don't. 100% = the headliners together are queueing exactly
+    // their typical minutes. > 150% means the park as a whole is running
+    // materially above typical — not just its busiest single ride.
     const occupancyPercentage =
-      perRideRatios !== null
-        ? perRideRatios.ratioP90 * 100
+      headlinerLoad !== null
+        ? headlinerLoad.loadRatio * 100
         : (currentPeakWait / baseline) * 100;
 
     // Calculate park trend (hybrid logic) — headliner-only: average per headliner, then divide by count
@@ -582,8 +585,8 @@ export class AnalyticsService {
     // P50) / P50 diff while `current` used the per-ride-P90 ratio aggregate —
     // different denominators that produced contradictory pairs on the park
     // page (e.g. current 204 %, comparedToTypical 42 %). Anchoring on
-    // occupancyPercentage fixes both paths: in the per-ride path it tracks
-    // ratioP90 × 100 − 100, and in the park-wide fallback it reduces exactly
+    // occupancyPercentage fixes both paths: in the headliner path it tracks
+    // loadRatio × 100 − 100, and in the park-wide fallback it reduces exactly
     // to the original (currentPeakWait − P50) / P50 × 100.
     const comparedToTypical = occupancyPercentage - 100;
 
@@ -612,7 +615,14 @@ export class AnalyticsService {
       updatedAt: now.toISOString(),
       breakdown: {
         currentAvgWait: roundToNearest5Minutes(currentPeakWait),
-        typicalAvgWait: roundToNearest5Minutes(baseline),
+        // The baseline of exactly the rides in `currentAvgWait`, so the pair
+        // the API renders side by side divides out to `current`. Using the
+        // park-wide P50 here let the page show "25 min now / 30 min typical"
+        // next to a "+23% busier than typical" derived from a different
+        // denominator.
+        typicalAvgWait: roundToNearest5Minutes(
+          headlinerLoad?.averageTypicalWait ?? baseline,
+        ),
         activeAttractions: await this.getActiveAttractionsCount(parkId),
       },
     };
@@ -631,9 +641,10 @@ export class AnalyticsService {
    */
   async getCurrentOccupancy(parkId: string): Promise<number> {
     // ML feature `park_occupancy_pct`. Kept on the simpler park-wide
-    // (avg latest ÷ park-P50) shape — not the per-ride-ratio P90 used
-    // by the user-facing crowd level. Trained models depend on this
-    // exact feature distribution; switching to per-ride ratios would
+    // (avg latest ÷ park-P50) shape — NOT the baseline-weighted mean
+    // (`getHeadlinerLoad`) that calculateParkOccupancy uses for the
+    // user-facing crowd level. Trained models depend on this exact
+    // feature distribution; adopting the weighted mean here would
     // require a retrain cycle. We DO simplify the fallback here:
     // P50 and P90 are written atomically by the daily cron, so when
     // P50 is missing P90 is missing too.
@@ -997,30 +1008,66 @@ export class AnalyticsService {
    * vs. peak), 100%-centred, identical scale to the calendar day metric.
    */
   /**
-   * For each reporting headliner, compute (latest_wait ÷ that ride's P50
-   * baseline) and return the P90 of those ratios plus the simple-avg of
-   * the underlying current waits.
+   * Park load across the reporting headliners: the sum of their current
+   * waits ÷ the sum of those same rides' P50 baselines.
    *
-   * The P90 of ratios protects against "everything reads very_low because
-   * one quiet ride drags the average down". A park with 9 quiet rides and
-   * 1 marquee at typical wait shouldn't be labelled "very_low" — the
-   * marquee experience is what visitors remember.
+   * A baseline-weighted mean, NOT an average of per-ride ratios and not
+   * a percentile over them. Three properties matter:
+   *
+   * 1. **It measures the park, not its loudest ride.** The previous
+   *    formulation took the P90 *across* the per-ride ratios. With the
+   *    headliner set capped at 10 (MAX_TIER1_HEADLINERS) the P90 index
+   *    `(n-1) * 0.9` lands on the second-busiest ride, so one mid-size
+   *    ride running above its own median decided the whole park. At
+   *    Phantasialand that read `high` (123%) on an afternoon where Taron
+   *    sat at 20/45 min and F.L.Y. at 20/40 — the two rides visitors
+   *    actually queue for contributed nothing, because the estimator
+   *    only ever looked at the top of the sorted list. Weighting by
+   *    baseline gives those rides the influence their queues deserve.
+   *
+   * 2. **It can fall as well as rise.** An extreme-value estimator is
+   *    one-sided: it can only be dragged up by an outlier, never down,
+   *    so quiet days never surfaced as quiet.
+   *
+   * 3. **Small baselines stop dominating.** A ride whose typical wait is
+   *    10 min doubles its ratio on a 10-minute swing. Summing minutes
+   *    before dividing weights each ride by how much queue it actually
+   *    represents, so that swing moves the park reading by minutes, not
+   *    by a crowd tier.
+   *
+   * The returned `averageTypicalWait` is the mean P50 over exactly the
+   * rides in the numerator, so `averageCurrentWait / averageTypicalWait`
+   * reproduces `loadRatio` — the breakdown the API returns can no longer
+   * contradict the rating derived from it.
+   *
+   * Composition-proof by construction: only rides that actually reported
+   * enter both sums, so a closed headliner (Chiapas on a winter day)
+   * drops out of numerator *and* denominator instead of deflating one
+   * against a fixed reference.
    *
    * Returns null when:
    * - No headlinerIds given (caller should fall back to park-wide path)
    * - No ride has both a P50 baseline AND a recent operating sample.
    */
-  private async getPerHeadlinerRatios(
+  private async getHeadlinerLoad(
     _parkId: string,
     headlinerIds: string[] | undefined,
   ): Promise<{
-    ratioP90: number;
+    loadRatio: number;
     averageCurrentWait: number;
+    averageTypicalWait: number;
     rideCount: number;
   } | null> {
     if (!headlinerIds || headlinerIds.length === 0) return null;
 
     const sixtyMinAgo = new Date(Date.now() - 60 * 60 * 1000);
+    // No MIN_WAIT_TIME_THRESHOLD here (unlike the spot-peak query): that
+    // threshold drops rides below 10 min, which in a weighted mean would
+    // silently delete the quietest queues from the numerator and bias the
+    // park upward on exactly the days it should read low. An OPERATING
+    // headliner at 5 min is signal about how busy the park is. Rides whose
+    // source reports no usable waits are still excluded — they have no
+    // positive P50 baseline and are skipped below.
     const latestRows = await this.queueDataRepository.query(
       `
       SELECT DISTINCT ON (qd."attractionId")
@@ -1031,41 +1078,35 @@ export class AnalyticsService {
         AND qd.timestamp >= $2
         AND qd.status = 'OPERATING'
         AND qd."waitTime" IS NOT NULL
-        AND qd."waitTime" >= $3
         AND qd."queueType" = 'STANDBY'
       ORDER BY qd."attractionId", qd.timestamp DESC
       `,
-      [headlinerIds, sixtyMinAgo, this.MIN_WAIT_TIME_THRESHOLD],
+      [headlinerIds, sixtyMinAgo],
     );
 
     if (latestRows.length === 0) return null;
 
     const p50Map = await this.getBatchAttractionP50s(headlinerIds);
 
-    const ratios: number[] = [];
     let waitSum = 0;
-    let waitCount = 0;
+    let baselineSum = 0;
+    let rideCount = 0;
     for (const row of latestRows) {
       const wait = Number(row.latest_wait ?? 0);
       const p50 = p50Map.get(row.attractionId);
       if (!p50 || p50 <= 0) continue;
-      ratios.push(wait / p50);
       waitSum += wait;
-      waitCount++;
+      baselineSum += p50;
+      rideCount++;
     }
 
-    if (ratios.length === 0) return null;
-
-    ratios.sort((a, b) => a - b);
-    const idx = (ratios.length - 1) * 0.9;
-    const lo = Math.floor(idx);
-    const hi = Math.ceil(idx);
-    const ratioP90 = ratios[lo] * (1 - (idx - lo)) + ratios[hi] * (idx - lo);
+    if (rideCount === 0 || baselineSum <= 0) return null;
 
     return {
-      ratioP90,
-      averageCurrentWait: Math.round(waitSum / waitCount),
-      rideCount: ratios.length,
+      loadRatio: waitSum / baselineSum,
+      averageCurrentWait: Math.round(waitSum / rideCount),
+      averageTypicalWait: baselineSum / rideCount,
+      rideCount,
     };
   }
 
@@ -1200,6 +1241,36 @@ export class AnalyticsService {
 
     const percentileIndex = Math.ceil(sortedWaitTimes.length * 0.95) - 1;
     return sortedWaitTimes[percentileIndex];
+  }
+
+  /**
+   * Collapse per-ride "today" rows (each ride's own average and maximum) to
+   * the park pair the page renders: the mean of the per-ride averages and
+   * the mean of the per-ride maxima.
+   *
+   * Deriving both from the same rows is the point. `avgWaitToday` used to
+   * be ParkDailyStats.p90WaitTime — a P90 pooled over *all* attractions —
+   * while `peakWaitToday` was the mean of per-headliner maxima. Two
+   * statistics over two populations, which is how the park page came to
+   * show "Ø 45 min" next to "Peak 40 min". Per ride AVG ≤ MAX, so averaging
+   * both over the same rides makes avg ≤ peak hold by construction.
+   *
+   * Returns null when no ride reported, leaving the caller's fallback.
+   */
+  private averageTodayAcrossRides(
+    rows: { avg_wait: string | number; max_wait: string | number }[],
+  ): { avgWaitToday: number; peakWaitToday: number } | null {
+    if (!rows || rows.length === 0) return null;
+    let avgSum = 0;
+    let maxSum = 0;
+    for (const row of rows) {
+      avgSum += Number(row.avg_wait ?? 0);
+      maxSum += Number(row.max_wait ?? 0);
+    }
+    return {
+      avgWaitToday: roundToNearest5Minutes(avgSum / rows.length),
+      peakWaitToday: roundToNearest5Minutes(maxSum / rows.length),
+    };
   }
 
   /**
@@ -1458,9 +1529,17 @@ export class AnalyticsService {
     // This uses the unified Smart Logic (> 10m fallback to > 0)
     const occupancy = await this.calculateParkOccupancy(parkId);
 
-    // Get TODAY's aggregate statistics for history
-    const avgWaitToday = roundToNearest5Minutes(stats?.avg_wait_today || 0);
-    // Park peak: average of the peaks (per-headliner MAX today, then divide by count) — typical peak load, not dominated by a single ride
+    // Get TODAY's aggregate statistics for history.
+    //
+    // Both figures come from ONE headliner query so the pair is coherent:
+    // per ride, its average and its maximum today, then averaged across
+    // rides. Previously `avgWaitToday` was ParkDailyStats.p90WaitTime — a
+    // P90 pooled over *all* attractions — while `peakWaitToday` was the
+    // mean of per-headliner maxima over the headliner set. Two different
+    // statistics over two different populations, which is how the park page
+    // ended up rendering "Ø 45 min" next to "Peak 40 min". Averaging both
+    // over the same rides makes avg ≤ peak true by construction.
+    let avgWaitToday = roundToNearest5Minutes(stats?.avg_wait_today || 0);
     let peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
@@ -1468,9 +1547,12 @@ export class AnalyticsService {
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
     if (headlinerIds.length > 0) {
-      const headlinerMaxPerRide = await this.queueDataRepository.query(
+      const headlinerTodayPerRide = await this.queueDataRepository.query(
         `
-        SELECT qd."attractionId", MAX(qd."waitTime") as max_wait
+        SELECT
+          qd."attractionId",
+          AVG(qd."waitTime") as avg_wait,
+          MAX(qd."waitTime") as max_wait
         FROM queue_data qd
         WHERE qd."attractionId" = ANY($1)
           AND qd.timestamp BETWEEN $2 AND $3
@@ -1481,14 +1563,10 @@ export class AnalyticsService {
         `,
         [headlinerIds, startOfDay, now],
       );
-      if (headlinerMaxPerRide.length > 0) {
-        const sum = headlinerMaxPerRide.reduce(
-          (acc: number, row: { max_wait: string | number }) =>
-            acc + Number(row.max_wait ?? 0),
-          0,
-        );
-        const avgHeadlinerMax = sum / headlinerMaxPerRide.length;
-        peakWaitToday = roundToNearest5Minutes(avgHeadlinerMax);
+      const todayPair = this.averageTodayAcrossRides(headlinerTodayPerRide);
+      if (todayPair) {
+        avgWaitToday = todayPair.avgWaitToday;
+        peakWaitToday = todayPair.peakWaitToday;
       }
     }
 
@@ -1627,8 +1705,12 @@ export class AnalyticsService {
       peakHourLocal: displayPeakHour,
       peakHourConfidence: peakHourConfidence(peakHourSource),
       peakHourSource,
-      // Use utility method for consistency
-      crowdLevel: this.getParkCrowdLevel(occupancy.current),
+      // Prefer the rating calculateParkOccupancy already gated: deriving it
+      // again from the raw percentage bypassed the ratability check, so a
+      // thin park that reads "unknown" everywhere else still surfaced a
+      // made-up level here — and this is the field the park page renders.
+      crowdLevel:
+        occupancy.crowdLevel ?? this.getParkCrowdLevel(occupancy.current),
       totalAttractions,
       operatingAttractions,
       closedAttractions: totalAttractions - operatingAttractions,
@@ -2661,11 +2743,14 @@ export class AnalyticsService {
     rating: CrowdLevel;
     baseline: number;
   } {
-    // STRICT baseline-relative: no absolute threshold fallbacks.
-    // If no baseline available, default to 'moderate' — honest about
-    // lack of data rather than guessing an absolute cutoff.
-    if (baseline === 0 || current === 0) {
-      return { rating: "moderate", baseline };
+    // STRICT baseline-relative: no absolute threshold fallbacks. Without a
+    // baseline there is nothing to rate against, so emit "unknown" rather
+    // than "moderate" — the same no-made-up-ratings rule rateOrUnknown
+    // applies on the typical-day-peak surfaces. A current wait of 0 with a
+    // real baseline is not missing data, it is a walk-on: rate it (→ 0% →
+    // very_low) instead of calling a walk-on "moderate".
+    if (!baseline || baseline <= 0) {
+      return { rating: "unknown", baseline };
     }
 
     // Calculate occupancy percentage: (current / baseline) * 100
@@ -3679,7 +3764,13 @@ export class AnalyticsService {
     waitTime: number | undefined,
     baseline: number | undefined,
   ): CrowdLevel | null {
-    if (!waitTime || waitTime === 0) return null;
+    // Only an ABSENT wait means "no data". A reported 0 against a real
+    // baseline is a walk-on — a measurement — and rates `very_low`, the same
+    // rule getLoadRating follows. Short-circuiting on 0 made this function
+    // disagree with getLoadRating for the identical (wait, baseline) pair, so
+    // the attraction payload could carry crowdLevel "unknown" next to a
+    // comparison of "much_lower".
+    if (waitTime == null) return null;
     if (baseline && baseline > 0) {
       const occupancy = (waitTime / baseline) * 100;
       return this.determineCrowdLevel(occupancy);
@@ -4950,23 +5041,29 @@ export class AnalyticsService {
    * Get full headliner entities for a park.
    */
   /**
-   * Actual recorded per-attraction daily average waits over a date range
-   * (park timezone), for a given set of attractions (typically headliners).
+   * Actual recorded per-attraction daily PEAK waits (day-P90) over a date
+   * range (park timezone), for a given set of attractions (typically
+   * headliners).
    *
-   * Powers the calendar detail panel's "average wait" figures on PAST days —
+   * Powers the calendar detail panel's per-day wait figures on PAST days —
    * the historical counterpart to the ML forecast shown on today/future days.
+   * The forecast side is a day-peak proxy, so this side is a day-P90 rather
+   * than a day-average: the two land in the same response field and the same
+   * UI slot, and a mean-vs-peak mismatch there reads as the park getting
+   * busier next week when only the statistic changed.
+   *
    * One grouped query (STANDBY / OPERATING / plausible-wait filters mirror the
    * headliner + baseline queries), scoped to the attraction set and the range.
    *
-   * @returns Map<dateStr(YYYY-MM-DD), Array<{ attractionId, avg }>>
+   * @returns Map<dateStr(YYYY-MM-DD), Array<{ attractionId, peak }>>
    */
-  async getHeadlinerDailyAverages(
+  async getHeadlinerDailyPeaks(
     attractionIds: string[],
     fromStr: string,
     toStr: string,
     timezone: string,
-  ): Promise<Map<string, { attractionId: string; avg: number }[]>> {
-    const result = new Map<string, { attractionId: string; avg: number }[]>();
+  ): Promise<Map<string, { attractionId: string; peak: number }[]>> {
+    const result = new Map<string, { attractionId: string; peak: number }[]>();
     if (attractionIds.length === 0) return result;
 
     // [from, toExclusive) in UTC, derived from the park-timezone day bounds.
@@ -4978,12 +5075,20 @@ export class AnalyticsService {
       timezone,
     );
 
-    const rows: { attraction_id: string; d: string; avg_wait: string }[] =
+    // P90, not AVG: this feeds the calendar's per-day headliner figure, and
+    // the FUTURE side of that same field is a day-peak proxy (predict.py
+    // collapses the peak-window hours to a per-day MAX). Averaging the past
+    // days instead produced a step change at the today/tomorrow boundary —
+    // Phantasialand showed ~40 min for last week and ~65 for next week, most
+    // of which was the statistic changing rather than the park getting
+    // busier. A day-P90 per ride matches both the forecast side and the
+    // numerator calculateCrowdLevelForDate rates the day with.
+    const rows: { attraction_id: string; d: string; peak_wait: string }[] =
       await this.queueDataRepository.query(
         `
         SELECT qd."attractionId" AS attraction_id,
                TO_CHAR(DATE(qd.timestamp AT TIME ZONE $2), 'YYYY-MM-DD') AS d,
-               AVG(qd."waitTime") AS avg_wait
+               PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") AS peak_wait
         FROM queue_data qd
         WHERE qd."attractionId" = ANY($1::uuid[])
           AND qd."queueType" = 'STANDBY'
@@ -5003,11 +5108,11 @@ export class AnalyticsService {
       );
 
     for (const r of rows) {
-      const avg = parseFloat(r.avg_wait);
-      if (!Number.isFinite(avg)) continue;
+      const peak = parseFloat(r.peak_wait);
+      if (!Number.isFinite(peak)) continue;
       const list = result.get(r.d);
-      if (list) list.push({ attractionId: r.attraction_id, avg });
-      else result.set(r.d, [{ attractionId: r.attraction_id, avg }]);
+      if (list) list.push({ attractionId: r.attraction_id, peak });
+      else result.set(r.d, [{ attractionId: r.attraction_id, peak }]);
     }
     return result;
   }

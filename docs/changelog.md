@@ -6,6 +6,100 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — Close the remaining "invented rating" paths and the Swagger contract (2026-07-27)
+
+Review follow-up to the two entries below. The rule they established ("anything
+that cannot rate against a real baseline emits `unknown`") was stated more
+broadly in the docs than the code delivered.
+
+- **`statistics.crowdLevel` could still publish a fabricated `very_low`.**
+  `calculateParkOccupancy`'s no-live-data branch returned an `OccupancyDto`
+  with no `crowdLevel` at all, so the `occupancy.crowdLevel ?? getParkCrowdLevel(occupancy.current)`
+  fallback recomputed from `current = 0` → `very_low`, for a park we had heard
+  nothing from. That branch now states `crowdLevel: "unknown"` itself.
+- **A walk-on read as "no data".** `getAttractionCrowdLevel` short-circuited on
+  `waitTime === 0` *before* looking at the baseline, so a ride reporting 0 min
+  against a real P50 returned null → `"unknown"` — while `getLoadRating` rated
+  the identical pair `very_low`. The attraction payload therefore carried
+  `crowdLevel: "unknown"` next to `comparison: "much_lower"`. Only an absent
+  wait (`null`/`undefined`) is missing data now.
+- **`/v1/search` still invented ratings.** `getCrowdLevelForSearch` substituted
+  `"moderate"` for a null rating, and `getBatchLoadLevels` re-derived the tier
+  from `occupancy.current` instead of reading the gated `occupancy.crowdLevel`,
+  bypassing the ratability gate that every other surface honours.
+- **The published OpenAPI contract omitted `unknown`.** Several DTOs hand-wrote
+  a six-tier `enum:` while the API had been sending `unknown` for months, and
+  three declarations shared `enumName: "CrowdLevel"` with differing member
+  lists. All crowd-level enums now derive from `CROWD_LEVEL_VALUES` /
+  `CROWD_LEVEL_WITH_CLOSED_VALUES` in `common/types/crowd-level.type.ts`, so the
+  schema cannot drift from the TS union again.
+
+Also swept up: an orphaned JSDoc left over the wrong method, and two comments
+that the rename in the entry below had made false (`ratioP90` no longer exists;
+`getCurrentOccupancy` was described as using the formula it deliberately does
+*not* use — it stays park-wide `avg ÷ park-P50` because the trained models
+depend on that feature distribution).
+
+### Fixed — Live park load measures the park, not its second-busiest ride (2026-07-27)
+
+The live park crowd level was the **P90 across the per-headliner ratios**
+(`latest_wait ÷ that ride's own P50`). With the headliner set capped at 10
+(`MAX_TIER1_HEADLINERS`) the P90 index `(n-1) × 0.9` lands on the
+second-highest ratio, so the park rating was an extreme-value estimator over
+at most ten rides — one-sided (an outlier could only push it up, never down)
+and dominated by whichever ride had the smallest baseline to divide by.
+
+Phantasialand read `high` (123%) on an afternoon when Taron sat at 20/45 min
+and F.L.Y. at 20/40; both were at the bottom of the sorted list and
+contributed nothing, while Crazy Bats (45/30) and Wakobato (40/30) set the
+level.
+
+- **Now a baseline-weighted mean** (`getHeadlinerLoad`): `Σ current headliner
+  waits ÷ Σ those rides' P50 baselines`. Same afternoon → 240/290 = 83% =
+  `low`. Each ride carries the weight of the queue it represents; only rides
+  that reported enter both sums, so a closed headliner leaves numerator and
+  denominator together. The threshold ladder is unchanged.
+- **No wait floor on this query.** The 10-minute `MIN_WAIT_TIME_THRESHOLD`
+  would delete the quietest queues from a weighted mean and bias the park
+  upward on exactly the days that should read low.
+- **`breakdown.typicalAvgWait`** is now the baseline of exactly the rides in
+  `currentAvgWait`, so the pair the park page renders divides out to the
+  percentage beside it. It previously carried the park-wide P50, which is how
+  a payload could show "25 min now / 30 min typical" next to `+23%`.
+- **`avgWaitToday` / `peakWaitToday`** come from one per-headliner query
+  (each ride's AVG and MAX today, meaned across rides). The "average" used to
+  be `ParkDailyStats.p90WaitTime` — a P90 pooled over *all* attractions —
+  while the "peak" was headliner-scoped, so nothing ordered them and the page
+  served `avgWaitToday: 45` beside `peakWaitToday: 40`. Per ride AVG ≤ MAX,
+  so the pair is now ordered by construction.
+- **Four invented ratings became `unknown`.** `statistics.crowdLevel` — the
+  field the park page actually renders — re-derived the rating from the raw
+  percentage and bypassed the ratability gate. Likewise `getLoadRating`
+  without a baseline, the calendar's hourly predictions (rated against a
+  hardcoded 25-minute reference), and the attraction live crowd level. A
+  0-minute wait against a *real* baseline is still rated: that is a walk-on,
+  not missing data, so it reads `very_low`.
+
+Docs: [Crowd Levels](analytics/crowd-levels.md) (§1, §4, §6).
+
+### Fixed — Calendar compares past and future days on the same statistic (2026-07-27)
+
+`headlinerForecast.avgWait` carried two different measurements depending on
+which side of today a date fell. Future days come from
+`getServingDailyPredictions`, where `predict.py` collapses the peak-window
+hours to a per-day MAX — a day-peak proxy. Past days came from a plain AVG
+over the day's readings. Same field, same UI slot, systematic step up at the
+today/tomorrow seam: Phantasialand rendered ~40 min for last week beside
+~65 min for next week, much of which was the statistic changing rather than
+the park getting busier.
+
+The historical side is now a per-ride **day-P90** (`getHeadlinerDailyPeaks`,
+renamed from `getHeadlinerDailyAverages`), matching both the forecast side
+and the numerator `calculateCrowdLevelForDate` already rates each day with.
+The response field keeps its `avgWait` name — it is still the mean across
+headliners. **Crowd levels were never affected**; both sides already divided
+a peak by the typical-day-peak baseline.
+
 ### Changed — Calendar payload diet: influencingHolidays off by default (SEO/perf P1) (2026-07-14)
 
 `GET /v1/parks/{path}/calendar` no longer returns per-day `influencingHolidays`

@@ -25,15 +25,16 @@ import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.enti
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
- * Pins down `getPerHeadlinerRatios` — the park-level crowd-level
- * aggregation that takes per-headliner (latest_wait ÷ that_ride's_P50)
- * ratios and returns the P90 across them.
+ * Pins down `getHeadlinerLoad` — the park-level crowd-level aggregation:
+ * Σ(current headliner waits) ÷ Σ(those rides' P50 baselines).
  *
- * The P90-of-ratios is what protects a park with one marquee at typical
- * wait from being averaged down to "very_low" by a dozen quiet smaller
- * rides — the marquee experience surfaces.
+ * A baseline-weighted mean, deliberately not a percentile over per-ride
+ * ratios. The percentile version was an extreme-value estimator: with the
+ * headliner set capped at 10 its P90 index landed on the second-busiest
+ * ride, so one mid-size ride above its own median rated the whole park
+ * "high" while the marquees sat at half their typical wait.
  */
-describe("AnalyticsService.getPerHeadlinerRatios", () => {
+describe("AnalyticsService.getHeadlinerLoad", () => {
   let service: AnalyticsService;
   const queueDataRepo = {
     query: jest.fn(),
@@ -119,7 +120,7 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
   }
 
   it("returns null when no headlinerIds are passed", async () => {
-    const result = await (service as any).getPerHeadlinerRatios("park-x", []);
+    const result = await (service as any).getHeadlinerLoad("park-x", []);
     expect(result).toBeNull();
     expect(queueDataRepo.query).not.toHaveBeenCalled();
   });
@@ -127,7 +128,7 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
   it("returns null when no headliner has a recent operating sample", async () => {
     queueDataRepo.query.mockResolvedValueOnce([]);
     stubP50s({ h1: 50, h2: 60 });
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
+    const result = await (service as any).getHeadlinerLoad("park-x", [
       "h1",
       "h2",
     ]);
@@ -139,24 +140,22 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       { attractionId: "h1", latest_wait: "30" },
     ]);
     stubP50s({}); // empty baseline map
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
-      "h1",
-    ]);
+    const result = await (service as any).getHeadlinerLoad("park-x", ["h1"]);
     expect(result).toBeNull();
   });
 
-  it("computes ratioP90 across reporting rides", async () => {
-    // 8 reporting rides with ratios spanning 0.25 to 1.0.
-    // Marquee ride (h1) is at its typical median; the rest are quieter.
+  it("computes Σ waits ÷ Σ baselines across reporting rides", async () => {
+    // 8 reporting rides. Marquee (h1) is at its typical median; the rest
+    // are quieter, so the park as a whole is below typical.
     queueDataRepo.query.mockResolvedValueOnce([
-      { attractionId: "h1", latest_wait: "100" }, // 100/100 = 1.0
-      { attractionId: "h2", latest_wait: "45" }, //  45/70  ≈ 0.643
-      { attractionId: "h3", latest_wait: "25" }, //  25/45  ≈ 0.556
-      { attractionId: "h4", latest_wait: "10" }, //  10/40  = 0.25
-      { attractionId: "h5", latest_wait: "25" }, //  25/40  = 0.625
-      { attractionId: "h6", latest_wait: "15" }, //  15/35  ≈ 0.429
-      { attractionId: "h7", latest_wait: "10" }, //  10/25  = 0.4
-      { attractionId: "h8", latest_wait: "20" }, //  20/25  = 0.8
+      { attractionId: "h1", latest_wait: "100" },
+      { attractionId: "h2", latest_wait: "45" },
+      { attractionId: "h3", latest_wait: "25" },
+      { attractionId: "h4", latest_wait: "10" },
+      { attractionId: "h5", latest_wait: "25" },
+      { attractionId: "h6", latest_wait: "15" },
+      { attractionId: "h7", latest_wait: "10" },
+      { attractionId: "h8", latest_wait: "20" },
     ]);
     stubP50s({
       h1: 100,
@@ -169,7 +168,7 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       h8: 25,
     });
 
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
+    const result = await (service as any).getHeadlinerLoad("park-x", [
       "h1",
       "h2",
       "h3",
@@ -182,11 +181,17 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
 
     expect(result).not.toBeNull();
     expect(result.rideCount).toBe(8);
-    // Sorted ratios: 0.25, 0.4, 0.429, 0.556, 0.625, 0.643, 0.8, 1.0
-    // P90 = interpolate at idx (7 * 0.9) = 6.3 → 0.8 + 0.3*(1.0 - 0.8) = 0.86
-    expect(result.ratioP90).toBeCloseTo(0.86, 2);
-    // avg of latest waits = (100+45+25+10+25+15+10+20)/8 = 31.25
+    // Σ waits = 250, Σ P50 = 380 → 0.658 (≈ 66 % → "low").
+    expect(result.loadRatio).toBeCloseTo(250 / 380, 4);
+    // avg of latest waits = 250/8 = 31.25
     expect(result.averageCurrentWait).toBe(31); // rounded
+    // The matched baseline: 380/8 = 47.5. currentAvg/typicalAvg must
+    // reproduce loadRatio so the API's breakdown can't contradict it.
+    expect(result.averageTypicalWait).toBeCloseTo(47.5, 4);
+    expect(250 / 8 / result.averageTypicalWait).toBeCloseTo(
+      result.loadRatio,
+      6,
+    );
   });
 
   it("excludes rides whose P50 baseline is missing or zero", async () => {
@@ -196,7 +201,7 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       { attractionId: "h3", latest_wait: "0" }, // wait is 0 — still counts (status filter is in SQL)
     ]);
     stubP50s({ h1: 60, h2: 0, h3: 30 });
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
+    const result = await (service as any).getHeadlinerLoad("park-x", [
       "h1",
       "h2",
       "h3",
@@ -206,13 +211,13 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
     expect(result.rideCount).toBe(2);
   });
 
-  it("a single marquee at typical wait surfaces as occupancy >= 50%", async () => {
-    // Regression: in the prior simple-avg formulation, a marquee at
-    // typical wait surrounded by quiet small rides got averaged down to
-    // "very_low" (~20-40%). P90-of-ratios should preserve the marquee's
-    // signal — the busiest ride at its typical wait drives the rating.
+  it("weights the marquee by its baseline instead of averaging ratios", async () => {
+    // One marquee at its typical wait plus nine small rides at a sixth of
+    // theirs. A plain mean of per-ride ratios reads 0.25 — the marquee is
+    // one vote among ten. Weighting by baseline gives it the 100 minutes
+    // of queue it actually represents: (100 + 9*5) / (100 + 9*30) = 0.39.
     queueDataRepo.query.mockResolvedValueOnce([
-      { attractionId: "marquee", latest_wait: "100" }, // 100/100 = 1.0
+      { attractionId: "marquee", latest_wait: "100" },
       ...Array.from({ length: 9 }, (_, i) => ({
         attractionId: `small-${i}`,
         latest_wait: "5",
@@ -230,7 +235,7 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       "small-7": 30,
       "small-8": 30,
     });
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
+    const result = await (service as any).getHeadlinerLoad("park-x", [
       "marquee",
       "small-0",
       "small-1",
@@ -243,61 +248,99 @@ describe("AnalyticsService.getPerHeadlinerRatios", () => {
       "small-8",
     ]);
     expect(result).not.toBeNull();
-    // P90 of [0.167×9, 1.0]: sorted [0.167×9, 1.0], idx = 9*0.9 = 8.1.
-    // Between idx 8 (0.167) and idx 9 (1.0) → 0.167 + 0.1*(1.0 - 0.167) ≈ 0.25.
-    // That's "very_low" (≤60%). The naive-avg would be even lower
-    // ((9*0.167 + 1.0)/10 ≈ 0.25) — same result here because the marquee
-    // is one ride drowned by nine quiet ones.
-    //
-    // The protection only fires when ratios are *more spread out*. Lock
-    // the math as a regression anchor: with this distribution the
-    // marquee alone isn't enough to lift the rating.
-    expect(result.ratioP90).toBeGreaterThan(0.2);
-    expect(result.ratioP90).toBeLessThan(0.35);
+    expect(result.loadRatio).toBeCloseTo(145 / 370, 4);
+    // Still "very_low" — nine rides at a sixth of typical IS a quiet park —
+    // but measurably above the unweighted 0.25.
+    expect(result.loadRatio).toBeGreaterThan(0.25);
   });
 
-  it("with mixed-busy rides the marquee at typical does lift the rating", async () => {
-    // 3 marquees at typical, 5 mid-busy, 2 quiet.
+  it("does not let one ride above its own median rate the whole park high", async () => {
+    // The Phantasialand case. Nine headliners: the two marquees sit at
+    // under half their typical wait, while two mid-size rides run above
+    // their own (much smaller) medians. The old P90-across-ratios landed
+    // on the second-highest ratio (1.33 → "high"); the weighted mean sees
+    // a park at 83 % of typical → "low".
     queueDataRepo.query.mockResolvedValueOnce([
-      { attractionId: "m1", latest_wait: "100" }, // 1.0
-      { attractionId: "m2", latest_wait: "100" }, // 1.0
-      { attractionId: "m3", latest_wait: "100" }, // 1.0
-      { attractionId: "b1", latest_wait: "30" }, // 0.6
-      { attractionId: "b2", latest_wait: "30" }, // 0.6
-      { attractionId: "b3", latest_wait: "30" }, // 0.6
-      { attractionId: "b4", latest_wait: "30" }, // 0.6
-      { attractionId: "b5", latest_wait: "30" }, // 0.6
-      { attractionId: "q1", latest_wait: "5" }, // 0.1
-      { attractionId: "q2", latest_wait: "5" }, // 0.1
+      { attractionId: "taron", latest_wait: "20" }, // 20/45 = 0.44
+      { attractionId: "fly", latest_wait: "20" }, // 20/40 = 0.50
+      { attractionId: "mamba", latest_wait: "15" }, // 15/30 = 0.50
+      { attractionId: "riverquest", latest_wait: "15" }, // 15/30 = 0.50
+      { attractionId: "colorado", latest_wait: "15" }, // 15/25 = 0.60
+      { attractionId: "winja-fear", latest_wait: "35" }, // 35/30 = 1.17
+      { attractionId: "winja-force", latest_wait: "35" }, // 35/30 = 1.17
+      { attractionId: "wakobato", latest_wait: "40" }, // 40/30 = 1.33
+      { attractionId: "crazybats", latest_wait: "45" }, // 45/30 = 1.50
     ]);
     stubP50s({
-      m1: 100,
-      m2: 100,
-      m3: 100,
-      b1: 50,
-      b2: 50,
-      b3: 50,
-      b4: 50,
-      b5: 50,
-      q1: 50,
-      q2: 50,
+      taron: 45,
+      fly: 40,
+      mamba: 30,
+      riverquest: 30,
+      colorado: 25,
+      "winja-fear": 30,
+      "winja-force": 30,
+      wakobato: 30,
+      crazybats: 30,
     });
-    const result = await (service as any).getPerHeadlinerRatios("park-x", [
-      "m1",
-      "m2",
-      "m3",
-      "b1",
-      "b2",
-      "b3",
-      "b4",
-      "b5",
-      "q1",
-      "q2",
+    const result = await (service as any).getHeadlinerLoad("park-x", [
+      "taron",
+      "fly",
+      "mamba",
+      "riverquest",
+      "colorado",
+      "winja-fear",
+      "winja-force",
+      "wakobato",
+      "crazybats",
     ]);
     expect(result).not.toBeNull();
-    // Sorted: [0.1, 0.1, 0.6, 0.6, 0.6, 0.6, 0.6, 1.0, 1.0, 1.0]
-    // P90 idx = 9*0.9 = 8.1 → between idx 8 (1.0) and 9 (1.0) → 1.0.
-    // 100% → moderate. The marquees' typical-wait reading surfaces.
-    expect(result.ratioP90).toBeCloseTo(1.0, 2);
+    // Σ waits = 240, Σ P50 = 290 → 0.828.
+    expect(result.loadRatio).toBeCloseTo(240 / 290, 4);
+    expect(service.determineCrowdLevel(result.loadRatio * 100)).toBe("low");
+  });
+
+  it("keeps a genuinely busy park high", async () => {
+    // Same park, a real peak day: every headliner above its median.
+    queueDataRepo.query.mockResolvedValueOnce([
+      { attractionId: "taron", latest_wait: "90" },
+      { attractionId: "fly", latest_wait: "80" },
+      { attractionId: "mamba", latest_wait: "45" },
+      { attractionId: "crazybats", latest_wait: "40" },
+    ]);
+    stubP50s({ taron: 45, fly: 40, mamba: 30, crazybats: 30 });
+    const result = await (service as any).getHeadlinerLoad("park-x", [
+      "taron",
+      "fly",
+      "mamba",
+      "crazybats",
+    ]);
+    expect(result).not.toBeNull();
+    // Σ waits = 255, Σ P50 = 145 → 1.76 → "very_high".
+    expect(result.loadRatio).toBeCloseTo(255 / 145, 4);
+    expect(service.determineCrowdLevel(result.loadRatio * 100)).toBe(
+      "very_high",
+    );
+  });
+
+  it("counts quiet headliners instead of filtering them out", async () => {
+    // The 10-minute MIN_WAIT_TIME_THRESHOLD must not apply here: dropping
+    // sub-10-minute rides would delete exactly the queues that make a day
+    // quiet and bias the park upward. The SQL carries no wait floor, and a
+    // 5-minute reading pulls the ratio down as it should.
+    queueDataRepo.query.mockResolvedValueOnce([
+      { attractionId: "h1", latest_wait: "5" },
+      { attractionId: "h2", latest_wait: "5" },
+    ]);
+    stubP50s({ h1: 40, h2: 30 });
+    const result = await (service as any).getHeadlinerLoad("park-x", [
+      "h1",
+      "h2",
+    ]);
+    expect(result).not.toBeNull();
+    expect(result.rideCount).toBe(2);
+    expect(result.loadRatio).toBeCloseTo(10 / 70, 4);
+    // The query must not carry a minimum-wait parameter.
+    const [, params] = queueDataRepo.query.mock.calls[0];
+    expect(params).toHaveLength(2);
   });
 });

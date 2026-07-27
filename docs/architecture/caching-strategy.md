@@ -23,7 +23,7 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
   - `analytics:crowdlevel:park:{parkId}:{date}` (TTL: 30 min for today, 6 h for past) — Daily crowd level and peak load.
   - `park:p50:{parkId}` (TTL: 24 h) — Park P50 baseline from headliners (table: `park_p50_baselines`). JSON `{p50, confidence}`. **Primary** baseline for live occupancy (ratio-vs-P50).
   - `park:p90:{parkId}` (TTL: 24 h) — Park P90 baseline from headliners (table: `park_p90_baselines`). JSON `{p90, confidence}`. Computed for free; no longer the crowd-level reference.
-  - `attraction:p50:{attractionId}` (TTL: 24 h) — Per-attraction P50 baseline (table: `attraction_p50_baselines`). **Primary** for live per-headliner ratios.
+  - `attraction:p50:{attractionId}` (TTL: 24 h) — Per-attraction P50 baseline (table: `attraction_p50_baselines`). **Primary** for the live park load (`Σ latest ÷ Σ P50` across headliners).
   - `attraction:p90:{attractionId}` (TTL: 24 h) — Per-attraction P90 baseline (table: `attraction_p90_baselines`). Computed for free; no longer the crowd-level reference.
 
 > **Orphaned keys** — the previous P90 sliding-window precompute used `analytics:percentile:sliding:park:{parkId}` and `analytics:percentile:sliding:attraction:{attractionId}` to cache its 548-day live aggregation. Both the precompute job and the live-aggregation method have been removed; nothing writes or reads these keys any more. Existing entries TTL out within 24 h of deploy.

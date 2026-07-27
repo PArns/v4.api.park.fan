@@ -1,5 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
 /**
  * Where the displayed peak hour came from:
@@ -74,8 +77,11 @@ export class ParkStatisticsDto {
   peakHourSource: PeakHourSource | null;
 
   @ApiProperty({
-    description: "Current crowd level based on occupancy percentage",
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    description:
+      "Current crowd level based on occupancy percentage. `unknown` when the " +
+      "park is not ratable (< 30 operating days of headliner data) or has no " +
+      "live sample at all — never a placeholder tier.",
+    enum: CROWD_LEVEL_VALUES,
     example: "moderate",
     enumName: "CrowdLevel",
   })

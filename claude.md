@@ -116,9 +116,16 @@ ml-service/            # 🐍 Python CatBoost Service
 - **Calendar daily**: a day's value = **AVG across headliner rides** of each ride's daily P90; denominator = **typical-day-peak baseline** = the **median over operating days** of that same day value (548-day window, headliner-only). Future/predicted days use the same baseline (AVG of predicted headliner waits ÷ typical-day-peak).
   - **Predicted-wait source (2026-05-24)**: those predicted headliner waits come from **TFT for days 1–30** (nf-service, ~2× better on busy peaks), **CatBoost for days 31–365** — merged in `MLService.getServingDailyPredictions` (serving only; the writer stays pure CatBoost). See [TFT vs CatBoost split](docs/ml/neuralforecast-tft-evaluation.md).
   - **Formula**: `(day_value / typical_day_peak) * 100` — 100% = a statistically typical day = `moderate`; busy seasons (Wintertraum, Easter, promos) correctly read high/very_high/extreme. The pooled P90 baseline is NOT used (it's inflated by the busiest season and compresses the top).
-- **Live overview / `getCurrentOccupancy` (ratio-vs-P50)**: current short-window peak ÷ park P50 baseline. Also an ML feature. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
-  - **Formula**: `(current_peak / p50_baseline) * 100`.
-- **No calendar fallback**: typical-day-peak is written atomically with P50/P90 (`park_p50_baselines.typicalDayPeak` + Redis), so a missing value means no baseline at all → neutral default. P50 stays load-bearing (live + ML feature); P90 is computed for free but no longer a calendar reference.
+- **Live overview / `calculateParkOccupancy` (ratio-vs-P50)**: the **baseline-weighted mean** across headliners reporting in the last 60 min. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
+  - **Formula**: `Σ latest_wait / Σ attraction_p50 * 100` (`getHeadlinerLoad`). Falls back to `avg(latest) / park_p50 * 100` when no per-ride baselines exist.
+  - **The ML feature is a DIFFERENT function.** `park_occupancy_pct` comes from `getCurrentOccupancy`, which deliberately stays on the older park-wide `avg(latest) / park_p50 * 100` shape — trained models depend on that exact feature distribution, so moving it to the weighted mean needs a retrain cycle. Don't "unify" the two.
+  - **Sum the minutes, then divide — never average or take a percentile of the per-ride ratios.** A percentile across ratios is an extreme-value estimator: over a ten-ride headliner set its P90 is just the second-busiest ride, it can only push the reading up, and a 10-minute-baseline ride outvotes a marquee. That is what made Phantasialand read `high` (123%) with Taron at 20/45 min. Same rule applies to any new cross-ride aggregate.
+  - **`breakdown.typicalAvgWait`** must be the baseline of exactly the rides in `currentAvgWait`, so the displayed pair divides out to the displayed percentage.
+- **No made-up ratings**: anything that cannot rate against a real baseline emits **`unknown`**, never a placeholder `moderate` — `rateOrUnknown`, the `isParkRatable` gate, `getLoadRating(_, baseline<=0)`, `calculateParkOccupancy` with no live sample at all, and the callers of `getAttractionCrowdLevel`. A 0-minute wait against a real baseline is a walk-on, not missing data, and still rates (`very_low`) — only an *absent* wait is "no data".
+  - Consumers must read the **gated** value (`occupancy.crowdLevel`), never re-derive a tier from `occupancy.current`: the recompute bypasses the ratability gate, and at `current = 0` it silently yields `very_low`.
+  - Every Swagger `enum:` for a crowd-level field comes from `CROWD_LEVEL_VALUES` / `CROWD_LEVEL_WITH_CLOSED_VALUES` (`common/types/crowd-level.type.ts`). Never hand-write the list — that drift is how `unknown` stayed out of the published contract while the API had been sending it for months.
+- **No calendar fallback**: typical-day-peak is written atomically with P50/P90 (`park_p50_baselines.typicalDayPeak` + Redis), so a missing value means no usable baseline → `unknown`. P50 stays load-bearing (live + ML feature); P90 is computed for free but no longer a calendar reference.
+- **Past and future days must carry the same statistic** where they share a response field. `headlinerForecast.avgWait` is a day-peak on both sides: forecasts come from a per-day MAX in `predict.py`, history from `getHeadlinerDailyPeaks` (per-ride day-P90). A mean on one side and a peak on the other reads as the park getting busier next week when only the statistic changed.
 
 ---
 
@@ -126,7 +133,7 @@ ml-service/            # 🐍 Python CatBoost Service
 
 All shared types are in `src/common/types/`.
 
-- **CrowdLevel**: `very_low` | `low` | `moderate` | `high` | `very_high` | `extreme`
+- **CrowdLevel**: `very_low` | `low` | `moderate` | `high` | `very_high` | `extreme` | `unknown` (no usable baseline — "keine Prognose")
 - **ParkStatus**: `OPERATING` | `CLOSED`
 - **AttractionStatus**: `OPERATING` | `CLOSED` | `DOWN` | `REFURBISHMENT`
 

@@ -1,5 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_WITH_CLOSED_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
 /**
  * History Day DTO
@@ -18,15 +21,7 @@ export class HistoryDayDto {
 
   @ApiProperty({
     description: "Daily utilization (crowd level) for this day",
-    enum: [
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-      "closed",
-    ],
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     example: "moderate",
   })
   utilization: CrowdLevel | "closed";

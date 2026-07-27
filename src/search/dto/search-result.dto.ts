@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types";
+import { CROWD_LEVEL_VALUES, CrowdLevel } from "../../common/types";
 
 export class SearchResultItemDto {
   @ApiProperty({
@@ -86,8 +86,10 @@ export class SearchResultItemDto {
   status?: "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null;
 
   @ApiProperty({
-    description: "Current crowd/wait level (parks, attractions)",
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    description:
+      "Current crowd/wait level (parks, attractions). `unknown` when there is " +
+      "no baseline to rate against; `null` when the park is closed.",
+    enum: CROWD_LEVEL_VALUES,
     example: "moderate",
     required: false,
   })

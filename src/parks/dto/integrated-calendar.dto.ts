@@ -1,6 +1,10 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { ParkStatus } from "../../common/types/status.type";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CROWD_LEVEL_WITH_CLOSED_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 import { InfluencingHoliday } from "./schedule-item.dto";
 
 export { InfluencingHoliday };
@@ -137,7 +141,12 @@ export class HourlyPrediction {
   @ApiProperty()
   hour: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      "Crowd level for this hour. `unknown` when the park has no P50 " +
+      "baseline to rate the predicted median against.",
+    enum: CROWD_LEVEL_VALUES,
+  })
   crowdLevel: CrowdLevel;
 
   @ApiProperty()
@@ -268,7 +277,12 @@ export class CalendarDay {
   @ApiProperty({ type: () => OperatingHours, required: false })
   hours?: OperatingHours;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      "Crowd level for the day. `unknown` when the park is not ratable; " +
+      "`closed` when it is shut.",
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
+  })
   crowdLevel: CrowdLevel | "closed";
 
   @ApiProperty({
@@ -283,15 +297,7 @@ export class CalendarDay {
   @ApiProperty({
     description:
       "Peak crowd level (P90) for this day (historical or predicted)",
-    enum: [
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-      "closed",
-    ],
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     required: false,
   })
   peakLoad?: CrowdLevel | "closed";

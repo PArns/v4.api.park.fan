@@ -5,7 +5,11 @@ import { WeatherWarningDto } from "./weather-warning.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CROWD_LEVEL_WITH_CLOSED_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
@@ -50,16 +54,10 @@ export class ParkAttractionDto {
   effectiveStatus?: string;
 
   @ApiProperty({
-    description: "Crowd level badge",
-    enum: [
-      "very_low",
-      "low",
-      "moderate",
-      "high",
-      "very_high",
-      "extreme",
-      "closed",
-    ],
+    description:
+      "Crowd level badge. `unknown` when there is no baseline to rate this " +
+      "ride against; `closed` when it is not operating.",
+    enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     required: false,
   })
   crowdLevel?: CrowdLevel | "closed";
@@ -379,8 +377,10 @@ export class ParkStatisticsDto {
     "prediction" | "observed_today" | "historical_fallback" | null;
 
   @ApiProperty({
-    description: "Crowd level",
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    description:
+      "Crowd level. `unknown` when the park is not ratable or has no live " +
+      "sample at all — never a placeholder tier.",
+    enum: CROWD_LEVEL_VALUES,
   })
   crowdLevel: CrowdLevel;
 

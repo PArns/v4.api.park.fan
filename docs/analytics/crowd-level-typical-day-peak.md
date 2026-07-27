@@ -84,11 +84,12 @@ The typical-day-peak is computed and stored **atomically** with P50/P90 (`calcul
 - **Calendar future (park):** `buildPredictedCrowdLevels` (calendar.service.ts) → AVG of predicted headliner waits ÷ typical-day-peak.
 - **ML / Python crowd level:** `ml.service.ts` passes `typicalDayPeakBaseline`; `ml-service/predict.py` divides predicted wait by it (fallback: p50 → rolling_avg_7d → 30). Keeps the yearly-predictions endpoint + stored `wait_time_predictions.crowdLevel` on the same scale as the calendar.
 
-### Point-in-time / live → ratio-vs-P50 (numeric unchanged; rating gated)
-The numeric ratio-vs-P50 math below is **unchanged**. What changed: when the
-park isn't ratable, the *rating string* on these surfaces also flips to
-`unknown` (via `isParkRatable`), while the numeric occupancy % stays intact.
+### Point-in-time / live → ratio-vs-P50 (rating gated)
+These surfaces keep the P50 denominator. When the park isn't ratable the
+*rating string* flips to `unknown` (via `isParkRatable`), while the numeric
+occupancy % stays intact.
 - Live overview `calculateParkOccupancy` / `getCurrentOccupancy` (÷P50). The ML feature `park_occupancy_pct` is the raw number — untouched. `calculateParkOccupancy` now also emits a gated `crowdLevel` on the `OccupancyDto` (the single place park-level live consumers read).
+  > **Cross-ride aggregation changed separately** (after this calibration writeup): the park number is now `Σ reporting headliners' latest waits ÷ Σ their P50s`, a baseline-weighted mean. It used to be the P90 *across* the per-ride ratios, which over a ten-ride headliner set is just the second-busiest ride — Phantasialand read `high` at 123% while Taron sat at 20/45 min. The denominator regime (P50) is unchanged; only how the rides are combined. See [Crowd Levels § Migration Notes](crowd-levels.md#6-migration-notes).
 - Calendar "today" cell (uses the live signal — today is an incomplete day).
 - Hourly within-a-day predictions (median ÷ P50).
 - Attraction live ratings (÷ attraction P50), gated on the parent park's ratability.

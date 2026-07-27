@@ -80,7 +80,9 @@ Short guide for frequent problems and how to fix them.
 **Fix (implemented):**
 
 1. **Peak hour (peakHour):** If the displayed peak hour in the park’s timezone is **after** today’s closing time, it is not shown (`peakHour: null`).
-2. **Park peak (peakWaitToday):** Computed **only from headliner attractions** (same rides as P50/crowd level). **Average of peaks:** per headliner MAX(wait time today), then sum / number of headliners. This is intentional – it describes typical peak load across headliners and is not dominated by a single outlier ride. Without headliner fallback: max over all attractions.
+2. **Park peak (peakWaitToday) and park average (avgWaitToday):** Both computed **only from headliner attractions** (same rides as P50/crowd level), from **one** query: per headliner, its AVG and its MAX for today, each then averaged across headliners (`averageTodayAcrossRides`). Averaging peaks rather than taking a global max is intentional — it describes typical peak load across headliners and is not dominated by a single outlier ride. Deriving both from the same rides is also what keeps them ordered: per ride AVG ≤ MAX, so `avgWaitToday ≤ peakWaitToday` holds by construction. Without headliners, both fall back to the `park_daily_stats` figures.
+
+   > Previously `avgWaitToday` was `ParkDailyStats.p90WaitTime` — a P90 pooled over *all* attractions — while `peakWaitToday` was headliner-scoped. Two statistics over two populations, so nothing ordered them, and the park page could render "Ø 45 min" next to "Peak 40 min".
 3. **Trend (occupancy.trend):** Computed **only from headliner attractions**. Per headliner: average wait time in the last 1h and 1h–2h; then **average** = sum of these per-headliner averages / number of headliners (not sum over all data points). Current wait time for occupancy (`getCurrentSpotWaitTime`) is also headliner-only when headliners exist.
 
 **Relevant code:** `AnalyticsService.getParkStatistics` (peak hour, park peak), `AnalyticsService.calculateParkOccupancy` (trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.

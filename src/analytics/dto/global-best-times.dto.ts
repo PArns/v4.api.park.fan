@@ -1,14 +1,10 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
-const CROWD_LEVEL_ENUM = [
-  "very_low",
-  "low",
-  "moderate",
-  "high",
-  "very_high",
-  "extreme",
-] as const;
+const CROWD_LEVEL_ENUM = CROWD_LEVEL_VALUES;
 
 export class BestTimeBucketDto {
   @ApiProperty({

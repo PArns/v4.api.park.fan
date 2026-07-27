@@ -1422,6 +1422,12 @@ export class SearchService implements OnModuleInit {
   /**
    * Determine attraction load level from wait time
    * REFACTORED: Delegates to AnalyticsService for consistent logic (P50 baseline when available).
+   *
+   * A null from getAttractionCrowdLevel means "no wait reported, or no
+   * baseline to rate against" → `unknown`, never a placeholder `moderate`.
+   * A made-up tier is indistinguishable on the search card from a measured
+   * one. (A reported 0 against a real baseline is NOT null — that is a
+   * walk-on and rates `very_low`.)
    */
   private getCrowdLevelForSearch(
     waitTime: number | undefined,
@@ -1431,7 +1437,7 @@ export class SearchService implements OnModuleInit {
       waitTime,
       baseline,
     );
-    return level || "moderate";
+    return level || "unknown";
   }
 
   /**
@@ -1545,8 +1551,13 @@ export class SearchService implements OnModuleInit {
 
       for (const [parkId, occupancy] of occupancyMap.entries()) {
         if (occupancy) {
-          // Map occupancy percentage to CrowdLevel directly
-          const crowdLevel = this.determineParkCrowdLevel(occupancy.current);
+          // Prefer the rating calculateParkOccupancy already gated. Deriving
+          // it again from the raw percentage bypasses the ratability check,
+          // so a thin park that reads "unknown" on its own page would show a
+          // made-up tier in search results.
+          const crowdLevel =
+            occupancy.crowdLevel ??
+            this.determineParkCrowdLevel(occupancy.current);
           loadMap.set(parkId, crowdLevel);
         }
       }
