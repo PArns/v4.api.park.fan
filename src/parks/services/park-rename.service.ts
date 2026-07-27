@@ -5,6 +5,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import { generateSlug } from "../../common/utils/slug.util";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { Park } from "../entities/park.entity";
 
@@ -226,6 +227,59 @@ export class ParkRenameService implements OnModuleInit {
    * Current canonical path for a previously used one, or `null` when the path was never a park's.
    * Returns `null` if the alias points at a park that has since been deleted.
    */
+  /**
+   * Corrects a park's real-world location.
+   *
+   * Used when a geocode failed badly enough to put a park on the wrong
+   * continent — Universal Studios Hollywood sat at "Bull Creek" 28.0/-81.0,
+   * smooth-rounded coordinates in Florida for a park in California. Merging
+   * kept that row because it holds the wiki entity id and the destination
+   * link, so the location is fixed here rather than by discarding the row.
+   *
+   * Routes through {@link handlePathChange}, so a changed citySlug records an
+   * alias for the old path and tells the frontend to rebuild. Coordinate-only
+   * corrections leave the path untouched and record nothing.
+   */
+  async correctLocation(
+    parkId: string,
+    location: {
+      city?: string;
+      citySlug?: string;
+      latitude?: number;
+      longitude?: number;
+    },
+  ): Promise<{ park: Park; pathChanged: boolean }> {
+    const park = await this.parkRepository.findOne({ where: { id: parkId } });
+    if (!park) {
+      throw new Error(`Park not found: ${parkId}`);
+    }
+
+    const previous = captureParkPath(park);
+
+    if (location.city !== undefined) {
+      park.city = location.city;
+      park.citySlug = location.citySlug ?? generateSlug(location.city);
+    } else if (location.citySlug !== undefined) {
+      park.citySlug = location.citySlug;
+    }
+    if (location.latitude !== undefined) park.latitude = location.latitude;
+    if (location.longitude !== undefined) park.longitude = location.longitude;
+
+    await this.parkRepository.save(park);
+
+    const current = captureParkPath(park);
+    const pathChanged = !!previous && !!current && !samePath(previous, current);
+
+    await this.handlePathChange(park, previous);
+
+    this.logger.log(
+      `Corrected location for "${park.name}": ${park.city} (${park.latitude}/${park.longitude})` +
+        (pathChanged ? " — path changed, alias recorded" : ""),
+    );
+
+    return { park, pathChanged };
+  }
+
   async resolveAlias(path: ParkGeoPath): Promise<ParkGeoPath | null> {
     const alias = await this.aliasRepository.findOne({
       where: path,

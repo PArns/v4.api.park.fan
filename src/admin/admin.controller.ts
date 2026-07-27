@@ -30,6 +30,7 @@ import {
   AttractionMergeService,
   DuplicatePairReport,
 } from "../attractions/services/attraction-merge.service";
+import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
@@ -66,6 +67,7 @@ export class AdminController {
     private readonly parkMergeService: ParkMergeService,
     private readonly systemHealth: SystemHealthService,
     private readonly attractionMergeService: AttractionMergeService,
+    private readonly parkRenameService: ParkRenameService,
   ) {}
 
   /**
@@ -868,6 +870,71 @@ export class AdminController {
           reason: d.reason,
         })),
       },
+    };
+  }
+
+  /**
+   * Correct a park's real-world location.
+   *
+   * A failed geocode can put a park on the wrong continent, and a merge may
+   * legitimately keep that row when it holds the better data lineage. Changing
+   * the city changes the public path, so this records an alias for the old
+   * path and triggers frontend revalidation instead of silently breaking
+   * already-indexed URLs.
+   */
+  @Post("parks/:id/correct-location")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Correct a park's city and/or coordinates",
+    description:
+      "Updates city/citySlug/latitude/longitude. A changed city records a " +
+      "slug alias for the old path so indexed URLs keep resolving, and " +
+      "revalidates the frontend.",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        city: { type: "string" },
+        citySlug: { type: "string", description: "Derived from city if omitted" },
+        latitude: { type: "number" },
+        longitude: { type: "number" },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Location corrected" })
+  async correctParkLocation(
+    @Param("id") id: string,
+    @Body()
+    body: {
+      city?: string;
+      citySlug?: string;
+      latitude?: number;
+      longitude?: number;
+    },
+  ): Promise<{
+    message: string;
+    parkId: string;
+    city: string | null;
+    citySlug: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    pathChanged: boolean;
+  }> {
+    const { park, pathChanged } = await this.parkRenameService.correctLocation(
+      id,
+      body,
+    );
+    return {
+      message: pathChanged
+        ? "Location corrected; old path kept alive as an alias"
+        : "Location corrected",
+      parkId: park.id,
+      city: park.city,
+      citySlug: park.citySlug,
+      latitude: park.latitude,
+      longitude: park.longitude,
+      pathChanged,
     };
   }
 
