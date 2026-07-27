@@ -435,6 +435,7 @@ export class ChildrenMetadataProcessor {
       const update: Partial<{
         rcdbId: number;
         minimumHeight: number;
+        minimumHeightUnit: "cm" | "in";
         mayGetWet: boolean;
       }> = {};
       if (entry.rcdbId && attraction.rcdbId !== entry.rcdbId) {
@@ -444,6 +445,9 @@ export class ChildrenMetadataProcessor {
       // Curated height is a FALLBACK — never overwrite an upstream value
       if (entry.minimumHeightCm && attraction.minimumHeight === null) {
         update.minimumHeight = entry.minimumHeightCm;
+        // Curated US values were converted from inches; record that so the
+        // ride page can show the number the park itself puts on its signage.
+        update.minimumHeightUnit = entry.minimumHeightUnit ?? "cm";
         heightsApplied++;
       }
       // Curated wet flag is a CORRECTION — it exists to overrule a wrong

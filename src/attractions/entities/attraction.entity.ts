@@ -90,6 +90,20 @@ export class Attraction {
   maximumHeight: number | null;
 
   // Whether riders may get wet (water rides). Null = unknown, not "dry".
+  /**
+   * Unit the operator publishes the height in. `minimumHeight` is always
+   * centimetres; this only says how it should be shown. US parks publish
+   * inches (52"), and converting that to "132 cm" on their ride pages would
+   * contradict the number on the park's own signage.
+   */
+  @Column({
+    name: "minimum_height_unit",
+    type: "varchar",
+    length: 2,
+    nullable: true,
+  })
+  minimumHeightUnit: "cm" | "in" | null;
+
   @Column({ name: "may_get_wet", type: "boolean", nullable: true })
   mayGetWet: boolean | null;
 

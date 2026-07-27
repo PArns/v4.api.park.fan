@@ -1,4 +1,7 @@
-import { parseMinHeightInches } from "./six-flags.parser";
+import {
+  parseMinHeightInches,
+  inchesToCentimetres,
+} from "./six-flags.parser";
 
 /**
  * Six Flags renders ride facts server-side, so the minimum height can be read
@@ -50,5 +53,23 @@ describe("parseMinHeightInches", () => {
   it("rejects implausible values rather than storing nonsense", () => {
     expect(parseMinHeightInches(block("Min Height", "0”"))).toBeNull();
     expect(parseMinHeightInches(block("Min Height", "999”"))).toBeNull();
+  });
+});
+
+describe("inchesToCentimetres", () => {
+  it("converts the heights the US parks actually publish", () => {
+    expect(inchesToCentimetres(42)).toBe(107);
+    expect(inchesToCentimetres(48)).toBe(122);
+    expect(inchesToCentimetres(52)).toBe(132);
+    expect(inchesToCentimetres(54)).toBe(137);
+  });
+
+  it("survives a round trip at the precision we display", () => {
+    // We store centimetres but a US park page says 52" — converting back must
+    // land on the published number, or the ride page contradicts the park.
+    for (const inches of [36, 40, 42, 44, 46, 48, 52, 54, 60]) {
+      const back = Math.round(inchesToCentimetres(inches) / 2.54);
+      expect(back).toBe(inches);
+    }
   });
 });

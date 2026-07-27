@@ -60,6 +60,9 @@ export class SixFlagsHeightsProcessor {
         if (inches !== null) {
           await repo.update(attraction.id, {
             minimumHeight: inchesToCentimetres(inches),
+            // Centimetres are canonical, but these parks publish inches and
+            // their guests read the number off park signage.
+            minimumHeightUnit: "in",
           });
           filled++;
         }

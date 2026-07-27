@@ -251,6 +251,16 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "Unit the operator publishes the height in. minimumHeight is always " +
+      "centimetres; this says how to present it (US parks publish inches).",
+    example: "in",
+    enum: ["cm", "in"],
+    nullable: true,
+  })
+  minimumHeightUnit?: "cm" | "in" | null;
+
+  @ApiProperty({
+    description:
       "Maximum rider height in cm (kiddie rides). Null if unrestricted or unknown.",
     example: 150,
     required: false,
@@ -426,6 +436,7 @@ export class AttractionResponseDto {
       isSeasonal: attraction.isSeasonal || false,
       seasonMonths: attraction.seasonMonths || null,
       minimumHeight: attraction.minimumHeight ?? null,
+      minimumHeightUnit: attraction.minimumHeightUnit ?? null,
       maximumHeight: attraction.maximumHeight ?? null,
       mayGetWet: attraction.mayGetWet ?? null,
       rcdbId: attraction.rcdbId ?? null,

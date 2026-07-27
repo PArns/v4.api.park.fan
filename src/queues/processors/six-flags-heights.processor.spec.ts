@@ -33,13 +33,19 @@ describe("SixFlagsHeightsProcessor", () => {
     client.fetchMinHeightInches.mockResolvedValue(null);
   });
 
-  it("stores the height in centimetres", async () => {
+  it("stores the height in centimetres and records that the park publishes inches", async () => {
+    // Centimetres stay the canonical value, but a US park page says 52" —
+    // without the unit a ride page would show "132 cm" to an audience that
+    // has never seen the number expressed that way.
     repo.find.mockResolvedValue([attraction()]);
     client.fetchMinHeightInches.mockResolvedValue(52);
 
     await processor().handleSyncHeights({} as never);
 
-    expect(repo.update).toHaveBeenCalledWith("a1", { minimumHeight: 132 });
+    expect(repo.update).toHaveBeenCalledWith("a1", {
+      minimumHeight: 132,
+      minimumHeightUnit: "in",
+    });
   });
 
   it("asks the park's own site slug, not ours", async () => {
@@ -118,6 +124,9 @@ describe("SixFlagsHeightsProcessor", () => {
     await processor().handleSyncHeights({} as never);
 
     expect(repo.update).toHaveBeenCalledTimes(1);
-    expect(repo.update).toHaveBeenCalledWith("a2", { minimumHeight: 122 });
+    expect(repo.update).toHaveBeenCalledWith("a2", {
+      minimumHeight: 122,
+      minimumHeightUnit: "in",
+    });
   });
 });

@@ -29,6 +29,8 @@ export interface ManualAttractionMetadata {
   attractionSlug: string;
   rcdbId?: number;
   minimumHeightCm?: number;
+  /** Unit the park publishes; the stored value stays centimetres either way. */
+  minimumHeightUnit?: "cm" | "in";
   mayGetWet?: boolean;
 }
 
@@ -3538,83 +3540,97 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "cedar-point",
     attractionSlug: "blue-streak",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "cedar-creek-mine-ride",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "corkscrew",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "gatekeeper",
     minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "gemini",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "iron-dragon",
     minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "magnum-xl-200",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "maverick",
     minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "millennium-force",
     minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "raptor",
     minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "rougarou",
     minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "steel-vengeance",
     minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "top-thrill-2",
     minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "valravn",
     minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
 ];
