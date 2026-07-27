@@ -4,6 +4,7 @@ import { Repository } from "typeorm";
 import Redis from "ioredis";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { buildAttractionUrl } from "../common/utils/url.util";
 import { safeJsonParse } from "../common/utils/json.util";
 
@@ -14,7 +15,7 @@ export interface AttractionSitemapItem {
 
 @Injectable()
 export class SitemapService {
-  private readonly CACHE_KEY = "sitemap:attractions:v1";
+  private readonly CACHE_KEY = CacheKeys.sitemapAttractions();
   private readonly CACHE_TTL = 24 * 60 * 60; // 24h — attractions change rarely
 
   constructor(

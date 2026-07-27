@@ -152,4 +152,12 @@ export const CacheKeys = {
    * every park from the DB. Busted on merge/repair (the park set changes).
    */
   parkLocationIndex: (): string => "location:parkcoords:v1",
+
+  /**
+   * Flat list backing /v1/sitemap/attractions. Owned by SitemapService, but
+   * invalidated here too: it is not deduplicated, so any merge that removes
+   * an attraction row must drop it or the sitemap keeps advertising a slug
+   * that now 404s.
+   */
+  sitemapAttractions: (): string => "sitemap:attractions:v1",
 } as const;
