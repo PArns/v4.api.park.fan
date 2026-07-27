@@ -5,6 +5,11 @@ import { DataSource, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
+import {
+  ATTRACTION_DEPENDENCIES,
+  PARK_DEPENDENCIES,
+  applyMergeDependencies,
+} from "../utils/merge-dependencies";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Inject } from "@nestjs/common";
@@ -162,13 +167,26 @@ export class ParkMergeService {
         result.migratedMappings = await manager
           .createQueryBuilder()
           .update(ExternalEntityMapping)
-          .set({ internal_entity_id: winner.id })
+          // Entity property, not the column name — TypeORM resolves the
+          // mapping itself and throws "Property ... was not found" otherwise.
+          .set({ internalEntityId: winner.id })
           .where(
             "internal_entity_id = :loserId AND internal_entity_type = 'park'",
             { loserId: loser.id },
           )
           .execute()
           .then((r) => r.affected || 0);
+
+        // 5b. Park-scoped tables outside the nine migrated above. Without this
+        // the DELETE either fails (attraction_p50/p90 baselines carry a
+        // parkId with FK NO ACTION) or silently destroys park_slug_aliases,
+        // which is what keeps already-indexed URLs alive.
+        await applyMergeDependencies(
+          manager,
+          PARK_DEPENDENCIES,
+          winner.id,
+          loser.id,
+        );
 
         // 6. Delete the loser park (now empty of related data)
         await manager.delete(Park, loser.id);
@@ -209,6 +227,10 @@ export class ParkMergeService {
     "park_occupancy",
     "headliner_attractions",
     "weather_data",
+    // Declared in merge-dependencies.ts; the identifiers there are covered by
+    // a test that pins them to the safe-identifier pattern.
+    ...ATTRACTION_DEPENDENCIES.map((d) => d.table),
+    ...PARK_DEPENDENCIES.map((d) => d.table),
   ]);
 
   private static readonly ALLOWED_COLUMN_NAMES = new Set([
@@ -217,6 +239,14 @@ export class ParkMergeService {
     "date",
     "scheduleType",
     "timestamp",
+    ...ATTRACTION_DEPENDENCIES.flatMap((d) => [
+      d.column,
+      ...(d.conflictColumns ?? []),
+    ]),
+    ...PARK_DEPENDENCIES.flatMap((d) => [
+      d.column,
+      ...(d.conflictColumns ?? []),
+    ]),
   ]);
 
   private assertAllowedIdentifier(
@@ -333,31 +363,11 @@ export class ParkMergeService {
         "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
       );
 
-      await manager.query(
-        `UPDATE queue_data SET "attractionId" = $1 WHERE "attractionId" = $2`,
-        [winnerId, loserId],
-      );
-      await manager.query(
-        `UPDATE forecast_data SET "attractionId" = $1 WHERE "attractionId" = $2`,
-        [winnerId, loserId],
-      );
-      await manager.query(
-        `UPDATE wait_time_predictions SET "attractionId" = $1 WHERE "attractionId" = $2`,
-        [winnerId, loserId],
-      );
-
-      // Accuracy tables
-      await manager.query(
-        `UPDATE prediction_accuracy SET attraction_id = $1 WHERE attraction_id = $2`,
-        [winnerId, loserId],
-      );
-      await manager.query(
-        `DELETE FROM attraction_accuracy_stats WHERE attraction_id = $1`,
-        [loserId],
-      );
-      await manager.query(
-        `DELETE FROM attraction_p50_baselines WHERE "attractionId" = $1`,
-        [loserId],
+      await applyMergeDependencies(
+        manager,
+        ATTRACTION_DEPENDENCIES,
+        winnerId,
+        loserId,
       );
 
       await manager.query(
