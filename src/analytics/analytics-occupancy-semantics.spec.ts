@@ -350,6 +350,39 @@ describe("AnalyticsService — peak-vs-median occupancy semantics", () => {
     });
   });
 
+  describe("averageTodayAcrossRides (today's avg/peak pair)", () => {
+    const call = (rows: unknown[]) =>
+      (service as any).averageTodayAcrossRides(rows);
+
+    it("averages both figures over the same rides", () => {
+      // Per-ride averages 30/20/10 → 20; per-ride maxima 60/40/20 → 40.
+      const result = call([
+        { avg_wait: "30", max_wait: "60" },
+        { avg_wait: "20", max_wait: "40" },
+        { avg_wait: "10", max_wait: "20" },
+      ]);
+      expect(result).toEqual({ avgWaitToday: 20, peakWaitToday: 40 });
+    });
+
+    it("never reports an average above the peak", () => {
+      // Regression: avgWaitToday was a pooled P90 over all attractions and
+      // peakWaitToday the mean of per-headliner maxima, so the park page
+      // could render "Ø 45 min" next to "Peak 40 min". Per ride AVG ≤ MAX,
+      // so the pair is now ordered by construction.
+      const rows = [
+        { avg_wait: "44", max_wait: "45" },
+        { avg_wait: "5", max_wait: "90" },
+        { avg_wait: "38", max_wait: "38" },
+      ];
+      const result = call(rows)!;
+      expect(result.avgWaitToday).toBeLessThanOrEqual(result.peakWaitToday);
+    });
+
+    it("returns null when no ride reported, leaving the caller's fallback", () => {
+      expect(call([])).toBeNull();
+    });
+  });
+
   describe("getLoadRating (no invented ratings)", () => {
     it("returns 'unknown' when there is no baseline to rate against", () => {
       // Previously "moderate" — indistinguishable, to a reader, from a

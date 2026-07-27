@@ -1240,6 +1240,36 @@ export class AnalyticsService {
   /**
    * Get count of currently operating attractions
    */
+  /**
+   * Collapse per-ride "today" rows (each ride's own average and maximum) to
+   * the park pair the page renders: the mean of the per-ride averages and
+   * the mean of the per-ride maxima.
+   *
+   * Deriving both from the same rows is the point. `avgWaitToday` used to
+   * be ParkDailyStats.p90WaitTime — a P90 pooled over *all* attractions —
+   * while `peakWaitToday` was the mean of per-headliner maxima. Two
+   * statistics over two populations, which is how the park page came to
+   * show "Ø 45 min" next to "Peak 40 min". Per ride AVG ≤ MAX, so averaging
+   * both over the same rides makes avg ≤ peak hold by construction.
+   *
+   * Returns null when no ride reported, leaving the caller's fallback.
+   */
+  private averageTodayAcrossRides(
+    rows: { avg_wait: string | number; max_wait: string | number }[],
+  ): { avgWaitToday: number; peakWaitToday: number } | null {
+    if (!rows || rows.length === 0) return null;
+    let avgSum = 0;
+    let maxSum = 0;
+    for (const row of rows) {
+      avgSum += Number(row.avg_wait ?? 0);
+      maxSum += Number(row.max_wait ?? 0);
+    }
+    return {
+      avgWaitToday: roundToNearest5Minutes(avgSum / rows.length),
+      peakWaitToday: roundToNearest5Minutes(maxSum / rows.length),
+    };
+  }
+
   private async getActiveAttractionsCount(parkId: string): Promise<number> {
     // Use 120 minutes (2 hours) to accommodate sync intervals
     const windowAgo = new Date(Date.now() - 120 * 60 * 1000);
@@ -1527,21 +1557,10 @@ export class AnalyticsService {
         `,
         [headlinerIds, startOfDay, now],
       );
-      if (headlinerTodayPerRide.length > 0) {
-        const rows = headlinerTodayPerRide as {
-          avg_wait: string | number;
-          max_wait: string | number;
-        }[];
-        const avgSum = rows.reduce(
-          (acc, row) => acc + Number(row.avg_wait ?? 0),
-          0,
-        );
-        const maxSum = rows.reduce(
-          (acc, row) => acc + Number(row.max_wait ?? 0),
-          0,
-        );
-        avgWaitToday = roundToNearest5Minutes(avgSum / rows.length);
-        peakWaitToday = roundToNearest5Minutes(maxSum / rows.length);
+      const todayPair = this.averageTodayAcrossRides(headlinerTodayPerRide);
+      if (todayPair) {
+        avgWaitToday = todayPair.avgWaitToday;
+        peakWaitToday = todayPair.peakWaitToday;
       }
     }
 
