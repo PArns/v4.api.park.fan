@@ -2984,42 +2984,56 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "kennywood",
     attractionSlug: "exterminator",
     rcdbId: 538,
+    minimumHeightCm: 117, // 46"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "jack-rabbit",
     rcdbId: 120,
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "phantoms-revenge",
     rcdbId: 123,
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "racer",
     rcdbId: 121,
+    minimumHeightCm: 117, // 46"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "sky-rocket",
     rcdbId: 8612,
+    minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "the-steel-curtain",
     rcdbId: 16479,
+    minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "west-mifflin",
     parkSlug: "kennywood",
     attractionSlug: "thunderbolt",
     rcdbId: 122,
+    minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "williamsburg",
@@ -3314,6 +3328,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "kennywood",
     attractionSlug: "raging-rapids",
     mayGetWet: true,
+    minimumHeightCm: 109, // 43"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "doswell",
@@ -4439,5 +4455,144 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "plopsaland-belgium",
     attractionSlug: "wickie-the-battle",
     minimumHeightCm: 85,
+  },
+
+  // ── Kennywood ───────────────────────────────────────────────────────────
+  // Unlike the previous four parks, Kennywood renders its height requirements
+  // straight into the attractions listing ("Min: 48 inches" per ride card), so
+  // the whole park came from one page rather than one fetch per ride.
+  //
+  // Read July 2026. US park, so inches are what the signage shows; stored as
+  // the exact conversion (36"=91, 39"=99, 42"=107, 43"=109, 46"=117, 48"=122,
+  // 50"=127, 52"=132) with `minimumHeightUnit: "in"`.
+  //
+  // Our slug for Red Baron is `red-barron` — a typo that predates this and is
+  // what the database actually holds, so that is what the entry keys on.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "aero-360",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "black-widow",
+    minimumHeightCm: 132, // 52"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "cosmic-chaos",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "kangaroo",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "kennys-cargo-drop",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "kennys-karousel",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "musik-express",
+    minimumHeightCm: 127, // 50"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "pirate",
+    minimumHeightCm: 99, // 39"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "pittsburg-plunge",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "potato-smash",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "red-barron",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "spinvasion",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "steel-city-choppers",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "swingshot",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "wacky-wheel",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "wave-swinger",
+    minimumHeightCm: 117, // 46"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "whippersnapper",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "west-mifflin",
+    parkSlug: "kennywood",
+    attractionSlug: "whirlwind",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
   },
 ];
