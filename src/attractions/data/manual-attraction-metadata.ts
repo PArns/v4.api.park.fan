@@ -857,12 +857,14 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "plopsaland-belgium",
     attractionSlug: "anubis-the-ride",
     rcdbId: 4181,
+    minimumHeightCm: 125,
   },
   {
     citySlug: "de-panne",
     parkSlug: "plopsaland-belgium",
     attractionSlug: "the-ride-to-happiness-by-tomorrowland",
     rcdbId: 17725,
+    minimumHeightCm: 130,
   },
   {
     citySlug: "dolancourt",
@@ -4358,5 +4360,84 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "energylandia",
     attractionSlug: "wonder-wheel",
     minimumHeightCm: 120,
+  },
+
+  // ── Plopsaland Belgium ──────────────────────────────────────────────────
+  // The park grades every ride in three bands: "not accessible" below X,
+  // "with guidance" from X, "accessible" from Y. X is the absolute floor and
+  // is what we store — same rule as Toverland and Energylandia.
+  //
+  // Read off the park's own ride pages (plopsa.com/en/plopsaland-belgium/
+  // attractions/<slug>), July 2026. The slugs came from the site's sitemap;
+  // the attraction listing lazy-loads and shows only a dozen.
+  //
+  // Balloon Race is absent on purpose: it has no "not accessible" band at all
+  // (under 120 cm simply means "with guidance"), so it has no floor to record.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "dinosplash",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "draconis",
+    minimumHeightCm: 96,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "heidi-the-ride",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "k3-roller-skater",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "likeme-coaster",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "mega-mindy-jet-ski",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "storm-at-sea",
+    minimumHeightCm: 85,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "supersplash",
+    minimumHeightCm: 96,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "the-falling-tower",
+    minimumHeightCm: 96,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "vics-whirlwind",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "de-panne",
+    parkSlug: "plopsaland-belgium",
+    attractionSlug: "wickie-the-battle",
+    minimumHeightCm: 85,
   },
 ];
