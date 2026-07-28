@@ -984,7 +984,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "biddinghuizen",
     parkSlug: "walibi-holland",
-    attractionSlug: "xpress-platform",
+    attractionSlug: "xpress-platform-13",
     elements: [
       "launch",
       "top-hat",
@@ -3128,7 +3128,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "the-flying-dinosaur",
+    attractionSlug: "the-flying-dinosaur-2",
     // The longest and tallest flying coaster in the world — the pretzel loop
     // is the moment riders hang face-down at the bottom of the dive.
     elements: [
@@ -3149,7 +3149,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "hollywood-dream-the-ride",
+    attractionSlug: "hollywood-dream-the-ride-2",
     elements: [
       "lifthill",
       "first-drop",
@@ -3168,7 +3168,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "space-fantasy-the-ride",
+    attractionSlug: "space-fantasy-the-ride-2",
     elements: ["lifthill", "first-drop", "helix", "brake-run"],
     types: ["spinning-coaster", "indoor-coaster", "dark-ride"],
     manufacturer: "Mack Rides",
@@ -3179,7 +3179,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "harry-potter-and-the-forbidden-journey",
+    attractionSlug: "harry-potter-and-the-forbidden-journey-2",
     types: ["dark-ride", "motion-simulator", "animatronics", "pre-show"],
     manufacturer: "KUKA / Oceaneering",
     manufacturerTermId: "oceaneering",
@@ -3189,14 +3189,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "mario-kart-koopas-challenge",
+    attractionSlug: "mario-kart-koopas-challenge-2",
     types: ["interactive-dark-ride", "dark-ride", "projection-mapping"],
     openedYear: 2021,
   },
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "jurassic-park-the-ride",
+    attractionSlug: "jurassic-park-the-ride-2",
     elements: ["lifthill", "first-drop", "splashdown"],
     types: ["shoot-the-chute", "water-ride", "animatronics"],
     openedYear: 2001,
@@ -3204,7 +3204,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "flight-of-the-hippogriff",
+    attractionSlug: "flight-of-the-hippogriff-2",
     elements: ["lifthill", "first-drop", "helix"],
     types: ["family-coaster", "steel-coaster"],
     manufacturer: "Vekoma",
@@ -3215,7 +3215,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "osaka",
     parkSlug: "universal-studios-japan",
-    attractionSlug: "mine-cart-madness",
+    attractionSlug: "mine-cart-madness-2",
     elements: ["lifthill", "first-drop", "helix", "brake-run"],
     types: ["family-coaster", "single-rail-coaster", "dark-ride"],
     openedYear: 2025,
@@ -3377,7 +3377,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "kaatsheuvel",
     parkSlug: "efteling",
-    attractionSlug: "baron",
+    attractionSlug: "baron-1898",
     elements: [
       "lifthill",
       "beyond-vertical-drop",
@@ -4550,7 +4550,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "sandusky",
     parkSlug: "cedar-point",
-    attractionSlug: "magnum-xl",
+    attractionSlug: "magnum-xl-200",
     // The first coaster past 200 ft — the ride that started the hyper era.
     elements: [
       "lifthill",
@@ -5155,7 +5155,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   {
     citySlug: "charlotte",
     parkSlug: "carowinds",
-    attractionSlug: "fury",
+    attractionSlug: "fury-325",
     elements: [
       "lifthill",
       "first-drop",

@@ -21,10 +21,11 @@ lists the other rides that have one.
 - `RIDE_PROFILE_SEED`: **629 hand-curated rides across 95 parks** — every
   Disney and Universal park, Phantasialand, Toverland, Europa-Park, Movie Park,
   all three Walibis, plus the major European, North American, Asian and
-  Australian coaster parks — 88% of every ride in the database that carries an
-  RCDB id. Assembled from park and manufacturer pages, Wikipedia and on-ride
-  footage; RCDB is used only as a link target and to confirm
-  manufacturer/model/year, exactly as it already is for `rcdbId`.
+  Australian coaster parks. All 629 resolve against the live database, covering
+  **402 of the 474 rides that carry an RCDB id (85%)** plus 227 rides without
+  one (dark rides, flats). Assembled from park and manufacturer pages,
+  Wikipedia and on-ride footage; RCDB is used only as a link target and to
+  confirm manufacturer/model/year, exactly as it already is for `rcdbId`.
 - Served on the attraction detail response *and* embedded in the park response
   (one batched read per park — the frontend ride page renders from the park
   payload).
@@ -38,6 +39,11 @@ lists the other rides that have one.
   frontend term ids plus four curation invariants. The "no inversions claimed
   without an inverting figure" check caught four wrong entries on its first run
   (Maverick, Pantheon, Hyperia, Cheetah Hunt).
+- The apply job now **names** the entries it skipped instead of only counting
+  them. Skipping a slug that matches nothing is deliberate — ride slugs drift
+  and one stale line must not fail the run — but a bare count hid twelve dead
+  entries, among them Universal Studios Japan's whole coaster line-up. CI
+  cannot catch this (no database), so the log is the only signal.
 
 → [Ride ↔ Glossary link](docs/frontend/ride-glossary-link.md)
 

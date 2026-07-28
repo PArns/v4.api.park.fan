@@ -14,6 +14,13 @@ import { RideProfileSeedEntry } from "../data/ride-profile-seed.types";
 export interface RideProfileSeedResult {
   written: number;
   skipped: number;
+  /**
+   * The `citySlug/parkSlug/attractionSlug` of every entry that matched no
+   * attraction. Skipping is deliberate — ride slugs drift and one stale line
+   * must not fail the run — but a bare count makes that drift invisible: a
+   * curated ride silently stops being served and nothing says which one.
+   */
+  skippedKeys: string[];
 }
 
 /** One ride in the reverse (glossary → rides) lookup. */
@@ -91,7 +98,11 @@ export class RideProfileService implements OnModuleInit {
    */
   async apply(): Promise<RideProfileSeedResult> {
     const entries = this.seed ?? RIDE_PROFILE_SEED;
-    const result: RideProfileSeedResult = { written: 0, skipped: 0 };
+    const result: RideProfileSeedResult = {
+      written: 0,
+      skipped: 0,
+      skippedKeys: [],
+    };
     const seededAt = new Date();
 
     // Resolve every slug triple in ONE query. Doing it per entry was ~500
@@ -124,11 +135,11 @@ export class RideProfileService implements OnModuleInit {
 
     const profiles: Partial<AttractionRideProfile>[] = [];
     for (const entry of entries) {
-      const match = byKey.get(
-        `${entry.citySlug}/${entry.parkSlug}/${entry.attractionSlug}`,
-      );
+      const key = `${entry.citySlug}/${entry.parkSlug}/${entry.attractionSlug}`;
+      const match = byKey.get(key);
       if (!match) {
         result.skipped++;
+        result.skippedKeys.push(key);
         continue;
       }
 
@@ -157,6 +168,13 @@ export class RideProfileService implements OnModuleInit {
     this.logger.log(
       `🎢 Ride profiles applied: ${result.written} written, ${result.skipped} skipped (no matching attraction)`,
     );
+    if (result.skippedKeys.length > 0) {
+      // Naming them is the whole point: a skipped entry is curated data that
+      // silently stops being served, and the only way to notice is to be told.
+      this.logger.warn(
+        `🎢 Ride profiles with no matching attraction: ${result.skippedKeys.join(", ")}`,
+      );
+    }
     return result;
   }
 
