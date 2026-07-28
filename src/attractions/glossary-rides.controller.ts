@@ -6,7 +6,10 @@ import {
   ApiResponse,
   ApiTags,
 } from "@nestjs/swagger";
-import { RideProfileService } from "./services/ride-profile.service";
+import {
+  RideProfileService,
+  parseTermAttractionSort,
+} from "./services/ride-profile.service";
 import { TermAttractionDto, mapTermAttraction } from "./dto/ride-profile.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 
@@ -45,7 +48,8 @@ export class GlossaryRidesController {
     summary: "Rides that feature a glossary term",
     description:
       "Every curated ride whose track figures, ride type or manufacturer " +
-      "matches the term. Ordered by park name, then ride name.",
+      "matches the term. Ordered by park name, then ride name; pass " +
+      "`sort=popularity` to rank by typical peak wait instead.",
   })
   @ApiParam({
     name: "termId",
@@ -59,10 +63,19 @@ export class GlossaryRidesController {
     description: "Maximum rides to return (default 200, max 500)",
     example: 200,
   })
+  @ApiQuery({
+    name: "sort",
+    required: false,
+    enum: ["park", "popularity"],
+    description:
+      "`park` (default) orders alphabetically by park, then ride. `popularity` ranks by typical peak wait — the P90 over 548 days — with well-measured rides first. Unknown values fall back to `park`.",
+    example: "popularity",
+  })
   @ApiResponse({ status: 200, type: [TermAttractionDto] })
   async attractionsForTerm(
     @Param("termId") termId: string,
     @Query("limit") limit?: string,
+    @Query("sort") sort?: string,
   ): Promise<{ termId: string; total: number; data: TermAttractionDto[] }> {
     const parsed = Number.parseInt(limit ?? "", 10);
     const capped = Number.isFinite(parsed)
@@ -72,6 +85,7 @@ export class GlossaryRidesController {
     const rows = await this.rideProfileService.findAttractionsByTerm(
       termId,
       capped,
+      parseTermAttractionSort(sort),
     );
     return {
       termId,

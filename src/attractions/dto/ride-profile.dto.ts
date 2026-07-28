@@ -118,6 +118,20 @@ export class TermAttractionDto {
 
   @ApiProperty({ example: 2006, nullable: true })
   openedYear: number | null;
+
+  @ApiProperty({
+    example: 75,
+    nullable: true,
+    description:
+      "Typical peak wait in minutes (P90 over 548 days). Null when the ride has no baseline yet. This is a long-run average, not a live wait time.",
+  })
+  typicalPeakWait: number | null;
+
+  @ApiProperty({
+    example: true,
+    description: "Whether this ride is one of its park's headliners.",
+  })
+  isHeadliner: boolean;
 }
 
 export function mapTermAttraction(row: AttractionWithTerm): TermAttractionDto {
@@ -137,5 +151,7 @@ export function mapTermAttraction(row: AttractionWithTerm): TermAttractionDto {
     parkSlug: row.parkSlug,
     kind: row.kind,
     openedYear: row.openedYear,
+    typicalPeakWait: row.typicalPeakWait,
+    isHeadliner: row.isHeadliner,
   };
 }

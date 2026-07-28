@@ -37,6 +37,30 @@ export interface AttractionWithTerm {
   /** Where the term appears: as a track figure or as a ride type. */
   kind: "element" | "type" | "manufacturer";
   openedYear: number | null;
+  /**
+   * Typical peak wait in whole minutes — the P90 over 548 days from
+   * `attraction_p90_baselines`, not a live reading. Null when the ride has no
+   * baseline yet, which is normal for recently added or rarely open rides.
+   */
+  typicalPeakWait: number | null;
+  /** Whether the baseline job classified this ride as one of its park's headliners. */
+  isHeadliner: boolean;
+}
+
+/** How the reverse lookup orders its rides. */
+export type TermAttractionSort = "park" | "popularity";
+
+/**
+ * Reads the `sort` query parameter.
+ *
+ * Unknown values fall back to `park` rather than raising: this endpoint is
+ * public and already in use, and a mistyped query string should still answer
+ * with a usable list.
+ */
+export function parseTermAttractionSort(
+  raw: string | undefined,
+): TermAttractionSort {
+  return raw === "popularity" ? "popularity" : "park";
 }
 
 /** Injection token so tests can supply their own seed. */
@@ -207,12 +231,13 @@ export class RideProfileService implements OnModuleInit {
   async findAttractionsByTerm(
     termId: string,
     limit = 200,
+    sort: TermAttractionSort = "park",
   ): Promise<AttractionWithTerm[]> {
     // `@>` with a single-element array is the containment form the GIN
     // jsonb_path_ops index can serve.
     const containment = JSON.stringify([termId]);
 
-    const rows = await this.repo
+    const query = this.repo
       .createQueryBuilder("profile")
       .innerJoin(
         "attractions",
@@ -220,6 +245,14 @@ export class RideProfileService implements OnModuleInit {
         "attraction.id = profile.attractionId",
       )
       .innerJoin("parks", "park", "park.id = profile.parkId")
+      // LEFT, not INNER: a ride with no baseline must still appear in the
+      // list. The count endpoint and this list are read side by side on the
+      // glossary overview, and an inner join would make them disagree.
+      .leftJoin(
+        "attraction_p90_baselines",
+        "baseline",
+        'baseline."attractionId" = profile."attractionId"',
+      )
       .select([
         "profile.attractionId AS attractionid",
         "attraction.name AS attractionname",
@@ -236,30 +269,55 @@ export class RideProfileService implements OnModuleInit {
         // guarantees to substitute, and these arrays are a handful of strings.
         "profile.elements AS elements",
         "profile.types AS types",
+        'baseline."p90Baseline" AS p90baseline',
+        'baseline."isHeadliner" AS isheadliner',
+        "baseline.confidence AS confidence",
       ])
       .where(
         `(profile.elements @> :containment::jsonb
           OR profile.types @> :containment::jsonb
           OR profile.manufacturerTermId = :termId)`,
         { containment, termId },
-      )
-      .orderBy("park.name", "ASC")
-      .addOrderBy("attraction.name", "ASC")
-      .limit(limit)
-      .getRawMany<{
-        attractionid: string;
-        attractionname: string;
-        attractionslug: string;
-        parkid: string;
-        parkname: string;
-        parkslug: string;
-        cityslug: string;
-        countryslug: string;
-        continentslug: string;
-        openedyear: number | null;
-        elements: string[] | null;
-        types: string[] | null;
-      }>();
+      );
+
+    if (sort === "popularity") {
+      // Confidence first: `low` means a handful of samples, and those readings
+      // swing wildly. Sorting purely by P90 would put them on top.
+      query
+        .orderBy(
+          `CASE baseline.confidence
+             WHEN 'high' THEN 0
+             WHEN 'medium' THEN 1
+             ELSE 2
+           END`,
+          "ASC",
+        )
+        .addOrderBy('baseline."p90Baseline"', "DESC", "NULLS LAST");
+    } else {
+      query.orderBy("park.name", "ASC");
+    }
+
+    // Always last, in both modes: without a total order, two rides with the
+    // same baseline can swap places between identical requests.
+    query.addOrderBy("park.name", "ASC").addOrderBy("attraction.name", "ASC");
+
+    const rows = await query.limit(limit).getRawMany<{
+      attractionid: string;
+      attractionname: string;
+      attractionslug: string;
+      parkid: string;
+      parkname: string;
+      parkslug: string;
+      cityslug: string;
+      countryslug: string;
+      continentslug: string;
+      openedyear: number | null;
+      elements: string[] | null;
+      types: string[] | null;
+      p90baseline: string | null;
+      isheadliner: boolean | null;
+      confidence: "high" | "medium" | "low" | null;
+    }>();
 
     return rows.map((row) => ({
       attractionId: row.attractionid,
@@ -277,6 +335,11 @@ export class RideProfileService implements OnModuleInit {
           ? "type"
           : "manufacturer",
       openedYear: row.openedyear,
+      // `decimal` comes back from pg as a string ("75.00"), so this needs an
+      // explicit conversion — `row.p90baseline > 60` would compare strings.
+      typicalPeakWait:
+        row.p90baseline === null ? null : Math.round(Number(row.p90baseline)),
+      isHeadliner: row.isheadliner ?? false,
     }));
   }
 
