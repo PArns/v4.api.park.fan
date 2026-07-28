@@ -38,6 +38,19 @@ interface ParkLiveStats {
 }
 
 /**
+ * Park coordinates are `decimal` columns, which the pg driver hands back as
+ * strings — and they are nullable for parks that never geocoded. Normalise both
+ * cases to a finite number or null so clients never receive "50.7991" or NaN.
+ */
+function toCoordinate(
+  value: number | string | null | undefined,
+): number | null {
+  if (value === null || value === undefined) return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
  * Discovery Service
  *
  * Builds hierarchical geographic structures for route generation.
@@ -48,6 +61,8 @@ export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
   // Centralized so park merge/repair can bust it via invalidateParkCaches
   // (the geo skeleton lists every park). v4: added timezone to ParkReference.
+  // v5: added latitude/longitude to ParkReference — a v4 skeleton has no
+  // coordinates, so it must not be reused for up to 24h after the deploy.
   private readonly CACHE_KEY = CacheKeys.discoveryGeoStructure();
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
   private readonly LIVE_STATS_CACHE_KEY = "discovery:live_stats:v1";
@@ -134,6 +149,8 @@ export class DiscoveryService {
         "countryCode",
         "city",
         "citySlug",
+        "latitude",
+        "longitude",
       ],
       order: {
         continent: "ASC",
@@ -223,6 +240,10 @@ export class DiscoveryService {
         url: parkBaseUrl,
         timezone: park.timezone,
         hasOperatingSchedule: scheduleFlags.get(park.id) ?? false,
+        // Coordinates so listing clients can show "X km away" without a per-park
+        // lookup. `decimal` columns come back as strings from the driver — coerce.
+        latitude: toCoordinate(park.latitude),
+        longitude: toCoordinate(park.longitude),
         attractionCount: 0, // Will be hydrated with live stats
         status: "CLOSED", // Default, will be hydrated
       };

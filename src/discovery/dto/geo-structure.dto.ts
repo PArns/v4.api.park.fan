@@ -32,6 +32,21 @@ export class ParkReferenceDto {
   url: string;
 
   @ApiProperty({
+    description:
+      "Park latitude. Null for parks that could not be geocoded. Lets listing clients render the distance to the visitor without a per-park lookup.",
+    example: 48.2682,
+    nullable: true,
+  })
+  latitude: number | null;
+
+  @ApiProperty({
+    description: "Park longitude. Null for parks that could not be geocoded.",
+    example: 7.7216,
+    nullable: true,
+  })
+  longitude: number | null;
+
+  @ApiProperty({
     description: "Number of attractions in this park",
     example: 15,
   })
