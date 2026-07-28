@@ -17,6 +17,7 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { PopularityService } from "../../popularity/popularity.service";
+import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import type { CrowdLevel } from "../../common/types/crowd-level.type";
 
@@ -84,6 +85,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { provide: QueueTimesClient, useValue: {} },
         { provide: WartezeitenClient, useValue: {} },
         { provide: PopularityService, useValue: {} },
+        { provide: RideProfileService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
       ],
     }).compile();

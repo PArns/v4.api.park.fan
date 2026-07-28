@@ -13,6 +13,7 @@ import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
 import { PopularityService } from "../../popularity/popularity.service";
+import { RideProfileService } from "./ride-profile.service";
 import { createTestAttraction } from "../../../test/fixtures/attraction.fixtures";
 
 describe("AttractionIntegrationService", () => {
@@ -150,6 +151,14 @@ describe("AttractionIntegrationService", () => {
         {
           provide: REDIS_CLIENT,
           useValue: mockRedis,
+        },
+        {
+          // Curated ride profiles are hand-seeded and optional per ride — an
+          // un-curated attraction must build a response exactly as before.
+          provide: RideProfileService,
+          useValue: {
+            findByAttraction: jest.fn().mockResolvedValue(null),
+          },
         },
       ],
     }).compile();
