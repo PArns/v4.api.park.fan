@@ -575,6 +575,30 @@ Two findings the frontend plan should carry:
 1. **A term can have fewer than three rides.** `celestial-spin` has exactly one.
    The highlight strip must lay out gracefully at one and two entries rather
    than assuming a three-column grid.
-2. **Roughly one ride in nine has no baseline.** Those sort to the end and carry
-   `typicalPeakWait: null`, so any "typisch bis N min" label needs a null branch
-   — it must not render "typisch bis null min" or silently print 0.
+2. **Roughly one ride in nine has no baseline** — 6 of the 92 rides under
+   `launch`. They sort to the end of the ranking, as intended.
+
+   The field is then **absent from the JSON, not null**: a global
+   `ExcludeNullInterceptor` strips every null-valued key from every response
+   (`?debug=true` disables it, which is how this was confirmed). So the
+   frontend sees `undefined`, and `typicalPeakWait` must be typed optional
+   (`typicalPeakWait?: number | null`) rather than `number | null`. A label
+   must branch on absence — never render "typisch bis null min" or fall back
+   to 0, which would read as "never a queue".
+
+## End-to-end verification (2026-07-28)
+
+Ran against the live database on port 3199:
+
+- `?sort=popularity` → Journey to the Center of the Earth (190), Hagrid's (180),
+  TRON Lightcycle (120), Guardians Cosmic Rewind (115), TRON Lightcycle/Run (105)
+  — all `isHeadliner: true`
+- no `sort` → The Underground, Rita, The Smiler — byte-identical to the
+  pre-change production response, so the default path is untouched
+- `?sort=quatsch` → falls back to park ordering rather than erroring
+- unknown term → `{"termId":"gibtsnicht","total":0,"data":[]}`
+- rides without a baseline sort last (iSpeed, THE JOKER's Jinx, Steel Venom)
+
+This matters because the unit tests run against a mocked query builder: a typo
+in a quoted column such as `baseline."p90Baseline"` would pass every test and
+only fail against a real database.
