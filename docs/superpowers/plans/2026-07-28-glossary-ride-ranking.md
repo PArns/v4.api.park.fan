@@ -544,3 +544,37 @@ git commit -m "docs(glossary): record P90 baseline coverage for the ride ranking
 - Frontend consumption of `sort`, `typicalPeakWait` and `isHeadliner` — that is the second plan, written after this one lands.
 - Any change to `GET /v1/glossary/terms/counts`. It already returns correct data; the frontend simply never called it with the right prefix.
 - New indexes. `attraction_p90_baselines` is keyed on `attractionId`, which is exactly the join column, and the result set is capped at 500 rows.
+
+---
+
+## Baseline coverage (measured 2026-07-28)
+
+The spec's open risk was whether enough curated rides carry a P90 baseline for a
+ranking to mean anything. Measured against the live database (`parkfan` on
+192.168.100.2):
+
+| Curated rides | With a baseline | `high`/`medium` confidence | Coverage |
+| ------------: | --------------: | -------------------------: | -------: |
+|           710 |             630 |                        599 |    88.7% |
+
+The ranking carries. Spot-checking the top 3 of five terms, every one came back
+`high` confidence and named the rides a visitor would expect:
+
+| Term             | Top 3                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `launch`         | Journey to the Center of the Earth (190 min), Hagrid's (180), TRON Lightcycle (120) |
+| `zero-g-roll`    | Iron Rattler (90), Jurassic World VelociCoaster (90), Time Traveler (75)            |
+| `dive-coaster`   | SheiKra (60), Oblivion (55), Baron 1898 (45)                                        |
+| `b-and-m`        | Hollywood Dream (95), The Flying Dinosaur (85), Manta (75)                          |
+| `celestial-spin` | Stardust Racers (60) — the only curated ride carrying this term                     |
+
+The spec's fallback to `openedYear DESC` is therefore **not needed**.
+
+Two findings the frontend plan should carry:
+
+1. **A term can have fewer than three rides.** `celestial-spin` has exactly one.
+   The highlight strip must lay out gracefully at one and two entries rather
+   than assuming a three-column grid.
+2. **Roughly one ride in nine has no baseline.** Those sort to the end and carry
+   `typicalPeakWait: null`, so any "typisch bis N min" label needs a null branch
+   — it must not render "typisch bis null min" or silently print 0.
