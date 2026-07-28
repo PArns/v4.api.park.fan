@@ -3,6 +3,7 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { safeJsonParse } from "../common/utils/json.util";
 import { SingleFlight } from "../common/utils/single-flight.util";
 import { getMlServiceUrl } from "../config/ml-services.config";
+import { isQueueTimesExcluded } from "../external-apis/queue-times/queue-times.exclusions";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, MoreThan } from "typeorm";
 import { ConfigService } from "@nestjs/config";
@@ -1055,16 +1056,41 @@ export class MLService {
       .innerJoin("a.park", "p")
       .select("a.id", "id")
       .addSelect("a.parkId", "parkId")
+      .addSelect("a.externalId", "externalId")
       .addSelect("p.timezone", "timezone")
       .where("a.id IN (:...ids)", { ids: attractionIds })
-      .getRawMany<{ id: string; parkId: string; timezone: string | null }>();
+      .getRawMany<{
+        id: string;
+        parkId: string;
+        externalId: string | null;
+        timezone: string | null;
+      }>();
 
     // Create map: attractionId -> parkId (+ parkId -> timezone)
     const attractionToPark = new Map<string, string>();
     const parkTimezones = new Map<string, string>();
+    // Rows the ingestion filter rejects are not attractions at all (Energylandia
+    // publishes its turnstile counters through the ride feed). They stop
+    // receiving wait times, but they remain in `attractions` until they can be
+    // deleted — and the generator keeps predicting for every row it finds. Drop
+    // them here so no further predictions, and no accuracy rows derived from
+    // them, are written for something that is not a ride.
+    const notAnAttraction = new Set<string>();
     for (const attraction of attractions) {
+      if (
+        attraction.externalId &&
+        isQueueTimesExcluded(attraction.externalId)
+      ) {
+        notAnAttraction.add(attraction.id);
+        continue;
+      }
       attractionToPark.set(attraction.id, attraction.parkId);
       parkTimezones.set(attraction.parkId, attraction.timezone || "UTC");
+    }
+    if (notAnAttraction.size > 0) {
+      this.logger.debug(
+        `Skipping predictions for ${notAnAttraction.size} excluded non-attraction row(s)`,
+      );
     }
 
     // Group predictions by parkId
