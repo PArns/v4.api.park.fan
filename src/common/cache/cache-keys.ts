@@ -143,7 +143,7 @@ export const CacheKeys = {
     `attraction:history:${attractionId}:*`,
 
   /** The discovery geo-structure skeleton (continent/country/city/park tree). */
-  discoveryGeoStructure: (): string => "discovery:geo:structure:v4",
+  discoveryGeoStructure: (): string => "discovery:geo:structure:v5",
 
   /**
    * Shared, user-INDEPENDENT index of park coordinates (+ slugs) for the

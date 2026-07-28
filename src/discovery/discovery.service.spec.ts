@@ -102,4 +102,55 @@ describe("DiscoveryService Deduplication", () => {
     // Expect both parks to be in that single country entry
     expect(europe.countries[0].parkCount).toBe(2);
   });
+
+  it("exposes park coordinates as finite numbers, null when unset", async () => {
+    mockRedis.get.mockResolvedValue(null);
+    mockParkRepository.find.mockResolvedValue([
+      {
+        id: "1",
+        name: "Europa-Park",
+        slug: "europa-park",
+        continent: "Europe",
+        continentSlug: "europe",
+        country: "Germany",
+        countrySlug: "germany",
+        countryCode: "DE",
+        city: "Rust",
+        citySlug: "rust",
+        // `decimal` columns arrive as strings from the pg driver.
+        latitude: "48.2682000",
+        longitude: "7.7216000",
+        attractions: [],
+      },
+      {
+        id: "2",
+        name: "Never Geocoded",
+        slug: "never-geocoded",
+        continent: "Europe",
+        continentSlug: "europe",
+        country: "Germany",
+        countrySlug: "germany",
+        countryCode: "DE",
+        city: "Nowhere",
+        citySlug: "nowhere",
+        latitude: null,
+        longitude: null,
+        attractions: [],
+      },
+    ]);
+
+    const result = await service.getGeoStructure();
+    const germany = result.continents
+      .find((c) => c.slug === "europe")
+      ?.countries.find((c) => c.slug === "germany");
+
+    const geocoded = germany?.cities.find((c) => c.slug === "rust")?.parks[0];
+    expect(geocoded?.latitude).toBe(48.2682);
+    expect(geocoded?.longitude).toBe(7.7216);
+
+    const ungeocoded = germany?.cities.find((c) => c.slug === "nowhere")
+      ?.parks[0];
+    expect(ungeocoded?.latitude).toBeNull();
+    expect(ungeocoded?.longitude).toBeNull();
+  });
 });
