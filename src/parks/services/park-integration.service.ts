@@ -40,6 +40,8 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { RideProfileService } from "../../attractions/services/ride-profile.service";
+import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import {
   computeBestVisitTimes,
@@ -95,6 +97,7 @@ export class ParkIntegrationService {
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
     private readonly popularityService: PopularityService,
+    private readonly rideProfileService: RideProfileService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -499,6 +502,7 @@ export class ParkIntegrationService {
         ropeDropMap,
         typicalWaitsMap,
         parkRatable,
+        rideProfileMap,
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
@@ -528,6 +532,13 @@ export class ParkIntegrationService {
         // levels too, consistent with the park-level crowdLevel and the
         // other live surfaces (search/nearby/favorites/attraction-detail).
         this.analyticsService.isParkRatable(park.id),
+        // Curated ride profiles (glossary link). One indexed read for the whole
+        // park; the ride page renders its "what this ride does" chapter from
+        // the park response, so it has to ride along here rather than only on
+        // the attraction detail endpoint.
+        this.rideProfileService
+          .findByAttractions(attractionIds)
+          .catch(() => new Map()),
       ]);
 
       // Resolve rope-drop UTC instants against today's opening (single value);
@@ -834,6 +845,10 @@ export class ParkIntegrationService {
         // Precomputed typical-waits (P50/P90) from the batched park read.
         const typicalWaits = typicalWaitsMap.get(attraction.id);
         if (typicalWaits) attraction.typicalWaits = typicalWaits;
+
+        // Curated ride profile — the glossary link.
+        const rideProfile = mapRideProfile(rideProfileMap.get(attraction.id));
+        if (rideProfile) attraction.rideProfile = rideProfile;
       }
 
       // Park-level summary: worthy headliners, biggest time-saver first.

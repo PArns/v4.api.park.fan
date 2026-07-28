@@ -15,6 +15,7 @@ import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
+import { RideProfileDto } from "./ride-profile.dto";
 
 /**
  * One weekday/weekend bucket of the typical-waits summary.
@@ -414,6 +415,17 @@ export class AttractionResponseDto {
     nullable: true,
   })
   ropeDrop?: RopeDropInfo | null;
+
+  @ApiProperty({
+    description:
+      "Curated ride profile: the track figures in ride order, the ride type, " +
+      "manufacturer and opening year. Every id is a glossary term id. " +
+      "Absent for rides that have not been curated yet.",
+    required: false,
+    nullable: true,
+    type: RideProfileDto,
+  })
+  rideProfile?: RideProfileDto | null;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

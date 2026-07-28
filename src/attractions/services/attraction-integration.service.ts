@@ -43,6 +43,8 @@ import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { buildRopeDropInfo } from "../../common/utils/rope-drop-info.util";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
+import { RideProfileService } from "./ride-profile.service";
+import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 
 /**
@@ -76,6 +78,7 @@ export class AttractionIntegrationService {
     private readonly popularityService: PopularityService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
+    private readonly rideProfileService: RideProfileService,
   ) {}
 
   /**
@@ -463,6 +466,22 @@ export class AttractionIntegrationService {
           ]);
 
         dto.typicalWaits = typicalWaits;
+
+        // Curated glossary link (track figures, ride type, manufacturer).
+        // A single indexed PK lookup on a hand-seeded table — cheap enough to
+        // not be worth joining into the batch above, and it must never take
+        // the whole response down if the table is not seeded yet.
+        dto.rideProfile = mapRideProfile(
+          await this.rideProfileService
+            .findByAttraction(attraction.id)
+            .catch((err) => {
+              this.logger.warn(
+                `Failed to load ride profile for attraction ${attraction.id}:`,
+                err,
+              );
+              return null;
+            }),
+        );
 
         dto.statistics = {
           avgWaitToday: statistics.avgWaitToday,

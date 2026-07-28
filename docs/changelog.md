@@ -6,6 +6,40 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — Ride ↔ Glossary link (`rideProfile`) (2026-07-28)
+
+Rides now carry a curated profile that connects them to the frontend glossary:
+the named track figures in ride order, what kind of ride it is, who built it
+and when it opened. Everything is stored as **glossary term ids**, so the link
+works in both directions off one table — a ride page renders "Zero-G Roll" as
+a link into the glossary entry that explains and animates it, and that entry
+lists the other rides that have one.
+
+- New `attraction_ride_profiles` table (`elements` / `types` jsonb + GIN
+  containment indexes, manufacturer name *and* optional term id, model,
+  opening year, inversions).
+- `RIDE_PROFILE_SEED`: **524 hand-curated rides across 67 parks** — every
+  Disney and Universal park, Phantasialand, Toverland, Europa-Park, Movie Park,
+  all three Walibis, plus the major European, North American and Asian coaster
+  parks. Assembled from park and manufacturer pages, Wikipedia and on-ride
+  footage; RCDB is used only as a link target and to confirm
+  manufacturer/model/year, exactly as it already is for `rcdbId`.
+- Served on the attraction detail response *and* embedded in the park response
+  (one batched read per park — the frontend ride page renders from the park
+  payload).
+- Reverse lookup: `GET /v1/glossary/terms/:termId/attractions` and
+  `GET /v1/glossary/terms/counts`. Matches the term as a track figure, a ride
+  type *or* a manufacturer in one indexed query.
+- Applied by `POST /v1/admin/apply-ride-profiles` (own queue, seconds,
+  idempotent). There is no upstream feed: updates happen by editing the seed
+  file and re-running the job.
+- `ride-profile-seed.spec.ts` guards the data against a mirrored allowlist of
+  frontend term ids plus four curation invariants. The "no inversions claimed
+  without an inverting figure" check caught four wrong entries on its first run
+  (Maverick, Pantheon, Hyperia, Cheetah Hunt).
+
+→ [Ride ↔ Glossary link](docs/frontend/ride-glossary-link.md)
+
 ### Fixed — Misdated closing times no longer make a park read CLOSED while it is open (2026-07-27)
 
 A park's operating day is anchored to one calendar date, so the window between

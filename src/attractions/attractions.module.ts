@@ -18,10 +18,18 @@ import { PopularityModule } from "../popularity/popularity.module";
 import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
 import { ManualMetadataService } from "./services/manual-metadata.service";
+import { RideProfileService } from "./services/ride-profile.service";
+import { GlossaryRidesController } from "./glossary-rides.controller";
+import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Attraction, QueueData, ScheduleEntry]),
+    TypeOrmModule.forFeature([
+      Attraction,
+      AttractionRideProfile,
+      QueueData,
+      ScheduleEntry,
+    ]),
     ThemeParksModule,
     forwardRef(() => ParksModule),
     forwardRef(() => QueueDataModule),
@@ -34,18 +42,20 @@ import { ManualMetadataService } from "./services/manual-metadata.service";
     HolidaysModule,
     RevalidationModule,
   ],
-  controllers: [],
+  controllers: [GlossaryRidesController],
   providers: [
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
     ManualMetadataService,
+    RideProfileService,
   ],
   exports: [
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
     ManualMetadataService,
+    RideProfileService,
   ],
 })
 export class AttractionsModule {}

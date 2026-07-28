@@ -13,6 +13,7 @@ import {
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
+import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -215,6 +216,17 @@ export class ParkAttractionDto {
     nullable: true,
   })
   typicalWaits?: TypicalWaitsDto | null;
+
+  @ApiProperty({
+    description:
+      "Curated ride profile: track figures in ride order, ride type, " +
+      "manufacturer and opening year. Every id is a glossary term id. " +
+      "Absent for rides that have not been curated yet.",
+    required: false,
+    nullable: true,
+    type: RideProfileDto,
+  })
+  rideProfile?: RideProfileDto | null;
 }
 
 export class ParkShowDto {
@@ -624,7 +636,7 @@ export class ParkWithAttractionsDto {
               seasonMonths,
               isCurrentlyInSeason,
               minimumHeight: attraction.minimumHeight ?? null,
-      minimumHeightUnit: attraction.minimumHeightUnit ?? null,
+              minimumHeightUnit: attraction.minimumHeightUnit ?? null,
               maximumHeight: attraction.maximumHeight ?? null,
               mayGetWet: attraction.mayGetWet ?? null,
               rcdbId: attraction.rcdbId ?? null,

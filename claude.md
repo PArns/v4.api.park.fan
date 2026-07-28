@@ -60,6 +60,7 @@
 - [Precomputed best-days endpoint (`/best-days`)](docs/frontend/best-days-endpoint.md) - Lean today→+90d projection (status/crowd/holiday flags + optional weekday aggregate) served from a materialized Redis snapshot the calendar warmup refreshes; p99 < 300 ms, CDN-cached, fires the on-change revalidation webhook.
 - [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.
 - [Ride P50/P90 stats (`typicalWaits`)](docs/frontend/ride-typical-waits.md) - The typical (P50) vs busy (P90) peak-wait stats on the attraction detail endpoint: shape, `displayable` gate, weekday/weekend + per-day breakdown, record peak.
+- [Ride ↔ Glossary link (`rideProfile`)](docs/frontend/ride-glossary-link.md) - Curated per-ride track figures, ride type, manufacturer and opening year, stored as **glossary term ids** so a ride page can link into the glossary and the glossary can list the rides that feature a term. Hand-seeded (`RIDE_PROFILE_SEED`), applied via `POST /v1/admin/apply-ride-profiles`; reverse lookup at `/v1/glossary/terms/:termId/attractions`.
 - [Severe-weather warnings (`weather.warnings`)](docs/frontend/weather-warnings.md) - The `WeatherWarningDto[]` on the park weather + nowcast (MeteoGate/DWD): shape, de/en localization, severity→colour, validity, banner rendering, EU-only coverage.
 
 ### 🔧 Troubleshooting

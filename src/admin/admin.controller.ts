@@ -902,6 +902,32 @@ export class AdminController {
   }
 
   /**
+   * Apply the curated ride profiles (glossary link: track figures, ride type,
+   * manufacturer, opening year).
+   *
+   * This is how the seed reaches production: edit
+   * `src/attractions/data/ride-profile-seed.ts`, deploy, call this. Pure
+   * database work over a few hundred rows, so it finishes in seconds.
+   */
+  @Post("apply-ride-profiles")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Apply the curated ride-profile seed",
+    description:
+      "Writes RIDE_PROFILE_SEED to attraction_ride_profiles. Idempotent — " +
+      "entries whose slugs match no attraction are skipped.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerRideProfiles(): Promise<{ message: string; jobId: string }> {
+    const job = await this.manualMetadataQueue.add(
+      "apply-ride-profiles",
+      {},
+      { priority: 1 },
+    );
+    return { message: "Ride profile job queued", jobId: job.id.toString() };
+  }
+
+  /**
    * Trigger the Six Flags ride-height sync.
    *
    * ThemeParks.wiki carries no minimumHeight for the Six Flags and former
@@ -924,7 +950,10 @@ export class AdminController {
       {},
       { priority: 10 },
     );
-    return { message: "Six Flags height sync queued", jobId: job.id.toString() };
+    return {
+      message: "Six Flags height sync queued",
+      jobId: job.id.toString(),
+    };
   }
 
   /**
@@ -950,7 +979,10 @@ export class AdminController {
       type: "object",
       properties: {
         city: { type: "string" },
-        citySlug: { type: "string", description: "Derived from city if omitted" },
+        citySlug: {
+          type: "string",
+          description: "Derived from city if omitted",
+        },
         latitude: { type: "number" },
         longitude: { type: "number" },
       },
