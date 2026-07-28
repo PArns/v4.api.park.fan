@@ -1151,72 +1151,96 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "hersheypark",
     attractionSlug: "candymonium",
     rcdbId: 16682,
+    minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "comet",
     rcdbId: 106,
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "fahrenheit",
     rcdbId: 4049,
+    minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "great-bear",
     rcdbId: 468,
+    minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "jolly-rancher-remix-featuring-christmas-overlay",
     rcdbId: 109,
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "lightning-racer-dark-coaster",
     rcdbId: 597,
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "skyrush",
     rcdbId: 10089,
+    minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "sooperdooperlooper",
     rcdbId: 108,
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "storm-runner",
     rcdbId: 2498,
+    minimumHeightCm: 137, // 54"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "trailblazer",
     rcdbId: 107,
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "wild-mouse",
     rcdbId: 539,
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "wildcats-revenge",
     rcdbId: 100,
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "hong-kong",
@@ -3248,6 +3272,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "hersheypark",
     attractionSlug: "breakers-edge-water-coaster",
     mayGetWet: true,
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
   {
     citySlug: "arlington",
@@ -3765,5 +3791,256 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "universal-studios-at-universal-orlando",
     attractionSlug: "revenge-of-the-mummy",
     rcdbId: 2232, // Revenge of the Mummy™ — Universal Studios At Universal Orlando
+  },
+
+  // ── Hersheypark ─────────────────────────────────────────────────────────
+  // ThemeParks.wiki carries no height for this park, and Hersheypark does not
+  // print inches on its ride pages: it sorts rides into candy categories
+  // (Hershey's Miniatures 0-36", Kisses 36-42", Reese's 42-48", Hershey's
+  // 48-54", Twizzlers 54-60", Jolly Rancher 60"+). The per-ride assignment
+  // lives only in the park's own Rider Safety & Accessibility Guide, and there
+  // only as a row of candy logos — the badges are images, so the PDF's text
+  // layer does not carry them. Read off the rendered pages of that guide
+  // (July 2026); a ride's minimum is the floor of the smallest badge shown.
+  //
+  // Rides whose badge row starts at Miniatures have no minimum at all and are
+  // deliberately absent: NULL means "unknown" in this column and there is no
+  // way to say "none", so claiming 0 would be inventing a number.
+  //
+  // Hershey Triple Tower is one attraction in the guide with one badge row but
+  // three rows in our database (Kisses / Hershey's / Reese's Tower). All three
+  // carry the guide's single figure — it does not differentiate.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug:
+      "all-new-shaq-a-licious-laff-trakk-featuring-christmas-overlay",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coal-cracker",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-hydro",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-pipeline",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-riptide",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-surge",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-vortex",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "coastline-plunge-whirlwind",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "cocoa-cruiser",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "dizzy-drums",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "fender-bender",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "frog-hopper",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "frontier-flyers",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "hershey-triple-tower-hersheys-kisses-tower",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "hershey-triple-tower-hersheys-tower",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "hershey-triple-tower-reeses-tower",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "laff-trakk",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "livery-stables",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "mini-pirate",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "mixd-flavored-by-jolly-rancher",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "music-express",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "pirate",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "red-baron",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "reeses-cupfusion",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "sweet-swing",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "swing-thing",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "tea-cups",
+    minimumHeightCm: 91, // 36"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "the-claw",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "the-howler",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "tidal-force",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "twizzlers-twisted-gravity-now-open",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "wave-swinger",
+    minimumHeightCm: 122, // 48"
+    minimumHeightUnit: "in",
+  },
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "whitecap-racer",
+    minimumHeightCm: 107, // 42"
+    minimumHeightUnit: "in",
   },
 ];
