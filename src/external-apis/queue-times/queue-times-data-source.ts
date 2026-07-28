@@ -9,6 +9,7 @@ import {
   LandData,
   LiveStatus,
 } from "../data-sources/interfaces/data-source.interface";
+import { isQueueTimesExcluded } from "./queue-times.exclusions";
 import { QueueTimesClient } from "./queue-times.client";
 import { QueueTimesRide } from "./queue-times.types";
 
@@ -43,10 +44,12 @@ export class QueueTimesDataSource implements IDataSource {
       for (const park of group.parks) {
         // Optimization: Include rides in metadata if available for signature matching
         // Some groups might already have ride lists in this summary call
-        const attractions = (park.rides || []).map((r) => ({
-          name: r.name,
-          externalId: `qt-ride-${r.id}`,
-        }));
+        const attractions = (park.rides || [])
+          .filter((r) => !isQueueTimesExcluded(`qt-ride-${r.id}`))
+          .map((r) => ({
+            name: r.name,
+            externalId: `qt-ride-${r.id}`,
+          }));
 
         allParks.push({
           externalId: `qt-park-${park.id}`,
@@ -80,17 +83,21 @@ export class QueueTimesDataSource implements IDataSource {
         externalId: `qt-land-${land.id}`,
         source: this.name,
         name: land.name,
-        attractions: land.rides.map((r) => `qt-ride-${r.id}`),
+        attractions: land.rides
+          .map((r) => `qt-ride-${r.id}`)
+          .filter((id) => !isQueueTimesExcluded(id)),
       });
 
       // Process rides in this land
       for (const ride of land.rides) {
+        if (isQueueTimesExcluded(`qt-ride-${ride.id}`)) continue;
         entities.push(this.transformRideToEntity(ride, land.id.toString()));
       }
     }
 
     // Process rides not in lands
     for (const ride of queueData.rides) {
+      if (isQueueTimesExcluded(`qt-ride-${ride.id}`)) continue;
       entities.push(this.transformRideToEntity(ride, undefined));
     }
 
@@ -149,6 +156,7 @@ export class QueueTimesDataSource implements IDataSource {
       // Process rides from lands
       for (const land of queueData.lands) {
         for (const ride of land.rides) {
+          if (isQueueTimesExcluded(`qt-ride-${ride.id}`)) continue;
           entities.push({
             externalId: `qt-ride-${ride.id}`,
             source: this.name,
@@ -166,6 +174,7 @@ export class QueueTimesDataSource implements IDataSource {
 
       // Process orphan rides
       for (const ride of queueData.rides) {
+        if (isQueueTimesExcluded(`qt-ride-${ride.id}`)) continue;
         entities.push({
           externalId: `qt-ride-${ride.id}`,
           source: this.name,
