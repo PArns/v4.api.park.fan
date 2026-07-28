@@ -3633,4 +3633,137 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     minimumHeightCm: 132, // 52"
     minimumHeightUnit: "in",
   },
+
+  // ── RCDB ids the first Wikidata pass missed ──────────────────────────────
+  // Same provenance as the block above (Wikidata P2751, CC0), but matched on
+  // park geo-proximity plus a name comparison that also strips ™/® and the
+  // all-caps licensor styling. That styling is why these were missed: we
+  // store "BATMAN™ The Ride" and "THE RIDDLER™'s Revenge" where Wikidata has
+  // "Batman: The Ride" and "The Riddler's Revenge".
+  //
+  // Every id below was confirmed against the ride and park name on its RCDB
+  // page. That check earned its keep: the geo match also proposed 4327 for
+  // Universal Orlando's Revenge of the Mummy, which is in fact Singapore's
+  // ride — the Orlando one is 2232.
+
+  {
+    citySlug: "ieper",
+    parkSlug: "bellewaerde",
+    attractionSlug: "boomerang",
+    rcdbId: 926, // Boomerang — Bellewaerde
+  },
+  {
+    citySlug: "kasterlee",
+    parkSlug: "bobbejaanland",
+    attractionSlug: "dreamcatcher",
+    rcdbId: 915, // Dreamcatcher — Bobbejaanland
+  },
+  {
+    citySlug: "bottrop",
+    parkSlug: "movie-park-germany",
+    attractionSlug: "star-trek-operation-enterprise",
+    rcdbId: 13796, // Star Trek™: Operation Enterprise — Movie Park Germany
+  },
+  {
+    citySlug: "san-martin-de-la-vega",
+    parkSlug: "parque-warner-madrid",
+    attractionSlug: "superman-la-atraccion-de-acero",
+    rcdbId: 1366, // SUPERMAN™: La Atracción de Acero — Parque Warner Madrid
+  },
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "motocoaster",
+    rcdbId: 4138, // Motocoaster — Six Flags Darien Lake
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "batgirl-coaster-chase",
+    rcdbId: 207, // BAT GIRL™: Coaster Chase — Six Flags Fiesta Texas
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "batman-the-ride",
+    rcdbId: 12283, // BATMAN™ The Ride — Six Flags Fiesta Texas
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "superman-krypton-coaster",
+    rcdbId: 605, // SUPERMAN™ KRYPTON Coaster — Six Flags Fiesta Texas
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "wonder-woman-golden-lasso-coaster",
+    rcdbId: 15368, // WONDER WOMAN™ Golden Lasso Coaster — Six Flags Fiesta Texas
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "harley-quinn-crazy-train",
+    rcdbId: 567, // HARLEY QUINN™ Crazy Train — Six Flags Great Adventure
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "the-dark-knight-coaster",
+    rcdbId: 4047, // THE DARK KNIGHT™ Coaster — Six Flags Great Adventure
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "the-flash-vertical-velocity",
+    rcdbId: 21088, // THE FLASH™: Vertical Velocity — Six Flags Great Adventure
+  },
+  {
+    citySlug: "gurnee",
+    parkSlug: "six-flags-great-america",
+    attractionSlug: "the-flash-vertical-velocity",
+    rcdbId: 747, // THE FLASH™: Vertical Velocity — Six Flags Great America
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "gold-rusher",
+    rcdbId: 266, // Gold Rusher — Six Flags Magic Mountain
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "the-riddlers-revenge",
+    rcdbId: 470, // THE RIDDLER™’s Revenge — Six Flags Magic Mountain
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "wonder-woman-flight-of-courage",
+    rcdbId: 19515, // WONDER WOMAN™ Flight of Courage — Six Flags Magic Mountain
+  },
+  {
+    citySlug: "austell",
+    parkSlug: "six-flags-over-georgia",
+    attractionSlug: "superman-ultimate-flight",
+    rcdbId: 1568, // SUPERMAN™: Ultimate Flight — Six Flags Over Georgia
+  },
+  {
+    citySlug: "arlington",
+    parkSlug: "six-flags-over-texas",
+    attractionSlug: "mini-mine-train",
+    rcdbId: 97, // Mini Mine Train — Six Flags Over Texas
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "toos-express",
+    rcdbId: 1041, // Toos-Express — Toverland
+  },
+  {
+    citySlug: "orlando",
+    parkSlug: "universal-studios-at-universal-orlando",
+    attractionSlug: "revenge-of-the-mummy",
+    rcdbId: 2232, // Revenge of the Mummy™ — Universal Studios At Universal Orlando
+  },
 ];
