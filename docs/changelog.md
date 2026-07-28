@@ -6,6 +6,27 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — Hersheypark ride heights
+
+`MANUAL_ATTRACTION_METADATA` gains a minimum rider height for **46
+Hersheypark rides**, a park where ThemeParks.wiki carries none at all: all 72
+of its rides showed no height requirement.
+
+Hersheypark does not print inches. It sorts rides into candy categories
+(Hershey's Miniatures 0-36", Kisses 36-42", Reese's 42-48", Hershey's 48-54",
+Twizzlers 54-60", Jolly Rancher 60"+), and the per-ride assignment appears
+only in the park's own Rider Safety & Accessibility Guide — as a row of candy
+logos. The badges are images, so neither the ride pages, the ride listing, the
+FAQ nor the PDF's text layer carries them; the guide's pages had to be
+rendered and read. A ride's minimum is the floor of the smallest badge shown.
+
+Stored as centimetres with `minimumHeightUnit: "in"`, following the existing
+convention: 36"=91, 42"=107, 48"=122, 54"=137.
+
+Rides whose badge row starts at Miniatures have no minimum at all and are
+deliberately left out — NULL means "unknown" in this column and there is no
+way to express "none", so a 0 would be an invented number.
+
 ### Added — Ride ↔ Glossary link (`rideProfile`) (2026-07-28)
 
 Rides now carry a curated profile that connects them to the frontend glossary:
