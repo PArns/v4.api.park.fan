@@ -47,6 +47,22 @@ export interface AttractionWithTerm {
   isHeadliner: boolean;
 }
 
+/** How the reverse lookup orders its rides. */
+export type TermAttractionSort = "park" | "popularity";
+
+/**
+ * Reads the `sort` query parameter.
+ *
+ * Unknown values fall back to `park` rather than raising: this endpoint is
+ * public and already in use, and a mistyped query string should still answer
+ * with a usable list.
+ */
+export function parseTermAttractionSort(
+  raw: string | undefined,
+): TermAttractionSort {
+  return raw === "popularity" ? "popularity" : "park";
+}
+
 /** Injection token so tests can supply their own seed. */
 export const RIDE_PROFILE_SEED_TOKEN = "RIDE_PROFILE_SEED";
 
@@ -215,12 +231,13 @@ export class RideProfileService implements OnModuleInit {
   async findAttractionsByTerm(
     termId: string,
     limit = 200,
+    sort: TermAttractionSort = "park",
   ): Promise<AttractionWithTerm[]> {
     // `@>` with a single-element array is the containment form the GIN
     // jsonb_path_ops index can serve.
     const containment = JSON.stringify([termId]);
 
-    const rows = await this.repo
+    const query = this.repo
       .createQueryBuilder("profile")
       .innerJoin(
         "attractions",
@@ -261,9 +278,30 @@ export class RideProfileService implements OnModuleInit {
           OR profile.types @> :containment::jsonb
           OR profile.manufacturerTermId = :termId)`,
         { containment, termId },
-      )
-      .orderBy("park.name", "ASC")
-      .addOrderBy("attraction.name", "ASC")
+      );
+
+    if (sort === "popularity") {
+      // Confidence first: `low` means a handful of samples, and those readings
+      // swing wildly. Sorting purely by P90 would put them on top.
+      query
+        .orderBy(
+          `CASE baseline.confidence
+             WHEN 'high' THEN 0
+             WHEN 'medium' THEN 1
+             ELSE 2
+           END`,
+          "ASC",
+        )
+        .addOrderBy('baseline."p90Baseline"', "DESC", "NULLS LAST");
+    } else {
+      query.orderBy("park.name", "ASC");
+    }
+
+    // Always last, in both modes: without a total order, two rides with the
+    // same baseline can swap places between identical requests.
+    query.addOrderBy("park.name", "ASC").addOrderBy("attraction.name", "ASC");
+
+    const rows = await query
       .limit(limit)
       .getRawMany<{
         attractionid: string;
