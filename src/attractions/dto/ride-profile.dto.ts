@@ -126,7 +126,11 @@ export function mapTermAttraction(row: AttractionWithTerm): TermAttractionDto {
     name: row.attractionName,
     slug: row.attractionSlug,
     parkName: row.parkName,
-    url: `/v1/parks/${geo}/${row.attractionSlug}`,
+    // The attraction detail route is
+    // `parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug`
+    // — without the `attractions` segment this resolves to the park route's
+    // sibling and 404s.
+    url: `/v1/parks/${geo}/attractions/${row.attractionSlug}`,
     continentSlug: row.continentSlug,
     countrySlug: row.countrySlug,
     citySlug: row.citySlug,
