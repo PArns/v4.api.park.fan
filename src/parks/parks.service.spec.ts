@@ -19,6 +19,7 @@ describe("ParksService", () => {
     set: jest.fn(),
     del: jest.fn(),
     setex: jest.fn(),
+    keys: jest.fn().mockResolvedValue([]),
   };
 
   // Mock repositories
@@ -45,21 +46,29 @@ describe("ParksService", () => {
     },
   };
 
+  /** Query builder covering both the read (select/getRawMany) and delete chains. */
+  const scheduleQueryBuilder = (existingRows: unknown[] = []) => ({
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    getMany: jest.fn().mockResolvedValue([]),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue(existingRows),
+    delete: jest.fn().mockReturnThis(),
+    from: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ affected: 0 }),
+  });
+
   const mockScheduleRepository = {
     find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
-    createQueryBuilder: jest.fn(() => ({
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      orderBy: jest.fn().mockReturnThis(),
-      addOrderBy: jest.fn().mockReturnThis(),
-      getMany: jest.fn().mockResolvedValue([]),
-      select: jest.fn().mockReturnThis(),
-      getRawMany: jest.fn().mockResolvedValue([]),
-    })),
+    query: jest.fn(),
+    createQueryBuilder: jest.fn(() => scheduleQueryBuilder()),
   };
 
   // Mock services
@@ -294,6 +303,93 @@ describe("ParksService", () => {
       expect(queryBuilder.select).toHaveBeenCalledWith(
         "DISTINCT park.country",
         "country",
+      );
+    });
+  });
+
+  /**
+   * Sources misdate a past-midnight closing time: ThemeParks.wiki publishes
+   * Parque Warner Madrid as `open 12:00+02:00` / `close 00:00+02:00` on the
+   * *same* date, so the close lands 12 h before the open and the park reads
+   * CLOSED all day. normalizeClosingTime is unit-tested on its own; these
+   * cover that saveScheduleData actually applies it on the way to the database.
+   */
+  describe("saveScheduleData — misdated closing times", () => {
+    const parkId = "11111111-2222-3333-4444-555555555555";
+
+    // Verbatim from https://api.themeparks.wiki/v1/entity/{warner}/schedule
+    const upstreamEntry = {
+      date: "2026-07-28",
+      type: "OPERATING",
+      openingTime: "2026-07-28T12:00:00+02:00", // 10:00Z
+      closingTime: "2026-07-28T00:00:00+02:00", // 22:00Z on the 27th — before opening
+    };
+    const OPENS = "2026-07-28T10:00:00.000Z";
+    const REPAIRED_CLOSE = "2026-07-27T22:00:00.000Z" as const;
+    // Midnight *after* the operating day, i.e. 00:00 local on the 29th.
+    const EXPECTED_CLOSE = "2026-07-28T22:00:00.000Z";
+
+    beforeEach(() => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "ES",
+        regionCode: null,
+        timezone: "Europe/Madrid",
+      });
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.query.mockResolvedValue([]);
+    });
+
+    it("persists the closing time on the day the park actually shuts", async () => {
+      // No existing row for that date → insert path.
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+
+      await service.saveScheduleData(parkId, [upstreamEntry]);
+
+      expect(mockScheduleRepository.save).toHaveBeenCalledTimes(1);
+      const [inserted] = mockScheduleRepository.save.mock.calls[0] as [
+        Array<{ openingTime: Date; closingTime: Date }>,
+      ];
+      expect(inserted[0].openingTime.toISOString()).toBe(OPENS);
+      // Raw source value would be REPAIRED_CLOSE's counterpart (before opening).
+      expect(inserted[0].closingTime.toISOString()).toBe(EXPECTED_CLOSE);
+      expect(inserted[0].closingTime.getTime()).toBeGreaterThan(
+        inserted[0].openingTime.getTime(),
+      );
+    });
+
+    it("does not rewrite a row that already holds the repaired time", async () => {
+      // What production looks like after the one-off repair: the source still
+      // sends the broken value, the stored row is already correct. The diff
+      // upsert must see no change — this is why `updatedAt` stops moving.
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([
+          {
+            id: "99999999-8888-7777-6666-555555555555",
+            date: "2026-07-28",
+            scheduleType: "OPERATING",
+            openingTime: new Date(OPENS),
+            closingTime: new Date(EXPECTED_CLOSE),
+            description: null,
+            purchases: null,
+            isHoliday: false,
+            holidayName: null,
+            isBridgeDay: false,
+          },
+        ]),
+      );
+
+      await service.saveScheduleData(parkId, [upstreamEntry]);
+
+      expect(mockScheduleRepository.save).not.toHaveBeenCalled();
+      expect(mockScheduleRepository.query).not.toHaveBeenCalled();
+      // Sanity: the raw value differs from the stored one, so a missing
+      // normalization would have produced an update here.
+      expect(new Date(REPAIRED_CLOSE).getTime()).not.toBe(
+        new Date(EXPECTED_CLOSE).getTime(),
       );
     });
   });
