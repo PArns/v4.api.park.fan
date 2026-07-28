@@ -3785,6 +3785,7 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "toverland",
     attractionSlug: "toos-express",
     rcdbId: 1041, // Toos-Express — Toverland
+    minimumHeightCm: 90,
   },
   {
     citySlug: "orlando",
@@ -4042,5 +4043,125 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     attractionSlug: "whitecap-racer",
     minimumHeightCm: 107, // 42"
     minimumHeightUnit: "in",
+  },
+
+  // ── Toverland ───────────────────────────────────────────────────────────
+  // ThemeParks.wiki carries no height for this park either. Toverland
+  // publishes two figures per ride — "Begeleid" (accompanied) and
+  // "Zelfstandig" (alone). We store the ACCOMPANIED figure: it is the
+  // absolute floor, the height at which a child may ride at all. Storing the
+  // solo figure would lock out riders the park lets on.
+  //
+  // Read off the park's own ride pages (toverland.com/en/rides/<slug>) and its
+  // accessibility overview, July 2026. Metric park, so no
+  // `minimumHeightUnit` — the column defaults to cm.
+  //
+  // Rides whose accompanied figure is 0 cm have no minimum and are absent by
+  // the same rule as Hersheypark: Karussell, Klokhuis, Jumping Juna, Tolly
+  // Molly, Merlin's Quest and Wirbelbaum all read 0 accompanied. The play
+  // areas (Fort Boreas, Sparky's Splash Dock, Sim sa la Klim, Villa
+  // Toverhoed, Exploria Magica) publish no figure at all.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "alpenrutsche",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "booster-bike",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "coco-bolo",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "djengu-river",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "djinn",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "dragonwatch",
+    minimumHeightCm: 80,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "drakenslangen",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "dwervelwind",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "expedition-zork",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "fenix",
+    minimumHeightCm: 132,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "paarden-van-ithaka",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "pixarus",
+    minimumHeightCm: 125,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "scorpios",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "theekopjes",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "troy",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "villa-fiasko",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "sevenum",
+    parkSlug: "toverland",
+    attractionSlug: "vliegend-tapijt",
+    minimumHeightCm: 90,
   },
 ];
