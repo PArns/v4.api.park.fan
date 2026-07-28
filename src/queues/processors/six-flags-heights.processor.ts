@@ -40,7 +40,9 @@ export class SixFlagsHeightsProcessor {
       select: { id: true, slug: true, minimumHeight: true },
     });
 
-    const targets = pending.filter((a) => a.park && sixFlagsSlugFor(a.park.slug));
+    const targets = pending.filter(
+      (a) => a.park && sixFlagsSlugFor(a.park.slug),
+    );
     this.logger.log(
       `📏 Six Flags height sync: ${targets.length} rides without a height across ${
         new Set(targets.map((a) => a.park.slug)).size

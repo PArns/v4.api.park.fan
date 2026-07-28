@@ -15,7 +15,8 @@
  * absent from their entity documents — so this is the only available source
  * for roughly 1400 rides across the Six Flags and former Cedar Fair parks.
  */
-const MIN_HEIGHT = />Min Height<\/div>\s*<p[^>]*>\s*<span[^>]*>\s*(\d{2,3})\s*[”"″]/i;
+const MIN_HEIGHT =
+  />Min Height<\/div>\s*<p[^>]*>\s*<span[^>]*>\s*(\d{2,3})\s*[”"″]/i;
 
 /** Outside this range the match is an artefact, not a height requirement. */
 const PLAUSIBLE_INCHES = { min: 24, max: 84 };

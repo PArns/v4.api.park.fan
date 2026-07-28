@@ -5,7 +5,6 @@ import { ParkMergeService } from "./park-merge.service";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
-import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
@@ -100,9 +99,7 @@ describe("ParkMergeService — the loser's path", () => {
 
     await service.mergeParks("winner", "loser");
 
-    expect(
-      inserted.filter((i) => "citySlug" in i),
-    ).toHaveLength(0);
+    expect(inserted.filter((i) => "citySlug" in i)).toHaveLength(0);
   });
 
   it("tells the frontend to rebuild even when the path did not change", async () => {
@@ -127,7 +124,9 @@ describe("ParkMergeService — the loser's path", () => {
         ? park({ id: "winner", name: "IOA", citySlug: "orlando" })
         : park({ id: "loser", name: "IOA", citySlug: "tampa" }),
     );
-    revalidation.revalidateTags.mockRejectedValueOnce(new Error("frontend down"));
+    revalidation.revalidateTags.mockRejectedValueOnce(
+      new Error("frontend down"),
+    );
 
     await expect(service.mergeParks("winner", "loser")).resolves.toBeDefined();
   });

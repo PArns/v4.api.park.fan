@@ -15,10 +15,7 @@ describe("SixFlagsHeightsProcessor", () => {
   const client = { fetchMinHeightInches: jest.fn() };
 
   const processor = () =>
-    new SixFlagsHeightsProcessor(
-      attractionsService as never,
-      client as never,
-    );
+    new SixFlagsHeightsProcessor(attractionsService as never, client as never);
 
   const attraction = (over: Record<string, unknown> = {}) => ({
     id: "a1",

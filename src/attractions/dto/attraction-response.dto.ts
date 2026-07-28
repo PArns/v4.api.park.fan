@@ -351,7 +351,12 @@ export class AttractionResponseDto {
     nullable: true,
   })
   comparison?:
-    "much_lower" | "lower" | "typical" | "higher" | "much_higher" | null;
+    | "much_lower"
+    | "lower"
+    | "typical"
+    | "higher"
+    | "much_higher"
+    | null;
 
   // Prediction Accuracy (Feedback Loop)
   @ApiProperty({

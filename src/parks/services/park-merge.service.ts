@@ -233,11 +233,7 @@ export class ParkMergeService {
       // does this via handlePathChange; a same-path merge went unannounced
       // and left the deleted park on the site for up to 24h.
       try {
-        await this.revalidation.revalidateTags([
-          "geo",
-          "parks",
-          "attractions",
-        ]);
+        await this.revalidation.revalidateTags(["geo", "parks", "attractions"]);
       } catch (error) {
         // The merge itself is committed; a webhook the frontend did not answer
         // must not turn a successful merge into a failure.

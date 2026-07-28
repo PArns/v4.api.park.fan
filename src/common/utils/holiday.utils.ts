@@ -29,7 +29,11 @@ export interface HolidayInfo {
  * Bridge days only apply to public holidays, not school holidays
  */
 export type HolidayType =
-  "public" | "school" | "observance" | "bank" | "bridge";
+  | "public"
+  | "school"
+  | "observance"
+  | "bank"
+  | "bridge";
 
 /**
  * Holiday entry with type information

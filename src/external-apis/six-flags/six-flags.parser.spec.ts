@@ -1,7 +1,4 @@
-import {
-  parseMinHeightInches,
-  inchesToCentimetres,
-} from "./six-flags.parser";
+import { parseMinHeightInches, inchesToCentimetres } from "./six-flags.parser";
 
 /**
  * Six Flags renders ride facts server-side, so the minimum height can be read
