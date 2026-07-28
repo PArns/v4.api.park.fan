@@ -1057,12 +1057,14 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "liseberg",
     attractionSlug: "balder",
     rcdbId: 1562,
+    minimumHeightCm: 130,
   },
   {
     citySlug: "gothenburg",
     parkSlug: "liseberg",
     attractionSlug: "helix",
     rcdbId: 11048,
+    minimumHeightCm: 130,
   },
   {
     citySlug: "gothenburg",
@@ -1075,6 +1077,7 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "liseberg",
     attractionSlug: "valkyria",
     rcdbId: 14301,
+    minimumHeightCm: 132,
   },
   {
     citySlug: "gurnee",
@@ -3402,6 +3405,7 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "liseberg",
     attractionSlug: "flumeride",
     mayGetWet: true,
+    minimumHeightCm: 100,
   },
   {
     citySlug: "seoul",
@@ -4594,5 +4598,55 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     attractionSlug: "whirlwind",
     minimumHeightCm: 91, // 36"
     minimumHeightUnit: "in",
+  },
+
+  // ── Liseberg ────────────────────────────────────────────────────────────
+  // Liseberg writes "Minst X cm eller Y cm i vuxens sällskap" — X alone, Y in
+  // an adult's company. Y is the floor and is what we store, same rule as the
+  // other parks here.
+  //
+  // Read off the park's own ride pages, July 2026. Rides whose page says
+  // "ingen begränsning i vuxens sällskap" (no limit when accompanied) have no
+  // floor at all and are deliberately absent — Farfars Bil and Skepp o'skoj
+  // among them.
+  //
+  // Covers the ten busiest rides by measured wait; the rest of the park is
+  // children's rides in Kaninlandet.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "kaninlandsbanan",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "kraftverket",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "loke",
+    minimumHeightCm: 130,
+  },
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "mechanica",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "rabalder",
+    minimumHeightCm: 90,
+  },
+  {
+    citySlug: "gothenburg",
+    parkSlug: "liseberg",
+    attractionSlug: "stormvag",
+    minimumHeightCm: 95,
   },
 ];
