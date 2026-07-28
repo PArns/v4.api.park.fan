@@ -94,27 +94,47 @@ export class RideProfileService implements OnModuleInit {
     const result: RideProfileSeedResult = { written: 0, skipped: 0 };
     const seededAt = new Date();
 
-    for (const entry of entries) {
-      const attraction = await this.repo.manager
-        .createQueryBuilder()
-        .select(["attraction.id AS id", "attraction.parkId AS parkid"])
-        .from("attractions", "attraction")
-        .innerJoin("parks", "park", "park.id = attraction.parkId")
-        .where("park.citySlug = :citySlug", { citySlug: entry.citySlug })
-        .andWhere("park.slug = :parkSlug", { parkSlug: entry.parkSlug })
-        .andWhere("attraction.slug = :attractionSlug", {
-          attractionSlug: entry.attractionSlug,
-        })
-        .getRawOne<{ id: string; parkid: string }>();
+    // Resolve every slug triple in ONE query. Doing it per entry was ~500
+    // round-trips for a job whose whole point is to finish in seconds.
+    const rows = await this.repo.manager
+      .createQueryBuilder()
+      .select([
+        "attraction.id AS id",
+        'attraction."parkId" AS parkid',
+        'park."citySlug" AS cityslug',
+        "park.slug AS parkslug",
+        "attraction.slug AS attractionslug",
+      ])
+      .from("attractions", "attraction")
+      .innerJoin("parks", "park", 'park.id = attraction."parkId"')
+      .getRawMany<{
+        id: string;
+        parkid: string;
+        cityslug: string;
+        parkslug: string;
+        attractionslug: string;
+      }>();
 
-      if (!attraction) {
+    const byKey = new Map(
+      rows.map((row) => [
+        `${row.cityslug}/${row.parkslug}/${row.attractionslug}`,
+        row,
+      ]),
+    );
+
+    const profiles: Partial<AttractionRideProfile>[] = [];
+    for (const entry of entries) {
+      const match = byKey.get(
+        `${entry.citySlug}/${entry.parkSlug}/${entry.attractionSlug}`,
+      );
+      if (!match) {
         result.skipped++;
         continue;
       }
 
-      await this.repo.save({
-        attractionId: attraction.id,
-        parkId: attraction.parkid,
+      profiles.push({
+        attractionId: match.id,
+        parkId: match.parkid,
         elements: entry.elements ?? [],
         types: entry.types ?? [],
         manufacturerName: entry.manufacturer ?? null,
@@ -124,8 +144,15 @@ export class RideProfileService implements OnModuleInit {
         inversions: entry.inversions ?? null,
         seededAt,
       });
-      result.written++;
     }
+
+    // Chunked upsert on the primary key: re-running after a seed edit updates
+    // in place instead of erroring, and never leaves a half-written table.
+    const CHUNK = 200;
+    for (let i = 0; i < profiles.length; i += CHUNK) {
+      await this.repo.upsert(profiles.slice(i, i + CHUNK), ["attractionId"]);
+    }
+    result.written = profiles.length;
 
     this.logger.log(
       `🎢 Ride profiles applied: ${result.written} written, ${result.skipped} skipped (no matching attraction)`,
@@ -163,7 +190,11 @@ export class RideProfileService implements OnModuleInit {
     termId: string,
     limit = 200,
   ): Promise<AttractionWithTerm[]> {
-    return this.repo
+    // `@>` with a single-element array is the containment form the GIN
+    // jsonb_path_ops index can serve.
+    const containment = JSON.stringify([termId]);
+
+    const rows = await this.repo
       .createQueryBuilder("profile")
       .innerJoin(
         "attractions",
@@ -182,17 +213,17 @@ export class RideProfileService implements OnModuleInit {
         'park."countrySlug" AS countryslug',
         'park."continentSlug" AS continentslug',
         "profile.openedYear AS openedyear",
-        `CASE
-           WHEN profile.elements @> :containment::jsonb THEN 'element'
-           WHEN profile.types @> :containment::jsonb THEN 'type'
-           ELSE 'manufacturer'
-         END AS kind`,
+        // Returned so `kind` can be derived in TypeScript. A bound parameter
+        // inside a SELECT expression is not something the query builder
+        // guarantees to substitute, and these arrays are a handful of strings.
+        "profile.elements AS elements",
+        "profile.types AS types",
       ])
       .where(
         `(profile.elements @> :containment::jsonb
           OR profile.types @> :containment::jsonb
-          OR profile.manufacturer_term_id = :termId)`,
-        { containment: JSON.stringify([termId]), termId },
+          OR profile.manufacturerTermId = :termId)`,
+        { containment, termId },
       )
       .orderBy("park.name", "ASC")
       .addOrderBy("attraction.name", "ASC")
@@ -208,23 +239,27 @@ export class RideProfileService implements OnModuleInit {
         countryslug: string;
         continentslug: string;
         openedyear: number | null;
-        kind: "element" | "type" | "manufacturer";
-      }>()
-      .then((rows) =>
-        rows.map((row) => ({
-          attractionId: row.attractionid,
-          attractionName: row.attractionname,
-          attractionSlug: row.attractionslug,
-          parkId: row.parkid,
-          parkName: row.parkname,
-          parkSlug: row.parkslug,
-          citySlug: row.cityslug,
-          countrySlug: row.countryslug,
-          continentSlug: row.continentslug,
-          kind: row.kind,
-          openedYear: row.openedyear,
-        })),
-      );
+        elements: string[] | null;
+        types: string[] | null;
+      }>();
+
+    return rows.map((row) => ({
+      attractionId: row.attractionid,
+      attractionName: row.attractionname,
+      attractionSlug: row.attractionslug,
+      parkId: row.parkid,
+      parkName: row.parkname,
+      parkSlug: row.parkslug,
+      citySlug: row.cityslug,
+      countrySlug: row.countryslug,
+      continentSlug: row.continentslug,
+      kind: row.elements?.includes(termId)
+        ? "element"
+        : row.types?.includes(termId)
+          ? "type"
+          : "manufacturer",
+      openedYear: row.openedyear,
+    }));
   }
 
   /**

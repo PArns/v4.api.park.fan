@@ -25,13 +25,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 export class GlossaryRidesController {
   constructor(private readonly rideProfileService: RideProfileService) {}
 
-  /**
-   * How many rides carry each term, for the whole curated set.
-   *
-   * Declared before `:termId/attractions` on purpose — a literal segment must
-   * be registered ahead of the parameterised one or "counts" would be matched
-   * as a term id.
-   */
+  /** How many rides carry each term, for the whole curated set. */
   @Get("counts")
   @UseInterceptors(new HttpCacheInterceptor(3600))
   @ApiOperation({
