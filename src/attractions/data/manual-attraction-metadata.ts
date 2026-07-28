@@ -3084,42 +3084,49 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "energylandia",
     attractionSlug: "abyssus",
     rcdbId: 17412,
+    minimumHeightCm: 120,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "boomerang",
     rcdbId: 14192,
+    minimumHeightCm: 100,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "hyperion-rc",
     rcdbId: 14462,
+    minimumHeightCm: 140,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "mayan-rc",
     rcdbId: 12263,
+    minimumHeightCm: 140,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "moya-formula-autodrom",
     rcdbId: 12362,
+    minimumHeightCm: 120,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "speed-rc",
     rcdbId: 14352,
+    minimumHeightCm: 140,
   },
   {
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "zadra-rc",
     rcdbId: 16184,
+    minimumHeightCm: 140,
   },
 
   // --- Water rides ThemeParks.wiki leaves at NULL -------------------------
@@ -3206,6 +3213,7 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "energylandia",
     attractionSlug: "splash-battle",
     mayGetWet: true,
+    minimumHeightCm: 120,
   },
   {
     citySlug: "rust",
@@ -4163,5 +4171,192 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     parkSlug: "toverland",
     attractionSlug: "vliegend-tapijt",
     minimumHeightCm: 90,
+  },
+
+  // ── Energylandia ────────────────────────────────────────────────────────
+  // ThemeParks.wiki carries no height here either. Energylandia states either
+  // a single "Wzrost od X cm" or a pair — "X-Y cm z opiekunem / od Y cm bez
+  // opiekuna" (X-Y with a guardian, from Y unaccompanied). We store the
+  // ACCOMPANIED figure, same rule as Toverland: it is the height at which a
+  // child may ride at all.
+  //
+  // Read off the park's own ride pages (energylandia.pl/atrakcje/<zone>/<ride>),
+  // July 2026. The park's Regulamin PDF looks like the obvious bulk source but
+  // is a scan with no text layer and, once rendered, turns out to be pure legal
+  // text with no height table at all.
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "anaconda",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "apocalypto",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "atlantis",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "aztec-swing",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "dragon-adv-rc",
+    minimumHeightCm: 130,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "draken-rc",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "ekipa-light-explorers",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "frida-rc",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "frutti-loop-rc",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "grotto-expedition",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "honey-harbor",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "jungle-adventure",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "lolipop-farm",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "magic-fly",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "main-train-2",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "mars-rc",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "monster-house",
+    minimumHeightCm: 130,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "moya-formula-rc",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "rmf-dragon-rc",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "smiejzelki-energus-rc",
+    minimumHeightCm: 100,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "space-booster",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "space-gun",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "swiss-water-cups",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "tidal-wave-twister",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "toffifee-kopalnia-zlota",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "tsunami-drop",
+    minimumHeightCm: 130,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "viking-rc",
+    minimumHeightCm: 140,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "viking-ride",
+    minimumHeightCm: 120,
+  },
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "wonder-wheel",
+    minimumHeightCm: 120,
   },
 ];
