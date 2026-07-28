@@ -77,10 +77,9 @@ describe("RideProfileService.findAttractionsByTerm ordering", () => {
   it("does not order by baseline columns in park mode", async () => {
     await service.findAttractionsByTerm("launch", 200, "park");
 
-    const ordered = [
-      ...qb.orderBy.mock.calls,
-      ...qb.addOrderBy.mock.calls,
-    ].map(([clause]) => clause as string);
+    const ordered = [...qb.orderBy.mock.calls, ...qb.addOrderBy.mock.calls].map(
+      ([clause]) => clause as string,
+    );
     expect(ordered.some((clause) => clause.includes("baseline"))).toBe(false);
   });
 

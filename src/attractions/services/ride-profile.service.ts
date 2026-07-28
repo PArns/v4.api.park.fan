@@ -301,25 +301,23 @@ export class RideProfileService implements OnModuleInit {
     // same baseline can swap places between identical requests.
     query.addOrderBy("park.name", "ASC").addOrderBy("attraction.name", "ASC");
 
-    const rows = await query
-      .limit(limit)
-      .getRawMany<{
-        attractionid: string;
-        attractionname: string;
-        attractionslug: string;
-        parkid: string;
-        parkname: string;
-        parkslug: string;
-        cityslug: string;
-        countryslug: string;
-        continentslug: string;
-        openedyear: number | null;
-        elements: string[] | null;
-        types: string[] | null;
-        p90baseline: string | null;
-        isheadliner: boolean | null;
-        confidence: "high" | "medium" | "low" | null;
-      }>();
+    const rows = await query.limit(limit).getRawMany<{
+      attractionid: string;
+      attractionname: string;
+      attractionslug: string;
+      parkid: string;
+      parkname: string;
+      parkslug: string;
+      cityslug: string;
+      countryslug: string;
+      continentslug: string;
+      openedyear: number | null;
+      elements: string[] | null;
+      types: string[] | null;
+      p90baseline: string | null;
+      isheadliner: boolean | null;
+      confidence: "high" | "medium" | "low" | null;
+    }>();
 
     return rows.map((row) => ({
       attractionId: row.attractionid,
