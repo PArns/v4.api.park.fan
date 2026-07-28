@@ -8749,4 +8749,547 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "zierer",
     openedYear: 2009,
   },
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Builder and opening year only — the RCDB-carrying rides the curated
+  // passes above did not reach (mostly junior and family coasters, plus a
+  // few the earlier passes simply missed, e.g. Hollywood Rip Ride Rockit).
+  //
+  // No `elements`: nobody has walked these layouts and an invented figure is
+  // worse than none. Manufacturer and year are facts, taken from Wikidata
+  // (properties P176 / P571, P729, P1619 — license CC0), joined to our rows
+  // on the RCDB id both sides already carry. That is the same provenance
+  // MANUAL_ATTRACTION_METADATA uses for `rcdbId` itself.
+  //
+  // A builder the glossary has no term for still gets credited by name, with
+  // `manufacturerTermId` left off — that is what the two fields are for.
+  // ───────────────────────────────────────────────────────────────────────
+  // Adventureland Resort
+  {
+    citySlug: "altoona",
+    parkSlug: "adventureland-resort",
+    attractionSlug: "dragon-slayer",
+    manufacturer: "Hopkins Rides",
+  },
+  {
+    citySlug: "altoona",
+    parkSlug: "adventureland-resort",
+    attractionSlug: "tornado",
+  },
+  // Avonturenpark Hellendoorn
+  {
+    citySlug: "hellendoorn",
+    parkSlug: "avonturenpark-hellendoorn",
+    attractionSlug: "rioolrat",
+  },
+  // Blackpool Pleasure Beach
+  {
+    citySlug: "blackpool",
+    parkSlug: "blackpool-pleasure-beach",
+    attractionSlug: "blue-flyer",
+  },
+  // Busch Gardens Tampa
+  {
+    citySlug: "tampa",
+    parkSlug: "busch-gardens-tampa",
+    attractionSlug: "gwazi-gliders",
+    manufacturer: "Great Coasters International",
+    manufacturerTermId: "gci",
+    openedYear: 1999,
+  },
+  // Canada's Wonderland
+  {
+    citySlug: "vaughan",
+    parkSlug: "canadas-wonderland",
+    attractionSlug: "ghoster-coaster",
+    manufacturer: "Philadelphia Toboggan Coasters",
+  },
+  {
+    citySlug: "vaughan",
+    parkSlug: "canadas-wonderland",
+    attractionSlug: "silver-streak",
+  },
+  // Carowinds
+  {
+    citySlug: "charlotte",
+    parkSlug: "carowinds",
+    attractionSlug: "ricochet",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+  },
+  {
+    citySlug: "charlotte",
+    parkSlug: "carowinds",
+    attractionSlug: "vortex",
+    manufacturer: "Bolliger & Mabillard",
+    manufacturerTermId: "b-and-m",
+  },
+  {
+    citySlug: "charlotte",
+    parkSlug: "carowinds",
+    attractionSlug: "woodstock-express",
+    manufacturer: "Philadelphia Toboggan Coasters",
+  },
+  // Cedar Point
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "wilderness-run",
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+    openedYear: 1979,
+  },
+  {
+    citySlug: "sandusky",
+    parkSlug: "cedar-point",
+    attractionSlug: "woodstock-express",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    openedYear: 1999,
+  },
+  // Chessington World of Adventures
+  {
+    citySlug: "chessington",
+    parkSlug: "chessington-world-of-adventures",
+    attractionSlug: "rattlesnake",
+    manufacturer: "Maurer Söhne",
+    manufacturerTermId: "maurer-rides",
+  },
+  // Dorney Park
+  {
+    citySlug: "allentown",
+    parkSlug: "dorney-park",
+    attractionSlug: "woodstock-express",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  // Energylandia
+  {
+    citySlug: "zator",
+    parkSlug: "energylandia",
+    attractionSlug: "moya-formula-autodrom",
+  },
+  // Flamingo Land
+  {
+    citySlug: "kirby-misperton",
+    parkSlug: "flamingo-land",
+    attractionSlug: "sik",
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+    openedYear: 2022,
+  },
+  // Great America
+  {
+    citySlug: "santa-clara",
+    parkSlug: "great-america",
+    attractionSlug: "demon",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+  },
+  // Hersheypark
+  {
+    citySlug: "hershey",
+    parkSlug: "hersheypark",
+    attractionSlug: "jolly-rancher-remix-featuring-christmas-overlay",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Kings Dominion
+  {
+    citySlug: "doswell",
+    parkSlug: "kings-dominion",
+    attractionSlug: "woodstock-express",
+    manufacturer: "Philadelphia Toboggan Coasters",
+  },
+  // Kings Island
+  {
+    citySlug: "maineville",
+    parkSlug: "kings-island",
+    attractionSlug: "woodstock-express",
+    manufacturer: "Philadelphia Toboggan Coasters",
+  },
+  // Knoebels Amusement Park
+  {
+    citySlug: "elysburg",
+    parkSlug: "knoebels-amusement-park",
+    attractionSlug: "kozmos-kurves",
+    manufacturer: "E&F Miler Industries",
+  },
+  // La Ronde
+  {
+    citySlug: "montreal",
+    parkSlug: "la-ronde",
+    attractionSlug: "ednoer",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Lake Compounce
+  {
+    citySlug: "southington",
+    parkSlug: "lake-compounce",
+    attractionSlug: "zoomerang",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Le Pal
+  {
+    citySlug: "saint-pourcain-sur-besbre",
+    parkSlug: "le-pal",
+    attractionSlug: "fjord-explorer",
+  },
+  // Michigan's Adventure
+  {
+    citySlug: "muskegon",
+    parkSlug: "michigans-adventure",
+    attractionSlug: "corkscrew",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+    openedYear: 1979,
+  },
+  {
+    citySlug: "muskegon",
+    parkSlug: "michigans-adventure",
+    attractionSlug: "mad-mouse",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+  },
+  {
+    citySlug: "muskegon",
+    parkSlug: "michigans-adventure",
+    attractionSlug: "zachs-zoomer",
+    manufacturer: "Custom Coasters International",
+  },
+  // Mid-America Parks
+  {
+    citySlug: "eureka",
+    parkSlug: "mid-america-parks",
+    attractionSlug: "boomerang",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  {
+    citySlug: "eureka",
+    parkSlug: "mid-america-parks",
+    attractionSlug: "ninja",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Movie Park Germany
+  {
+    citySlug: "bottrop",
+    parkSlug: "movie-park-germany",
+    attractionSlug: "movie-park-studio-tour",
+  },
+  // Nigloland
+  {
+    citySlug: "dolancourt",
+    parkSlug: "nigloland",
+    attractionSlug: "krampus-expedition",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+  },
+  {
+    citySlug: "dolancourt",
+    parkSlug: "nigloland",
+    attractionSlug: "spatiale-experience-grand-huit",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+    openedYear: 1998,
+  },
+  // SeaWorld San Diego
+  {
+    citySlug: "san-diego",
+    parkSlug: "seaworld-san-diego",
+    attractionSlug: "journey-to-atlantis",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+  },
+  // Sesame Place
+  {
+    citySlug: "houston",
+    parkSlug: "sesame-place",
+    attractionSlug: "oscars-wacky-taxi-coaster",
+    manufacturer: "The Gravity Group",
+    manufacturerTermId: "gravity-group",
+  },
+  {
+    citySlug: "houston",
+    parkSlug: "sesame-place",
+    attractionSlug: "vapor-trail-coaster",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Six Flags America
+  {
+    citySlug: "bowie",
+    parkSlug: "six-flags-america",
+    attractionSlug: "great-chase",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  {
+    citySlug: "bowie",
+    parkSlug: "six-flags-america",
+    attractionSlug: "roar",
+    manufacturer: "Great Coasters International",
+    manufacturerTermId: "gci",
+  },
+  // Six Flags Darien Lake
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "hootn-holler",
+    manufacturer: "Zierer",
+    manufacturerTermId: "zierer",
+  },
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "predator",
+    manufacturer: "Dinn Corporation",
+  },
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "tantrum",
+    manufacturer: "Gerstlauer",
+    manufacturerTermId: "gerstlauer",
+    openedYear: 2018,
+  },
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "viper",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+  },
+  // Six Flags Discovery Kingdom
+  {
+    citySlug: "vallejo",
+    parkSlug: "six-flags-discovery-kingdom",
+    attractionSlug: "road-runner-express",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  {
+    citySlug: "vallejo",
+    parkSlug: "six-flags-discovery-kingdom",
+    attractionSlug: "the-flash-vertical-velocity",
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+  },
+  // Six Flags Frontier City
+  {
+    citySlug: "oklahoma-city",
+    parkSlug: "six-flags-frontier-city",
+    attractionSlug: "silver-bullet",
+    manufacturer: "Schwarzkopf",
+    manufacturerTermId: "schwarzkopf",
+    openedYear: 1986,
+  },
+  {
+    citySlug: "oklahoma-city",
+    parkSlug: "six-flags-frontier-city",
+    attractionSlug: "steel-lasso",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  {
+    citySlug: "oklahoma-city",
+    parkSlug: "six-flags-frontier-city",
+    attractionSlug: "wildcat",
+    manufacturer: "National Amusement Devices",
+    openedYear: 1991,
+  },
+  // Six Flags Great Adventure
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "barrels-o-fun",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  // Six Flags Great America
+  {
+    citySlug: "gurnee",
+    parkSlug: "six-flags-great-america",
+    attractionSlug: "goliath",
+    manufacturer: "Rocky Mountain Construction",
+    manufacturerTermId: "rmc",
+  },
+  {
+    citySlug: "gurnee",
+    parkSlug: "six-flags-great-america",
+    attractionSlug: "little-dipper",
+    manufacturer: "Philadelphia Toboggan Coasters",
+  },
+  // Six Flags Great Escape
+  {
+    citySlug: "queensbury",
+    parkSlug: "six-flags-great-escape",
+    attractionSlug: "canyon-blaster",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+  },
+  {
+    citySlug: "queensbury",
+    parkSlug: "six-flags-great-escape",
+    attractionSlug: "frankies-mine-train",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  {
+    citySlug: "queensbury",
+    parkSlug: "six-flags-great-escape",
+    attractionSlug: "steamin-demon",
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+  },
+  // Six Flags Magic Mountain
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "magic-flyer",
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "road-runner-express",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Six Flags Mexico
+  {
+    citySlug: "ciudad-de-mexico",
+    parkSlug: "six-flags-mexico",
+    attractionSlug: "the-joker",
+    manufacturer: "Gerstlauer",
+    manufacturerTermId: "gerstlauer",
+    openedYear: 2013,
+  },
+  {
+    citySlug: "ciudad-de-mexico",
+    parkSlug: "six-flags-mexico",
+    attractionSlug: "wonder-woman-coaster",
+    manufacturer: "S&S Worldwide",
+    manufacturerTermId: "s-and-s-worldwide",
+    openedYear: 2018,
+  },
+  // Six Flags New England
+  {
+    citySlug: "agawam",
+    parkSlug: "six-flags-new-england",
+    attractionSlug: "flashback",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  {
+    citySlug: "agawam",
+    parkSlug: "six-flags-new-england",
+    attractionSlug: "gotham-city-gauntlet-escape-from-arkham-asylum",
+    manufacturer: "Maurer Söhne",
+    manufacturerTermId: "maurer-rides",
+  },
+  // Six Flags Over Georgia
+  {
+    citySlug: "austell",
+    parkSlug: "six-flags-over-georgia",
+    attractionSlug: "blue-hawk",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  {
+    citySlug: "austell",
+    parkSlug: "six-flags-over-georgia",
+    attractionSlug: "the-riddler-mindbender",
+  },
+  // Six Flags Over Texas
+  {
+    citySlug: "arlington",
+    parkSlug: "six-flags-over-texas",
+    attractionSlug: "runaway-mountain",
+    manufacturer: "Premier Rides",
+    manufacturerTermId: "premier-rides",
+  },
+  {
+    citySlug: "arlington",
+    parkSlug: "six-flags-over-texas",
+    attractionSlug: "wile-e-coyotes-grand-canyon-blaster",
+    manufacturer: "Chance Rides",
+    manufacturerTermId: "chance-rides",
+  },
+  // Traumatica
+  {
+    citySlug: "rust",
+    parkSlug: "traumatica",
+    attractionSlug: "matterhorn-blitz",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+  },
+  {
+    citySlug: "rust",
+    parkSlug: "traumatica",
+    attractionSlug: "pegasus-the-youngstar-coaster",
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+    openedYear: 2006,
+  },
+  // Universal Studios At Universal Orlando
+  {
+    citySlug: "orlando",
+    parkSlug: "universal-studios-at-universal-orlando",
+    attractionSlug: "hollywood-rip-ride-rockit",
+    manufacturer: "Maurer Söhne",
+    manufacturerTermId: "maurer-rides",
+  },
+  // Valleyfair
+  {
+    citySlug: "shakopee",
+    parkSlug: "valleyfair",
+    attractionSlug: "cosmic-coaster",
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+  },
+  {
+    citySlug: "shakopee",
+    parkSlug: "valleyfair",
+    attractionSlug: "high-roller",
+  },
+  {
+    citySlug: "shakopee",
+    parkSlug: "valleyfair",
+    attractionSlug: "mad-mouse",
+  },
+  // Warner Bros. Movie World
+  {
+    citySlug: "oxenford",
+    parkSlug: "warner-bros-movie-world",
+    attractionSlug: "road-runner-rollercoaster",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+  },
+  // Worlds of Fun
+  {
+    citySlug: "kansas-city",
+    parkSlug: "worlds-of-fun",
+    attractionSlug: "boomerang",
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    openedYear: 2000,
+  },
+  {
+    citySlug: "kansas-city",
+    parkSlug: "worlds-of-fun",
+    attractionSlug: "cosmic-coaster",
+    manufacturer: "Preston & Barbieri",
+    openedYear: 1993,
+  },
+  {
+    citySlug: "kansas-city",
+    parkSlug: "worlds-of-fun",
+    attractionSlug: "spinning-dragons",
+    manufacturer: "Gerstlauer",
+    manufacturerTermId: "gerstlauer",
+    openedYear: 2004,
+  },
 ];

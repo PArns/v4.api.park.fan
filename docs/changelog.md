@@ -18,14 +18,21 @@ lists the other rides that have one.
 - New `attraction_ride_profiles` table (`elements` / `types` jsonb + GIN
   containment indexes, manufacturer name *and* optional term id, model,
   opening year, inversions).
-- `RIDE_PROFILE_SEED`: **629 hand-curated rides across 95 parks** — every
-  Disney and Universal park, Phantasialand, Toverland, Europa-Park, Movie Park,
-  all three Walibis, plus the major European, North American, Asian and
-  Australian coaster parks. All 629 resolve against the live database, covering
-  **402 of the 474 rides that carry an RCDB id (85%)** plus 227 rides without
-  one (dark rides, flats). Assembled from park and manufacturer pages,
-  Wikipedia and on-ride footage; RCDB is used only as a link target and to
-  confirm manufacturer/model/year, exactly as it already is for `rcdbId`.
+- `RIDE_PROFILE_SEED`: **701 rides across 100 parks** — every Disney and
+  Universal park, Phantasialand, Toverland, Europa-Park, Movie Park, all three
+  Walibis, plus the major European, North American, Asian and Australian
+  coaster parks. All 701 resolve against the live database and they now cover
+  **every one of the 474 rides that carry an RCDB id**, plus 227 without one
+  (dark rides, flats).
+  - 629 are hand-curated with full layouts, assembled from park and
+    manufacturer pages, Wikipedia and on-ride footage. RCDB is used only as a
+    link target and to confirm manufacturer/model/year, exactly as it already
+    is for `rcdbId`.
+  - 72 carry **builder and opening year only** — the RCDB-carrying rides the
+    curated passes never reached. Those two fields are facts from Wikidata
+    (P176 / P571 / P729 / P1619, CC0), joined on the RCDB id both sides
+    already hold. They deliberately have no `elements`: nobody has walked
+    those layouts, and an invented figure is worse than none.
 - Served on the attraction detail response *and* embedded in the park response
   (one batched read per park — the frontend ride page renders from the park
   payload).
@@ -44,6 +51,14 @@ lists the other rides that have one.
   and one stale line must not fail the run — but a bare count hid twelve dead
   entries, among them Universal Studios Japan's whole coaster line-up. CI
   cannot catch this (no database), so the log is the only signal.
+- `MANUAL_ATTRACTION_METADATA`: **20 more `rcdbId`s**. The first Wikidata pass
+  compared names literally, so every ride whose name carries licensor styling
+  was missed — we store "BATMAN™ The Ride" and "THE RIDDLER™'s Revenge" where
+  Wikidata has "Batman: The Ride" and "The Riddler's Revenge". Re-matched on
+  park geo-proximity plus a name comparison that strips ™/® and case, then
+  each id confirmed against the ride and park name on its RCDB page. That
+  confirmation step is not ceremony: the geo match proposed 4327 for Universal
+  Orlando's Revenge of the Mummy, which is Singapore's ride (Orlando is 2232).
 
 → [Ride ↔ Glossary link](docs/frontend/ride-glossary-link.md)
 
