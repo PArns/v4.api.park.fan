@@ -37,6 +37,14 @@ export interface AttractionWithTerm {
   /** Where the term appears: as a track figure or as a ride type. */
   kind: "element" | "type" | "manufacturer";
   openedYear: number | null;
+  /**
+   * Typical peak wait in whole minutes — the P90 over 548 days from
+   * `attraction_p90_baselines`, not a live reading. Null when the ride has no
+   * baseline yet, which is normal for recently added or rarely open rides.
+   */
+  typicalPeakWait: number | null;
+  /** Whether the baseline job classified this ride as one of its park's headliners. */
+  isHeadliner: boolean;
 }
 
 /** Injection token so tests can supply their own seed. */
@@ -220,6 +228,14 @@ export class RideProfileService implements OnModuleInit {
         "attraction.id = profile.attractionId",
       )
       .innerJoin("parks", "park", "park.id = profile.parkId")
+      // LEFT, not INNER: a ride with no baseline must still appear in the
+      // list. The count endpoint and this list are read side by side on the
+      // glossary overview, and an inner join would make them disagree.
+      .leftJoin(
+        "attraction_p90_baselines",
+        "baseline",
+        'baseline."attractionId" = profile."attractionId"',
+      )
       .select([
         "profile.attractionId AS attractionid",
         "attraction.name AS attractionname",
@@ -236,6 +252,9 @@ export class RideProfileService implements OnModuleInit {
         // guarantees to substitute, and these arrays are a handful of strings.
         "profile.elements AS elements",
         "profile.types AS types",
+        'baseline."p90Baseline" AS p90baseline',
+        'baseline."isHeadliner" AS isheadliner',
+        "baseline.confidence AS confidence",
       ])
       .where(
         `(profile.elements @> :containment::jsonb
@@ -259,6 +278,9 @@ export class RideProfileService implements OnModuleInit {
         openedyear: number | null;
         elements: string[] | null;
         types: string[] | null;
+        p90baseline: string | null;
+        isheadliner: boolean | null;
+        confidence: "high" | "medium" | "low" | null;
       }>();
 
     return rows.map((row) => ({
@@ -277,6 +299,11 @@ export class RideProfileService implements OnModuleInit {
           ? "type"
           : "manufacturer",
       openedYear: row.openedyear,
+      // `decimal` comes back from pg as a string ("75.00"), so this needs an
+      // explicit conversion — `row.p90baseline > 60` would compare strings.
+      typicalPeakWait:
+        row.p90baseline === null ? null : Math.round(Number(row.p90baseline)),
+      isHeadliner: row.isheadliner ?? false,
     }));
   }
 
