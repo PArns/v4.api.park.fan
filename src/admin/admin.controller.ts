@@ -924,7 +924,10 @@ export class AdminController {
       {},
       { priority: 10 },
     );
-    return { message: "Six Flags height sync queued", jobId: job.id.toString() };
+    return {
+      message: "Six Flags height sync queued",
+      jobId: job.id.toString(),
+    };
   }
 
   /**
@@ -950,7 +953,10 @@ export class AdminController {
       type: "object",
       properties: {
         city: { type: "string" },
-        citySlug: { type: "string", description: "Derived from city if omitted" },
+        citySlug: {
+          type: "string",
+          description: "Derived from city if omitted",
+        },
         latitude: { type: "number" },
         longitude: { type: "number" },
       },

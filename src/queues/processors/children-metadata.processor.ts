@@ -12,7 +12,6 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { ThemeParksMapper } from "../../external-apis/themeparks/themeparks.mapper";
 import { EntityResponse } from "../../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
-import { MANUAL_ATTRACTION_METADATA } from "../../attractions/data/manual-attraction-metadata";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { findExistingAttraction } from "../../attractions/utils/attraction-match.util";
 import { publishedHeightUnit } from "../../common/utils/height-unit.util";
@@ -358,7 +357,10 @@ export class ChildrenMetadataProcessor {
                 maximumHeight: number;
                 mayGetWet: boolean;
               }> = {};
-              if (minHeight !== null && minHeight !== attraction.minimumHeight) {
+              if (
+                minHeight !== null &&
+                minHeight !== attraction.minimumHeight
+              ) {
                 update.minimumHeight = minHeight;
                 // The wiki always hands us centimetres, but US parks publish
                 // inches — 122 here is the park's 48" sign. Record which

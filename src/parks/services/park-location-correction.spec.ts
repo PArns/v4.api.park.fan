@@ -65,7 +65,10 @@ describe("ParkRenameService.correctLocation", () => {
       providers: [
         ParkRenameService,
         { provide: getRepositoryToken(Park), useValue: parkRepository },
-        { provide: getRepositoryToken(ParkSlugAlias), useValue: aliasRepository },
+        {
+          provide: getRepositoryToken(ParkSlugAlias),
+          useValue: aliasRepository,
+        },
         { provide: REDIS_CLIENT, useValue: redis },
         { provide: RevalidationService, useValue: revalidation },
       ],

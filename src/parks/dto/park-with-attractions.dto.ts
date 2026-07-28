@@ -85,7 +85,12 @@ export class ParkAttractionDto {
     nullable: true,
   })
   comparison?:
-    "much_lower" | "lower" | "typical" | "higher" | "much_higher" | null;
+    | "much_lower"
+    | "lower"
+    | "typical"
+    | "higher"
+    | "much_higher"
+    | null;
 
   @ApiProperty({
     description: "Attraction statistics",
@@ -374,7 +379,10 @@ export class ParkStatisticsDto {
     nullable: true,
   })
   peakHourSource:
-    "prediction" | "observed_today" | "historical_fallback" | null;
+    | "prediction"
+    | "observed_today"
+    | "historical_fallback"
+    | null;
 
   @ApiProperty({
     description:
@@ -624,7 +632,7 @@ export class ParkWithAttractionsDto {
               seasonMonths,
               isCurrentlyInSeason,
               minimumHeight: attraction.minimumHeight ?? null,
-      minimumHeightUnit: attraction.minimumHeightUnit ?? null,
+              minimumHeightUnit: attraction.minimumHeightUnit ?? null,
               maximumHeight: attraction.maximumHeight ?? null,
               mayGetWet: attraction.mayGetWet ?? null,
               rcdbId: attraction.rcdbId ?? null,
