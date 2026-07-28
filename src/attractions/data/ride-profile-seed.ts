@@ -9343,4 +9343,89 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gerstlauer",
     openedYear: 2004,
   },
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Beto Carrero World (Penha, BR)
+  //
+  // The park's busiest rides had no profile at all — Star Mountain alone
+  // averages 74 minutes, the highest of any unprofiled ride we track. Builder
+  // and model confirmed against RCDB (link-and-confirm only, as everywhere
+  // here); types from the park's own attraction pages and Wikipedia.
+  //
+  // No `elements` anywhere in this block: nobody publishes a ride-order
+  // description for these layouts. The park says Star Mountain has "two
+  // loopings" but never says where in the circuit they sit.
+  // ───────────────────────────────────────────────────────────────────────
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "star-mountain",
+    types: ["steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "MK-1200",
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "tigor-mountain",
+    types: ["family-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Junior Coaster",
+    openedYear: 2007,
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "big-drop",
+    types: ["drop-tower"],
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+    openedYear: 2003,
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "spin-blast",
+    types: ["flat-ride"],
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+    model: "Disk'O",
+    openedYear: 2023,
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "rebulico",
+    types: ["flat-ride"],
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+    model: "Air Race",
+    openedYear: 2022,
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "roda-gigante",
+    types: ["ferris-wheel"],
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "carrossel-veneziano",
+    types: ["carousel"],
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "autopista-bate-bate",
+    types: ["bumper-cars"],
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "tchibum",
+    types: ["water-ride"],
+  },
 ];

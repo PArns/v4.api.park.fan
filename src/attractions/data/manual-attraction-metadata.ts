@@ -4649,4 +4649,20 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     attractionSlug: "stormvag",
     minimumHeightCm: 95,
   },
+
+  // ── Beto Carrero World ──────────────────────────────────────────────────
+  // Two coasters RCDB covers that we had no id for. Both confirmed against
+  // the ride and park name on their RCDB page.
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "star-mountain",
+    rcdbId: 1154, // Star Mountain — Beto Carrero World
+  },
+  {
+    citySlug: "penha",
+    parkSlug: "beto-carrero-world",
+    attractionSlug: "tigor-mountain",
+    rcdbId: 3686, // Tigor Mountain — Beto Carrero World
+  },
 ];
