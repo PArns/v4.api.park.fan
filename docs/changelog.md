@@ -18,10 +18,11 @@ lists the other rides that have one.
 - New `attraction_ride_profiles` table (`elements` / `types` jsonb + GIN
   containment indexes, manufacturer name *and* optional term id, model,
   opening year, inversions).
-- `RIDE_PROFILE_SEED`: **524 hand-curated rides across 67 parks** — every
+- `RIDE_PROFILE_SEED`: **629 hand-curated rides across 95 parks** — every
   Disney and Universal park, Phantasialand, Toverland, Europa-Park, Movie Park,
-  all three Walibis, plus the major European, North American and Asian coaster
-  parks. Assembled from park and manufacturer pages, Wikipedia and on-ride
+  all three Walibis, plus the major European, North American, Asian and
+  Australian coaster parks — 88% of every ride in the database that carries an
+  RCDB id. Assembled from park and manufacturer pages, Wikipedia and on-ride
   footage; RCDB is used only as a link target and to confirm
   manufacturer/model/year, exactly as it already is for `rcdbId`.
 - Served on the attraction detail response *and* embedded in the park response

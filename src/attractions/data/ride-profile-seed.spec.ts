@@ -52,8 +52,12 @@ describe("RIDE_PROFILE_SEED", () => {
     expect(dupes).toEqual([]);
   });
 
-  it("gives every coaster with elements a lift, a launch or a drop to start", () => {
-    // A layout that starts mid-air means the element list was truncated.
+  it("gives every coaster with elements a lift, a launch or a drop up front", () => {
+    // A layout with no way of gaining energy near its start means the element
+    // list was truncated. Checked over the first few entries rather than
+    // exactly the first, because a ride can legitimately do something before
+    // the lift: Hydra at Dorney Park is famous for inverting through a jojo
+    // roll on the way OUT of the station, before it has climbed anything.
     const starters = new Set([
       "lifthill",
       "launch",
@@ -62,10 +66,13 @@ describe("RIDE_PROFILE_SEED", () => {
       "beyond-vertical-drop",
       "first-drop",
     ]);
+    const LOOKAHEAD = 3;
 
     const bad = RIDE_PROFILE_SEED.filter(
-      (e) => e.elements?.length && !starters.has(e.elements[0]),
-    ).map((e) => `${e.attractionSlug}: ${e.elements?.[0]}`);
+      (e) =>
+        e.elements?.length &&
+        !e.elements.slice(0, LOOKAHEAD).some((id) => starters.has(id)),
+    ).map((e) => `${e.attractionSlug}: ${e.elements?.join(" → ")}`);
 
     expect(bad).toEqual([]);
   });
