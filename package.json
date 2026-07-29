@@ -68,7 +68,7 @@
     "slugify": "^1.6.9",
     "tar": "^7.5.20",
     "transliteration": "^2.6.1",
-    "typeorm": "^0.3.30",
+    "typeorm": "^0.3.31",
     "uuid": "^14.0.1"
   },
   "devDependencies": {
