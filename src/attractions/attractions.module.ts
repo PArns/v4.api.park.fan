@@ -19,6 +19,8 @@ import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
 import { ManualMetadataService } from "./services/manual-metadata.service";
 import { RideProfileService } from "./services/ride-profile.service";
+import { RideStatsService } from "./services/ride-stats.service";
+import { RcdbClient } from "../external-apis/rcdb/rcdb.client";
 import { GlossaryRidesController } from "./glossary-rides.controller";
 import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity";
 
@@ -49,6 +51,8 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionMergeService,
     ManualMetadataService,
     RideProfileService,
+    RideStatsService,
+    RcdbClient,
   ],
   exports: [
     AttractionsService,
@@ -56,6 +60,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionMergeService,
     ManualMetadataService,
     RideProfileService,
+    RideStatsService,
   ],
 })
 export class AttractionsModule {}

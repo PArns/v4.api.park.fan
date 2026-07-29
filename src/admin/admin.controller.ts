@@ -58,6 +58,7 @@ export class AdminController {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
+    @InjectQueue("rcdb-stats") private rcdbStatsQueue: Queue,
     @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
@@ -925,6 +926,35 @@ export class AdminController {
       { priority: 1 },
     );
     return { message: "Ride profile job queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Import ride measurements from RCDB.
+   *
+   * Length, height, drop, speed, duration, g-force, capacity and who designed
+   * and built the ride — none of which exists anywhere else in this system.
+   * Fetched one ride at a time, so a full run over the ~500 rides we hold an
+   * RCDB id for takes minutes; rows imported in the last 90 days are skipped,
+   * so a second run costs a handful of requests.
+   */
+  @Post("import-rcdb-stats")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Import ride measurements from RCDB",
+    description:
+      "Queues a fetch of every curated ride that has an rcdbId and no recent " +
+      "import. Pass `limit` for a trial run. Re-runnable and self-limiting.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerRcdbStats(
+    @Body() body?: { limit?: number },
+  ): Promise<{ message: string; jobId: string }> {
+    const job = await this.rcdbStatsQueue.add(
+      "import-stats",
+      { limit: body?.limit },
+      { priority: 1 },
+    );
+    return { message: "RCDB stat import queued", jobId: job.id.toString() };
   }
 
   /**

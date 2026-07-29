@@ -10,6 +10,20 @@ import {
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
 import { Attraction } from "./attraction.entity";
+import type { RcdbRideStats } from "../../external-apis/rcdb/rcdb.parser";
+
+/**
+ * The imported measurements, plus where they came from.
+ *
+ * Provenance travels with the numbers: these are somebody else's figures, and
+ * a row that cannot say which RCDB entry it came from cannot be checked or
+ * re-imported.
+ */
+export interface RideStats extends RcdbRideStats {
+  source: "rcdb";
+  /** The RCDB id the numbers were read from. */
+  sourceId: number;
+}
 
 /**
  * Attraction Ride Profile Entity
@@ -104,6 +118,26 @@ export class AttractionRideProfile {
    */
   @Column({ type: "int", nullable: true })
   inversions: number | null;
+
+  /**
+   * Measured ride facts imported from RCDB — length, height, drop, speed,
+   * duration, g-force, capacity and who designed and built it. Metric is
+   * canonical; the frontend converts for visitors on imperial units.
+   *
+   * Written by `RideStatsService`, NOT by the seed. The two writers share this
+   * row on purpose (both answer "what is this ride"), and stay out of each
+   * other's way because the seed's `upsert` names only its own columns — see
+   * the note on {@link RideProfileService.apply}.
+   *
+   * jsonb rather than fifteen columns: nothing queries these yet, they arrive
+   * and change together, and RCDB's table is free to grow a field.
+   */
+  @Column({ type: "jsonb", nullable: true })
+  stats: RideStats | null;
+
+  /** When the stats were last imported, so a re-run can skip fresh rows. */
+  @Column({ name: "stats_updated_at", type: "timestamptz", nullable: true })
+  statsUpdatedAt: Date | null;
 
   /** When the seed entry was last written, for spotting stale curation. */
   @Column({ name: "seeded_at", type: "timestamptz" })

@@ -1,5 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
+import {
+  AttractionRideProfile,
+  type RideStats,
+} from "../entities/attraction-ride-profile.entity";
 import type { AttractionWithTerm } from "../services/ride-profile.service";
 
 /**
@@ -62,6 +65,28 @@ export class RideProfileDto {
       "Inversions as the park publishes them. May legitimately differ from the element list.",
   })
   inversions: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      "Measured facts imported from RCDB (metric): lengthM, heightM, dropM, elevationM, " +
+      "topSpeedKmh, durationSeconds, gForce, verticalAngleDeg, inversions, capacityPerHour, " +
+      "ridersPerTrain, designer, builder, trainManufacturer, restraints — plus source and " +
+      "sourceId. Null for rides we hold no RCDB id for. Individual fields are null when RCDB " +
+      "omits them, so read every one defensively.",
+    example: {
+      lengthM: 768,
+      heightM: 26.2,
+      dropM: 27,
+      topSpeedKmh: 80,
+      durationSeconds: 140,
+      gForce: 4,
+      inversions: 4,
+      source: "rcdb",
+      sourceId: 3117,
+    },
+  })
+  stats: RideStats | null;
 }
 
 export function mapRideProfile(
@@ -76,6 +101,7 @@ export function mapRideProfile(
     model: profile.model,
     openedYear: profile.openedYear,
     inversions: profile.inversions,
+    stats: profile.stats ?? null,
   };
 }
 
