@@ -12,6 +12,25 @@ import { Park } from "../../parks/entities/park.entity";
 import { Attraction } from "./attraction.entity";
 
 /**
+ * A ride's measurements, imported from Wikidata, with the entity they came
+ * from. Every field is independently nullable — Wikidata states what someone
+ * bothered to enter, which for most rides is nothing.
+ */
+export interface RideStats {
+  /** Top speed in km/h. */
+  topSpeedKmh: number | null;
+  /** Highest point in metres. */
+  heightM: number | null;
+  /** Track length in metres. */
+  lengthM: number | null;
+  /** Ride duration in seconds. */
+  durationSeconds: number | null;
+  source: "wikidata";
+  /** Wikidata entity id, e.g. "Q319081". */
+  sourceId: string;
+}
+
+/**
  * Attraction Ride Profile Entity
  *
  * The curated "what kind of ride is this, and what does it do" record that
@@ -104,6 +123,23 @@ export class AttractionRideProfile {
    */
   @Column({ type: "int", nullable: true })
   inversions: number | null;
+
+  /**
+   * Measured facts imported from Wikidata — speed, height, length, duration.
+   *
+   * Written by `RideStatsService`, NOT by the seed. The two writers share this
+   * row on purpose (both answer "what is this ride") and stay out of each
+   * other's way because the seed's `upsert` names only its own columns.
+   *
+   * jsonb rather than four columns: nothing queries these yet, they arrive and
+   * change together, and the source is free to start stating one more.
+   */
+  @Column({ type: "jsonb", nullable: true })
+  stats: RideStats | null;
+
+  /** When the stats were last imported, so a re-run can skip fresh rows. */
+  @Column({ name: "stats_updated_at", type: "timestamptz", nullable: true })
+  statsUpdatedAt: Date | null;
 
   /** When the seed entry was last written, for spotting stale curation. */
   @Column({ name: "seeded_at", type: "timestamptz" })

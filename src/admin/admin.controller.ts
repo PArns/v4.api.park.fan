@@ -58,6 +58,7 @@ export class AdminController {
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
+    @InjectQueue("ride-stats") private rideStatsQueue: Queue,
     @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
@@ -115,6 +116,7 @@ export class AdminController {
       // was no way to see whether the job was waiting, failed or done.
       { name: "manual-metadata", queue: this.manualMetadataQueue },
       { name: "six-flags-heights", queue: this.sixFlagsHeightsQueue },
+      { name: "ride-stats", queue: this.rideStatsQueue },
     ];
     const results = await Promise.all(
       queues.map(async ({ name, queue }) => ({
@@ -154,6 +156,7 @@ export class AdminController {
       "children-metadata": this.childrenQueue,
       "manual-metadata": this.manualMetadataQueue,
       "six-flags-heights": this.sixFlagsHeightsQueue,
+      "ride-stats": this.rideStatsQueue,
       analytics: this.analyticsQueue,
       "prediction-accuracy": this.accuracyQueue,
     };
@@ -983,6 +986,36 @@ export class AdminController {
       { priority: 1 },
     );
     return { message: "Ride profile job queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Import ride measurements from Wikidata.
+   *
+   * Speed, height, length and duration — none of which exists anywhere else in
+   * this system. Joined on the RCDB id we already hold (which came from
+   * Wikidata property P2751), a few hundred rides per SPARQL query, so the
+   * whole catalogue is a handful of requests. Rows imported in the last 90 days
+   * are skipped, and rides Wikidata states nothing for stay eligible for a
+   * later run.
+   */
+  @Post("import-ride-stats")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Import ride measurements from Wikidata",
+    description:
+      "Queues a fetch for every curated ride that has an rcdbId and no recent " +
+      "import. Pass `limit` for a trial run. Re-runnable and self-limiting.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerRideStats(
+    @Body() body?: { limit?: number },
+  ): Promise<{ message: string; jobId: string }> {
+    const job = await this.rideStatsQueue.add(
+      "import-stats",
+      { limit: body?.limit },
+      { priority: 1 },
+    );
+    return { message: "Ride stat import queued", jobId: job.id.toString() };
   }
 
   /**
