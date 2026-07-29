@@ -22,4 +22,22 @@ export class AppController {
   async getRoot(): Promise<string> {
     return this.appService.getReadmeAsHtml();
   }
+
+  @Get("robots.txt")
+  @Header("Content-Type", "text/plain; charset=utf-8")
+  @Header("Cache-Control", "public, max-age=86400")
+  @ApiOperation({
+    summary: "robots.txt",
+    description:
+      "Keeps crawlers off the JSON API surface and the Swagger UI. Without it every " +
+      "crawler probe logged a 404 warning.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Plain-text robots directives",
+    type: String,
+  })
+  getRobotsTxt(): string {
+    return this.appService.getRobotsTxt();
+  }
 }

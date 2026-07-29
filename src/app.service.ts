@@ -36,6 +36,18 @@ export class AppService {
   }
 
   /**
+   * robots.txt for api.park.fan.
+   *
+   * Nothing under /v1 is indexable — it is JSON served to park.fan and the native
+   * app — and /api is the Swagger UI. Crawlers that probe those paths only produce
+   * 404 noise in the exception filter, so disallow both and leave the README docs
+   * page at / crawlable. The content site park.fan ships its own robots.txt.
+   */
+  getRobotsTxt(): string {
+    return ["User-agent: *", "Disallow: /v1/", "Disallow: /api", ""].join("\n");
+  }
+
+  /**
    * Wrap markdown content in a styled HTML template
    */
   private wrapInHtmlTemplate(content: string): string {
