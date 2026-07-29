@@ -17,8 +17,13 @@ const REFRESH_AFTER_DAYS = 90;
 export interface RideStatsImportResult {
   /** Rides whose stats were written. */
   written: number;
-  /** Rides skipped because their stats are still fresh. */
-  fresh: number;
+  /**
+   * Rides left for the next run because `limit` cut this one short.
+   *
+   * NOT "already fresh": the query never returns those, so a run has no idea
+   * how many it skipped that way and must not claim a number for it.
+   */
+  deferred: number;
   /** Rides whose RCDB id yielded nothing (gone, or a model page). */
   missing: number;
   touchedParks: TouchedPark[];
@@ -64,7 +69,7 @@ export class RideStatsService {
   async import(limit?: number): Promise<RideStatsImportResult> {
     const result: RideStatsImportResult = {
       written: 0,
-      fresh: 0,
+      deferred: 0,
       missing: 0,
       touchedParks: [],
     };
@@ -149,14 +154,17 @@ export class RideStatsService {
       if (index < targets.length - 1) await sleep(REQUEST_GAP_MS);
     }
 
-    result.fresh = candidates.length - targets.length;
+    result.deferred = candidates.length - targets.length;
     result.touchedParks = [...byPark].map(([parkId, attractionIds]) => ({
       parkId,
       attractionIds,
     }));
 
     this.logger.log(
-      `🎢 RCDB stat import done: ${result.written} written, ${result.missing} without stats`,
+      `🎢 RCDB stat import done: ${result.written} written, ${result.missing} without stats` +
+        (result.deferred > 0
+          ? `, ${result.deferred} left for the next run`
+          : ""),
     );
     return result;
   }
