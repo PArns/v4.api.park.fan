@@ -6,6 +6,36 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — ride measurements from RCDB
+
+Nothing in this system knew how fast, how long or how tall a ride is:
+ThemeParks.wiki carries rider heights and stops there, so length, drop, speed,
+duration, g-force, capacity, designer and train builder existed nowhere.
+
+The Roller Coaster DataBase has all of it for the ~500 rides we already store
+an `rcdbId` for, which is what makes this targeted rather than a crawl — we
+only ask for pages we already hold an id for, one at a time, 1.2s apart.
+
+- `RcdbClient` + `parseRideStats` (`src/external-apis/rcdb/`) read the Tracks /
+  Trains / Details stat tables. RCDB serves imperial regardless of cookies, so
+  everything is converted; the conversion is **lossless for rides built
+  metric**, because RCDB stores one canonical value and converts for display.
+  49.7 mph is 80.0 km/h and 2519.7 ft is 768.0 m — Black Mamba's published
+  figures exactly. A ride genuinely built in mph keeps its converted value
+  (47 mph stays 75.6 km/h, it does not become 76).
+- A manufacturer's MODEL page (rcdb.com/12374.htm is Mack's "Custom - Mega
+  Coaster") has a Details table and no track. Those parse to `null` rather than
+  a row of empty measurements, so a wrong id in our seed stays visible.
+- `RideStatsService.import()` writes them onto `attraction_ride_profiles.stats`
+  (jsonb, with `source`/`sourceId` provenance) and stamps `stats_updated_at`.
+  Re-runnable and self-limiting: rows imported in the last 90 days are skipped,
+  so a second run costs a handful of requests and an interrupted run resumes.
+- Queued on its own `rcdb-stats` queue — a job measured in minutes has no
+  business in front of the curated-seed queue — and triggered by
+  `POST /v1/admin/import-rcdb-stats` (`limit` for a trial run). It publishes
+  through the same order the seed now uses: our caches, then the frontend, then
+  once more after the CDN window.
+
 ### Fixed — a seed write was announced before it was visible
 
 Applying the curated seeds (`apply-ride-profiles`, `apply-seed`) told the
