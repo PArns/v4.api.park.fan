@@ -15,6 +15,23 @@ Full JSON responses for "Integrated" DTOs (aggregating weather, schedule, attrac
   - Time-based (TTL)
   - Event-based (via `CacheInvalidationService` when significant data changes)
 
+> **Publishing order — evict here BEFORE telling the frontend.** There are three
+> caches in front of a write, and they have to be dealt with outside-in:
+> `park:integrated:{parkId}` here (up to 6 h for a closed park, see
+> `calculateDynamicTTL`), the Cloudflare edge copy (`max-age=300` +
+> `stale-while-revalidate=600`, and **nothing in this service can purge it** —
+> no Cloudflare API integration exists), and finally the frontend's own data
+> cache, which pins a park snapshot for **24 h**.
+>
+> The frontend refetches the instant `RevalidationService.revalidateTags` tells
+> it to. Calling that first therefore does not publish a write — it makes the
+> frontend read the pre-write payload from Redis or the edge and freeze it for
+> a day. Any job that writes park or attraction data must call
+> `invalidateParkCaches()` first, revalidate second, and — because the edge
+> cannot be purged — revalidate once more after the edge window has passed.
+> `ManualMetadataProcessor.publish()` is the reference implementation
+> (`CDN_SETTLE_MS`).
+
 ### 2. Analytics & Statistics
 Heavy analytical queries are cached with varying TTLs based on data volatility.
 - **Keys**:

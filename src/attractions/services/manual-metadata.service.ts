@@ -4,11 +4,20 @@ import {
   MANUAL_ATTRACTION_METADATA,
   ManualAttractionMetadata,
 } from "../data/manual-attraction-metadata";
+import { TouchedPark } from "./ride-profile.service";
 
 export interface ManualMetadataResult {
   rcdb: number;
   heights: number;
   wet: number;
+  /**
+   * The parks this run actually wrote into, with their changed attractions.
+   * The park response is served from `park:integrated:{parkId}` (up to 6h old
+   * for a closed park), so a corrected height stays invisible until that entry
+   * is evicted — and the frontend, told to revalidate, refetches the stale
+   * copy and pins it for a day.
+   */
+  touchedParks: TouchedPark[];
 }
 
 /** Injection token so tests can supply their own seed. */
@@ -36,7 +45,15 @@ export class ManualMetadataService {
 
   async apply(): Promise<ManualMetadataResult> {
     const repo = this.attractionsService.getRepository();
-    const result: ManualMetadataResult = { rcdb: 0, heights: 0, wet: 0 };
+    const result: ManualMetadataResult = {
+      rcdb: 0,
+      heights: 0,
+      wet: 0,
+      touchedParks: [],
+    };
+    // Only rows that really changed — the writes below are conditional, so
+    // unlike the ride-profile seed this can name exactly the affected parks.
+    const byPark = new Map<string, string[]>();
 
     for (const entry of this.seed ?? MANUAL_ATTRACTION_METADATA) {
       const attraction = await repo
@@ -49,6 +66,7 @@ export class ManualMetadataService {
         })
         .select([
           "attraction.id",
+          "attraction.parkId",
           "attraction.minimumHeight",
           "attraction.rcdbId",
           "attraction.mayGetWet",
@@ -85,8 +103,18 @@ export class ManualMetadataService {
 
       if (Object.keys(update).length > 0) {
         await repo.update(attraction.id, update);
+        if (attraction.parkId) {
+          const ids = byPark.get(attraction.parkId) ?? [];
+          ids.push(attraction.id);
+          byPark.set(attraction.parkId, ids);
+        }
       }
     }
+
+    result.touchedParks = [...byPark].map(([parkId, attractionIds]) => ({
+      parkId,
+      attractionIds,
+    }));
 
     this.logger.log(
       `🔗 Manual metadata applied: ${result.rcdb} RCDB ids, ${result.heights} fallback heights, ${result.wet} wet-flag corrections`,

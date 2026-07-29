@@ -21,6 +21,20 @@ export interface RideProfileSeedResult {
    * curated ride silently stops being served and nothing says which one.
    */
   skippedKeys: string[];
+  /**
+   * The parks this run wrote into, with their written attractions. Writing the
+   * rows is only half the job: the park response is served from
+   * `park:integrated:{parkId}` (up to 6h old for a closed park), so without
+   * evicting those the new profiles stay invisible — and the frontend, told to
+   * revalidate, refetches the stale copy and pins it for a day.
+   */
+  touchedParks: TouchedPark[];
+}
+
+/** A park whose cached response a seed run invalidated. */
+export interface TouchedPark {
+  parkId: string;
+  attractionIds: string[];
 }
 
 /** One ride in the reverse (glossary → rides) lookup. */
@@ -126,6 +140,7 @@ export class RideProfileService implements OnModuleInit {
       written: 0,
       skipped: 0,
       skippedKeys: [],
+      touchedParks: [],
     };
     const seededAt = new Date();
 
@@ -188,6 +203,22 @@ export class RideProfileService implements OnModuleInit {
       await this.repo.upsert(profiles.slice(i, i + CHUNK), ["attractionId"]);
     }
     result.written = profiles.length;
+
+    // Every matched entry is upserted, changed or not, so this names every
+    // curated park rather than only the ones whose data actually moved. That
+    // is the honest granularity available here and the job is a manual,
+    // occasional one — over-evicting a warm park costs one rebuild, while
+    // under-evicting serves curated data that is invisible for hours.
+    const byPark = new Map<string, string[]>();
+    for (const profile of profiles) {
+      const ids = byPark.get(profile.parkId!) ?? [];
+      ids.push(profile.attractionId!);
+      byPark.set(profile.parkId!, ids);
+    }
+    result.touchedParks = [...byPark].map(([parkId, attractionIds]) => ({
+      parkId,
+      attractionIds,
+    }));
 
     this.logger.log(
       `🎢 Ride profiles applied: ${result.written} written, ${result.skipped} skipped (no matching attraction)`,

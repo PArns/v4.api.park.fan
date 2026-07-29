@@ -129,4 +129,34 @@ describe("ManualMetadataService", () => {
 
     expect(repo.update).not.toHaveBeenCalled();
   });
+
+  it("names the parks it wrote into, and only those", async () => {
+    // The caller evicts `park:integrated:{parkId}` from this list. A run that
+    // changed nothing must report nothing — otherwise every no-op seed run
+    // throws away warm park responses for the whole catalogue.
+    qb.getOne
+      .mockResolvedValueOnce({
+        id: "a1",
+        parkId: "p1",
+        mayGetWet: true,
+        minimumHeight: null,
+        rcdbId: null,
+      })
+      .mockResolvedValueOnce({
+        id: "a2",
+        parkId: "p2",
+        mayGetWet: false,
+        minimumHeight: null,
+        rcdbId: null,
+      });
+
+    const result = await service([
+      { citySlug: "c", parkSlug: "p", attractionSlug: "a1", mayGetWet: false },
+      { citySlug: "c", parkSlug: "q", attractionSlug: "a2", mayGetWet: false },
+    ]).apply();
+
+    expect(result.touchedParks).toEqual([
+      { parkId: "p1", attractionIds: ["a1"] },
+    ]);
+  });
 });
