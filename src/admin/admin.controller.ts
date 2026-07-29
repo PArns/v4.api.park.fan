@@ -110,6 +110,11 @@ export class AdminController {
       { name: "holidays", queue: this.holidaysQueue },
       { name: "park-enrichment", queue: this.parkEnrichmentQueue },
       { name: "children-metadata", queue: this.childrenQueue },
+      // The queues you can trigger by hand were missing from this list, which
+      // is exactly when you want it: after firing one of those endpoints there
+      // was no way to see whether the job was waiting, failed or done.
+      { name: "manual-metadata", queue: this.manualMetadataQueue },
+      { name: "six-flags-heights", queue: this.sixFlagsHeightsQueue },
     ];
     const results = await Promise.all(
       queues.map(async ({ name, queue }) => ({
@@ -122,6 +127,59 @@ export class AdminController {
       })),
     );
     return { timestamp: new Date().toISOString(), queues: results };
+  }
+
+  /**
+   * Why the recent jobs on a queue failed.
+   *
+   * `queue-status` counts failures; Bull knows the reason and the stack, and
+   * keeps them in Redis where nothing could read them. A job that dies on a
+   * server you cannot tail is otherwise a number with no explanation.
+   */
+  @Get("queue-failures")
+  @ApiOperation({
+    summary: "Failure reasons for the most recent failed jobs on a queue",
+    description:
+      "Pass `queue` (e.g. manual-metadata) and optionally `limit` (default 3). " +
+      "Returns each failed job's name, reason and first stack frames.",
+  })
+  @ApiResponse({ status: 200, description: "Recent failures" })
+  async getQueueFailures(
+    @Query("queue") queueName: string,
+    @Query("limit") limit?: string,
+  ): Promise<Record<string, unknown>> {
+    const queues: Record<string, Queue> = {
+      "wait-times": this.waitTimesQueue,
+      "park-metadata": this.parkMetadataQueue,
+      "children-metadata": this.childrenQueue,
+      "manual-metadata": this.manualMetadataQueue,
+      "six-flags-heights": this.sixFlagsHeightsQueue,
+      analytics: this.analyticsQueue,
+      "prediction-accuracy": this.accuracyQueue,
+    };
+    const queue = queues[queueName];
+    if (!queue) {
+      return {
+        error: `Unknown queue "${queueName}"`,
+        known: Object.keys(queues),
+      };
+    }
+
+    const count = Math.min(Number(limit) || 3, 20);
+    const jobs = await queue.getFailed(0, count - 1);
+    return {
+      queue: queueName,
+      failures: jobs.map((job) => ({
+        id: job.id,
+        name: job.name,
+        data: job.data as unknown,
+        attemptsMade: job.attemptsMade,
+        failedReason: job.failedReason,
+        // First frames only: the interesting line is always near the top and
+        // a full stack turns this response into a wall.
+        stack: (job.stacktrace ?? []).join("\n").split("\n").slice(0, 12),
+      })),
+    };
   }
 
   /**
