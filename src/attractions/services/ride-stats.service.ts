@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import {
@@ -52,7 +52,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * hundred, and an interrupted run resumes where it stopped.
  */
 @Injectable()
-export class RideStatsService {
+export class RideStatsService implements OnModuleInit {
   private readonly logger = new Logger(RideStatsService.name);
 
   constructor(
@@ -60,6 +60,33 @@ export class RideStatsService {
     private readonly repo: Repository<AttractionRideProfile>,
     private readonly rcdb: RcdbClient,
   ) {}
+
+  onModuleInit(): void {
+    // Fire and forget, same as the ride-profile GIN indexes next door.
+    void this.ensureStatsColumns();
+  }
+
+  /**
+   * Create the two stat columns if they are not there yet.
+   *
+   * The entity declares them, but that only builds the schema where TypeORM is
+   * allowed to: `DB_SYNCHRONIZE` is documented as dev-only, and production
+   * evidently runs without it — the first import job failed outright, before a
+   * single page was fetched, because the query selects `stats_updated_at`.
+   * `ADD COLUMN IF NOT EXISTS` is idempotent and costs one statement at boot,
+   * which is a better trade than a job that dies on a missing column.
+   */
+  private async ensureStatsColumns(): Promise<void> {
+    try {
+      await this.repo.query(
+        `ALTER TABLE attraction_ride_profiles
+           ADD COLUMN IF NOT EXISTS stats jsonb,
+           ADD COLUMN IF NOT EXISTS stats_updated_at timestamptz;`,
+      );
+    } catch (err) {
+      this.logger.warn(`Ride-stat columns not ensured: ${err}`);
+    }
+  }
 
   /**
    * Fetch and store stats for every curated ride that has an RCDB id.
