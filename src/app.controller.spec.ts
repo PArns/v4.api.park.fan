@@ -7,6 +7,8 @@ import { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
+import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
+import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 
 /**
  * `/robots.txt` must resolve at the HOST ROOT. It is served by the root controller,
@@ -24,8 +26,16 @@ describe("AppController — robots.txt", () => {
     }).compile();
 
     app = moduleRef.createNestApplication();
-    // Mirror main.ts exactly.
+    // Mirror main.ts: the global prefix exclusion AND the global interceptors that
+    // sit on every response. Without them this would pass against a pipeline the
+    // real app never uses — ExcludeNullInterceptor maps every response body, and
+    // CacheControlInterceptor would clobber the handler's Cache-Control if it did
+    // not defer to an already-set header.
     app.setGlobalPrefix("v1", { exclude: ["/", "/robots.txt"] });
+    app.useGlobalInterceptors(
+      new CacheControlInterceptor(),
+      new ExcludeNullInterceptor(),
+    );
     await app.init();
   });
 
@@ -42,6 +52,14 @@ describe("AppController — robots.txt", () => {
     expect(response.text).toContain("User-agent: *");
     expect(response.text).toContain("Disallow: /v1/");
     expect(response.text).toContain("Disallow: /api");
+  });
+
+  it("keeps the handler's own Cache-Control through the global interceptor", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/robots.txt")
+      .expect(200);
+
+    expect(response.headers["cache-control"]).toBe("public, max-age=86400");
   });
 
   it("does not move robots.txt under the /v1 prefix", async () => {
