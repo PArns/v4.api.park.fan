@@ -111,6 +111,12 @@ export class AdminController {
       { name: "holidays", queue: this.holidaysQueue },
       { name: "park-enrichment", queue: this.parkEnrichmentQueue },
       { name: "children-metadata", queue: this.childrenQueue },
+      // The three queues you can trigger by hand were missing from this list,
+      // which is exactly when you want it: after firing one of these endpoints
+      // there was no way to see whether the job was waiting, failed or done.
+      { name: "manual-metadata", queue: this.manualMetadataQueue },
+      { name: "six-flags-heights", queue: this.sixFlagsHeightsQueue },
+      { name: "rcdb-stats", queue: this.rcdbStatsQueue },
     ];
     const results = await Promise.all(
       queues.map(async ({ name, queue }) => ({
