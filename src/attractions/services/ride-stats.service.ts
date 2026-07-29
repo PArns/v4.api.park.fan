@@ -88,7 +88,10 @@ export class RideStatsService {
         'attraction."rcdbId" AS rcdbid',
         "attraction.slug AS slug",
       ])
-      .from(AttractionRideProfile, "profile")
+      // Raw table name, like `RideProfileService.apply` — with an entity here
+      // TypeORM rewrites property names inside our own SQL strings, and this
+      // query is hand-written SQL that wants passing through untouched.
+      .from("attraction_ride_profiles", "profile")
       .innerJoin(
         "attractions",
         "attraction",
@@ -96,7 +99,7 @@ export class RideStatsService {
       )
       .where('attraction."rcdbId" IS NOT NULL')
       .andWhere(
-        '(profile."stats_updated_at" IS NULL OR profile."stats_updated_at" < :cutoff)',
+        "(profile.stats_updated_at IS NULL OR profile.stats_updated_at < :cutoff)",
         { cutoff },
       )
       .orderBy("attraction.slug", "ASC")

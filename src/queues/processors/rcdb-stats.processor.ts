@@ -41,7 +41,23 @@ export class RcdbStatsProcessor {
   @Process("import-stats")
   async handleImportStats(job: Job<RcdbStatsJob>): Promise<void> {
     this.logger.log("🎢 Importing ride stats from RCDB...");
-    const result = await this.rideStats.import(job.data?.limit);
+
+    // Bull records a failure in Redis and nothing else. The first run of this
+    // job failed with no trace anywhere a person could read, which cost more
+    // time than the import itself — so say what broke before handing the error
+    // on for Bull to count.
+    let result;
+    try {
+      result = await this.rideStats.import(job.data?.limit);
+    } catch (error) {
+      this.logger.error(
+        `🎢 RCDB stat import failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
 
     if (result.written === 0) {
       this.logger.log("🎢 Nothing written — no caches to clear");
