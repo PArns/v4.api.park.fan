@@ -6,6 +6,36 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — ride measurements from Wikidata
+
+Nothing in this system knew how fast, how tall or how long a ride is:
+ThemeParks.wiki carries rider heights and stops there.
+
+Wikidata does, it is **CC0** so the values can be stored and served, and it
+already anchors this catalogue — the `rcdbId` on every attraction came from
+Wikidata property P2751, which is exactly the key the import joins on. (The
+roller-coaster database those ids point at permits the link, not the data; see
+the note on `Attraction.rcdbId`.)
+
+- `WikidataClient` + `parseStatsResults` (`src/external-apis/wikidata/`) fetch
+  speed, height, length and duration. Every measurement is read through `psn:`
+  — the **normalised** value — so Wikidata converts to SI before we see it: a
+  ride entered in mph and one entered in km/h both arrive as metres per second.
+  That is why there is no unit table here and none to get wrong. Black Mamba's
+  22.222222222222222224 m/s comes home as exactly 80 km/h.
+- One SPARQL request answers for 200 rides, so the whole catalogue is three
+  queries rather than one request per ride.
+- **Coverage is thin and that is the source, not a bug.** Of ~1740 Wikidata
+  items carrying an RCDB id, ~146 state a speed, ~208 a height, ~222 a length.
+  A ride Wikidata says nothing about is left unstamped, so a later run picks it
+  up if somebody fills the values in.
+- `RideStatsService.import()` writes to `attraction_ride_profiles.stats` (jsonb,
+  with `source`/`sourceId` provenance) and stamps `stats_updated_at`; rows
+  imported in the last 90 days are skipped. Queued on `ride-stats`, triggered by
+  `POST /v1/admin/import-ride-stats` (`limit` for a trial run), and it publishes
+  through the same cache order as the curated seed: our caches, then the
+  frontend, then once more after the CDN window.
+
 ### Fixed — a seed write was announced before it was visible
 
 Applying the curated seeds (`apply-ride-profiles`, `apply-seed`) told the

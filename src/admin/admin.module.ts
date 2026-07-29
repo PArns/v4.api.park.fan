@@ -18,6 +18,7 @@ import { SystemHealthService } from "./system-health.service";
     BullModule.registerQueue({ name: "wait-times" }),
     BullModule.registerQueue({ name: "children-metadata" }),
     BullModule.registerQueue({ name: "six-flags-heights" }),
+    BullModule.registerQueue({ name: "ride-stats" }),
     BullModule.registerQueue({ name: "manual-metadata" }),
     BullModule.registerQueue({ name: "prediction-accuracy" }),
     BullModule.registerQueue({ name: "analytics" }),

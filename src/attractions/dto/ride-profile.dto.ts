@@ -1,5 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
+import {
+  AttractionRideProfile,
+  type RideStats,
+} from "../entities/attraction-ride-profile.entity";
 import type { AttractionWithTerm } from "../services/ride-profile.service";
 
 /**
@@ -62,6 +65,24 @@ export class RideProfileDto {
       "Inversions as the park publishes them. May legitimately differ from the element list.",
   })
   inversions: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      "Measurements imported from Wikidata (CC0), metric: topSpeedKmh, heightM, lengthM, " +
+      "durationSeconds, plus source and the Wikidata entity id. Null for rides Wikidata " +
+      "states nothing for — which is most of them. Individual fields are independently " +
+      "nullable, so read every one defensively.",
+    example: {
+      topSpeedKmh: 80,
+      heightM: 26,
+      lengthM: 768,
+      durationSeconds: null,
+      source: "wikidata",
+      sourceId: "Q319081",
+    },
+  })
+  stats: RideStats | null;
 }
 
 export function mapRideProfile(
@@ -76,6 +97,7 @@ export function mapRideProfile(
     model: profile.model,
     openedYear: profile.openedYear,
     inversions: profile.inversions,
+    stats: profile.stats ?? null,
   };
 }
 
