@@ -88,17 +88,34 @@ function snap(value: number, decimals: number, tolerance: number): number {
   return Math.abs(rounded - whole) <= tolerance ? whole : rounded;
 }
 
-/** Strips tags and normalises entities/whitespace to one clean line. */
+/**
+ * Strips tags and normalises entities/whitespace to one clean line.
+ *
+ * Entities are decoded FIRST and the tag strip runs to a fixed point, because
+ * one pass is not a strip: `<<b>b>` leaves `<b>` behind, and `&#60;b&#62;`
+ * would only become a tag after decoding. Nothing here is trusted to be
+ * well-formed — it is someone else's HTML — and while these values are stored
+ * and later escaped on output, a function shaped like a sanitizer should
+ * actually be one.
+ */
 function text(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, "")
+  const decoded = html
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&#(\d+);/g, (_, code: string) =>
       String.fromCharCode(Number(code)),
-    )
-    .replace(/\s+/g, " ")
-    .trim();
+    );
+
+  // Each pass strictly shortens the string, so this terminates.
+  let previous: string;
+  let stripped = decoded;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<[^>]*>/g, "");
+  } while (stripped !== previous);
+
+  // Whatever angle brackets malformed markup leaves behind are not text.
+  return stripped.replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
 }
 
 /** First number in the string, or null. Handles "2,519.7" and "534.8 ft". */

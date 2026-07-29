@@ -66,4 +66,25 @@ describe("parseRideStats", () => {
     expect(parseRideStats("")).toBeNull();
     expect(parseRideStats("<html><body>404</body></html>")).toBeNull();
   });
+
+  it("leaves no markup behind, however malformed the input", () => {
+    // Entity-encoded tags only become tags once decoded, and one strip pass is
+    // not a strip: `<<b>b>` leaves `b>` behind. This is someone else's HTML and
+    // nothing promises it is well-formed, so entities are decoded first, the
+    // strip runs to a fixed point, and any angle bracket that survives is not
+    // text either.
+    const html = [
+      "<h3>Tracks</h3><table class=stat-tbl><tbody>",
+      "<tr><th>Speed<td><span class=float>49.7</span> mph",
+      "<tr><th>Designer<td>&#60;i&#62;Werner Stengel&#60;/i&#62;",
+      "<tr><th>Restraints<td><<b>b>Lap bar",
+      "</table>",
+    ].join("");
+
+    const stats = parseRideStats(html)!;
+
+    expect(stats.designer).toBe("Werner Stengel");
+    expect(stats.restraints).not.toMatch(/[<>]/);
+    expect(stats.topSpeedKmh).toBe(80);
+  });
 });
