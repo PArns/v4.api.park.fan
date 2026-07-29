@@ -6,6 +6,30 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a seed write was announced before it was visible
+
+Applying the curated seeds (`apply-ride-profiles`, `apply-seed`) told the
+frontend to drop its `parks` cache but never evicted our own. The frontend
+refetches the moment it is told, so it read the pre-seed payload back out of
+`park:integrated:{parkId}` (up to 6 h old for a closed park) or off the
+Cloudflare edge — and pinned that in its own data cache **for 24 h**. A
+curated ride profile could be written, announced, and still be missing from
+the ride page the next morning, for some regions and not others: Cloudflare
+caches per PoP and the frontend's data cache is per region.
+
+`ManualMetadataProcessor` now publishes a write in the order that works —
+`invalidateParkCaches()` for every touched park first, `revalidateTags` second,
+and a second revalidation `CDN_SETTLE_MS` (16 min) later, because the edge copy
+lives up to `max-age 300 + stale-while-revalidate 600` and this service has no
+way to purge it. The delayed sweep carries a fixed job id, so iterating on a
+seed leaves one pending sweep rather than a pile.
+
+Both seed services now report which parks they wrote into
+(`RideProfileSeedResult.touchedParks`, `ManualMetadataResult.touchedParks`);
+the metadata seed reports only rows that actually changed, so a no-op run
+evicts nothing. See
+[Caching Strategy](architecture/caching-strategy.md#1-integrated-responses).
+
 ### Added — Hersheypark ride heights
 
 `MANUAL_ATTRACTION_METADATA` gains a minimum rider height for **46
