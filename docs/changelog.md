@@ -6,6 +6,42 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a park merge could wire a park to another park's feed
+
+A merge fills the winner's empty upstream ids from the loser, which is how a
+park keeps its feeds when the row carrying them disappears. But an upstream id
+is not a fact about the loser — it is a claim about which park the _source_ is
+describing, and nothing checked that the claim still held for the winner.
+
+Islands of Adventure in Orlando spent three days carrying `qt-park-97`, which
+Queue-Times uses for **Adventure Island in Tampa**, a hundred kilometres away.
+It arrived from a merge with a row that sat in Tampa. The damage was not the
+wrong wait times it would have served once that water park reopened — it was
+that the sync could no longer find the real Islands of Adventure under its own
+id (`qt-park-64`) and created a **second park row** for it two days later.
+That duplicate is what surfaced the whole thing.
+
+`consolidateEntityIds` now asks `canInheritSourceIds` first: when both rows
+state coordinates and those coordinates describe different places (>10 km), the
+ids are not inherited, a warning names which feeds were left behind, and
+`MergeResult.skippedSourceIds` carries them out to the caller.
+
+The threshold is deliberately loose. This is not a duplicate test — the
+detector already decided these are the same park, and it works to a kilometre.
+This is the last check before one row's identity is copied onto another, so it
+only has to recognise "not the same place at all". Missing coordinates, and the
+`0,0` of a failed geocode, are not evidence of anything and do not block
+inheritance.
+
+Refusing costs a park a feed until someone looks, which the next sync makes
+loudly visible by creating a row. Accepting costs a park quietly serving
+another park's data. Refusing is the cheaper mistake.
+
+Repaired in production alongside the fix: the two Islands of Adventure rows
+merged back into one (queue_data 185,337 + 2,335 → 187,672 exactly, zero
+orphans), the surviving row now carries the correct `qt-park-64`, and the
+loser's path redirects instead of 404ing. Park count 210 → 209, duplicates 0.
+
 ### Added — curated ride measurements, because Wikidata alone leaves the headliners blank
 
 The Wikidata import below is the right automatic source and it is not enough:
