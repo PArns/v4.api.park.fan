@@ -120,4 +120,47 @@ describe("RIDE_PROFILE_SEED", () => {
 
     expect(bad).toEqual([]);
   });
+
+  it("keeps every curated measurement inside what a ride can physically be", () => {
+    // These are typed as plain numbers, so the failure mode is a unit slip —
+    // an American ride's 95 entered as mph, a length written into height. The
+    // bounds are wide on purpose: they are not a taste test, they catch the
+    // value that cannot describe a roller coaster at all.
+    const RANGES: Record<string, [number, number]> = {
+      topSpeedKmh: [5, 260],
+      heightM: [1, 200],
+      lengthM: [20, 8500],
+      durationSeconds: [10, 900],
+    };
+
+    const bad: string[] = [];
+    for (const entry of RIDE_PROFILE_SEED) {
+      for (const [field, [lo, hi]] of Object.entries(RANGES)) {
+        const value = entry.stats?.[field as keyof typeof entry.stats];
+        if (value === undefined) continue;
+        if (!Number.isFinite(value) || value < lo || value > hi) {
+          bad.push(`${entry.attractionSlug}: ${field}=${value}`);
+        }
+      }
+    }
+
+    expect(bad).toEqual([]);
+  });
+
+  it("never curates a ride taller than half its own track", () => {
+    // Height and length in the same units is the slip this catches: a 30 m
+    // ride on 40 m of track is not a mistake anyone makes on purpose, it is a
+    // length that was read in feet or a height that was read as a length.
+    const bad = RIDE_PROFILE_SEED.filter((e) => {
+      const { heightM, lengthM } = e.stats ?? {};
+      return (
+        heightM !== undefined && lengthM !== undefined && heightM > lengthM / 2
+      );
+    }).map(
+      (e) =>
+        `${e.attractionSlug}: ${e.stats?.heightM}m tall, ${e.stats?.lengthM}m long`,
+    );
+
+    expect(bad).toEqual([]);
+  });
 });

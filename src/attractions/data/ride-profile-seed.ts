@@ -71,6 +71,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Blitz Coaster",
     openedYear: 2016,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 117,
+      heightM: 30,
+      lengthM: 1320,
+      durationSeconds: 100,
+    },
   },
   {
     citySlug: "bruehl",
@@ -93,6 +99,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2006,
     inversions: 4,
+    stats: { topSpeedKmh: 80, heightM: 26, lengthM: 768, durationSeconds: 47 },
   },
   {
     citySlug: "bruehl",
@@ -116,6 +123,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launched Flying Coaster",
     openedYear: 2020,
     inversions: 2,
+    stats: { topSpeedKmh: 78, lengthM: 1236 },
   },
   {
     citySlug: "bruehl",
@@ -136,6 +144,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mine Train MK-1200",
     openedYear: 1996,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 50,
+      heightM: 26,
+      lengthM: 1280,
+      durationSeconds: 175,
+    },
   },
   {
     citySlug: "bruehl",
@@ -159,6 +173,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 1988,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 46.5,
+      heightM: 11.7,
+      lengthM: 1175,
+      durationSeconds: 240,
+    },
   },
   {
     citySlug: "bruehl",
@@ -173,6 +193,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Family Boomerang",
     openedYear: 2016,
     inversions: 0,
+    stats: { topSpeedKmh: 62, heightM: 25, lengthM: 210, durationSeconds: 55 },
   },
   {
     citySlug: "bruehl",
@@ -185,6 +206,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     openedYear: 2002,
     elements: ["vertical-lift", "first-drop", "helix", "brake-run"],
     inversions: 0,
+    stats: { topSpeedKmh: 66, heightM: 17, lengthM: 465 },
   },
   {
     citySlug: "bruehl",
@@ -197,6 +219,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     openedYear: 2002,
     elements: ["vertical-lift", "first-drop", "helix", "brake-run"],
     inversions: 0,
+    stats: { topSpeedKmh: 66, heightM: 17, lengthM: 465 },
   },
   {
     citySlug: "bruehl",
@@ -336,6 +359,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2018,
     inversions: 2,
+    stats: { topSpeedKmh: 95, heightM: 40, lengthM: 813, durationSeconds: 108 },
   },
   {
     citySlug: "sevenum",
@@ -356,6 +380,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wooden Coaster",
     openedYear: 2007,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 31.9,
+      lengthM: 1077,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "sevenum",
@@ -368,18 +398,30 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Motorbike Coaster",
     openedYear: 2004,
     inversions: 0,
+    stats: { topSpeedKmh: 75, heightM: 15, lengthM: 603, durationSeconds: 68 },
   },
   {
     citySlug: "sevenum",
     parkSlug: "toverland",
     attractionSlug: "dwervelwind",
-    elements: ["lifthill", "first-drop", "helix", "brake-run"],
-    types: ["spinning-coaster", "indoor-coaster", "dark-ride"],
+    // Outdoors, through the Magische Vallei: the queue winds between the
+    // coaster's own ponds and boulders and the station is an open-air, thatched
+    // structure. It is not the indoor spinner the rest of this family is.
+    elements: ["lifthill", "first-drop", "horseshoe", "helix", "brake-run"],
+    types: ["spinning-coaster", "steel-coaster", "terrain-coaster"],
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     model: "Spinning Coaster",
-    openedYear: 2015,
+    // Public opening 29 September 2012 — a five-week autumn preview under the
+    // name D'Wervelwind, before it reopened in spring 2013 with the rest of the
+    // Magische Vallei. Toverland, Wikidata (P1619) and both Wikipedia articles
+    // agree on the 2012 date.
+    openedYear: 2012,
     inversions: 0,
+    // Toverland's own figures. The Wikipedia articles say 70 km/h and 20 m; the
+    // park publishes 75 and 21, which the layout supports — it drops into the
+    // valley below the station.
+    stats: { topSpeedKmh: 75, heightM: 21, lengthM: 462, durationSeconds: 112 },
   },
   {
     citySlug: "sevenum",
@@ -391,6 +433,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Bobsled Coaster",
     openedYear: 2007,
+    stats: { topSpeedKmh: 45, lengthM: 512 },
   },
   {
     citySlug: "sevenum",
@@ -475,6 +518,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2024,
     inversions: 7,
+    stats: { topSpeedKmh: 100, heightM: 32.5, lengthM: 1385 },
   },
   {
     citySlug: "rust",
@@ -497,6 +541,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2002,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 127,
+      heightM: 73,
+      lengthM: 1620,
+      durationSeconds: 177,
+    },
   },
   {
     citySlug: "rust",
@@ -518,6 +568,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launch Coaster",
     openedYear: 2009,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 38,
+      lengthM: 1056,
+      durationSeconds: 145,
+    },
   },
   {
     citySlug: "rust",
@@ -538,6 +594,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wooden Coaster",
     openedYear: 2012,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 40,
+      lengthM: 1050,
+      durationSeconds: 205,
+    },
   },
   {
     citySlug: "rust",
@@ -551,6 +613,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     openedYear: 1997,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 28.2,
+      lengthM: 982,
+      durationSeconds: 287,
+    },
   },
   {
     citySlug: "rust",
@@ -562,6 +630,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     openedYear: 1989,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 60,
+      heightM: 25.5,
+      lengthM: 900,
+      durationSeconds: 198,
+    },
   },
   {
     citySlug: "rust",
@@ -573,6 +647,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Powered Coaster",
     openedYear: 2014,
     elements: ["lifthill", "helix", "brake-run"],
+    stats: { topSpeedKmh: 31, heightM: 13.5, lengthM: 505 },
   },
   {
     citySlug: "rust",
@@ -584,6 +659,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Wilde Maus",
     openedYear: 1999,
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 16,
+      lengthM: 383,
+      durationSeconds: 188,
+    },
   },
   {
     citySlug: "rust",
@@ -594,7 +675,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     model: "Youngstar Coaster",
-    openedYear: 2005,
+    openedYear: 2006,
+    stats: { topSpeedKmh: 65, heightM: 13, lengthM: 430 },
   },
   {
     citySlug: "rust",
@@ -606,6 +688,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Water Coaster",
     openedYear: 2005,
+    stats: { topSpeedKmh: 80, heightM: 30, lengthM: 390, durationSeconds: 200 },
   },
   {
     citySlug: "rust",
@@ -617,6 +700,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Water Coaster",
     openedYear: 1994,
+    stats: { topSpeedKmh: 70, heightM: 23, lengthM: 836, durationSeconds: 350 },
   },
   {
     citySlug: "rust",
@@ -627,7 +711,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     model: "Powered Coaster",
-    openedYear: 2019,
+    openedYear: 2016,
+    stats: { topSpeedKmh: 22, heightM: 3, lengthM: 67, durationSeconds: 90 },
   },
   {
     citySlug: "rust",
@@ -639,6 +724,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Powered Coaster",
     openedYear: 1984,
+    stats: { topSpeedKmh: 45, heightM: 6, lengthM: 264, durationSeconds: 100 },
   },
   {
     citySlug: "rust",
@@ -767,6 +853,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Infinity Coaster",
     openedYear: 2017,
     inversions: 2,
+    stats: { topSpeedKmh: 90, heightM: 40, lengthM: 720 },
   },
   {
     citySlug: "bottrop",
@@ -777,7 +864,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Maurer Rides",
     manufacturerTermId: "maurer-rides",
     model: "Spinning Coaster",
-    openedYear: 2013,
+    openedYear: 2011,
+    stats: {
+      topSpeedKmh: 36,
+      heightM: 7.7,
+      lengthM: 400,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "bottrop",
@@ -791,11 +884,16 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
       "brake-run",
     ],
     types: ["wooden-coaster", "out-and-back"],
-    manufacturer: "Vekoma",
-    manufacturerTermId: "vekoma",
+    manufacturer: "Roller Coaster Corporation of America",
     model: "Wooden Coaster",
     openedYear: 1999,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 27.8,
+      lengthM: 1099,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "bottrop",
@@ -806,6 +904,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 1996,
+    stats: { topSpeedKmh: 45, heightM: 14, lengthM: 370, durationSeconds: 110 },
   },
   {
     citySlug: "bottrop",
@@ -816,6 +915,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 1996,
+    stats: { topSpeedKmh: 35, heightM: 8.5, lengthM: 207, durationSeconds: 44 },
   },
   {
     citySlug: "bottrop",
@@ -826,7 +926,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     model: "Force Two",
-    openedYear: 2005,
+    openedYear: 2007,
+    stats: {
+      topSpeedKmh: 47.7,
+      heightM: 13,
+      lengthM: 294,
+      durationSeconds: 48,
+    },
   },
   {
     citySlug: "bottrop",
@@ -872,7 +978,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "movie-park-germany",
     attractionSlug: "iron-claw",
     types: ["swing-ride", "flat-ride"],
-    openedYear: 1996,
+    openedYear: 2001,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "bottrop",
@@ -923,6 +1035,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2019,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 92,
+      heightM: 36.5,
+      lengthM: 1085,
+      durationSeconds: 106,
+    },
   },
   {
     citySlug: "biddinghuizen",
@@ -943,6 +1061,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mega Coaster",
     openedYear: 2002,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 106,
+      heightM: 46.8,
+      lengthM: 1214,
+      durationSeconds: 92,
+    },
   },
   {
     citySlug: "biddinghuizen",
@@ -962,6 +1086,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Big Dipper",
     openedYear: 2016,
     inversions: 2,
+    stats: { topSpeedKmh: 87, heightM: 32, lengthM: 680 },
   },
   {
     citySlug: "biddinghuizen",
@@ -978,8 +1103,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Custom Looping Coaster",
-    openedYear: 1994,
+    openedYear: 2000,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "biddinghuizen",
@@ -999,6 +1130,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "LSM Launch Coaster",
     openedYear: 2000,
     inversions: 1,
+    stats: { topSpeedKmh: 90, heightM: 25.8, lengthM: 996 },
   },
   {
     citySlug: "biddinghuizen",
@@ -1016,6 +1148,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Suspended Family Coaster",
     openedYear: 1994,
+    stats: { topSpeedKmh: 80, heightM: 31, lengthM: 662 },
   },
   {
     citySlug: "biddinghuizen",
@@ -1026,6 +1159,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     model: "Tivoli Coaster",
+    stats: { topSpeedKmh: 32, heightM: 6, lengthM: 199, durationSeconds: 90 },
   },
   {
     citySlug: "biddinghuizen",
@@ -1036,7 +1170,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Family Boomerang",
-    openedYear: 2024,
+    openedYear: 2023,
+    stats: { topSpeedKmh: 40, heightM: 11.8, lengthM: 200 },
   },
   {
     citySlug: "biddinghuizen",
@@ -1110,6 +1245,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mega Coaster",
     openedYear: 2021,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 113,
+      heightM: 50,
+      lengthM: 1200,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "wavre",
@@ -1120,6 +1261,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Power Splash",
     openedYear: 2016,
+    stats: { topSpeedKmh: 101, heightM: 45, lengthM: 217, durationSeconds: 78 },
   },
   {
     citySlug: "wavre",
@@ -1137,8 +1279,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Wooden Coaster",
-    openedYear: 1996,
+    openedYear: 2001,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 28,
+      lengthM: 1035,
+      durationSeconds: 125,
+    },
   },
   {
     citySlug: "wavre",
@@ -1159,6 +1307,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 1999,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "wavre",
@@ -1176,8 +1330,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Custom Looping Coaster",
-    openedYear: 1988,
+    openedYear: 2001,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "wavre",
@@ -1188,7 +1348,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "The Gravity Group",
     manufacturerTermId: "gravity-group",
     model: "Timberliner Family Coaster",
-    openedYear: 2016,
+    openedYear: 2018,
+    stats: { topSpeedKmh: 55, heightM: 21, lengthM: 564, durationSeconds: 110 },
   },
   {
     citySlug: "wavre",
@@ -1199,7 +1360,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Mine Train",
-    openedYear: 1991,
+    openedYear: 1992,
+    stats: {
+      topSpeedKmh: 48.4,
+      heightM: 14,
+      lengthM: 785,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "wavre",
@@ -1211,6 +1378,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Boomerang",
     inversions: 3,
+    stats: {
+      topSpeedKmh: 85.3,
+      heightM: 42,
+      lengthM: 220,
+      durationSeconds: 35,
+    },
   },
   {
     citySlug: "wavre",
@@ -1221,6 +1394,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     openedYear: 2016,
+    stats: { topSpeedKmh: 40, heightM: 9.5, lengthM: 190, durationSeconds: 80 },
   },
   {
     citySlug: "wavre",
@@ -1270,7 +1444,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["launch-coaster", "family-coaster", "steel-coaster"],
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
-    openedYear: 2023,
+    openedYear: 2024,
+    stats: { topSpeedKmh: 67, heightM: 18, lengthM: 600 },
   },
   {
     citySlug: "lyon",
@@ -1280,7 +1455,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["family-coaster", "steel-coaster"],
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
-    openedYear: 2017,
+    openedYear: 2019,
+    stats: { topSpeedKmh: 85, heightM: 31, lengthM: 575, durationSeconds: 105 },
   },
   {
     citySlug: "lyon",
@@ -1330,6 +1506,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2023,
     inversions: 0,
+    stats: { topSpeedKmh: 95.4, heightM: 23.8, lengthM: 966 },
   },
   {
     citySlug: "orlando",
@@ -1343,6 +1520,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2014,
     inversions: 0,
+    stats: { topSpeedKmh: 54.9, lengthM: 610 },
   },
   {
     citySlug: "orlando",
@@ -1354,6 +1532,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "wdi",
     openedYear: 1975,
     inversions: 0,
+    stats: { topSpeedKmh: 44, heightM: 27, durationSeconds: 155 },
   },
   {
     citySlug: "orlando",
@@ -1365,6 +1544,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "wdi",
     openedYear: 1980,
     inversions: 0,
+    stats: { topSpeedKmh: 56.3, heightM: 31.7, lengthM: 814 },
   },
   {
     citySlug: "orlando",
@@ -1376,6 +1556,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Junior Coaster",
     openedYear: 1996,
+    stats: {
+      topSpeedKmh: 40.2,
+      heightM: 9.1,
+      lengthM: 207,
+      durationSeconds: 53,
+    },
   },
   {
     citySlug: "orlando",
@@ -1524,6 +1710,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Omnicoaster",
     openedYear: 2022,
     inversions: 0,
+    stats: { topSpeedKmh: 96.8, lengthM: 1700, durationSeconds: 200 },
   },
   {
     citySlug: "orlando",
@@ -1645,6 +1832,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "LSM Launch Coaster",
     openedYear: 1999,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 91.7,
+      heightM: 24.4,
+      lengthM: 996,
+      durationSeconds: 82,
+    },
   },
   {
     citySlug: "orlando",
@@ -1664,6 +1857,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Youngstar Coaster",
     openedYear: 2018,
     inversions: 0,
+    stats: { topSpeedKmh: 64.2, heightM: 15.1, durationSeconds: 120 },
   },
   {
     citySlug: "orlando",
@@ -1749,6 +1943,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2006,
     inversions: 0,
+    stats: { topSpeedKmh: 80.5, durationSeconds: 170 },
   },
   {
     citySlug: "orlando",
@@ -1809,6 +2004,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "wdi",
     openedYear: 1977,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 51.5,
+      heightM: 23.2,
+      lengthM: 1054,
+      durationSeconds: 165,
+    },
   },
   {
     citySlug: "anaheim",
@@ -1822,6 +2023,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1959,
     inversions: 0,
+    stats: { topSpeedKmh: 44, lengthM: 620, durationSeconds: 127 },
   },
   {
     citySlug: "anaheim",
@@ -1944,6 +2146,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Junior Coaster",
     openedYear: 1993,
+    stats: {
+      topSpeedKmh: 34.9,
+      heightM: 8.5,
+      lengthM: 207,
+      durationSeconds: 44,
+    },
   },
   {
     citySlug: "anaheim",
@@ -1994,6 +2202,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2001,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 37.1,
+      lengthM: 1851,
+      durationSeconds: 156,
+    },
   },
   {
     citySlug: "anaheim",
@@ -2005,6 +2219,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Wilde Maus",
     openedYear: 2001,
+    stats: {
+      topSpeedKmh: 43.5,
+      heightM: 16.8,
+      lengthM: 366,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "anaheim",
@@ -2014,6 +2234,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Walt Disney Imagineering",
     manufacturerTermId: "wdi",
     openedYear: 2012,
+    stats: { topSpeedKmh: 64.4, durationSeconds: 262 },
   },
   {
     citySlug: "anaheim",
@@ -2113,6 +2334,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 1995,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 70.8,
+      heightM: 32,
+      lengthM: 1000,
+      durationSeconds: 125,
+    },
   },
   {
     citySlug: "paris",
@@ -2135,6 +2362,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 1993,
     inversions: 1,
+    stats: { lengthM: 600 },
   },
   {
     citySlug: "paris",
@@ -2227,6 +2455,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Spinning Coaster",
     openedYear: 2007,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 60,
+      heightM: 15.5,
+      lengthM: 545,
+      durationSeconds: 115,
+    },
   },
   {
     citySlug: "paris",
@@ -2389,6 +2623,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "wdi",
     openedYear: 2001,
     inversions: 0,
+    stats: { topSpeedKmh: 75.6, durationSeconds: 180 },
   },
   {
     citySlug: "tokyo",
@@ -2400,6 +2635,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2005,
     inversions: 1,
+    stats: { topSpeedKmh: 60, heightM: 16, lengthM: 600, durationSeconds: 98 },
   },
   {
     citySlug: "tokyo",
@@ -2482,6 +2718,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     openedYear: 2001,
+    stats: { topSpeedKmh: 32, lengthM: 239, durationSeconds: 66 },
   },
   {
     citySlug: "tokyo",
@@ -2505,6 +2742,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2016,
     inversions: 0,
+    stats: { topSpeedKmh: 95.4, heightM: 23.8, lengthM: 966 },
   },
   {
     citySlug: "shanghai",
@@ -2515,6 +2753,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 2016,
+    stats: { topSpeedKmh: 55, durationSeconds: 150 },
   },
   {
     citySlug: "shanghai",
@@ -2604,6 +2843,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2012,
     inversions: 0,
+    stats: { topSpeedKmh: 56, lengthM: 1100, durationSeconds: 194 },
   },
   {
     citySlug: "hong-kong",
@@ -2699,6 +2939,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2021,
     inversions: 4,
+    stats: { topSpeedKmh: 112.7, heightM: 47.2, lengthM: 1433 },
   },
   {
     citySlug: "orlando",
@@ -2722,6 +2963,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "b-and-m",
     openedYear: 1999,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 107.9,
+      heightM: 33.5,
+      lengthM: 1128,
+      durationSeconds: 135,
+    },
   },
   {
     citySlug: "orlando",
@@ -2745,6 +2992,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2019,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 19.8,
+      lengthM: 1540,
+      durationSeconds: 175,
+    },
   },
   {
     citySlug: "orlando",
@@ -2768,6 +3021,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Junior Coaster",
     openedYear: 2010,
+    stats: {
+      topSpeedKmh: 45.9,
+      heightM: 13,
+      lengthM: 335,
+      durationSeconds: 66,
+    },
   },
   {
     citySlug: "orlando",
@@ -2846,6 +3105,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     elements: ["launch", "drop-track", "brake-run"],
     openedYear: 2014,
     inversions: 0,
+    stats: { topSpeedKmh: 40.2, lengthM: 600, durationSeconds: 300 },
   },
   {
     citySlug: "orlando",
@@ -2868,6 +3128,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "X-Car Coaster",
     openedYear: 2009,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 104.8,
+      heightM: 51,
+      lengthM: 1179,
+      durationSeconds: 102,
+    },
   },
   {
     citySlug: "orlando",
@@ -2886,6 +3152,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 2004,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 13.8,
+      lengthM: 671,
+      durationSeconds: 177,
+    },
   },
   {
     citySlug: "orlando",
@@ -2974,6 +3246,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launch Coaster",
     openedYear: 2025,
     inversions: 2,
+    stats: { topSpeedKmh: 99.8, heightM: 40.5 },
   },
   {
     citySlug: "orlando",
@@ -3016,6 +3289,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Spinning Coaster",
     openedYear: 2025,
+    stats: { topSpeedKmh: 59.5 },
   },
   {
     citySlug: "orlando",
@@ -3026,6 +3300,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 2025,
+    stats: { topSpeedKmh: 72.4, heightM: 15.2 },
   },
   {
     citySlug: "orlando",
@@ -3071,6 +3346,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Premier Rides",
     manufacturerTermId: "premier-rides",
     openedYear: 2004,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 13.5,
+      lengthM: 581,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "los-angeles",
@@ -3145,6 +3426,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Coaster",
     openedYear: 2016,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 46,
+      lengthM: 1124,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "osaka",
@@ -3164,6 +3451,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2007,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 90,
+      heightM: 44,
+      lengthM: 1200,
+      durationSeconds: 151,
+    },
   },
   {
     citySlug: "osaka",
@@ -3175,6 +3468,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Spinning Coaster",
     openedYear: 2010,
+    stats: { heightM: 7, lengthM: 585, durationSeconds: 275 },
   },
   {
     citySlug: "osaka",
@@ -3211,6 +3505,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Junior Coaster",
     openedYear: 2014,
+    stats: {
+      topSpeedKmh: 45.9,
+      heightM: 13,
+      lengthM: 335,
+      durationSeconds: 66,
+    },
   },
   {
     citySlug: "osaka",
@@ -3272,6 +3572,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Premier Rides",
     manufacturerTermId: "premier-rides",
     openedYear: 2010,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 13.5,
+      lengthM: 671,
+      durationSeconds: 117,
+    },
   },
   {
     citySlug: "singapore",
@@ -3332,6 +3638,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2021,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 107.8,
+      heightM: 33.5,
+      lengthM: 1128,
+      durationSeconds: 135,
+    },
   },
   {
     citySlug: "beijing",
@@ -3392,6 +3704,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2015,
     inversions: 2,
+    stats: { topSpeedKmh: 90, heightM: 30, lengthM: 501, durationSeconds: 130 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3409,6 +3722,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2010,
     inversions: 0,
+    stats: { topSpeedKmh: 75, heightM: 25, lengthM: 810, durationSeconds: 120 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3420,6 +3734,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["water-coaster", "dark-ride", "animatronics"],
     manufacturer: "KumbaK",
     openedYear: 2007,
+    stats: {
+      topSpeedKmh: 70,
+      heightM: 22.5,
+      lengthM: 420,
+      durationSeconds: 225,
+    },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3440,6 +3760,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Double Loop Corkscrew",
     openedYear: 1981,
     inversions: 4,
+    stats: { topSpeedKmh: 75, heightM: 29, lengthM: 750, durationSeconds: 128 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3451,6 +3772,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 1998,
     inversions: 0,
+    stats: { topSpeedKmh: 65, heightM: 20, lengthM: 643, durationSeconds: 101 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3462,6 +3784,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Youngstar Coaster",
     openedYear: 2020,
+    stats: { topSpeedKmh: 36, heightM: 6, lengthM: 300, durationSeconds: 150 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3478,6 +3801,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "droomvlucht",
     types: ["suspended-coaster", "dark-ride", "animatronics"],
     openedYear: 1993,
+    stats: { topSpeedKmh: 18, heightM: 13, lengthM: 425, durationSeconds: 360 },
   },
   {
     citySlug: "kaatsheuvel",
@@ -3541,6 +3865,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2019,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 121,
+      heightM: 62.8,
+      lengthM: 1316,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "zator",
@@ -3561,6 +3891,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mega Coaster",
     openedYear: 2018,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 142,
+      heightM: 77,
+      lengthM: 1450,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "zator",
@@ -3578,8 +3914,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Super Sky Loop Launch",
-    openedYear: 2022,
+    openedYear: 2021,
     inversions: 3,
+    stats: { topSpeedKmh: 100, heightM: 38.5, lengthM: 1316 },
   },
   {
     citySlug: "zator",
@@ -3596,8 +3933,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     model: "Infinity Coaster",
-    openedYear: 2017,
+    openedYear: 2015,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.2,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "zator",
@@ -3609,6 +3952,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2015,
     inversions: 0,
+    stats: { topSpeedKmh: 101, lengthM: 687 },
   },
   {
     citySlug: "zator",
@@ -3643,6 +3987,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Plug and Play Wooden Coaster",
     openedYear: 2001,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 110,
+      heightM: 60,
+      lengthM: 1344,
+      durationSeconds: 143,
+    },
   },
   {
     citySlug: "soltau",
@@ -3661,6 +4011,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2011,
     inversions: 1,
+    stats: { topSpeedKmh: 103, heightM: 41, lengthM: 476, durationSeconds: 90 },
   },
   {
     citySlug: "soltau",
@@ -3681,6 +4032,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2014,
     inversions: 3,
+    stats: { topSpeedKmh: 100, heightM: 40, lengthM: 772 },
   },
   {
     citySlug: "soltau",
@@ -3691,8 +4043,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     model: "Accelerator Coaster",
-    openedYear: 2006,
+    openedYear: 2007,
     inversions: 0,
+    stats: { topSpeedKmh: 101, heightM: 19, lengthM: 650 },
   },
   {
     citySlug: "soltau",
@@ -3709,8 +4062,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["steel-coaster"],
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
-    openedYear: 1989,
+    openedYear: 1983,
     inversions: 3,
+    stats: { heightM: 30, lengthM: 705 },
   },
   {
     citySlug: "soltau",
@@ -3720,6 +4074,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wild-mouse", "steel-coaster"],
     manufacturer: "Maurer Rides",
     manufacturerTermId: "maurer-rides",
+    stats: { topSpeedKmh: 30, heightM: 4.5, lengthM: 128 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -3745,6 +4100,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Infinity Coaster",
     openedYear: 2015,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 127,
+      heightM: 73,
+      lengthM: 1235,
+      durationSeconds: 227,
+    },
   },
   {
     citySlug: "sierksdorf",
@@ -3754,8 +4115,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["launch-coaster", "shuttle-coaster", "indoor-coaster"],
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
-    openedYear: 2010,
+    openedYear: 2009,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 40,
+      lengthM: 700,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "sierksdorf",
@@ -3765,8 +4132,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["steel-coaster", "terrain-coaster"],
     manufacturer: "Anton Schwarzkopf",
     manufacturerTermId: "schwarzkopf",
-    openedYear: 1987,
+    openedYear: 1980,
     inversions: 1,
+    stats: { topSpeedKmh: 79, heightM: 26, lengthM: 741, durationSeconds: 130 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -3793,6 +4161,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2023,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 107,
+      heightM: 51,
+      lengthM: 1075,
+      durationSeconds: 123,
+    },
   },
   {
     citySlug: "plailly",
@@ -3814,6 +4188,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2012,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 90,
+      heightM: 40,
+      lengthM: 1000,
+      durationSeconds: 135,
+    },
   },
   {
     citySlug: "plailly",
@@ -3833,6 +4213,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 1989,
     inversions: 7,
+    stats: { topSpeedKmh: 90, heightM: 36, lengthM: 950, durationSeconds: 80 },
   },
   {
     citySlug: "plailly",
@@ -3848,6 +4229,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1997,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 83.7,
+      heightM: 29.9,
+      lengthM: 1233,
+      durationSeconds: 125,
+    },
   },
   {
     citySlug: "plailly",
@@ -3858,6 +4245,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     openedYear: 2017,
+    stats: { topSpeedKmh: 52, heightM: 21, lengthM: 928, durationSeconds: 180 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -3884,6 +4272,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2012,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 134,
+      heightM: 76,
+      lengthM: 1564,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "vila-seca",
@@ -3906,6 +4300,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sitting Coaster",
     openedYear: 1995,
     inversions: 8,
+    stats: {
+      topSpeedKmh: 104.6,
+      heightM: 45.1,
+      lengthM: 1269,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "vila-seca",
@@ -3918,6 +4318,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2007,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 135,
+      heightM: 14.5,
+      lengthM: 850,
+      durationSeconds: 55,
+    },
   },
   {
     citySlug: "vila-seca",
@@ -3933,6 +4339,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "racing-coaster"],
     openedYear: 1997,
     inversions: 0,
+    stats: { topSpeedKmh: 74, heightM: 26, lengthM: 953 },
   },
   {
     citySlug: "vila-seca",
@@ -3947,6 +4354,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2017,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 180,
+      heightM: 112,
+      lengthM: 880,
+      durationSeconds: 39,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -3974,6 +4387,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Infinity Coaster",
     openedYear: 2013,
     inversions: 14,
+    stats: {
+      topSpeedKmh: 85,
+      heightM: 30,
+      lengthM: 1170,
+      durationSeconds: 165,
+    },
   },
   {
     citySlug: "farley",
@@ -3988,6 +4407,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 1998,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 109.4,
+      heightM: 19.8,
+      lengthM: 373,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "farley",
@@ -4007,6 +4432,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Coaster",
     openedYear: 2002,
     inversions: 2,
+    stats: { topSpeedKmh: 75, heightM: 20, lengthM: 840, durationSeconds: 100 },
   },
   {
     citySlug: "farley",
@@ -4024,6 +4450,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2018,
     inversions: 0,
+    stats: { topSpeedKmh: 70.2, heightM: 22, lengthM: 795 },
   },
   {
     citySlug: "farley",
@@ -4036,6 +4463,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2005,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 98.3,
+      heightM: 21,
+      lengthM: 640,
+      durationSeconds: 25,
+    },
   },
   {
     citySlug: "farley",
@@ -4047,6 +4480,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "maurer-rides",
     model: "Spinning Coaster",
     openedYear: 2004,
+    stats: {
+      topSpeedKmh: 60.5,
+      heightM: 17,
+      lengthM: 450,
+      durationSeconds: 75,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4075,6 +4514,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2024,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 128.7,
+      heightM: 71.9,
+      lengthM: 995,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "chertsey",
@@ -4087,6 +4532,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2006,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 128.7,
+      heightM: 62.5,
+      lengthM: 400,
+      durationSeconds: 25,
+    },
   },
   {
     citySlug: "chertsey",
@@ -4107,6 +4558,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2012,
     inversions: 5,
+    stats: { topSpeedKmh: 95, heightM: 38.7, lengthM: 775 },
   },
   {
     citySlug: "chertsey",
@@ -4127,6 +4579,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2003,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 78.8,
+      heightM: 29,
+      lengthM: 750,
+      durationSeconds: 103,
+    },
   },
   {
     citySlug: "chertsey",
@@ -4148,6 +4606,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2002,
     inversions: 10,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 30,
+      lengthM: 850,
+      durationSeconds: 92,
+    },
   },
   {
     citySlug: "chertsey",
@@ -4160,6 +4624,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2009,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 89.3,
+      heightM: 30.8,
+      lengthM: 720,
+      durationSeconds: 100,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4188,6 +4658,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Xtreme Spinning Coaster",
     openedYear: 2021,
     inversions: 5,
+    stats: { topSpeedKmh: 90, heightM: 33, lengthM: 920, durationSeconds: 80 },
   },
   {
     citySlug: "de-panne",
@@ -4199,6 +4670,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gerstlauer",
     openedYear: 2009,
     inversions: 1,
+    stats: { topSpeedKmh: 90, heightM: 34, lengthM: 600, durationSeconds: 48 },
   },
   {
     citySlug: "kasterlee",
@@ -4220,6 +4692,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Infinity Coaster",
     openedYear: 2019,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 106.6,
+      heightM: 43,
+      lengthM: 600,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "kasterlee",
@@ -4238,6 +4716,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2004,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 25.7,
+      lengthM: 670,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "ieper",
@@ -4253,8 +4737,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     model: "Euro-Fighter",
-    openedYear: 2011,
+    openedYear: 2013,
     inversions: 3,
+    stats: { topSpeedKmh: 50, heightM: 15, lengthM: 500, durationSeconds: 120 },
   },
   {
     citySlug: "ieper",
@@ -4265,7 +4750,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Family Boomerang",
-    openedYear: 2021,
+    openedYear: 2020,
+    stats: { topSpeedKmh: 50, heightM: 21, lengthM: 660 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4292,6 +4778,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launch Coaster",
     openedYear: 2014,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 41,
+      lengthM: 1381,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "gothenburg",
@@ -4311,6 +4803,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2018,
     inversions: 3,
+    stats: { topSpeedKmh: 105, heightM: 47, lengthM: 700 },
   },
   {
     citySlug: "gothenburg",
@@ -4330,6 +4823,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Plug and Play Wooden Coaster",
     openedYear: 2003,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 90,
+      heightM: 36,
+      lengthM: 1070,
+      durationSeconds: 128,
+    },
   },
   {
     citySlug: "stockholm",
@@ -4349,6 +4848,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2021,
     inversions: 4,
+    stats: { topSpeedKmh: 90, heightM: 34, lengthM: 700 },
   },
   {
     citySlug: "stockholm",
@@ -4361,6 +4861,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "ZacSpin",
     openedYear: 2009,
     inversions: 0,
+    stats: { topSpeedKmh: 57.5 },
   },
   {
     citySlug: "nimtofte",
@@ -4380,6 +4881,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2008,
     inversions: 0,
+    stats: { topSpeedKmh: 85, heightM: 31, lengthM: 755, durationSeconds: 61 },
   },
   {
     citySlug: "blokhus",
@@ -4400,6 +4902,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2022,
     inversions: 3,
+    stats: { topSpeedKmh: 95, heightM: 40, lengthM: 905, durationSeconds: 80 },
   },
   {
     citySlug: "blokhus",
@@ -4411,6 +4914,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gerstlauer",
     openedYear: 2008,
     inversions: 0,
+    stats: { topSpeedKmh: 80, heightM: 20, lengthM: 540 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4439,6 +4943,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2018,
     inversions: 4,
+    stats: { topSpeedKmh: 119, heightM: 62.5, lengthM: 1750 },
   },
   {
     citySlug: "sandusky",
@@ -4461,6 +4966,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Giga Coaster",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 149.7,
+      heightM: 94.5,
+      lengthM: 2010,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4487,6 +4998,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Blitz Coaster",
     openedYear: 2007,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 32,
+      lengthM: 1356,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4506,6 +5023,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2016,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 68,
+      lengthM: 1041,
+      durationSeconds: 147,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4526,6 +5049,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2013,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 108,
+      heightM: 51.8,
+      lengthM: 1269,
+      durationSeconds: 160,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4546,6 +5075,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1994,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 91.7,
+      heightM: 41.8,
+      lengthM: 1155,
+      durationSeconds: 136,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4565,6 +5100,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1989,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 115.9,
+      heightM: 62.5,
+      lengthM: 1556,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4583,6 +5124,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1976,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 77.2,
+      heightM: 25.9,
+      lengthM: 625,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4600,6 +5147,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1978,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 96.3,
+      heightM: 37.1,
+      lengthM: 1199,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4616,6 +5169,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Philadelphia Toboggan Company",
     openedYear: 1964,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 23.8,
+      lengthM: 780,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4636,6 +5195,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 1996,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 44.2,
+      lengthM: 1189,
+      durationSeconds: 160,
+    },
   },
   {
     citySlug: "sandusky",
@@ -4647,6 +5212,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1987,
     inversions: 0,
+    stats: { topSpeedKmh: 64.4, heightM: 23.2, lengthM: 853 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4672,6 +5238,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2022,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 122.3,
+      heightM: 62.8,
+      lengthM: 1242,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "tampa",
@@ -4692,6 +5264,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1996,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 45.7,
+      lengthM: 1214,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "tampa",
@@ -4710,6 +5288,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2005,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 61,
+      lengthM: 972,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "tampa",
@@ -4731,6 +5315,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sitting Coaster",
     openedYear: 1993,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 43.6,
+      lengthM: 1213,
+      durationSeconds: 174,
+    },
   },
   {
     citySlug: "tampa",
@@ -4756,6 +5346,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Blitz Coaster",
     openedYear: 2011,
     inversions: 1,
+    stats: { topSpeedKmh: 96.6, heightM: 31.1, lengthM: 1350 },
   },
   {
     citySlug: "tampa",
@@ -4767,6 +5358,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Spinning Coaster",
     openedYear: 2016,
+    stats: { topSpeedKmh: 64.4, heightM: 21.3, lengthM: 640 },
   },
   {
     citySlug: "williamsburg",
@@ -4790,6 +5382,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Multi Launch Coaster",
     openedYear: 2022,
     inversions: 2,
+    stats: { topSpeedKmh: 117.5, heightM: 54.3, lengthM: 1014 },
   },
   {
     citySlug: "williamsburg",
@@ -4808,6 +5401,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2007,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 114.3,
+      heightM: 62.5,
+      lengthM: 947,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "williamsburg",
@@ -4827,6 +5426,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 1999,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 117.5,
+      heightM: 51.8,
+      lengthM: 1488,
+      durationSeconds: 135,
+    },
   },
   {
     citySlug: "williamsburg",
@@ -4847,6 +5452,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1997,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 107.8,
+      heightM: 59.4,
+      lengthM: 1167,
+      durationSeconds: 190,
+    },
   },
   {
     citySlug: "williamsburg",
@@ -4860,6 +5471,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "zierer",
     openedYear: 2012,
     inversions: 0,
+    stats: { topSpeedKmh: 85.3, lengthM: 864 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -4885,6 +5497,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 2002,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 122.2,
+      heightM: 53.2,
+      lengthM: 1100,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -4908,6 +5526,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2015,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 91.7,
+      heightM: 36.9,
+      lengthM: 1521,
+      durationSeconds: 220,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -4928,6 +5552,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Coaster",
     openedYear: 2006,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 51.8,
+      lengthM: 1098,
+      durationSeconds: 210,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -4947,6 +5577,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 2013,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 50,
+      lengthM: 671,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -4964,6 +5600,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Giovanola",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 136.8,
+      heightM: 71.6,
+      lengthM: 1372,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -4985,6 +5627,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2003,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 101.4,
+      heightM: 45.7,
+      lengthM: 1215,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "jackson-township",
@@ -5006,6 +5654,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Plug and Play Wooden Coaster",
     openedYear: 2006,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 55,
+      lengthM: 1341,
+      durationSeconds: 102,
+    },
   },
   {
     citySlug: "jackson-township",
@@ -5026,6 +5680,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2001,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 128.7,
+      heightM: 70.1,
+      lengthM: 1644,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "jackson-township",
@@ -5046,6 +5706,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Raptor Track",
     openedYear: 2021,
     inversions: 3,
+    stats: { topSpeedKmh: 93.3, heightM: 39.6, lengthM: 914 },
   },
   {
     citySlug: "jackson-township",
@@ -5067,6 +5728,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 1999,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 98.2,
+      heightM: 43.3,
+      lengthM: 1215,
+      durationSeconds: 140,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -5090,6 +5757,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "terrain-coaster", "out-and-back"],
     openedYear: 1979,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 104.2,
+      heightM: 33.5,
+      lengthM: 2243,
+      durationSeconds: 250,
+    },
   },
   {
     citySlug: "maineville",
@@ -5111,6 +5784,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2014,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 109.4,
+      heightM: 50.9,
+      lengthM: 1257,
+      durationSeconds: 160,
+    },
   },
   {
     citySlug: "maineville",
@@ -5131,6 +5810,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Giga Coaster",
     openedYear: 2020,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 146.5,
+      heightM: 87.5,
+      lengthM: 1622,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "maineville",
@@ -5151,6 +5836,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2009,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 128.7,
+      heightM: 70.1,
+      lengthM: 1610,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "charlotte",
@@ -5172,6 +5863,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Giga Coaster",
     openedYear: 2015,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 153,
+      heightM: 99.1,
+      lengthM: 2012,
+      durationSeconds: 205,
+    },
   },
   {
     citySlug: "charlotte",
@@ -5191,6 +5888,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launch Coaster",
     openedYear: 2019,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 25,
+      lengthM: 992,
+      durationSeconds: 144,
+    },
   },
   {
     citySlug: "vaughan",
@@ -5211,6 +5914,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Giga Coaster",
     openedYear: 2012,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 148.1,
+      heightM: 93.3,
+      lengthM: 1672,
+      durationSeconds: 208,
+    },
   },
   {
     citySlug: "vaughan",
@@ -5230,6 +5939,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2019,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 130,
+      heightM: 68,
+      lengthM: 1105,
+      durationSeconds: 205,
+    },
   },
   {
     citySlug: "vaughan",
@@ -5250,6 +5965,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2008,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 123.9,
+      heightM: 70.1,
+      lengthM: 1621,
+      durationSeconds: 190,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -5273,6 +5994,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mega Coaster",
     openedYear: 2012,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 61,
+      lengthM: 1097,
+      durationSeconds: 63,
+    },
   },
   {
     citySlug: "hershey",
@@ -5292,6 +6019,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2004,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 45.7,
+      lengthM: 793,
+      durationSeconds: 50,
+    },
   },
   {
     citySlug: "hershey",
@@ -5313,6 +6046,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2020,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 122.3,
+      heightM: 64,
+      lengthM: 1413,
+      durationSeconds: 146,
+    },
   },
   {
     citySlug: "hershey",
@@ -5332,6 +6071,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2023,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 42.7,
+      lengthM: 1070,
+      durationSeconds: 156,
+    },
   },
   {
     citySlug: "hershey",
@@ -5350,6 +6095,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 82.1,
+      heightM: 27.9,
+      lengthM: 1034,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -5368,6 +6119,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "rmc",
     openedYear: 2016,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 117.5,
+      heightM: 50.3,
+      lengthM: 1158,
+      durationSeconds: 192,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -5389,6 +6146,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2012,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 98.2,
+      heightM: 64,
+      lengthM: 953,
+      durationSeconds: 142,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -5407,6 +6170,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2007,
     inversions: 2,
+    stats: { topSpeedKmh: 70, heightM: 26, lengthM: 551, durationSeconds: 150 },
   },
   {
     citySlug: "pigeon-forge",
@@ -5418,6 +6182,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gerstlauer",
     openedYear: 2014,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 55.5,
+      heightM: 23.8,
+      lengthM: 740,
+      durationSeconds: 139,
+    },
   },
   {
     citySlug: "branson",
@@ -5440,6 +6210,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Xtreme Spinning Coaster",
     openedYear: 2018,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 81,
+      heightM: 30.5,
+      lengthM: 921,
+      durationSeconds: 117,
+    },
   },
   {
     citySlug: "branson",
@@ -5461,6 +6237,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Topper Track",
     openedYear: 2013,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 109.4,
+      heightM: 32.6,
+      lengthM: 895,
+      durationSeconds: 87,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -5479,6 +6261,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Morgan",
     openedYear: 2001,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 136.8,
+      heightM: 48.8,
+      lengthM: 975,
+      durationSeconds: 117,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -5497,6 +6285,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "s-and-s-worldwide",
     openedYear: 2019,
     inversions: 9,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 67.1,
+      lengthM: 1219,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "buena-park",
@@ -5518,6 +6312,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Infinity Coaster",
     openedYear: 2018,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 91.7,
+      heightM: 45.7,
+      lengthM: 670,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "buena-park",
@@ -5535,6 +6335,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Custom Coasters International",
     openedYear: 1998,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 90.1,
+      heightM: 36,
+      lengthM: 1382,
+      durationSeconds: 160,
+    },
   },
   {
     citySlug: "buena-park",
@@ -5547,6 +6353,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Accelerator Coaster",
     openedYear: 2002,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 132,
+      heightM: 62.5,
+      lengthM: 671,
+      durationSeconds: 62,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -5571,6 +6383,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2016,
     inversions: 0,
+    stats: { topSpeedKmh: 117.5, heightM: 61, lengthM: 1451 },
   },
   {
     citySlug: "orlando",
@@ -5591,6 +6404,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Coaster",
     openedYear: 2009,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 90.1,
+      heightM: 42.7,
+      lengthM: 1024,
+      durationSeconds: 155,
+    },
   },
   {
     citySlug: "orlando",
@@ -5612,6 +6431,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2000,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 104.6,
+      heightM: 45.4,
+      lengthM: 1273,
+      durationSeconds: 122,
+    },
   },
   {
     citySlug: "orlando",
@@ -5623,6 +6448,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 2022,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 83.7,
+      heightM: 28.3,
+      lengthM: 579,
+      durationSeconds: 80,
+    },
   },
   {
     citySlug: "orlando",
@@ -5637,6 +6468,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Surf Coaster",
     openedYear: 2023,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 33.5,
+      lengthM: 899,
+      durationSeconds: 110,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -5661,6 +6498,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2011,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 43,
+      lengthM: 1000,
+      durationSeconds: 112,
+    },
   },
   {
     citySlug: "fujikawaguchiko",
@@ -5680,6 +6523,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "s-and-s-worldwide",
     openedYear: 2006,
     inversions: 14,
+    stats: {
+      topSpeedKmh: 126,
+      heightM: 76,
+      lengthM: 1153,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "oxenford",
@@ -5700,6 +6549,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2017,
     inversions: 0,
+    stats: { topSpeedKmh: 115.1, heightM: 61.8, lengthM: 1400 },
   },
   {
     citySlug: "oxenford",
@@ -5711,6 +6561,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2005,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 40,
+      lengthM: 760,
+      durationSeconds: 100,
+    },
   },
   {
     citySlug: "al-moqbel-palaces",
@@ -5732,6 +6588,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2025,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 250,
+      heightM: 164,
+      lengthM: 4250,
+      durationSeconds: 215,
+    },
   },
   {
     citySlug: "al-moqbel-palaces",
@@ -5751,6 +6613,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Raptor Track",
     openedYear: 2025,
     inversions: 4,
+    stats: { topSpeedKmh: 127, heightM: 73, lengthM: 582 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -5773,6 +6636,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2015,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 100.1,
+      heightM: 42.5,
+      lengthM: 566,
+      durationSeconds: 100,
+    },
   },
   {
     citySlug: "ronchi",
@@ -5793,6 +6662,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 1998,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 765,
+      durationSeconds: 102,
+    },
   },
   {
     citySlug: "ronchi",
@@ -5812,6 +6687,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2011,
     inversions: 3,
+    stats: { topSpeedKmh: 90, heightM: 33, lengthM: 770, durationSeconds: 90 },
   },
   {
     citySlug: "ronchi",
@@ -5821,7 +6697,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["mine-train", "dark-ride", "family-coaster"],
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
-    openedYear: 1990,
+    openedYear: 1985,
+    stats: { topSpeedKmh: 70, heightM: 30, lengthM: 700, durationSeconds: 120 },
   },
   {
     citySlug: "ronchi",
@@ -5832,6 +6709,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 2008,
+    stats: {
+      topSpeedKmh: 50.1,
+      heightM: 14,
+      lengthM: 1030,
+      durationSeconds: 165,
+    },
   },
   {
     citySlug: "ravenna",
@@ -5851,6 +6734,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Blitz Coaster",
     openedYear: 2009,
     inversions: 3,
+    stats: { topSpeedKmh: 110, heightM: 55, lengthM: 980 },
   },
   {
     citySlug: "ravenna",
@@ -5872,6 +6756,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2000,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 104,
+      heightM: 50,
+      lengthM: 1200,
+      durationSeconds: 142,
+    },
   },
   {
     citySlug: "ravenna",
@@ -5885,6 +6775,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     model: "Water Coaster",
     openedYear: 2012,
+    stats: { topSpeedKmh: 110, heightM: 60, lengthM: 767 },
   },
   {
     citySlug: "ravenna",
@@ -5920,6 +6811,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Launch Coaster",
     openedYear: 2018,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 85,
+      heightM: 27,
+      lengthM: 1143,
+      durationSeconds: 161,
+    },
   },
   {
     citySlug: "blackpool",
@@ -5937,6 +6834,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "racing-coaster", "out-and-back"],
     openedYear: 1935,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 18.9,
+      lengthM: 1006,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "blackpool",
@@ -5952,6 +6855,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1923,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 18.2,
+      lengthM: 1006,
+      durationSeconds: 148,
+    },
   },
   {
     citySlug: "blackpool",
@@ -5965,6 +6874,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "schwarzkopf",
     openedYear: 1979,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 17.1,
+      lengthM: 194,
+      durationSeconds: 66,
+    },
   },
   {
     citySlug: "blackpool",
@@ -5985,6 +6900,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 2007,
     inversions: 5,
+    stats: { topSpeedKmh: 80.3, heightM: 33.3, lengthM: 689 },
   },
   {
     citySlug: "blackpool",
@@ -5996,6 +6912,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Bobsled Coaster",
     openedYear: 1988,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 18,
+      lengthM: 354,
+      durationSeconds: 82,
+    },
   },
   {
     citySlug: "blackpool",
@@ -6008,6 +6930,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1977,
+    stats: { topSpeedKmh: 40.2, heightM: 9.1 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -6023,6 +6946,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1992,
+    stats: { topSpeedKmh: 36, heightM: 11, lengthM: 302, durationSeconds: 110 },
   },
   {
     citySlug: "chertsey",
@@ -6032,7 +6956,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["indoor-coaster", "dark-ride", "steel-coaster"],
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
-    openedYear: 1998,
+    openedYear: 1996,
+    stats: {
+      topSpeedKmh: 46.5,
+      heightM: 12.7,
+      lengthM: 400,
+      durationSeconds: 125,
+    },
   },
   {
     citySlug: "chertsey",
@@ -6043,6 +6973,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 1994,
+    stats: { topSpeedKmh: 27, heightM: 6.1, lengthM: 234 },
   },
   {
     citySlug: "vila-seca",
@@ -6053,6 +6984,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1995,
+    stats: {
+      topSpeedKmh: 60,
+      heightM: 16.5,
+      lengthM: 1008,
+      durationSeconds: 190,
+    },
   },
   {
     citySlug: "gothenburg",
@@ -6065,6 +7002,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "schwarzkopf",
     openedYear: 1987,
     inversions: 0,
+    stats: { topSpeedKmh: 80, heightM: 45, lengthM: 1340 },
   },
   {
     citySlug: "stockholm",
@@ -6082,6 +7020,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gravity-group",
     openedYear: 2011,
     inversions: 0,
+    stats: { topSpeedKmh: 61.2, heightM: 15.5, lengthM: 471 },
   },
   {
     citySlug: "stockholm",
@@ -6091,7 +7030,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["suspended-coaster", "family-coaster"],
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
-    openedYear: 2011,
+    openedYear: 2007,
+    stats: {
+      topSpeedKmh: 55,
+      heightM: 19.6,
+      lengthM: 395,
+      durationSeconds: 63,
+    },
   },
   {
     citySlug: "stockholm",
@@ -6103,6 +7048,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Wilde Maus",
     openedYear: 2003,
+    stats: {
+      topSpeedKmh: 55,
+      heightM: 20.8,
+      lengthM: 430,
+      durationSeconds: 94,
+    },
   },
   {
     citySlug: "sierksdorf",
@@ -6121,7 +7072,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     elements: ["lifthill", "first-drop", "brake-run"],
     types: ["wild-mouse", "family-coaster"],
     manufacturer: "Reverchon",
-    openedYear: 1991,
+    openedYear: 1990,
+    stats: { topSpeedKmh: 32, heightM: 6, lengthM: 200, durationSeconds: 90 },
   },
   {
     citySlug: "blokhus",
@@ -6137,8 +7089,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "twister-coaster"],
     manufacturer: "The Gravity Group",
     manufacturerTermId: "gravity-group",
-    openedYear: 2012,
+    openedYear: 2013,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 75,
+      heightM: 19.3,
+      lengthM: 453,
+      durationSeconds: 60,
+    },
   },
   {
     citySlug: "blokhus",
@@ -6148,7 +7106,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["family-coaster", "steel-coaster"],
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
-    openedYear: 1997,
+    openedYear: 2004,
+    stats: { topSpeedKmh: 75, heightM: 20, lengthM: 622, durationSeconds: 114 },
   },
   {
     citySlug: "nimtofte",
@@ -6160,6 +7119,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Water Coaster",
     openedYear: 2011,
+    stats: { topSpeedKmh: 70, heightM: 28, lengthM: 455 },
   },
   {
     citySlug: "ieper",
@@ -6169,7 +7129,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["family-coaster", "racing-coaster", "steel-coaster"],
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
-    openedYear: 2015,
+    openedYear: 2017,
+    stats: { topSpeedKmh: 40, heightM: 25, lengthM: 470, durationSeconds: 61 },
   },
   {
     citySlug: "wavre",
@@ -6186,6 +7147,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 2025,
+    stats: { topSpeedKmh: 65, heightM: 15, lengthM: 925 },
   },
   {
     citySlug: "san-martin-de-la-vega",
@@ -6206,6 +7168,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2002,
     inversions: 5,
+    stats: { topSpeedKmh: 80, heightM: 32, lengthM: 823, durationSeconds: 75 },
   },
   {
     citySlug: "san-martin-de-la-vega",
@@ -6221,6 +7184,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 2002,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 37,
+      lengthM: 1394,
+      durationSeconds: 120,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -6243,6 +7212,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2003,
     inversions: 0,
+    stats: { topSpeedKmh: 75, heightM: 22, lengthM: 670, durationSeconds: 108 },
   },
   {
     citySlug: "seoul",
@@ -6254,6 +7224,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 1989,
     inversions: 1,
+    stats: { topSpeedKmh: 70, lengthM: 630, durationSeconds: 105 },
   },
   {
     citySlug: "seoul",
@@ -6306,6 +7277,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wing Coaster",
     openedYear: 2012,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 88.8,
+      heightM: 37,
+      lengthM: 912,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6326,6 +7303,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Compressed Air Launch Coaster",
     openedYear: 2019,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 125.5,
+      heightM: 53.3,
+      lengthM: 549,
+      durationSeconds: 23,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6348,6 +7331,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 1999,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 117.5,
+      heightM: 61.6,
+      lengthM: 1541,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6367,6 +7356,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2025,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 107.8,
+      heightM: 54.9,
+      lengthM: 987,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6382,6 +7377,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1995,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 30.5,
+      lengthM: 1054,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6401,6 +7402,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1976,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 31.4,
+      lengthM: 649,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "gurnee",
@@ -6414,6 +7421,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "schwarzkopf",
     openedYear: 1976,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 70.2,
+      heightM: 21.2,
+      lengthM: 942,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "san-antonio",
@@ -6437,6 +7450,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2013,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 54.6,
+      lengthM: 996,
+      durationSeconds: 112,
+    },
   },
   {
     citySlug: "san-antonio",
@@ -6449,6 +7468,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Dive Coaster",
     openedYear: 2022,
     inversions: 1,
+    stats: { topSpeedKmh: 96.6, heightM: 45.7, lengthM: 762 },
   },
   {
     citySlug: "san-antonio",
@@ -6460,6 +7480,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 1999,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 24,
+      lengthM: 825,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "doswell",
@@ -6481,6 +7507,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2018,
     inversions: 3,
+    stats: { topSpeedKmh: 86.9, heightM: 33.8, lengthM: 1023 },
   },
   {
     citySlug: "doswell",
@@ -6502,6 +7529,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2000,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 104.6,
+      heightM: 47.9,
+      lengthM: 1283,
+      durationSeconds: 126,
+    },
   },
   {
     citySlug: "doswell",
@@ -6519,8 +7552,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Bolliger & Mabillard",
     manufacturerTermId: "b-and-m",
     model: "Inverted Coaster",
-    openedYear: 1993,
+    openedYear: 2010,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 144.8,
+      heightM: 93,
+      lengthM: 1555,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "doswell",
@@ -6532,6 +7571,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "s-and-s-worldwide",
     model: "4D Free Spin",
     openedYear: 2022,
+    stats: {
+      topSpeedKmh: 54.7,
+      heightM: 34.1,
+      lengthM: 235,
+      durationSeconds: 55,
+    },
   },
   {
     citySlug: "doswell",
@@ -6541,6 +7586,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "terrain-coaster", "out-and-back"],
     openedYear: 1982,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 82.1,
+      heightM: 26.5,
+      lengthM: 962,
+      durationSeconds: 150,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -6563,6 +7614,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2017,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 85.3,
+      heightM: 33.3,
+      lengthM: 995,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "maineville",
@@ -6577,6 +7634,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Boomerang",
     openedYear: 1999,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 40,
+      lengthM: 309,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "maineville",
@@ -6587,6 +7650,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1991,
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 19.2,
+      lengthM: 903,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "maineville",
@@ -6598,6 +7667,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1993,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 82.1,
+      heightM: 23.9,
+      lengthM: 717,
+      durationSeconds: 112,
+    },
   },
   {
     citySlug: "charlotte",
@@ -6618,6 +7693,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1999,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 34.4,
+      lengthM: 901,
+      durationSeconds: 167,
+    },
   },
   {
     citySlug: "charlotte",
@@ -6637,6 +7718,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Dutchman",
     openedYear: 2004,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 82.1,
+      heightM: 35.1,
+      lengthM: 843,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "charlotte",
@@ -6647,6 +7734,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1973,
+    stats: {
+      topSpeedKmh: 48.3,
+      heightM: 13.1,
+      lengthM: 731,
+      durationSeconds: 137,
+    },
   },
   {
     citySlug: "vaughan",
@@ -6655,6 +7748,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["interactive-dark-ride", "indoor-coaster", "dark-ride"],
     manufacturer: "Triotech",
     openedYear: 2014,
+    stats: { heightM: 18.2, lengthM: 305, durationSeconds: 30 },
   },
   {
     citySlug: "vaughan",
@@ -6665,7 +7759,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zamperla",
     manufacturerTermId: "zamperla",
     model: "Volare",
-    openedYear: 2003,
+    openedYear: 2004,
+    stats: {
+      topSpeedKmh: 41.4,
+      heightM: 15.3,
+      lengthM: 391,
+      durationSeconds: 64,
+    },
   },
   {
     citySlug: "vaughan",
@@ -6678,6 +7778,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Boomerang",
     openedYear: 1987,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 75,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "vaughan",
@@ -6693,6 +7799,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1981,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 90,
+      heightM: 27,
+      lengthM: 1167,
+      durationSeconds: 122,
+    },
   },
   {
     citySlug: "vaughan",
@@ -6703,6 +7815,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Premier Rides",
     manufacturerTermId: "premier-rides",
     openedYear: 2005,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 13.8,
+      lengthM: 597,
+      durationSeconds: 64,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -6726,6 +7844,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "intamin",
     openedYear: 2008,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 93.3,
+      heightM: 36.9,
+      lengthM: 823,
+      durationSeconds: 85,
+    },
   },
   {
     citySlug: "hershey",
@@ -6746,6 +7870,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1998,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 93.3,
+      heightM: 27.4,
+      lengthM: 853,
+      durationSeconds: 175,
+    },
   },
   {
     citySlug: "hershey",
@@ -6758,6 +7888,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "schwarzkopf",
     openedYear: 1977,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 72.2,
+      heightM: 22.2,
+      lengthM: 797,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "hershey",
@@ -6774,6 +7910,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Philadelphia Toboggan Company",
     openedYear: 1946,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 25.6,
+      lengthM: 1024,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -6794,6 +7936,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1999,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 101.4,
+      heightM: 49.7,
+      lengthM: 818,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -6812,6 +7960,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2004,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 86.4,
+      heightM: 30.6,
+      lengthM: 985,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -6823,6 +7977,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Suspended Family Coaster",
     openedYear: 2019,
+    stats: {
+      topSpeedKmh: 75,
+      heightM: 19.3,
+      lengthM: 453,
+      durationSeconds: 60,
+    },
   },
   {
     citySlug: "branson",
@@ -6843,6 +8003,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sitting Coaster",
     openedYear: 2001,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 106.2,
+      heightM: 36.6,
+      lengthM: 937,
+      durationSeconds: 135,
+    },
   },
   {
     citySlug: "branson",
@@ -6853,6 +8019,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1993,
+    stats: {
+      topSpeedKmh: 77.2,
+      heightM: 24.7,
+      lengthM: 921,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "buena-park",
@@ -6874,6 +8046,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2004,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 44.5,
+      lengthM: 953,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "buena-park",
@@ -6885,6 +8063,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Spinning Coaster",
     openedYear: 2007,
+    stats: { topSpeedKmh: 59.5, heightM: 19.3, lengthM: 444 },
   },
   {
     citySlug: "buena-park",
@@ -6895,6 +8074,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zamperla",
     manufacturerTermId: "zamperla",
     openedYear: 2008,
+    stats: {
+      topSpeedKmh: 61.2,
+      heightM: 13.4,
+      lengthM: 396,
+      durationSeconds: 36,
+    },
   },
   {
     citySlug: "buena-park",
@@ -6905,6 +8090,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     openedYear: 1995,
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 19.8,
+      lengthM: 793,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -6923,6 +8114,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sky Rocket II",
     openedYear: 2010,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 29,
+      lengthM: 640,
+      durationSeconds: 65,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -6934,6 +8131,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "terrain-coaster"],
     openedYear: 1920,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 12.2,
+      lengthM: 650,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -6943,6 +8146,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "terrain-coaster"],
     openedYear: 1968,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 21.3,
+      lengthM: 991,
+      durationSeconds: 101,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -6958,6 +8167,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "racing-coaster"],
     openedYear: 1927,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 22.1,
+      lengthM: 1372,
+      durationSeconds: 92,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -6980,6 +8195,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1978,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 39.6,
+      lengthM: 988,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "williamsburg",
@@ -6999,6 +8220,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sky Rocket II",
     openedYear: 2015,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 45.7,
+      lengthM: 263,
+      durationSeconds: 55,
+    },
   },
   {
     citySlug: "williamsburg",
@@ -7016,6 +8243,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2017,
     inversions: 0,
+    stats: { topSpeedKmh: 77.2, heightM: 18.3, lengthM: 646 },
   },
   {
     citySlug: "tampa",
@@ -7034,6 +8262,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sky Rocket II",
     openedYear: 2019,
     inversions: 3,
+    stats: { topSpeedKmh: 99.8, heightM: 45.7, lengthM: 263 },
   },
   {
     citySlug: "orlando",
@@ -7044,6 +8273,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     openedYear: 1998,
+    stats: { topSpeedKmh: 67.6, heightM: 29.8 },
   },
   {
     citySlug: "santa-clarita",
@@ -7062,6 +8292,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 2020,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 20.4,
+      lengthM: 1219,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -7079,6 +8315,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gravity-group",
     openedYear: 2009,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80.6,
+      heightM: 29,
+      lengthM: 877,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -7100,6 +8342,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1990,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 112.7,
+      heightM: 57.3,
+      lengthM: 1167,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "santa-clarita",
@@ -7111,6 +8359,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1988,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 18.3,
+      lengthM: 823,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "oxenford",
@@ -7131,6 +8385,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "El Loco",
     openedYear: 2011,
     inversions: 3,
+    stats: { topSpeedKmh: 66, heightM: 33, lengthM: 488, durationSeconds: 67 },
   },
   {
     citySlug: "oxenford",
@@ -7142,6 +8397,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Bobsled Coaster",
     openedYear: 2002,
+    stats: {
+      topSpeedKmh: 44.6,
+      heightM: 17,
+      lengthM: 530,
+      durationSeconds: 253,
+    },
   },
   // ───────────────────────────────────────────────────────────────────────
   // Six Flags Over Texas / Over Georgia / St. Louis / New England / America /
@@ -7167,6 +8428,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2011,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 100,
+      heightM: 46,
+      lengthM: 1500,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "arlington",
@@ -7185,6 +8452,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Giovanola",
     openedYear: 2001,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 136.8,
+      heightM: 74.7,
+      lengthM: 1619,
+      durationSeconds: 210,
+    },
   },
   {
     citySlug: "arlington",
@@ -7198,6 +8471,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 1998,
     inversions: 1,
+    stats: { topSpeedKmh: 112.7, heightM: 66.4, lengthM: 396 },
   },
   {
     citySlug: "arlington",
@@ -7217,6 +8491,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "schwarzkopf",
     openedYear: 1978,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 97,
+      heightM: 35,
+      lengthM: 1100,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "arlington",
@@ -7232,6 +8512,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1980,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 21.6,
+      lengthM: 814,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "arlington",
@@ -7244,6 +8530,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1966,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 56.2,
+      heightM: 11,
+      lengthM: 757,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "arlington",
@@ -7254,7 +8546,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     model: "Power Splash",
-    openedYear: 2022,
+    openedYear: 2023,
+    stats: { topSpeedKmh: 99.9, heightM: 44.6, lengthM: 216 },
   },
   {
     citySlug: "austell",
@@ -7275,6 +8568,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2018,
     inversions: 3,
+    stats: { topSpeedKmh: 80.5, heightM: 30.5, lengthM: 731 },
   },
   {
     citySlug: "austell",
@@ -7295,6 +8589,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2006,
     inversions: 0,
+    stats: { topSpeedKmh: 112.7, heightM: 61, lengthM: 1366 },
   },
   {
     citySlug: "austell",
@@ -7313,6 +8608,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Euro-Fighter",
     openedYear: 2011,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 83.9,
+      heightM: 29,
+      lengthM: 640,
+      durationSeconds: 100,
+    },
   },
   {
     citySlug: "austell",
@@ -7332,6 +8633,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Stand-Up Coaster",
     openedYear: 1999,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 86.9,
+      heightM: 32.6,
+      lengthM: 914,
+      durationSeconds: 84,
+    },
   },
   {
     citySlug: "austell",
@@ -7342,6 +8649,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1967,
+    stats: {
+      topSpeedKmh: 46.9,
+      heightM: 11.2,
+      lengthM: 709,
+      durationSeconds: 171,
+    },
   },
   {
     citySlug: "eureka",
@@ -7359,6 +8672,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Custom Coasters International",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 106.7,
+      heightM: 37.2,
+      lengthM: 1412,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "eureka",
@@ -7376,6 +8695,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2008,
     inversions: 0,
+    stats: { topSpeedKmh: 77.2, heightM: 25, lengthM: 827 },
   },
   {
     citySlug: "eureka",
@@ -7391,6 +8711,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back", "terrain-coaster"],
     openedYear: 1976,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 33.5,
+      lengthM: 1180,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "eureka",
@@ -7401,6 +8727,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1971,
+    stats: {
+      topSpeedKmh: 59.8,
+      heightM: 9.8,
+      lengthM: 761,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "agawam",
@@ -7421,6 +8753,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2015,
     inversions: 3,
+    stats: { topSpeedKmh: 88.5, heightM: 33.2, lengthM: 1012 },
   },
   {
     citySlug: "agawam",
@@ -7441,6 +8774,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2002,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 35.9,
+      lengthM: 793,
+      durationSeconds: 140,
+    },
   },
   {
     citySlug: "agawam",
@@ -7456,6 +8795,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1941,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 64.4,
+      heightM: 21.3,
+      lengthM: 793,
+      durationSeconds: 60,
+    },
   },
   {
     citySlug: "bowie",
@@ -7475,6 +8820,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Mega Coaster",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 117.5,
+      heightM: 60,
+      lengthM: 1631,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "bowie",
@@ -7496,6 +8847,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Flying Dutchman",
     openedYear: 2001,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 35.1,
+      lengthM: 1018,
+      durationSeconds: 122,
+    },
   },
   {
     citySlug: "bowie",
@@ -7507,6 +8864,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 1999,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 24,
+      lengthM: 825,
+      durationSeconds: 56,
+    },
   },
   {
     citySlug: "vallejo",
@@ -7528,6 +8891,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2000,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 104.6,
+      heightM: 45.7,
+      lengthM: 1200,
+      durationSeconds: 195,
+    },
   },
   {
     citySlug: "vallejo",
@@ -7541,6 +8910,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "premier-rides",
     openedYear: 2012,
     inversions: 1,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 45.7,
+      lengthM: 263,
+      durationSeconds: 45,
+    },
   },
   {
     citySlug: "vallejo",
@@ -7561,6 +8936,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2016,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 85.3,
+      heightM: 30.5,
+      lengthM: 975,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "vallejo",
@@ -7581,6 +8962,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 1998,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "ciudad-de-mexico",
@@ -7601,6 +8988,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "IBox Track",
     openedYear: 2014,
     inversions: 3,
+    stats: { topSpeedKmh: 93.3, heightM: 29.9, lengthM: 914 },
   },
   {
     citySlug: "ciudad-de-mexico",
@@ -7619,6 +9007,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2004,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 120.1,
+      heightM: 67,
+      lengthM: 1700,
+      durationSeconds: 184,
+    },
   },
   {
     citySlug: "ciudad-de-mexico",
@@ -7637,8 +9031,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Bolliger & Mabillard",
     manufacturerTermId: "b-and-m",
     model: "Inverted Coaster",
-    openedYear: 2001,
+    openedYear: 2000,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   // ───────────────────────────────────────────────────────────────────────
   // Cedar Fair regionals — Dorney, Valleyfair, Worlds of Fun,
@@ -7661,6 +9061,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Morgan",
     openedYear: 1997,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 61,
+      lengthM: 1707,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "allentown",
@@ -7680,6 +9086,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2001,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 93.3,
+      heightM: 41.1,
+      lengthM: 948,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "allentown",
@@ -7701,6 +9113,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2005,
     inversions: 7,
+    stats: {
+      topSpeedKmh: 85.2,
+      heightM: 29,
+      lengthM: 975,
+      durationSeconds: 155,
+    },
   },
   {
     citySlug: "allentown",
@@ -7713,6 +9131,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Impulse Coaster",
     openedYear: 2000,
     inversions: 0,
+    stats: { topSpeedKmh: 112.7, heightM: 55.7 },
   },
   {
     citySlug: "allentown",
@@ -7726,8 +9145,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
       "brake-run",
     ],
     types: ["wooden-coaster", "out-and-back"],
-    openedYear: 1923,
+    openedYear: 1924,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 24.4,
+      lengthM: 843,
+      durationSeconds: 78,
+    },
   },
   {
     citySlug: "shakopee",
@@ -7746,6 +9171,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Morgan",
     openedYear: 1996,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 119.9,
+      heightM: 63.1,
+      lengthM: 1664,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "shakopee",
@@ -7764,6 +9195,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2007,
     inversions: 0,
+    stats: { topSpeedKmh: 82.6, lengthM: 949, durationSeconds: 120 },
   },
   {
     citySlug: "shakopee",
@@ -7776,6 +9208,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Impulse Coaster",
     openedYear: 2003,
     inversions: 0,
+    stats: { topSpeedKmh: 109.4, heightM: 56.4, lengthM: 192 },
   },
   {
     citySlug: "shakopee",
@@ -7794,6 +9227,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1980,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 25.9,
+      lengthM: 594,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "shakopee",
@@ -7805,6 +9244,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1989,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 87.7,
+      heightM: 30.5,
+      lengthM: 736,
+      durationSeconds: 137,
+    },
   },
   {
     citySlug: "kansas-city",
@@ -7823,6 +9268,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Morgan",
     openedYear: 1998,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 120.7,
+      heightM: 62.5,
+      lengthM: 1707,
+      durationSeconds: 180,
+    },
   },
   {
     citySlug: "kansas-city",
@@ -7840,6 +9291,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2009,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 82.4,
+      heightM: 31.2,
+      lengthM: 937,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "kansas-city",
@@ -7859,6 +9316,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 2006,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 45.4,
+      lengthM: 939,
+      durationSeconds: 138,
+    },
   },
   {
     citySlug: "kansas-city",
@@ -7868,6 +9331,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "terrain-coaster", "out-and-back"],
     openedYear: 1989,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 85.3,
+      heightM: 30.5,
+      lengthM: 1289,
+      durationSeconds: 133,
+    },
   },
   {
     citySlug: "kansas-city",
@@ -7879,6 +9348,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "zierer",
     openedYear: 2023,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 22.6,
+      lengthM: 748,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "muskegon",
@@ -7898,6 +9373,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Custom Coasters International",
     openedYear: 1998,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 91.7,
+      heightM: 37.2,
+      lengthM: 1641,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "muskegon",
@@ -7918,6 +9399,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 2008,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "muskegon",
@@ -7933,6 +9420,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1988,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.8,
+      heightM: 26,
+      lengthM: 914,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "santa-clara",
@@ -7954,6 +9447,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Raptor Track",
     openedYear: 2018,
     inversions: 3,
+    stats: { topSpeedKmh: 83.7, heightM: 32.3, lengthM: 549 },
   },
   {
     citySlug: "santa-clara",
@@ -7972,6 +9466,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2013,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 86.4,
+      heightM: 33,
+      lengthM: 974,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "santa-clara",
@@ -7991,6 +9491,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Inverted Coaster",
     openedYear: 1993,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 31.1,
+      lengthM: 689,
+      durationSeconds: 146,
+    },
   },
   {
     citySlug: "santa-clara",
@@ -8009,6 +9515,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "b-and-m",
     openedYear: 1991,
     inversions: 4,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 27.7,
+      lengthM: 585,
+      durationSeconds: 134,
+    },
   },
   {
     citySlug: "santa-clara",
@@ -8024,6 +9536,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1986,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.5,
+      heightM: 27.7,
+      lengthM: 991,
+      durationSeconds: 160,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -8048,6 +9566,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Philadelphia Toboggan Company",
     openedYear: 1985,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 23.8,
+      lengthM: 975,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "elysburg",
@@ -8057,6 +9581,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "twister-coaster"],
     openedYear: 1999,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 82.5,
+      heightM: 31,
+      lengthM: 1189,
+      durationSeconds: 130,
+    },
   },
   {
     citySlug: "elysburg",
@@ -8068,6 +9598,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["bobsled-coaster", "wooden-coaster"],
     openedYear: 2013,
     inversions: 0,
+    stats: { topSpeedKmh: 38.6, heightM: 15.2, lengthM: 396 },
   },
   {
     citySlug: "elysburg",
@@ -8085,6 +9616,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "zierer",
     openedYear: 2015,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 88.8,
+      heightM: 30,
+      lengthM: 602,
+      durationSeconds: 80,
+    },
   },
   {
     citySlug: "elysburg",
@@ -8093,6 +9630,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["indoor-coaster", "dark-ride", "family-coaster"],
     elements: ["lifthill", "first-drop", "brake-run"],
     openedYear: 2011,
+    stats: { heightM: 10.7 },
   },
   {
     citySlug: "southington",
@@ -8111,6 +9649,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Custom Coasters International",
     openedYear: 2000,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 96.6,
+      heightM: 34.3,
+      lengthM: 1440,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "southington",
@@ -8126,6 +9670,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1927,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 77.2,
+      heightM: 25.9,
+      lengthM: 837,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "montreal",
@@ -8145,6 +9695,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Hyper Coaster",
     openedYear: 2006,
     inversions: 0,
+    stats: { topSpeedKmh: 110, heightM: 53.3, lengthM: 1231 },
   },
   {
     citySlug: "montreal",
@@ -8160,6 +9711,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "racing-coaster"],
     openedYear: 1985,
     inversions: 0,
+    stats: { topSpeedKmh: 96, heightM: 39.9, lengthM: 1218 },
   },
   {
     citySlug: "san-antonio",
@@ -8178,6 +9730,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "gci",
     openedYear: 2020,
     inversions: 0,
+    stats: { topSpeedKmh: 88.5, heightM: 29.3, lengthM: 1030 },
   },
   {
     citySlug: "san-antonio",
@@ -8195,6 +9748,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Morgan",
     openedYear: 1999,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 104.6,
+      heightM: 45.7,
+      lengthM: 1128,
+      durationSeconds: 100,
+    },
   },
   {
     citySlug: "san-antonio",
@@ -8206,6 +9765,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     openedYear: 2017,
     inversions: 0,
+    stats: { topSpeedKmh: 70.8, heightM: 18.6, lengthM: 793 },
   },
   {
     citySlug: "san-diego",
@@ -8226,6 +9786,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sky Rocket II",
     openedYear: 2018,
     inversions: 3,
+    stats: {
+      topSpeedKmh: 99.8,
+      heightM: 45.7,
+      lengthM: 263,
+      durationSeconds: 45,
+    },
   },
   {
     citySlug: "san-diego",
@@ -8237,6 +9803,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     openedYear: 2012,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 69.2,
+      heightM: 9.1,
+      lengthM: 853,
+      durationSeconds: 118,
+    },
   },
   {
     citySlug: "altoona",
@@ -8246,7 +9818,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["indoor-coaster", "launch-coaster", "dark-ride"],
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
-    openedYear: 2018,
+    openedYear: 1996,
+    stats: { heightM: 4, lengthM: 278 },
   },
   {
     citySlug: "altoona",
@@ -8263,6 +9836,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Custom Coasters International",
     openedYear: 1993,
     inversions: 0,
+    stats: { topSpeedKmh: 77.2, heightM: 20.4, lengthM: 853 },
   },
   // ───────────────────────────────────────────────────────────────────────
   // Remaining Europe / Asia / Oceania
@@ -8283,6 +9857,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     openedYear: 2023,
     inversions: 3,
+    stats: { topSpeedKmh: 72, heightM: 20, lengthM: 380 },
   },
   {
     citySlug: "chessington",
@@ -8294,6 +9869,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1990,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 21.3,
+      lengthM: 671,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "chessington",
@@ -8305,6 +9886,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "maurer-rides",
     model: "Spinning Coaster",
     openedYear: 2004,
+    stats: { heightM: 15.5, lengthM: 520 },
   },
   {
     citySlug: "kirby-misperton",
@@ -8318,6 +9900,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "El Loco",
     openedYear: 2009,
     inversions: 0,
+    stats: { topSpeedKmh: 65, heightM: 30 },
   },
   {
     citySlug: "kirby-misperton",
@@ -8338,6 +9921,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Suspended Looping Coaster",
     openedYear: 2006,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 88.4,
+      heightM: 35.9,
+      lengthM: 671,
+      durationSeconds: 92,
+    },
   },
   {
     citySlug: "dolancourt",
@@ -8356,6 +9945,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     openedYear: 2014,
     inversions: 0,
+    stats: { topSpeedKmh: 83, heightM: 33, lengthM: 719 },
   },
   {
     citySlug: "saint-pourcain-sur-besbre",
@@ -8371,17 +9961,17 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "saint-pourcain-sur-besbre",
     parkSlug: "le-pal",
     attractionSlug: "yukon-quad",
-    elements: [
-      "lifthill",
-      "first-drop",
-      "airtime-hill",
-      "overbank",
-      "brake-run",
-    ],
-    types: ["family-coaster", "terrain-coaster", "steel-coaster"],
-    manufacturer: "Mack Rides",
-    manufacturerTermId: "mack-rides",
-    openedYear: 2015,
+    // Launched, not lifted: 90 km/h out of a 12 m tall layout is not something
+    // gravity can do, and Intamin's own drive for it is a friction-wheel
+    // launch. That mismatch is what exposed the rest of this entry as another
+    // ride's — it was filed as a 2015 Mack coaster.
+    elements: ["launch", "airtime-hill", "overbank", "brake-run"],
+    types: ["launch-coaster", "family-coaster", "terrain-coaster"],
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+    model: "Family Launch Coaster",
+    openedYear: 2018,
+    stats: { topSpeedKmh: 90, heightM: 12, lengthM: 1000 },
   },
   {
     citySlug: "billund",
@@ -8394,6 +9984,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     openedYear: 2012,
+    stats: { topSpeedKmh: 65, heightM: 19, lengthM: 498, durationSeconds: 111 },
   },
   {
     citySlug: "billund",
@@ -8404,7 +9995,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Suspended Family Coaster",
-    openedYear: 2010,
+    openedYear: 2018,
+    stats: { heightM: 11, lengthM: 281 },
   },
   {
     citySlug: "madrid",
@@ -8423,6 +10015,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "X-Car Coaster",
     openedYear: 2006,
     inversions: 2,
+    stats: {
+      topSpeedKmh: 105,
+      heightM: 46.1,
+      lengthM: 450,
+      durationSeconds: 60,
+    },
   },
   {
     citySlug: "madrid",
@@ -8441,8 +10039,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Suspended Looping Coaster",
-    openedYear: 2003,
+    openedYear: 1999,
     inversions: 5,
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 29.9,
+      lengthM: 800,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "hassloch",
@@ -8463,6 +10067,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Sky Rocket II",
     openedYear: 2014,
     inversions: 2,
+    stats: { topSpeedKmh: 100, heightM: 45, lengthM: 263, durationSeconds: 60 },
   },
   {
     citySlug: "havant",
@@ -8472,7 +10077,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["family-coaster", "steel-coaster"],
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
-    openedYear: 2022,
+    openedYear: 2021,
+    stats: { heightM: 20 },
   },
   {
     citySlug: "hong-kong",
@@ -8494,6 +10100,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Floorless Coaster",
     openedYear: 2011,
     inversions: 4,
+    stats: { topSpeedKmh: 88, heightM: 35, lengthM: 850, durationSeconds: 60 },
   },
   {
     citySlug: "main-beach",
@@ -8511,6 +10118,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Martin & Vleminckx",
     openedYear: 2022,
     inversions: 0,
+    stats: { topSpeedKmh: 80, heightM: 32, lengthM: 1000, durationSeconds: 90 },
   },
   {
     citySlug: "main-beach",
@@ -8522,6 +10130,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Water Coaster",
     openedYear: 2013,
+    stats: { topSpeedKmh: 70, heightM: 28, lengthM: 463 },
   },
   {
     citySlug: "main-beach",
@@ -8532,6 +10141,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 2008,
+    stats: { topSpeedKmh: 71, heightM: 6, lengthM: 538, durationSeconds: 32 },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -8546,6 +10156,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1969,
+    stats: {
+      topSpeedKmh: 67.8,
+      heightM: 14.8,
+      lengthM: 774,
+      durationSeconds: 166,
+    },
   },
   {
     citySlug: "charlotte",
@@ -8567,6 +10183,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1980,
     inversions: 4,
+    stats: { topSpeedKmh: 66, heightM: 29, lengthM: 640, durationSeconds: 90 },
   },
   {
     citySlug: "charlotte",
@@ -8577,8 +10194,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "Boomerang",
-    openedYear: 2010,
+    openedYear: 2009,
     inversions: 6,
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "charlotte",
@@ -8594,6 +10217,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1994,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 25.3,
+      lengthM: 962,
+      durationSeconds: 120,
+    },
   },
   {
     citySlug: "vaughan",
@@ -8605,6 +10234,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1991,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 88.8,
+      heightM: 27.8,
+      lengthM: 720,
+      durationSeconds: 96,
+    },
   },
   {
     citySlug: "vaughan",
@@ -8615,6 +10250,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     openedYear: 1981,
+    stats: { topSpeedKmh: 64, heightM: 10, lengthM: 330, durationSeconds: 84 },
   },
   {
     citySlug: "hershey",
@@ -8625,6 +10261,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1974,
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 13.1,
+      lengthM: 488,
+      durationSeconds: 75,
+    },
   },
   {
     citySlug: "hershey",
@@ -8635,6 +10277,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 1999,
+    stats: {
+      topSpeedKmh: 45.1,
+      heightM: 13.7,
+      lengthM: 370,
+      durationSeconds: 118,
+    },
   },
   {
     citySlug: "jackson-township",
@@ -8645,6 +10293,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 1996,
+    stats: {
+      topSpeedKmh: 53.1,
+      heightM: 12.3,
+      lengthM: 420,
+      durationSeconds: 84,
+    },
   },
   {
     citySlug: "san-antonio",
@@ -8654,7 +10308,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["mine-train", "family-coaster", "terrain-coaster"],
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
-    openedYear: 1992,
+    openedYear: 1997,
+    stats: {
+      topSpeedKmh: 56.2,
+      heightM: 22.2,
+      lengthM: 731,
+      durationSeconds: 144,
+    },
   },
   {
     citySlug: "west-mifflin",
@@ -8664,6 +10324,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["spinning-coaster", "indoor-coaster", "dark-ride"],
     manufacturer: "Reverchon",
     openedYear: 1999,
+    stats: {
+      topSpeedKmh: 46.8,
+      heightM: 13,
+      lengthM: 420,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "pigeon-forge",
@@ -8683,6 +10349,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "mack-rides",
     model: "Wilde Maus",
     openedYear: 2013,
+    stats: { heightM: 15.8, lengthM: 408, durationSeconds: 150 },
   },
   {
     citySlug: "farley",
@@ -8692,7 +10359,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["family-coaster", "steel-coaster"],
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
-    openedYear: 2013,
+    openedYear: 2015,
+    stats: { heightM: 6.5, lengthM: 143 },
   },
   {
     citySlug: "blackpool",
@@ -8708,6 +10376,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["wooden-coaster", "out-and-back"],
     openedYear: 1933,
     inversions: 0,
+    stats: {
+      topSpeedKmh: 56.2,
+      heightM: 18.8,
+      lengthM: 699,
+      durationSeconds: 104,
+    },
   },
   {
     citySlug: "ronchi",
@@ -8728,6 +10402,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
     openedYear: 2002,
+    stats: { topSpeedKmh: 35.7, heightM: 8, lengthM: 360, durationSeconds: 65 },
   },
   {
     citySlug: "tampa",
@@ -8770,23 +10445,27 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "adventureland-resort",
     attractionSlug: "dragon-slayer",
     manufacturer: "Hopkins Rides",
+    stats: { topSpeedKmh: 88.5, heightM: 27.4, lengthM: 799 },
   },
   {
     citySlug: "altoona",
     parkSlug: "adventureland-resort",
     attractionSlug: "tornado",
+    stats: { topSpeedKmh: 93.3, heightM: 28.3, lengthM: 869 },
   },
   // Avonturenpark Hellendoorn
   {
     citySlug: "hellendoorn",
     parkSlug: "avonturenpark-hellendoorn",
     attractionSlug: "rioolrat",
+    stats: { topSpeedKmh: 45, lengthM: 305, durationSeconds: 98 },
   },
   // Blackpool Pleasure Beach
   {
     citySlug: "blackpool",
     parkSlug: "blackpool-pleasure-beach",
     attractionSlug: "blue-flyer",
+    stats: { topSpeedKmh: 40, heightM: 5.3, lengthM: 335, durationSeconds: 60 },
   },
   // Busch Gardens Tampa
   {
@@ -8803,11 +10482,23 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "canadas-wonderland",
     attractionSlug: "ghoster-coaster",
     manufacturer: "Philadelphia Toboggan Coasters",
+    stats: {
+      topSpeedKmh: 56.2,
+      heightM: 12.5,
+      lengthM: 413,
+      durationSeconds: 80,
+    },
   },
   {
     citySlug: "vaughan",
     parkSlug: "canadas-wonderland",
     attractionSlug: "silver-streak",
+    stats: {
+      topSpeedKmh: 41.8,
+      heightM: 14.8,
+      lengthM: 342,
+      durationSeconds: 76,
+    },
   },
   // Carowinds
   {
@@ -8816,6 +10507,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "ricochet",
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
+    stats: {
+      topSpeedKmh: 45.1,
+      heightM: 14,
+      lengthM: 370,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "charlotte",
@@ -8823,12 +10520,24 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "vortex",
     manufacturer: "Bolliger & Mabillard",
     manufacturerTermId: "b-and-m",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 27.4,
+      lengthM: 622,
+      durationSeconds: 139,
+    },
   },
   {
     citySlug: "charlotte",
     parkSlug: "carowinds",
     attractionSlug: "woodstock-express",
     manufacturer: "Philadelphia Toboggan Coasters",
+    stats: {
+      topSpeedKmh: 57.9,
+      heightM: 12.2,
+      lengthM: 413,
+      durationSeconds: 60,
+    },
   },
   // Cedar Point
   {
@@ -8838,6 +10547,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 1979,
+    stats: {
+      topSpeedKmh: 9.7,
+      heightM: 5.8,
+      lengthM: 135,
+      durationSeconds: 50,
+    },
   },
   {
     citySlug: "sandusky",
@@ -8846,6 +10561,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     openedYear: 1999,
+    stats: {
+      topSpeedKmh: 40.2,
+      heightM: 11.6,
+      lengthM: 335,
+      durationSeconds: 70,
+    },
   },
   // Chessington World of Adventures
   {
@@ -8854,6 +10575,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "rattlesnake",
     manufacturer: "Maurer Söhne",
     manufacturerTermId: "maurer-rides",
+    stats: { topSpeedKmh: 45.1, heightM: 15, lengthM: 370 },
   },
   // Dorney Park
   {
@@ -8868,6 +10590,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "zator",
     parkSlug: "energylandia",
     attractionSlug: "moya-formula-autodrom",
+    stats: { topSpeedKmh: 79.2, heightM: 24.7, lengthM: 560 },
   },
   // Flamingo Land
   {
@@ -8882,6 +10605,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
     openedYear: 2022,
+    stats: {
+      topSpeedKmh: 85.1,
+      heightM: 33,
+      lengthM: 875,
+      durationSeconds: 65,
+    },
   },
   // Great America
   {
@@ -8890,6 +10619,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "demon",
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 31.4,
+      lengthM: 649,
+      durationSeconds: 105,
+    },
   },
   // Hersheypark
   {
@@ -8898,6 +10633,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "jolly-rancher-remix-featuring-christmas-overlay",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   // Kings Dominion
   {
@@ -8905,6 +10646,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "kings-dominion",
     attractionSlug: "woodstock-express",
     manufacturer: "Philadelphia Toboggan Coasters",
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 10.7,
+      lengthM: 422,
+      durationSeconds: 100,
+    },
   },
   // Kings Island
   {
@@ -8912,6 +10659,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "kings-island",
     attractionSlug: "woodstock-express",
     manufacturer: "Philadelphia Toboggan Coasters",
+    stats: {
+      topSpeedKmh: 56.2,
+      heightM: 11.8,
+      lengthM: 412,
+      durationSeconds: 90,
+    },
   },
   // Knoebels Amusement Park
   {
@@ -8927,6 +10680,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "ednoer",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 80,
+      heightM: 33.3,
+      lengthM: 689,
+      durationSeconds: 96,
+    },
   },
   // Lake Compounce
   {
@@ -8935,12 +10694,19 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "zoomerang",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   // Le Pal
   {
     citySlug: "saint-pourcain-sur-besbre",
     parkSlug: "le-pal",
     attractionSlug: "fjord-explorer",
+    stats: { topSpeedKmh: 79, heightM: 27, lengthM: 497 },
   },
   // Michigan's Adventure
   {
@@ -8950,6 +10716,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
     openedYear: 1979,
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 21.3,
+      lengthM: 381,
+      durationSeconds: 70,
+    },
   },
   {
     citySlug: "muskegon",
@@ -8957,12 +10729,19 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "mad-mouse",
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
+    stats: {
+      topSpeedKmh: 53.1,
+      heightM: 20.7,
+      lengthM: 387,
+      durationSeconds: 90,
+    },
   },
   {
     citySlug: "muskegon",
     parkSlug: "michigans-adventure",
     attractionSlug: "zachs-zoomer",
     manufacturer: "Custom Coasters International",
+    stats: { durationSeconds: 80 },
   },
   // Mid-America Parks
   {
@@ -8971,6 +10750,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "boomerang",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 76.1,
+      heightM: 35.5,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "eureka",
@@ -8978,12 +10763,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "ninja",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: { topSpeedKmh: 88, heightM: 33, lengthM: 740, durationSeconds: 120 },
   },
   // Movie Park Germany
   {
     citySlug: "bottrop",
     parkSlug: "movie-park-germany",
     attractionSlug: "movie-park-studio-tour",
+    stats: { topSpeedKmh: 60, lengthM: 532, durationSeconds: 123 },
   },
   // Nigloland
   {
@@ -8992,6 +10779,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "krampus-expedition",
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
+    stats: {
+      topSpeedKmh: 78.9,
+      heightM: 28,
+      lengthM: 600,
+      durationSeconds: 240,
+    },
   },
   {
     citySlug: "dolancourt",
@@ -9000,6 +10793,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     openedYear: 1998,
+    stats: { topSpeedKmh: 60, heightM: 20, lengthM: 800, durationSeconds: 135 },
   },
   // SeaWorld San Diego
   {
@@ -9009,6 +10803,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["water-coaster"],
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
+    stats: { topSpeedKmh: 67.6, heightM: 29, durationSeconds: 300 },
   },
   // Sesame Place
   {
@@ -9039,6 +10834,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "roar",
     manufacturer: "Great Coasters International",
     manufacturerTermId: "gci",
+    stats: {
+      topSpeedKmh: 81.3,
+      heightM: 28.8,
+      lengthM: 1030,
+      durationSeconds: 112,
+    },
   },
   // Six Flags Darien Lake
   {
@@ -9047,6 +10848,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "hootn-holler",
     manufacturer: "Zierer",
     manufacturerTermId: "zierer",
+    stats: { topSpeedKmh: 26.1, heightM: 3.3, lengthM: 60 },
   },
   {
     citySlug: "corfu",
@@ -9054,6 +10856,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "predator",
     types: ["wooden-coaster", "out-and-back"],
     manufacturer: "Dinn Corporation",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 29,
+      lengthM: 1036,
+      durationSeconds: 110,
+    },
   },
   {
     citySlug: "corfu",
@@ -9073,6 +10881,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     openedYear: 2018,
+    stats: { topSpeedKmh: 85, heightM: 30, lengthM: 380, durationSeconds: 60 },
   },
   {
     citySlug: "corfu",
@@ -9080,6 +10889,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "viper",
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 36.9,
+      lengthM: 945,
+      durationSeconds: 124,
+    },
   },
   // Six Flags Discovery Kingdom
   {
@@ -9095,6 +10910,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "the-flash-vertical-velocity",
     manufacturer: "Intamin",
     manufacturerTermId: "intamin",
+    stats: {
+      topSpeedKmh: 104.8,
+      heightM: 45.9,
+      lengthM: 192,
+      durationSeconds: 60,
+    },
   },
   // Six Flags Frontier City
   {
@@ -9104,6 +10925,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Schwarzkopf",
     manufacturerTermId: "schwarzkopf",
     openedYear: 1986,
+    stats: { topSpeedKmh: 76.9, heightM: 24.4, lengthM: 592 },
   },
   {
     citySlug: "oklahoma-city",
@@ -9111,6 +10933,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "steel-lasso",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 48.3,
+      heightM: 14.9,
+      lengthM: 293,
+      durationSeconds: 43,
+    },
   },
   {
     citySlug: "oklahoma-city",
@@ -9118,6 +10946,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "wildcat",
     manufacturer: "National Amusement Devices",
     openedYear: 1991,
+    stats: {
+      topSpeedKmh: 74,
+      heightM: 22.9,
+      lengthM: 809,
+      durationSeconds: 130,
+    },
   },
   // Six Flags Great Adventure
   {
@@ -9126,6 +10960,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "barrels-o-fun",
     manufacturer: "Zamperla",
     manufacturerTermId: "zamperla",
+    stats: {
+      topSpeedKmh: 46.8,
+      heightM: 13,
+      lengthM: 420,
+      durationSeconds: 90,
+    },
   },
   // Six Flags Great America
   {
@@ -9149,12 +10989,24 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     inversions: 2,
     manufacturer: "Rocky Mountain Construction",
     manufacturerTermId: "rmc",
+    stats: {
+      topSpeedKmh: 115.9,
+      heightM: 50.3,
+      lengthM: 945,
+      durationSeconds: 103,
+    },
   },
   {
     citySlug: "gurnee",
     parkSlug: "six-flags-great-america",
     attractionSlug: "little-dipper",
     manufacturer: "Philadelphia Toboggan Coasters",
+    stats: {
+      topSpeedKmh: 40.2,
+      heightM: 8.5,
+      lengthM: 213,
+      durationSeconds: 50,
+    },
   },
   // Six Flags Great Escape
   {
@@ -9163,6 +11015,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "canyon-blaster",
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 17.1,
+      lengthM: 621,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "queensbury",
@@ -9170,6 +11028,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "frankies-mine-train",
     manufacturer: "Zamperla",
     manufacturerTermId: "zamperla",
+    stats: { heightM: 4, lengthM: 80 },
   },
   {
     citySlug: "queensbury",
@@ -9177,12 +11036,19 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "steamin-demon",
     manufacturer: "Arrow Dynamics",
     manufacturerTermId: "arrow-dynamics",
+    stats: {
+      topSpeedKmh: 72.4,
+      heightM: 29,
+      lengthM: 477,
+      durationSeconds: 37,
+    },
   },
   // Six Flags Magic Mountain
   {
     citySlug: "santa-clarita",
     parkSlug: "six-flags-magic-mountain",
     attractionSlug: "magic-flyer",
+    stats: { topSpeedKmh: 16.1, heightM: 3, lengthM: 108, durationSeconds: 30 },
   },
   {
     citySlug: "santa-clarita",
@@ -9190,6 +11056,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "road-runner-express",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 34.9,
+      heightM: 8.5,
+      lengthM: 207,
+      durationSeconds: 44,
+    },
   },
   // Six Flags Mexico
   {
@@ -9199,6 +11071,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     openedYear: 2013,
+    stats: { topSpeedKmh: 49.9, heightM: 14.6, lengthM: 412 },
   },
   {
     citySlug: "ciudad-de-mexico",
@@ -9215,6 +11088,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "flashback",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 75.6,
+      heightM: 35.6,
+      lengthM: 285,
+      durationSeconds: 108,
+    },
   },
   {
     citySlug: "agawam",
@@ -9224,6 +11103,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     model: "Wilde Maus Classic",
     manufacturer: "Maurer Söhne",
     manufacturerTermId: "maurer-rides",
+    stats: {
+      topSpeedKmh: 45.1,
+      heightM: 15,
+      lengthM: 370,
+      durationSeconds: 92,
+    },
   },
   // Six Flags Over Georgia
   {
@@ -9247,11 +11132,23 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     inversions: 5,
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 83.7,
+      heightM: 37.2,
+      lengthM: 836,
+      durationSeconds: 80,
+    },
   },
   {
     citySlug: "austell",
     parkSlug: "six-flags-over-georgia",
     attractionSlug: "the-riddler-mindbender",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 24.4,
+      lengthM: 992,
+      durationSeconds: 153,
+    },
   },
   // Six Flags Over Texas
   {
@@ -9261,6 +11158,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     types: ["indoor-coaster", "steel-coaster"],
     manufacturer: "Premier Rides",
     manufacturerTermId: "premier-rides",
+    stats: { topSpeedKmh: 64, heightM: 20, lengthM: 460 },
   },
   {
     citySlug: "arlington",
@@ -9268,6 +11166,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "wile-e-coyotes-grand-canyon-blaster",
     manufacturer: "Chance Rides",
     manufacturerTermId: "chance-rides",
+    stats: { heightM: 5 },
   },
   // Traumatica
   {
@@ -9276,6 +11175,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "matterhorn-blitz",
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
+    stats: {
+      topSpeedKmh: 56.3,
+      heightM: 16,
+      lengthM: 383,
+      durationSeconds: 188,
+    },
   },
   {
     citySlug: "rust",
@@ -9284,6 +11189,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Mack Rides",
     manufacturerTermId: "mack-rides",
     openedYear: 2006,
+    stats: { topSpeedKmh: 65, heightM: 13, lengthM: 430 },
   },
   // Universal Studios At Universal Orlando
   {
@@ -9292,6 +11198,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "hollywood-rip-ride-rockit",
     manufacturer: "Maurer Söhne",
     manufacturerTermId: "maurer-rides",
+    stats: {
+      topSpeedKmh: 104.8,
+      heightM: 51,
+      lengthM: 1179,
+      durationSeconds: 102,
+    },
   },
   // Valleyfair
   {
@@ -9300,16 +11212,34 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "cosmic-coaster",
     manufacturer: "Zamperla",
     manufacturerTermId: "zamperla",
+    stats: {
+      topSpeedKmh: 24.1,
+      heightM: 4.3,
+      lengthM: 66,
+      durationSeconds: 150,
+    },
   },
   {
     citySlug: "shakopee",
     parkSlug: "valleyfair",
     attractionSlug: "high-roller",
+    stats: {
+      topSpeedKmh: 80.5,
+      heightM: 21.3,
+      lengthM: 909,
+      durationSeconds: 105,
+    },
   },
   {
     citySlug: "shakopee",
     parkSlug: "valleyfair",
     attractionSlug: "mad-mouse",
+    stats: {
+      topSpeedKmh: 48.3,
+      heightM: 15.2,
+      lengthM: 383,
+      durationSeconds: 90,
+    },
   },
   // Warner Bros. Movie World
   {
@@ -9318,6 +11248,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "road-runner-rollercoaster",
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
+    stats: {
+      topSpeedKmh: 45.9,
+      heightM: 11,
+      lengthM: 335,
+      durationSeconds: 66,
+    },
   },
   // Worlds of Fun
   {
@@ -9334,6 +11270,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     attractionSlug: "cosmic-coaster",
     manufacturer: "Preston & Barbieri",
     openedYear: 1993,
+    stats: { heightM: 4.6, lengthM: 135, durationSeconds: 55 },
   },
   {
     citySlug: "kansas-city",
@@ -9342,6 +11279,12 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Gerstlauer",
     manufacturerTermId: "gerstlauer",
     openedYear: 2004,
+    stats: {
+      topSpeedKmh: 49.9,
+      heightM: 16.5,
+      lengthM: 410,
+      durationSeconds: 90,
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────
@@ -9364,6 +11307,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturer: "Vekoma",
     manufacturerTermId: "vekoma",
     model: "MK-1200",
+    stats: { topSpeedKmh: 64.4, heightM: 22.9, lengthM: 732 },
   },
   {
     citySlug: "penha",
@@ -9374,6 +11318,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "vekoma",
     model: "Junior Coaster",
     openedYear: 2007,
+    stats: { heightM: 15 },
   },
   {
     citySlug: "penha",
