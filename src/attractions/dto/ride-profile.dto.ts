@@ -4,6 +4,7 @@ import {
   type RideStats,
 } from "../entities/attraction-ride-profile.entity";
 import type { AttractionWithTerm } from "../services/ride-profile.service";
+import { mergeRideStats } from "../utils/ride-stats.util";
 
 /**
  * The curated "what this ride is and what it does" payload.
@@ -69,16 +70,18 @@ export class RideProfileDto {
   @ApiProperty({
     nullable: true,
     description:
-      "Measurements imported from Wikidata (CC0), metric: topSpeedKmh, heightM, lengthM, " +
-      "durationSeconds, plus source and the Wikidata entity id. Null for rides Wikidata " +
-      "states nothing for — which is most of them. Individual fields are independently " +
-      "nullable, so read every one defensively.",
+      "Measurements, metric: topSpeedKmh, heightM, lengthM, durationSeconds. Merged field " +
+      "by field from the hand-curated seed and the Wikidata (CC0) import, curated winning; " +
+      '`source` says which — "curated", "wikidata" or "mixed" — and `sourceId` carries ' +
+      "the Wikidata entity id only when an imported value survived. Null for rides we have " +
+      "no measurement of at all, and individual fields are independently nullable, so read " +
+      "every one defensively.",
     example: {
       topSpeedKmh: 80,
       heightM: 26,
       lengthM: 768,
       durationSeconds: null,
-      source: "wikidata",
+      source: "mixed",
       sourceId: "Q319081",
     },
   })
@@ -97,7 +100,7 @@ export function mapRideProfile(
     model: profile.model,
     openedYear: profile.openedYear,
     inversions: profile.inversions,
-    stats: profile.stats ?? null,
+    stats: mergeRideStats(profile.curatedStats, profile.stats),
   };
 }
 

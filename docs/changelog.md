@@ -6,6 +6,122 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — curated ride measurements, because Wikidata alone leaves the headliners blank
+
+The Wikidata import below is the right automatic source and it is not enough:
+of the 452 coasters this repo curates, it states a **top speed for 84**. The
+gap is not random — it is worst exactly where people look. Fury 325, Steel
+Vengeance, Millennium Force, Hyperia, Eejanaika all have a Wikidata entity with
+a height and a length and no speed at all.
+
+So the seed can now state measurements too, and 472 rides do.
+
+- `RideProfileSeedEntry.stats` (`topSpeedKmh`, `heightM`, `lengthM`,
+  `durationSeconds`, all optional, all metric) is written to a **separate**
+  column, `attraction_ride_profiles.curated_stats`. Same reason `stats` is its
+  own column: two writers, no shared cell, so neither the import nor a seed
+  re-run can undo the other's work.
+- `mergeRideStats` merges the two **field by field** with curated winning, and
+  reports `source: "curated" | "wikidata" | "mixed"` for the result. `sourceId`
+  is dropped unless an imported value survived — citing a Wikidata entity none
+  of the served numbers came from would be a false citation. Nothing changes for
+  a consumer that already reads `rideProfile.stats`.
+- Coverage after this change: the API serves a top speed for **458 of the 710
+  curated rides, up from 88** — 403 of 452 coasters. The seed states 456 speeds,
+  450 heights, 452 lengths and 370 durations; the import fills the rest.
+
+Assembled the way the rest of this seed is, and cross-checked rather than
+copied: each ride's figures were read from its park page and its Wikipedia
+articles in three languages, joined on the RCDB id we already store — so a
+"Goliath" can never pick up another "Goliath"'s numbers — then required to
+agree within 5% before being written. What the sources disagreed about was left
+out rather than averaged: 37 fields are still blank for that reason.
+
+The 233 rides with no RCDB id — nearly every Disney and Universal attraction —
+needed a second pass that finds the ride by name, which means it has to prove
+it found the right one. Two more gates do that, and both earned their keep:
+searching "Winja's Force Phantasialand" returns the article about Taron, which
+is in the right park and states 117 km/h, so the article must also carry a
+distinctive word from the **ride's** name; and an infobox that lists three
+parks states one speed for whichever installation somebody typed in, so
+multi-park articles are dropped whole. That is why Tokyo's Big Thunder Mountain
+still has no speed here and Radiator Springs Racers, VelociCoaster, Rock 'n'
+Roller Coaster, all three Revenge of the Mummys, Expedition Everest and
+Journey to the Center of the Earth do.
+
+What is left is left on purpose. Universal publishes no specification for
+Mine-Cart Madness and the enthusiast estimate of "around 30 mph" is not a
+measurement, so that field stays empty. Where the sources disagreed a third one
+was asked before anything was written: Big Thunder Mountain Railroad reads 35
+mph in every English source against one German 45 km/h, Divertical is the
+world's tallest water coaster at 60 m and 110 km/h rather than the 50 m the
+German article states, and Stampida's 74 km/h carries two sources against one.
+Heide-Park's Big Loop is quoted at 60, 63 and 70 km/h by three sources, so it
+keeps its height and length and no speed. Chessington's Dragon's Fury keeps a
+height and a length and no speed for the plainer reason that nobody publishes
+one.
+
+The physics check paid for itself twice more. It flagged four terrain coasters
+that legitimately drop below their own station — Oblivion falls into a hole in
+the ground — and, in the previous round, one entry that was simply another
+ride's.
+
+Three checks earned their place by catching real errors:
+
+- **Identity.** The English infobox states its own RCDB id, and 8 rides came
+  back with one that was not ours. Six were our bug, now fixed in
+  `MANUAL_ATTRACTION_METADATA`: Steel Vengeance pointed at Mean Streak,
+  Wildcat's Revenge at the Wildcat it replaced, Twisted Cyclone at the Georgia
+  Cyclone, Canada's Wonderland's Backlot Stunt Coaster at the Kings Island
+  installation, Magic Mountain's Road Runner Express at a Six Flags New Orleans
+  ride, and SeaWorld San Diego's Journey to Atlantis at the San Antonio one
+  (whose own id was missing and is now filled in). Each verified against the
+  RCDB page title — the link target, not its content.
+- **Park.** An infobox that names a different park is about a different
+  installation. This is what kept Magic Kingdom's Seven Dwarfs Mine Train
+  figures off Shanghai's.
+- **Physics.** A ride cannot be faster than `sqrt(2gh)` unless something
+  launched it. Five rides tripped this: four are terrain coasters that drop
+  below their own station, and the fifth exposed a wrong seed entry — Le PAL's
+  Yukon Quad was filed as a 2015 Mack coaster and is Intamin's 2018 Family
+  Launch Coaster.
+
+Two invariants in `ride-profile-seed.spec.ts` now hold the line: every curated
+measurement must be inside what a ride can physically be, and no ride may be
+taller than half its own track — the shape a foot/metre slip takes.
+
+### Fixed — Dwervelwind was three years and one building off
+
+Toverland's Dwervelwind was seeded as a 2015 **indoor** dark ride. It opened on
+**29 September 2012** — a five-week autumn preview as _D'Wervelwind_, before it
+reopened in spring 2013 with the rest of the Magische Vallei — and it is
+outdoors: the queue winds between the coaster's own ponds and boulders, and the
+station is an open-air thatched structure. Toverland's own page, Wikidata
+(P1619) and both Wikipedia articles agree on the date.
+
+Now `spinning-coaster` + `steel-coaster` + `terrain-coaster`, with the horseshoe
+its layout actually starts with, and the park's figures: 75 km/h, 21 m, 462 m,
+1:52.
+
+The same audit compared every seeded `openedYear` against the sources: **51
+disagreed, 39 are corrected here**, and the way the last 26 were settled is the
+point. An infobox year cannot decide these on its own, because "opened" means
+the year the ride opened _here_ and an article about a relocated or rebuilt ride
+answers a different question. The article's opening sentence does say which case
+it is, so all 36 were read.
+
+That reading corrected Pantherian (1993→2010 — it is Intimidator 305), Nessie
+(1987→1980), Big Loop (1989→1983), Shaman (1990→1985), Tornado Madrid
+(2003→1999), Flying Eagle (2010→2018) and twenty more. It also confirmed seven
+seed values the infoboxes contradicted: Magic Kingdom's Big Thunder Mountain
+Railroad really is 1980 (Disneyland's is the 1979 one), TRON is 2023 in Florida
+and 2016 in Shanghai, and Michigan's Adventure's Thunderhawk opened there in
+2008 however much of it was Serial Thriller in 1998.
+
+Nine are still open, two of them for want of a sentence that states a year and
+seven because they are the same multi-park ambiguity, already resolved in our
+favour.
+
 ### Added — ride measurements from Wikidata
 
 Nothing in this system knew how fast, how tall or how long a ride is:
@@ -91,7 +207,7 @@ a link into the glossary entry that explains and animates it, and that entry
 lists the other rides that have one.
 
 - New `attraction_ride_profiles` table (`elements` / `types` jsonb + GIN
-  containment indexes, manufacturer name *and* optional term id, model,
+  containment indexes, manufacturer name _and_ optional term id, model,
   opening year, inversions).
 - `RIDE_PROFILE_SEED`: **701 rides across 100 parks** — every Disney and
   Universal park, Phantasialand, Toverland, Europa-Park, Movie Park, all three
@@ -108,12 +224,12 @@ lists the other rides that have one.
     (P176 / P571 / P729 / P1619, CC0), joined on the RCDB id both sides
     already hold. They deliberately have no `elements`: nobody has walked
     those layouts, and an invented figure is worse than none.
-- Served on the attraction detail response *and* embedded in the park response
+- Served on the attraction detail response _and_ embedded in the park response
   (one batched read per park — the frontend ride page renders from the park
   payload).
 - Reverse lookup: `GET /v1/glossary/terms/:termId/attractions` and
   `GET /v1/glossary/terms/counts`. Matches the term as a track figure, a ride
-  type *or* a manufacturer in one indexed query.
+  type _or_ a manufacturer in one indexed query.
 - Applied by `POST /v1/admin/apply-ride-profiles` (own queue, seconds,
   idempotent). There is no upstream feed: updates happen by editing the seed
   file and re-running the job.
@@ -144,9 +260,9 @@ A park's operating day is anchored to one calendar date, so the window between
 Sources break that in both directions and `saveScheduleData` stored it verbatim:
 
 - **Closing before opening.** ThemeParks.wiki stamps a past-midnight close with
-  the day's *own* date — Parque Warner Madrid publishes
+  the day's _own_ date — Parque Warner Madrid publishes
   `open 2026-07-27T12:00+02:00` / `close 2026-07-27T00:00+02:00`, putting the
-  close 12 h *before* the open. `isParkOpen` then reads CLOSED for the whole
+  close 12 h _before_ the open. `isParkOpen` then reads CLOSED for the whole
   day, every day: the park badge, `effectiveStatus` and every derived crowd
   level said "closed" while rides reported 60-minute queues. 179 rows, 15 parks,
   concentrated in September/October (Halloween events with post-midnight hours:
@@ -158,7 +274,7 @@ Sources break that in both directions and `saveScheduleData` stored it verbatim:
 The time-of-day is the trustworthy part in every observed case, so
 `normalizeClosingTime` re-anchors it to the opening's park-local date and rolls
 it forward a day when that lands at or before opening (DST-safe: the local
-closing time is preserved, not a fixed 24 h offset). An *equal* opening and
+closing time is preserved, not a fixed 24 h offset). An _equal_ opening and
 closing is left alone — rolling it forward would invent a 24-hour operating day
 out of a source that reported nothing.
 
@@ -188,14 +304,14 @@ frontend rendered as a green **OPEN** badge next to a red **CLOSED** one:
 
 - **`effectiveStatus` was stripped from the payload** (to save bytes), so the card
   had no park-aware status left — only the raw `status`/`queues[].status`, which are
-  a *last-known* value. Sources stop publishing at closing time and `queue_data` only
+  a _last-known_ value. Sources stop publishing at closing time and `queue_data` only
   gets a row on change, so a ride's newest row keeps saying `OPERATING` for hours
   after the park shuts (measured: 132 rides across 9 closed parks at once). The
-  `crowdLevel`, however, *is* park-aware and already read `"closed"` → the two badges
+  `crowdLevel`, however, _is_ park-aware and already read `"closed"` → the two badges
   disagreed. `effectiveStatus` is now part of the response again.
 - **The cache-miss path never assigned `status` at all**, leaving the hardcoded
   `"CLOSED"` placeholder from `AttractionResponseDto.fromEntity` (attractions carry no
-  status column) next to live `OPERATING` queue data — visible even in *open* parks.
+  status column) next to live `OPERATING` queue data — visible even in _open_ parks.
   It now derives `status` from the live STANDBY queue, sets `effectiveStatus` from the
   park status, gates `crowdLevel` to `"closed"` for a closed park, and mirrors the
   integrated path's free-flow (`openWithPark`) override so a cache miss can't flip a
@@ -216,7 +332,7 @@ broadly in the docs than the code delivered.
   fallback recomputed from `current = 0` → `very_low`, for a park we had heard
   nothing from. That branch now states `crowdLevel: "unknown"` itself.
 - **A walk-on read as "no data".** `getAttractionCrowdLevel` short-circuited on
-  `waitTime === 0` *before* looking at the baseline, so a ride reporting 0 min
+  `waitTime === 0` _before_ looking at the baseline, so a ride reporting 0 min
   against a real P50 returned null → `"unknown"` — while `getLoadRating` rated
   the identical pair `very_low`. The attraction payload therefore carried
   `crowdLevel: "unknown"` next to `comparison: "much_lower"`. Only an absent
@@ -235,7 +351,7 @@ broadly in the docs than the code delivered.
 Also swept up: an orphaned JSDoc left over the wrong method, and two comments
 that the rename in the entry below had made false (`ratioP90` no longer exists;
 `getCurrentOccupancy` was described as using the formula it deliberately does
-*not* use — it stays park-wide `avg ÷ park-P50` because the trained models
+_not_ use — it stays park-wide `avg ÷ park-P50` because the trained models
 depend on that feature distribution).
 
 ### Fixed — Live park load measures the park, not its second-busiest ride (2026-07-27)
@@ -253,7 +369,7 @@ contributed nothing, while Crazy Bats (45/30) and Wakobato (40/30) set the
 level.
 
 - **Now a baseline-weighted mean** (`getHeadlinerLoad`): `Σ current headliner
-  waits ÷ Σ those rides' P50 baselines`. Same afternoon → 240/290 = 83% =
+waits ÷ Σ those rides' P50 baselines`. Same afternoon → 240/290 = 83% =
   `low`. Each ride carries the weight of the queue it represents; only rides
   that reported enter both sums, so a closed headliner leaves numerator and
   denominator together. The threshold ladder is unchanged.
@@ -266,7 +382,7 @@ level.
   a payload could show "25 min now / 30 min typical" next to `+23%`.
 - **`avgWaitToday` / `peakWaitToday`** come from one per-headliner query
   (each ride's AVG and MAX today, meaned across rides). The "average" used to
-  be `ParkDailyStats.p90WaitTime` — a P90 pooled over *all* attractions —
+  be `ParkDailyStats.p90WaitTime` — a P90 pooled over _all_ attractions —
   while the "peak" was headliner-scoped, so nothing ordered them and the page
   served `avgWaitToday: 45` beside `peakWaitToday: 40`. Per ride AVG ≤ MAX,
   so the pair is now ordered by construction.
@@ -275,7 +391,7 @@ level.
   percentage and bypassed the ratability gate. Likewise `getLoadRating`
   without a baseline, the calendar's hourly predictions (rated against a
   hardcoded 25-minute reference), and the attraction live crowd level. A
-  0-minute wait against a *real* baseline is still rated: that is a walk-on,
+  0-minute wait against a _real_ baseline is still rated: that is a walk-on,
   not missing data, so it reads `very_low`.
 
 Docs: [Crowd Levels](analytics/crowd-levels.md) (§1, §4, §6).
@@ -450,7 +566,7 @@ that:
   (ML feature) are unchanged — only the rating string flips.
 - **ML training** (`ml-service/db.py`) and the **reported aggregate MAE/accuracy**
   (`prediction-accuracy`, `ml-drift-monitoring`) `INNER JOIN park_p50_baselines …
-  typicalDayPeak IS NOT NULL`, excluding thin parks from both.
+typicalDayPeak IS NOT NULL`, excluding thin parks from both.
 - Frontend must render the new `unknown` enum value as
   "Keine Prognose / noch nicht genug Daten".
 
@@ -480,7 +596,7 @@ so these never gated — but the suite was misleading.
 - **Per-attraction calendar divided a day's peak by the attraction P50 (median)**
   (`attraction-integration.service.ts`), i.e. peak-vs-median — the same structural
   miscalibration the park calendar already fixed: a day's peak is ~1.5-2× the
-  median, so a *normal* day read elevated. It now divides by a new per-attraction
+  median, so a _normal_ day read elevated. It now divides by a new per-attraction
   **typical-day-peak** baseline (`AnalyticsService.getAttractionTypicalDayPeak` —
   median over operating days of the day's peak, computed on-demand from
   `queue_data_aggregates`, cached in Redis `attraction:typicalpeak:{id}`), so a
@@ -580,7 +696,6 @@ so these never gated — but the suite was misleading.
   model-quality anomaly monitoring (enum kept for history); purged the 5883 existing closure
   rows. Board now shows 68 actionable anomalies instead of 602.
 
-
 - **"Best predictions" board de-polluted** (`prediction-accuracy.service.ts`
   `getTopBottomPerformers`). It was dominated by 0.0-MAE non-rides — shows, walk-on/kiddie
   rides and transport mis-ingested as attractions (Hall of Presidents, Mickey's PhilharMagic,
@@ -620,7 +735,7 @@ Follow-up to the 2026-06-10 generate-daily fix; coverage had plateaued at ~110/1
   widget read 54% (tripping the <80% alert); the real rate is ~80-96%. `coveragePercent` reused
   the MAE-eligible count, which excludes ride closures and sub-5-min waits — conflating "did we
   check this against reality?" with "was the actual a non-trivial wait?". Measured live: 95% of
-  the "uncovered" slots are rides closed/quiet *during opening hours* (the operating-hours filter
+  the "uncovered" slots are rides closed/quiet _during opening hours_ (the operating-hours filter
   already works). Coverage is now `COMPLETED / total`, separate from the strict MAE filter.
 - **Open-but-null rides no longer counted as unplanned closures** (`prediction-accuracy.service.ts`).
   Status-only parks (Chimelong = #1 most-popular, many Asian/water parks) report status=OPERATING
@@ -727,27 +842,30 @@ Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively
 - **`getAttractionSparklinesBatch`** (`analytics.service.ts`): New helper on `AnalyticsService` for fetching sparklines when attractions may span multiple parks. Groups by `parkId`, calls `getEffectiveStartTime` once per park, batches `getBatchAttractionWaitTimeHistory` per group, and merges results into a single `Map<attractionId, SparklinePoint[]>`. Use this for any multi-park context (global stats, recommendations, …); use `getBatchAttractionWaitTimeHistory` directly when you already hold a shared `startTime` for a single park. See [Sparklines](analytics/sparklines.md).
 
 ### Added
+
 - **`crowdLevel` on `ParkReference.analytics.statistics`** (`discovery.service.ts`, `geo-structure.dto.ts`): The `/v1/discovery/geo`, `/v1/discovery/continents`, `/v1/discovery/continents/:continent`, and `/v1/discovery/continents/:continent/:country` endpoints now expose the park's current live crowd level inside `analytics.statistics` alongside `avgWaitTime`. Previously the only source of live crowd level on these endpoints was `currentLoad.crowdLevel`, which could be `null` even when wait-time statistics were available — causing the frontend's Popular Parks section to render wait times without a crowd badge. `analytics.statistics.crowdLevel` is now co-present with `avgWaitTime` whenever the park has a valid P50 baseline. The other discovery routes already expose live crowd level via their existing shapes: `/v1/discovery/:continent/:country` (`ParkResponseDto.analytics.statistics.crowdLevel`) and `/v1/discovery/nearby` (`analytics.crowdLevel` per park/ride).
 
 ### Changed
+
 - **Shared crowd-level utility** (`common/utils/crowd-level.util.ts`): Extracted the P50-relative occupancy → CrowdLevel threshold ladder (very_low/low/moderate/high/very_high/extreme) into a single reusable function. `AnalyticsService.determineCrowdLevel` now delegates to it (all ~20 existing call sites unchanged), and `DiscoveryService.hydrateStructure` uses it directly. Thresholds now exist in exactly one place.
 
-### Added 
-- **Smart Gaps: Historical Hour Reconstruction** (`docs/analytics/smart-gaps.md`): Automatically reconstructs park opening/closing hours for past days using a 15-minute sliding window and 10% attraction activity threshold (rides with waitTime >= 5 min only). Includes rounding to nearest full hour and strict exclusion of service points (bars, snacks) via name-based blacklist. 
-- **`isEstimated` flag for Calendar API**: New per-day flag in `CalendarDay` to signal reconstructed historical data. 
-- **`hasOperatingSchedule` flag for Parks API**: New per-park flag to signal if a park provides an official API calendar (true) or relies on inference/estimates (false). Added to all park-related DTOs and Nearby responses. 
-- **Automated Seasonal Detection**: Logic to identify "Seasonal Parks" (winter gaps > 21 days) to suppress crowd predictions during off-season while allowing them for year-round parks with UNKNOWN schedule. 
+### Added
 
-### Changed 
-- **Optimized Seasonal Check**: Accelerated `isParkSeasonal` query by 120x (from 72ms to 0.6ms) using SQL Window Functions (`LEAD`). 
-- **ML Feature Context Alignment**: ML service now receives real-time reconstructed opening hours instead of static 9/10 AM fallbacks, improving prediction accuracy for "No-Schedule" parks. 
-- **Batch Processing for DTO Enrichment**: Introduced `getBatchHasOperatingSchedule` to prevent N+1 queries when listing parks. 
+- **Smart Gaps: Historical Hour Reconstruction** (`docs/analytics/smart-gaps.md`): Automatically reconstructs park opening/closing hours for past days using a 15-minute sliding window and 10% attraction activity threshold (rides with waitTime >= 5 min only). Includes rounding to nearest full hour and strict exclusion of service points (bars, snacks) via name-based blacklist.
+- **`isEstimated` flag for Calendar API**: New per-day flag in `CalendarDay` to signal reconstructed historical data.
+- **`hasOperatingSchedule` flag for Parks API**: New per-park flag to signal if a park provides an official API calendar (true) or relies on inference/estimates (false). Added to all park-related DTOs and Nearby responses.
+- **Automated Seasonal Detection**: Logic to identify "Seasonal Parks" (winter gaps > 21 days) to suppress crowd predictions during off-season while allowing them for year-round parks with UNKNOWN schedule.
 
+### Changed
+
+- **Optimized Seasonal Check**: Accelerated `isParkSeasonal` query by 120x (from 72ms to 0.6ms) using SQL Window Functions (`LEAD`).
+- **ML Feature Context Alignment**: ML service now receives real-time reconstructed opening hours instead of static 9/10 AM fallbacks, improving prediction accuracy for "No-Schedule" parks.
+- **Batch Processing for DTO Enrichment**: Introduced `getBatchHasOperatingSchedule` to prevent N+1 queries when listing parks.
 
 ### Added
 
 - **Training roadmap doc** (`docs/ml/training-roadmap.md`): Tracks known ML issues, data quality analysis, and next steps for training improvements including UNKNOWN park inclusion strategy.
-- **Reverse reconciliation for stale attractions** (`wait-times.processor.ts`, docs: `docs/architecture/reverse-reconciliation.md`): Attractions that disappear from every upstream source (ThemeParks.wiki, Queue-Times, Wartezeiten) for >24h are now auto-closed. A Redis `attraction:last-seen:{id}` key is touched only by real source sightings (never by the heartbeat). After each park's 5-minute sync the processor diffs seen vs. known attractions and writes a `status=CLOSED` `queue_data` entry for any attraction stale for >24h. Grace period of 24h protects newly created rides from premature closure, and the safety guard `seenAttractionIds.size > 0` prevents mass-close during upstream outages. The hourly heartbeat now also skips stale attractions instead of preserving their last `OPERATING` status. Fixes Movie Park Germany's Halloween mazes (e.g. *A Quiet Place*) showing "open, 0 min" year-round.
+- **Reverse reconciliation for stale attractions** (`wait-times.processor.ts`, docs: `docs/architecture/reverse-reconciliation.md`): Attractions that disappear from every upstream source (ThemeParks.wiki, Queue-Times, Wartezeiten) for >24h are now auto-closed. A Redis `attraction:last-seen:{id}` key is touched only by real source sightings (never by the heartbeat). After each park's 5-minute sync the processor diffs seen vs. known attractions and writes a `status=CLOSED` `queue_data` entry for any attraction stale for >24h. Grace period of 24h protects newly created rides from premature closure, and the safety guard `seenAttractionIds.size > 0` prevents mass-close during upstream outages. The hourly heartbeat now also skips stale attractions instead of preserving their last `OPERATING` status. Fixes Movie Park Germany's Halloween mazes (e.g. _A Quiet Place_) showing "open, 0 min" year-round.
 - **`POST /admin/detect-seasonal`** (`admin.controller.ts`, `admin.module.ts`): Manual trigger for the `detect-seasonal` analytics job (normally daily at 2:30 am). Intended to re-evaluate seasonal flags after deploying the reverse-reconciliation fix so newly `CLOSED` attractions get `isSeasonal=true` + `seasonMonths` populated without waiting for the cron.
 
 ### Fixed
@@ -824,6 +942,7 @@ Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively
 ### Performance
 
 #### Schedule Sync Optimizations (NestJS)
+
 - **Schedule sync (`saveScheduleData`)**: Batch DELETE operations for cleanup placeholders (UNKNOWN/CLOSED removed when API provides real data) reduced from ~300 individual queries to **3 batch queries** (99% reduction). Code deduplication: normalize scheduleType once instead of 3× redundant iterations.
 - **Gap-fill (`fillScheduleGaps`)**: Batch INSERT/UPDATE operations for gap-filled entries and status changes reduced from ~364 individual queries to **~5 batch queries** (98.6% reduction). All iterations collect entries/updates in-memory, then execute bulk operations using `createQueryBuilder().insert()` and `whereInIds()`.
 - **Duplicate cleanup (`cleanupDuplicateScheduleEntries`)**: SQL window functions and CTEs replace N+1 queries; same-type and cross-type duplicate detection reduced from ~160 queries to **2 queries** (98.8% reduction). Uses PostgreSQL `ROW_NUMBER()` OVER (PARTITION BY) for efficient deduplication.
@@ -833,12 +952,14 @@ Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively
 **Schedule sync impact**: Typical schedule sync reduced from ~924 database queries to ~12 queries (**98.7% reduction**), estimated duration improvement from ~92 seconds to ~1.2 seconds.
 
 #### ML Service Optimizations (Python) – 2026-02-15
+
 - **Database query caching**: Added in-memory caching for holidays (1h TTL), schedules (5min TTL), recent wait times (2min TTL), and weather historical data (1h TTL). Reduces repeated queries for unchanged data.
 - **Query optimization with window functions**: `fetch_recent_wait_times` now pre-computes `rolling_avg_7d` and `rolling_std_7d` using PostgreSQL window functions instead of Python aggregation. Reduces data transfer and eliminates expensive Python loops.
 - **Holiday lookup vectorization**: Replaced loop over 1000+ prediction rows with pandas `.map()` operations. Pre-processes park metadata once instead of per-row. Eliminates JSON parsing in loop.
 - **Historical features optimization**: Uses pre-computed rolling averages and standard deviations directly from database instead of Python calculations.
 
 **ML service impact**:
+
 - First request (cold cache): **40-50% faster**
 - Cached requests (warm cache): **70-85% faster**
 - Daily predictions (365 days): up to **90% faster**

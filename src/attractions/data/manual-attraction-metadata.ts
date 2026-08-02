@@ -36,6 +36,12 @@ export interface ManualAttractionMetadata {
 
 export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
   {
+    citySlug: "orlando",
+    parkSlug: "universal-islands-of-adventure",
+    attractionSlug: "jurassic-world-velocicoaster",
+    rcdbId: 6992,
+  },
+  {
     // S&S shot tower in the space-themed Andromeda Base. The park's own page
     // lists "Thrill, Big Drops, Scary, Outdoor" and no water; ThemeParks.wiki
     // reports mayGetWet=true, which is simply wrong.
@@ -334,7 +340,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "austell",
     parkSlug: "six-flags-over-georgia",
     attractionSlug: "twisted-cyclone",
-    rcdbId: 36,
+    // 36 is the Georgia Cyclone this was built from.
+    rcdbId: 15457,
   },
   {
     citySlug: "beijing",
@@ -1243,7 +1250,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "wildcats-revenge",
-    rcdbId: 100,
+    // 100 is the Wildcat this replaced, not the RMC conversion.
+    rcdbId: 20462,
     minimumHeightCm: 122, // 48"
     minimumHeightUnit: "in",
   },
@@ -2217,6 +2225,12 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
   {
     citySlug: "san-antonio",
     parkSlug: "seaworld-san-antonio",
+    attractionSlug: "journey-to-atlantis",
+    rcdbId: 3635,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "seaworld-san-antonio",
     attractionSlug: "steel-eel",
     rcdbId: 532,
   },
@@ -2266,7 +2280,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "san-diego",
     parkSlug: "seaworld-san-diego",
     attractionSlug: "journey-to-atlantis",
-    rcdbId: 3635,
+    // 3635 is the San Antonio installation; San Diego's is 2079.
+    rcdbId: 2079,
   },
   {
     citySlug: "san-diego",
@@ -2362,7 +2377,9 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "steel-vengeance",
-    rcdbId: 16,
+    // 16 is Mean Streak, the wooden coaster RMC rebuilt this from — RCDB gives
+    // the conversion its own entry, so the old id links to a ride that is gone.
+    rcdbId: 15411,
   },
   {
     citySlug: "sandusky",
@@ -2452,7 +2469,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "santa-clarita",
     parkSlug: "six-flags-magic-mountain",
     attractionSlug: "road-runner-express",
-    rcdbId: 591,
+    // 591 is the Six Flags New Orleans ride of almost the same name.
+    rcdbId: 4346,
   },
   {
     citySlug: "santa-clarita",
@@ -2818,7 +2836,8 @@ export const MANUAL_ATTRACTION_METADATA: ManualAttractionMetadata[] = [
     citySlug: "vaughan",
     parkSlug: "canadas-wonderland",
     attractionSlug: "backlot-stunt-coaster",
-    rcdbId: 2860,
+    // 2860 is the Kings Island installation (now Queen City Stunt Coaster).
+    rcdbId: 2861,
   },
   {
     citySlug: "vaughan",

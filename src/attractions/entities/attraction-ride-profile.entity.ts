@@ -11,12 +11,8 @@ import {
 import { Park } from "../../parks/entities/park.entity";
 import { Attraction } from "./attraction.entity";
 
-/**
- * A ride's measurements, imported from Wikidata, with the entity they came
- * from. Every field is independently nullable — Wikidata states what someone
- * bothered to enter, which for most rides is nothing.
- */
-export interface RideStats {
+/** The four numbers a ride is measured by, metric. Independently nullable. */
+export interface RideMeasurements {
   /** Top speed in km/h. */
   topSpeedKmh: number | null;
   /** Highest point in metres. */
@@ -25,9 +21,20 @@ export interface RideStats {
   lengthM: number | null;
   /** Ride duration in seconds. */
   durationSeconds: number | null;
-  source: "wikidata";
-  /** Wikidata entity id, e.g. "Q319081". */
-  sourceId: string;
+}
+
+/**
+ * A ride's measurements as served, with where each number came from.
+ *
+ * Two writers feed this: the Wikidata import, which is automatic and thin, and
+ * the seed, which is hand-curated and states what Wikidata does not. They are
+ * stored apart and merged on read — see `mergeRideStats`.
+ */
+export interface RideStats extends RideMeasurements {
+  /** "mixed" = some fields curated, some imported. */
+  source: "wikidata" | "curated" | "mixed";
+  /** Wikidata entity id, e.g. "Q319081". Null when no imported value survived. */
+  sourceId: string | null;
 }
 
 /**
@@ -140,6 +147,24 @@ export class AttractionRideProfile {
   /** When the stats were last imported, so a re-run can skip fresh rows. */
   @Column({ name: "stats_updated_at", type: "timestamptz", nullable: true })
   statsUpdatedAt: Date | null;
+
+  /**
+   * The same four measurements, hand-curated — and a separate column for the
+   * same reason `stats` is one: two writers, no shared cell. The seed owns
+   * this, the importer owns `stats`, and neither can undo the other's work.
+   *
+   * It exists because Wikidata is thin where it matters most: of the coasters
+   * we curate it states a top speed for well under a fifth, and misses nearly
+   * every headliner people actually search for. These values are assembled the
+   * way the rest of the seed is — from the park's own page, the manufacturer,
+   * and the ride's Wikipedia articles cross-checked against each other.
+   *
+   * On read the two are merged field by field with curated winning
+   * (`mergeRideStats`), so a hand-checked speed is not displaced by an import
+   * and a Wikidata duration still shows up next to it.
+   */
+  @Column({ name: "curated_stats", type: "jsonb", nullable: true })
+  curatedStats: RideMeasurements | null;
 
   /** When the seed entry was last written, for spotting stale curation. */
   @Column({ name: "seeded_at", type: "timestamptz" })

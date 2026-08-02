@@ -7,9 +7,37 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
-import { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
+import {
+  AttractionRideProfile,
+  type RideMeasurements,
+} from "../entities/attraction-ride-profile.entity";
 import { RIDE_PROFILE_SEED } from "../data/ride-profile-seed";
-import { RideProfileSeedEntry } from "../data/ride-profile-seed.types";
+import {
+  RideProfileSeedEntry,
+  RideProfileSeedStats,
+} from "../data/ride-profile-seed.types";
+
+/**
+ * Widen the seed's optional measurements into the stored shape.
+ *
+ * The seed omits what it does not know, the column states null for it: an
+ * absent field and a null one have to mean the same thing downstream, or a
+ * merge that reads `undefined` would treat "we did not curate this" as a
+ * curated value and shadow the imported one.
+ */
+function toMeasurements(
+  stats: RideProfileSeedStats | undefined,
+): RideMeasurements | null {
+  if (!stats) return null;
+  const measurements: RideMeasurements = {
+    topSpeedKmh: stats.topSpeedKmh ?? null,
+    heightM: stats.heightM ?? null,
+    lengthM: stats.lengthM ?? null,
+    durationSeconds: stats.durationSeconds ?? null,
+  };
+  const hasAny = Object.values(measurements).some((value) => value !== null);
+  return hasAny ? measurements : null;
+}
 
 export interface RideProfileSeedResult {
   written: number;
@@ -192,6 +220,7 @@ export class RideProfileService implements OnModuleInit {
         model: entry.model ?? null,
         openedYear: entry.openedYear ?? null,
         inversions: entry.inversions ?? null,
+        curatedStats: toMeasurements(entry.stats),
         seededAt,
       });
     }
