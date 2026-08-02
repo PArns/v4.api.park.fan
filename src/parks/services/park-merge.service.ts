@@ -3,6 +3,7 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
+import { canInheritSourceIds } from "../utils/source-id-inheritance.util";
 import { ScheduleEntry } from "../entities/schedule-entry.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
@@ -33,6 +34,13 @@ export interface MergeResult {
   migratedScheduleEntries: number;
   migratedMappings: number;
   migratedStats: number;
+  /**
+   * Upstream feeds the winner did NOT take over, because the loser turned out
+   * to describe a different place. Empty in the ordinary case. Non-empty means
+   * the surviving park has one fewer source than the pair had, which someone
+   * should look at.
+   */
+  skippedSourceIds: string[];
   errors: string[];
 }
 
@@ -73,6 +81,7 @@ export class ParkMergeService {
       migratedScheduleEntries: 0,
       migratedMappings: 0,
       migratedStats: 0,
+      skippedSourceIds: [],
       errors: [],
     };
 
@@ -92,7 +101,11 @@ export class ParkMergeService {
         result.loserName = loser.name;
 
         // 1. Consolidate Park-Level Metadata & IDs
-        await this.consolidateEntityIds(manager, winner, loser);
+        result.skippedSourceIds = await this.consolidateEntityIds(
+          manager,
+          winner,
+          loser,
+        );
 
         // 2. Migrate Core Entities with Collision Handling (Attractions, Shows, Restaurants)
         result.migratedAttractions = await this.migrateEntities(
@@ -476,11 +489,45 @@ export class ParkMergeService {
     return result[1] || 0;
   }
 
+  /**
+   * Fill the winner's empty upstream ids from the loser — unless the two rows
+   * describe different places.
+   *
+   * An upstream id is not a fact about the loser, it is a claim about which
+   * park the source is describing. Copied onto the wrong row it wires a park to
+   * another park's feed and, worse, hides itself: the sync stops finding the
+   * real park under its own id and creates a second row for it days later. See
+   * `canInheritSourceIds` for the case that taught us this.
+   */
   private async consolidateEntityIds(
     manager: any,
     winner: Park,
     loser: Park,
-  ): Promise<void> {
+  ): Promise<string[]> {
+    const { allowed, distanceKm } = canInheritSourceIds(winner, loser);
+    if (!allowed) {
+      const skipped = [
+        loser.wikiEntityId && !winner.wikiEntityId ? "wiki" : null,
+        loser.queueTimesEntityId && !winner.queueTimesEntityId
+          ? "queue-times"
+          : null,
+        loser.wartezeitenEntityId && !winner.wartezeitenEntityId
+          ? "wartezeiten"
+          : null,
+      ].filter((source): source is string => source !== null);
+
+      if (skipped.length > 0) {
+        // Loud on purpose: the park now has one fewer feed than it could, which
+        // is a thing someone should look at — and far easier to notice than a
+        // park quietly serving another park's wait times.
+        this.logger.warn(
+          `🌍 Not inheriting ${skipped.join(", ")} id(s) from "${loser.name}" — ` +
+            `it sits ${distanceKm} km from "${winner.name}", so the ids describe another place`,
+        );
+      }
+      return skipped;
+    }
+
     const updates: Partial<Park> = {};
     if (!winner.wikiEntityId && loser.wikiEntityId)
       updates.wikiEntityId = loser.wikiEntityId;
@@ -492,6 +539,7 @@ export class ParkMergeService {
     if (Object.keys(updates).length > 0) {
       await manager.update(Park, winner.id, updates);
     }
+    return [];
   }
 
   private async invalidateParkCaches(
