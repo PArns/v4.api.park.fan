@@ -1,4 +1,4 @@
-import { mergeRideStats } from "./ride-stats.util";
+import { mergeRideStats, resolveRideStatsAttribution } from "./ride-stats.util";
 import type {
   RideMeasurements,
   RideStats,
@@ -94,5 +94,53 @@ describe("mergeRideStats", () => {
     );
 
     expect(stats).toMatchObject({ source: "curated", sourceId: null });
+  });
+});
+
+describe("resolveRideStatsAttribution", () => {
+  it("credits Wikidata and links the entity the numbers are stated on", () => {
+    const stats = mergeRideStats(null, imported({ topSpeedKmh: 80 }));
+
+    expect(resolveRideStatsAttribution(stats)).toEqual({
+      label: "Wikidata",
+      url: "https://www.wikidata.org/wiki/Q319081",
+    });
+  });
+
+  it("credits nobody when every surviving number is hand-curated", () => {
+    // The case that shipped a broken citation: `source` alone said "curated"
+    // while the client still rendered a link, and there was no id to put in it.
+    const stats = mergeRideStats(curated({ topSpeedKmh: 70 }), null);
+
+    expect(resolveRideStatsAttribution(stats)).toBeNull();
+  });
+
+  it("still credits Wikidata on a mixed record — an imported value survived", () => {
+    const stats = mergeRideStats(
+      curated({ topSpeedKmh: 70 }),
+      imported({ durationSeconds: 112 }),
+    );
+
+    expect(stats?.source).toBe("mixed");
+    expect(resolveRideStatsAttribution(stats)).toMatchObject({
+      label: "Wikidata",
+    });
+  });
+
+  it("credits nobody when the import was outvoted on every field", () => {
+    // `source` is "curated" here and so is every served number, even though the
+    // ride does have an entity. Crediting it would name a source none of the
+    // displayed values came from.
+    const stats = mergeRideStats(
+      curated({ topSpeedKmh: 70, heightM: 20 }),
+      imported({ topSpeedKmh: 65, heightM: 18 }),
+    );
+
+    expect(stats?.sourceId).toBeNull();
+    expect(resolveRideStatsAttribution(stats)).toBeNull();
+  });
+
+  it("has nothing to credit on a ride with no measurements", () => {
+    expect(resolveRideStatsAttribution(null)).toBeNull();
   });
 });

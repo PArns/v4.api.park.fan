@@ -3,6 +3,47 @@ import type {
   RideStats,
 } from "../entities/attraction-ride-profile.entity";
 
+/** A credit line: who supplied numbers we did not measure, and where it says so. */
+export interface RideStatsAttribution {
+  /** Source name as it should be credited, e.g. "Wikidata". */
+  label: string;
+  /** The record the numbers are stated on. */
+  url: string;
+}
+
+/**
+ * The only automatic source there is. `sourceId` is a Wikidata entity id by
+ * definition — `RideStatsService` is what writes it — so its presence is the
+ * whole condition, and `source` needs no reading.
+ *
+ * A second importer would make `sourceId` ambiguous and force a discriminator
+ * onto the stored record. That is the moment to turn this into a lookup, not
+ * before: a registry keyed by a source we do not have yet would be a guess
+ * about a shape we have not seen.
+ */
+const WIKIDATA = {
+  label: "Wikidata",
+  url: (entityId: string) => `https://www.wikidata.org/wiki/${entityId}`,
+} as const;
+
+/**
+ * Who to credit for a merged record, resolved here rather than at the edge.
+ *
+ * Clients used to get `source` and `sourceId` and had to rebuild this rule
+ * themselves — which meant knowing that curated numbers owe nobody a credit,
+ * and knowing Wikidata's URL shape. Both are facts about the data, so both
+ * belong with it; a client that renders `attribution` when it is there and
+ * nothing when it is null cannot get the citation wrong.
+ *
+ * Null for a purely curated ride: there is no outside source to name.
+ */
+export function resolveRideStatsAttribution(
+  stats: RideStats | null | undefined,
+): RideStatsAttribution | null {
+  if (!stats?.sourceId) return null;
+  return { label: WIKIDATA.label, url: WIKIDATA.url(stats.sourceId) };
+}
+
 const FIELDS = [
   "topSpeedKmh",
   "heightM",
