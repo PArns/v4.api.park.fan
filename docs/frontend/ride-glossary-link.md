@@ -68,13 +68,40 @@ where it came from:
 "stats": {
   "topSpeedKmh": 153, "heightM": 99.1, "lengthM": 2012, "durationSeconds": 205,
   "source": "mixed",          // "curated" | "wikidata" | "mixed"
-  "sourceId": "Q1065056"      // null unless an imported value survived the merge
+  "sourceId": "Q1065056",     // null unless an imported value survived the merge
+  "attribution": {            // null when every surviving number is curated
+    "label": "Wikidata",
+    "url": "https://www.wikidata.org/wiki/Q1065056"
+  }
 }
 ```
 
 Everything is metric and **every field is independently nullable** — including
 `stats` itself. Render what is there; a ride with a speed and no duration is
 the normal case, not an error.
+
+### Crediting the numbers: read `attribution`, nothing else
+
+```tsx
+{stats.attribution && (
+  <a href={stats.attribution.url}>{t("statsSource", { source: stats.attribution.label })}</a>
+)}
+```
+
+That is the whole rule, and it is deliberately the only one a client needs.
+`attribution` is null exactly when nobody outside is owed a credit, so a client
+that renders it when present and nothing when absent cannot produce a false
+citation. Localize the sentence around `label`, never the label itself.
+
+**Do not derive the credit from `source` or `sourceId`.** Those two are
+provenance — useful to know, not a rule to reimplement. Deriving it is how the
+frontend once rendered a credit for every ride that had any measurement,
+naming a source none of its numbers came from and linking to `/undefined`; most
+rides here are `curated`, and a curated ride has no outside source to name.
+
+Note that `attribution` is also null when a ride **has** an entity but the
+curation overruled it on every field — `sourceId` goes null with it, for the
+same reason: the displayed numbers did not come from there.
 
 Why curate at all when there is an importer: Wikidata states a top speed for
 fewer than a fifth of the coasters here, and misses most of the headliners —

@@ -6,6 +6,37 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the measurements say who to credit, instead of leaving it to be worked out
+
+`rideProfile.stats` shipped `source` and `sourceId` and left every client to
+rebuild the citation rule from them: that a curated ride owes nobody a credit,
+and that a `sourceId` is a Wikidata entity whose page lives at
+`wikidata.org/wiki/{id}`. Both are facts about the data. The frontend got the
+rule wrong, which is what this is fixed from — it rendered the credit whenever
+`stats` existed at all, so 26 of the 27 rides that state a measurement today
+named a source none of their numbers came from and linked to `/undefined`.
+
+- **`stats.attribution`** — `{ label, url }`, or **null when every surviving
+  number is hand-curated**. Null is the whole rule: render it when it is there,
+  show nothing when it is not, and the citation cannot come out wrong. It is
+  also null when a ride *has* an entity but the curation outvoted it on every
+  field, because naming a source none of the displayed values came from is a
+  false citation either way.
+- **`source` and `sourceId` stay** — they are provenance, and honest data. They
+  are no longer the thing a client has to interpret to draw a link.
+
+### Fixed — `stats` was served as an undeclared object
+
+The DTO typed the field off the entity interface, so Swagger emitted
+`stats: object` with no properties at all — a prose description and an example
+were the entire contract. Consumers hand-maintained a mirror of a shape nothing
+could check, which is how the frontend's copy drifted from `source: 'rcdb'` (a
+source that no longer exists) without a single failing build on either side.
+
+`RideStatsDto` and `RideStatsAttributionDto` now declare every field, so `source`
+publishes its `curated | wikidata | mixed` enum and the shape is checkable by
+anyone generating a client from the spec.
+
 ### Fixed — a park merge could wire a park to another park's feed
 
 A merge fills the winner's empty upstream ids from the loser, which is how a
