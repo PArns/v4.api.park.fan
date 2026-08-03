@@ -113,10 +113,7 @@ export class ParkResponseDto {
       peakHourLocal: string | null;
       peakHourConfidence: number;
       peakHourSource:
-        | "prediction"
-        | "observed_today"
-        | "historical_fallback"
-        | null;
+        "prediction" | "observed_today" | "historical_fallback" | null;
       crowdLevel: CrowdLevel;
       totalAttractions: number;
       operatingAttractions: number;

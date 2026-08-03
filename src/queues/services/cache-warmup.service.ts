@@ -210,7 +210,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // The "none" month-cache keys for every month in [-1, +3] — the variant the
       // FE calendar/best-days widget reads (the proxy forwards includeHourly=none).
       const monthKeys: string[] = [];
-      for (let mm = fromM, yy = fromY; ; ) {
+      for (let mm = fromM, yy = fromY; ;) {
         monthKeys.push(
           CacheKeys.calendarMonth(
             park.id,
