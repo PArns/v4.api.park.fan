@@ -216,7 +216,10 @@ export class AttractionResponseDto {
   longitude: number | null;
 
   @ApiProperty({
-    description: "Parent park details",
+    description:
+      "Parent park details. On this endpoint the block also carries the park's live `status`, " +
+      "so a client rendering a single ride has everything it needs (the park's `timezone` was " +
+      "already here) without also fetching the full park payload.",
     required: false,
     nullable: true,
   })
@@ -351,12 +354,7 @@ export class AttractionResponseDto {
     nullable: true,
   })
   comparison?:
-    | "much_lower"
-    | "lower"
-    | "typical"
-    | "higher"
-    | "much_higher"
-    | null;
+    "much_lower" | "lower" | "typical" | "higher" | "much_higher" | null;
 
   // Prediction Accuracy (Feedback Loop)
   @ApiProperty({
