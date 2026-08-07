@@ -2,6 +2,7 @@ import {
   PostgreSqlContainer,
   StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
+import { RedisContainer, StartedRedisContainer } from "@testcontainers/redis";
 import { DataSource } from "typeorm";
 import * as dotenv from "dotenv";
 import * as path from "path";
@@ -13,15 +14,35 @@ dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
 process.env.NODE_ENV = "test";
 
 let container: StartedPostgreSqlContainer;
+let redisContainer: StartedRedisContainer;
 let dataSource: DataSource;
 
 /**
  * Global setup for E2E tests
- * - Starts TimescaleDB container
+ * - Starts TimescaleDB and Redis containers
  * - Initializes database with schema
  * - Runs before all test suites
+ *
+ * Redis is a container rather than a developer's local server for the same reason
+ * Postgres is: without it every endpoint that reads through the cache answers 500
+ * ("Stream isn't writeable and enableOfflineQueue options is false"), and the suite
+ * only passes on machines that happen to run Redis on :6379.
  */
 beforeAll(async () => {
+  console.log("🐳 Starting Redis test container...");
+
+  redisContainer = await new RedisContainer("redis:7-alpine").start();
+
+  // Set before the app modules read config — dotenv above does not override these.
+  process.env.REDIS_HOST = redisContainer.getHost();
+  process.env.REDIS_PORT = redisContainer.getPort().toString();
+  delete process.env.REDIS_PASSWORD;
+  delete process.env.SKIP_REDIS;
+
+  console.log(
+    `✅ Test Redis running at ${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
+  );
+
   console.log("🐳 Starting TimescaleDB test container...");
 
   container = await new PostgreSqlContainer("timescale/timescaledb:latest-pg16")
@@ -108,7 +129,12 @@ afterAll(async () => {
     await container.stop();
     console.log("🧹 Test container stopped");
   }
-}, 30000); // 30s timeout for cleanup
+
+  if (redisContainer) {
+    await redisContainer.stop();
+    console.log("🧹 Redis container stopped");
+  }
+}, 60000); // 60s timeout for cleanup (two containers)
 
 /**
  * Cleanup between test suites

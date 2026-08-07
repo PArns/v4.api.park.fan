@@ -110,8 +110,10 @@ export class TimescaleInitService implements OnModuleInit {
         return;
       }
 
-      // Get current primary key constraint name
+      // Get current primary key constraint name AND its columns — the columns have
+      // to be read before the constraint is dropped.
       const pkName = await this.getPrimaryKeyConstraintName(tableName);
+      const pkColumns = await this.getPrimaryKeyColumns(tableName);
 
       // Drop primary key constraint
       if (pkName) {
@@ -122,27 +124,30 @@ export class TimescaleInitService implements OnModuleInit {
         this.logger.debug(`  ✓ Dropped primary key constraint: ${pkName}`);
       }
 
-      // Add composite primary key BEFORE creating hypertable
-      // All live data tables use (id, timestamp) as composite PK
-      // - queue_data, forecast_data: (id, timeColumn)
-      // - weather_data: (parkId, timeColumn) - special case for weather
-      // - show_live_data: (id, timeColumn)
-      // - restaurant_live_data: (id, timeColumn)
-      let compositePK: string;
-      if (tableName === "weather_data") {
-        // SECURITY: Use identifier quoting for column names
-        compositePK = `${this.quoteIdentifier("parkId")}, ${this.quoteIdentifier(timeColumn)}`;
-      } else {
-        // All other tables use (id, timestamp)
-        // SECURITY: Use identifier quoting for column names
-        compositePK = `${this.quoteIdentifier("id")}, ${this.quoteIdentifier(timeColumn)}`;
+      // Add composite primary key BEFORE creating hypertable.
+      //
+      // Timescale requires the partitioning column to be part of every unique index,
+      // so the key becomes "whatever the entity already declares, plus the time
+      // column". Deriving it from the live schema rather than assuming a surrogate
+      // "id" is what lets tables with a natural key work: wait_time_predictions
+      // dropped its uuid id for (attractionId, createdAt, predictedTime,
+      // predictionType), and an assumed `id` failed hypertable creation outright on
+      // any freshly created database.
+      const keyColumns = [...pkColumns];
+      if (keyColumns.length > 0 && !keyColumns.includes(timeColumn)) {
+        keyColumns.push(timeColumn);
       }
 
-      // SECURITY: Table name and columns are validated, but use identifier quoting
-      await this.dataSource.query(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD PRIMARY KEY (${compositePK});`,
-      );
-      this.logger.debug(`  ✓ Added composite primary key (${compositePK})`);
+      if (keyColumns.length > 0) {
+        // SECURITY: Table name and columns are validated, but use identifier quoting
+        const compositePK = keyColumns
+          .map((column) => this.quoteIdentifier(column))
+          .join(", ");
+        await this.dataSource.query(
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD PRIMARY KEY (${compositePK});`,
+        );
+        this.logger.debug(`  ✓ Added composite primary key (${compositePK})`);
+      }
 
       // Convert to hypertable — migrate_data preserves existing rows
       await this.dataSource.query(
@@ -192,6 +197,27 @@ export class TimescaleInitService implements OnModuleInit {
       [tableName],
     );
     return result[0]?.conname || `PK_${tableName}`;
+  }
+
+  /**
+   * Get the primary key's columns, in key order.
+   *
+   * Read this BEFORE dropping the constraint — afterwards there is nothing left to
+   * read, and the hypertable's key would have to be guessed.
+   */
+  private async getPrimaryKeyColumns(tableName: string): Promise<string[]> {
+    // SECURITY: Use parameterized query
+    const result: { attname: string }[] = await this.dataSource.query(
+      `SELECT a.attname
+       FROM pg_constraint c
+       JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+       JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+       WHERE c.conrelid = $1::regclass
+         AND c.contype = 'p'
+       ORDER BY k.ord;`,
+      [tableName],
+    );
+    return result.map((row) => row.attname);
   }
 
   /**
