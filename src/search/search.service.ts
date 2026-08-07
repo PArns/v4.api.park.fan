@@ -86,7 +86,9 @@ interface EntryPre {
   tri: Set<string>; // trigrams of lc
   words: string[]; // lc split on non-alphanumerics (wordFuzzyMatch input)
   wordsWs: string[]; // lc split on whitespace (tier-2 word-prefix check)
-  extraLc: string | null; // secondary field lowercased (attraction landName)
+  extraLc: string | null; // secondary field lowercased (attraction landName, park city)
+  extraTri: Set<string> | null; // trigrams of extraLc — lets the secondary field tolerate typos
+  extraWords: string[]; // extraLc split on non-alphanumerics (wordFuzzyMatch input)
 }
 
 @Injectable()
@@ -1274,11 +1276,8 @@ export class SearchService implements OnModuleInit {
         resort: attraction.park?.destination?.name || null,
         status:
           (status as
-            | "OPERATING"
-            | "CLOSED"
-            | "DOWN"
-            | "REFURBISHMENT"
-            | null) || "CLOSED",
+            "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT" | null) ||
+          "CLOSED",
         load,
         waitTime:
           waitTime !== null && waitTime !== undefined
@@ -1955,9 +1954,30 @@ export class SearchService implements OnModuleInit {
   // trigram sets (shared / union), matching Postgres' 0.3 `%` threshold.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Strip diacritics so "Brühl" and "bruhl" are the same word to the matcher.
+   *
+   * Everything downstream splits on `[^a-z0-9]`, which treats an accented letter as
+   * a separator: without this "Brühl" arrives as the two fragments "br" and "hl",
+   * and "Fårup" as "f" and "rup". Long names survive that on trigram overlap alone,
+   * short ones do not — which is why a city like Brühl was unreachable by any
+   * spelling a user would type.
+   */
+  private fold(s: string): string {
+    // "ß" has no decomposition, so NFD leaves it in place and the split below turns
+    // "Haßloch" into "ha" + "loch". Transliterating it first is what lets someone
+    // type the town the ordinary way.
+    return s
+      .replace(/\u00df/g, "ss")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
   private buildTrigrams(s: string): Set<string> {
     const t = new Set<string>();
-    for (const word of s.toLowerCase().split(/[^a-z0-9]+/)) {
+    for (const word of this.fold(s)
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)) {
       if (!word) continue;
       const padded = `  ${word} `;
       for (let i = 0; i < padded.length - 2; i++) t.add(padded.slice(i, i + 3));
@@ -1981,14 +2001,17 @@ export class SearchService implements OnModuleInit {
 
   /** Derive an entry's reusable scoring fields from its display name. */
   private buildEntryPre(name: string, extra?: string | null): EntryPre {
-    const lc = name.toLowerCase();
+    const lc = this.fold(name).toLowerCase();
+    const extraLc = extra ? this.fold(extra).toLowerCase() : null;
     return {
       lc,
       norm: lc.replace(/[^a-z0-9]/g, ""),
       tri: this.buildTrigrams(lc),
       words: lc.split(/[^a-z0-9]+/).filter(Boolean),
       wordsWs: lc.split(/\s+/).filter(Boolean),
-      extraLc: extra ? extra.toLowerCase() : null,
+      extraLc,
+      extraTri: extraLc ? this.buildTrigrams(extraLc) : null,
+      extraWords: extraLc ? extraLc.split(/[^a-z0-9]+/).filter(Boolean) : [],
     };
   }
 
@@ -1999,7 +2022,7 @@ export class SearchService implements OnModuleInit {
     tri: Set<string>;
     words: string[];
   } {
-    const lc = q.toLowerCase();
+    const lc = this.fold(q).toLowerCase();
     return {
       lc,
       norm: lc.replace(/[^a-z0-9]/g, ""),
@@ -2009,10 +2032,17 @@ export class SearchService implements OnModuleInit {
   }
 
   /** Cached per-entry scoring data, computed on first use if enrich missed it. */
-  private getPre(entry: { name: string; landName?: string | null }): EntryPre {
+  private getPre(entry: {
+    name: string;
+    landName?: string | null;
+    city?: string | null;
+  }): EntryPre {
     let pre = this.entryPre.get(entry);
     if (!pre) {
-      pre = this.buildEntryPre(entry.name, entry.landName ?? null);
+      pre = this.buildEntryPre(
+        entry.name,
+        entry.landName ?? entry.city ?? null,
+      );
       this.entryPre.set(entry, pre);
     }
     return pre;
@@ -2020,6 +2050,8 @@ export class SearchService implements OnModuleInit {
 
   /** Precompute EntryPre for every index entry after a (re)build. */
   private enrichIndexes(): void {
+    // Parks are scored by searchParksInProcess, which compares city/country/
+    // continent itself — only attractions route through scoreEntryPre's extra field.
     for (const e of this.parkIndex)
       this.entryPre.set(e, this.buildEntryPre(e.name));
     for (const e of this.attractionIndex)
@@ -2098,6 +2130,19 @@ export class SearchService implements OnModuleInit {
     if (this.wordFuzzyMatch(pre.words, qWords))
       return { matches: true, tier: 7, sim };
 
+    // The secondary field — an attraction's land, a park's city — gets the same
+    // typo tolerance the name has, one tier lower throughout. Without this a land
+    // or city only matched as an exact substring (tier 5), so "rookburgh" found
+    // F.L.Y. but "rookhburgh" lost it, and no spelling of a city ever reached the
+    // park standing in it. Everything here ranks below every name match, so a park
+    // actually called "Orlando…" still outranks the parks that merely sit there.
+    if (pre.extraTri) {
+      const extraSim = this.trgmSimSets(pre.extraTri, qTri);
+      if (extraSim >= 0.3) return { matches: true, tier: 8, sim: extraSim };
+      if (this.wordFuzzyMatch(pre.extraWords, qWords))
+        return { matches: true, tier: 9, sim: extraSim };
+    }
+
     return { matches: false, tier: 99, sim: 0 };
   }
 
@@ -2123,9 +2168,11 @@ export class SearchService implements OnModuleInit {
       );
       if (r.matches) {
         const popular = this.topAttractionIdSet.has(entry.id);
+        // Tiers 8+ are secondary-field (land) matches — the boost must not lift
+        // those over anything that matched the name itself.
         scored.push({
           entry,
-          tier: popular && r.tier > 2 ? 3 : r.tier,
+          tier: popular && r.tier > 2 && r.tier < 8 ? 3 : r.tier,
           sim: r.sim,
         });
       }
@@ -2203,13 +2250,23 @@ export class SearchService implements OnModuleInit {
       const pre = this.getPre(park);
       const nameLower = pre.lc;
       const nameNorm = pre.norm;
-      const cityLower = (park.city || "").toLowerCase();
-      const countryLower = (park.country || "").toLowerCase();
-      const continentLower = (park.continent || "").toLowerCase();
+      // Folded, because the query is: an unfolded "brühl" can never contain the
+      // "bruhl" a user types, which left every accented city unreachable.
+      const cityLower = this.fold(park.city || "").toLowerCase();
+      const countryLower = this.fold(park.country || "").toLowerCase();
+      const continentLower = this.fold(park.continent || "").toLowerCase();
       const sim = this.trgmSimSets(pre.tri, qTri);
       // Word-level typo tolerance ("epuc" → "epic") — same as scoreEntryPre's
       // tier 7. parks use this bespoke matcher, so it needs the check explicitly.
       const fuzzyWord = this.wordFuzzyMatch(pre.words, qWords);
+      // The city gets the same typo tolerance the name has, so "orlndo" still
+      // reaches the parks standing in Orlando. Ranked last (see tier below).
+      const fuzzyCity =
+        cityLower.length > 0 &&
+        this.wordFuzzyMatch(
+          cityLower.split(/[^a-z0-9]+/).filter(Boolean),
+          qWords,
+        );
 
       const matches =
         nameLower.includes(qLower) ||
@@ -2218,7 +2275,8 @@ export class SearchService implements OnModuleInit {
         countryLower.includes(qLower) ||
         continentLower.includes(qLower) ||
         sim >= 0.3 ||
-        fuzzyWord;
+        fuzzyWord ||
+        fuzzyCity;
       if (!matches) continue;
 
       let tier: number;
@@ -2227,11 +2285,15 @@ export class SearchService implements OnModuleInit {
       else if (nameLower.startsWith(qLower)) tier = 2;
       else if (cityLower === qLower) tier = 4;
       else if (sim >= 0.3) tier = 5;
-      else tier = 7; // fuzzy word match only (typo) — loosest signal, rank last
+      else if (fuzzyWord)
+        tier = 7; // name typo — loosest name signal
+      else tier = 8; // city typo only — never above anything matching the name
 
       // Popularity boost ranks before city-exact/other (CASE order), but not
-      // before an exact/normalized/prefix name hit.
-      if (tier > 2 && this.topParkIdSet.has(park.id)) tier = 3;
+      // before an exact/normalized/prefix name hit — and never for a match that
+      // only came through the city, or a popular park would outrank the park the
+      // query actually names.
+      if (tier > 2 && tier < 8 && this.topParkIdSet.has(park.id)) tier = 3;
 
       scored.push({ entry: park, tier, sim });
     }
@@ -2248,7 +2310,9 @@ export class SearchService implements OnModuleInit {
     q: string,
     limit: number,
   ): SearchResultItemDto[] {
-    const qLower = q.toLowerCase();
+    // Folded, so the substring test agrees with trgmSim about what the text is —
+    // the two used to disagree on every accented place name.
+    const qLower = this.fold(q).toLowerCase();
 
     type CityHit = { park: ParkIndexData; sim: number };
     const cityHits: CityHit[] = [];
@@ -2258,7 +2322,7 @@ export class SearchService implements OnModuleInit {
 
     for (const park of this.parkIndex) {
       if (park.city && park.citySlug && !seenCity.has(park.citySlug)) {
-        const cityLower = park.city.toLowerCase();
+        const cityLower = this.fold(park.city).toLowerCase();
         const sim = this.trgmSim(cityLower, qLower);
         if (cityLower.includes(qLower) || sim >= 0.3) {
           seenCity.add(park.citySlug);
@@ -2270,7 +2334,7 @@ export class SearchService implements OnModuleInit {
         park.countrySlug &&
         !seenCountry.has(park.countrySlug)
       ) {
-        const countryLower = park.country.toLowerCase();
+        const countryLower = this.fold(park.country).toLowerCase();
         const sim = this.trgmSim(countryLower, qLower);
         if (countryLower.includes(qLower) || sim >= 0.3) {
           seenCountry.add(park.countrySlug);

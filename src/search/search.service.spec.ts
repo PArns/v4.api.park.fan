@@ -362,6 +362,89 @@ describe("SearchService", () => {
       expect(result.results.map((r) => r.id)).not.toContain("gardaland");
     });
 
+    it("reaches a park through the city it stands in", async () => {
+      await primeIndex({
+        parks: [
+          park({ id: "phantasialand", city: "Brühl", citySlug: "bruhl" }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["phantasialand", "OPERATING"]]),
+      );
+
+      const result = await service.search({ q: "bruhl", type: ["park"] });
+
+      expect(result.results.map((r) => r.id)).toContain("phantasialand");
+    });
+
+    it("ranks a park named after a city above the parks merely standing in it", async () => {
+      await primeIndex({
+        parks: [
+          park({ id: "resident", name: "Some Resort", city: "Orlando" }),
+          park({ id: "eponymous", name: "Orlando Park", city: "Berlin" }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["resident", "OPERATING"],
+          ["eponymous", "OPERATING"],
+        ]),
+      );
+
+      const result = await service.search({ q: "orlando", type: ["park"] });
+
+      const ids = result.results.map((r) => r.id);
+      expect(ids).toContain("eponymous");
+      expect(ids).toContain("resident");
+      // A name match must always outrank a city match, or searching a park by its
+      // own name buries it under every park in the same town.
+      expect(ids.indexOf("eponymous")).toBeLessThan(ids.indexOf("resident"));
+    });
+
+    it("does not let the popularity boost lift a city match over a name match", async () => {
+      // The boost promotes anything below tier 3 up to tier 3. Applied to a city
+      // match that would place a popular park standing in Orlando above a park
+      // actually called "Orlando …" — the one ordering this must never produce.
+      mockPopularityService.getTopParks.mockResolvedValue(["resident"]);
+      await primeIndex({
+        parks: [
+          park({ id: "resident", name: "Zzz Park", city: "Orlando" }),
+          park({ id: "eponymous", name: "Orlando Resort", city: "Berlin" }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["resident", "OPERATING"],
+          ["eponymous", "OPERATING"],
+        ]),
+      );
+
+      // A typo, so the popular park is reachable only through its city.
+      const result = await service.search({ q: "orlndo", type: ["park"] });
+
+      const ids = result.results.map((r) => r.id);
+      expect(ids).toContain("eponymous");
+      expect(ids.indexOf("eponymous")).toBeLessThan(ids.indexOf("resident"));
+    });
+
+    it("tolerates a typo in an attraction's land name", async () => {
+      await primeIndex({
+        attractions: [
+          attraction({ id: "fly", name: "F.L.Y.", landName: "Rookburgh" }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+
+      const result = await service.search({
+        q: "rookhburgh",
+        type: ["attraction"],
+      });
+
+      expect(result.results.map((r) => r.id)).toContain("fly");
+    });
+
     it("derives location results from the park index", async () => {
       await primeIndex({
         parks: [park({ id: "p1", city: "Orlando", citySlug: "orlando" })],

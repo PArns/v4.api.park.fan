@@ -62,50 +62,57 @@ describe("ParksController (E2E)", () => {
     await clearTestData(app);
   });
 
+  // The fixture parks live at north-america/united-states/orlando; a park is only
+  // addressable through that geographic path, not by slug alone.
+  const GEO = "/v1/parks/north-america/united-states/orlando";
+
   describe("GET /v1/parks", () => {
-    it("should return empty array when no parks exist", () => {
-      return request(app.getHttpServer())
-        .get("/v1/parks")
-        .expect(200)
-        .expect([]);
-    });
-
-    it("should return all parks when parks exist", async () => {
-      // Seed test data
-      await seedMinimalTestData(app);
-
-      const response = await request(app.getHttpServer())
+    it("returns an empty page when no parks exist", async () => {
+      const { body } = await request(app.getHttpServer())
         .get("/v1/parks")
         .expect(200);
 
-      expect(response.body).toHaveLength(2);
-      expect(response.body[0]).toHaveProperty("id");
-      expect(response.body[0]).toHaveProperty("name");
-      expect(response.body[0]).toHaveProperty("slug");
-      expect(response.body[0].name).toContain("Test");
+      expect(body.data).toEqual([]);
+      expect(body.pagination).toMatchObject({ total: 0, totalPages: 0 });
+    });
+
+    it("returns every park with its pagination envelope", async () => {
+      await seedMinimalTestData(app);
+
+      const { body } = await request(app.getHttpServer())
+        .get("/v1/parks")
+        .expect(200);
+
+      expect(body.data).toHaveLength(2);
+      expect(body.pagination).toMatchObject({ page: 1, total: 2 });
+      expect(body.data[0]).toHaveProperty("id");
+      expect(body.data[0]).toHaveProperty("name");
+      expect(body.data[0]).toHaveProperty("slug");
+      expect(body.data[0].name).toContain("Test");
     });
   });
 
-  describe("GET /v1/parks/:slug", () => {
-    it("should return 404 when park does not exist", () => {
+  describe(`GET ${GEO}/:parkSlug`, () => {
+    it("404s when the park does not exist", () => {
       return request(app.getHttpServer())
-        .get("/v1/parks/non-existent-park")
+        .get(`${GEO}/non-existent-park`)
         .expect(404);
     });
 
-    it("should return park by slug", async () => {
-      // Seed test data
+    it("returns the park addressed by its geographic path", async () => {
       const { parks } = await seedMinimalTestData(app);
       const testPark = parks[0];
 
-      const response = await request(app.getHttpServer())
-        .get(`/v1/parks/${testPark.slug}`)
+      const { body } = await request(app.getHttpServer())
+        .get(`${GEO}/${testPark.slug}`)
         .expect(200);
 
-      expect(response.body).toHaveProperty("id", testPark.id);
-      expect(response.body).toHaveProperty("name", testPark.name);
-      expect(response.body).toHaveProperty("slug", testPark.slug);
-      expect(response.body).toHaveProperty("timezone", testPark.timezone);
+      expect(body).toMatchObject({
+        id: testPark.id,
+        name: testPark.name,
+        slug: testPark.slug,
+        timezone: testPark.timezone,
+      });
     });
   });
 });
