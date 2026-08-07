@@ -253,6 +253,14 @@ export class AttractionIntegrationService {
     const parkStatus: "OPERATING" | "CLOSED" =
       parkStatusMap.get(attraction.parkId) || "CLOSED";
 
+    // Surface it on the embedded park block too. It costs nothing here — the status is already
+    // in hand for `effectiveStatus` below — and it is the last thing a client rendering a single
+    // ride still had to fetch the whole park for. With this (and `timezone`, already present)
+    // the attraction detail answers a ride page on its own.
+    if (dto.park) {
+      dto.park.status = parkStatus;
+    }
+
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
     // reported CLOSED by the source. Override to OPERATING with 0 min wait.
     if (attraction.openWithPark && parkStatus === "OPERATING") {
