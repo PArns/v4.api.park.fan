@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the name you typed outranks the park that happens to be open
+
+Searching `flyer` put *Blue Flyer* (Blackpool Pleasure Beach, open at the time)
+above the ride actually called **Flyer** (Knoebels, closed). Results are ordered
+OPERATING-first so people see what they can ride now, and that rule was beating
+the match itself.
+
+An exact name match now sorts ahead of everything, including OPERATING-first.
+"Exact" ignores punctuation and accents the same way the matcher does, so `fly`
+is an exact hit on **F.L.Y.** and `farup` on **Fårup Sommerland**. Deliberately
+narrow — prefix and substring hits stay subject to OPERATING-first, so a query
+that names no single thing still prefers an open park.
+
+The frontend scored matches on raw strings and had the same blind spot, which is
+why `fly` listed *Sky Fly* above F.L.Y. on park.fan even though the API returned
+F.L.Y. first — fixed separately in park.fan#277.
+
 ### Fixed — search can reach a park through the town it stands in
 
 Searching a city name could not find the parks in it, and any city spelled with an

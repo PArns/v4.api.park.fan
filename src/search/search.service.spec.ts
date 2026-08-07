@@ -236,6 +236,67 @@ describe("SearchService", () => {
       ).toHaveBeenCalledWith(["a1"]);
     });
 
+    it("ranks an exact name match above an open park's fuzzy match", async () => {
+      // OPERATING-first is the right default, but it must not bury the thing the
+      // user typed verbatim: searching "flyer" put Blue Flyer (Blackpool, open)
+      // above the ride actually called Flyer (Knoebels, closed).
+      attractionQB.getMany.mockResolvedValueOnce([
+        {
+          id: "blue",
+          name: "Blue Flyer",
+          slug: "blue-flyer",
+          landName: null,
+          park: park({ id: "pOpen" }),
+        },
+        {
+          id: "exact",
+          name: "Flyer",
+          slug: "flyer",
+          landName: null,
+          park: park({ id: "pClosed" }),
+        },
+      ]);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["pOpen", "OPERATING"],
+          ["pClosed", "CLOSED"],
+        ]),
+      );
+
+      const result = await service.search({ q: "flyer", type: ["attraction"] });
+
+      expect(result.results.map((r) => r.id)).toEqual(["exact", "blue"]);
+    });
+
+    it("treats a punctuation-only difference as an exact name match", async () => {
+      attractionQB.getMany.mockResolvedValueOnce([
+        {
+          id: "sky",
+          name: "Sky Fly",
+          slug: "sky-fly",
+          landName: null,
+          park: park({ id: "pOpen" }),
+        },
+        {
+          id: "fly",
+          name: "F.L.Y.",
+          slug: "fly",
+          landName: null,
+          park: park({ id: "pClosed" }),
+        },
+      ]);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["pOpen", "OPERATING"],
+          ["pClosed", "CLOSED"],
+        ]),
+      );
+
+      const result = await service.search({ q: "fly", type: ["attraction"] });
+
+      expect(result.results.map((r) => r.id)).toEqual(["fly", "sky"]);
+    });
+
     it("ranks OPERATING parks ahead of closed ones", async () => {
       parkQB.getMany.mockResolvedValueOnce([
         park({ id: "pClosed", name: "Closed Park", slug: "closed" }),

@@ -403,6 +403,23 @@ export class SearchService implements OnModuleInit {
     const parentParkIdOf = (c: Candidate): string =>
       c.type === "park" ? c.entity.id : (c.entity.park?.id ?? c.entity.id);
 
+    // Whatever the user typed verbatim outranks everything, including the
+    // OPERATING-first rule below — searching "flyer" used to put Blue Flyer
+    // (Blackpool, open) above the ride actually called Flyer (Knoebels, closed).
+    // "Verbatim" ignores punctuation and accents, the same way the matcher does,
+    // so "fly" is an exact hit on "F.L.Y." and "farup" on "Fårup Sommerland".
+    // Deliberately narrow: prefix and substring hits stay subject to OPERATING-first.
+    const exactQueryLc = this.fold(q).toLowerCase();
+    const exactQueryNorm = exactQueryLc.replace(/[^a-z0-9]/g, "");
+    const isVerbatimName = (c: Candidate): boolean => {
+      const name = this.fold(c.entity.name).toLowerCase();
+      return (
+        name === exactQueryLc ||
+        (exactQueryNorm.length > 0 &&
+          name.replace(/[^a-z0-9]/g, "") === exactQueryNorm)
+      );
+    };
+
     // Preload park status (cached) once for the OPERATING-first ranking. This only affects
     // ranking — never block search on it: when the per-park status cache is cold during a
     // DB-saturation burst, the underlying getBatchParkStatus can take many seconds (observed
@@ -433,8 +450,11 @@ export class SearchService implements OnModuleInit {
     const dedupedCandidates: Candidate[] = [];
 
     candidates
-      .map((c, index) => ({ c, index }))
+      // `exact` is computed once per candidate rather than inside the comparator,
+      // which would refold the same names on every comparison.
+      .map((c, index) => ({ c, index, exact: isVerbatimName(c) }))
       .sort((a, b) => {
+        if (a.exact !== b.exact) return a.exact ? -1 : 1;
         const aOp = rankStatusMap.get(parentParkIdOf(a.c)) === "OPERATING";
         const bOp = rankStatusMap.get(parentParkIdOf(b.c)) === "OPERATING";
         if (aOp && !bOp) return -1;
