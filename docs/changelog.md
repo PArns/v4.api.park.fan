@@ -6,6 +6,66 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — "open park" is answered the same way everywhere, and a frozen feed no longer counts
+
+At 06:00 UTC on 2026-08-07 the world map showed two parks open in Europe — France
+1, Italy 1 — at an hour when nothing in Europe was open. The parks were
+Le Parc du Petit Prince and Cinecittà World, and worldwide two more: Adventureland
+Resort at 01:20 local and Lake Compounce at 02:20.
+
+All four are fed by queue-times, and queue-times never closes them. It keeps
+serving the last snapshot after closing time: the same wait times, the same
+`is_open: true` per ride, with a freshly stamped `last_updated`. Cinecittà World
+served 29 rides "OPERATING @ 15 min" **unchanged for 24 hours straight** — verified
+against the upstream endpoint, so this is an upstream artefact and not an ingestion
+fault. Any rule of the shape "a ride is OPERATING and has a plausible wait" calls
+that park open at 3 a.m., and the analytics queries used exactly that rule.
+
+Neither of the two obvious guards separates a frozen feed from a real park: the
+placeholder waits sit well above any wait-time floor (15 min, 45 min), and the row
+timestamps are current, so a staleness check passes too. What does separate them is
+**movement** — a live feed's numbers change, a frozen snapshot's do not. The ride
+fallback now requires at least one ride to have reported more than one distinct
+`(waitTime, status)` within the movement window.
+
+The freshness window stays at 2 h ("is this park still reporting"); the movement
+window is 4 h, because a real park's queues can settle for an hour or two near
+closing and a 2 h window drops the last hours of the day.
+
+Replaying the rule hourly over 7 days against production, in park-hours judged open
+per local hour of day:
+
+| local hour | 00 | 02 | 04 | 06 | 08 | 10 | 12 | 14 | 16 | 18 | 20 | 22 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| before | 21 | 22 | 20 | 20 | 20 | 18 | 49 | 60 | 60 | 55 | 40 | 23 |
+| after | 1 | 0 | 0 | 1 | 2 | 4 | 41 | 53 | 50 | 43 | 27 | 4 |
+
+Before, the count sits flat at ~20 through the whole night — that is the bug. After,
+the night empties and what remains is an opening-hours curve peaking at 14:00–16:00
+local. Per park over those 7 days: **Cinecittà World 169 h → 4 h** and Le Parc du
+Petit Prince 22 → 7 (the two frozen feeds), Adventureland 152 → 71, Lake Compounce
+132 → 65, Le Pal 91 → 61. Parks that were already reported correctly lose **nothing**:
+Gröna Lund 63 → 63, Beto Carrero 43 → 43, Hellendoorn 32 → 32, Fårup 27 → 27,
+Universal Studios Orlando 75 → 75.
+
+A "no park is open at 04:00 local" clock guard was measured and rejected: over the
+same 7 days it removed 2 park-hours, both at 05:00–06:00 local. A magic constant
+worth 2 park-hours a week is not worth the maintenance question it raises.
+
+The same four CTEs had been copy-pasted across `getGlobalRealtimeStats` (twice),
+`getTickerData` and `getGeoLiveStats`. They still agreed with each other, but four
+copies of a rule is how they stop agreeing — they now come from one place,
+`analytics/utils/open-parks.sql.ts`, which documents why the rule looks the way it
+does. `test/e2e/open-park-openness.e2e-spec.ts` pins both halves against a real
+database: a frozen feed must not count, a moving one and a settled-but-recently-moved
+one must, and all three call sites must return the same set.
+
+Not part of this change, but found while confirming it: because the park detail
+endpoint uses a hard 30-minute recency window (`isParkOpen`) while these feeds are
+polled hourly at night, a fallback park's own `status` flips between OPERATING and
+CLOSED every hour. That is why the map and the park page disagreed at 06:00 but
+agreed at 06:18.
+
 ### Fixed — a park merge could wire a park to another park's feed
 
 A merge fills the winner's empty upstream ids from the loser, which is how a
