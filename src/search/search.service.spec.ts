@@ -427,6 +427,29 @@ describe("SearchService", () => {
       expect(ids.indexOf("eponymous")).toBeLessThan(ids.indexOf("resident"));
     });
 
+    it("does not match a short city word that merely resembles the query", async () => {
+      // "Ying Tan Shi" contains the word "tan", two edits from "taron" — which the
+      // name matcher's budget allows for a 5-letter query. Two edits out of a
+      // 3-letter word is a different word, not a typo, and let a search for the
+      // ride Taron surface two parks in Yingtan ahead of it.
+      await primeIndex({
+        parks: [
+          park({
+            id: "yingtan",
+            name: "Fantawild Oriental Heritage Yingtan",
+            city: "Ying Tan Shi",
+          }),
+        ],
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["yingtan", "OPERATING"]]),
+      );
+
+      const result = await service.search({ q: "taron", type: ["park"] });
+
+      expect(result.results.map((r) => r.id)).not.toContain("yingtan");
+    });
+
     it("tolerates a typo in an attraction's land name", async () => {
       await primeIndex({
         attractions: [

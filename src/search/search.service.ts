@@ -2101,6 +2101,28 @@ export class SearchService implements OnModuleInit {
   }
 
   /**
+   * The same word-level typo tolerance, budgeted against the SHORTER of the two
+   * words — used for the secondary fields (a park's city, an attraction's land).
+   *
+   * The name matcher budgets on the query alone, which is fine when the thing being
+   * matched is what the user is looking for. Applied to a city it is not: "Ying Tan
+   * Shi" holds the word "tan", two edits from "taron", and a 5-letter query is
+   * allowed two — so searching for the ride Taron surfaced two parks in Yingtan
+   * ahead of it. Two edits out of a three-letter word is a different word.
+   */
+  private secondaryFuzzyMatch(fieldWords: string[], qWords: string[]): boolean {
+    if (qWords.length === 0) return false;
+    return qWords.every((qw) => {
+      if (qw.length < 3) return false;
+      return fieldWords.some((fw) => {
+        if (fw.startsWith(qw)) return true;
+        const maxDist = Math.min(qw.length, fw.length) <= 4 ? 1 : 2;
+        return this.boundedLevenshtein(qw, fw, maxDist) <= maxDist;
+      });
+    });
+  }
+
+  /**
    * Score one entry against a query using precomputed `pre` data and the
    * once-per-search query fields. Tier semantics are identical to the previous
    * scoreEntry(); only the redundant per-entry recomputation is removed.
@@ -2139,7 +2161,7 @@ export class SearchService implements OnModuleInit {
     if (pre.extraTri) {
       const extraSim = this.trgmSimSets(pre.extraTri, qTri);
       if (extraSim >= 0.3) return { matches: true, tier: 8, sim: extraSim };
-      if (this.wordFuzzyMatch(pre.extraWords, qWords))
+      if (this.secondaryFuzzyMatch(pre.extraWords, qWords))
         return { matches: true, tier: 9, sim: extraSim };
     }
 
@@ -2263,7 +2285,7 @@ export class SearchService implements OnModuleInit {
       // reaches the parks standing in Orlando. Ranked last (see tier below).
       const fuzzyCity =
         cityLower.length > 0 &&
-        this.wordFuzzyMatch(
+        this.secondaryFuzzyMatch(
           cityLower.split(/[^a-z0-9]+/).filter(Boolean),
           qWords,
         );

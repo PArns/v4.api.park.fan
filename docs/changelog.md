@@ -22,106 +22,22 @@ path that does handle city and land has not served a request since the index lan
   way the indexed text is (`Brühl` → `bruhl`), including `ß` → `ss`, which has no
   Unicode decomposition and turned `Haßloch` into `ha` + `loch`.
 - **A city was only ever an exact substring.** `park.city.includes(query)` and
-  nothing else, so a single typo lost it. The city now gets the same word-level typo
-  tolerance the park name has, and an attraction's land does too — `rookburgh` found
-  F.L.Y. but `rookhburgh` lost it.
+  nothing else, so a single typo lost it. The city now gets word-level typo
+  tolerance, and an attraction's land does too — `rookburgh` found F.L.Y. but
+  `rookhburgh` lost it.
+
+  The secondary fields budget that tolerance against the **shorter** of the two
+  words, where the name matcher budgets against the query alone. That difference
+  matters: `Ying Tan Shi` holds the word `tan`, two edits from `taron`, and a
+  five-letter query is allowed two — so a search for the ride Taron surfaced two
+  parks in Yingtan ahead of it. Two edits out of a three-letter word is a different
+  word, not a typo.
 
 Ranking is unchanged where it matters: every city and land match is scored strictly
 below every name match, so a park named after a town still outranks the parks merely
 standing in it. Bounded by the data — the largest city holds 13 parks — and seven
 cities go from unreachable to reachable: Brühl, Günzburg, Haßloch, Montréal,
 Ciudad de México, Saint-Pourçain-sur-Besbre, San Martín de la Vega.
-
-### Fixed — "open park" is answered the same way everywhere, and a frozen feed no longer counts
-
-At 06:00 UTC on 2026-08-07 the world map showed two parks open in Europe — France
-1, Italy 1 — at an hour when nothing in Europe was open. The parks were
-Le Parc du Petit Prince and Cinecittà World, and worldwide two more: Adventureland
-Resort at 01:20 local and Lake Compounce at 02:20.
-
-All four are fed by queue-times, and queue-times never closes them. It keeps
-serving the last snapshot after closing time: the same wait times, the same
-`is_open: true` per ride, with a freshly stamped `last_updated`. Cinecittà World
-served 29 rides "OPERATING @ 15 min" **unchanged for 24 hours straight** — verified
-against the upstream endpoint, so this is an upstream artefact and not an ingestion
-fault. Any rule of the shape "a ride is OPERATING and has a plausible wait" calls
-that park open at 3 a.m., and the analytics queries used exactly that rule.
-
-Neither of the two obvious guards separates a frozen feed from a real park: the
-placeholder waits sit well above any wait-time floor (15 min, 45 min), and the row
-timestamps are current, so a staleness check passes too. What does separate them is
-**movement** — a live feed's numbers change, a frozen snapshot's do not. The ride
-fallback now requires at least one ride to have reported more than one distinct
-`(waitTime, status)` within the movement window.
-
-The freshness window stays at 2 h ("is this park still reporting"); the movement
-window is 4 h, because a real park's queues can settle for an hour or two near
-closing and a 2 h window drops the last hours of the day.
-
-Replaying the rule hourly over 7 days against production, in park-hours judged open
-per local hour of day:
-
-| local hour | 00 | 02 | 04 | 06 | 08 | 10 | 12 | 14 | 16 | 18 | 20 | 22 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| before | 21 | 22 | 20 | 20 | 20 | 18 | 49 | 60 | 60 | 55 | 40 | 23 |
-| after | 1 | 0 | 0 | 1 | 2 | 4 | 41 | 53 | 50 | 43 | 27 | 4 |
-
-Before, the count sits flat at ~20 through the whole night — that is the bug. After,
-the night empties and what remains is an opening-hours curve peaking at 14:00–16:00
-local. Per park over those 7 days: **Cinecittà World 169 h → 4 h** and Le Parc du
-Petit Prince 22 → 7 (the two frozen feeds), Adventureland 152 → 71, Lake Compounce
-132 → 65, Le Pal 91 → 61. Parks that were already reported correctly lose **nothing**:
-Gröna Lund 63 → 63, Beto Carrero 43 → 43, Hellendoorn 32 → 32, Fårup 27 → 27,
-Universal Studios Orlando 75 → 75.
-
-A "no park is open at 04:00 local" clock guard was measured and rejected: over the
-same 7 days it removed 2 park-hours, both at 05:00–06:00 local. A magic constant
-worth 2 park-hours a week is not worth the maintenance question it raises.
-
-The same four CTEs had been copy-pasted across `getGlobalRealtimeStats` (twice),
-`getTickerData` and `getGeoLiveStats`. They still agreed with each other, but four
-copies of a rule is how they stop agreeing — they now come from one place,
-`analytics/utils/open-parks.sql.ts`, which documents why the rule looks the way it
-does. `test/e2e/open-park-openness.e2e-spec.ts` pins both halves against a real
-database: a frozen feed must not count, a moving one and a settled-but-recently-moved
-one must, and all three call sites must return the same set.
-
-Not part of this change, but found while confirming it: because the park detail
-endpoint uses a hard 30-minute recency window (`isParkOpen`) while these feeds are
-polled hourly at night, a fallback park's own `status` flips between OPERATING and
-CLOSED every hour. That is why the map and the park page disagreed at 06:00 but
-agreed at 06:18.
-
-### Changed — the measurements say who to credit, instead of leaving it to be worked out
-
-`rideProfile.stats` shipped `source` and `sourceId` and left every client to
-rebuild the citation rule from them: that a curated ride owes nobody a credit,
-and that a `sourceId` is a Wikidata entity whose page lives at
-`wikidata.org/wiki/{id}`. Both are facts about the data. The frontend got the
-rule wrong, which is what this is fixed from — it rendered the credit whenever
-`stats` existed at all, so 26 of the 27 rides that state a measurement today
-named a source none of their numbers came from and linked to `/undefined`.
-
-- **`stats.attribution`** — `{ label, url }`, or **null when every surviving
-  number is hand-curated**. Null is the whole rule: render it when it is there,
-  show nothing when it is not, and the citation cannot come out wrong. It is
-  also null when a ride *has* an entity but the curation outvoted it on every
-  field, because naming a source none of the displayed values came from is a
-  false citation either way.
-- **`source` and `sourceId` stay** — they are provenance, and honest data. They
-  are no longer the thing a client has to interpret to draw a link.
-
-### Fixed — `stats` was served as an undeclared object
-
-The DTO typed the field off the entity interface, so Swagger emitted
-`stats: object` with no properties at all — a prose description and an example
-were the entire contract. Consumers hand-maintained a mirror of a shape nothing
-could check, which is how the frontend's copy drifted from `source: 'rcdb'` (a
-source that no longer exists) without a single failing build on either side.
-
-`RideStatsDto` and `RideStatsAttributionDto` now declare every field, so `source`
-publishes its `curated | wikidata | mixed` enum and the shape is checkable by
-anyone generating a client from the spec.
 
 ### Fixed — "open park" is answered the same way everywhere, and a frozen feed no longer counts
 
