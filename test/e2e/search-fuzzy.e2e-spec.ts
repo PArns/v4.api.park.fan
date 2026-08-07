@@ -10,11 +10,16 @@ import { ParksService } from "../../src/parks/parks.service";
 import { QueueDataService } from "../../src/queue-data/queue-data.service";
 import { AnalyticsService } from "../../src/analytics/analytics.service";
 import { ShowsService } from "../../src/shows/shows.service";
+import { SearchService } from "../../src/search/search.service";
+import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
+import type { Redis } from "ioredis";
 
 describe("Search Fuzzy (E2E)", () => {
   let app: INestApplication;
   let parkRepository: Repository<Park>;
   let attractionRepository: Repository<Attraction>;
+  let searchService: SearchService;
+  let redis: Redis;
 
   // Mocks to prevent background syncs and deadlocks
   const mockParksService = {
@@ -77,11 +82,18 @@ describe("Search Fuzzy (E2E)", () => {
     attractionRepository = moduleFixture.get<Repository<Attraction>>(
       getRepositoryToken(Attraction),
     );
+    searchService = moduleFixture.get<SearchService>(SearchService);
+    redis = moduleFixture.get<Redis>(REDIS_CLIENT);
   });
 
   // Seed data before EACH test because setup-e2e.ts truncates tables after each test
   beforeEach(async () => {
     await seedTestData();
+    // Search answers from an in-process index built at module init — i.e. against
+    // the empty database — and caches every response in Redis. Without both of
+    // these the suite searches a snapshot of a database that no longer exists.
+    await redis.flushdb();
+    await searchService.refreshSearchIndex();
   });
 
   afterAll(async () => {

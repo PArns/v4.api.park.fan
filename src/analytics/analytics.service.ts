@@ -62,6 +62,7 @@ import type { TypicalWaitsDto } from "../attractions/dto/attraction-response.dto
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { OPEN_PARKS_CTES } from "./utils/open-parks.sql";
 
 /**
  * TTL (seconds) for negatively-cached attraction baselines — i.e. caching
@@ -3038,35 +3039,7 @@ export class AnalyticsService {
     // IMPORTANT: Only consider parks that are currently OPERATING
     // to avoid showing closed parks with 0 wait times
     const activeParksResult = await this.queueDataRepository.query(`
-      WITH schedule_open_parks AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-          AND s."openingTime" <= NOW()
-          AND s."closingTime" > NOW()
-      ),
-      ride_open_parks AS (
-        -- UNKNOWN-schedule parks detected as open via live ride data (no OPERATING entries ever)
-        SELECT a."parkId"
-        FROM attractions a
-        JOIN queue_data qd ON qd."attractionId" = a.id
-          AND qd.timestamp > NOW() - INTERVAL '2 hours'
-          AND qd."waitTime" IS NOT NULL
-        WHERE NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
-        )
-        GROUP BY a."parkId"
-        HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
-      ),
-      park_status AS (
-        SELECT "parkId" FROM schedule_open_parks
-        UNION
-        SELECT "parkId" FROM ride_open_parks
-      ),
+      WITH ${OPEN_PARKS_CTES},
       latest_updates AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
@@ -3155,34 +3128,7 @@ export class AnalyticsService {
     // IMPORTANT: Only consider rides from parks that are currently OPERATING
     // to avoid showing rides from closed parks (e.g., stale data)
     const rideStats = await this.queueDataRepository.query(`
-      WITH schedule_open_parks AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-          AND s."openingTime" <= NOW()
-          AND s."closingTime" > NOW()
-      ),
-      ride_open_parks AS (
-        SELECT a."parkId"
-        FROM attractions a
-        JOIN queue_data qd ON qd."attractionId" = a.id
-          AND qd.timestamp > NOW() - INTERVAL '2 hours'
-          AND qd."waitTime" IS NOT NULL
-        WHERE NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
-        )
-        GROUP BY a."parkId"
-        HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
-      ),
-      park_status AS (
-        SELECT "parkId" FROM schedule_open_parks
-        UNION
-        SELECT "parkId" FROM ride_open_parks
-      ),
+      WITH ${OPEN_PARKS_CTES},
       latest_rides AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
@@ -3398,38 +3344,7 @@ export class AnalyticsService {
       p50Baseline: string;
       isHeadliner: boolean;
     }> = await this.queueDataRepository.query(`
-      WITH schedule_open_parks AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-          AND s."openingTime" <= NOW()
-          AND s."closingTime" > NOW()
-      ),
-      ride_open_parks AS (
-        SELECT a."parkId"
-        FROM attractions a
-        JOIN queue_data qd ON qd."attractionId" = a.id
-          AND qd.timestamp > NOW() - INTERVAL '2 hours'
-          AND qd."waitTime" IS NOT NULL
-        WHERE NOT EXISTS (
-          SELECT 1 FROM schedule_entries se
-          WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_entries se
-          WHERE se."parkId" = a."parkId"
-            AND se."scheduleType" = 'CLOSED'
-            AND se.date = CURRENT_DATE
-        )
-        GROUP BY a."parkId"
-        HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
-      ),
-      park_status AS (
-        SELECT "parkId" FROM schedule_open_parks
-        UNION
-        SELECT "parkId" FROM ride_open_parks
-      ),
+      WITH ${OPEN_PARKS_CTES},
       historical_rides AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
@@ -3563,34 +3478,7 @@ export class AnalyticsService {
 
     // Get all parks with their current status and wait times
     const parksData = await this.queueDataRepository.query(`
-      WITH schedule_open_parks AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-          AND s."openingTime" <= NOW()
-          AND s."closingTime" > NOW()
-      ),
-      ride_open_parks AS (
-        SELECT a."parkId"
-        FROM attractions a
-        JOIN queue_data qd ON qd."attractionId" = a.id
-          AND qd.timestamp > NOW() - INTERVAL '2 hours'
-          AND qd."waitTime" IS NOT NULL
-        WHERE NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_entries se WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'CLOSED' AND se.date = CURRENT_DATE
-        )
-        GROUP BY a."parkId"
-        HAVING COUNT(*) >= 3
-          AND 100.0 * COUNT(CASE WHEN qd."waitTime" >= 10 THEN 1 END) / COUNT(*) >= 25
-      ),
-      park_status AS (
-        SELECT "parkId" FROM schedule_open_parks
-        UNION
-        SELECT "parkId" FROM ride_open_parks
-      ),
+      WITH ${OPEN_PARKS_CTES},
       latest_updates AS (
         SELECT DISTINCT ON (qd."attractionId")
           qd."attractionId",
