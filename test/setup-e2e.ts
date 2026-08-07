@@ -87,7 +87,22 @@ beforeAll(async () => {
 
     // Enable pg_trgm extension (for fuzzy text search)
     await dataSource.query("CREATE EXTENSION IF NOT EXISTS pg_trgm;");
+    await dataSource.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;");
     console.log("✅ pg_trgm extension enabled");
+
+    // Lower the word-similarity threshold the `<%` operator uses, the same way
+    // SearchService.initializeFuzzySearchIndices does at boot.
+    //
+    // ALTER DATABASE only reaches connections opened AFTER it runs. In production
+    // that is every connection, because the setting was applied long ago. On a
+    // container created seconds before the app connects it is nobody: the service
+    // sets it on a pool that is already open, so `<%` keeps the 0.6 default and
+    // every single-character typo ("rokburg", "orlndo", "bruhl") stops matching.
+    // Setting it here, before the app starts, is what production actually looks like.
+    await dataSource.query(
+      `ALTER DATABASE "${container.getDatabase()}" SET pg_trgm.word_similarity_threshold = 0.4;`,
+    );
+    console.log("✅ pg_trgm word_similarity_threshold set to 0.4");
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.warn("⚠️  Could not enable extensions:", errorMessage);

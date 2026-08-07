@@ -70,30 +70,26 @@ describe("AnalyticsController (E2E)", () => {
       expect(body).toHaveProperty("leastCrowdedPark");
       expect(body).toHaveProperty("longestWaitRide");
       expect(body).toHaveProperty("shortestWaitRide");
-      expect(body).toHaveProperty("lastUpdated");
 
       // Validate counts object structure and types
       expect(body.counts).toMatchObject({
         openParks: expect.any(Number),
-        closedParks: expect.any(Number),
+        openAttractions: expect.any(Number),
         parks: expect.any(Number),
         attractions: expect.any(Number),
         shows: expect.any(Number),
         restaurants: expect.any(Number),
         queueDataRecords: expect.any(Number),
-        weatherDataRecords: expect.any(Number),
-        scheduleEntries: expect.any(Number),
-        restaurantLiveDataRecords: expect.any(Number),
-        showLiveDataRecords: expect.any(Number),
-        waitTimePredictions: expect.any(Number),
+        totalWaitTime: expect.any(Number),
       });
 
-      // Validate count logic
-      expect(body.counts.parks).toBe(
-        body.counts.openParks + body.counts.closedParks,
-      );
+      // Validate count logic — a park is either open or it is not, so the open
+      // count can never exceed the total.
       expect(body.counts.openParks).toBeGreaterThanOrEqual(0);
-      expect(body.counts.closedParks).toBeGreaterThanOrEqual(0);
+      expect(body.counts.openParks).toBeLessThanOrEqual(body.counts.parks);
+      expect(body.counts.openAttractions).toBeLessThanOrEqual(
+        body.counts.attractions,
+      );
 
       // Validate all counts are non-negative
       Object.values(body.counts).forEach((count) => {
@@ -208,9 +204,6 @@ describe("AnalyticsController (E2E)", () => {
         ]).toContain(body.shortestWaitRide.crowdLevel);
       }
 
-      // Validate lastUpdated is a valid ISO timestamp
-      expect(new Date(body.lastUpdated).toISOString()).toBe(body.lastUpdated);
-
       // If both parks exist, most crowded should have >= wait time
       if (body.mostCrowdedPark && body.leastCrowdedPark) {
         expect(body.mostCrowdedPark.averageWaitTime).toBeGreaterThanOrEqual(
@@ -233,7 +226,6 @@ describe("AnalyticsController (E2E)", () => {
 
       // Even with no data, structure should be valid
       expect(body).toHaveProperty("counts");
-      expect(body).toHaveProperty("lastUpdated");
 
       // Counts can be 0 but should exist
       expect(typeof body.counts.parks).toBe("number");

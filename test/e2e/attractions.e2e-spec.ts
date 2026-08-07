@@ -8,11 +8,21 @@ import { ParksModule } from "../../src/parks/parks.module";
 import { QueueDataModule } from "../../src/queue-data/queue-data.module";
 import { AnalyticsModule } from "../../src/analytics/analytics.module";
 import { MLModule } from "../../src/ml/ml.module";
+import { RedisModule, REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { getDatabaseConfig } from "../../src/config/database.config";
-import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
+import { seedMinimalTestData } from "../helpers/seed-test-data";
+import type { Redis } from "ioredis";
 
-describe("AttractionsController (E2E)", () => {
+/**
+ * Attractions are served under the park's geographic path — there is no flat
+ * /v1/attractions collection. The fixture parks live at
+ * north-america/united-states/orlando.
+ */
+describe("Park attractions (E2E)", () => {
   let app: INestApplication;
+  let redis: Redis;
+
+  const GEO = "/v1/parks/north-america/united-states/orlando";
 
   beforeAll(async () => {
     const dbConfig = getDatabaseConfig();
@@ -34,6 +44,7 @@ describe("AttractionsController (E2E)", () => {
           synchronize: true,
           logging: false,
         }),
+        RedisModule,
         AttractionsModule,
         ParksModule,
         QueueDataModule,
@@ -57,86 +68,98 @@ describe("AttractionsController (E2E)", () => {
     app.setGlobalPrefix("v1");
 
     await app.init();
+
+    redis = app.get(REDIS_CLIENT);
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  afterEach(async () => {
-    // Clean data after each test
-    await clearTestData(app);
+  // The shared setup truncates every table after each test, so each one seeds its
+  // own data. The responses are cached for five minutes, so the cache has to go
+  // with them or a test reads the previous test's park.
+  beforeEach(async () => {
+    await redis.flushdb();
   });
 
-  describe("GET /v1/attractions", () => {
-    it("should return empty array when no attractions exist", () => {
-      return request(app.getHttpServer())
-        .get("/v1/attractions")
-        .expect(200)
-        .expect([]);
+  describe(`GET ${GEO}/:parkSlug/attractions`, () => {
+    it("returns every attraction of the park with its pagination envelope", async () => {
+      const { parks } = await seedMinimalTestData(app);
+      const park = parks[0];
+
+      const { body } = await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions`)
+        .expect(200);
+
+      expect(body.data).toHaveLength(5);
+      expect(body.pagination).toMatchObject({
+        page: 1,
+        total: 5,
+        totalPages: 1,
+        hasNext: false,
+        hasPrevious: false,
+      });
+      expect(body.data[0]).toHaveProperty("id");
+      expect(body.data[0]).toHaveProperty("name");
+      expect(body.data[0]).toHaveProperty("slug");
     });
 
-    it("should return all attractions when attractions exist", async () => {
-      // Seed test data
+    it("scopes the list to the park in the path", async () => {
+      const { parks } = await seedMinimalTestData(app);
+
+      const [first, second] = await Promise.all([
+        request(app.getHttpServer())
+          .get(`${GEO}/${parks[0].slug}/attractions`)
+          .expect(200),
+        request(app.getHttpServer())
+          .get(`${GEO}/${parks[1].slug}/attractions`)
+          .expect(200),
+      ]);
+
+      const firstSlugs = first.body.data.map((a: { slug: string }) => a.slug);
+      const secondSlugs = second.body.data.map((a: { slug: string }) => a.slug);
+
+      expect(firstSlugs).toHaveLength(5);
+      expect(secondSlugs).toHaveLength(5);
+      expect(firstSlugs.filter((s: string) => secondSlugs.includes(s))).toEqual(
+        [],
+      );
+    });
+
+    it("404s for a park that does not exist", async () => {
       await seedMinimalTestData(app);
 
-      const response = await request(app.getHttpServer())
-        .get("/v1/attractions")
-        .expect(200);
-
-      expect(response.body).toHaveLength(10); // 2 parks * 5 attractions each
-      expect(response.body[0]).toHaveProperty("id");
-      expect(response.body[0]).toHaveProperty("name");
-      expect(response.body[0]).toHaveProperty("slug");
-      expect(response.body[0]).toHaveProperty("park");
-      expect(response.body[0].park).toHaveProperty("id");
-      expect(response.body[0].name).toContain("Test");
-    });
-
-    it("should filter attractions by park", async () => {
-      // Seed test data
-      const { parks } = await seedMinimalTestData(app);
-      const firstPark = parks[0];
-
-      const response = await request(app.getHttpServer())
-        .get(`/v1/attractions?park=${firstPark.slug}`)
-        .expect(200);
-
-      expect(response.body).toHaveLength(5);
-      response.body.forEach((attraction: any) => {
-        expect(attraction.park.id).toBe(firstPark.id);
-      });
+      await request(app.getHttpServer())
+        .get(`${GEO}/no-such-park/attractions`)
+        .expect(404);
     });
   });
 
-  describe("GET /v1/attractions/:slug", () => {
-    it("should return 404 when attraction does not exist", () => {
-      return request(app.getHttpServer())
-        .get("/v1/attractions/non-existent-attraction")
-        .expect(404);
-    });
+  describe(`GET ${GEO}/:parkSlug/attractions/:attractionSlug`, () => {
+    it("returns the attraction with its statistics block", async () => {
+      const { parks, attractions } = await seedMinimalTestData(app);
+      const park = parks[0];
+      const attraction = attractions.find((a) => a.parkId === park.id)!;
 
-    it("should return attraction by slug", async () => {
-      // Seed test data
-      const { attractions } = await seedMinimalTestData(app);
-      const testAttraction = attractions[0];
-
-      const response = await request(app.getHttpServer())
-        .get(`/v1/attractions/${testAttraction.slug}`)
+      const { body } = await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions/${attraction.slug}`)
         .expect(200);
 
-      expect(response.body).toHaveProperty("id", testAttraction.id);
-      expect(response.body).toHaveProperty("name", testAttraction.name);
-      expect(response.body).toHaveProperty("slug", testAttraction.slug);
-      expect(response.body).toHaveProperty("park");
-      expect(response.body.park.id).toBe(testAttraction.parkId);
+      expect(body).toMatchObject({
+        id: attraction.id,
+        name: attraction.name,
+        slug: attraction.slug,
+      });
+      expect(body).toHaveProperty("statistics");
+    });
 
-      // Check that statistics and prediction accuracy exist (always present)
-      expect(response.body).toHaveProperty("statistics");
-      expect(response.body).toHaveProperty("predictionAccuracy");
+    it("404s for an attraction that does not exist", async () => {
+      const { parks } = await seedMinimalTestData(app);
 
-      // Note: queues, forecasts, and predictions are only included if data exists
-      // Since test fixtures don't have queue data, these fields won't be present
+      await request(app.getHttpServer())
+        .get(`${GEO}/${parks[0].slug}/attractions/non-existent-attraction`)
+        .expect(404);
     });
   });
 });

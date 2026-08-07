@@ -8,9 +8,26 @@ import { ParksModule } from "../../src/parks/parks.module";
 import { AttractionsModule } from "../../src/attractions/attractions.module";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
+import { SearchService } from "../../src/search/search.service";
+import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
+import type { Redis } from "ioredis";
 
 describe("SearchController (E2E)", () => {
   let app: INestApplication;
+  let searchService: SearchService;
+  let redis: Redis;
+
+  /**
+   * Search answers from an in-process index built at module init — i.e. against the
+   * still-empty database — and caches every response in Redis. Seeding alone leaves
+   * it searching a snapshot of a database that no longer exists.
+   */
+  async function seedAndIndex() {
+    const seeded = await seedMinimalTestData(app);
+    await redis.flushdb();
+    await searchService.refreshSearchIndex();
+    return seeded;
+  }
 
   beforeAll(async () => {
     const dbConfig = getDatabaseConfig();
@@ -53,6 +70,9 @@ describe("SearchController (E2E)", () => {
     app.setGlobalPrefix("v1");
 
     await app.init();
+
+    searchService = moduleFixture.get<SearchService>(SearchService);
+    redis = moduleFixture.get<Redis>(REDIS_CLIENT);
   });
 
   afterAll(async () => {
@@ -71,7 +91,7 @@ describe("SearchController (E2E)", () => {
 
     it("should return empty results when no matches found", async () => {
       // Seed test data
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       const response = await request(app.getHttpServer())
         .get("/v1/search?q=nonexistent")
@@ -86,7 +106,7 @@ describe("SearchController (E2E)", () => {
 
     it("should find parks by name", async () => {
       // Seed test data (contains "Test Magic Kingdom" and "Test EPCOT")
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       const response = await request(app.getHttpServer())
         .get("/v1/search?q=magic")
@@ -105,7 +125,7 @@ describe("SearchController (E2E)", () => {
 
     it("should find attractions by name", async () => {
       // Seed test data (contains "Test Space Mountain", etc.)
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       const response = await request(app.getHttpServer())
         .get("/v1/search?q=space")
@@ -124,7 +144,7 @@ describe("SearchController (E2E)", () => {
 
     it("should filter by type", async () => {
       // Seed test data
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       const response = await request(app.getHttpServer())
         .get("/v1/search?q=test&type=park")
@@ -140,7 +160,7 @@ describe("SearchController (E2E)", () => {
 
     it("should respect limit parameter", async () => {
       // Seed test data
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       const response = await request(app.getHttpServer())
         .get("/v1/search?q=test&limit=2")
@@ -157,7 +177,7 @@ describe("SearchController (E2E)", () => {
 
     it("should perform fuzzy matching", async () => {
       // Seed test data (contains "Test Magic Kingdom")
-      await seedMinimalTestData(app);
+      await seedAndIndex();
 
       // Try searching with a typo
       const response = await request(app.getHttpServer())
