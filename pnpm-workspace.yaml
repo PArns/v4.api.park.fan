@@ -21,6 +21,10 @@ overrides:
   # Only the prod 4.x instance (via @nestjs/swagger); the 3.14.2 instance is
   # dev-only (jest/eslint) and needs the 3.x API, so leave it untouched.
   js-yaml@>=4.0.0 <4.1.2: '>=4.1.2'
+  # Exponential parsing DoS in flow collections (GHSA-pm4m-ph32-ghv5); 5.x
+  # consumers (@nestjs/swagger prod, cosmiconfig dev) take the patch bump.
+  js-yaml@>=5.0.0 <5.2.2: '>=5.2.2'
+  cosmiconfig>js-yaml: '>=5.2.2'
   minimatch@<3.1.4: 3.1.4
   minimatch@>=9.0.0 <9.0.7: 9.0.7
   minimatch@>=10.0.0 <10.2.3: 10.2.3
@@ -33,4 +37,5 @@ overrides:
   glob: '>=11.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
-  brace-expansion: '>=5.0.6'
+  # Unbounded-expansion DoS / OOM crash (GHSA-mh99-v99m-4gvg); patched in 5.0.8.
+  brace-expansion: '>=5.0.8'
