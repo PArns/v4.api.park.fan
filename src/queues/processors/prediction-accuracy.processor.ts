@@ -115,11 +115,7 @@ export class PredictionAccuracyProcessor {
 
           // Calculate badge
           let badge:
-            | "excellent"
-            | "good"
-            | "fair"
-            | "poor"
-            | "insufficient_data";
+            "excellent" | "good" | "fair" | "poor" | "insufficient_data";
           let message: string | null = null;
 
           if (comparedPredictions < 10) {

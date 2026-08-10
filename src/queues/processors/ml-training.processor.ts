@@ -168,8 +168,7 @@ export class MLTrainingProcessor {
 
       // Store feature distribution stats for drift detection
       const rawFeatureStats = modelInfo.featureStats as
-        | Array<Record<string, unknown>>
-        | undefined;
+        Array<Record<string, unknown>> | undefined;
       if (rawFeatureStats && rawFeatureStats.length > 0) {
         try {
           await this.featureDriftService.storeFeatureStats(

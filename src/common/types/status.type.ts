@@ -23,7 +23,4 @@ export type ParkStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
  * - REFURBISHMENT: Attraction is under maintenance/renovation
  */
 export type AttractionStatus =
-  | "OPERATING"
-  | "CLOSED"
-  | "DOWN"
-  | "REFURBISHMENT";
+  "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT";
