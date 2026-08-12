@@ -6,6 +6,38 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a dead schedule feed no longer keeps a running park closed
+
+Energylandia was `OPERATING` on its own park page and `CLOSED` everywhere it was
+listed: the country page, the card overlay behind `/v1/discovery/continents/*`,
+`/v1/discovery/nearby`, and `/v1/analytics/geo-live`, which left Poland out of the
+world map's open counts entirely. The park was open — 45 rides reporting, Ø 45 min,
+occupancy 217.
+
+Its schedule sync stopped on 2026-07-24. Everything after that is an `UNKNOWN` row
+with no times, which by this API's own contract means "we don't know", not "closed".
+
+`isParkOpen()` handled that correctly because nobody hands it a park's whole history
+— `ParkIntegrationService` gives it the next 16 days, `getBatchParkStatus` today and
+yesterday — so its "there is a schedule, trust it and ignore the rides" branch means
+"hours were published for the days in question". Both SQL re-implementations asked
+instead whether the park had **ever** published hours. That is true forever once it
+has been true once, so a park whose feed went silent kept a schedule branch it could
+no longer satisfy and could never fall back to its live rides again.
+
+The gate is now "did the schedule publish something decisive for today" — an
+`OPERATING` or `CLOSED` row, park-level, dated within a day of now to cover every
+timezone. `UNKNOWN` no longer silences the ride fallback, while a park that is
+genuinely shut still says so with its `CLOSED` row. Shared as
+`scheduleRowSpeaksForToday` so the two queries cannot drift apart again.
+
+Two smaller holes in the same queries: neither excluded attraction-level schedule
+rows, so one ride publishing its own hours could report the whole park open; and
+`parks_with_schedule` matched only `OPERATING` rows, so a park with nothing but
+`CLOSED` rows took the ride fallback and a frozen feed could open it.
+
+Of 213 parks exactly one was affected at the time of the fix.
+
 ### Fixed — the name you typed outranks the park that happens to be open
 
 Searching `flyer` put *Blue Flyer* (Blackpool Pleasure Beach, open at the time)

@@ -24,6 +24,90 @@ import {
 } from "./dto/geo-structure.dto";
 import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
+import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
+
+/**
+ * Open/closed plus the wait-time aggregates for every park, in one query.
+ *
+ * Mirrors `isParkOpen()` (common/utils/status-calculator.util):
+ *   1. `parks_with_schedule` — the park's feed made a statement about today
+ *      (`OPERATING` or `CLOSED`, park-level, dated within a day of now). Then the
+ *      schedule decides, and only `park_schedules` (a window covering NOW()) opens it.
+ *   2. Otherwise the live rides decide, because nothing published covers today.
+ *
+ * Both CTEs used to match on `scheduleType = 'OPERATING'` across the park's whole
+ * history, which turned step 1 into "has the park ever published hours" — a park
+ * whose feed died stayed closed forever. See `schedule-window.sql` for the full story.
+ *
+ * Exported so the spec can assert both CTEs stay windowed; the query takes no
+ * parameters, so there is nothing to interpolate at call time.
+ */
+export const LIVE_STATS_SQL = `
+      WITH park_schedules AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE s."scheduleType" = 'OPERATING'
+          AND s."attractionId" IS NULL
+          AND s."openingTime" <= NOW()
+          AND s."closingTime" > NOW()
+      ),
+      parks_with_schedule AS (
+        SELECT DISTINCT s."parkId"
+        FROM schedule_entries s
+        WHERE ${scheduleRowSpeaksForToday("s")}
+      ),
+      latest_attraction_data AS (
+        SELECT
+          a.id as "attractionId",
+          a."parkId",
+          qd."waitTime",
+          qd."status"
+        FROM attractions a
+        JOIN LATERAL (
+          SELECT "waitTime", "status"
+          FROM queue_data qd
+          WHERE qd."attractionId" = a.id
+            AND qd.timestamp > NOW() - INTERVAL '30 minutes'
+          ORDER BY
+            CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
+            qd.timestamp DESC
+          LIMIT 1
+        ) qd ON true
+      ),
+      park_stats AS (
+        SELECT
+          lad."parkId",
+          COUNT(*) FILTER (
+            WHERE lad.status = 'OPERATING'
+              AND lad."waitTime" > 0
+          ) as active_rides,
+          AVG(lad."waitTime") as avg_wait,
+          -- Only count attractions with status OPERATING (includes those with waitTime=0)
+          -- This matches the actual operational state from recent data
+          COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
+          COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
+        FROM latest_attraction_data lad
+        GROUP BY lad."parkId"
+      )
+      SELECT
+        p.id,
+        CASE
+          -- Schedule speaks for today: it alone decides
+          WHEN pws."parkId" IS NOT NULL THEN
+            CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END
+          -- Nothing published for today: ride-based fallback
+          ELSE
+            CASE WHEN COALESCE(stats.active_rides, 0) > 0 THEN true ELSE false END
+        END as is_open,
+        COALESCE(stats.avg_wait, 0) as avg_wait,
+        COALESCE(stats.operating_count, 0) as operating_conf_count,
+        COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
+        (SELECT COUNT(*)::int FROM attractions a WHERE a."parkId" = p.id) as total_attractions
+      FROM parks p
+      LEFT JOIN park_schedules ps ON ps."parkId" = p.id
+      LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
+      LEFT JOIN park_stats stats ON stats."parkId" = p.id
+    `;
 
 /** Live per-park stats shared by the geo structure and country summaries. */
 interface ParkLiveStats {
@@ -507,75 +591,8 @@ export class DiscoveryService {
 
     this.logger.log("Fetching live park statistics");
 
-    // ONE performant query for all parks
-    // Implements same hybrid logic as central utility:
-    // - Primary: Schedule-based (if schedule exists)
-    // - Fallback: Ride-based (for parks without schedules, using recent data)
-    const result = await this.parkRepository.query(`
-      WITH park_schedules AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-          AND s."openingTime" <= NOW()
-          AND s."closingTime" > NOW()
-      ),
-      parks_with_schedule AS (
-        SELECT DISTINCT s."parkId"
-        FROM schedule_entries s
-        WHERE s."scheduleType" = 'OPERATING'
-      ),
-      latest_attraction_data AS (
-        SELECT 
-          a.id as "attractionId",
-          a."parkId",
-          qd."waitTime",
-          qd."status"
-        FROM attractions a
-        JOIN LATERAL (
-          SELECT "waitTime", "status"
-          FROM queue_data qd
-          WHERE qd."attractionId" = a.id
-            AND qd.timestamp > NOW() - INTERVAL '30 minutes'
-          ORDER BY 
-            CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
-            qd.timestamp DESC
-          LIMIT 1
-        ) qd ON true
-      ),
-      park_stats AS (
-        SELECT 
-          lad."parkId",
-          COUNT(*) FILTER (
-            WHERE lad.status = 'OPERATING' 
-              AND lad."waitTime" > 0
-          ) as active_rides,
-          AVG(lad."waitTime") as avg_wait,
-          -- Only count attractions with status OPERATING (includes those with waitTime=0)
-          -- This matches the actual operational state from recent data
-          COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
-          COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
-        FROM latest_attraction_data lad
-        GROUP BY lad."parkId"
-      )
-      SELECT
-        p.id,
-        CASE
-          -- If park has schedule: Use schedule-based logic
-          WHEN pws."parkId" IS NOT NULL THEN
-            CASE WHEN ps."parkId" IS NOT NULL THEN true ELSE false END
-          -- If park has NO schedule: Use ride-based fallback
-          ELSE
-            CASE WHEN COALESCE(stats.active_rides, 0) > 0 THEN true ELSE false END
-        END as is_open,
-        COALESCE(stats.avg_wait, 0) as avg_wait,
-        COALESCE(stats.operating_count, 0) as operating_conf_count,
-        COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
-        (SELECT COUNT(*)::int FROM attractions a WHERE a."parkId" = p.id) as total_attractions
-      FROM parks p
-      LEFT JOIN park_schedules ps ON ps."parkId" = p.id
-      LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
-      LEFT JOIN park_stats stats ON stats."parkId" = p.id
-    `);
+    // ONE query for all parks — see LIVE_STATS_SQL for the open/closed rule.
+    const result = await this.parkRepository.query(LIVE_STATS_SQL);
 
     const stats = new Map<string, ParkLiveStats>();
     for (const row of result) {

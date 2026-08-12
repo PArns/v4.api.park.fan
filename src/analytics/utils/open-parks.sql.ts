@@ -1,3 +1,5 @@
+import { scheduleRowSpeaksForToday } from "../../common/utils/schedule-window.sql";
+
 /**
  * SINGLE SOURCE OF TRUTH for "which parks are open right now" in the analytics
  * queries — the SQL counterpart of `isParkOpen()` (common/utils/status-calculator.util).
@@ -8,8 +10,22 @@
  *
  * Two ways in, mirroring `isParkOpen()`:
  *   1. schedule_open_parks — the park publishes an OPERATING schedule covering now.
- *   2. ride_open_parks     — the fallback for parks with NO schedule integration,
- *                            decided from live ride data alone.
+ *   2. ride_open_parks     — the fallback for parks whose schedule published nothing
+ *                            for today, decided from live ride data alone.
+ *
+ * ## Why the fallback gate is a window, not "ever"
+ *
+ * It used to read `NOT EXISTS (… scheduleType = 'OPERATING')` with no date bound, so
+ * the fallback was reserved for parks that had *never* published hours. A park whose
+ * feed went silent kept the schedule branch it could no longer satisfy and was
+ * counted closed indefinitely — Energylandia, whose hours stop on 2026-07-24, dropped
+ * Poland out of `geo-live` entirely while its rides ran at Ø 45 min. The gate now asks
+ * whether hours were published *for today*; `scheduleRowSpeaksForToday` carries the
+ * window and the reasoning.
+ *
+ * The parks this newly admits still have to clear the freshness, queue-share and
+ * movement tests below, so the measurements in the next section stand: a dead
+ * schedule feed buys a park a fair hearing, not an open badge.
  *
  * ## Why the ride fallback needs a movement test
  *
@@ -88,14 +104,15 @@ export const OPEN_PARKS_CTES = `
         SELECT DISTINCT s."parkId"
         FROM schedule_entries s
         WHERE s."scheduleType" = 'OPERATING'
+          AND s."attractionId" IS NULL
           AND s."openingTime" <= NOW()
           AND s."closingTime" > NOW()
       ),
       ride_open_parks AS (
-        -- Parks with no schedule integration, judged open from live ride data.
-        -- Scans ${MOVEMENT_WINDOW} so the movement test has history to compare against;
-        -- the sample-count and queue-share tests stay on the ${FRESHNESS_WINDOW} window
-        -- via FILTER.
+        -- Parks whose schedule published no hours for today, judged open from live
+        -- ride data. Scans ${MOVEMENT_WINDOW} so the movement test has history to compare
+        -- against; the sample-count and queue-share tests stay on the ${FRESHNESS_WINDOW}
+        -- window via FILTER.
         SELECT a."parkId"
         FROM attractions a
         JOIN queue_data qd ON qd."attractionId" = a.id
@@ -103,11 +120,13 @@ export const OPEN_PARKS_CTES = `
           AND qd."waitTime" IS NOT NULL
         WHERE NOT EXISTS (
           SELECT 1 FROM schedule_entries se
-          WHERE se."parkId" = a."parkId" AND se."scheduleType" = 'OPERATING'
+          WHERE se."parkId" = a."parkId"
+            AND ${scheduleRowSpeaksForToday("se", ["OPERATING"])}
         )
         AND NOT EXISTS (
           SELECT 1 FROM schedule_entries se
           WHERE se."parkId" = a."parkId"
+            AND se."attractionId" IS NULL
             AND se."scheduleType" = 'CLOSED'
             AND se.date = CURRENT_DATE
         )

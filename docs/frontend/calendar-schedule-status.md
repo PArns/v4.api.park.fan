@@ -33,6 +33,13 @@ Found in the `meta` object of the calendar response and the park detail response
 ## Important Rules
 
 - **UNKNOWN ≠ closed.** UNKNOWN means we don’t have official hours, but the park could be open. **Always show crowd predictions** for UNKNOWN days if they are available.
+- **The same rule governs the live `status` in listings.** A park whose schedule
+  publishes only UNKNOWN rows for today is judged from its live ride feed, not called
+  closed — so `/v1/discovery/continents/*`, `/v1/discovery/nearby` and
+  `/v1/analytics/geo-live` agree with the park detail response. A `CLOSED` row for
+  today still wins over the ride feed. Note that `hasOperatingSchedule` keeps its
+  wider meaning below (*has this park ever published hours*), so it is not a signal
+  about today.
 - **CLOSED = no predictions.** When a park is closed, the API suppresses ML predictions to prevent "ghost" wait times.
 - **Disclaimer**: If `hasOperatingSchedule` is `false`, the park page should show a disclaimer: *"Official hours are not available for this park. Data is estimated based on attraction activity."*
 
