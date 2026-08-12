@@ -18,9 +18,11 @@ overrides:
   multer: '>=2.2.0'
   serialize-javascript: '>=7.0.3'
   form-data: '>=4.0.6'
-  # Only the prod 4.x instance (via @nestjs/swagger); the 3.14.2 instance is
-  # dev-only (jest/eslint) and needs the 3.x API, so leave it untouched.
-  js-yaml@>=4.0.0 <4.1.2: '>=4.1.2'
+  # js-yaml ships in two lines here: the 5.x instance is prod (via
+  # @nestjs/swagger, GHSA-pm4m-ph32-ghv5) and the 3.x instance is dev-only
+  # (jest, GHSA-5p4m-2wfm-xmqj) and needs the 3.x API, so patch each in place.
+  js-yaml@>=5.0.0 <5.2.2: '>=5.2.2'
+  js-yaml@>=3.0.0 <3.15.1: '>=3.15.1 <4.0.0'
   minimatch@<3.1.4: 3.1.4
   minimatch@>=9.0.0 <9.0.7: 9.0.7
   minimatch@>=10.0.0 <10.2.3: 10.2.3
@@ -33,4 +35,7 @@ overrides:
   glob: '>=11.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
-  brace-expansion: '>=5.0.6'
+  brace-expansion: '>=5.0.9'
+  # dev-only chains: undici via @testcontainers, fast-uri via @nestjs/cli
+  undici: '>=8.9.0'
+  fast-uri: '>=3.1.5'

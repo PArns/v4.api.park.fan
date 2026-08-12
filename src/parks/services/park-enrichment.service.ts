@@ -419,10 +419,7 @@ export class ParkEnrichmentService {
               holidayMap.set(dateStr, {
                 name: h.localName || h.name,
                 type: holidayType as
-                  | "public"
-                  | "school"
-                  | "observance"
-                  | "bank",
+                  "public" | "school" | "observance" | "bank",
               });
             }
           }

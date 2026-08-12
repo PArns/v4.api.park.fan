@@ -12,9 +12,7 @@ import {
  * - historical_fallback: no usable data today, falling back to the typical peak.
  */
 export type PeakHourSource =
-  | "prediction"
-  | "observed_today"
-  | "historical_fallback";
+  "prediction" | "observed_today" | "historical_fallback";
 
 export const PEAK_HOUR_SOURCE_ENUM = [
   "prediction",
