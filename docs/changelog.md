@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — an API catalog at `/.well-known/api-catalog` (RFC 9727)
+
+`GET /.well-known/api-catalog` returns a linkset (RFC 9264) naming this API's OpenAPI
+description (`/api-json`), its documentation (`/api`) and its health endpoint
+(`/v1/health`), served as `application/linkset+json` with the RFC 9727 profile. A HEAD
+answers with the `api-catalog` link relation, as §2 requires, and the docs page at `/`
+carries the same `Link` header so a crawler that lands there is one hop from the
+machine-readable version.
+
+Like `robots.txt`, the path only works while it stays in `setGlobalPrefix`'s exclude
+list — a catalog that quietly moved to `/v1/.well-known/api-catalog` is a path no agent
+ever asks for, so `app.controller.spec.ts` guards it.
+
+park.fan publishes the same catalog. Both hosts serve it because a well-known URI is
+asked of whichever host the client already has, and something pointed at an api.park.fan
+endpoint has no reason to check the content site first.
+
 ### Fixed — a dead schedule feed no longer keeps a running park closed
 
 Energylandia was `OPERATING` on its own park page and `CLOSED` everywhere it was

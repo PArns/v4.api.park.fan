@@ -165,10 +165,10 @@ async function bootstrap(): Promise<void> {
     });
   }
 
-  // API versioning prefix (exclude root controller — docs page and robots.txt,
-  // both of which must stay at the host root to be found)
+  // API versioning prefix (exclude root controller — docs page, robots.txt and the
+  // RFC 9727 API catalog, all of which must stay at the host root to be found)
   app.setGlobalPrefix("v1", {
-    exclude: ["/", "/robots.txt"],
+    exclude: ["/", "/robots.txt", "/.well-known/api-catalog"],
   });
 
   // Swagger/OpenAPI Documentation

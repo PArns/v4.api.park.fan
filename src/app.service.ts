@@ -3,6 +3,22 @@ import { marked } from "marked";
 import { readFileSync } from "fs";
 import { join } from "path";
 
+interface CatalogLink {
+  href: string;
+  type: string;
+  title: string;
+}
+
+/** RFC 9264 Linkset, narrowed to what an RFC 9727 API catalog carries. */
+export interface ApiCatalog {
+  linkset: {
+    anchor: string;
+    "service-desc": CatalogLink[];
+    "service-doc": CatalogLink[];
+    status: CatalogLink[];
+  }[];
+}
+
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
@@ -45,6 +61,52 @@ export class AppService {
    */
   getRobotsTxt(): string {
     return ["User-agent: *", "Disallow: /v1/", "Disallow: /api", ""].join("\n");
+  }
+
+  /**
+   * The API catalog served at /.well-known/api-catalog (RFC 9727) — one document telling an
+   * agent where the OpenAPI description is, so nobody has to hand it the URL.
+   *
+   * park.fan serves the same catalog, and this host serves it as well because a well-known
+   * URI is asked of whichever host the client already has. Something pointed at an
+   * api.park.fan endpoint has no reason to go looking at the content site first.
+   *
+   * Linkset (RFC 9264) with the RFC 8631 relations: `service-desc` is the OpenAPI JSON,
+   * `service-doc` the Swagger UI, `status` the health probe. Absolute URLs because both
+   * Swagger routes sit outside the /v1 prefix, so a reader cannot resolve them against the
+   * anchor.
+   */
+  getApiCatalog(): ApiCatalog {
+    const origin = "https://api.park.fan";
+
+    return {
+      linkset: [
+        {
+          anchor: `${origin}/v1`,
+          "service-desc": [
+            {
+              href: `${origin}/api-json`,
+              type: "application/json",
+              title: "OpenAPI description of the park.fan API",
+            },
+          ],
+          "service-doc": [
+            {
+              href: `${origin}/api`,
+              type: "text/html",
+              title: "park.fan API reference",
+            },
+          ],
+          status: [
+            {
+              href: `${origin}/v1/health`,
+              type: "application/json",
+              title: "park.fan API health",
+            },
+          ],
+        },
+      ],
+    };
   }
 
   /**
