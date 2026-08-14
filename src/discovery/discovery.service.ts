@@ -25,6 +25,8 @@ import {
 import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
 import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
+import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
 
 /**
  * Open/closed plus the wait-time aggregates for every park, in one query.
@@ -324,6 +326,9 @@ export class DiscoveryService {
         url: parkBaseUrl,
         timezone: park.timezone,
         hasOperatingSchedule: scheduleFlags.get(park.id) ?? false,
+        liveWaitTimes: buildLiveWaitTimes(
+          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+        ),
         // Coordinates so listing clients can show "X km away" without a per-park
         // lookup. `decimal` columns come back as strings from the driver — coerce.
         latitude: toCoordinate(park.latitude),

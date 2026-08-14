@@ -33,6 +33,8 @@ import {
   RestaurantWithDistanceDto,
 } from "./dto/favorites-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
+import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
 import {
   calculateHaversineDistance,
   GeoCoordinate,
@@ -503,6 +505,7 @@ export class FavoritesService {
           city: park.city || null,
           country: park.country || null,
           status: integrated.status || "CLOSED",
+          liveWaitTimes: integrated.liveWaitTimes,
           totalAttractions:
             integrated.analytics?.statistics?.totalAttractions || 0,
           operatingAttractions:
@@ -545,6 +548,9 @@ export class FavoritesService {
         city: park.city || null,
         country: park.country || null,
         status: fb?.status || "CLOSED",
+        liveWaitTimes: buildLiveWaitTimes(
+          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+        ),
         totalAttractions: fb?.totalAttractions || 0,
         operatingAttractions: fb?.operatingAttractions || 0,
         analytics: fb?.analytics,
@@ -708,7 +714,16 @@ export class FavoritesService {
         // `fromEntity` seeds a "CLOSED" placeholder (attractions carry no
         // status column) — the live queue is the only source of truth.
         dto.status = standby?.status ?? dto.queues[0]?.status ?? "CLOSED";
-        dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
+        // Whether this ride's park publishes wait times we can read at all. With
+        // no source the placeholder above is never overwritten, so an open park
+        // would list every favourite as CLOSED on the strength of a default.
+        const waitTimesReadable = dto.park?.liveWaitTimes.available ?? true;
+        dto.effectiveStatus =
+          parkStatus === "CLOSED"
+            ? "CLOSED"
+            : waitTimesReadable
+              ? dto.status
+              : "UNKNOWN";
 
         const p50 = p50Map.get(attraction.id) || 0;
         const parkRatable = attraction.parkId
@@ -717,14 +732,16 @@ export class FavoritesService {
         dto.crowdLevel =
           dto.effectiveStatus === "CLOSED"
             ? "closed"
-            : standby?.status === "OPERATING" && standby.waitTime != null
-              ? !parkRatable
-                ? "unknown"
-                : p50 > 0
-                  ? this.analyticsService.getLoadRating(standby.waitTime, p50)
-                      .rating
-                  : null
-              : null;
+            : !waitTimesReadable
+              ? "unknown"
+              : standby?.status === "OPERATING" && standby.waitTime != null
+                ? !parkRatable
+                  ? "unknown"
+                  : p50 > 0
+                    ? this.analyticsService.getLoadRating(standby.waitTime, p50)
+                        .rating
+                    : null
+                : null;
         const history = sparklinesMap.get(attraction.id) || [];
         dto.statistics = {
           avgWaitToday: null,
@@ -740,7 +757,7 @@ export class FavoritesService {
         };
         // Best visit time from the ML model: today's hourly predictions for THIS ride,
         // capped at the park's closing time. Predictions come from the per-park bulk call.
-        if (attraction.parkId && attraction.park) {
+        if (waitTimesReadable && attraction.parkId && attraction.park) {
           const tz = attraction.park.timezone || "UTC";
           const todayStr = getCurrentDateInTimezone(tz);
           const todayAttrPreds = (
@@ -846,6 +863,9 @@ export class FavoritesService {
               continent: integrated.park.continent,
               country: integrated.park.country,
               city: integrated.park.city,
+              // Kept, not stripped: a favourited ride in a park we cannot read
+              // would otherwise render its absent wait time as a walk-on.
+              liveWaitTimes: integrated.park.liveWaitTimes,
             }
           : null,
         statistics: integrated.statistics,

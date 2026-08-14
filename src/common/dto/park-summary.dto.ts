@@ -1,4 +1,9 @@
 import { Park } from "../../parks/entities/park.entity";
+import {
+  LiveWaitTimesDto,
+  buildLiveWaitTimes,
+} from "../../parks/dto/live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
 
 /**
  * Compact parent-park block embedded in attraction/show/restaurant
@@ -25,6 +30,16 @@ export interface ParkSummaryDto {
    * which was already here) next to the attraction payload it fetches anyway.
    */
   status?: "OPERATING" | "CLOSED";
+
+  /**
+   * Whether the parent park's wait times are readable at all.
+   *
+   * Not optional and not filled in later, because unlike {@link status} it is a property of the
+   * park row rather than of the live snapshot — the mapper can always answer it. A ride page
+   * needs it for the same reason the park page does: with no source, "no wait time" reads as a
+   * walk-on instead of as an absence, and the ride's own forecast has nothing behind it.
+   */
+  liveWaitTimes: LiveWaitTimesDto;
 }
 
 export function mapParkSummary(
@@ -39,5 +54,8 @@ export function mapParkSummary(
     continent: park.continent || null,
     country: park.country || null,
     city: park.city || null,
+    liveWaitTimes: buildLiveWaitTimes(
+      getNoLiveWaitTimesReason(park.citySlug, park.slug),
+    ),
   };
 }

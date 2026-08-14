@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { LiveWaitTimesDto } from "../../parks/dto/live-wait-times.dto";
 
 /**
  * Park with distance DTO
@@ -45,6 +46,15 @@ export class ParkWithDistanceDto {
     example: true,
   })
   hasOperatingSchedule: boolean;
+
+  @ApiProperty({
+    description:
+      "Whether this park's wait times are readable at all. When false, " +
+      "`operatingAttractions` and every number under `analytics` are an " +
+      "aggregate over nothing rather than a quiet park.",
+    type: LiveWaitTimesDto,
+  })
+  liveWaitTimes: LiveWaitTimesDto;
 
   @ApiProperty({
     description: "Total number of attractions",

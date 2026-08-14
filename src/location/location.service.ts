@@ -29,6 +29,8 @@ import {
   NearbyParkInfoDto,
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
+import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import {
   formatTodaySchedule,
@@ -510,6 +512,7 @@ export class LocationService {
           country: park.country || null,
           status: integrated.status || "CLOSED",
           hasOperatingSchedule: integrated.hasOperatingSchedule ?? false,
+          liveWaitTimes: integrated.liveWaitTimes,
           totalAttractions:
             integrated.analytics?.statistics?.totalAttractions || 0,
           operatingAttractions:
@@ -553,6 +556,9 @@ export class LocationService {
         country: park.country || null,
         status: statusMap.get(park.id) || "CLOSED",
         hasOperatingSchedule: operatingScheduleMap.get(park.id) || false,
+        liveWaitTimes: buildLiveWaitTimes(
+          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+        ),
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,
         analytics: occupancy

@@ -14,6 +14,8 @@ import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
+import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -481,6 +483,15 @@ export class ParkWithAttractionsDto {
   hasOperatingSchedule: boolean;
 
   @ApiProperty({
+    description:
+      "Whether this park's wait times are readable at all. Check it before " +
+      "rendering wait times, operating counts or a crowd level — for a park " +
+      "with no source those all collapse to zero.",
+    type: LiveWaitTimesDto,
+  })
+  liveWaitTimes: LiveWaitTimesDto;
+
+  @ApiProperty({
     description: "Current operating status",
     enum: ["OPERATING", "CLOSED"],
     required: false,
@@ -604,6 +615,12 @@ export class ParkWithAttractionsDto {
       continent: park.continent || null,
       timezone: park.timezone,
       hasOperatingSchedule: false, // Default, overwritten by service
+      // Derived from the entity, not from live data: whether a source exists is
+      // a property of the park, and it must be right even on the paths that
+      // never reach ParkIntegrationService.
+      liveWaitTimes: buildLiveWaitTimes(
+        getNoLiveWaitTimesReason(park.citySlug, park.slug),
+      ),
       status: "CLOSED", // Default to ensure order
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,

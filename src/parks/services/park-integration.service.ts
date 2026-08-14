@@ -207,6 +207,15 @@ export class ParkIntegrationService {
 
     dto.hasOperatingSchedule = parkHasOperatingSchedule;
 
+    // Whether this park publishes wait times anywhere we can read (curated, see
+    // parks/data/live-wait-time-sources.ts). `fromEntity` has already put the
+    // answer on the response; what follows uses it to keep the live surfaces
+    // from filling the gap with values nothing supports. Everything derived
+    // from a wait time — ride status, crowd level, best visit times, the ML
+    // forecast — is unknowable here, and this API's rule is to say `unknown`
+    // rather than emit a placeholder tier.
+    const waitTimesReadable = dto.liveWaitTimes.available;
+
     const currentEntity = weatherData.current;
     const weatherNow =
       currentEntity?.temperatureCurrent != null
@@ -585,14 +594,21 @@ export class ParkIntegrationService {
           // Fallback if no live data found
           attraction.queues = [];
 
-          // Optimistic Fallback:
-          // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
-          // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
-          // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
-          if (dto.status === "OPERATING") {
+          if (dto.status !== "OPERATING") {
+            attraction.status = "CLOSED";
+          } else if (waitTimesReadable) {
+            // Optimistic Fallback:
+            // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
+            // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
+            // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
             attraction.status = "OPERATING";
           } else {
-            attraction.status = "CLOSED";
+            // The optimistic fallback reads an absent ride as a live feed that
+            // dropped one row. For a park with no readable source there is no
+            // feed to drop rows: every ride is absent, always, and asserting
+            // all 82 are running on the strength of the schedule alone is a
+            // claim about the park nobody made. UNKNOWN is the honest answer.
+            attraction.status = "UNKNOWN";
           }
         }
 
@@ -623,6 +639,12 @@ export class ParkIntegrationService {
 
         if (attraction.effectiveStatus === "CLOSED") {
           crowdLevel = "closed";
+        } else if (!waitTimesReadable) {
+          // No source → no wait → nothing to rate against the baseline. Without
+          // this the chain below falls through both branches to the last-resort
+          // default and rates every ride in the park `very_low`, which reads as
+          // "walk on, no queues" on the busiest Saturday of the year.
+          crowdLevel = "unknown";
         } else {
           // Find current hour prediction
           // predictedTime from ML is stored as UTC. So we match with current UTC hour.
@@ -793,7 +815,10 @@ export class ParkIntegrationService {
         const storedPreds = storedPredictionsMap.get(attraction.id) ?? [];
         const predsForBestVisit =
           storedPreds.length > 0 ? storedPreds : mlPreds;
-        if (predsForBestVisit.length > 0) {
+        // Withheld for an unreadable park for the same reason a closed park gets
+        // no predictions: the model has never seen a wait time from here, so
+        // "come at 16:00, it's quieter" is a recommendation with nothing under it.
+        if (waitTimesReadable && predsForBestVisit.length > 0) {
           // Substitute actual live wait for current slot to avoid predicting a
           // spike-masked slot as "best time".
           const currentActualWait = attraction.queues?.[0]?.waitTime;
@@ -1127,6 +1152,27 @@ export class ParkIntegrationService {
           percentiles: undefined,
         };
       }
+    }
+
+    // A park with no readable source contributes no wait times to any of the
+    // aggregates above, so each of them is the shape a division by an empty set
+    // takes rather than a reading: Ø 0 min, peak 0 min, and — because the closed
+    // branch hard-codes it and the live branch has nothing to rate — `very_low`
+    // crowds, on a park that may be at capacity. The counts survive (the
+    // catalog is real, and 0 operating is true: none is *known* to run), the
+    // wait-derived claims do not.
+    if (dto.analytics && !waitTimesReadable) {
+      dto.analytics.statistics = {
+        ...dto.analytics.statistics,
+        crowdLevel: "unknown",
+        peakHour: null,
+        peakHourLocal: null,
+        peakHourConfidence: 0,
+        peakHourSource: null,
+      };
+      // `percentiles` is a distribution over observed waits — of which there are
+      // none — and the frontend renders it as a "typical day" chart.
+      dto.analytics.percentiles = undefined;
     }
 
     // Enrich schedule with holiday data (covers weekends that might be missing in scraped data)

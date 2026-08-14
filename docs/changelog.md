@@ -6,6 +6,50 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — a park we cannot read says so, instead of reading as empty
+
+Hansa-Park serves wait times from its own app, only to devices on the park's
+WLAN. There is no public endpoint, so the API has never held a single wait time
+for it — `/stats` has stood at `totalSampleDays: 0` since ingestion began — while
+the catalog carries all 82 attractions and the schedule feed works fine.
+
+Nothing in the response said so, and the live surfaces filled the gap. During
+opening hours the park read `OPERATING` with **82 of 82 rides operating**, every
+one of them at `crowdLevel: very_low`, Ø 0 min, peak 0 min. That is the optimistic
+ride fallback doing its job on a park it was never meant for: it exists so a feed
+that drops a row does not report "park open, all rides closed", and it assumes a
+missing ride is running. Here every ride is missing, always — so it asserted the
+whole park was up, quiet and walk-on, on the strength of the schedule alone. The
+ride pages went further and served an ML forecast (10 min at 67 % confidence, every
+slot of every day) built from zero observations of this park.
+
+A client cannot tell that apart from a park shut for the night: at 03:00 local
+every park in the catalog has zero rides operating and an empty `queues` array.
+The difference is knowledge about where a park publishes, which existed nowhere
+in the data. It is now curated in `parks/data/live-wait-time-sources.ts` (keyed
+by `citySlug` + `parkSlug`, each entry carrying the evidence that put it there)
+and published as `liveWaitTimes` on the park detail, the attraction detail's
+embedded park, the discovery cards, nearby and favorites:
+
+```ts
+liveWaitTimes: { available: false, reason: "in_park_app_only" }
+```
+
+`available: false` is a statement about the source, not about right now — a park
+whose feed went silent this morning stays `true`, since that is what the
+staleness and movement rules already handle.
+
+Everything the API derives from a wait time now follows the house rule and emits
+`unknown` rather than a placeholder: the optimistic fallback is skipped so rides
+read `UNKNOWN` instead of `OPERATING`, ride and park crowd levels read `unknown`
+instead of `very_low`, `peakHour*` and `percentiles` are dropped, and
+`hourlyForecast` / `bestVisitTimes` are withheld the same way they are for a
+closed park. A `CLOSED` park still closes its rides — that comes from the
+schedule, which we can read, and is a fact rather than a gap.
+
+Of 213 parks exactly one is on the list. Frontend contract:
+[Parks whose wait times we cannot read](frontend/live-wait-times-availability.md).
+
 ### Fixed — a dead schedule feed no longer keeps a running park closed
 
 Energylandia was `OPERATING` on its own park page and `CLOSED` everywhere it was
