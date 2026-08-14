@@ -699,6 +699,61 @@ describe("AttractionIntegrationService", () => {
       expect(result.comparison).toBeNull();
     });
 
+    it("ignores a contentless CLOSED row from the park's own feed", async () => {
+      // Hansa-Park's upstream does publish a row per attraction — permanently CLOSED,
+      // never carrying a minute. Keying the treatment off "no queue row" let that read
+      // as an observation, and the park went from "82 of 82 running" to "82 of 82
+      // closed" at 12:58 on an open summer Friday. A row that has only ever said
+      // CLOSED is not a statement about whether the ride is running.
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([
+        {
+          queueType: "STANDBY",
+          status: "CLOSED",
+          waitTime: null,
+          state: null,
+          returnStart: null,
+          returnEnd: null,
+          price: null,
+          allocationStatus: null,
+          currentGroupStart: null,
+          currentGroupEnd: null,
+          estimatedWait: null,
+          lastUpdated: new Date(),
+          timestamp: new Date(),
+        },
+      ]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue(unreadablePark);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([]);
+      mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
+        avgWaitToday: 0,
+        peakWaitToday: 0,
+        minWaitToday: 0,
+        typicalWaitThisHour: null,
+        percentile95ThisHour: null,
+        currentVsTypical: null,
+        dataPoints: 0,
+        timestamp: new Date(),
+      });
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+
+      const result =
+        await service.buildIntegratedResponse(rideInUnreadablePark);
+
+      expect(result.effectiveStatus).toBe("UNKNOWN");
+      expect(result.crowdLevel).toBe("unknown");
+      // The row is dropped, so nothing downstream can read its 0 as a walk-on.
+      expect(result.queues).toEqual([]);
+    });
+
     it("still closes the ride when the park itself is closed", async () => {
       // Closed comes from the schedule, which we *can* read — that is a fact
       // about the park, not a gap, so it must survive the unknown treatment.

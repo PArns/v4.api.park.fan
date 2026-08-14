@@ -571,7 +571,19 @@ export class ParkIntegrationService {
         // Get current queue data for this attraction from the bulk result
         const queueData = queueDataMap.get(attraction.id) || [];
 
-        if (queueData.length > 0) {
+        if (!waitTimesReadable) {
+          // A park we cannot read has no informative ride feed — but that is not the
+          // same as having no feed at all. Hansa-Park's upstream publishes a row for
+          // every one of its 82 attractions, permanently CLOSED and never carrying a
+          // wait time, which is why keying this off "no queue row" was not enough: at
+          // 12:58 on an open summer Friday the park read 82 of 82 closed. A row that
+          // has only ever said CLOSED and never a minute is not an observation about
+          // whether the ride is running. The rows are dropped and the ride reads
+          // UNKNOWN; the park's own CLOSED (from the schedule, which we CAN read)
+          // still closes everything below.
+          attraction.queues = [];
+          attraction.status = dto.status === "OPERATING" ? "UNKNOWN" : "CLOSED";
+        } else if (queueData.length > 0) {
           // Convert to DTOs (removed timestamp field)
           attraction.queues = queueData.map((qd) => ({
             queueType: qd.queueType,
@@ -594,22 +606,12 @@ export class ParkIntegrationService {
           // Fallback if no live data found
           attraction.queues = [];
 
-          if (dto.status !== "OPERATING") {
-            attraction.status = "CLOSED";
-          } else if (waitTimesReadable) {
-            // Optimistic Fallback:
-            // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
-            // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
-            // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
-            attraction.status = "OPERATING";
-          } else {
-            // The optimistic fallback reads an absent ride as a live feed that
-            // dropped one row. For a park with no readable source there is no
-            // feed to drop rows: every ride is absent, always, and asserting
-            // all 82 are running on the strength of the schedule alone is a
-            // claim about the park nobody made. UNKNOWN is the honest answer.
-            attraction.status = "UNKNOWN";
-          }
+          // Optimistic Fallback:
+          // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
+          // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
+          // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
+          attraction.status =
+            dto.status === "OPERATING" ? "OPERATING" : "CLOSED";
         }
 
         // Calculate Effective Status

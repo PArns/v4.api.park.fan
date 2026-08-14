@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a feed that only ever says CLOSED is not an observation either
+
+The first cut of the unreadable-park treatment keyed off _"no queue row exists"_, on the
+assumption that a park we cannot read publishes nothing at all. Hansa-Park does publish:
+its upstream carries a row for every one of its 82 attractions, permanently `CLOSED` and
+never once carrying a wait time. Whether those rows are present varies through the day —
+at 08:00 UTC 80 of 82 were absent, by 11:00 all 82 were there — so the park went from
+"82 of 82 running at `very_low`" to **"82 of 82 closed"** at 12:58 on an open summer
+Friday, which is the same fabrication wearing the opposite sign.
+
+A row that has only ever said `CLOSED` and never a minute says nothing about whether the
+ride is running. For a park on the curated list the rows are now dropped and the ride
+reads `UNKNOWN` whenever the park itself is open — the park's own `CLOSED`, which comes
+from the schedule and _is_ readable, still closes everything below it. Applied on all
+three surfaces that build ride status (park payload, attraction detail, favorites), so a
+client cannot read a `waitTime: 0` off a row that means "no data" rather than "walk on".
+
 ### Added — a park we cannot read says so, instead of reading as empty
 
 Hansa-Park serves wait times from its own app, only to devices on the park's
@@ -84,7 +101,7 @@ Of 213 parks exactly one was affected at the time of the fix.
 
 ### Fixed — the name you typed outranks the park that happens to be open
 
-Searching `flyer` put *Blue Flyer* (Blackpool Pleasure Beach, open at the time)
+Searching `flyer` put _Blue Flyer_ (Blackpool Pleasure Beach, open at the time)
 above the ride actually called **Flyer** (Knoebels, closed). Results are ordered
 OPERATING-first so people see what they can ride now, and that rule was beating
 the match itself.
@@ -96,7 +113,7 @@ narrow — prefix and substring hits stay subject to OPERATING-first, so a query
 that names no single thing still prefers an open park.
 
 The frontend scored matches on raw strings and had the same blind spot, which is
-why `fly` listed *Sky Fly* above F.L.Y. on park.fan even though the API returned
+why `fly` listed _Sky Fly_ above F.L.Y. on park.fan even though the API returned
 F.L.Y. first — fixed separately in park.fan#277.
 
 ### Fixed — search can reach a park through the town it stands in
@@ -161,10 +178,10 @@ closing and a 2 h window drops the last hours of the day.
 Replaying the rule hourly over 7 days against production, in park-hours judged open
 per local hour of day:
 
-| local hour | 00 | 02 | 04 | 06 | 08 | 10 | 12 | 14 | 16 | 18 | 20 | 22 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| before | 21 | 22 | 20 | 20 | 20 | 18 | 49 | 60 | 60 | 55 | 40 | 23 |
-| after | 1 | 0 | 0 | 1 | 2 | 4 | 41 | 53 | 50 | 43 | 27 | 4 |
+| local hour | 00  | 02  | 04  | 06  | 08  | 10  | 12  | 14  | 16  | 18  | 20  | 22  |
+| ---------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| before     | 21  | 22  | 20  | 20  | 20  | 18  | 49  | 60  | 60  | 55  | 40  | 23  |
+| after      | 1   | 0   | 0   | 1   | 2   | 4   | 41  | 53  | 50  | 43  | 27  | 4   |
 
 Before, the count sits flat at ~20 through the whole night — that is the bug. After,
 the night empties and what remains is an opening-hours curve peaking at 14:00–16:00
@@ -205,7 +222,7 @@ named a source none of their numbers came from and linked to `/undefined`.
 - **`stats.attribution`** — `{ label, url }`, or **null when every surviving
   number is hand-curated**. Null is the whole rule: render it when it is there,
   show nothing when it is not, and the citation cannot come out wrong. It is
-  also null when a ride *has* an entity but the curation outvoted it on every
+  also null when a ride _has_ an entity but the curation outvoted it on every
   field, because naming a source none of the displayed values came from is a
   false citation either way.
 - **`source` and `sourceId` stay** — they are provenance, and honest data. They

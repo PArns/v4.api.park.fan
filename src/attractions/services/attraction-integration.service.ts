@@ -291,6 +291,12 @@ export class AttractionIntegrationService {
       ];
     }
 
+    // Drop the queue rows of a park we cannot read. They exist — Hansa-Park's upstream
+    // publishes one per attraction — but each has only ever said CLOSED with no minute
+    // attached, so they carry nothing about whether the ride is running, and a client
+    // reading `waitTime` off one gets a 0 that means "no data", not "walk on".
+    if (!waitTimesReadable) dto.queues = [];
+
     dto.effectiveStatus =
       parkStatus === "CLOSED"
         ? "CLOSED"
