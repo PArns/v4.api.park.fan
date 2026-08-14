@@ -4,6 +4,8 @@ import { buildParkUrl } from "../../common/utils/url.util";
 import { WeatherItemDto } from "./weather-item.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
+import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
 
 /**
  * Park Response DTO
@@ -74,6 +76,15 @@ export class ParkResponseDto {
     example: true,
   })
   hasOperatingSchedule: boolean;
+
+  @ApiProperty({
+    description:
+      "Whether this park's wait times are readable at all. Check it before " +
+      "rendering wait times, operating counts or a crowd level — for a park " +
+      "with no source those all collapse to zero.",
+    type: LiveWaitTimesDto,
+  })
+  liveWaitTimes: LiveWaitTimesDto;
 
   @ApiProperty({
     description: "Current operating status",
@@ -174,6 +185,11 @@ export class ParkResponseDto {
       longitude: park.longitude !== undefined ? park.longitude : null,
       timezone: park.timezone,
       hasOperatingSchedule: false, // Default, overwritten by services
+      // Derived from the entity, not from live data: whether a source exists is
+      // a property of the park, so every path that builds this DTO gets it right.
+      liveWaitTimes: buildLiveWaitTimes(
+        getNoLiveWaitTimesReason(park.citySlug, park.slug),
+      ),
       status: "CLOSED", // Default, overwritten by service
     };
   }

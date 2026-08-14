@@ -1,5 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
+import { LiveWaitTimesDto } from "../../parks/dto/live-wait-times.dto";
 
 /**
  * Park Reference DTO
@@ -64,6 +65,15 @@ export class ParkReferenceDto {
     example: true,
   })
   hasOperatingSchedule: boolean;
+
+  @ApiProperty({
+    description:
+      "Whether this park's wait times are readable at all. When false, the " +
+      "`analytics` block below is an aggregate over nothing — a card rendering " +
+      "its average, operating count or crowd level must say so instead.",
+    type: LiveWaitTimesDto,
+  })
+  liveWaitTimes: LiveWaitTimesDto;
 
   @ApiProperty({
     description: "Live park analytics",

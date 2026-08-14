@@ -596,4 +596,199 @@ describe("AttractionIntegrationService", () => {
       expect(result.predictionAccuracy).toBeNull();
     });
   });
+
+  describe("a park whose wait times we cannot read", () => {
+    // Hansa-Park: the ride list, the schedule and the weather all arrive
+    // normally, only the wait times do not exist for us. Everything the ride
+    // page derives from a wait therefore has to say "unknown" rather than
+    // borrow the shape of a quiet ride.
+    const unreadablePark = {
+      id: "park-hansa",
+      name: "Hansa-Park",
+      slug: "hansa-park",
+      citySlug: "sierksdorf",
+      continentSlug: "europe",
+      countrySlug: "germany",
+      continent: "Europe",
+      country: "Germany",
+      city: "Sierksdorf",
+      timezone: "Europe/Berlin",
+      countryCode: "DE",
+    };
+
+    const rideInUnreadablePark = createTestAttraction("park-hansa", {
+      id: "attraction-hansa-carousel",
+      name: "HANSA Carousel",
+      slug: "hansa-carousel",
+      park: unreadablePark as never,
+    });
+
+    /** The park is open per its schedule; no queue row exists, and none ever will. */
+    const buildWithParkOpen = async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue(unreadablePark);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockAnalyticsService.getEffectiveStartTime.mockResolvedValue(
+        new Date("2026-08-14T00:00:00Z"),
+      );
+      // Zeroes, because that is what an aggregate over no rows returns here —
+      // not a null, which the service would log as a failed fetch.
+      mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
+        avgWaitToday: 0,
+        peakWaitToday: 0,
+        minWaitToday: 0,
+        typicalWaitThisHour: null,
+        percentile95ThisHour: null,
+        currentVsTypical: null,
+        dataPoints: 0,
+        timestamp: new Date(),
+      });
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+      // The model still emits rows for these rides — it fills gaps from
+      // schedule/weather/calendar features without ever having seen a wait.
+      mockMLService.isHealthy.mockResolvedValue(true);
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([
+        {
+          predictedTime: "2026-08-14T14:00:00Z",
+          predictedWaitTime: 10,
+          confidence: 0.677,
+          crowdLevel: "very_low",
+          baseline: 0,
+          trend: "increasing",
+          modelVersion: "v1.0.0",
+        },
+      ]);
+      return service.buildIntegratedResponse(rideInUnreadablePark);
+    };
+
+    it("marks the parent park's wait times unavailable, with the reason", async () => {
+      const result = await buildWithParkOpen();
+
+      expect(result.park?.liveWaitTimes).toEqual({
+        available: false,
+        reason: "in_park_app_only",
+      });
+    });
+
+    it("reads UNKNOWN, not OPERATING, while the park is open", async () => {
+      const result = await buildWithParkOpen();
+
+      expect(result.effectiveStatus).toBe("UNKNOWN");
+    });
+
+    it("withholds the ML forecast it has no observations behind", async () => {
+      const result = await buildWithParkOpen();
+
+      expect(result.hourlyForecast).toEqual([]);
+      expect(result.bestVisitTimes).toBeUndefined();
+    });
+
+    it("rates the crowd level unknown instead of very_low", async () => {
+      const result = await buildWithParkOpen();
+
+      expect(result.crowdLevel).toBe("unknown");
+      expect(result.baseline).toBeNull();
+      expect(result.comparison).toBeNull();
+    });
+
+    it("still closes the ride when the park itself is closed", async () => {
+      // Closed comes from the schedule, which we *can* read — that is a fact
+      // about the park, not a gap, so it must survive the unknown treatment.
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue(unreadablePark);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "CLOSED"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([]);
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+
+      const result =
+        await service.buildIntegratedResponse(rideInUnreadablePark);
+
+      expect(result.effectiveStatus).toBe("CLOSED");
+      expect(result.crowdLevel).toBe("closed");
+    });
+
+    it("leaves a park with a readable source untouched", async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([
+        {
+          queueType: "STANDBY",
+          status: "OPERATING",
+          waitTime: 25,
+          state: null,
+          returnStart: null,
+          returnEnd: null,
+          price: null,
+          allocationStatus: null,
+          currentGroupStart: null,
+          currentGroupEnd: null,
+          estimatedWait: null,
+          lastUpdated: new Date(),
+          timestamp: new Date(),
+        },
+      ]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      const readablePark = { ...unreadablePark, slug: "europa-park" };
+      mockParkRepository.findOne.mockResolvedValue(readablePark);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
+        avgWaitToday: 25,
+        peakWaitToday: 40,
+        minWaitToday: 10,
+        typicalWaitThisHour: 22,
+        percentile95ThisHour: 38,
+        currentVsTypical: 3,
+        dataPoints: 60,
+        timestamp: new Date(),
+      });
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([
+        {
+          predictedTime: "2026-08-14T14:00:00Z",
+          predictedWaitTime: 30,
+          confidence: 0.9,
+          crowdLevel: "moderate",
+          baseline: 25,
+          trend: "stable",
+          modelVersion: "v1.0.0",
+        },
+      ]);
+
+      const result = await service.buildIntegratedResponse(
+        createTestAttraction("park-hansa", {
+          id: "attraction-readable",
+          slug: "some-ride",
+          park: readablePark as never,
+        }),
+      );
+
+      expect(result.park?.liveWaitTimes).toEqual({
+        available: true,
+        reason: null,
+      });
+      expect(result.effectiveStatus).toBe("OPERATING");
+      expect(result.hourlyForecast).toHaveLength(1);
+    });
+  });
 });

@@ -261,6 +261,13 @@ export class AttractionIntegrationService {
       dto.park.status = parkStatus;
     }
 
+    // Whether the parent park's wait times are readable at all — set by
+    // mapParkSummary off the park row. A ride in a park with no source has no
+    // wait, no rating and nothing to forecast from, and the branches below say
+    // so instead of filling the gap. (Defaults to readable when the embedded
+    // park is missing: the same conservative direction as the lookup itself.)
+    const waitTimesReadable = dto.park?.liveWaitTimes.available ?? true;
+
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
     // reported CLOSED by the source. Override to OPERATING with 0 min wait.
     if (attraction.openWithPark && parkStatus === "OPERATING") {
@@ -284,7 +291,15 @@ export class AttractionIntegrationService {
       ];
     }
 
-    dto.effectiveStatus = parkStatus === "CLOSED" ? "CLOSED" : dto.status;
+    dto.effectiveStatus =
+      parkStatus === "CLOSED"
+        ? "CLOSED"
+        : waitTimesReadable
+          ? dto.status
+          : // Park open, no readable source: the stored status is a leftover
+            // default, not an observation. Matches the park page, which puts
+            // every ride of such a park on UNKNOWN rather than guessing.
+            "UNKNOWN";
 
     // --- Forecasts ---
     if (forecasts.length > 0) {
@@ -305,8 +320,13 @@ export class AttractionIntegrationService {
       baseline: p.baseline,
       trend: p.trend || "stable",
     }));
+    // Withheld when the park's wait times are unreadable. The model still emits
+    // rows for these rides — it fills gaps from schedule, weather and calendar
+    // features — but it has never been shown a wait time from this park, so the
+    // forecast is the prior, not a prediction. Hansa-Park's carousel was served
+    // "10 min, 67% confidence" for every slot of every day on zero observations.
     dto.hourlyForecast =
-      mlPredictionsRaw.length > 0
+      waitTimesReadable && mlPredictionsRaw.length > 0
         ? enrichedPredictions.map((p) => ({
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
@@ -331,6 +351,10 @@ export class AttractionIntegrationService {
     let crowdLevel: CrowdLevel | "closed" | null = null;
     if (dto.effectiveStatus === "CLOSED") {
       crowdLevel = "closed";
+      dto.baseline = null;
+      dto.comparison = null;
+    } else if (!waitTimesReadable) {
+      crowdLevel = "unknown";
       dto.baseline = null;
       dto.comparison = null;
     } else if (!parkRatable) {
@@ -537,7 +561,9 @@ export class AttractionIntegrationService {
         // --- Best visit times (today only, including current active 15-min slot) ---
         // Uses today's closing time from schedule so recommendations don't exceed operating hours.
         // Cached with the integrated response (expires at the next 5-min boundary).
-        if (mlPredictionsRaw.length > 0) {
+        // Skipped for an unreadable park, same as hourlyForecast above: the
+        // predictions these rank are a prior over a park nobody has measured.
+        if (waitTimesReadable && mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);
 
