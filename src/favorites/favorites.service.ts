@@ -718,6 +718,10 @@ export class FavoritesService {
         // no source the placeholder above is never overwritten, so an open park
         // would list every favourite as CLOSED on the strength of a default.
         const waitTimesReadable = dto.park?.liveWaitTimes.available ?? true;
+        // Same as the park and ride payloads: the rows such a park does publish have
+        // only ever said CLOSED with no minute attached, so they say nothing about
+        // whether the ride is running.
+        if (!waitTimesReadable) dto.queues = [];
         dto.effectiveStatus =
           parkStatus === "CLOSED"
             ? "CLOSED"

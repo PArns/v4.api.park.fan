@@ -19,17 +19,17 @@ So the API says which is which.
 
 ```ts
 {
-  available: boolean;                              // false → no readable source
+  available: boolean; // false → no readable source
   reason: "in_park_app_only" | "not_published" | null;
 }
 ```
 
-| Where | Field |
-| ----- | ----- |
-| `GET /v1/parks/{continent}/{country}/{city}/{park}` | `liveWaitTimes` |
-| `GET /v1/parks/…/attractions/{attraction}` | `park.liveWaitTimes` |
-| `GET /v1/discovery/continents/*` (park cards) | `liveWaitTimes` per park |
-| `GET /v1/discovery/nearby`, `/v1/favorites/*` | `liveWaitTimes` per park |
+| Where                                               | Field                    |
+| --------------------------------------------------- | ------------------------ |
+| `GET /v1/parks/{continent}/{country}/{city}/{park}` | `liveWaitTimes`          |
+| `GET /v1/parks/…/attractions/{attraction}`          | `park.liveWaitTimes`     |
+| `GET /v1/discovery/continents/*` (park cards)       | `liveWaitTimes` per park |
+| `GET /v1/discovery/nearby`, `/v1/favorites/*`       | `liveWaitTimes` per park |
 
 **`available: false` is permanent, not a freshness signal.** A park whose feed
 went silent this morning stays `true` — that case is handled by the staleness and
@@ -47,26 +47,33 @@ The strings are contract. Renaming one is a breaking change.
 
 Everything derived from a wait time is unknowable for these parks, and this API's
 standing rule is to emit `unknown` rather than a placeholder tier (see
-`claude.md` → *No made-up ratings*). So:
+`claude.md` → _No made-up ratings_). So:
 
-| | Readable park | `available: false` |
-| --- | --- | --- |
-| Ride with no queue row, park open | `OPERATING` (optimistic fallback) | **`UNKNOWN`** |
-| Ride `crowdLevel` | rated against the P50 baseline | **`unknown`** |
-| Park `statistics.crowdLevel` | rated | **`unknown`** |
-| `statistics.peakHour*` | today's peak or a forecast | **`null` / 0** |
-| `analytics.percentiles` | today's distribution | **omitted** |
-| `hourlyForecast`, `bestVisitTimes` | ML predictions | **withheld** |
+|                                    | Readable park                     | `available: false` |
+| ---------------------------------- | --------------------------------- | ------------------ |
+| Ride with no queue row, park open  | `OPERATING` (optimistic fallback) | **`UNKNOWN`**      |
+| Ride `crowdLevel`                  | rated against the P50 baseline    | **`unknown`**      |
+| Park `statistics.crowdLevel`       | rated                             | **`unknown`**      |
+| `statistics.peakHour*`             | today's peak or a forecast        | **`null` / 0**     |
+| `analytics.percentiles`            | today's distribution              | **omitted**        |
+| `hourlyForecast`, `bestVisitTimes` | ML predictions                    | **withheld**       |
 
 The optimistic fallback is the one worth understanding. It exists so a park whose
 feed drops a row does not read "open, all rides closed" — if the park is open and
 a ride is missing, the ride is assumed to be running. For a park with no source
-*every* ride is missing, always, so that fallback would assert all 82 of
-Hansa-Park's attractions are operating on the strength of the schedule alone.
-It is skipped, and the rides read `UNKNOWN`.
+that would assert all 82 of Hansa-Park's attractions are operating on the strength
+of the schedule alone. It is skipped, and the rides read `UNKNOWN`.
+
+**A queue row does not change that.** These parks are not necessarily silent —
+Hansa-Park's upstream publishes a row per attraction, permanently `CLOSED` and never
+carrying a wait time, and how many of those rows are present varies through the day.
+Keying the treatment off "no row exists" therefore flipped the park from "82 running"
+to "82 closed" instead of fixing it. A row that has only ever said `CLOSED` and never
+a minute is not a statement about whether the ride is running, so for a park on the
+list the rows are dropped and `queues` comes back empty.
 
 **A closed park still closes its rides.** `CLOSED` comes from the schedule, which
-we *can* read — that is a fact, not a gap, and it survives untouched. Only the
+we _can_ read — that is a fact, not a gap, and it survives untouched. Only the
 open-park case becomes `UNKNOWN`.
 
 ## What the client still has to do
@@ -75,7 +82,7 @@ The response shape does not change, so a client that ignores the flag renders an
 empty park as a quiet one. Check `liveWaitTimes.available` before showing:
 
 - wait times, or the absence of one as a walk-on
-- "x of y rides open" — the count is honest (none is *known* to run) and reads as
+- "x of y rides open" — the count is honest (none is _known_ to run) and reads as
   a catastrophe
 - any average, peak or crowd badge
 - ride status as "closed"
