@@ -13,6 +13,7 @@ import {
 import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
+import { resolveCuratedFacts } from "../utils/curated-attraction-facts.util";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
@@ -442,6 +443,8 @@ export class AttractionResponseDto {
   rideProfile?: RideProfileDto | null;
 
   static fromEntity(attraction: Attraction): AttractionResponseDto {
+    const curated = resolveCuratedFacts(attraction);
+
     return {
       id: attraction.id,
       name: attraction.name,
@@ -459,10 +462,10 @@ export class AttractionResponseDto {
 
       isSeasonal: attraction.isSeasonal || false,
       seasonMonths: attraction.seasonMonths || null,
-      minimumHeight: attraction.minimumHeight ?? null,
-      minimumHeightUnit: attraction.minimumHeightUnit ?? null,
+      minimumHeight: curated.minimumHeight,
+      minimumHeightUnit: curated.minimumHeightUnit,
       maximumHeight: attraction.maximumHeight ?? null,
-      mayGetWet: attraction.curatedMayGetWet ?? attraction.mayGetWet ?? null,
+      mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
       rcdbId: attraction.rcdbId ?? null,
       isCurrentlyInSeason: (() => {

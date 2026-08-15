@@ -84,6 +84,10 @@ export class Attraction {
   // parks the wiki does not cover (Disney) and simply live in this column —
   // the sync only overwrites them once the wiki publishes a number of its own,
   // which is the intended order: the park's own sign wins.
+  //
+  // This cell belongs to the sync. A correction to a number the wiki already
+  // publishes would be overwritten on the next run, so it goes in
+  // `curated_minimum_height` instead.
   @Column({ name: "minimum_height", type: "int", nullable: true })
   minimumHeight: number | null;
 
@@ -125,6 +129,26 @@ export class Attraction {
    */
   @Column({ name: "curated_may_get_wet", type: "boolean", nullable: true })
   curatedMayGetWet: boolean | null;
+
+  /**
+   * The minimum height, hand-corrected — same two-writers rule as
+   * `curated_may_get_wet`, and for a demonstrated reason.
+   *
+   * Upstream reads the parks' app fields, and those conflate "you must be this
+   * tall" with "below this height you need an adult with you". Phantasialand's
+   * Winni Splash is the worked example: the wiki publishes 100, while the
+   * park's own Nutzungsbedingungen say children under 1.00 m may play *when
+   * accompanied* — no minimum at all. Its neighbour Wavy Battle genuinely
+   * forbids entry below 1.00 m and upstream carries nothing.
+   *
+   * Always centimetres. Null means "nothing to correct"; **0 means "no minimum
+   * height"**, which is not really a sentinel — a 0 cm minimum excludes nobody
+   * — and lets a correction say "upstream's number is wrong and the truth is
+   * none". Resolve it through `resolveCuratedFacts`, never inline, and never
+   * write it from a sync.
+   */
+  @Column({ name: "curated_minimum_height", type: "int", nullable: true })
+  curatedMinimumHeight: number | null;
 
   /**
    * Whether the ride has a single-rider line at all — a static fact about the

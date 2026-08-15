@@ -13,6 +13,7 @@ import {
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
 import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
@@ -638,6 +639,7 @@ export class ParkWithAttractionsDto {
 
       attractions: park.attractions
         ? park.attractions.map((attraction) => {
+            const curated = resolveCuratedFacts(attraction);
             const isSeasonal = attraction.isSeasonal || false;
             const seasonMonths = attraction.seasonMonths || null;
             let isCurrentlyInSeason: boolean | null = null;
@@ -663,11 +665,10 @@ export class ParkWithAttractionsDto {
               isSeasonal,
               seasonMonths,
               isCurrentlyInSeason,
-              minimumHeight: attraction.minimumHeight ?? null,
-              minimumHeightUnit: attraction.minimumHeightUnit ?? null,
+              minimumHeight: curated.minimumHeight,
+              minimumHeightUnit: curated.minimumHeightUnit,
               maximumHeight: attraction.maximumHeight ?? null,
-              mayGetWet:
-                attraction.curatedMayGetWet ?? attraction.mayGetWet ?? null,
+              mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
               rcdbId: attraction.rcdbId ?? null,
               // queue data, forecasts etc will be attached by service
