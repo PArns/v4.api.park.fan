@@ -163,6 +163,22 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     }
   });
 
+  it("clears the flag on retired attractions, which no reset path can reach", async () => {
+    const statements = await runDetectSeasonal();
+
+    // A demolished ride never reports OPERATING, so the recently-operating
+    // reset can never clear it, and excluding it from the candidate searches
+    // only stops it being marked again.
+    const reset = statements.find(
+      (sql) =>
+        /UPDATE attractions/i.test(sql) && /retired_at IS NOT NULL/i.test(sql),
+    );
+
+    expect(reset).toBeDefined();
+    expect(reset).toMatch(/is_seasonal = false/i);
+    expect(reset).toMatch(/season_months = NULL/i);
+  });
+
   it("excludes them from both candidate searches", async () => {
     const statements = await runDetectSeasonal();
 
