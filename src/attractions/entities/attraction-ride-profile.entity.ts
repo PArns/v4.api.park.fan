@@ -27,8 +27,8 @@ export interface RideMeasurements {
  * A ride's measurements as served, with where each number came from.
  *
  * Two writers feed this: the Wikidata import, which is automatic and thin, and
- * the seed, which is hand-curated and states what Wikidata does not. They are
- * stored apart and merged on read — see `mergeRideStats`.
+ * the curation, which is hand-written and states what Wikidata does not. They
+ * are stored apart and merged on read — see `mergeRideStats`.
  */
 export interface RideStats extends RideMeasurements {
   /** "mixed" = some fields curated, some imported. */
@@ -47,13 +47,15 @@ export interface RideStats extends RideMeasurements {
  * rides that feature a term — the link works in both directions off one table.
  *
  * Why a table and not columns on `attractions`: the attraction row is written
- * by the upstream syncs on every poll, this is hand-curated seed data with a
+ * by the upstream syncs on every poll, this is hand-curated data with a
  * completely different lifecycle. Keeping it separate means a sync can never
- * clobber it and the seed can be re-applied independently.
+ * clobber it.
  *
- * Lifecycle: written **only** by `RideProfileSeedService.apply()` from
- * `RIDE_PROFILE_SEED`. There is no upstream feed — updates happen by editing
- * the seed file and re-running the job (`POST /v1/admin/apply-ride-profiles`).
+ * Lifecycle: there is no upstream feed and no seed job — these rows ARE the
+ * source of truth and are edited directly in the database. Nothing in this
+ * codebase writes them, so a deploy can never overwrite the curation. The one
+ * exception is `stats` below, which `RideStatsService` imports from Wikidata
+ * into its own column.
  *
  * The `elements` / `types` arrays are jsonb with GIN indexes so the reverse
  * lookup ("which rides have a zero-g roll") is a single indexed containment
@@ -62,7 +64,7 @@ export interface RideStats extends RideMeasurements {
 @Entity("attraction_ride_profiles")
 @Index("idx_ride_profile_park", ["parkId"])
 // GIN indexes for the reverse (glossary → rides) lookup — created by
-// RideProfileSeedService.onModuleInit(), not TypeORM sync.
+// RideProfileService.onModuleInit(), not TypeORM sync.
 @Index("idx_ride_profile_elements_gin", { synchronize: false })
 @Index("idx_ride_profile_types_gin", { synchronize: false })
 export class AttractionRideProfile {
@@ -134,9 +136,9 @@ export class AttractionRideProfile {
   /**
    * Measured facts imported from Wikidata — speed, height, length, duration.
    *
-   * Written by `RideStatsService`, NOT by the seed. The two writers share this
-   * row on purpose (both answer "what is this ride") and stay out of each
-   * other's way because the seed's `upsert` names only its own columns.
+   * Written by `RideStatsService`, NOT by hand. It shares this row with the
+   * curated columns on purpose (both answer "what is this ride") and stays out
+   * of their way by naming only its own column on write.
    *
    * jsonb rather than four columns: nothing queries these yet, they arrive and
    * change together, and the source is free to start stating one more.
@@ -150,14 +152,15 @@ export class AttractionRideProfile {
 
   /**
    * The same four measurements, hand-curated — and a separate column for the
-   * same reason `stats` is one: two writers, no shared cell. The seed owns
+   * same reason `stats` is one: two writers, no shared cell. The curation owns
    * this, the importer owns `stats`, and neither can undo the other's work.
    *
    * It exists because Wikidata is thin where it matters most: of the coasters
    * we curate it states a top speed for well under a fifth, and misses nearly
    * every headliner people actually search for. These values are assembled the
-   * way the rest of the seed is — from the park's own page, the manufacturer,
-   * and the ride's Wikipedia articles cross-checked against each other.
+   * way the rest of the curation is — from the park's own page, the
+   * manufacturer, and the ride's Wikipedia articles cross-checked against
+   * each other.
    *
    * On read the two are merged field by field with curated winning
    * (`mergeRideStats`), so a hand-checked speed is not displaced by an import
@@ -166,7 +169,7 @@ export class AttractionRideProfile {
   @Column({ name: "curated_stats", type: "jsonb", nullable: true })
   curatedStats: RideMeasurements | null;
 
-  /** When the seed entry was last written, for spotting stale curation. */
+  /** When the curation was last written, for spotting stale rows. */
   @Column({ name: "seeded_at", type: "timestamptz" })
   seededAt: Date;
 

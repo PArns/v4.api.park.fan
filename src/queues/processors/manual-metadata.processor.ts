@@ -5,10 +5,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { ManualMetadataService } from "../../attractions/services/manual-metadata.service";
-import {
-  RideProfileService,
-  TouchedPark,
-} from "../../attractions/services/ride-profile.service";
+import { TouchedPark } from "../../attractions/services/ride-profile.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
@@ -34,7 +31,6 @@ export class ManualMetadataProcessor {
 
   constructor(
     private readonly manualMetadata: ManualMetadataService,
-    private readonly rideProfiles: RideProfileService,
     private readonly revalidationService: RevalidationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("manual-metadata") private readonly queue: Queue,
@@ -46,23 +42,6 @@ export class ManualMetadataProcessor {
     const result = await this.manualMetadata.apply();
 
     if (result.rcdb + result.heights + result.wet > 0) {
-      await this.publish(result.touchedParks);
-    }
-  }
-
-  /**
-   * Writes the curated ride profiles — the ride ↔ glossary link.
-   *
-   * Shares this queue with the metadata seed because it has the same shape:
-   * checked-in data, pure database work, and worth being able to re-run the
-   * moment the seed file changes.
-   */
-  @Process("apply-ride-profiles")
-  async handleApplyRideProfiles(_job: Job): Promise<void> {
-    this.logger.log("🎢 Applying curated ride profiles...");
-    const result = await this.rideProfiles.apply();
-
-    if (result.written > 0) {
       await this.publish(result.touchedParks);
     }
   }

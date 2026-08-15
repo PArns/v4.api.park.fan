@@ -6,6 +6,60 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the curated ride profiles now live in the database, not in a seed file
+
+`RIDE_PROFILE_SEED` and its apply job are gone: the 11,409-line seed file, its
+spec, the exported term-id allowlist, `RideProfileService.apply()`, the
+`apply-ride-profiles` queue handler and `POST /v1/admin/apply-ride-profiles`.
+The `attraction_ride_profiles` rows are the source of truth now and are edited
+directly. `RideProfileService` keeps every read path, and `RideStatsService`
+still writes the Wikidata `stats` column — a different writer for a different
+column, as before.
+
+What that trades away is written down in
+[the ride ↔ glossary guide](frontend/ride-glossary-link.md): term ids are no
+longer validated against the frontend's list, a direct write does not evict
+`park:integrated` or ping the frontend to revalidate, and the invariants the
+spec used to enforce are now SQL you run by hand. The guide carries those
+queries.
+
+### Fixed — 45 curated rides had silently stopped being written, and ten carried the wrong ride
+
+The seed job skips entries whose slugs match no attraction, deliberately, so
+one stale line cannot fail a run. The cost showed up when four parks were
+renamed upstream — `toverland`, `disney-magic-kingdom`,
+`disney-hollywood-studios` and `disney-animal-kingdom` — and 45 curated rides
+across them stopped matching. Their rows stayed in the database, frozen at
+whatever the last successful run wrote. `MANUAL_ATTRACTION_METADATA` is keyed
+the same way and had lost 33 entries the same way: 23 to those renames and ten
+to `-2` ride slugs that vanished when duplicate attractions were merged.
+
+Then the profiles themselves. Five B&M floorless coasters carried a
+byte-identical element list while publishing 7, 7, 7, 5 and 7 inversions — the
+copy-paste pattern that had already produced wrong SLC and Boomerang entries.
+Checked one at a time against their own RCDB ids: Dominator does not run the
+Medusa layout at all (no dive loop, no zero-g roll), Rougarou is still the 1996
+Mantis track and has four inversions rather than five with an inclined loop
+rather than a zero-g roll, Vallejo's Medusa has the first sea serpent roll B&M
+ever built rather than a cobra roll, Kraken has a second vertical loop and a
+flat spin that were missing, and Medusa (Jackson), Scream and Batman: The Dark
+Knight were each short the second of two interlocking corkscrews. Hydra opens
+with a jojo roll and has no cutback, Hair Raiser's fourth inversion is an
+Immelmann and not a corkscrew, and Storm Runner has a cobra loop and a flying
+snake dive rather than an Immelmann, a cobra roll and a corkscrew.
+
+Those last three figures had no glossary term, so cobra loop, jojo roll and
+flying snake dive were added to the frontend glossary in all six languages.
+
+### Added — profiles for the twenty rides that had an RCDB id and no entry
+
+Each checked against its own id rather than the ride it shares a name with,
+which is how the two `THE FLASH: Vertical Velocity` entries turned out to be an
+Intamin impulse from 2001 and a Vekoma Super Boomerang from 2025, and Fiesta
+Texas's `BATMAN The Ride` an S&S 4D Free Spin rather than the B&M invert the
+name promises everywhere else. Where no source states the element order, none
+is recorded.
+
 ### Fixed — a feed that only ever says CLOSED is not an observation either
 
 The first cut of the unreadable-park treatment keyed off _"no queue row exists"_, on the
