@@ -23,6 +23,24 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
+- [ ] **Drei doppelte RCDB-IDs sind doppelte PARKS, nicht falsche IDs.**
+      Dieselbe Bahn liegt jeweils unter zwei Park-Datensaetzen:
+      `europa-park` + `traumatica` (das Halloween-Event desselben Parks, gleicher
+      citySlug `rust`, 12 Attraktionen als Kopie) bei RCDB 971 und 3403, und
+      `universal-studios-florida` (ThemeParks.wiki) + `universal-studios-at-
+      universal-orlando` (**Queue-Times**, `externalId` `qt-park-65`) bei
+      RCDB 3866. Letzteres ist der bekannte Cross-Source-Duplikat-Fall: 18 Parks
+      im Bestand haben eine `qt-`-externalId, und mindestens dieser eine
+      beschreibt einen Park, den es unter der Wiki-ID schon gibt.
+      **Vorsicht:** einige Ride-Profile haengen an der Queue-Times-Kopie (u. a.
+      `revenge-of-the-mummy`), ein Merge muesste die mitnehmen. Park-Merge
+      blockiert laut Erfahrung an den FKs auf attraction_p50/p90.
+- [ ] **`curated_may_get_wet` beweist sich erst beim naechsten Detail-Sync.**
+      Aktuell stimmt sie ueberall mit `may_get_wet` ueberein, weil der geloeschte
+      Seed seine Werte dort schon hineingeschrieben hatte. Die Divergenz — und
+      damit der Beweis, dass die Korrekturschicht greift — entsteht erst, wenn
+      der Sync Gentings Shot Tower wieder auf `true` setzt. Danach einmal
+      pruefen, dass die Ride-Seite weiterhin `false` ausliefert.
 - [x] **Runde 5 erledigt — der Cluster-Sweep ueber benannte Inversionen ist
       sauber.** Alle Listen, die eine benannte Inversion enthalten, werden jetzt
       nur noch von Rides geteilt, die auch dieselbe Inversionszahl melden. Was
