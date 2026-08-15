@@ -39,6 +39,7 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
+import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -600,6 +601,15 @@ export class ParkIntegrationService {
           // still closes everything below.
           attraction.queues = [];
           attraction.status = dto.status === "OPERATING" ? "UNKNOWN" : "CLOSED";
+        } else if (readsUnknownFromAbsentSource(queueData, dto.status)) {
+          // Every reading here was written by reverse-reconciliation, which
+          // stamps CLOSED on anything no source has mentioned for 24h. That is
+          // our bookkeeping, not the operator's word: ThemeParks.wiki dropped
+          // 44 Europa-Park attractions from its live feed on 2026-06-07 and the
+          // park page called them closed for the next ten weeks, in August.
+          // Say we do not know, and drop the rows that only carry our guess.
+          attraction.queues = [];
+          attraction.status = "UNKNOWN";
         } else if (queueData.length > 0) {
           // Convert to DTOs (removed timestamp field)
           attraction.queues = queueData.map((qd) => ({

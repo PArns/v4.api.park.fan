@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { readsUnknownFromAbsentSource } from "../common/utils/source-absent-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -691,14 +692,13 @@ export class FavoritesService {
         // Free-flow attractions (playgrounds, water play areas) have no queue
         // and are reported CLOSED by the source — same override the integrated
         // path applies, so a cache miss doesn't flip the card's status.
-        if (
-          isFreeFlowOpen({
-            openWithPark: attraction.openWithPark,
-            parkStatus,
-            seasonMonths: attraction.seasonMonths,
-            parkTimezone: attraction.park?.timezone,
-          })
-        ) {
+        const freeFlowOpen = isFreeFlowOpen({
+          openWithPark: attraction.openWithPark,
+          parkStatus,
+          seasonMonths: attraction.seasonMonths,
+          parkTimezone: attraction.park?.timezone,
+        });
+        if (freeFlowOpen) {
           dto.queues = freeFlowQueues();
         }
 
@@ -706,6 +706,26 @@ export class FavoritesService {
         // `fromEntity` seeds a "CLOSED" placeholder (attractions carry no
         // status column) — the live queue is the only source of truth.
         dto.status = standby?.status ?? dto.queues[0]?.status ?? "CLOSED";
+
+        // ...unless the only rows we hold were written by reverse-
+        // reconciliation, which stamps CLOSED on anything no source has
+        // mentioned in 24h. Same rule as the park and ride payloads: our own
+        // bookkeeping must not be served as the operator's word.
+        //
+        // Guarded on freeFlowOpen because the check reads the RAW rows, not
+        // dto.queues — without it a flagged playground whose feed went silent
+        // would be flipped from OPERATING to UNKNOWN, inverting the precedence
+        // the other two surfaces give free-flow.
+        if (
+          !freeFlowOpen &&
+          readsUnknownFromAbsentSource(
+            queuesMap.get(attraction.id) || [],
+            parkStatus,
+          )
+        ) {
+          dto.status = "UNKNOWN";
+          dto.queues = [];
+        }
         // Whether this ride's park publishes wait times we can read at all. With
         // no source the placeholder above is never overwritten, so an open park
         // would list every favourite as CLOSED on the strength of a default.

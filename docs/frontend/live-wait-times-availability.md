@@ -105,3 +105,30 @@ Before adding one, rule out the alternatives — a broken ingestion mapping and 
 park that has genuinely stopped reporting both look the same from here. A park
 that has never had a single row in `/stats` (`totalSampleDays: 0`) while carrying
 a full attraction list and a working schedule feed is the signature.
+
+## A single ride can read `UNKNOWN` too (2026-08-15)
+
+`UNKNOWN` is no longer only a whole-park condition. An individual attraction now
+reads it when **every** current queue row was written by reverse-reconciliation
+— the job that stamps CLOSED on anything no upstream source has mentioned for
+24 hours — while its park is operating.
+
+That row records "our data stopped arriving", and it was being served as "the
+operator closed this ride". On 2026-06-07 ThemeParks.wiki dropped 44
+Europa-Park attractions and 18 Rulantica ones from its live feed, all of them
+rides with no Queue-Times mapping to fall back on. Ten weeks later the park page
+still showed a Ball Pool, a London Bus and a Dwarf City as closed, in August.
+The same signature — one date, a whole cluster of rides — appears at Universal
+Studios Singapore, both Wet'n'Wild records, Busch Gardens Tampa and Ocean Park:
+roughly 140 attractions across ten parks.
+
+For a client this means:
+
+- `status` can now be `UNKNOWN` on a ride in an otherwise perfectly readable
+  park. Render it as "no information", never as closed.
+- `queues` is emptied in that case, the same as for an unreadable park — there
+  is nothing to read a wait time off.
+- A free-flow attraction (`open_with_park`) still wins: its flag, not the feed,
+  is what makes it open, so it stays `OPERATING`.
+- The count of operating attractions is unaffected by design — an `UNKNOWN`
+  ride is not counted as operating, and it was not counted before either.
