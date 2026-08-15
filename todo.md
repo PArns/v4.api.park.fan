@@ -30,10 +30,15 @@ and both fail **silently** — that is what makes them worth tracking.
       (`lifthill → first-drop → helix → brake-run` und Verwandte, 54 Rides),
       Minenzuege und Holzachterbahnen — die fuehren gar keine benannte
       Inversion, dort kann die Liste nur unvollstaendig sein, nicht falsch.
-- [ ] **Zwei kleine Cluster stehen noch**, beide ohne geprueften Widerspruch,
-      aber mit gemischter Inversionszahl: `cobras-curse / winjas-force /
-      winjas-fear` (Spinning Coaster) und `sky-scream / electric-eel`
-      (Premier Sky Rocket II). Vier Rides, guenstige Runde 6.
+- [x] **Runde 6 erledigt — die Cluster-Query ist ausgereizt.** Es gibt keine
+      geteilte Elementliste mit einer benannten Inversion mehr, deren Rides
+      unterschiedliche Inversionszahlen melden. Die verbliebenen Gruppen sind
+      echte Klonfamilien (Boomerang 6, SLC 6, Double Loop Corkscrew 5,
+      Sky Rocket II 4, Batman 2 …) und ihre Uebereinstimmung ist jetzt ein
+      Konsistenz-Signal statt eines Alarms. Als naechstes Instrument braeuchte
+      es etwas anderes als diese Query — z. B. Elementlisten, die zur
+      veroeffentlichten Inversionszahl nicht aufgehen, ueber den ganzen Bestand
+      statt nur ueber Cluster.
 - [ ] **Beide Great-America-Demons tragen RCDB-ID 3.** Die Zwillingsparks haben
       wirklich je einen identischen Arrow-Looper von 1976, aber dieselbe ID
       koennen nicht beide haben — eine ist falsch verknuepft.
