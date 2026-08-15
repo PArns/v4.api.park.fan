@@ -190,7 +190,39 @@ export class AttractionMergeService {
    */
   async findDuplicatePairs(): Promise<DuplicatePairReport[]> {
     const rows: DuplicatePairRow[] = await this.dataSource.query(`
-      WITH pairs AS (
+      WITH slug_pairs AS (
+        -- The original rule: "foo" next to "foo-2". Finds duplicates the sync
+        -- created by appending a counter.
+        SELECT b.id AS base_id, s.id AS suffix_id, b."parkId" AS park_id
+        FROM attractions s
+        JOIN attractions b
+          ON b."parkId" = s."parkId"
+         AND b.slug = regexp_replace(s.slug, '-[0-9]+$', '')
+        WHERE s.slug ~ '-[0-9]+$'
+          AND b.retired_at IS NULL AND s.retired_at IS NULL
+      ),
+      qt_pairs AS (
+        -- Two rows in one park carrying the SAME Queue-Times id. That is not a
+        -- resemblance, it is an identity: Queue-Times issues one id per ride.
+        --
+        -- The slug rule cannot see these, because their slugs share no stem.
+        -- Energylandia is the worked example: Queue-Times publishes the park's
+        -- own map numbers inside the ride names — "Draken (155)", "Frutti Loop
+        -- (39)" — while ThemeParks.wiki publishes them without. Name matching
+        -- therefore fails, and we ended up with "draken" beside "draken-rc",
+        -- eight times in that park alone.
+        SELECT LEAST(a.id, b.id) AS base_id, GREATEST(a.id, b.id) AS suffix_id,
+               a."parkId" AS park_id
+        FROM attractions a
+        JOIN attractions b
+          ON b."parkId" = a."parkId"
+         AND b.queue_times_entity_id = a.queue_times_entity_id
+         AND b.id <> a.id
+        WHERE a.queue_times_entity_id IS NOT NULL
+          AND a.retired_at IS NULL AND b.retired_at IS NULL
+        GROUP BY 1, 2, 3
+      ),
+      pairs AS (
         SELECT b.id AS base_id, b.slug AS base_slug, b.name AS base_name,
                b.queue_times_entity_id AS base_qt,
                (b.latitude IS NOT NULL) AS base_geo, b."createdAt" AS base_created,
@@ -198,11 +230,13 @@ export class AttractionMergeService {
                s.queue_times_entity_id AS suffix_qt,
                (s.latitude IS NOT NULL) AS suffix_geo, s."createdAt" AS suffix_created,
                b."parkId" AS park_id
-        FROM attractions s
-        JOIN attractions b
-          ON b."parkId" = s."parkId"
-         AND b.slug = regexp_replace(s.slug, '-[0-9]+$', '')
-        WHERE s.slug ~ '-[0-9]+$'
+        FROM (
+          SELECT base_id, suffix_id, park_id FROM slug_pairs
+          UNION
+          SELECT base_id, suffix_id, park_id FROM qt_pairs
+        ) candidate_pairs
+        JOIN attractions b ON b.id = candidate_pairs.base_id
+        JOIN attractions s ON s.id = candidate_pairs.suffix_id
       )
       SELECT p.*, pk.name AS park_name,
         (SELECT count(*) FROM queue_data q WHERE q."attractionId" = p.base_id
@@ -255,8 +289,8 @@ export class AttractionMergeService {
         survivingSlug: resolveSurvivingSlug(winner.slug, loser.slug),
         safe,
         reason: safe
-          ? "same ride (name or queue-times id match)"
-          : `names differ and no shared queue-times id — "${base.name}" vs "${suffix.name}"; review by hand`,
+          ? "same ride (names agree once the map number is stripped)"
+          : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
       };
     });
   }

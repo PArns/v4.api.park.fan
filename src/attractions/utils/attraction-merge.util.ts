@@ -37,7 +37,17 @@ export interface DuplicateCandidate {
 }
 
 function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (
+    name
+      // Queue-Times publishes some parks' own map numbers inside the ride
+      // name — Energylandia's feed says "Draken (155)" and "Frutti Loop (39)"
+      // where ThemeParks.wiki says "Draken" and "Frutti Loop". Stripping the
+      // trailing number is what lets those two rows recognise each other; it
+      // is an artefact of one source's formatting, not part of the name.
+      .replace(/\s*\(\d+\)\s*$/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+  );
 }
 
 /**
@@ -49,23 +59,27 @@ function normalizeName(name: string): string {
  * "Power Builder" vs its Halloween overlay, and "Spindeln - Nyhet" vs
  * "Spindeln - Nyhet 2026", which is a legitimately numbered ride name.
  *
- * So we require positive evidence: either the names agree once punctuation and
- * case are stripped, or both rows carry the same Queue-Times id — which means
- * the upstream source itself considers them one ride. Everything else is left
- * for a human.
+ * So we require positive evidence: the names must agree once punctuation, case
+ * and a trailing map number are stripped. Everything else is left for a human.
+ *
+ * A shared Queue-Times id used to be sufficient on its own. It is not, and
+ * Carowinds shows why: `Blackbeard's Revenge - Cannonball Drop & Captain's
+ * Curse` and `Blackbeard's Revenge - Pirate's Plank` both carry id 14744, and
+ * their slugs say `tube-slides` and `drop-slides`. They are two slide
+ * complexes the upstream lumped under one id, and auto-merging them would
+ * destroy one. The same shape appears at Kings Island, where two stations of
+ * one railroad share an id, and at Six Flags Great Escape, where three
+ * Sasquatch rows do.
+ *
+ * The id still finds the pair — see the detector — it just no longer decides
+ * it. That costs a human glance at cases like `Kiddy Hawk Cove` / `Kiddy Hawk`,
+ * which is the right price for a merge that cannot be undone.
  */
 export function isSafeToAutoMerge(
   a: DuplicateCandidate,
   b: DuplicateCandidate,
 ): boolean {
-  if (normalizeName(a.name) === normalizeName(b.name)) {
-    return true;
-  }
-
-  return (
-    a.queueTimesEntityId !== null &&
-    a.queueTimesEntityId === b.queueTimesEntityId
-  );
+  return normalizeName(a.name) === normalizeName(b.name);
 }
 
 /**

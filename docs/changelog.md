@@ -6,6 +6,36 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a park's map number hid eight duplicates
+
+Queue-Times publishes some parks' own map numbers **inside** the ride name.
+Energylandia's feed says `Draken (155)`, `Frutti Loop (39)`, `Abyssus (184)`;
+ThemeParks.wiki says `Draken`, `Frutti Loop`, `Abyssus`. So the same ride
+arrives twice under names that never match, and the rows end up as `draken`
+beside `draken-rc` — eight times in that park alone.
+
+The duplicate detector could not see them: it looked for a base slug next to a
+numbered one (`foo` / `foo-2`), and these share no slug stem. It now also pairs
+**two rows in one park carrying the same Queue-Times id**, which is not a
+resemblance but an identity — the source issues one id per ride. 19 such pairs
+exist, across Energylandia, Carowinds, Cedar Point, Kings Island, LEGOLAND New
+York, Silver Dollar City, Walibi Belgium and four others.
+
+`normalizeName` now strips a trailing `(number)` before comparing, which is what
+lets the two spellings of a ride recognise each other. A year inside a name is
+untouched — `Spindeln - Nyhet 2026` is a real ride name, not a map label.
+
+**And the safety rule got stricter, not looser.** A shared Queue-Times id used
+to be sufficient on its own to auto-merge. It is not: Carowinds' `Blackbeard's
+Revenge - Cannonball Drop & Captain's Curse` and `Blackbeard's Revenge -
+Pirate's Plank` both carry id 14744, and their slugs read `tube-slides` and
+`drop-slides` — two slide complexes the upstream lumped under one id. Merging
+them would destroy one. Kings Island has two stations of a railroad under one
+id, Six Flags Great Escape three Sasquatch rows. The id still **finds** the
+pair; it no longer **decides** it. That costs a human glance at cases like
+`Kiddy Hawk Cove` / `Kiddy Hawk`, which is the right price for a merge nobody
+can undo.
+
 ### Fixed — a retired attraction is gone, not seasonal
 
 Excluding retired attractions from `detect-seasonal`'s candidate searches stops
