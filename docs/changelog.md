@@ -6,6 +6,45 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the curated attraction metadata now lives in the database too
+
+`MANUAL_ATTRACTION_METADATA` and its apply job are gone, the same way the
+ride-profile seed went: the 727-entry file, its spec, `ManualMetadataService`,
+the `apply-seed` queue handler, `POST /v1/admin/apply-manual-metadata`, and the
+call the attraction detail sweep made at the end of every run.
+
+The three things it curated are **not** equally safe without it, and that
+difference is the whole design:
+
+- **`rcdb_id`** has no upstream writer at all. It simply stays in the column.
+- **`minimum_height`** is overwritten by the detail sync whenever the wiki
+  publishes a number — which is the documented intent, the park's own sign
+  wins. Curated values keep filling the gaps the wiki leaves.
+- **`may_get_wet`** was the problem. The sync overwrites it whenever the wiki
+  publishes a differing value, so a correction stored there survives exactly
+  until the next run. It now has its own column, `curated_may_get_wet`, on the
+  `stats` / `curated_stats` pattern already used by the ride profile: two
+  writers, no shared cell, merged on read with curated winning. The 72 curated
+  flags were copied into it before the seed was deleted.
+
+### Fixed — two RCDB ids pointed at somebody else's ride
+
+`rcdb_id` was matched to attractions by park proximity and normalised name, and
+that has one failure mode: where two parks hold a ride of the *same name*, both
+can inherit the one id. Both cases were real. RCDB 3 is the Demon at Six Flags
+Great America in Gurnee, and Santa Clara's identical twin — the other half of
+the Marriott pair — carried it too. RCDB 9720 is the Magic Kingdom's Seven
+Dwarfs Mine Train, and Shanghai's carried it as well.
+
+Both wrong halves are now NULL rather than guessed at: an id that opens a
+different ride's page is worse than no link. A duplicate check is documented on
+the column.
+
+Three duplicated ids remain and are a **different** problem — the same physical
+ride recorded under two park records (Traumatica alongside Europa-Park, and
+Universal Studios Florida held once from ThemeParks.wiki and once from
+Queue-Times). Those are duplicate parks, not wrong ids.
+
 ### Changed — the curated ride profiles now live in the database, not in a seed file
 
 `RIDE_PROFILE_SEED` and its apply job are gone: the 11,409-line seed file, its

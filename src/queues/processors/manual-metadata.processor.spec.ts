@@ -6,7 +6,7 @@ jest.mock("../../common/cache/park-cache-invalidation", () => ({
 }));
 
 /**
- * A metadata write is only published when the caches in front of it are gone.
+ * A curation write is only published when the caches in front of it are gone.
  *
  * Announcing the write to the frontend first is worse than not announcing it:
  * the frontend refetches immediately, reads the pre-seed payload from
@@ -15,7 +15,6 @@ jest.mock("../../common/cache/park-cache-invalidation", () => ({
  * morning — that is the bug these tests exist to keep fixed.
  */
 describe("ManualMetadataProcessor", () => {
-  const manualMetadata = { apply: jest.fn() };
   const rideProfiles = { findCuratedSince: jest.fn() };
   const revalidationService = { revalidateTags: jest.fn() };
   const redis = {};
@@ -23,7 +22,6 @@ describe("ManualMetadataProcessor", () => {
 
   const processor = () =>
     new ManualMetadataProcessor(
-      manualMetadata as never,
       rideProfiles as never,
       revalidationService as never,
       redis as never,
@@ -37,14 +35,6 @@ describe("ManualMetadataProcessor", () => {
     queue.add.mockResolvedValue(undefined);
   });
 
-  const seedResult = (over: Record<string, unknown> = {}) => ({
-    rcdb: 2,
-    heights: 0,
-    wet: 0,
-    touchedParks: [{ parkId: "p1", attractionIds: ["a1", "a2"] }],
-    ...over,
-  });
-
   it("evicts the park's cached response BEFORE telling the frontend", async () => {
     const order: string[] = [];
     (invalidateParkCaches as jest.Mock).mockImplementation(() => {
@@ -55,9 +45,11 @@ describe("ManualMetadataProcessor", () => {
       order.push("revalidate");
       return Promise.resolve();
     });
-    manualMetadata.apply.mockResolvedValue(seedResult());
+    rideProfiles.findCuratedSince.mockResolvedValue([
+      { parkId: "p1", attractionIds: ["a1", "a2"] },
+    ]);
 
-    await processor().handleApplySeed({} as never);
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     expect(order).toEqual(["invalidate", "revalidate"]);
     expect(invalidateParkCaches).toHaveBeenCalledWith(redis, "p1", [
@@ -70,9 +62,11 @@ describe("ManualMetadataProcessor", () => {
     // Nothing here can purge Cloudflare, and the edge copy lives up to
     // max-age 300 + stale-while-revalidate 600. The refetch triggered above
     // can still read it, so one more sweep has to land after it expires.
-    manualMetadata.apply.mockResolvedValue(seedResult());
+    rideProfiles.findCuratedSince.mockResolvedValue([
+      { parkId: "p1", attractionIds: ["a1", "a2"] },
+    ]);
 
-    await processor().handleApplySeed({} as never);
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     expect(queue.add).toHaveBeenCalledWith(
       "revalidate-parks",
@@ -84,9 +78,11 @@ describe("ManualMetadataProcessor", () => {
   it("collapses repeated seed runs onto one pending sweep", async () => {
     // Iterating on the seed means running it several times in a row. Each run
     // must not leave its own delayed job, or they all fire in the same minute.
-    manualMetadata.apply.mockResolvedValue(seedResult());
+    rideProfiles.findCuratedSince.mockResolvedValue([
+      { parkId: "p1", attractionIds: ["a1", "a2"] },
+    ]);
 
-    await processor().handleApplySeed({} as never);
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     const [, , options] = queue.add.mock.calls[0] as [
       string,
@@ -100,16 +96,12 @@ describe("ManualMetadataProcessor", () => {
     (invalidateParkCaches as jest.Mock)
       .mockRejectedValueOnce(new Error("redis down"))
       .mockResolvedValue(undefined);
-    manualMetadata.apply.mockResolvedValue(
-      seedResult({
-        touchedParks: [
-          { parkId: "p1", attractionIds: ["a1"] },
-          { parkId: "p2", attractionIds: ["a2"] },
-        ],
-      }),
-    );
+    rideProfiles.findCuratedSince.mockResolvedValue([
+      { parkId: "p1", attractionIds: ["a1"] },
+      { parkId: "p2", attractionIds: ["a2"] },
+    ]);
 
-    await processor().handleApplySeed({} as never);
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     expect(invalidateParkCaches).toHaveBeenCalledTimes(2);
     expect(revalidationService.revalidateTags).toHaveBeenCalledWith([
@@ -118,12 +110,10 @@ describe("ManualMetadataProcessor", () => {
     ]);
   });
 
-  it("does nothing at all when the seed wrote nothing", async () => {
-    manualMetadata.apply.mockResolvedValue(
-      seedResult({ rcdb: 0, touchedParks: [] }),
-    );
+  it("does nothing at all when nothing was curated", async () => {
+    rideProfiles.findCuratedSince.mockResolvedValue([]);
 
-    await processor().handleApplySeed({} as never);
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     expect(invalidateParkCaches).not.toHaveBeenCalled();
     expect(revalidationService.revalidateTags).not.toHaveBeenCalled();

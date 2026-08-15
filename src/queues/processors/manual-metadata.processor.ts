@@ -4,7 +4,6 @@ import { Job, Queue } from "bull";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
-import { ManualMetadataService } from "../../attractions/services/manual-metadata.service";
 import {
   RideProfileService,
   TouchedPark,
@@ -22,7 +21,7 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
 const CDN_SETTLE_MS = 16 * 60 * 1000;
 
 /**
- * Applies the curated attraction seed on its own queue.
+ * Publishes hand-curated attraction data on its own queue.
  *
  * Deliberately separate from children-metadata: that queue is occupied for
  * hours by the detail sweep's ~7000 rate-limited wiki requests, and a job
@@ -33,22 +32,11 @@ export class ManualMetadataProcessor {
   private readonly logger = new Logger(ManualMetadataProcessor.name);
 
   constructor(
-    private readonly manualMetadata: ManualMetadataService,
     private readonly rideProfiles: RideProfileService,
     private readonly revalidationService: RevalidationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("manual-metadata") private readonly queue: Queue,
   ) {}
-
-  @Process("apply-seed")
-  async handleApplySeed(_job: Job): Promise<void> {
-    this.logger.log("🔗 Applying curated attraction metadata...");
-    const result = await this.manualMetadata.apply();
-
-    if (result.rcdb + result.heights + result.wet > 0) {
-      await this.publish(result.touchedParks);
-    }
-  }
 
   /**
    * Publish ride profiles that were curated directly in the database.

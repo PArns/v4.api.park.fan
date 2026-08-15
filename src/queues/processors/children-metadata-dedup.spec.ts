@@ -54,7 +54,6 @@ describe("ChildrenMetadataProcessor — cross-source duplicate prevention", () =
       {} as any,
       {} as any,
       {} as any,
-      { apply: jest.fn() } as any,
     );
   });
 
