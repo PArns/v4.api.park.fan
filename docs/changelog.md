@@ -6,6 +6,43 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a season cannot be read off less than a year of watching
+
+`detect-seasonal` derived `season_months` from the months an entity had ever
+been seen OPERATING. On 2026-08-15 the entire `queue_data` history was **234
+days** deep — 2025-12-24 onward — so nothing in the database had been watched
+through a full cycle, and every stored month list was a contiguous run anchored
+at the start of that window:
+
+    [1, 2, 3, 4, 12]        69 attractions
+    [1, 2, 3, 4, 5, 6, 12]  64
+    [1, 12]                 18
+    [4]                     22
+
+None of those is a season. They are the span in which we happened to be
+recording. Europa-Park's 44 feed-dropped rides all carried the identical
+`[1,2,3,4,5,6,12]` and read as out of season in August, at a park in peak
+season.
+
+Months are now derived only for entities watched for at least
+`MIN_OBSERVED_DAYS` (330). The span is measured over **all** rows, not the
+OPERATING ones: a genuine winter attraction only ever operates for about forty
+days, which says nothing about how long we have been looking at it. Under-
+observed entities are excluded from the month query rather than skipped, so the
+job writes NULL for them and clears the artefact on every run.
+
+Applied to **shows** as well — 1096 of them were marked from the same 234-day
+window and are just as wrong.
+
+`is_seasonal` itself is untouched: "closed on ≥7 consecutive park-open days" is
+observationally true whatever the window length. It was the months that lied.
+
+Consequence, and it is the intended one: `isCurrentlyInSeason` goes null almost
+everywhere, so out-of-season badges disappear until real evidence exists.
+Phantasialand's ice-rink labels were correct and go with it — two right answers
+against a hundred and forty wrong ones. Months start flowing again from roughly
+**2026-11-19** (2025-12-24 + 330 days), which is about when Wintertraum starts.
+
 ### Fixed — "no source reports this ride" was being served as "closed"
 
 Reverse-reconciliation writes a CLOSED `queue_data` row for any attraction no

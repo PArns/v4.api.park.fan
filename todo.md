@@ -13,11 +13,12 @@ with the same rows.
       Europa-Park rides carry the identical list `[1,2,3,4,5,6,12]`, which is
       simply "every month before the feed went silent". In August that reads as
       44 attractions out of season at a park in peak season.
-      Two pieces: **(a)** clear the wrong months now, **(b)** build the guard
-      that was deliberately deferred — do not derive `season_months` from an
-      observation window shorter than a full year. The Avoras case argued for
-      deferring it because it would also drop two correct labels; this case
-      argues the other way, and it is 140 attractions against 2.
+      **(b) is built** — months need `MIN_OBSERVED_DAYS` (330) of watching, on
+      attractions and shows alike. **(a) still to do**: the stored artefact
+      months must be cleared once the guard is deployed, not before — Step 3 has
+      no `is_seasonal = false` filter, so every still-closed candidate is
+      re-evaluated on the next 2:30am run and a reset done first would simply be
+      rewritten.
 - [ ] Consider teaching the detector the same distinction the read path just
       learned: a row written by `system-reconciliation` is not evidence of a
       season. That is probably the cleaner fix than (b) alone.
