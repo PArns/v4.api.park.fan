@@ -6,6 +6,54 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — `hasSingleRider`, and a curated wet flag that a sync cannot undo
+
+Two curated fields on the attraction, both edited in the database and written
+by no sync.
+
+`hasSingleRider` answers "does this ride have a single-rider line at all". It is
+deliberately NOT derived from the live `queues` array: a single-rider queue that
+happens to be closed, or a park whose wait times we cannot read, would make the
+ride look as though it never had one. `queues` keeps answering "is it open and
+how long"; this answers "does it exist". Seeded from observation — the 48
+attractions that have ever reported a SINGLE_RIDER queue — then extended by
+research to 59 yes / 12 no. Three rides were left unset because sources
+contradicted each other (Chiapas, River Quest, F.L.Y.).
+
+`curatedMayGetWet` grew from 72 to 130 entries, taking the served coverage from
+82 to 140 attractions. Every addition was verified against the park's own page
+or Wikipedia, and water play areas are flagged as such rather than as rides.
+
+### Fixed — 42 Magic Kingdom rides were living in Animal Kingdom
+
+Animal Kingdom held 66 attractions, of which 48 came from Queue-Times and only
+six were actually its own. Big Thunder Mountain, Haunted Mansion, Space
+Mountain, Cinderella Castle and 38 more sat under the wrong park **and were
+still being updated there daily**.
+
+The park-level mapping was never wrong: Queue-Times park 6 is Magic Kingdom and
+park 8 is Animal Kingdom, exactly as stored. The cause is one level down — the
+ingestion resolves an attraction by `externalId` alone, with no park scope
+(`children-metadata.processor.ts`), so the Magic Kingdom sync kept writing into
+whichever row already carried that id, wrong park and all. There is already a
+regression spec naming this exact failure.
+
+Which ride belongs where was decided by Queue-Times' own park listings rather
+than by judgement — that is how `meet-moana-at-character-landing` stayed in
+Animal Kingdom, where a reasonable guess would have moved it. The 42 were
+re-parented, the 35 that collided with an existing Magic Kingdom row were given
+the `-2` suffix the duplicate finder looks for, and the existing merge tooling
+paired them up inside the park. The wiki row won every pair and inherited the
+Queue-Times id, so future syncs resolve to the right row.
+
+All 30 parks that hold Queue-Times rides were checked the same way. **Animal
+Kingdom was the only cross-park misassignment** — the 129 other rides that no
+longer appear in their park's listing are retired or renamed ids, not
+misplaced ones.
+
+Animal Kingdom is now 24 attractions instead of 66. Its headliner set was
+already correct, so no baseline was polluted.
+
 ### Changed — the curated attraction metadata now lives in the database too
 
 `MANUAL_ATTRACTION_METADATA` and its apply job are gone, the same way the

@@ -126,6 +126,23 @@ export class Attraction {
   @Column({ name: "curated_may_get_wet", type: "boolean", nullable: true })
   curatedMayGetWet: boolean | null;
 
+  /**
+   * Whether the ride has a single-rider line at all — a static fact about the
+   * queue layout, not a live reading.
+   *
+   * Deliberately NOT derived from the live `queues` array on each request: a
+   * single-rider queue that is closed right now, or a park whose wait times we
+   * cannot read, would make the ride look as though it never had one. The
+   * `queues` array keeps answering "is it open and how long"; this answers
+   * "does it exist".
+   *
+   * Seeded from observation — every attraction that has ever reported a
+   * SINGLE_RIDER queue — and extended by hand for the rides whose feed does not
+   * publish the queue even though the park runs one. No sync writes it.
+   */
+  @Column({ name: "has_single_rider", type: "boolean", nullable: true })
+  hasSingleRider: boolean | null;
+
   // RCDB (rcdb.com) database ID for outbound links (https://rcdb.com/{id}.htm).
   // Originally from Wikidata property P2751 (CC0); edited by hand in the
   // database now, with no upstream writer — linking to RCDB is explicitly

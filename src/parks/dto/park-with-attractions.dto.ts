@@ -185,6 +185,17 @@ export class ParkAttractionDto {
 
   @ApiProperty({
     description:
+      "Whether the ride has a single-rider line at all. A static fact about " +
+      "the queue layout — NOT whether it is open right now, which `queues` " +
+      "answers. Null = unknown, not 'no'.",
+    example: true,
+    required: false,
+    nullable: true,
+  })
+  hasSingleRider?: boolean | null;
+
+  @ApiProperty({
+    description:
       "RCDB (rcdb.com) database id for outbound links (https://rcdb.com/{id}.htm). Null for non-coasters or unmatched rides.",
     example: 12723,
     required: false,
@@ -657,6 +668,7 @@ export class ParkWithAttractionsDto {
               maximumHeight: attraction.maximumHeight ?? null,
               mayGetWet:
                 attraction.curatedMayGetWet ?? attraction.mayGetWet ?? null,
+              hasSingleRider: attraction.hasSingleRider ?? null,
               rcdbId: attraction.rcdbId ?? null,
               // queue data, forecasts etc will be attached by service
             };
