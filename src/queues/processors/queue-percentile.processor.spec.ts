@@ -116,6 +116,27 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     expect(reset).toMatch(/season_months\s*=\s*NULL/i);
   });
 
+  /**
+   * The zero-history query is a chain of CTEs that lost its leading WITH in the
+   * 2026-06-03 perf refactor (9046535). Postgres rejected it with a syntax
+   * error, the handler threw before writing anything, and detect-seasonal
+   * silently did nothing for 73 days — including the step-3 candidates it had
+   * already computed. A build passes either way, because it is a string.
+   */
+  it("issues syntactically framed CTE chains (regression: missing WITH)", async () => {
+    const statements = await runDetectSeasonal();
+
+    for (const sql of statements) {
+      if (!/^\s*(--[^\n]*\n\s*)*\w+ AS \(/m.test(sql)) continue;
+      // A statement whose first non-comment token opens a CTE must say WITH.
+      const firstToken = sql
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith("--"))[0];
+      expect(firstToken).toMatch(/^(WITH|SELECT|UPDATE|INSERT|DELETE|SET)\b/i);
+    }
+  });
+
   it("excludes them from both candidate searches", async () => {
     const statements = await runDetectSeasonal();
 

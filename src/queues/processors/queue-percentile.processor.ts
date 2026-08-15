@@ -291,7 +291,7 @@ export class QueuePercentileProcessor {
       -- queue_data (one per attraction), which re-scanned the whole compressed
       -- queue_data hypertable once PER attraction (thousands of chunk-
       -- decompressing probes, ~240s). Equivalent semantics, single scan.
-      attr_activity AS (
+      WITH attr_activity AS (
         SELECT "attractionId", bool_or(status = 'OPERATING') AS has_operating
         FROM queue_data
         GROUP BY "attractionId"
