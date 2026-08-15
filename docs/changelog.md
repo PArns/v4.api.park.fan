@@ -6,6 +6,38 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — upstream put the height on the wrong splash attraction
+
+Phantasialand runs two water attractions side by side and ThemeParks.wiki has
+their rules swapped: it gives `NEW: Winni Splash` a `minimumHeight` of 100 and
+`NEW: Wavy Battle` nothing. The park's own Nutzungsbedingungen say the opposite
+— Winni Splash's board reads *"Kinder unter 1,00 m Körpergröße dürfen nur in
+Begleitung Erwachsener spielen"* (a supervision threshold, no limit), Wavy
+Battle's reads *"Kindern unter 1,00 m Körpergröße ist das Betreten verboten"*
+(a real minimum). So a playground that welcomes accompanied toddlers advertised
+a 100 cm limit while the one that genuinely turns them away advertised none.
+Both soak you; only one said so.
+
+New column `attractions.curated_minimum_height`, under the same rule as
+`curated_may_get_wet`: the detail sync overwrites `minimum_height` whenever the
+wiki publishes a number, so a correction has to sit **beside** that cell rather
+than in it. Always centimetres, `null` means "nothing to correct", and **`0`
+means "no minimum height"** — barely a sentinel, since a 0 cm minimum excludes
+nobody, and the only way a correction can override an upstream number with
+*nothing*.
+
+Both DTO mappers had grown their own copy of `curatedMayGetWet ?? mayGetWet`,
+which is precisely how the free-flow status rule drifted into a shipped bug.
+Height and wet now resolve through one `resolveCuratedFacts`
+(`attractions/utils/curated-attraction-facts.util.ts`), which also closes two
+gaps the inline version had: the unit is dropped when the height resolves to
+null — otherwise a ride page renders a bare "cm" — and a curated-only height is
+labelled cm instead of nothing. `curatedMinimumHeight` also joins the merge's
+inheritable columns, or a later merge would silently drop the correction.
+
+Data written to production: Wavy Battle 100 + wet, Winni Splash 0. Mopti's
+Monkey Depot is correct as it stands — a dry climbing area with no height rule.
+
 ### Fixed — playgrounds read CLOSED on the one page people actually look at
 
 `attractions.open_with_park` marks free-flow attractions — playgrounds, splash
