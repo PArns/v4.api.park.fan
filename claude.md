@@ -13,7 +13,7 @@
 ---
 
 ## ✅ Open TODOs
-- [todo.md](todo.md) – Active follow-ups (e.g. ML `hourly_agg` cache post-deploy verification & per-attraction caching gate).
+- [todo.md](todo.md) – Active follow-ups (e.g. the ride-profile safety nets that went with the seed: nothing validates glossary term ids, nothing evicts caches after a curation write).
 
 ## 📚 Documentation Index
 

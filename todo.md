@@ -1,5 +1,71 @@
 # TODO
 
+## Ride profiles: the safety nets that went with the seed (2026-08-15)
+
+**Context:** [#163](https://github.com/PArns/v4.api.park.fan/pull/163) removed
+`RIDE_PROFILE_SEED`, its spec, the mirrored term-id allowlist and the
+`apply-ride-profiles` job. `attraction_ride_profiles` is now the source of truth
+and is edited directly. Two things the job did for free are now nobody's job,
+and both fail **silently** — that is what makes them worth tracking.
+
+- [ ] **Nothing validates term ids.** The old spec checked every id against the
+      frontend's exported list and failed CI on a typo. A misspelled id now
+      reaches production and the ride page just drops that element, so the layout
+      reads short and nothing complains. Cheapest fix: a scheduled job (or a
+      `/v1/admin` check) that pulls the distinct ids out of the table and diffs
+      them against `park.fan/lib/glossary/data.ts`. The query already exists in
+      [the guide](docs/frontend/ride-glossary-link.md); it needs an owner and a
+      cadence, not new logic.
+- [ ] **Nothing evicts caches after a curation write.** The job invalidated
+      `park:integrated:{parkId}` and pinged the frontend to revalidate. A direct
+      SQL write now surfaces only as TTLs expire — Redis up to 6 h for a closed
+      park, Cloudflare edge 900 s, frontend data cache up to 24 h. A tiny
+      `POST /v1/admin/publish-ride-profiles` taking a list of park ids and
+      reusing `invalidateParkCaches` + `RevalidationService` would restore it
+      without bringing the seed back.
+
+**Curation left deliberately open:**
+
+- [ ] **Hyperia** (Thorpe Park, RCDB 20652) — sources state 2, 3 *and* 4
+      inversions; Wikipedia contradicts itself within one article. The element
+      list also calls its Immelmann non-inverting. Needs the park's own spec
+      sheet or a POV count before the entry moves.
+- [ ] **Zadra** (Energylandia, RCDB 16184) — publishes 3 inversions but the
+      curated element list names 4 inverting figures. No source states the
+      element order, so neither side can be corrected without inventing data.
+- [ ] **Coasters with no RCDB id are unexamined.** Every ride that *has* an id
+      now has a profile (0 remaining). The coverage question is the other
+      direction: 6,508 attractions have no profile, and while most are flat rides
+      and shows, an unknown number are coasters that never got an id from the
+      Wikidata match. Find them by `types`/name heuristics before deciding
+      whether it is worth a pass.
+
+**park.fan follow-ups from the same work:**
+
+- [ ] **`scripts/export-glossary-term-ids.mjs` has no consumer.** Its whole
+      purpose was writing the API allowlist that #163 deleted. It still runs and
+      still prints a useful id list — decide whether to delete it or document it
+      as a diffing tool, but do not leave it looking like a required step.
+- [ ] **18 named figures have no 3-D player** (42 of 77 `coaster-elements` have
+      one). Concepts and brakes legitimately have none; these are real shapes:
+      `bowtie, butterfly, cobra-loop, cutback, dive-drop, flying-snake-dive,
+      high-five, inline-twist, jojo-roll, norwegian-loop, predrop, pretzel-knot,
+      splashdown, stall, stengel-dive, swing-launch, treble-clef, turntable`.
+      `inline-twist` and `stall` are the highest-value — they appear most often
+      in curated layouts. Build against `lib/three/coaster/elements.ts` and
+      verify with `scripts/render-coaster-elements.mjs`, per the three.js
+      convention.
+
+**Observed while auditing, not acted on:**
+
+- [ ] **Disney Orlando parks hold each other's attractions.** `disneys-animal-
+      kingdom-theme-park` carries 66 attractions including `big-thunder-mountain-
+      railroad`, `haunted-mansion`, `cinderella-castle` and `main-street-vehicles`
+      — Magic Kingdom rides. This is the known duplicate-record class, but it is
+      worth a targeted look because it inflates that park's attraction count and
+      any per-park aggregate built on it.
+
+
 ## Schedule times: 12-hour-clock rows need a curated override (2026-07-27)
 
 **Context:** `normalizeClosingTime` (PR "repair closing times whose date contradicts
@@ -63,62 +129,6 @@ already consumed. Guessing further means inventing data.
          OR "closingTime" > "openingTime" + interval '24 hours');
   ```
 
-## PCN/Shape shadow boards — one-time reset + post-deploy steps (PR #79)
-
-**Context:** the pre-fix shadow scorers overwrote matured board days with ever-smaller
-rolling-window slices (visible live: lead-bucket N sums > the "all" row). The full-day
-contract fix (PR #79, [review §8](docs/ml/pcn-intraday-review.md)) makes new writes
-correct, but the already-persisted matured rows are irreparably degraded and must be
-dropped once. Yesterday + today regenerate within the next hourly score run.
-
-> **✅ DEPLOYED & RESET 2026-07-02 16:15 UTC** (merge `727419f`). Verified against prod DB:
-> board reset ran (pcn −90 rows, shape −32); after the first fixed score run the leak is
-> gone — `sum(lead-buckets) == all` exactly for every (model, segment, date) on BOTH boards;
-> daily N jumped ~10–20× (pcn 21 268/day, shape 45 204/day vs ~1.9k before). Indexes were
-> pre-created `CONCURRENTLY` (both valid). Retention `pruned=0` — nothing older than 14d/30d
-> existed (tables only reached back to 06-29), so the feared backlog DELETE was a no-op.
-> First clean-board verdict: PCN still wins every segment (busy +5.85 ≈ the old +6.5);
-> Shape still loses every segment (busy −2.26) → §6b reconcile stays open, no Shape swap.
-> **Still pending below:** 1–2-week maturation, tomorrow's 08:30 UTC DOW-channel retrain, RF bake-off.
-
-- [x] **After PR #79 is deployed**, run once against prod Postgres: *(done 2026-07-02)*
-
-  ```sql
-  DELETE FROM pcn_intraday_comparisons WHERE target_date < CURRENT_DATE;
-  DELETE FROM shape_comparisons       WHERE target_date < CURRENT_DATE;
-  ```
-
-- [x] Verify the next scored days are consistent: per (segment, date), the lead-bucket
-      `n` values must sum exactly to the `all` row, and daily N should jump ~10×+
-      (full days instead of the last hour). *(verified 2026-07-02: excess=0 everywhere; N jumped ~10–20×)*
-- [x] **Optional but recommended BEFORE the first post-deploy forecast/score run:** *(done 2026-07-02 — both indexes built CONCURRENTLY, valid)*
-      pre-create the new indexes without blocking writes (the in-code
-      `CREATE INDEX IF NOT EXISTS` is non-concurrent — the first build over the
-      accumulated backlog would block the producer for minutes):
-
-  ```sql
-  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pcn_forecasts_created_at
-      ON pcn_forecasts (created_at);
-  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_shape_forecasts_created_at
-      ON shape_forecasts (created_at);
-  ```
-
-- [x] Expect the first `/score` run to take longer once: the new retention prune
-      (`pcn_forecasts` 14d / `shape_forecasts` 30d) deletes the accumulated backlog
-      (order 10⁸ rows). If it times out, pre-delete manually in batches, e.g.
-      `DELETE FROM pcn_forecasts WHERE created_at < now() - interval '14 days'`
-      with a `LIMIT`-style loop (`ctid` batching) or during a quiet window.
-      *(N/A 2026-07-02: `pruned=0` — tables only reached back to 06-29, nothing >14d/30d yet.
-      Steady-state will cap ~120M rows / ~24 GB for `pcn_forecasts`; retention verified working.)*
-- [ ] Let the boards mature **1–2 weeks**, then re-confirm the PCN swap win
-      (busy/headliner, no quiet inflation) and re-judge Shape offline-vs-live —
-      no Shape producer swap before that.
-- [ ] After the next nightly PCN retrain (08:30 UTC): models pick up the new
-      DOW channels (11 channels); spot-check `/status` + board that nothing regressed.
-- [ ] When boards are clean: run the receptive-field bake-off
-      (`run_bakeoff.py --layers 8` vs `--layers 2`, busy MAE/bias) — flip
-      `PCN_GWN_LAYERS` only on a busy-segment win (review §5a).
-
 ## PCN/Shape — deferred model work (gated on a clean board, PR #79 review)
 
 Deliberately NOT shipped in PR #79 — code-side that PR is complete; these are
@@ -128,22 +138,25 @@ model/quality experiments that must wait until the shadow boards have matured
 Rough order by ROI; each its own PR. Full rationale in
 [docs/ml/pcn-intraday-review.md](docs/ml/pcn-intraday-review.md) (§5–6, §8).
 
-- [ ] **Receptive-field bake-off (biggest lever)** — `run_bakeoff.py --layers 8`
-      vs `2` (also vs `gpstgnn`, which uses the full context as an RNN). Served
-      GraphWaveNet at `layers=2` only sees ~1h of the 192-slot context; flip
-      `PCN_GWN_LAYERS` only on a busy-segment win. (Also tracked as the last
-      post-deploy step above — this is the same experiment.)
-- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7): the scorer
+- [x] **Receptive-field bake-off** — done and flipped: `PCN_GWN_LAYERS` defaults
+      to **8** in `pcn-service/config.py`, so the served GraphWaveNet sees the
+      whole 192-slot context instead of ~1 h. Won on the busy segment and the
+      champion swap now serves PCN intraday. *(Note: review §7 table row 6 still
+      reads "Default bleibt 2" — that line is stale, the code is the truth.)*
+- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7) — *partly done:*
+      the `pcn_blend` shadow model in `pcn-service/score.py` keeps the persistence
+      blend under live A/B (`pcn_forecasts` stays raw on purpose). What remains: the scorer
       currently joins only the freshest origin (≈15-min leads), so the quality of
       the actually-served longer leads (3–12h, rest-of-day) is unmeasured. Join the
       stored 48-slot fan at lead 1h/3h/6h vs actual + persistence baseline. A
       CatBoost head-to-head at long lead additionally needs the design-doc §12.3
       CatBoost co-snapshot (not implemented) — optional.
-- [ ] **Feature channels** (review §5b) — DOW already shipped (append-only, picked
-      up by the nightly retrain). Remaining, each through the bake-off, busy-MAE/bias
-      target: `is_holiday`/`is_school_break` (mirror ml-service `holiday_utils`),
-      schedule-relative time (minutes since open / to close), weather (the worst-MAE
-      list — Cheetah Hunt / Wolfpack Raft Slide / Manta — is a water/outdoor cluster).
+- [ ] **Feature channels** (review §5b) — DOW shipped; `is_holiday` was measured
+      and **rejected** (clean A/B came out flat, so it is not in the channel set —
+      don't re-add it without new evidence). Still open, each through the bake-off
+      on busy-MAE/bias: `is_school_break`, schedule-relative time (minutes since
+      open / to close), weather (the worst-MAE list — Cheetah Hunt / Wolfpack Raft
+      Slide / Manta — is a water/outdoor cluster).
 - [ ] **KPIs must follow the served model** (review §6a): "Live MAE 8.70" + the drift
       warning (24.58/20) still measure CatBoost-stored, but PCN serves intraday. Point
       the `prediction_accuracy` pipeline at the serving view (incl. PCN override) or
@@ -179,6 +192,13 @@ raise TTL 2→15 min + evict expired entries on write.
 | **combined**| **~29.7** | **~8551** (≈14% of one core) | — |
 
 ### Verification protocol (run AFTER deploy)
+
+> **Stale as written (noted 2026-08-15):** the fix itself is long deployed —
+> `predict.py` buckets the cache key and runs a 900 s TTL with eviction. Nobody
+> ran the before/after comparison, and the 2026-06-03 baseline is now two months
+> and several query changes old. Either re-baseline and measure, or close this
+> out on the current slow-query log instead of resurrecting the old numbers.
+
 - [ ] Confirm new ml-service container is live (Coolify redeploy done — module-global cache
       only resets on a fresh process, so the fix is NOT active until redeploy).
 - [ ] `SELECT pg_stat_statements_reset();` on celestrial Postgres.
