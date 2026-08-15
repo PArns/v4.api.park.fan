@@ -28,19 +28,43 @@ and both fail **silently** — that is what makes them worth tracking.
       32 Attraktionen und 313 Schedule-Eintraege migriert, der Park steht jetzt bei
       36 Attraktionen ohne Duplikate, alle 11 Ride-Profile erhalten. RCDB 3866 ist
       damit nicht mehr doppelt vergeben.
-- [ ] **Hurricane Harbor Los Angeles blockiert an kaputten `wait_time_predictions`.**
-      Beide Datensaetze (`hurricane-harbor-los-angeles` Wiki und
-      `six-flags-hurricane-harbor-los-angeles` Queue-Times) teilen sich qt-park-41
-      und gehoeren zusammengefuehrt, aber der Merge bricht mit einer
-      PK-Verletzung ab — und schon ein DELETE auf den Vorhersagen des Verlierers
-      tut es. Grund: die Tabelle enthaelt **vorbestehende doppelte
-      Primaerschluessel** (`attractionId, predictionType, createdAt,
-      predictedTime`), die erst sichtbar werden, wenn Timescale einen
-      komprimierten Chunk dekomprimiert. Allein `forgotten-sea-wave-pool` hat
-      drei. Das ist eine eigene Baustelle: erst die Tabelle deduplizieren
-      (vorsichtig, komprimiertes Hypertable — siehe die Bulk-Delete-Recipe),
-      dann den Merge wiederholen. Die Transaktion rollt sauber zurueck, es ist
-      also nichts halb passiert.
+- [ ] **`wait_time_predictions` hat ~51.000 doppelte Primaerschluessel** — und das
+      ist die eigentliche Baustelle, nicht der Park-Merge, der sie nur ans Licht
+      gebracht hat. Timescale erzwingt den PK auf komprimierten Chunks nicht, also
+      liegen dort Zeilen, die beim Dekomprimieren mit den unkomprimierten
+      kollidieren. **Damit scheitert JEDE Loeschung**, die einen betroffenen Chunk
+      beruehrt — also vermutlich auch der Retention-Job.
+
+      Betroffen ist ein abgegrenztes historisches Fenster (Chunks vom 2026-05-21
+      bis 2026-07-09); die sechs neueren Chunks sind sauber, das Problem hat also
+      aufgehoert:
+
+      | Chunk ab | doppelte Schluessel |
+      | --- | --- |
+      | 05-21 | 4 |
+      | 05-28 | 1.544 |
+      | 06-04 | 2.193 |
+      | 06-11 | 13.684 |
+      | 06-18 | 11.481 |
+      | 06-25 | 11.107 |
+      | 07-02 | 10.989 |
+      | ab 07-09 | **0** |
+
+      Der Weg: pro betroffenem Chunk den PK-Index droppen, `decompress_chunk`,
+      Duplikate entfernen, Index neu anlegen, `compress_chunk`. Das ist DDL auf
+      einem produktiven Hypertable und gehoert in einen eigenen, geplanten Lauf —
+      nicht als Nebenprodukt eines Merges.
+- [ ] **Hurricane Harbor Los Angeles wartet darauf.** Die beiden Datensaetze
+      (`hurricane-harbor-los-angeles` Wiki, `six-flags-hurricane-harbor-los-angeles`
+      Queue-Times) teilen sich qt-park-41 und gehoeren zusammen. 12 Attraktionen
+      ueberschneiden sich, ~8.600 Vorhersagen des Verlierers muessten weichen —
+      geht erst nach der Dedup oben. Die Merge-Transaktion rollt sauber zurueck,
+      es ist nichts halb passiert.
+- [x] **Chunk 2026-05-14…05-21 wurde gedroppt** (3.775 Zeilen ueber 993
+      Attraktionen, davon 1.223 ohnehin ueber der 90-Tage-Retention). Das hat den
+      Chunk befreit, aber nur den — der naechste blockierte sofort wieder, was
+      erst das Ausmass oben sichtbar gemacht hat. Kein weiterer Chunk wurde
+      angefasst.
 - [ ] **Traumatica und Europa-Park bleiben getrennt** (bewusste Entscheidung:
       Traumatica ist ein eigenstaendiges Event mit eigenem Ticket, kein
       Duplikat). Folge davon: `matterhorn-blitz` und `pegasus` existieren als
