@@ -23,6 +23,27 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
+- [ ] **`sky-loop` fehlt im Glossar.** Abismo (Madrid, RCDB 3185) ist der einzige
+      je gebaute Maurer SkyLoop XT 450, und seine Signaturfigur — die
+      herzförmige Schleife, in der der Zug sekundenlang kopfüber hängt — hat
+      keinen Begriff. Die Elementliste führt jetzt Korkenzieher + Immelmann
+      (so benennt die spanische Wikipedia die beiden Überschläge, und nur so
+      geht die veröffentlichte 2 auf), aber die Figur selbst fehlt. Gleiche
+      Klasse wie `cobra-loop` vor der Ergänzung.
+- [ ] **Red Force: Modell umstritten.** Die DB sagt `Accelerator Coaster`,
+      Wikipedia `LSM Launch Coaster`. Je eine Quelle, also nichts geändert —
+      die Regel „bei Widerspruch nichts schreiben" gilt auch fürs Modell.
+      Klärt eine dritte Quelle (Intamin-Projektseite, Ferrari Land), ob der
+      Abschuss hydraulisch oder per LSM erfolgt.
+- [ ] **Furius Baco: `overbank` ist unbelegt.** Die gefundene Quelle nennt vier
+      Helices und keinen Overbank. Eine Quelle reicht mir nicht zum Ändern,
+      aber das Element steht auf der Kippe.
+- [ ] **`-2`-Duplikate stehen als Headliner in den Baselines.**
+      `universal-studios-japan/mine-cart-madness-2` (p90 210) und
+      `mario-kart-koopas-challenge-2` (140) sind Duplikatdatensätze derselben
+      Klasse wie die Blackpool-`-2`-Slugs — nur diesmal gewinnen sie die
+      Headliner-Rangliste ihres Parks und verzerren damit die Park-Baseline,
+      nicht nur eine Ride-Seite.
 
 - [ ] **Hyperia** (Thorpe Park, RCDB 20652) — sources state 2, 3 *and* 4
       inversions; Wikipedia contradicts itself within one article. The element
