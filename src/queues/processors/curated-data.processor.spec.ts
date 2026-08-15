@@ -1,4 +1,4 @@
-import { ManualMetadataProcessor } from "./manual-metadata.processor";
+import { CuratedDataProcessor } from "./curated-data.processor";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 
 jest.mock("../../common/cache/park-cache-invalidation", () => ({
@@ -14,7 +14,7 @@ jest.mock("../../common/cache/park-cache-invalidation", () => ({
  * value was written, announced, and still missing from the ride page the next
  * morning — that is the bug these tests exist to keep fixed.
  */
-describe("ManualMetadataProcessor", () => {
+describe("CuratedDataProcessor", () => {
   const rideProfiles = { findCuratedSince: jest.fn() };
   const rideProfileAudit = { audit: jest.fn() };
   const revalidationService = { revalidateTags: jest.fn() };
@@ -22,7 +22,7 @@ describe("ManualMetadataProcessor", () => {
   const queue = { add: jest.fn() };
 
   const processor = () =>
-    new ManualMetadataProcessor(
+    new CuratedDataProcessor(
       rideProfiles as never,
       rideProfileAudit as never,
       revalidationService as never,

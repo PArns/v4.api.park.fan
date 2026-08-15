@@ -17,6 +17,7 @@ The application relies heavily on background processing for data consistency and
 | `HolidaysProcessor` | Daily | Syncs public/school holidays for next 365 days. |
 | `ParkMetadataProcessor` | Daily 03:00 (`sync-all-parks`), Daily 15:00 (`sync-schedules-only`) | Syncs static data (geo, images) and **opening hours** for parks. Job names must be `sync-all-parks` / `sync-schedules-only` (not `fetch-all-parks`). See [Schedule Sync & Calendar](schedule-sync-and-calendar.md). |
 | `ChildrenMetadataProcessor` | Daily 04:00 | Combined sync of attractions / shows / restaurants metadata (replaced the deprecated per-entity-type metadata jobs). |
+| `CuratedDataProcessor` | Daily 06:30 (`audit-ride-profile-terms`), plus on demand | Publishes hand-curated ride profiles (evicts `park:integrated`, revalidates, re-revalidates past the CDN window) and audits that every glossary term id stored in `attraction_ride_profiles` still resolves against the frontend's published list. **The queue is still named `manual-metadata`** after the seed it was built for — renaming it would strand the repeatable job Bull keys by queue name in Redis. See [Ride ↔ Glossary link](../frontend/ride-glossary-link.md). |
 
 ### Analytics & ML
 | Processor | Schedule | Purpose |

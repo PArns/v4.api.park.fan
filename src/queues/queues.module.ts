@@ -10,7 +10,7 @@ import { ParkMetadataProcessor } from "./processors/park-metadata.processor";
 import { ChildrenMetadataProcessor } from "./processors/children-metadata.processor";
 import { SixFlagsHeightsProcessor } from "./processors/six-flags-heights.processor";
 import { RideStatsProcessor } from "./processors/ride-stats.processor";
-import { ManualMetadataProcessor } from "./processors/manual-metadata.processor";
+import { CuratedDataProcessor } from "./processors/curated-data.processor";
 import { SixFlagsClient } from "../external-apis/six-flags/six-flags.client";
 import { WaitTimesProcessor } from "./processors/wait-times.processor";
 import { WeatherProcessor } from "./processors/weather.processor";
@@ -118,7 +118,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
       { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
       { name: "six-flags-heights" }, // Ride heights the wiki does not carry
       { name: "ride-stats" }, // Speed/height/length from Wikidata
-      { name: "manual-metadata" }, // Curated seed, kept off the slow sweep queue
+      { name: "manual-metadata" }, // Curated data (name is historical — see CuratedDataProcessor)
       { name: "entity-mappings" }, // Phase 6.6.3: Multi-source mappings
       { name: "weather" },
       { name: "weather-warnings" },
@@ -216,7 +216,7 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     SixFlagsHeightsProcessor,
     RideStatsProcessor,
     SixFlagsClient,
-    ManualMetadataProcessor,
+    CuratedDataProcessor,
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
     WaitTimesProcessor,
     WeatherProcessor,

@@ -6,6 +6,30 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the term audit runs itself, and the processor says what it does
+
+`GET /v1/admin/ride-profile-term-audit` now also runs daily at 06:30. The seed's
+CI check went away with the seed, and an endpoint nobody calls catches a renamed
+glossary term only when somebody thinks to ask — while the failure is silent by
+design, because a ride page drops an unknown term rather than rendering a dead
+link.
+
+The job deliberately does **not** fail on a broken id. The ids are correct until
+the frontend ships a rename, and a nightly red job teaches people to ignore it;
+a warning naming the ids and the rides they shorten is the signal. An
+unreachable frontend is logged as exactly that rather than as "the curation is
+dead" — there is a test for it. `publish-ride-profiles` stays manual: it belongs
+at the end of a curation session, which is a human moment anyway.
+
+`ManualMetadataProcessor` is now `CuratedDataProcessor`. It has not applied a
+manual-metadata seed since that seed was deleted; it publishes curated ride
+profiles and audits their term ids. **The Bull queue keeps the name
+`manual-metadata`** — Bull keys repeatable jobs by queue name in Redis, so
+renaming it would strand `ride-profile-term-audit-cron` under the old name,
+registered and consumed by nobody. That needs an expand/contract migration,
+which is more machinery than a tidier string is worth; the reason is documented
+at the decorator.
+
 ### Added — `hasSingleRider`, and a curated wet flag that a sync cannot undo
 
 Two curated fields on the attraction, both edited in the database and written

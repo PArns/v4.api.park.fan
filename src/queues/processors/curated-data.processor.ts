@@ -22,15 +22,23 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
 const CDN_SETTLE_MS = 16 * 60 * 1000;
 
 /**
- * Publishes hand-curated attraction data on its own queue.
+ * Publishes hand-curated attraction data, and audits the glossary term ids it
+ * stores.
  *
  * Deliberately separate from children-metadata: that queue is occupied for
  * hours by the detail sweep's ~7000 rate-limited wiki requests, and a job
  * queued behind it would inherit exactly the delay this exists to avoid.
+ *
+ * The queue is still called `manual-metadata` although the seed it was named
+ * for is gone. That is on purpose: Bull keys repeatable jobs by queue name in
+ * Redis, so renaming it would strand `ride-profile-term-audit-cron` under the
+ * old name — registered, firing, and consumed by nobody. Renaming needs an
+ * expand/contract migration that removes the old repeatable first, which is
+ * more machinery than a tidier string is worth.
  */
 @Processor("manual-metadata")
-export class ManualMetadataProcessor {
-  private readonly logger = new Logger(ManualMetadataProcessor.name);
+export class CuratedDataProcessor {
+  private readonly logger = new Logger(CuratedDataProcessor.name);
 
   constructor(
     private readonly rideProfiles: RideProfileService,

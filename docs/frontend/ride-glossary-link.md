@@ -199,8 +199,15 @@ and the rides they shorten. It aborts rather than reporting when the glossary
 side answers empty — a frontend blip must not read as "the whole curation is
 dead".
 
-Run the audit after renaming or removing a glossary term, and after a curation
-session. Nothing runs it for you.
+**The audit runs itself daily at 06:30** (`CuratedDataProcessor`), so a renamed
+glossary term surfaces as a warning naming the ids and the rides they shorten,
+rather than waiting for somebody to ask. It deliberately does not fail the job:
+the ids are correct until the frontend ships a rename, and a nightly red job
+teaches people to ignore it. Call the endpoint yourself when you want the
+detail — after renaming a term, or at the end of a curation session.
+
+**Publish stays manual**, and that is the right split: it belongs at the end of
+a curation session, which is a human moment anyway.
 
 **Still nobody's job:** a ride deleted and re-created upstream loses its profile
 without a warning, because the FK cascades. Park and ride slugs drifting is no
@@ -283,9 +290,9 @@ ride page just silently drops it and the layout reads short. The mirrored
 allowlist (`glossary-term-ids.ts`) and the spec that failed CI on an unknown id
 both went with the seed, because there is no longer a checked-in file to check.
 
-`GET /v1/admin/ride-profile-term-audit` is what replaced them. It is **not**
-automatic: nothing calls it, so it catches a rename only when someone asks.
-Before writing a new id by hand, confirm it exists:
+`GET /v1/admin/ride-profile-term-audit` is what replaced them, and a daily
+06:30 job now calls it — so a rename shows up in the log the next morning
+instead of on a ride page. Before writing a new id by hand, confirm it exists:
 
 ```bash
 grep "id: 'zero-g-stall'" ../park.fan/lib/glossary/data.ts
