@@ -28,43 +28,28 @@ and both fail **silently** — that is what makes them worth tracking.
       32 Attraktionen und 313 Schedule-Eintraege migriert, der Park steht jetzt bei
       36 Attraktionen ohne Duplikate, alle 11 Ride-Profile erhalten. RCDB 3866 ist
       damit nicht mehr doppelt vergeben.
-- [ ] **`wait_time_predictions` hat ~51.000 doppelte Primaerschluessel** — und das
-      ist die eigentliche Baustelle, nicht der Park-Merge, der sie nur ans Licht
-      gebracht hat. Timescale erzwingt den PK auf komprimierten Chunks nicht, also
-      liegen dort Zeilen, die beim Dekomprimieren mit den unkomprimierten
-      kollidieren. **Damit scheitert JEDE Loeschung**, die einen betroffenen Chunk
-      beruehrt — also vermutlich auch der Retention-Job.
-
-      Betroffen ist ein abgegrenztes historisches Fenster (Chunks vom 2026-05-21
-      bis 2026-07-09); die sechs neueren Chunks sind sauber, das Problem hat also
-      aufgehoert:
-
-      | Chunk ab | doppelte Schluessel |
-      | --- | --- |
-      | 05-21 | 4 |
-      | 05-28 | 1.544 |
-      | 06-04 | 2.193 |
-      | 06-11 | 13.684 |
-      | 06-18 | 11.481 |
-      | 06-25 | 11.107 |
-      | 07-02 | 10.989 |
-      | ab 07-09 | **0** |
-
-      Der Weg: pro betroffenem Chunk den PK-Index droppen, `decompress_chunk`,
-      Duplikate entfernen, Index neu anlegen, `compress_chunk`. Das ist DDL auf
-      einem produktiven Hypertable und gehoert in einen eigenen, geplanten Lauf —
-      nicht als Nebenprodukt eines Merges.
-- [ ] **Hurricane Harbor Los Angeles wartet darauf.** Die beiden Datensaetze
-      (`hurricane-harbor-los-angeles` Wiki, `six-flags-hurricane-harbor-los-angeles`
-      Queue-Times) teilen sich qt-park-41 und gehoeren zusammen. 12 Attraktionen
-      ueberschneiden sich, ~8.600 Vorhersagen des Verlierers muessten weichen —
-      geht erst nach der Dedup oben. Die Merge-Transaktion rollt sauber zurueck,
-      es ist nichts halb passiert.
-- [x] **Chunk 2026-05-14…05-21 wurde gedroppt** (3.775 Zeilen ueber 993
-      Attraktionen, davon 1.223 ohnehin ueber der 90-Tage-Retention). Das hat den
-      Chunk befreit, aber nur den — der naechste blockierte sofort wieder, was
-      erst das Ausmass oben sichtbar gemacht hat. Kein weiterer Chunk wurde
-      angefasst.
+- [x] **`wait_time_predictions`: die 51.000 doppelten Primaerschluessel sind weg,
+      und Hurricane Harbor ist zusammengefuehrt.** Timescale erzwingt den PK auf
+      komprimierten Chunks nicht, also kollidierten dort Zeilen beim
+      Dekomprimieren — womit JEDE Loeschung scheiterte, die einen betroffenen
+      Chunk beruehrte. Der PK haengt an der Hypertable, nicht am Chunk, ein
+      chunkweises Reparieren war also nicht moeglich. Entschieden wurde, die
+      sieben betroffenen Chunks (2026-05-21 bis 07-09) zu droppen: 13,5 Mio.
+      Zeilen Vorhersage-Historie, ~37 % der Tabelle. `drop_chunks` braucht keine
+      Dekomprimierung und lief in Sekunden. Die Tabelle steht jetzt bei 23,0 Mio.
+      Zeilen, aeltester Chunk 2026-07-09, alle verbliebenen Chunks duplikatfrei.
+      Danach ging der Park-Merge ohne Weiteres durch (13 Attraktionen, 173
+      Schedule-Eintraege).
+- [ ] **Die Ursache der Duplikate ist NICHT gefunden.** Das Fenster war
+      abgegrenzt (05-21 bis 07-09) und alles danach ist sauber, das Problem hat
+      also von selbst aufgehoert — aber niemand weiss, warum es anfing oder
+      warum es endete. Wenn es wiederkommt, faellt es erst auf, wenn wieder eine
+      Loeschung scheitert. Ein billiger Waechter waere eine periodische Zaehlung
+      doppelter Schluessel pro Chunk; die Query steht im Verlauf dieser Session.
+- [ ] **prediction_accuracy fuer 2026-05-21 bis 07-09 hat keine Grundlage mehr.**
+      Die Vorhersagen dieses Zeitraums sind geloescht; ausgewertete Kennzahlen,
+      die noch darauf verweisen, stehen ohne Beleg da. Pruefen, ob dort etwas
+      nachgezogen oder als luecke markiert werden muss.
 - [ ] **Traumatica und Europa-Park bleiben getrennt** (bewusste Entscheidung:
       Traumatica ist ein eigenstaendiges Event mit eigenem Ticket, kein
       Duplikat). Folge davon: `matterhorn-blitz` und `pegasus` existieren als
