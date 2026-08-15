@@ -23,18 +23,20 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
-- [ ] **Runde 5: die drei verbliebenen geteilten Inversionslisten.** Runde 4 hat
-      die Cluster-Query aus dem Guide als Auswahlkriterium benutzt statt
-      Prominenz — Trefferquote 9 von 14. Was noch steht:
-      **`big-loop` / `corkscrew` / `corkscrew`** (Vekoma + zweimal Arrow —
-      wieder eine Liste ueber verschiedene Hersteller),
-      **`demon` / `python` / `rolling-x-train`** (Arrow-Looper) und
-      **`batman-arkham-asylum` / `batman-the-ride` / `nemesis-inferno`** —
-      dort ist Nemesis Inferno nachweislich richtig (4 Inversionen), die beiden
-      Batman-Klone melden aber 5 auf derselben Liste, also stimmt eine Seite
-      nicht. Die 6er-Boomerang- und 5er-SLC-Cluster sind dagegen *echte*
-      Klonfamilien und in #161/#162 bereits einzeln geprueft — die bitte in
-      Ruhe lassen.
+- [x] **Runde 5 erledigt — der Cluster-Sweep ueber benannte Inversionen ist
+      sauber.** Alle Listen, die eine benannte Inversion enthalten, werden jetzt
+      nur noch von Rides geteilt, die auch dieselbe Inversionszahl melden. Was
+      die Query noch ausgibt, sind die generischen duennen Listen
+      (`lifthill → first-drop → helix → brake-run` und Verwandte, 54 Rides),
+      Minenzuege und Holzachterbahnen — die fuehren gar keine benannte
+      Inversion, dort kann die Liste nur unvollstaendig sein, nicht falsch.
+- [ ] **Zwei kleine Cluster stehen noch**, beide ohne geprueften Widerspruch,
+      aber mit gemischter Inversionszahl: `cobras-curse / winjas-force /
+      winjas-fear` (Spinning Coaster) und `sky-scream / electric-eel`
+      (Premier Sky Rocket II). Vier Rides, guenstige Runde 6.
+- [ ] **Beide Great-America-Demons tragen RCDB-ID 3.** Die Zwillingsparks haben
+      wirklich je einen identischen Arrow-Looper von 1976, aber dieselbe ID
+      koennen nicht beide haben — eine ist falsch verknuepft.
 - [x] **Runde 3 erledigt** — Voltron, Banshee, blue fire, Fury (Bobbejaanland)
       und die zehn Marquee-Namen mit 0 Inversionen geprueft. Vier Fehler
       gefunden und korrigiert; Millennium Force, Taron, Shambhala, Silver Star,
