@@ -6,6 +6,18 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a retired attraction is gone, not seasonal
+
+Excluding retired attractions from `detect-seasonal`'s candidate searches stops
+them being marked **again**; it does not clear the flag they already carry. And
+no reset path can reach them: the recently-operating reset keys off a ride
+reporting OPERATING, which a demolished one never will. Verifying the retirement
+of the first four found all four still carrying `is_seasonal = true`.
+
+Step 2c clears it, the same shape as the free-flow heal (Step 2b) and for the
+same structural reason. "Seasonal" says an attraction closes for part of the
+year; that is not what happened to it.
+
 ### Added — attractions that no longer exist can finally say so
 
 A demolished ride is not "closed today" and it is not "unknown" either. Both of

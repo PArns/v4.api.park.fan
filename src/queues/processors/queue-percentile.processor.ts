@@ -212,6 +212,22 @@ export class QueuePercentileProcessor {
         WHERE open_with_park AND is_seasonal = true
           AND season_months IS NULL`,
     );
+
+    // Step 2c: same shape, same reason. Excluding retired attractions from the
+    // candidate searches stops them being marked AGAIN; it does not clear the
+    // flag they already carry, and no reset path can reach them either — a
+    // demolished ride will never report OPERATING. "Seasonal" says it closes
+    // for part of the year, which is not what happened to it.
+    const retiredReset = await this.dataSource.query(
+      `UPDATE attractions
+          SET is_seasonal = false, season_months = NULL
+        WHERE retired_at IS NOT NULL AND is_seasonal = true`,
+    );
+    if (retiredReset[1] > 0) {
+      this.logger.log(
+        `   🪦 Reset ${retiredReset[1]} retired attractions (gone, not seasonal)`,
+      );
+    }
     if (freeFlowReset[1] > 0) {
       this.logger.log(
         `   🎠 Reset ${freeFlowReset[1]} free-flow attractions (never seasonal)`,
