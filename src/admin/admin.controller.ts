@@ -24,6 +24,10 @@ import { Queue } from "bull";
 import { In } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import {
+  RideProfileAuditService,
+  RideProfileTermAudit,
+} from "../attractions/services/ride-profile-audit.service";
 import { ParkValidatorService } from "../parks/services/park-validator.service";
 import { ParkRepairService } from "../parks/services/park-repair.service";
 import {
@@ -71,6 +75,7 @@ export class AdminController {
     private readonly systemHealth: SystemHealthService,
     private readonly attractionMergeService: AttractionMergeService,
     private readonly parkRenameService: ParkRenameService,
+    private readonly rideProfileAudit: RideProfileAuditService,
   ) {}
 
   /**
@@ -960,6 +965,59 @@ export class AdminController {
       { priority: 1 },
     );
     return { message: "Manual metadata job queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Publish ride profiles curated directly in the database.
+   *
+   * The curation is hand-written SQL now, and SQL cannot evict a Redis key or
+   * ping the frontend. Without this, a corrected ride surfaces only as the
+   * caches age out — `park:integrated` up to 6h, the Cloudflare copy 900s on
+   * top, and the frontend pinning whatever it read for a day. Call it after a
+   * curation session; it evicts, revalidates, and schedules the second sweep
+   * past the CDN window.
+   */
+  @Post("publish-ride-profiles")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Publish hand-curated ride profiles",
+    description:
+      "Evicts the park caches for every ride profile whose `seeded_at` falls " +
+      "in the last `sinceHours` (default 24) and tells the frontend to " +
+      "revalidate. Set `seeded_at = now()` when you edit a row.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerPublishRideProfiles(
+    @Body() body?: { sinceHours?: number },
+  ): Promise<{ message: string; jobId: string }> {
+    const job = await this.manualMetadataQueue.add(
+      "publish-ride-profiles",
+      { sinceHours: body?.sinceHours },
+      { priority: 1 },
+    );
+    return { message: "Ride profile publish queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Check that every glossary term id the curation stores still resolves.
+   *
+   * Replaces the CI check that went away with the ride-profile seed. Both
+   * sides are needed and only one is in this repo, so the frontend publishes
+   * the ids that resolve to a page and this diffs them against the ids the
+   * database actually stores. Synchronous: it is one HTTP call plus one query
+   * over a few hundred rows, and the answer is the point of calling it.
+   */
+  @Get("ride-profile-term-audit")
+  @ApiOperation({
+    summary: "Find ride-profile term ids the glossary no longer defines",
+    description:
+      "A broken id is invisible at runtime — the ride page drops it and the " +
+      "layout just reads short. Names every offending id and the rides it " +
+      "damages.",
+  })
+  @ApiResponse({ status: 200, description: "Audit result" })
+  async getRideProfileTermAudit(): Promise<RideProfileTermAudit> {
+    return this.rideProfileAudit.audit();
   }
 
   /**
