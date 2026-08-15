@@ -8,6 +8,47 @@ left is establishing, per attraction, whether it is actually gone.
 - [ ] **73 individual retirement candidates** — attractions that had real wait
       times, stopped reporting more than 30 days ago on a date **not shared**
       with others in their park, and are still receiving reconciliation rows.
+
+      Regenerate the list with this — it is the whole definition, and the
+      `s.n <= 2` clause is the load-bearing part:
+
+      ```sql
+      WITH act AS (
+        SELECT "attractionId" AS aid,
+               max(timestamp) FILTER (WHERE status='OPERATING') AS last_op,
+               max(timestamp) AS last_row, max("waitTime") AS max_wait
+          FROM queue_data WHERE timestamp > now() - interval '400 days' GROUP BY 1
+      ), cand AS (
+        SELECT a.id, a.name, a."parkId", p.name AS park,
+               act.last_op::date AS d, act.max_wait
+          FROM act JOIN attractions a ON a.id = act.aid
+          JOIN parks p ON p.id = a."parkId"
+         WHERE act.last_op < now() - interval '30 days'
+           AND act.last_row > now() - interval '2 days'
+           AND act.max_wait > 0            -- it really had a queue
+           AND a.retired_at IS NULL
+      ), same_day AS (SELECT "parkId", d, count(*) AS n FROM cand GROUP BY 1,2)
+      SELECT c.park, c.name, c.d AS went_silent, c.id
+        FROM cand c JOIN same_day s ON s."parkId" = c."parkId" AND s.d = c.d
+       WHERE s.n <= 2                      -- individual, not a block
+       ORDER BY c.park, c.name;
+      ```
+
+      **Research shape that works** (six subagents grouped by operator, since
+      causes cluster there): each attraction gets one of PERMANENTLY_CLOSED /
+      REFURBISHMENT / SEASONAL / STILL_OPERATING / UNKNOWN, and
+      PERMANENTLY_CLOSED requires a **date and a source** or it does not count.
+      Tell the agents explicitly that STILL_OPERATING is a normal answer —
+      *Pooh's Hunny Hunt*, *Dumbo*, *Enchanted Storybook Castle*, *Marvel Cave*
+      and *Shock Wave* are all in the list and are all landmarks of their parks.
+      If those come back "retired", the research is wrong, not the parks.
+
+      Traps found while preparing the batch: "Sea World" here is the **Gold
+      Coast, Australia** park, not Orlando; `Skyride (Egypt Station)` and
+      `Walibi Express Station 2` are **stations** of one ride; Universal
+      Beijing's "The Wizarding World of Harry Potter" is a whole **land**; and
+      `Coastersaurus - Currently Closed for Maintenance` carries a hint in its
+      name that still needs verifying.
       Spread over ~20 parks, at most five each. The scattered dates are what
       separates them from the 67 whose whole block fell silent on one day —
       those are seasonal closures (Wet'n'Wild's 13+9 on 2026-06-29 is the
