@@ -10,7 +10,7 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
 /**
  * How long the public copy of a park response can outlive a write: the park
  * endpoint is served `max-age=300, stale-while-revalidate=600` and nothing here
- * can purge Cloudflare. Mirrors `ManualMetadataProcessor`.
+ * can purge Cloudflare. Mirrors `CuratedDataProcessor`.
  */
 const CDN_SETTLE_MS = 16 * 60 * 1000;
 

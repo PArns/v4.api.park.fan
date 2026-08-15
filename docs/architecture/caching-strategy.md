@@ -29,7 +29,7 @@ Full JSON responses for "Integrated" DTOs (aggregating weather, schedule, attrac
 > a day. Any job that writes park or attraction data must call
 > `invalidateParkCaches()` first, revalidate second, and — because the edge
 > cannot be purged — revalidate once more after the edge window has passed.
-> `ManualMetadataProcessor.publish()` is the reference implementation
+> `CuratedDataProcessor.publish()` is the reference implementation
 > (`CDN_SETTLE_MS`).
 
 ### 2. Analytics & Statistics

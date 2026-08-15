@@ -27,6 +27,18 @@ and both fail **silently** — that is what makes them worth tracking.
       ohnehin ein menschlicher Moment.
 
 **Curation left deliberately open:**
+- [ ] **Der Audit-Cron ist registriert, aber noch nie gelaufen.** `delayed: 1` auf
+      der Queue belegt die Registrierung, der Fehlerpfad ist getestet — dass der
+      Handler in Produktion durchlaeuft, zeigt erst der erste Lauf um 06:30.
+      Danach einmal im API-Log nach `Ride-profile term audit clean` schauen.
+- [ ] **Die Bull-Queue heisst weiter `manual-metadata`**, obwohl der Seed dieses
+      Namens geloescht ist. Bewusst so gelassen: Bull schluesselt Repeatable-Jobs
+      in Redis am Queue-Namen, ein Umbenennen wuerde
+      `ride-profile-term-audit-cron` unter dem alten Namen stranden — registriert
+      und von niemandem konsumiert. Sauber ginge es nur per Expand/Contract: neue
+      Queue registrieren, alten Repeatable entfernen, dann die alte fallenlassen.
+      Der Grund steht am Dekorator, die Klasse heisst inzwischen
+      `CuratedDataProcessor`.
 - [x] **Universal Studios Florida ist zusammengefuehrt.** Der Queue-Times-Datensatz
       (`universal-studios-at-universal-orlando`) ist im Wiki-Datensatz aufgegangen:
       32 Attraktionen und 313 Schedule-Eintraege migriert, der Park steht jetzt bei
