@@ -187,6 +187,21 @@ export class QueuePercentileProcessor {
       }
     }
 
+    // Step 2b: Clear free-flow attractions that an earlier run mislabelled.
+    // Step 2 resets on "recently OPERATING", which a playground never is — its
+    // queue_data says CLOSED forever and only the read-time override says
+    // otherwise. Without this the false positives are permanent.
+    const freeFlowReset = await this.dataSource.query(
+      `UPDATE attractions
+          SET is_seasonal = false, season_months = NULL
+        WHERE open_with_park AND is_seasonal = true`,
+    );
+    if (freeFlowReset[1] > 0) {
+      this.logger.log(
+        `   🎠 Reset ${freeFlowReset[1]} free-flow attractions (never seasonal)`,
+      );
+    }
+
     // Step 3: Find attractions fully CLOSED (zero operating records that day) while park open
     // Requirements:
     // - Fully closed on ≥ MIN_PARK_OPEN_DAYS_CLOSED park-open days
@@ -230,7 +245,13 @@ export class QueuePercentileProcessor {
           a."parkId",
           COUNT(DISTINCT pod.open_day) as fully_closed_days
         FROM park_open_days pod
+        -- Free-flow attractions (playgrounds, splash pads) have no queue, so
+        -- their feed reports CLOSED every single day. That is exactly this
+        -- detector's seasonal signature, and it is a false positive: they are
+        -- open whenever the park is. Three of Phantasialand's four were marked
+        -- seasonal with no months; open_with_park already states the truth.
         JOIN attractions a ON a."parkId" = pod."parkId"
+                          AND NOT a.open_with_park
         WHERE NOT EXISTS (
           SELECT 1 FROM attraction_operating_days aod
           WHERE aod."attractionId" = a.id AND aod.op_day = pod.open_day
@@ -299,7 +320,9 @@ export class QueuePercentileProcessor {
         SELECT a.id as "attractionId", a."parkId"
         FROM attractions a
         JOIN attr_activity aa ON aa."attractionId" = a.id
-        WHERE aa.has_operating = false
+        -- Same reason as above: "never seen OPERATING" is the normal state of
+        -- a playground, not evidence of a season.
+        WHERE aa.has_operating = false AND NOT a.open_with_park
       ),
       current_status AS (
         SELECT DISTINCT ON ("attractionId")

@@ -1,5 +1,83 @@
 # TODO
 
+## Free-flow attractions & seasonality (2026-08-15)
+
+**Context:** `open_with_park` was only ever curated for Phantasialand. A sweep
+found 76 name-matched candidates; 47 already report OPERATING (the feed handles
+them), 4 sit in Hansa-Park where the flag deliberately cannot fire, and 25 were
+researched one by one against the operators' own pages. 14 were flagged.
+
+**Deliberately not flagged — genuinely seasonal, at parks open year-round:**
+- [ ] Europa-Park — *Lítill Island* (summer) and *Water Playground* (summer +
+      Halloween); Everland — *Snow playground* (winter); Bellewaerde —
+      *Snowmen Playground* (Christmas event only).
+      `isFreeFlowOpen` has **no season gate**, so flagging these would report a
+      snow playground open in July. Fixing it properly means either a season
+      gate on the util or usable `season_months` — see the next item, which is
+      why the months cannot currently be trusted.
+- [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
+      *Muddy Puddles Splash Pad*, Walibi Rhône-Alpes *Exotic Island 3-6* and
+      *7-12*. Confirmed free-flow, but no source states an operating window, and
+      a water play area plausibly closes in cold months. Held rather than
+      guessed. (The splash pads at *seasonal parks* — Water Country USA,
+      Hurricane Harbor Arlington — were flagged: the park-status gate does the
+      seasonal work there.)
+
+**`season_months` can encode the observation window, not a season:**
+- [ ] Phantasialand's Avoras, Berliner Eislaufen and Ice skate hire all have
+      their first queue_data row on **2025-12-24** and all derived
+      `season_months = [1, 12]`. For the two ice-rink attractions that is
+      correct; for Avoras — advertised by the park as open *"ganzjährig"* — it
+      was pure artefact, and it read as out of season all summer.
+      **The data alone cannot separate the two cases.** A guard ("only derive
+      months once we have observed ≥ ~330 days") would drop the artefact but
+      also drop the two correct labels, so it was not shipped. Revisit once
+      history spans a full year for these attractions, or gate on observed span
+      per attraction rather than globally.
+
+**Attractions marked seasonal with no months at all:**
+- [ ] Movie Park Germany's 9 Halloween Horror Fest mazes are correctly seasonal
+      but have `season_months = NULL`: their first feed row is 2026-04-17, i.e.
+      *after* the last Halloween, so there is no observed operating month to
+      derive from. The detector honestly writes NULL. Consequence:
+      `isCurrentlyInSeason` is `null`, the frontend cannot distinguish "closed
+      today" from "not in season", and they drag the park's operating count to
+      22/39 in August. Do **not** hand-fill October — whether the feed even
+      reports the mazes OPERATING during HHF is unproven. After HHF 2026 the
+      detector will have real evidence.
+- [ ] Related presentation gap: the API already knows `isSeasonal: true`. What a
+      client cannot do is tell "out of season" from "no data", because
+      `isCurrentlyInSeason` is `null` in both cases.
+
+**Unresolved identities — researched, not concluded:**
+- [ ] Heide Park **"PLAYGROUND"** — no source ties this record to a specific
+      physical area; the park's own attraction overview names no standalone
+      playground. Possibly a feed artefact.
+- [ ] Plopsaland De Panne **"The Pirates' Playground"** — absent from the
+      official sitemap in all four languages, old URLs 404. Evidence points to
+      removal; needs a decision (delete vs keep).
+- [ ] LEGOLAND Korea **"Cole's Rock Climbing"** — the official page's entire
+      body text does not say whether it is a walk-up wall or a staffed harnessed
+      one. Sister parks point free-flow, but that is cross-park inference.
+- [ ] Toverland **"Kletterparcours"** is **gone** — a harnessed high-ropes course
+      (140 cm minimum, 120 kg max), permanently closed after 2 Nov 2025, and its
+      Toverland page 404s. It is still in our DB. Note it was never free-flow:
+      flagging it by name pattern would have advertised a demolished attraction
+      as always open.
+- [ ] Movie Park **"Teenage Mutant Ninja Turtles: License to Drive"** has never
+      once reported OPERATING since its first row on 2025-12-24. Unclear whether
+      it is unopened, removed, or mis-fed.
+
+**The wider backlog (not yet touched):**
+- [ ] The name-based net has a known hole: *Mopti's Monkey Depot* contains no
+      playground vocabulary and would never have matched. The behavioural net —
+      attractions that never report OPERATING in a park whose feed demonstrably
+      works — returns **453** rows. A sample shows it is dominated by Halloween
+      event attractions, winter operations (*Curlingbaan*, *Schaatsbaan*,
+      *Tubingbaan*), off-season water areas and genuinely defunct rides, so it
+      needs a cheaper triage than per-attraction research before it is useful.
+
+
 ## Ride profiles: the safety nets that went with the seed (2026-08-15)
 
 **Context:** [#163](https://github.com/PArns/v4.api.park.fan/pull/163) removed
