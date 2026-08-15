@@ -6,6 +6,43 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a playground is not a season
+
+`detect-seasonal` marks an attraction seasonal when it stays CLOSED across every
+park-open day in the lookback window. That is also the permanent state of a
+free-flow attraction: a playground has no queue, so its feed reports CLOSED
+forever and only the read-time `open_with_park` override says otherwise. The
+detector could not tell the two apart, and Step 2's reset keys off queue_data
+ever saying OPERATING — which a playground never does — so the mislabel was
+permanent.
+
+Phantasialand showed both halves of the damage. Three of its four free-flow
+attractions carried `isSeasonal: true` with no months while serving
+`status: OPERATING`. And **Avoras** — a walk-in climbing course the park
+advertises as open *"ganzjährig im Sommer wie auch im Wintertraum"* — was
+reported out of season in August.
+
+Avoras also exposes a second, subtler trap worth naming: its `season_months`
+came out as `[1, 12]` because our history for it starts 2025-12-24. December and
+January were not its season, they were **our observation window**. The park's
+two genuine winter attractions share the same first-seen date and the same
+derived months, so the artefact is invisible from the data alone — only the
+park's own page separates them. Left in place for now (the ice-rink labels are
+correct), recorded in `todo.md`.
+
+Both candidate searches now skip `open_with_park` attractions, and the job
+clears the flag on any it had already mislabelled, so it self-heals.
+
+Curated to `open_with_park` after per-attraction research against the operators'
+own pages: 14 free-flow attractions across Europa-Park, LEGOLAND Billund /
+Deutschland / New York, Walibi Rhône-Alpes, Chessington, Busch Gardens
+Williamsburg, Universal Studios Florida, Water Country USA, Hurricane Harbor
+Arlington, Familypark and Paradise Country — plus Avoras. Deliberately **not**
+flagged: genuinely seasonal free-flow areas at year-round parks (Europa-Park's
+two water playgrounds, Everland's snow playground, Bellewaerde's Christmas
+playground), because `isFreeFlowOpen` has no season gate and would call them
+open in the wrong month.
+
 ### Fixed — upstream put the height on the wrong splash attraction
 
 Phantasialand runs two water attractions side by side and ThemeParks.wiki has

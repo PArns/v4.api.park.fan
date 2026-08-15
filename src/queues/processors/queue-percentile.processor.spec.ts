@@ -76,3 +76,57 @@ describe("QueuePercentileProcessor — dedupe-percentile-aggregates", () => {
     expect(deleteSql).toContain("rn > 1");
   });
 });
+
+/**
+ * Free-flow attractions (playgrounds, splash pads, climbing structures) have no
+ * queue, so their feed says CLOSED every day the park is open — which is this
+ * detector's exact signature for "seasonal". Three of Phantasialand's four were
+ * marked seasonal with no months, and Avoras, a year-round climbing course the
+ * park advertises as open "ganzjährig", read as a winter attraction.
+ *
+ * Step 2's reset keys off queue_data ever saying OPERATING, which a playground
+ * never does, so a mislabel is permanent without the explicit clear.
+ */
+describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
+  const runDetectSeasonal = async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never, // dataSource
+    );
+    await processor.handleDetectSeasonal({} as never);
+    return query.mock.calls.map((c) => c[0] as string);
+  };
+
+  it("clears the flag on attractions that are open with the park", async () => {
+    const statements = await runDetectSeasonal();
+
+    const reset = statements.find(
+      (sql) =>
+        /UPDATE attractions/i.test(sql) &&
+        /is_seasonal\s*=\s*false/i.test(sql) &&
+        /open_with_park/i.test(sql),
+    );
+
+    expect(reset).toBeDefined();
+    // It must clear the months too — a stale [1, 12] is what made Avoras read
+    // as out of season in August.
+    expect(reset).toMatch(/season_months\s*=\s*NULL/i);
+  });
+
+  it("excludes them from both candidate searches", async () => {
+    const statements = await runDetectSeasonal();
+
+    // The history-based search (step 3) and the zero-history search (step 3b).
+    const candidateQueries = statements.filter((sql) =>
+      /days_fully_closed|never_operating/.test(sql),
+    );
+
+    expect(candidateQueries.length).toBeGreaterThanOrEqual(2);
+    for (const sql of candidateQueries) {
+      expect(sql).toMatch(/NOT a\.open_with_park/);
+    }
+  });
+});
