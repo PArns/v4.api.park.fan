@@ -953,6 +953,28 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Data-quality sweep: a park losing a block of attractions from its feed,
+    // and jobs that are scheduled, run and throw. Both failure modes ran for
+    // weeks unnoticed before this existed — see DataQualityMonitorService.
+    const hasDataQualityCron = await this.hasRepeatableJob(
+      this.analyticsQueue,
+      "data-quality-monitor-cron",
+    );
+    if (!hasDataQualityCron) {
+      await this.analyticsQueue.add(
+        "monitor-data-quality",
+        {},
+        {
+          repeat: {
+            cron: "45 6 * * *", // Daily at 06:45, just after the term audit
+          },
+          jobId: "data-quality-monitor-cron",
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
+    }
+
     this.logger.log("🎉 All scheduled jobs registered!");
   }
 

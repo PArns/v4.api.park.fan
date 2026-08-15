@@ -35,9 +35,11 @@ import {
   isThrottlingEnabled,
 } from "./common/throttler/throttler.config";
 import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
+import { MonitoringModule } from "./monitoring/monitoring.module";
 
 @Module({
   imports: [
+    MonitoringModule,
     // Global config module
     ConfigModule.forRoot({
       isGlobal: true,

@@ -6,6 +6,50 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — detectors for the two ways this system went quietly wrong
+
+Both of today's multi-week failures were found **by accident**, while looking at
+something else, and neither was visible in any existing check:
+
+- `detect-seasonal` threw a SQL syntax error on every run from 2026-06-03. It
+  was scheduled, it ran, it died. 73 days.
+- ThemeParks.wiki dropped 44 Europa-Park attractions from its live feed on
+  2026-06-07, plus clusters at nine other parks. 10 weeks.
+
+`SystemHealthService.freshness()` could not have caught either — it reads
+`MAX(timestamp)` across all of queue_data and the last hour's row count, and
+both stayed perfectly healthy while 140 attractions were dead. **An aggregate
+cannot see a subset go silent.** The boot-time `hasRepeatableJob` check could
+not have caught the first either: it finds jobs that were never scheduled, and
+this one was scheduled and running.
+
+Two detectors, daily at 06:45 on the analytics queue, plus
+`GET /v1/admin/data-quality` for detail:
+
+**Silenced clusters** — a park where ≥5 attractions stopped reporting on the
+same day, while the park's feed demonstrably still works. The window is the
+design: the cluster must have fallen silent between 3 and 14 days ago, so the
+warning appears within days and then **goes quiet by itself**. No state, no
+acknowledgement table, and no nightly-red job that trains people to scroll past
+it. `windowDays` is a parameter so history can be inspected on demand.
+
+The park-health gate is an **absolute count of still-live attractions, never a
+ratio** — a ratio is self-defeating here, because the very incident being looked
+for drags the park below it. Europa-Park at 45% live would have been hidden by a
+70% gate.
+
+**Failing jobs** — Bull's failed sets, grouped by job name with the newest
+reason. Read straight off the Redis keys rather than by injecting fourteen
+queues. Complementary to the boot-time check, not a replacement.
+
+On its first run against production the cluster detector reported four events
+inside its default window, none of which anyone knew about: 19 rides at
+Schlitterbahn NB, 15 at Six Flags Over Georgia and 13 at Kings Dominion all
+silent since 2026-08-09, and 6 at Warner Bros. Movie World since 2026-08-05.
+Those names are water-park sections, so this is far more likely to be US parks
+closing after the school year than four simultaneous faults — **a hit is an
+event, not a verdict**. The point is that until now the event was invisible.
+
 ### Fixed — a season cannot be read off less than a year of watching
 
 `detect-seasonal` derived `season_months` from the months an entity had ever

@@ -38,6 +38,7 @@ import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
+import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
 
 /**
  * Admin Controller
@@ -76,6 +77,7 @@ export class AdminController {
     private readonly attractionMergeService: AttractionMergeService,
     private readonly parkRenameService: ParkRenameService,
     private readonly rideProfileAudit: RideProfileAuditService,
+    private readonly dataQualityMonitor: DataQualityMonitorService,
   ) {}
 
   /**
@@ -85,6 +87,25 @@ export class AdminController {
    * CatBoost (ml-service) + TFT (nf-service): training status/progress + model
    * quality + the TFT-vs-CatBoost scoreboard. One JSON for a monitoring UI.
    */
+  /**
+   * On-demand view of the two silent-failure detectors that run daily at 06:45.
+   *
+   * `windowDays` exists so the cluster detector can be pointed at history: it
+   * defaults to a short window on purpose, so a reported cluster falls quiet by
+   * itself after a couple of weeks rather than nagging forever. Ask for 120
+   * days to see the known incidents (Europa-Park 2026-06-07 and friends).
+   */
+  @Get("data-quality")
+  @ApiOperation({ summary: "Silenced attraction clusters and failing jobs" })
+  async getDataQuality(@Query("windowDays") windowDays?: string) {
+    const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
+    const [silencedClusters, failingJobs] = await Promise.all([
+      this.dataQualityMonitor.findSilencedClusters(days),
+      this.dataQualityMonitor.findFailingJobs(),
+    ]);
+    return { windowDays: days, silencedClusters, failingJobs };
+  }
+
   @Get("system-health")
   @ApiOperation({
     summary: "System health + ML training/quality dashboard",
