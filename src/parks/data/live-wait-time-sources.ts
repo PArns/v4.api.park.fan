@@ -25,7 +25,7 @@
  *
  * Keyed by citySlug + parkSlug because park slugs are not globally unique
  * ("disneyland-park" exists in Anaheim and in Paris), matching the convention
- * in MANUAL_ATTRACTION_METADATA.
+ * in the attractions table (`rcdb_id`).
  */
 
 /**

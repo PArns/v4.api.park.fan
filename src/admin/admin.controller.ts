@@ -305,15 +305,16 @@ export class AdminController {
   /**
    * Manually trigger attraction detail sync
    *
-   * Syncs minimumHeight from ThemeParks.wiki per-entity documents and applies
-   * MANUAL_ATTRACTION_METADATA (RCDB ids, curated fallback heights).
+   * Syncs minimumHeight, maximumHeight and mayGetWet from ThemeParks.wiki
+   * per-entity documents. It writes only the upstream columns — hand-made
+   * corrections live in `curated_may_get_wet` and are never touched here.
    */
   @Post("sync-attraction-details")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger attraction detail sync",
     description:
-      "Syncs minimum rider heights from ThemeParks.wiki entity documents (~1 request per attraction) and applies manual RCDB/height metadata",
+      "Syncs minimum rider heights from ThemeParks.wiki entity documents (~1 request per attraction). Curated corrections are not overwritten.",
   })
   @ApiResponse({
     status: 202,
@@ -939,32 +940,6 @@ export class AdminController {
         })),
       },
     };
-  }
-
-  /**
-   * Apply the curated attraction seed (RCDB ids, fallback heights, wet-flag
-   * corrections).
-   *
-   * Runs on its own queue in seconds. The attraction detail sweep also applies
-   * it, but only after ~7000 rate-limited wiki requests, so this is the way to
-   * make a seed change take effect now.
-   */
-  @Post("apply-manual-metadata")
-  @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({
-    summary: "Apply the curated attraction metadata seed",
-    description:
-      "Pure database work — no upstream calls. Heights only fill gaps; " +
-      "wet-flag entries overrule a wrong upstream value.",
-  })
-  @ApiResponse({ status: 202, description: "Job queued" })
-  async triggerManualMetadata(): Promise<{ message: string; jobId: string }> {
-    const job = await this.manualMetadataQueue.add(
-      "apply-seed",
-      {},
-      { priority: 1 },
-    );
-    return { message: "Manual metadata job queued", jobId: job.id.toString() };
   }
 
   /**

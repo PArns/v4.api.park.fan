@@ -80,8 +80,10 @@ export class Attraction {
   attractionType: string;
 
   // Minimum rider height in cm. Synced from ThemeParks.wiki entity documents
-  // (which mirror the parks' own app APIs); manually-curated fallback values
-  // from MANUAL_ATTRACTION_METADATA fill parks the wiki doesn't cover (Disney).
+  // (which mirror the parks' own app APIs). Hand-curated fallbacks fill the
+  // parks the wiki does not cover (Disney) and simply live in this column —
+  // the sync only overwrites them once the wiki publishes a number of its own,
+  // which is the intended order: the park's own sign wins.
   @Column({ name: "minimum_height", type: "int", nullable: true })
   minimumHeight: number | null;
 
@@ -104,12 +106,36 @@ export class Attraction {
   })
   minimumHeightUnit: "cm" | "in" | null;
 
+  /** Whether the ride may soak you, as ThemeParks.wiki reports it. */
   @Column({ name: "may_get_wet", type: "boolean", nullable: true })
   mayGetWet: boolean | null;
 
+  /**
+   * The same flag, hand-corrected — and a separate column for the same reason
+   * `curated_stats` is one on the ride profile: two writers, no shared cell.
+   *
+   * The detail sync overwrites `may_get_wet` whenever the wiki publishes a
+   * value that differs, so a correction written into that column survives only
+   * until the next run. It exists because the wiki populates the flag for a
+   * few dozen of ~7000 attractions and is occasionally wrong where it does —
+   * Genting SkyWorlds' shot tower is flagged as a water ride and is not.
+   *
+   * Null means "nothing to correct"; read it as `curatedMayGetWet ?? mayGetWet`
+   * and never write it from a sync.
+   */
+  @Column({ name: "curated_may_get_wet", type: "boolean", nullable: true })
+  curatedMayGetWet: boolean | null;
+
   // RCDB (rcdb.com) database ID for outbound links (https://rcdb.com/{id}.htm).
-  // Sourced from Wikidata property P2751 (CC0) via MANUAL_ATTRACTION_METADATA —
-  // linking to RCDB is explicitly permitted by their ToS, ingesting their data is not.
+  // Originally from Wikidata property P2751 (CC0); edited by hand in the
+  // database now, with no upstream writer — linking to RCDB is explicitly
+  // permitted by their ToS, ingesting their data is not.
+  //
+  // One id must never sit on two attractions: it would point a ride page at a
+  // different ride. Two did, from a name-based match across parks that hold a
+  // ride of the same name. Check before adding one:
+  //   SELECT rcdb_id, count(*) FROM attractions WHERE rcdb_id IS NOT NULL
+  //    GROUP BY rcdb_id HAVING count(*) > 1;
   @Column({ name: "rcdb_id", type: "int", nullable: true })
   rcdbId: number | null;
 

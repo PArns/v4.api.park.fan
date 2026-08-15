@@ -328,6 +328,7 @@ export class AttractionMergeService {
     "minimumHeight",
     "maximumHeight",
     "mayGetWet",
+    "curatedMayGetWet",
     "rcdbId",
     "seasonMonths",
   ] as const;

@@ -21,7 +21,6 @@ import { THEMEPARKS_EXCLUSIONS } from "../../external-apis/themeparks/themeparks
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
-import { ManualMetadataService } from "../../attractions/services/manual-metadata.service";
 
 /**
  * Rows already matched during the current park's sync pass. A park can hold
@@ -63,7 +62,6 @@ export class ChildrenMetadataProcessor {
     private entityMappingsQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private revalidationService: RevalidationService,
-    private manualMetadata: ManualMetadataService,
   ) {}
 
   @Process("fetch-all-children")
@@ -289,10 +287,12 @@ export class ChildrenMetadataProcessor {
    * Height restrictions change rarely, so this runs as its own low-frequency
    * job instead of bloating the daily children sync with ~5k extra requests.
    *
-   * Afterwards MANUAL_ATTRACTION_METADATA is applied:
-   * - rcdbId is always taken from the seed (no upstream source exists)
-   * - minimumHeightCm only fills attractions the wiki left at NULL, so the
-   *   upstream value wins whenever the parks' own apps publish one
+   * There is no curated seed to apply afterwards any more — `rcdb_id` and the
+   * curated heights live in the database and nothing here writes them. Note
+   * what this loop still DOES overwrite: `minimum_height` whenever the wiki
+   * publishes a different number (deliberate — the park's own sign wins) and
+   * `may_get_wet` likewise. A hand-made correction to the wet flag therefore
+   * belongs in `curated_may_get_wet`, which this sync never touches.
    */
   @Process("sync-attraction-details")
   async handleSyncAttractionDetails(_job: Job): Promise<void> {
@@ -409,8 +409,6 @@ export class ChildrenMetadataProcessor {
     this.logger.log(
       `📏 Wiki detail sync done: ${updated} heights updated, ${failed} failed`,
     );
-
-    await this.manualMetadata.apply();
 
     // The frontend caches the park/attraction structure payloads for a day
     // (Vercel Data Cache, tags 'parks'/'attractions') — bust them so the new

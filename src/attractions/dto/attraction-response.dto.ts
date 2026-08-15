@@ -451,7 +451,7 @@ export class AttractionResponseDto {
       minimumHeight: attraction.minimumHeight ?? null,
       minimumHeightUnit: attraction.minimumHeightUnit ?? null,
       maximumHeight: attraction.maximumHeight ?? null,
-      mayGetWet: attraction.mayGetWet ?? null,
+      mayGetWet: attraction.curatedMayGetWet ?? attraction.mayGetWet ?? null,
       rcdbId: attraction.rcdbId ?? null,
       isCurrentlyInSeason: (() => {
         if (!attraction.isSeasonal) return null;
