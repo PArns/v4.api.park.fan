@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { AttractionsService } from "./attractions.service";
 import { Attraction } from "./entities/attraction.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -175,7 +175,11 @@ describe("AttractionsService", () => {
       expect(result).toEqual({ data: testAttractions, total: 2 });
       expect(mockAttractionRepository.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { parkId },
+          // Retired attractions leave the park's list. They keep their row,
+          // their history and their own detail endpoint — a page reading
+          // "operated until February 2026" beats a 404 — but a demolished ride
+          // has no business in a list that describes the park as it is today.
+          where: { parkId, retiredAt: IsNull() },
           order: { name: "ASC" },
         }),
       );

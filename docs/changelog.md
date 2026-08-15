@@ -6,6 +6,45 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — attractions that no longer exist can finally say so
+
+A demolished ride is not "closed today" and it is not "unknown" either. Both of
+those describe a state it could come back from, and the API had no way to say
+the third thing. So Disney's **Dino-Sue**, torn down with DinoLand in February
+2026, sat in Animal Kingdom's attraction list regardless — as did Animal
+Kingdom's *Affection Section* and *Animation Experience*, and Ocean Park's
+*North Pole Encounter*.
+
+`attractions.retired_at` + `retired_reason`. The reason carries the **source
+URL**: a retirement is a claim about the world, so it travels with its evidence.
+No sync writes either column — the same two-writers rule as the curated fields.
+
+**The row and its queue_data stay.** The wait-time history is load-bearing for
+baselines and models, and a ride page reading "operated until February 2026" is
+worth more than a 404. What retirement changes is visibility: the attraction
+leaves the park's list and its operating counts (filtered in `loadParkRelations`
+and `findByParkId`, at the source rather than at each DTO site), while its own
+detail endpoint keeps answering and now exposes `retiredAt` / `retiredReason`.
+
+Three background jobs were excluded, and the first two matter most:
+
+- **reverse-reconciliation** would write a retired ride a CLOSED heartbeat row
+  forever. That is the write half of the bug the UNKNOWN read-path fixed.
+- **detect-seasonal** — a retired ride is its perfect candidate: permanently
+  CLOSED on every park-open day. It is not seasonal, it is gone.
+- the **detail sync**, which spends one rate-limited wiki request per attraction
+  and will not learn anything new about a demolished ride's height.
+
+Analytics and ML readers are deliberately untouched: their queries are windowed,
+so a ride with no recent data falls out of them already.
+
+Retiring goes through `POST /v1/admin/retire-attractions` rather than a plain
+UPDATE, because the write has to drag the park caches and the frontend sitemap
+along with it — otherwise the removed slug stays advertised for up to 24h plus
+the CDN's stale-while-revalidate window, exactly as the attraction merge found.
+`unretire-attraction/:id` undoes it, and `GET /v1/admin/retired-attractions` is
+the audit view.
+
 ### Added — detectors for the two ways this system went quietly wrong
 
 Both of today's multi-week failures were found **by accident**, while looking at

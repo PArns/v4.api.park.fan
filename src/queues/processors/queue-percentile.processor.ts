@@ -268,6 +268,10 @@ export class QueuePercentileProcessor {
         -- seasonal with no months; open_with_park already states the truth.
         JOIN attractions a ON a."parkId" = pod."parkId"
                           AND NOT a.open_with_park
+                          -- A retired ride is this detector's perfect
+                          -- candidate: permanently CLOSED on every park-open
+                          -- day. It is not seasonal, it is gone.
+                          AND a.retired_at IS NULL
         WHERE NOT EXISTS (
           SELECT 1 FROM attraction_operating_days aod
           WHERE aod."attractionId" = a.id AND aod.op_day = pod.open_day
@@ -339,6 +343,7 @@ export class QueuePercentileProcessor {
         -- Same reason as above: "never seen OPERATING" is the normal state of
         -- a playground, not evidence of a season.
         WHERE aa.has_operating = false AND NOT a.open_with_park
+          AND a.retired_at IS NULL
       ),
       current_status AS (
         SELECT DISTINCT ON ("attractionId")

@@ -39,6 +39,10 @@ import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
+import {
+  AttractionRetirementService,
+  RetirementRequest,
+} from "../attractions/services/attraction-retirement.service";
 
 /**
  * Admin Controller
@@ -78,6 +82,7 @@ export class AdminController {
     private readonly parkRenameService: ParkRenameService,
     private readonly rideProfileAudit: RideProfileAuditService,
     private readonly dataQualityMonitor: DataQualityMonitorService,
+    private readonly retirementService: AttractionRetirementService,
   ) {}
 
   /**
@@ -95,6 +100,43 @@ export class AdminController {
    * itself after a couple of weeks rather than nagging forever. Ask for 120
    * days to see the known incidents (Europa-Park 2026-06-07 and friends).
    */
+  /**
+   * Retire attractions that no longer exist.
+   *
+   * Not a plain UPDATE, because retirement has to drag the caches and the
+   * frontend sitemap along with it — a removed slug otherwise stays advertised
+   * for up to 24h plus the CDN window. Each entry carries the date and the
+   * source it was established from; a retirement is a claim about the world.
+   */
+  @Post("retire-attractions")
+  @ApiOperation({ summary: "Retire attractions that no longer exist" })
+  async retireAttractions(@Body() body: { retirements: RetirementRequest[] }) {
+    const retired = await this.retirementService.retire(body.retirements ?? []);
+    return { retired: retired.length, attractions: retired };
+  }
+
+  @Post("unretire-attraction/:id")
+  @ApiOperation({ summary: "Undo a retirement" })
+  async unretireAttraction(@Param("id") id: string) {
+    return { restored: await this.retirementService.unretire(id) };
+  }
+
+  @Get("retired-attractions")
+  @ApiOperation({ summary: "Everything currently retired" })
+  async listRetiredAttractions() {
+    const rows = await this.retirementService.listRetired();
+    return {
+      total: rows.length,
+      attractions: rows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        park: a.park?.name ?? null,
+        retiredAt: a.retiredAt,
+        reason: a.retiredReason,
+      })),
+    };
+  }
+
   @Get("data-quality")
   @ApiOperation({ summary: "Silenced attraction clusters and failing jobs" })
   async getDataQuality(@Query("windowDays") windowDays?: string) {

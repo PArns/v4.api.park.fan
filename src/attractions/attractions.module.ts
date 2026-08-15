@@ -17,6 +17,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { PopularityModule } from "../popularity/popularity.module";
 import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
+import { AttractionRetirementService } from "./services/attraction-retirement.service";
 import { RideProfileService } from "./services/ride-profile.service";
 import { RideProfileAuditService } from "./services/ride-profile-audit.service";
 import { RideStatsService } from "./services/ride-stats.service";
@@ -49,6 +50,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
+    AttractionRetirementService,
     RideProfileService,
     RideProfileAuditService,
     RideStatsService,
@@ -58,6 +60,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionsService,
     AttractionIntegrationService,
     AttractionMergeService,
+    AttractionRetirementService,
     RideProfileService,
     RideProfileAuditService,
     RideStatsService,

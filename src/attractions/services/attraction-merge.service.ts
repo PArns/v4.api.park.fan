@@ -330,6 +330,8 @@ export class AttractionMergeService {
     "mayGetWet",
     "curatedMayGetWet",
     "curatedMinimumHeight",
+    "retiredAt",
+    "retiredReason",
     "hasSingleRider",
     "rcdbId",
     "seasonMonths",
