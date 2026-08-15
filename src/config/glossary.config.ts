@@ -13,6 +13,6 @@
 export function getGlossaryTermIdsUrl(): string {
   return (
     process.env.GLOSSARY_TERM_IDS_URL ||
-    "https://park.fan/api/glossary/term-ids"
+    "https://park.fan/api/glossary-term-ids"
   );
 }

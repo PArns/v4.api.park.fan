@@ -193,7 +193,7 @@ evicts nothing.
 
 **Audit** answers the question the deleted CI check used to answer. The frontend
 publishes the term ids that actually resolve to a page
-(`park.fan/api/glossary/term-ids`), this diffs them against every id stored in
+(`park.fan/api/glossary-term-ids`), this diffs them against every id stored in
 `elements`, `types` and `manufacturer_term_id`, and names both the broken ids
 and the rides they shorten. It aborts rather than reporting when the glossary
 side answers empty — a frontend blip must not read as "the whole curation is
@@ -289,7 +289,7 @@ Before writing a new id by hand, confirm it exists:
 
 ```bash
 grep "id: 'zero-g-stall'" ../park.fan/lib/glossary/data.ts
-curl -s https://park.fan/api/glossary/term-ids | jq -r '.ids[]' | grep zero-g-stall
+curl -s https://park.fan/api/glossary-term-ids | jq -r '.ids[]' | grep zero-g-stall
 ```
 
 The audit does the same comparison across every stored id at once. To find the
