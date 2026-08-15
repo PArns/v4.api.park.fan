@@ -153,6 +153,26 @@ Match on `parks.slug` **and** `attractions.slug` together — park slugs are not
 globally unique (`disneyland-park` exists in Anaheim and in Paris), and ride
 names repeat across parks ("Goliath" is six different coasters).
 
+A ride with no profile yet needs an INSERT, and `seeded_at` is NOT NULL with no
+default — leave it out and the insert fails:
+
+```sql
+INSERT INTO attraction_ride_profiles
+       ("attractionId", "parkId", elements, types, manufacturer_name,
+        manufacturer_term_id, model, opened_year, inversions, seeded_at)
+SELECT a.id, a."parkId",
+       '["lifthill","first-drop","vertical-loop","brake-run"]'::jsonb,
+       '["steel-coaster"]'::jsonb,
+       'Bolliger & Mabillard', 'b-and-m', 'Sitting Coaster', 1999, 1, now()
+  FROM attractions a JOIN parks p ON p.id = a."parkId"
+ WHERE p.slug = 'some-park' AND a.slug = 'some-ride'
+    ON CONFLICT ("attractionId") DO NOTHING;
+```
+
+`elements` and `types` are NOT NULL too, but default to `'[]'`, so omit them
+rather than writing `null`. Never touch `stats` or `stats_updated_at` — those
+belong to the Wikidata importer; hand-checked numbers go in `curated_stats`.
+
 Three things the removed seed job used to do for you, which are now yours:
 
 - **Nothing validates term ids any more.** The old `ride-profile-seed.spec.ts`
