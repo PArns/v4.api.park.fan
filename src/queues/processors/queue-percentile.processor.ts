@@ -146,6 +146,10 @@ export class QueuePercentileProcessor {
     this.logger.log("🌸 Starting seasonal attraction detection...");
 
     const MIN_PARK_OPEN_DAYS_CLOSED = 7;
+    // A season cannot be read off less than a year of watching. Until we have
+    // seen an entity through a full cycle, the months it was "ever OPERATING"
+    // are just the months we happened to be recording — see MIN_OBSERVED_DAYS.
+    const MIN_OBSERVED_DAYS = 330;
     const LOOKBACK_DAYS = 60;
     const RESET_DAYS = 14;
 
@@ -392,16 +396,29 @@ export class QueuePercentileProcessor {
 
       const monthRows: { attractionId: string; months: number[] }[] =
         await this.dataSource.query(
-          `SELECT a.id AS "attractionId",
+          `WITH observed AS (
+             -- How long we have WATCHED each candidate — every row, whatever
+             -- the status. Deliberately not the OPERATING span: a real winter
+             -- attraction only ever operates for about forty days, and that
+             -- says nothing about whether we have seen a full year of it.
+             SELECT "attractionId",
+                    max(timestamp) - min(timestamp) AS watched
+               FROM queue_data
+              WHERE "attractionId" = ANY($1::uuid[])
+              GROUP BY "attractionId"
+           )
+           SELECT a.id AS "attractionId",
                   ARRAY_AGG(DISTINCT EXTRACT(MONTH FROM q.timestamp AT TIME ZONE p.timezone)::int) AS months
            FROM queue_data q
            JOIN attractions a ON a.id = q."attractionId"
            JOIN parks p ON p.id = a."parkId"
+           JOIN observed o ON o."attractionId" = a.id
            WHERE a.id = ANY($1::uuid[])
              AND q.status = 'OPERATING'
              AND q.timestamp >= NOW() - INTERVAL '730 days'
+             AND o.watched >= ($2::int * INTERVAL '1 day')
            GROUP BY a.id`,
-          [candidateIds],
+          [candidateIds, MIN_OBSERVED_DAYS],
         );
 
       const monthsById = new Map(
@@ -518,16 +535,26 @@ export class QueuePercentileProcessor {
 
       const monthRows: { showId: string; months: number[] }[] =
         await this.dataSource.query(
-          `SELECT sld."showId" AS "showId",
+          `WITH observed AS (
+             -- Same rule as the attractions above: the months only mean
+             -- something once we have watched a full cycle.
+             SELECT "showId", max(timestamp) - min(timestamp) AS watched
+               FROM show_live_data
+              WHERE "showId" = ANY($1::uuid[])
+              GROUP BY "showId"
+           )
+           SELECT sld."showId" AS "showId",
                   ARRAY_AGG(DISTINCT EXTRACT(MONTH FROM sld.timestamp AT TIME ZONE p.timezone)::int) AS months
            FROM show_live_data sld
            JOIN shows s ON s.id = sld."showId"
            JOIN parks p ON p.id = s."parkId"
+           JOIN observed o ON o."showId" = sld."showId"
            WHERE sld."showId" = ANY($1::uuid[])
              AND sld."lastUpdated" IS NOT NULL
              AND (sld.timestamp - sld."lastUpdated") < INTERVAL '24 hours'
+             AND o.watched >= ($2::int * INTERVAL '1 day')
            GROUP BY sld."showId"`,
-          [showIds],
+          [showIds, MIN_OBSERVED_DAYS],
         );
 
       const monthsById = new Map(

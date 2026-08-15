@@ -177,3 +177,44 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     }
   });
 });
+
+/**
+ * Our whole queue_data history was 234 days deep on 2026-08-15, so no entity
+ * anywhere had been watched through a full year — and every stored month list
+ * was a contiguous run anchored at the start of that window. `[1,2,3,4,12]`
+ * (69 attractions), `[1,2,3,4,5,6,12]` (64), `[1,12]` (18): not seasons, just
+ * "the span in which we happened to see it open". Europa-Park's 44 feed-dropped
+ * rides all carried the same list and read as out of season in August.
+ */
+describe("QueuePercentileProcessor — no season without a year of watching", () => {
+  const runDetectSeasonal = async () => {
+    const query = jest.fn().mockResolvedValue([{ attractionId: "a1" }]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await processor.handleDetectSeasonal({} as never);
+    return query.mock.calls;
+  };
+
+  it("derives months only for entities watched long enough — attractions and shows alike", async () => {
+    const calls = await runDetectSeasonal();
+    const monthQueries = calls.filter(([sql]) =>
+      /ARRAY_AGG\(DISTINCT EXTRACT\(MONTH/.test(sql as string),
+    );
+
+    // One for attractions, one for shows — the shows table was marked from the
+    // same 234-day window and is just as wrong.
+    expect(monthQueries).toHaveLength(2);
+
+    for (const [sql, params] of monthQueries) {
+      // Watched-span measured over ALL rows: a real winter attraction only
+      // operates for ~40 days, which says nothing about how long we watched.
+      expect(sql as string).toMatch(/max\(timestamp\) - min\(timestamp\)/);
+      expect(sql as string).toMatch(/o\.watched >= /);
+      expect(params as unknown[]).toContain(330);
+    }
+  });
+});
