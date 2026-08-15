@@ -5,9 +5,11 @@ import { ParksModule } from "../parks/parks.module";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { AdminController } from "./admin.controller";
 import { SystemHealthService } from "./system-health.service";
+import { MonitoringModule } from "../monitoring/monitoring.module";
 
 @Module({
   imports: [
+    MonitoringModule,
     RedisModule,
     ParksModule,
     AttractionsModule,
