@@ -23,6 +23,18 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
+- [ ] **Runde 5: die drei verbliebenen geteilten Inversionslisten.** Runde 4 hat
+      die Cluster-Query aus dem Guide als Auswahlkriterium benutzt statt
+      Prominenz — Trefferquote 9 von 14. Was noch steht:
+      **`big-loop` / `corkscrew` / `corkscrew`** (Vekoma + zweimal Arrow —
+      wieder eine Liste ueber verschiedene Hersteller),
+      **`demon` / `python` / `rolling-x-train`** (Arrow-Looper) und
+      **`batman-arkham-asylum` / `batman-the-ride` / `nemesis-inferno`** —
+      dort ist Nemesis Inferno nachweislich richtig (4 Inversionen), die beiden
+      Batman-Klone melden aber 5 auf derselben Liste, also stimmt eine Seite
+      nicht. Die 6er-Boomerang- und 5er-SLC-Cluster sind dagegen *echte*
+      Klonfamilien und in #161/#162 bereits einzeln geprueft — die bitte in
+      Ruhe lassen.
 - [x] **Runde 3 erledigt** — Voltron, Banshee, blue fire, Fury (Bobbejaanland)
       und die zehn Marquee-Namen mit 0 Inversionen geprueft. Vier Fehler
       gefunden und korrigiert; Millennium Force, Taron, Shambhala, Silver Star,
