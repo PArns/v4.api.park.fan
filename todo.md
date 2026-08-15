@@ -23,15 +23,17 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
-- [ ] **Runde 3 der Ride-Pruefung: die verbliebenen Δ−1-Faelle.** Runde 2 hatte
-      eine Trefferquote von 7 aus 11 — die Annahme „Liste ist nur unvollstaendig"
-      haelt schlechter als gedacht. Offene Kandidaten, jeweils eine Inversion
-      weniger in der Liste als veroeffentlicht: **Voltron Nevera** (7),
-      **Banshee** (7), **blue fire** (4), sowie **Fury** in Bobbejaanland (3 vs
-      1 gelistet). Dazu die ungeprueften Marquee-Namen mit 0 Inversionen
-      (Fury 325, Millennium Force, Taron, Shambhala, Silver Star, Kondaa, die
-      vier Goliaths) — dort ist der Fehlerraum Hersteller/Modell/Jahr, nicht die
-      Elemente.
+- [x] **Runde 3 erledigt** — Voltron, Banshee, blue fire, Fury (Bobbejaanland)
+      und die zehn Marquee-Namen mit 0 Inversionen geprueft. Vier Fehler
+      gefunden und korrigiert; Millennium Force, Taron, Shambhala, Silver Star,
+      Kondaa und drei der vier Goliaths waren exakt richtig.
+- [ ] **Untamed ist der letzte ungeklaerte RMC.** Steel Vengeance und Iron Gwazi
+      trugen beide einen erfundenen `twisted-horseshoe-roll`; Untamed traegt
+      ihn auch, und die Arithmetik geht mit ihm auf (5). Aber keine Quelle
+      benennt die Figuren ausser der ersten — Wikipedia und RMC nennen dort
+      einen „270° Double Inverting Corner Stall", fuer den es keinen Begriff
+      gibt. Ohne Beleg nichts entfernt: Verdacht ist kein Nachweis. Braucht
+      eine Quelle, die alle fuenf benennt (RMC-Projektseite oder POV-Zaehlung).
 - [ ] **Helix' hintere Haelfte ist ungeklaert.** Wikipedia nennt einen Pretzel
       Knot, eine zweite Quelle stattdessen Inside Top Hat + Inline Twist. Beide
       koennen nicht stimmen; die Liste fuehrt deshalb nur die uebereinstimmenden
