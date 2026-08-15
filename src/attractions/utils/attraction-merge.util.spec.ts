@@ -78,13 +78,48 @@ describe("isSafeToAutoMerge", () => {
     ).toBe(true);
   });
 
-  it("accepts differing names when the queue-times id is the same ride", () => {
+  it("no longer takes a shared queue-times id as proof on its own", () => {
+    // Carowinds is why. "Blackbeard's Revenge - Cannonball Drop & Captain's
+    // Curse" and "Blackbeard's Revenge - Pirate's Plank" both carry id 14744,
+    // and their slugs say tube-slides and drop-slides: two slide complexes the
+    // upstream lumped under one id. Auto-merging them destroys one. Kings
+    // Island (two stations of a railroad) and Six Flags Great Escape (three
+    // Sasquatch rows) have the same shape.
     expect(
       isSafeToAutoMerge(
         row({ name: "Riptide Racer", queueTimesEntityId: "77" }),
         row({ id: "b", name: "Riptide", queueTimesEntityId: "77" }),
       ),
+    ).toBe(false);
+  });
+
+  it("sees through the map number Queue-Times puts in some ride names", () => {
+    // Energylandia's feed says "Draken (155)" where the wiki says "Draken" —
+    // the number is that park's own map label, carried through by one source
+    // and not the other. Eight duplicate pairs in that park hang on this.
+    expect(
+      isSafeToAutoMerge(
+        row({ name: "Draken" }),
+        row({ id: "b", name: "Draken (155)" }),
+      ),
     ).toBe(true);
+    expect(
+      isSafeToAutoMerge(
+        row({ name: "Frutti Loop" }),
+        row({ id: "b", name: "Frutti Loop (39)" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("strips the map number without swallowing a genuinely numbered name", () => {
+    // "Spindeln - Nyhet 2026" is a real ride name with a year in it, not a
+    // map label in brackets — it must not collapse onto "Spindeln - Nyhet".
+    expect(
+      isSafeToAutoMerge(
+        row({ name: "Spindeln - Nyhet" }),
+        row({ id: "b", name: "Spindeln - Nyhet 2026" }),
+      ),
+    ).toBe(false);
   });
 
   it("refuses two different rides that merely collided on a slug", () => {
