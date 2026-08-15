@@ -181,10 +181,35 @@ day each:
 | Ocean Park | 7 | 2026-06-30 |
 
 **Every affected ride lacks a `queue_times_entity_id`** — the dual-sourced ones
-kept working. That is both the tell and the hint at a mitigation: broaden
-Queue-Times matching for these parks. Ten weeks later Europa-Park's page still
-showed a Ball Pool and a London Bus as closed, in August. §2.3 is the fix for
-the symptom; the cause is still open in `todo.md`.
+kept working. Ten weeks later Europa-Park's page still showed a Ball Pool and a
+London Bus as closed, in August. §2.3 is the fix for the symptom.
+
+**There is no other source to switch to.** All three live sources were checked
+directly on 2026-08-15:
+
+| source | Europa-Park | the silenced rides |
+|---|---|---|
+| ThemeParks.wiki | entity still exists, correct `parentId` | `liveData: []` |
+| Queue-Times (park 51) | 39 rides | absent |
+| wartezeiten.app (`europapark`) | 36 entries | absent |
+
+Queue-Times and wartezeiten.app publish only the marquee rides. The wiki was the
+only source that ever carried the rest, and it stopped.
+
+**What was actually lost is much smaller than 59 rides.** Of Europa-Park's 59
+silenced attractions, only **four** ever recorded a wait above zero — the EP
+Express stations, up to 65 minutes. The other 55 were walk-on for their entire
+recorded history: carousels, monorails, panorama trains, boat rides,
+playgrounds, the Christmas market. They lost a *status*, not a wait time.
+
+That reframes the fix. For the four Express stations this is a genuine gap with
+no remedy available. For the other 55 the answer is not a new source but
+**curation**: many are free-flow and belong under `open_with_park` (§2.2) —
+Adventure Playground and Würmchen Wies'n Playground were flagged on 2026-08-15
+and read OPERATING again immediately, and Lítill Island and Water Playground are
+held only pending season dates. A carousel with a zero wait is *not*
+automatically free-flow though — it has an operator and can be closed — so each
+needs researching individually (§7).
 
 ---
 
