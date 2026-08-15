@@ -5,7 +5,10 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { ManualMetadataService } from "../../attractions/services/manual-metadata.service";
-import { TouchedPark } from "../../attractions/services/ride-profile.service";
+import {
+  RideProfileService,
+  TouchedPark,
+} from "../../attractions/services/ride-profile.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
@@ -31,6 +34,7 @@ export class ManualMetadataProcessor {
 
   constructor(
     private readonly manualMetadata: ManualMetadataService,
+    private readonly rideProfiles: RideProfileService,
     private readonly revalidationService: RevalidationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("manual-metadata") private readonly queue: Queue,
@@ -44,6 +48,39 @@ export class ManualMetadataProcessor {
     if (result.rcdb + result.heights + result.wet > 0) {
       await this.publish(result.touchedParks);
     }
+  }
+
+  /**
+   * Publish ride profiles that were curated directly in the database.
+   *
+   * The rows are edited by hand now — there is no seed job to write them and,
+   * with it gone, nothing evicted the caches sitting in front of them either.
+   * A correct row would surface only as the TTLs expired: `park:integrated`
+   * up to six hours for a closed park, the Cloudflare copy 900s on top, and
+   * the frontend pinning whatever it read for a day. This is the missing half
+   * — the same {@link publish} the metadata seed uses, pointed at whatever was
+   * curated recently.
+   */
+  @Process("publish-ride-profiles")
+  async handlePublishRideProfiles(
+    job: Job<{ sinceHours?: number }>,
+  ): Promise<void> {
+    const sinceHours = job.data?.sinceHours ?? 24;
+    const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
+    const touchedParks = await this.rideProfiles.findCuratedSince(since);
+
+    if (touchedParks.length === 0) {
+      this.logger.log(
+        `🎢 No ride profiles curated in the last ${sinceHours}h — nothing to publish`,
+      );
+      return;
+    }
+
+    const rides = touchedParks.reduce((n, p) => n + p.attractionIds.length, 0);
+    this.logger.log(
+      `🎢 Publishing ${rides} curated ride profile(s) across ${touchedParks.length} park(s)...`,
+    );
+    await this.publish(touchedParks);
   }
 
   /** The delayed half of {@link publish} — see the reasoning there. */

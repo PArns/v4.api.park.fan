@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, MoreThanOrEqual, Repository } from "typeorm";
 import { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
 
 /** A park whose cached response a write invalidated. */
@@ -92,6 +92,80 @@ export class RideProfileService implements OnModuleInit {
     } catch (err) {
       this.logger.debug(`Ride-profile GIN indexes not created: ${err}`);
     }
+  }
+
+  /**
+   * Every distinct glossary term id the curation actually stores, across all
+   * three places one can appear.
+   *
+   * `jsonb_array_elements_text` over a few hundred rows — no index needed, and
+   * this runs on demand rather than per request.
+   */
+  async findDistinctTermIds(): Promise<string[]> {
+    const rows = await this.repo.query<{ term_id: string }[]>(`
+      SELECT DISTINCT term_id FROM (
+        SELECT jsonb_array_elements_text(elements) AS term_id
+          FROM attraction_ride_profiles
+        UNION ALL
+        SELECT jsonb_array_elements_text(types) FROM attraction_ride_profiles
+        UNION ALL
+        SELECT manufacturer_term_id FROM attraction_ride_profiles
+         WHERE manufacturer_term_id IS NOT NULL
+      ) t
+      ORDER BY term_id
+    `);
+    return rows.map((r) => r.term_id);
+  }
+
+  /**
+   * Which rides use a given set of term ids — so an audit can name the pages a
+   * broken id actually damages instead of only the id.
+   */
+  async findRidesUsingTermIds(
+    termIds: string[],
+  ): Promise<{ termId: string; parkSlug: string; attractionSlug: string }[]> {
+    if (termIds.length === 0) return [];
+    return this.repo.query(
+      `
+      SELECT t.term_id AS "termId", p.slug AS "parkSlug", a.slug AS "attractionSlug"
+        FROM attraction_ride_profiles rp
+        JOIN attractions a ON a.id = rp."attractionId"
+        JOIN parks p ON p.id = rp."parkId"
+        CROSS JOIN LATERAL (
+          SELECT jsonb_array_elements_text(rp.elements) AS term_id
+          UNION ALL SELECT jsonb_array_elements_text(rp.types)
+          UNION ALL SELECT rp.manufacturer_term_id
+        ) t
+       WHERE t.term_id = ANY($1)
+       ORDER BY t.term_id, p.slug, a.slug
+      `,
+      [termIds],
+    );
+  }
+
+  /**
+   * Parks whose curation was written since `since`, with their attractions —
+   * shaped for {@link TouchedPark} so a publish run can evict exactly those.
+   *
+   * `seeded_at` is what a hand-written UPDATE is expected to set (the guide
+   * says so), which makes it the only marker of "this row was just curated".
+   */
+  async findCuratedSince(since: Date): Promise<TouchedPark[]> {
+    const rows = await this.repo.find({
+      where: { seededAt: MoreThanOrEqual(since) },
+      select: ["attractionId", "parkId"],
+    });
+
+    const byPark = new Map<string, string[]>();
+    for (const row of rows) {
+      const ids = byPark.get(row.parkId) ?? [];
+      ids.push(row.attractionId);
+      byPark.set(row.parkId, ids);
+    }
+    return [...byPark].map(([parkId, attractionIds]) => ({
+      parkId,
+      attractionIds,
+    }));
   }
 
   /** The profile for one attraction, or null when it has not been curated. */

@@ -173,22 +173,38 @@ SELECT a.id, a."parkId",
 rather than writing `null`. Never touch `stats` or `stats_updated_at` — those
 belong to the Wikidata importer; hand-checked numbers go in `curated_stats`.
 
-Three things the removed seed job used to do for you, which are now yours:
+### After editing: publish, then audit
 
-- **Nothing validates term ids any more.** The old `ride-profile-seed.spec.ts`
-  checked every id against the frontend's exported allowlist and failed CI on a
-  typo. A misspelled id now reaches production and the ride page silently drops
-  that element, so the layout just reads short. Check a new id against
-  `park.fan → lib/glossary/data.ts` before writing it.
-- **Nothing evicts the caches.** The job used to invalidate
-  `park:integrated:{parkId}` and ping the frontend to revalidate. A direct write
-  becomes visible only as the TTLs expire — up to 6 h in Redis for a closed
-  park, plus 900 s at the Cloudflare edge.
-- **Nothing tells you a row went missing.** Park and ride slugs drift; the job
-  logged which curated entries had stopped matching. Renaming a park now
-  silently orphans nothing (rows key on `attractionId`, not slugs) — but a ride
-  that is deleted and re-created upstream loses its profile with no warning,
-  because the FK cascades.
+```
+POST /v1/admin/publish-ride-profiles   { "sinceHours": 24 }   # make it visible
+GET  /v1/admin/ride-profile-term-audit                        # check the ids
+```
+
+Both exist because SQL cannot do what the seed job did around the write.
+
+**Publish** evicts `park:integrated:{parkId}` for every profile whose
+`seeded_at` falls in the window, tells the frontend to revalidate, and queues
+the second sweep past the CDN window — the same evict-then-revalidate order the
+metadata seed uses, and the reason your `UPDATE` must set `seeded_at = now()`.
+Without it a corrected ride surfaces only as the TTLs expire: up to 6 h in Redis
+for a closed park, 900 s at the Cloudflare edge, and a day in the frontend's own
+data cache. Safe to call speculatively — with nothing curated in the window it
+evicts nothing.
+
+**Audit** answers the question the deleted CI check used to answer. The frontend
+publishes the term ids that actually resolve to a page
+(`park.fan/api/glossary-term-ids`), this diffs them against every id stored in
+`elements`, `types` and `manufacturer_term_id`, and names both the broken ids
+and the rides they shorten. It aborts rather than reporting when the glossary
+side answers empty — a frontend blip must not read as "the whole curation is
+dead".
+
+Run the audit after renaming or removing a glossary term, and after a curation
+session. Nothing runs it for you.
+
+**Still nobody's job:** a ride deleted and re-created upstream loses its profile
+without a warning, because the FK cascades. Park and ride slugs drifting is no
+longer a problem — rows key on `attractionId`, not slugs.
 
 Sanity queries worth keeping to hand:
 
@@ -263,19 +279,21 @@ looks equally authoritative whether or not anybody checked it:
 ## Keeping term ids honest
 
 Nothing at runtime can tell us a glossary term was renamed or removed — the
-ride page just silently drops it and the layout reads short. There used to be a
-mirrored allowlist (`glossary-term-ids.ts`) and a spec that failed CI on an
-unknown id; both went with the seed, because there is no longer a checked-in
-file to check. **The ids in the database are now unvalidated.**
+ride page just silently drops it and the layout reads short. The mirrored
+allowlist (`glossary-term-ids.ts`) and the spec that failed CI on an unknown id
+both went with the seed, because there is no longer a checked-in file to check.
 
-So before writing a term id, confirm it exists in the frontend repo:
+`GET /v1/admin/ride-profile-term-audit` is what replaced them. It is **not**
+automatic: nothing calls it, so it catches a rename only when someone asks.
+Before writing a new id by hand, confirm it exists:
 
 ```bash
 grep "id: 'zero-g-stall'" ../park.fan/lib/glossary/data.ts
+curl -s https://park.fan/api/glossary-term-ids | jq -r '.ids[]' | grep zero-g-stall
 ```
 
-And after renaming or removing a term in the frontend, find the rows that
-still reference it — nothing else will tell you:
+The audit does the same comparison across every stored id at once. To find the
+rows yourself — after removing a term, say:
 
 ```sql
 SELECT p.slug, a.slug, rp.elements

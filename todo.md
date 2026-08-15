@@ -8,21 +8,19 @@
 and is edited directly. Two things the job did for free are now nobody's job,
 and both fail **silently** — that is what makes them worth tracking.
 
-- [ ] **Nothing validates term ids.** The old spec checked every id against the
-      frontend's exported list and failed CI on a typo. A misspelled id now
-      reaches production and the ride page just drops that element, so the layout
-      reads short and nothing complains. Cheapest fix: a scheduled job (or a
-      `/v1/admin` check) that pulls the distinct ids out of the table and diffs
-      them against `park.fan/lib/glossary/data.ts`. The query already exists in
-      [the guide](docs/frontend/ride-glossary-link.md); it needs an owner and a
-      cadence, not new logic.
-- [ ] **Nothing evicts caches after a curation write.** The job invalidated
-      `park:integrated:{parkId}` and pinged the frontend to revalidate. A direct
-      SQL write now surfaces only as TTLs expire — Redis up to 6 h for a closed
-      park, Cloudflare edge 900 s, frontend data cache up to 24 h. A tiny
-      `POST /v1/admin/publish-ride-profiles` taking a list of park ids and
-      reusing `invalidateParkCaches` + `RevalidationService` would restore it
-      without bringing the seed back.
+- [x] **Nothing validates term ids** — built: `GET /v1/admin/ride-profile-term-audit`
+      diffs every stored id against `park.fan/api/glossary/term-ids` (which
+      publishes the ids that actually resolve to a page) and names both the
+      broken ids and the rides they shorten.
+- [x] **Nothing evicts caches after a curation write** — built:
+      `POST /v1/admin/publish-ride-profiles` evicts every park whose profiles
+      carry a recent `seeded_at`, revalidates, and queues the post-CDN sweep.
+- [ ] **Neither one runs by itself.** Both are manual calls, so they catch a
+      problem only when someone remembers to ask. The audit is the one that
+      wants a cadence — a daily cron that logs a warning when an id stops
+      resolving would turn a silent breakage into a visible one. The publish
+      endpoint is fine as a manual step: it belongs at the end of a curation
+      session, which is a human moment anyway.
 
 **Curation left deliberately open:**
 

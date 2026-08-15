@@ -19,6 +19,7 @@ import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
 import { ManualMetadataService } from "./services/manual-metadata.service";
 import { RideProfileService } from "./services/ride-profile.service";
+import { RideProfileAuditService } from "./services/ride-profile-audit.service";
 import { RideStatsService } from "./services/ride-stats.service";
 import { WikidataClient } from "../external-apis/wikidata/wikidata.client";
 import { GlossaryRidesController } from "./glossary-rides.controller";
@@ -51,6 +52,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionMergeService,
     ManualMetadataService,
     RideProfileService,
+    RideProfileAuditService,
     RideStatsService,
     WikidataClient,
   ],
@@ -60,6 +62,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionMergeService,
     ManualMetadataService,
     RideProfileService,
+    RideProfileAuditService,
     RideStatsService,
   ],
 })

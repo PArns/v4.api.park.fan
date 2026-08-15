@@ -16,6 +16,7 @@ jest.mock("../../common/cache/park-cache-invalidation", () => ({
  */
 describe("ManualMetadataProcessor", () => {
   const manualMetadata = { apply: jest.fn() };
+  const rideProfiles = { findCuratedSince: jest.fn() };
   const revalidationService = { revalidateTags: jest.fn() };
   const redis = {};
   const queue = { add: jest.fn() };
@@ -23,6 +24,7 @@ describe("ManualMetadataProcessor", () => {
   const processor = () =>
     new ManualMetadataProcessor(
       manualMetadata as never,
+      rideProfiles as never,
       revalidationService as never,
       redis as never,
       queue as never,
@@ -122,6 +124,53 @@ describe("ManualMetadataProcessor", () => {
     );
 
     await processor().handleApplySeed({} as never);
+
+    expect(invalidateParkCaches).not.toHaveBeenCalled();
+    expect(revalidationService.revalidateTags).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it("publishes the parks whose profiles were curated in the window", async () => {
+    rideProfiles.findCuratedSince.mockResolvedValue([
+      { parkId: "p1", attractionIds: ["a1", "a2"] },
+    ]);
+
+    await processor().handlePublishRideProfiles({ data: {} } as never);
+
+    expect(invalidateParkCaches).toHaveBeenCalledWith(redis, "p1", [
+      "a1",
+      "a2",
+    ]);
+    expect(revalidationService.revalidateTags).toHaveBeenCalled();
+    expect(queue.add).toHaveBeenCalled();
+  });
+
+  it("defaults to the last 24h and honours an explicit window", async () => {
+    rideProfiles.findCuratedSince.mockResolvedValue([]);
+
+    await processor().handlePublishRideProfiles({ data: {} } as never);
+    const [defaultSince] = rideProfiles.findCuratedSince.mock.calls[0] as [
+      Date,
+    ];
+    const defaultAgeHours = (Date.now() - defaultSince.getTime()) / 3_600_000;
+    expect(defaultAgeHours).toBeCloseTo(24, 1);
+
+    await processor().handlePublishRideProfiles({
+      data: { sinceHours: 2 },
+    } as never);
+    const [explicitSince] = rideProfiles.findCuratedSince.mock.calls[1] as [
+      Date,
+    ];
+    const explicitAgeHours = (Date.now() - explicitSince.getTime()) / 3_600_000;
+    expect(explicitAgeHours).toBeCloseTo(2, 1);
+  });
+
+  it("does nothing when no profile was curated in the window", async () => {
+    // A publish with nothing to publish must not evict a warm park or burn a
+    // revalidation — this endpoint is meant to be safe to call speculatively.
+    rideProfiles.findCuratedSince.mockResolvedValue([]);
+
+    await processor().handlePublishRideProfiles({ data: {} } as never);
 
     expect(invalidateParkCaches).not.toHaveBeenCalled();
     expect(revalidationService.revalidateTags).not.toHaveBeenCalled();
