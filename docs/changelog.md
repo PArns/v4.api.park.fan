@@ -6,6 +6,37 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — playgrounds read CLOSED on the one page people actually look at
+
+`attractions.open_with_park` marks free-flow attractions — playgrounds, splash
+pads, climbing nets. They have no queue, so the upstream feed reports them
+CLOSED for the whole day, and the flag exists to overrule that while the park
+is open.
+
+The rule was implemented three times and one copy was missing it: the
+attraction detail and the favorites list honoured the flag, **the park's ride
+list did not** — and that is the surface a visitor sees. Phantasialand's
+Mopti's Monkey Depot, Winni Splash and Wavy Battle all carried the flag and all
+read CLOSED on an operating park.
+
+The park payload also could not have honoured it as written: it loops over DTOs
+and `openWithPark` is only on the entity, so the flag was not even in scope. It
+now reads from the park entity it was handed.
+
+The rule is one function (`common/utils/free-flow-status.util.ts`) that all
+three call, because "written three times, one drifted" is the actual defect.
+Both halves of it are pinned by tests, including the two ways it must NOT fire:
+a closed park closes its playgrounds too, and in a park whose wait times we
+cannot read nothing below the park may claim to be running.
+
+The override runs before `effectiveStatus` is derived, so these attractions
+also count toward the park's operating total instead of being silently missing
+from it.
+
+**Not a bug:** these attractions receive data at the same cadence as every
+other ride (6 rows in 6 h, against Taron's 8). `queue_data` only writes a row
+when something changes; the 5-minute sync still runs.
+
 ### Changed — the term audit runs itself, and the processor says what it does
 
 `GET /v1/admin/ride-profile-term-audit` now also runs daily at 06:30. The seed's

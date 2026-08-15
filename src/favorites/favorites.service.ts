@@ -1,4 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import {
+  isFreeFlowOpen,
+  freeFlowQueues,
+} from "../common/utils/free-flow-status.util";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
@@ -18,10 +22,6 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionDto } from "../ml/dto";
-import {
-  QueueType,
-  LiveStatus,
-} from "../external-apis/themeparks/themeparks.types";
 import { computeBestVisitTimes } from "../common/utils/best-visit-times.util";
 import { buildRopeDropInfo } from "../common/utils/rope-drop-info.util";
 import { RopeDropStored } from "../common/types/rope-drop.type";
@@ -691,23 +691,8 @@ export class FavoritesService {
         // Free-flow attractions (playgrounds, water play areas) have no queue
         // and are reported CLOSED by the source — same override the integrated
         // path applies, so a cache miss doesn't flip the card's status.
-        if (attraction.openWithPark && parkStatus === "OPERATING") {
-          dto.queues = [
-            {
-              queueType: QueueType.STANDBY,
-              status: LiveStatus.OPERATING,
-              waitTime: 0,
-              state: null,
-              returnStart: null,
-              returnEnd: null,
-              price: null,
-              allocationStatus: null,
-              currentGroupStart: null,
-              currentGroupEnd: null,
-              estimatedWait: null,
-              lastUpdated: new Date().toISOString(),
-            },
-          ];
+        if (isFreeFlowOpen(attraction.openWithPark, parkStatus)) {
+          dto.queues = freeFlowQueues();
         }
 
         const standby = dto.queues.find((q) => q.queueType === "STANDBY");

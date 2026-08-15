@@ -39,6 +39,10 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
+import {
+  isFreeFlowOpen,
+  freeFlowQueues,
+} from "../../common/utils/free-flow-status.util";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
@@ -565,6 +569,15 @@ export class ParkIntegrationService {
       const ropeDropHeadliners: ParkWithAttractionsDto["ropeDropHeadliners"] =
         [];
 
+      // Free-flow attractions (playgrounds, splash pads, climbing nets) have no
+      // queue, so the source reports them CLOSED all day. The attraction detail
+      // and the favorites list already override that; this list did not, which
+      // is the surface people actually look at. The flag lives on the entity,
+      // not on the DTO, so read it from the park we were handed.
+      const openWithPark = new Set(
+        (park.attractions ?? []).filter((a) => a.openWithPark).map((a) => a.id),
+      );
+
       for (const attraction of dto.attractions) {
         totalAttractionsCount++;
 
@@ -612,6 +625,21 @@ export class ParkIntegrationService {
           // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
           attraction.status =
             dto.status === "OPERATING" ? "OPERATING" : "CLOSED";
+        }
+
+        // A free-flow attraction is open whenever the park is. Applied after the
+        // branches above so it overrides both a CLOSED queue row and the
+        // optimistic no-data fallback — and deliberately NOT when the park is
+        // closed or unreadable, where nothing below the park may claim to run.
+        if (
+          isFreeFlowOpen(
+            openWithPark.has(attraction.id),
+            dto.status,
+            waitTimesReadable,
+          )
+        ) {
+          attraction.status = "OPERATING";
+          attraction.queues = freeFlowQueues();
         }
 
         // Calculate Effective Status

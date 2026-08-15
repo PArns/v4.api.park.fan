@@ -1,4 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import {
+  isFreeFlowOpen,
+  freeFlowQueues,
+} from "../../common/utils/free-flow-status.util";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -22,10 +26,6 @@ import {
   ScheduleEntry,
   ScheduleType,
 } from "../../parks/entities/schedule-entry.entity";
-import {
-  QueueType,
-  LiveStatus,
-} from "../../external-apis/themeparks/themeparks.types";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -270,25 +270,9 @@ export class AttractionIntegrationService {
 
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
     // reported CLOSED by the source. Override to OPERATING with 0 min wait.
-    if (attraction.openWithPark && parkStatus === "OPERATING") {
+    if (isFreeFlowOpen(attraction.openWithPark, parkStatus)) {
       dto.status = "OPERATING";
-      dto.queues = [
-        {
-          queueType: QueueType.STANDBY,
-          status: LiveStatus.OPERATING,
-          waitTime: 0,
-          state: null,
-          returnStart: null,
-          returnEnd: null,
-          price: null,
-          allocationStatus: null,
-          currentGroupStart: null,
-          currentGroupEnd: null,
-          estimatedWait: null,
-          lastUpdated: new Date().toISOString(),
-          trend: undefined,
-        },
-      ];
+      dto.queues = freeFlowQueues();
     }
 
     // Drop the queue rows of a park we cannot read. They exist — Hansa-Park's upstream
