@@ -6,6 +6,45 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — free-flow attractions can now carry a season
+
+`isFreeFlowOpen` said "open whenever the park is", which is not true of every
+free-flow area. Europa-Park's two water playgrounds run in summer while the park
+itself stays open all winter; Everland's snow playground is the same story
+inverted. Those areas could not carry `open_with_park` at all — flagging them
+would have reported a snow playground open in July — so they stayed permanently
+CLOSED instead.
+
+The gate keys on **`season_months`, not `is_seasonal`**: the flag says an
+attraction closes for part of the year without saying which part, and a gate
+cannot act on that. Null or empty months mean no restriction, which is what most
+free-flow areas are and what the 15 already-flagged ones depend on. Months are
+1-based, as `detect-seasonal` writes them, and "which month is it" is asked in
+the **park's** timezone — the test that pins this uses an instant where UTC and
+park-local disagree, so a UTC implementation fails it.
+
+`isFreeFlowOpen` now takes an options object. Five positional arguments, two of
+them optional booleans, is precisely the shape that let the original rule drift
+into three copies.
+
+**Ownership boundary, and it is the load-bearing part.** The nightly detector
+would have erased every curated season it was given:
+
+- Step 2b (the self-heal added last change) cleared `season_months` on *every*
+  free-flow row. It is now scoped to rows where the months are already NULL —
+  the mislabel's exact signature, since the detector cannot derive months for an
+  attraction it never sees OPERATING. Months on a free-flow row are therefore
+  human-written, and this job does not own them.
+- Step 2's recently-operating reset now skips free-flow rows outright. Avoras
+  emitted 154 OPERATING records while free-flow, so that path would have wiped a
+  curated season the first time one appeared in the feed.
+
+Same two-writers rule as `curated_may_get_wet` and `curated_minimum_height`: the
+sync owns its cell, the human owns theirs, and neither writes the other's.
+
+No months were curated in this change — the four held attractions need their
+operators' season *dates* researched first, and "summer" is not a month list.
+
 ### Fixed — a playground is not a season
 
 `detect-seasonal` marks an attraction seasonal when it stays CLOSED across every

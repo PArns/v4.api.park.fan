@@ -111,9 +111,35 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     );
 
     expect(reset).toBeDefined();
-    // It must clear the months too — a stale [1, 12] is what made Avoras read
-    // as out of season in August.
-    expect(reset).toMatch(/season_months\s*=\s*NULL/i);
+    // ...but ONLY where there are no months. Months on a free-flow row are
+    // human-written — a curated season such as Europa-Park's summer-only water
+    // playgrounds — and this job does not own them. Clearing them here would
+    // undo the curation on the next nightly run.
+    expect(reset).toMatch(/season_months IS NULL/i);
+    expect(reset).not.toMatch(/SET[\s\S]*season_months\s*=/i);
+  });
+
+  it("never resets a free-flow row that has started reporting OPERATING", () => {
+    const query = jest.fn().mockResolvedValue([{ attractionId: "a1" }]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+
+    return processor.handleDetectSeasonal({} as never).then(() => {
+      const statements = query.mock.calls.map((c) => c[0] as string);
+      // Avoras emitted 154 OPERATING records while still being free-flow, so
+      // the recently-operating reset would otherwise wipe a curated season the
+      // first time one showed up in the feed.
+      const recentReset = statements.find(
+        (sql) => /UPDATE attractions/i.test(sql) && /id = ANY\(\$1\)/.test(sql),
+      );
+
+      expect(recentReset).toBeDefined();
+      expect(recentReset).toMatch(/NOT open_with_park/);
+    });
   });
 
   /**

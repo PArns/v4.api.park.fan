@@ -177,6 +177,10 @@ export class QueuePercentileProcessor {
         UPDATE attractions
         SET is_seasonal = false, season_months = NULL
         WHERE id = ANY($1) AND is_seasonal = true
+          -- Free-flow rows are curated by hand, and they DO emit the odd
+          -- OPERATING record (Avoras produced 154), so this reset would wipe a
+          -- curated season the first time one appeared in the feed.
+          AND NOT open_with_park
       `,
         [ids],
       );
@@ -188,13 +192,21 @@ export class QueuePercentileProcessor {
     }
 
     // Step 2b: Clear free-flow attractions that an earlier run mislabelled.
-    // Step 2 resets on "recently OPERATING", which a playground never is — its
-    // queue_data says CLOSED forever and only the read-time override says
+    // Step 2 resets on "recently OPERATING", which a playground rarely is — its
+    // queue_data says CLOSED nearly always and only the read-time override says
     // otherwise. Without this the false positives are permanent.
+    //
+    // Scoped to rows with NO months, because that is exactly the mislabel's
+    // signature: this detector cannot derive months for an attraction it never
+    // sees OPERATING, so every false positive it produced had NULL. Months on a
+    // free-flow row are therefore human-written — a curated season like
+    // Europa-Park's summer-only water playgrounds — and this job does not own
+    // them. Same two-writers boundary as curated_may_get_wet.
     const freeFlowReset = await this.dataSource.query(
       `UPDATE attractions
-          SET is_seasonal = false, season_months = NULL
-        WHERE open_with_park AND is_seasonal = true`,
+          SET is_seasonal = false
+        WHERE open_with_park AND is_seasonal = true
+          AND season_months IS NULL`,
     );
     if (freeFlowReset[1] > 0) {
       this.logger.log(

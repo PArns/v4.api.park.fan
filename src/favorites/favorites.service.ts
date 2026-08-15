@@ -691,7 +691,14 @@ export class FavoritesService {
         // Free-flow attractions (playgrounds, water play areas) have no queue
         // and are reported CLOSED by the source — same override the integrated
         // path applies, so a cache miss doesn't flip the card's status.
-        if (isFreeFlowOpen(attraction.openWithPark, parkStatus)) {
+        if (
+          isFreeFlowOpen({
+            openWithPark: attraction.openWithPark,
+            parkStatus,
+            seasonMonths: attraction.seasonMonths,
+            parkTimezone: attraction.park?.timezone,
+          })
+        ) {
           dto.queues = freeFlowQueues();
         }
 
