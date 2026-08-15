@@ -23,18 +23,31 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
-- [ ] **Drei doppelte RCDB-IDs sind doppelte PARKS, nicht falsche IDs.**
-      Dieselbe Bahn liegt jeweils unter zwei Park-Datensaetzen:
-      `europa-park` + `traumatica` (das Halloween-Event desselben Parks, gleicher
-      citySlug `rust`, 12 Attraktionen als Kopie) bei RCDB 971 und 3403, und
-      `universal-studios-florida` (ThemeParks.wiki) + `universal-studios-at-
-      universal-orlando` (**Queue-Times**, `externalId` `qt-park-65`) bei
-      RCDB 3866. Letzteres ist der bekannte Cross-Source-Duplikat-Fall: 18 Parks
-      im Bestand haben eine `qt-`-externalId, und mindestens dieser eine
-      beschreibt einen Park, den es unter der Wiki-ID schon gibt.
-      **Vorsicht:** einige Ride-Profile haengen an der Queue-Times-Kopie (u. a.
-      `revenge-of-the-mummy`), ein Merge muesste die mitnehmen. Park-Merge
-      blockiert laut Erfahrung an den FKs auf attraction_p50/p90.
+- [x] **Universal Studios Florida ist zusammengefuehrt.** Der Queue-Times-Datensatz
+      (`universal-studios-at-universal-orlando`) ist im Wiki-Datensatz aufgegangen:
+      32 Attraktionen und 313 Schedule-Eintraege migriert, der Park steht jetzt bei
+      36 Attraktionen ohne Duplikate, alle 11 Ride-Profile erhalten. RCDB 3866 ist
+      damit nicht mehr doppelt vergeben.
+- [ ] **Hurricane Harbor Los Angeles blockiert an kaputten `wait_time_predictions`.**
+      Beide Datensaetze (`hurricane-harbor-los-angeles` Wiki und
+      `six-flags-hurricane-harbor-los-angeles` Queue-Times) teilen sich qt-park-41
+      und gehoeren zusammengefuehrt, aber der Merge bricht mit einer
+      PK-Verletzung ab — und schon ein DELETE auf den Vorhersagen des Verlierers
+      tut es. Grund: die Tabelle enthaelt **vorbestehende doppelte
+      Primaerschluessel** (`attractionId, predictionType, createdAt,
+      predictedTime`), die erst sichtbar werden, wenn Timescale einen
+      komprimierten Chunk dekomprimiert. Allein `forgotten-sea-wave-pool` hat
+      drei. Das ist eine eigene Baustelle: erst die Tabelle deduplizieren
+      (vorsichtig, komprimiertes Hypertable — siehe die Bulk-Delete-Recipe),
+      dann den Merge wiederholen. Die Transaktion rollt sauber zurueck, es ist
+      also nichts halb passiert.
+- [ ] **Traumatica und Europa-Park bleiben getrennt** (bewusste Entscheidung:
+      Traumatica ist ein eigenstaendiges Event mit eigenem Ticket, kein
+      Duplikat). Folge davon: `matterhorn-blitz` und `pegasus` existieren als
+      Attraktion unter beiden Parks und teilen sich je eine RCDB-ID (971, 3403).
+      Das ist die einzige zulaessige Ausnahme von der Regel "eine ID, eine
+      Attraktion" — dieselbe physische Bahn wird in zwei Veranstaltungen
+      gelistet. Beim Duplikat-Check also nicht als Fehler werten.
 - [ ] **`curated_may_get_wet` beweist sich erst beim naechsten Detail-Sync.**
       Aktuell stimmt sie ueberall mit `may_get_wet` ueberein, weil der geloeschte
       Seed seine Werte dort schon hineingeschrieben hatte. Die Divergenz — und
