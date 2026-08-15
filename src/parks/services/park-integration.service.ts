@@ -574,8 +574,12 @@ export class ParkIntegrationService {
       // and the favorites list already override that; this list did not, which
       // is the surface people actually look at. The flag lives on the entity,
       // not on the DTO, so read it from the park we were handed.
-      const openWithPark = new Set(
-        (park.attractions ?? []).filter((a) => a.openWithPark).map((a) => a.id),
+      // A Map, not a Set: the season gate needs each attraction's months, and
+      // they live on the entity for the same reason the flag does.
+      const openWithPark = new Map<string, number[] | null>(
+        (park.attractions ?? [])
+          .filter((a) => a.openWithPark)
+          .map((a) => [a.id, a.seasonMonths ?? null]),
       );
 
       for (const attraction of dto.attractions) {
@@ -632,11 +636,13 @@ export class ParkIntegrationService {
         // optimistic no-data fallback — and deliberately NOT when the park is
         // closed or unreadable, where nothing below the park may claim to run.
         if (
-          isFreeFlowOpen(
-            openWithPark.has(attraction.id),
-            dto.status,
+          isFreeFlowOpen({
+            openWithPark: openWithPark.has(attraction.id),
+            parkStatus: dto.status,
             waitTimesReadable,
-          )
+            seasonMonths: openWithPark.get(attraction.id),
+            parkTimezone: park.timezone,
+          })
         ) {
           attraction.status = "OPERATING";
           attraction.queues = freeFlowQueues();

@@ -270,7 +270,14 @@ export class AttractionIntegrationService {
 
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
     // reported CLOSED by the source. Override to OPERATING with 0 min wait.
-    if (isFreeFlowOpen(attraction.openWithPark, parkStatus)) {
+    if (
+      isFreeFlowOpen({
+        openWithPark: attraction.openWithPark,
+        parkStatus,
+        seasonMonths: attraction.seasonMonths,
+        parkTimezone: attraction.park?.timezone,
+      })
+    ) {
       dto.status = "OPERATING";
       dto.queues = freeFlowQueues();
     }

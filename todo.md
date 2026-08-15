@@ -8,13 +8,17 @@ them), 4 sit in Hansa-Park where the flag deliberately cannot fire, and 25 were
 researched one by one against the operators' own pages. 14 were flagged.
 
 **Deliberately not flagged — genuinely seasonal, at parks open year-round:**
-- [ ] Europa-Park — *Lítill Island* (summer) and *Water Playground* (summer +
-      Halloween); Everland — *Snow playground* (winter); Bellewaerde —
-      *Snowmen Playground* (Christmas event only).
-      `isFreeFlowOpen` has **no season gate**, so flagging these would report a
-      snow playground open in July. Fixing it properly means either a season
-      gate on the util or usable `season_months` — see the next item, which is
-      why the months cannot currently be trusted.
+- [x] **The season gate exists now** — `isFreeFlowOpen` takes `seasonMonths` +
+      the park timezone, and the detector no longer owns the months on a
+      free-flow row. What is still missing is the months themselves.
+- [ ] Curate `season_months` for Europa-Park — *Lítill Island* (summer) and
+      *Water Playground* (summer + Halloween); Everland — *Snow playground*
+      (winter); Bellewaerde — *Snowmen Playground* (Christmas event only), then
+      set `open_with_park`. **Needs season-date research first**: "summer" is
+      not a month list, Europa-Park's summer season opens in late March (is 3 in
+      or out?), and Everland's snow-park closing date was never confirmed by a
+      fetched source. These are curation calls against the operator's calendar,
+      not util logic.
 - [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
       *Muddy Puddles Splash Pad*, Walibi Rhône-Alpes *Exotic Island 3-6* and
       *7-12*. Confirmed free-flow, but no source states an operating window, and
