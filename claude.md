@@ -28,6 +28,7 @@
 - [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md) - Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 - [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
+- [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md) - **2026-08-15**: who owns which cell and what an absent fact may become. The three status regimes (real feed / free-flow `open_with_park` / `UNKNOWN` when no source reports a ride), `is_seasonal` vs `season_months` and why months derived from under a year of history are just our recording window (`MIN_OBSERVED_DAYS`), the two-writers curated-column rule, the 73-day `detect-seasonal` outage and the ThemeParks.wiki feed drops. Includes diagnostic SQL.
 - [Weather](docs/architecture/weather.md) - Open-Meteo sync (16-day forecast), park timezone handling, why parks may have empty weather (missing coordinates).
 
 ### 📊 Analytics & Logic
@@ -131,13 +132,40 @@ ml-service/            # 🐍 Python CatBoost Service
 
 ---
 
+### 4. An Absent Fact Never Becomes a Confident One
+
+- **Detailed Guide**: [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md)
+- The `unknown` crowd-level rule (§3) is the same rule as these, and they have
+  all been broken the same way — **our own bookkeeping served as somebody
+  else's statement**:
+  - A ride **no source reports** reads `UNKNOWN`, never `CLOSED`. Reverse-
+    reconciliation's row records that our data stopped arriving, not that the
+    operator shut the ride. ~140 attractions across ten parks read "closed" for
+    weeks this way.
+  - **`season_months` may not be derived from less than a year of watching**
+    (`MIN_OBSERVED_DAYS` = 330). Below that the months are the observation
+    window, not a season — every list in the database was one.
+  - A **free-flow** attraction (`open_with_park`) is not seasonal just because
+    its feed never says OPERATING; that is a playground's normal state.
+- **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
+  and `curated_stats` sit *beside* the synced column, never in it, because the
+  sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.
+- **`AttractionStatus` includes `UNKNOWN`** and every Swagger `enum:` for it
+  comes from `ATTRACTION_STATUS_VALUES` — hand-written lists are how `unknown`
+  stayed out of the published contract for months.
+- **Research, never recall.** Facts about real rides and parks (heights, wet
+  flags, whether something is free-flow, seasons) come from the operator's own
+  pages. A name pattern is not evidence.
+
+---
+
 ## 📦 Key Types
 
 All shared types are in `src/common/types/`.
 
 - **CrowdLevel**: `very_low` | `low` | `moderate` | `high` | `very_high` | `extreme` | `unknown` (no usable baseline — "keine Prognose")
 - **ParkStatus**: `OPERATING` | `CLOSED`
-- **AttractionStatus**: `OPERATING` | `CLOSED` | `DOWN` | `REFURBISHMENT`
+- **AttractionStatus**: `OPERATING` | `CLOSED` | `DOWN` | `REFURBISHMENT` | `UNKNOWN` (no source reports this ride — an absence of information, never a closure)
 
 ---
 
