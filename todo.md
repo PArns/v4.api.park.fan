@@ -23,6 +23,22 @@ and both fail **silently** — that is what makes them worth tracking.
       session, which is a human moment anyway.
 
 **Curation left deliberately open:**
+- [ ] **Runde 3 der Ride-Pruefung: die verbliebenen Δ−1-Faelle.** Runde 2 hatte
+      eine Trefferquote von 7 aus 11 — die Annahme „Liste ist nur unvollstaendig"
+      haelt schlechter als gedacht. Offene Kandidaten, jeweils eine Inversion
+      weniger in der Liste als veroeffentlicht: **Voltron Nevera** (7),
+      **Banshee** (7), **blue fire** (4), sowie **Fury** in Bobbejaanland (3 vs
+      1 gelistet). Dazu die ungeprueften Marquee-Namen mit 0 Inversionen
+      (Fury 325, Millennium Force, Taron, Shambhala, Silver Star, Kondaa, die
+      vier Goliaths) — dort ist der Fehlerraum Hersteller/Modell/Jahr, nicht die
+      Elemente.
+- [ ] **Helix' hintere Haelfte ist ungeklaert.** Wikipedia nennt einen Pretzel
+      Knot, eine zweite Quelle stattdessen Inside Top Hat + Inline Twist. Beide
+      koennen nicht stimmen; die Liste fuehrt deshalb nur die uebereinstimmenden
+      Figuren und kommt auf 5 statt der veroeffentlichten 7.
+- [ ] **`the-flying-dinosaur-2` ist wieder ein `-2`-Duplikat** — diesmal ein
+      B&M Flying Coaster mit 90 min p90, also ein echter Headliner auf einem
+      Duplikat-Datensatz.
 - [ ] **`sky-loop` fehlt im Glossar.** Abismo (Madrid, RCDB 3185) ist der einzige
       je gebaute Maurer SkyLoop XT 450, und seine Signaturfigur — die
       herzförmige Schleife, in der der Zug sekundenlang kopfüber hängt — hat
