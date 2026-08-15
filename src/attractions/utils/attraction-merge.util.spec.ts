@@ -211,3 +211,43 @@ describe("chooseDuplicateWinner", () => {
     });
   });
 });
+
+describe("resolveSurvivingSlug — slugs that do not derive from each other", () => {
+  it("takes the slug the surviving name produces", () => {
+    // Energylandia's duplicates are found by a shared Queue-Times id, and their
+    // slugs share no stem. The winner is whichever row ingestion still feeds,
+    // and its slug can be an unrelated leftover — without this the merge would
+    // have published "Choco Chip Creek" at /main-train-2.
+    expect(
+      resolveSurvivingSlug(
+        "main-train-2",
+        "choco-chip-creek",
+        "Choco Chip Creek",
+      ),
+    ).toBe("choco-chip-creek");
+    expect(
+      resolveSurvivingSlug(
+        "lolipop-farm",
+        "mini-track-tour-ride",
+        "Mini Track Tour Ride",
+      ),
+    ).toBe("mini-track-tour-ride");
+  });
+
+  it("keeps the winner's slug when it already matches the name", () => {
+    expect(resolveSurvivingSlug("draken-rc", "draken", "Draken")).toBe(
+      "draken",
+    );
+    expect(resolveSurvivingSlug("draken", "draken-rc", "Draken")).toBe(
+      "draken",
+    );
+  });
+
+  it("changes nothing when no name is supplied", () => {
+    // The base/suffix rule is unaffected: existing callers keep their behaviour.
+    expect(resolveSurvivingSlug("taron-2", "taron")).toBe("taron");
+    expect(resolveSurvivingSlug("main-train-2", "choco-chip-creek")).toBe(
+      "main-train-2",
+    );
+  });
+});

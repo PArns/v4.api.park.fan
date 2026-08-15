@@ -1,3 +1,4 @@
+import { generateSlug } from "../../common/utils/slug.util";
 /**
  * Decides which slug the surviving row of an attraction merge should carry.
  *
@@ -14,11 +15,27 @@
 export function resolveSurvivingSlug(
   winnerSlug: string,
   loserSlug: string,
+  survivingName?: string,
 ): string {
   const winnerBase = winnerSlug.replace(/-[0-9]+$/, "");
 
   if (winnerBase !== winnerSlug && winnerBase === loserSlug) {
     return loserSlug;
+  }
+
+  // Duplicates found by a shared Queue-Times id need a different rule, because
+  // their slugs do not derive from one another at all. The winner is whichever
+  // row ingestion still feeds, and that row's slug can be an unrelated leftover:
+  // merging Energylandia's pair would have published "Choco Chip Creek" at
+  // /main-train-2, and "Mini Track' Tour Ride" at /lolipop-farm.
+  //
+  // So when neither slug is the other's stem, prefer whichever one the
+  // surviving NAME actually produces. A public URL should read like the ride.
+  if (survivingName) {
+    const fromName = generateSlug(survivingName);
+    if (loserSlug === fromName && winnerSlug !== fromName) {
+      return loserSlug;
+    }
   }
 
   return winnerSlug;

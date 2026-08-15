@@ -6,6 +6,21 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a merged ride kept the wrong URL
+
+`resolveSurvivingSlug` only knew one rule: if the winner's slug is the loser's
+with a number appended, take the loser's. That fits duplicates the sync made by
+counting, and nothing else.
+
+Duplicates found by a shared Queue-Times id do not derive from each other at
+all. The winner is whichever row ingestion still feeds, and that row's slug can
+be an unrelated leftover — the dry run was about to publish **Choco Chip Creek
+at `/main-train-2`** and **Mini Track' Tour Ride at `/lolipop-farm`**.
+
+So when neither slug is the other's stem, the survivor now takes whichever slug
+the surviving **name** produces. A public URL should read like the ride. Callers
+that pass no name keep the old behaviour exactly.
+
 ### Fixed — a park's map number hid eight duplicates
 
 Queue-Times publishes some parks' own map numbers **inside** the ride name.

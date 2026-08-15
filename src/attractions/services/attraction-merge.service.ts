@@ -137,7 +137,11 @@ export class AttractionMergeService {
 
       // Only now is the base slug free: (parkId, slug) is unique, so the
       // rename has to follow the delete.
-      const survivingSlug = resolveSurvivingSlug(winner.slug, loser.slug);
+      const survivingSlug = resolveSurvivingSlug(
+        winner.slug,
+        loser.slug,
+        winner.name,
+      );
       const renamed = survivingSlug !== winner.slug;
 
       // The two sources fill in different columns — across the real duplicate
@@ -286,7 +290,11 @@ export class AttractionMergeService {
         suffixSlug: suffix.slug,
         winnerId,
         loserId,
-        survivingSlug: resolveSurvivingSlug(winner.slug, loser.slug),
+        survivingSlug: resolveSurvivingSlug(
+          winner.slug,
+          loser.slug,
+          winner.name,
+        ),
         safe,
         reason: safe
           ? "same ride (names agree once the map number is stripped)"
