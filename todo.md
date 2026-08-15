@@ -79,9 +79,9 @@ and both fail **silently** — that is what makes them worth tracking.
       es etwas anderes als diese Query — z. B. Elementlisten, die zur
       veroeffentlichten Inversionszahl nicht aufgehen, ueber den ganzen Bestand
       statt nur ueber Cluster.
-- [ ] **Beide Great-America-Demons tragen RCDB-ID 3.** Die Zwillingsparks haben
-      wirklich je einen identischen Arrow-Looper von 1976, aber dieselbe ID
-      koennen nicht beide haben — eine ist falsch verknuepft.
+- [x] **Die doppelte RCDB-ID 3 ist bereinigt** — nur Gurnee traegt sie noch,
+      Santa Clara steht auf NULL. (Nebenbei aufgefallen: La Ronde hat einen
+      dritten Demon, ganz ohne ID.)
 - [x] **Runde 3 erledigt** — Voltron, Banshee, blue fire, Fury (Bobbejaanland)
       und die zehn Marquee-Namen mit 0 Inversionen geprueft. Vier Fehler
       gefunden und korrigiert; Millennium Force, Taron, Shambhala, Silver Star,
@@ -115,12 +115,14 @@ and both fail **silently** — that is what makes them worth tracking.
 - [ ] **Furius Baco: `overbank` ist unbelegt.** Die gefundene Quelle nennt vier
       Helices und keinen Overbank. Eine Quelle reicht mir nicht zum Ändern,
       aber das Element steht auf der Kippe.
-- [ ] **`-2`-Duplikate stehen als Headliner in den Baselines.**
-      `universal-studios-japan/mine-cart-madness-2` (p90 210) und
-      `mario-kart-koopas-challenge-2` (140) sind Duplikatdatensätze derselben
-      Klasse wie die Blackpool-`-2`-Slugs — nur diesmal gewinnen sie die
-      Headliner-Rangliste ihres Parks und verzerren damit die Park-Baseline,
-      nicht nur eine Ride-Seite.
+- [ ] **26 Attraktions-Duplikate warten, vom Tooling bereits als sicher
+      eingestuft** — `POST /v1/admin/merge-duplicate-attractions` findet sie im
+      Trockenlauf: **Energylandia 23**, Heide Park 2, Six Flags New England 1.
+      Es ist derselbe Cross-Source-Fall wie bei Magic Kingdom: eine Wiki-Zeile
+      und eine Queue-Times-Zeile derselben Bahn. Sechs weitere stellt das
+      Tooling bewusst zur Handpruefung zurueck, weil die Namen auseinandergehen
+      (`Riptide Racer` vs `Riptide`, `Main Train` vs `Choco Chip Creek`) — die
+      brauchen ein Urteil, keinen Batch-Lauf.
 
 - [ ] **Hyperia** (Thorpe Park, RCDB 20652) — sources state 2, 3 *and* 4
       inversions; Wikipedia contradicts itself within one article. The element
@@ -154,12 +156,8 @@ and both fail **silently** — that is what makes them worth tracking.
 
 **Observed while auditing, not acted on:**
 
-- [ ] **Disney Orlando parks hold each other's attractions.** `disneys-animal-
-      kingdom-theme-park` carries 66 attractions including `big-thunder-mountain-
-      railroad`, `haunted-mansion`, `cinderella-castle` and `main-street-vehicles`
-      — Magic Kingdom rides. This is the known duplicate-record class, but it is
-      worth a targeted look because it inflates that park's attraction count and
-      any per-park aggregate built on it.
+- [x] **Animal Kingdom haelt keine Magic-Kingdom-Rides mehr** — 42 umgehaengt,
+      35 Duplikate gemerged, der Park steht bei 24 statt 66 Attraktionen.
 
 
 ## Schedule times: 12-hour-clock rows need a curated override (2026-07-27)
