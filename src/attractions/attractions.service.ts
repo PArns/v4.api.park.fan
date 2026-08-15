@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, IsNull, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -350,7 +350,9 @@ export class AttractionsService {
     limit: number = 10,
   ): Promise<{ data: Attraction[]; total: number }> {
     const [data, total] = await this.attractionRepository.findAndCount({
-      where: { parkId },
+      // Retired attractions leave the park's list. The row and its history
+      // stay; only its own detail endpoint still answers for it.
+      where: { parkId, retiredAt: IsNull() },
       relations: ["park", "park.destination"],
       order: { name: "ASC" },
       take: limit,

@@ -2,7 +2,7 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -300,6 +300,9 @@ export class ChildrenMetadataProcessor {
 
     const repo = this.attractionsService.getRepository();
     const attractions = await repo.find({
+      // Retired attractions are skipped: this loop costs one rate-limited wiki
+      // request each, and a demolished ride's height will not change.
+      where: { retiredAt: IsNull() },
       // The park comes along for countryCode: the wiki reports centimetres
       // for everyone, but US parks publish the inch figure on their signage.
       relations: ["park"],

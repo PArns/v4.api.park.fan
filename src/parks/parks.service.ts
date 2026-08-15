@@ -2494,7 +2494,10 @@ export class ParksService {
   async loadParkRelations(park: Park): Promise<Park> {
     const em = this.parkRepository.manager;
     const [attractions, shows, restaurants] = await Promise.all([
-      em.find(Attraction, { where: { parkId: park.id } }),
+      // Retired attractions leave every list that describes the park as it is
+      // today. Their rows and history stay, and their own detail endpoint keeps
+      // answering — a page saying "operated until February 2026" beats a 404.
+      em.find(Attraction, { where: { parkId: park.id, retiredAt: IsNull() } }),
       em.find(Show, { where: { parkId: park.id } }),
       em.find(Restaurant, { where: { parkId: park.id } }),
     ]);

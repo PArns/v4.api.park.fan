@@ -442,6 +442,25 @@ export class AttractionResponseDto {
   })
   rideProfile?: RideProfileDto | null;
 
+  @ApiProperty({
+    description:
+      "When this attraction stopped existing (ISO 8601), or null while it is " +
+      "still around. A retired attraction is absent from park listings, " +
+      "counts and search, but keeps answering here so its history stays " +
+      'readable — render it as "operated until …", never as closed.',
+    required: false,
+    nullable: true,
+  })
+  retiredAt?: string | null;
+
+  @ApiProperty({
+    description:
+      "Why it was retired, including the source it was established from.",
+    required: false,
+    nullable: true,
+  })
+  retiredReason?: string | null;
+
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     const curated = resolveCuratedFacts(attraction);
 
@@ -468,6 +487,10 @@ export class AttractionResponseDto {
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
       rcdbId: attraction.rcdbId ?? null,
+      retiredAt: attraction.retiredAt
+        ? attraction.retiredAt.toISOString()
+        : null,
+      retiredReason: attraction.retiredReason ?? null,
       isCurrentlyInSeason: (() => {
         if (!attraction.isSeasonal) return null;
         if (!attraction.seasonMonths || attraction.seasonMonths.length === 0)

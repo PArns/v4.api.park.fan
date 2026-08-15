@@ -1,5 +1,32 @@
 # TODO
 
+## Retire the attractions that no longer exist (2026-08-15)
+
+The mechanism exists (`retired_at`, admin endpoints, job exclusions). What is
+left is establishing, per attraction, whether it is actually gone.
+
+- [ ] **73 individual retirement candidates** — attractions that had real wait
+      times, stopped reporting more than 30 days ago on a date **not shared**
+      with others in their park, and are still receiving reconciliation rows.
+      Spread over ~20 parks, at most five each. The scattered dates are what
+      separates them from the 67 whose whole block fell silent on one day —
+      those are seasonal closures (Wet'n'Wild's 13+9 on 2026-06-29 is the
+      Southern-Hemisphere winter, Bellewaerde's 5 on 2026-02-11 the Belgian
+      one) and must NOT be retired.
+      Each needs a **date and a source**, not just a verdict: `retired_at` wants
+      the actual closure date where one is stated, and anything that turns out
+      to still exist stays untouched.
+- [x] Four already established and retired as the proof batch: Animal Kingdom's
+      *Affection Section* (2026-02-22), *Dino-Sue* (2026-02-15) and *The
+      Animation Experience* (2026-02-23), Ocean Park's *North Pole Encounter*
+      (2026-03-03).
+- [ ] **`Expedition Everest - Legend of the Forbidden Mountain Single Rider` is
+      not a retirement candidate — it is a data-model error.** It is a queue
+      variant of a live roller coaster, not an attraction, so it should be
+      merged into its parent or excluded at mapping time. Worth checking whether
+      other parks have the same shape.
+
+
 ## Feed-dropped attractions still get marked seasonal (2026-08-15)
 
 A ride that no upstream source reports any more now reads `UNKNOWN` instead of

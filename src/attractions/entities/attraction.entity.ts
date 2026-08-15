@@ -193,6 +193,35 @@ export class Attraction {
   @Column({ name: "open_with_park", default: false })
   openWithPark: boolean;
 
+  /**
+   * When this attraction stopped existing. Null means it is still around.
+   *
+   * A ride that has been demolished is not "closed today" and it is not
+   * "unknown" either — both of those describe a state it could come back from.
+   * Before this column the API had no way to say the third thing, so Disney's
+   * Dino-Sue, torn down with DinoLand in February 2026, sat in the park's
+   * attraction list forever.
+   *
+   * The row and its queue_data are deliberately KEPT: the wait-time history is
+   * load-bearing for baselines and models, and a ride page that says "operated
+   * until February 2026" is worth more than a 404. What retirement changes is
+   * visibility — a retired attraction leaves the park's live list, the
+   * operating counts, search and favorites, while its own detail endpoint keeps
+   * answering.
+   *
+   * No sync writes this, the same two-writers rule as the curated columns.
+   */
+  @Column({ name: "retired_at", type: "timestamptz", nullable: true })
+  @Index("idx_attraction_retired_at", { where: "retired_at IS NULL" })
+  retiredAt: Date | null;
+
+  /**
+   * Why, and on whose authority — the source URL belongs in here. A retirement
+   * is a claim about the world, so it travels with its evidence.
+   */
+  @Column({ name: "retired_reason", type: "text", nullable: true })
+  retiredReason: string | null;
+
   @OneToMany(() => QueueData, (queueData) => queueData.attraction)
   queueData: QueueData[];
 

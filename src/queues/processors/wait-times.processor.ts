@@ -2,7 +2,7 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Park } from "../../parks/entities/park.entity";
@@ -135,7 +135,11 @@ export class WaitTimesProcessor {
               // Pre-fetch entity mappings
               const [pAttractions, pShows, pRestaurants] = await Promise.all([
                 this.attractionsService.getRepository().find({
-                  where: { parkId: park.id },
+                  // A retired attraction is absent from every feed by
+                  // definition, so reverse-reconciliation would write it a
+                  // CLOSED heartbeat row forever. That is the write half of the
+                  // bug the UNKNOWN read-path fix addressed.
+                  where: { parkId: park.id, retiredAt: IsNull() },
                   select: ["id", "externalId", "name"],
                 }),
                 this.showsService.getRepository().find({
