@@ -6,6 +6,42 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — "no source reports this ride" was being served as "closed"
+
+Reverse-reconciliation writes a CLOSED `queue_data` row for any attraction no
+upstream source has reported in 24 hours, so the seasonal detector has something
+to read. The write is deliberate; the status it produces is an assertion we
+cannot support. It says the operator closed the ride, when all that happened is
+that our data stopped arriving.
+
+On 2026-06-07 ThemeParks.wiki dropped 44 Europa-Park attractions and 18
+Rulantica ones from its live feed — every one of them a ride with no
+Queue-Times mapping to fall back on. Ten weeks later the park page still showed
+a Ball Pool, a London Bus and a Dwarf City as closed, in August, at one of the
+busiest parks in Europe. The same signature (one date, a whole cluster of rides)
+appears at Universal Studios Singapore, both Wet'n'Wild records, Busch Gardens
+Tampa and Ocean Park: roughly 140 attractions across ten parks.
+
+Such an attraction now reads `UNKNOWN` while its park operates, and its queue
+rows are dropped — the rule the codebase already applies one level up, where a
+park whose wait times we cannot read puts its rides on `UNKNOWN` rather than
+guessing. One util, applied on all three surfaces, because this is the third
+status rule of its kind and the previous one shipped a bug by being written
+three times.
+
+`AttractionStatus` gained `UNKNOWN` — which it had been **serving for months**
+via the unreadable-park path while the union claimed four values. The list now
+comes from `ATTRACTION_STATUS_VALUES`, the same fix applied to the crowd-level
+contract after that exact drift.
+
+Free-flow attractions outrank the new rule: their flag, not the feed, is what
+makes them open. In the favorites path that ordering needed an explicit guard,
+because the check reads the raw rows rather than the already-overridden ones.
+
+**Not fixed here:** the ~140 attractions keep getting marked seasonal, because
+`detect-seasonal` reads the same CLOSED rows — and the season it derives from a
+frozen feed is the observation-window artefact, at scale. Tracked in `todo.md`.
+
 ### Added — free-flow attractions can now carry a season
 
 `isFreeFlowOpen` said "open whenever the park is", which is not true of every

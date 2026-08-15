@@ -21,6 +21,21 @@ export type ParkStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
  * - CLOSED: Attraction is closed (scheduled closure)
  * - DOWN: Attraction is temporarily down (unexpected)
  * - REFURBISHMENT: Attraction is under maintenance/renovation
+ * - UNKNOWN: No source tells us. Not a closure — an absence of information.
+ *
+ * UNKNOWN was already being served before it was listed here: rides in a park
+ * whose wait times we cannot read at all (Hansa-Park) have carried it for
+ * months while this union claimed four values. That drift is the same one that
+ * kept `unknown` out of the published crowd-level contract, so: anything that
+ * emits a status reads it from this type, and the Swagger enum comes from
+ * ATTRACTION_STATUS_VALUES rather than a hand-written list.
  */
-export type AttractionStatus =
-  "OPERATING" | "CLOSED" | "DOWN" | "REFURBISHMENT";
+export const ATTRACTION_STATUS_VALUES = [
+  "OPERATING",
+  "CLOSED",
+  "DOWN",
+  "REFURBISHMENT",
+  "UNKNOWN",
+] as const;
+
+export type AttractionStatus = (typeof ATTRACTION_STATUS_VALUES)[number];

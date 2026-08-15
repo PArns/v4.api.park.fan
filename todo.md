@@ -1,5 +1,43 @@
 # TODO
 
+## Feed-dropped attractions still get marked seasonal (2026-08-15)
+
+A ride that no upstream source reports any more now reads `UNKNOWN` instead of
+CLOSED on all three surfaces. What is **not** fixed is what the detector does
+with the same rows.
+
+- [ ] `detect-seasonal` reads `current_status = 'CLOSED'` and the OPERATING
+      history, both of which still describe the frozen feed. So the ~140
+      feed-dropped attractions keep being marked seasonal, and the months it
+      derives are the observation-window artefact **at scale**: all 44
+      Europa-Park rides carry the identical list `[1,2,3,4,5,6,12]`, which is
+      simply "every month before the feed went silent". In August that reads as
+      44 attractions out of season at a park in peak season.
+      Two pieces: **(a)** clear the wrong months now, **(b)** build the guard
+      that was deliberately deferred — do not derive `season_months` from an
+      observation window shorter than a full year. The Avoras case argued for
+      deferring it because it would also drop two correct labels; this case
+      argues the other way, and it is 140 attractions against 2.
+- [ ] Consider teaching the detector the same distinction the read path just
+      learned: a row written by `system-reconciliation` is not evidence of a
+      season. That is probably the cleaner fix than (b) alone.
+
+## Upstream: ThemeParks.wiki dropped whole clusters of attractions
+
+- [ ] Ten parks lost a block of attractions from the wiki's **live** feed on a
+      single day each — Europa-Park and Rulantica on 2026-06-07, Universal
+      Studios Singapore on 2026-04-25, both Wet'n'Wild records on 2026-06-29,
+      Busch Gardens Tampa 2026-06-13, Ocean Park 2026-06-30. The entities may
+      still exist; only the live rows stopped. Worth establishing whether they
+      were recategorised upstream (and can be re-matched), or genuinely dropped.
+      Every affected ride lacks a `queue_times_entity_id` — the ones with a
+      Queue-Times mapping kept working, which is both the tell and a hint at the
+      mitigation: broaden Queue-Times matching for these parks.
+- [ ] **"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
+      attractions with the same date. That looks like a duplicate park pair for
+      the existing duplicate-records work.
+
+
 ## Free-flow attractions & seasonality (2026-08-15)
 
 **Context:** `open_with_park` was only ever curated for Phantasialand. A sweep

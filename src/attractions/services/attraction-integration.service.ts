@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
+import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -267,6 +268,16 @@ export class AttractionIntegrationService {
     // so instead of filling the gap. (Defaults to readable when the embedded
     // park is missing: the same conservative direction as the lookup itself.)
     const waitTimesReadable = dto.park?.liveWaitTimes.available ?? true;
+
+    // Reverse-reconciliation stamps CLOSED on anything no source has mentioned
+    // in 24h. That is our bookkeeping, not the operator's word, so it must not
+    // be served as a closure — see the util for the Europa-Park case that made
+    // this visible. Placed before the free-flow override, which outranks it: a
+    // flagged playground is open on the strength of the flag, not the feed.
+    if (readsUnknownFromAbsentSource(queueData, parkStatus)) {
+      dto.status = "UNKNOWN";
+      dto.queues = [];
+    }
 
     // Free-flow attractions (playgrounds, water play areas) have no queue and are
     // reported CLOSED by the source. Override to OPERATING with 0 min wait.
