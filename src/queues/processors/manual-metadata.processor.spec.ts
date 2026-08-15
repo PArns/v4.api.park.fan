@@ -16,6 +16,7 @@ jest.mock("../../common/cache/park-cache-invalidation", () => ({
  */
 describe("ManualMetadataProcessor", () => {
   const rideProfiles = { findCuratedSince: jest.fn() };
+  const rideProfileAudit = { audit: jest.fn() };
   const revalidationService = { revalidateTags: jest.fn() };
   const redis = {};
   const queue = { add: jest.fn() };
@@ -23,6 +24,7 @@ describe("ManualMetadataProcessor", () => {
   const processor = () =>
     new ManualMetadataProcessor(
       rideProfiles as never,
+      rideProfileAudit as never,
       revalidationService as never,
       redis as never,
       queue as never,
@@ -165,6 +167,14 @@ describe("ManualMetadataProcessor", () => {
     expect(invalidateParkCaches).not.toHaveBeenCalled();
     expect(revalidationService.revalidateTags).not.toHaveBeenCalled();
     expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it("swallows an audit failure instead of failing the nightly job", async () => {
+    rideProfileAudit.audit.mockRejectedValue(new Error("frontend unreachable"));
+
+    await expect(
+      processor().handleAuditRideProfileTerms({} as never),
+    ).resolves.toBeUndefined();
   });
 
   it("revalidates again when the delayed job fires", async () => {

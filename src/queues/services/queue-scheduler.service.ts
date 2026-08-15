@@ -54,6 +54,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
     @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
+    @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -925,6 +926,29 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "0 0 */2 * *", // Every 2 days at midnight
           },
           jobId: "geoip-update-cron",
+        },
+      );
+    }
+
+    // Ride-profile term audit: daily at 06:30, after the frontend's own deploys
+    // have settled. Cheap — one HTTP call plus one query over a few hundred
+    // rows — and the only thing that notices a renamed glossary term before a
+    // reader does.
+    const hasTermAuditCron = await this.hasRepeatableJob(
+      this.manualMetadataQueue,
+      "ride-profile-term-audit-cron",
+    );
+    if (!hasTermAuditCron) {
+      await this.manualMetadataQueue.add(
+        "audit-ride-profile-terms",
+        {},
+        {
+          repeat: {
+            cron: "30 6 * * *", // Daily at 06:30
+          },
+          jobId: "ride-profile-term-audit-cron",
+          removeOnComplete: true,
+          removeOnFail: true,
         },
       );
     }

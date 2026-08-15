@@ -8,6 +8,7 @@ import {
   RideProfileService,
   TouchedPark,
 } from "../../attractions/services/ride-profile.service";
+import { RideProfileAuditService } from "../../attractions/services/ride-profile-audit.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 
 /**
@@ -33,6 +34,7 @@ export class ManualMetadataProcessor {
 
   constructor(
     private readonly rideProfiles: RideProfileService,
+    private readonly rideProfileAudit: RideProfileAuditService,
     private readonly revalidationService: RevalidationService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("manual-metadata") private readonly queue: Queue,
@@ -69,6 +71,35 @@ export class ManualMetadataProcessor {
       `🎢 Publishing ${rides} curated ride profile(s) across ${touchedParks.length} park(s)...`,
     );
     await this.publish(touchedParks);
+  }
+
+  /**
+   * Daily check that every glossary term id the curation stores still resolves.
+   *
+   * The seed's CI check went away with the seed, and the replacement — the
+   * admin endpoint — only catches a rename when somebody remembers to ask.
+   * The failure is silent by design (a ride page drops an unknown term rather
+   * than rendering a dead link), so "nobody noticed" is not evidence that
+   * nothing broke. This turns it into a log line.
+   *
+   * Failing the job on a broken id would be wrong: the ids are fine until the
+   * frontend deploys a rename, and a red job every night teaches people to
+   * ignore it. A warning naming the ids and the rides they shorten is the
+   * signal; the endpoint stays for the details.
+   */
+  @Process("audit-ride-profile-terms")
+  async handleAuditRideProfileTerms(_job: Job): Promise<void> {
+    try {
+      await this.rideProfileAudit.audit();
+    } catch (error) {
+      // An unreachable frontend is not a curation problem — say so plainly
+      // rather than letting it read as "the term ids are broken".
+      this.logger.warn(
+        `🎢 Ride-profile term audit could not run: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /** The delayed half of {@link publish} — see the reasoning there. */
