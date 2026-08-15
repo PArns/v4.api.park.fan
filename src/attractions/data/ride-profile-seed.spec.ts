@@ -109,6 +109,8 @@ describe("RIDE_PROFILE_SEED", () => {
       "scorpion-tail",
       "celestial-spin",
       "jojo-roll",
+      "cobra-loop",
+      "flying-snake-dive",
     ]);
 
     const bad = RIDE_PROFILE_SEED.filter(

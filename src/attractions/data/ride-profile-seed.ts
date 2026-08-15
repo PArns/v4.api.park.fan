@@ -333,7 +333,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   // ───────────────────────────────────────────────────────────────────────
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "fenix",
     elements: [
       "lifthill",
@@ -355,7 +355,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "troy",
     elements: [
       "lifthill",
@@ -381,7 +381,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "booster-bike",
     elements: ["launch", "airtime-hill", "overbank", "helix", "brake-run"],
     types: ["motorbike-coaster", "launch-coaster", "steel-coaster"],
@@ -394,7 +394,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "dwervelwind",
     // Outdoors, through the Magische Vallei: the queue winds between the
     // coaster's own ponds and boulders and the station is an open-air, thatched
@@ -417,7 +417,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "maximus-blitz-bahn",
     elements: ["lifthill", "first-drop", "helix", "brake-run"],
     types: ["bobsled-coaster", "family-coaster", "indoor-coaster"],
@@ -429,7 +429,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "djengu-river",
     types: ["river-rapids", "water-ride"],
     manufacturer: "Hafema",
@@ -437,7 +437,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "expedition-zork",
     types: ["water-ride", "flat-ride"],
     manufacturer: "Mack Rides",
@@ -447,14 +447,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "merlins-quest",
     types: ["boat-ride", "dark-ride", "animatronics"],
     openedYear: 2018,
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "villa-fiasko",
     types: ["madhouse", "dark-ride"],
     manufacturer: "Vekoma",
@@ -464,7 +464,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "scorpios",
     types: ["pendulum-ride", "flat-ride"],
     manufacturer: "Zamperla",
@@ -474,7 +474,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "sevenum",
-    parkSlug: "toverland",
+    parkSlug: "attractiepark-toverland",
     attractionSlug: "djinn",
     types: ["swing-ride", "flat-ride"],
     openedYear: 2018,
@@ -1500,7 +1500,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   // ───────────────────────────────────────────────────────────────────────
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "tron-lightcycle-run",
     elements: ["launch", "airtime-hill", "overbank", "helix", "brake-run"],
     types: ["launch-coaster", "motorbike-coaster", "indoor-coaster"],
@@ -1513,7 +1513,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "seven-dwarfs-mine-train",
     // The swinging cars are the point: each vehicle rocks side to side
     // through the turns, which is why the layout stays gentle.
@@ -1527,7 +1527,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "space-mountain",
     elements: ["lifthill", "first-drop", "helix", "brake-run"],
     types: ["indoor-coaster", "dark-ride", "steel-coaster"],
@@ -1539,7 +1539,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "big-thunder-mountain-railroad",
     elements: ["lifthill", "first-drop", "helix", "block-brake", "brake-run"],
     types: ["mine-train", "family-coaster", "terrain-coaster"],
@@ -1551,7 +1551,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "the-barnstormer",
     elements: ["lifthill", "first-drop", "helix"],
     types: ["family-coaster", "wild-mouse"],
@@ -1568,7 +1568,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "haunted-mansion",
     types: ["omnimover", "dark-ride", "pepper-ghost", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1577,7 +1577,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "pirates-of-the-caribbean",
     types: ["boat-ride", "dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1586,7 +1586,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "its-a-small-world",
     types: ["boat-ride", "dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1595,7 +1595,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "peter-pans-flight",
     types: ["suspended-coaster", "dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1604,7 +1604,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "the-many-adventures-of-winnie-the-pooh",
     types: ["dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1613,7 +1613,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "under-the-sea-journey-of-the-little-mermaid",
     types: ["omnimover", "dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1622,7 +1622,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "buzz-lightyears-space-ranger-spin",
     types: ["interactive-dark-ride", "omnimover", "dark-ride"],
     manufacturer: "Walt Disney Imagineering",
@@ -1631,7 +1631,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "tianas-bayou-adventure",
     elements: ["lifthill", "first-drop", "splashdown"],
     types: ["log-flume", "dark-ride", "animatronics"],
@@ -1641,7 +1641,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "jingle-cruise",
     types: ["boat-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1650,7 +1650,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "tomorrowland-transit-authority-peoplemover",
     types: ["people-mover", "dark-ride"],
     manufacturer: "Walt Disney Imagineering",
@@ -1659,7 +1659,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "mad-tea-party",
     types: ["flat-ride"],
     manufacturer: "Walt Disney Imagineering",
@@ -1668,14 +1668,14 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "prince-charming-regal-carrousel",
     types: ["carousel", "flat-ride"],
     openedYear: 1971,
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "walt-disneys-carousel-of-progress",
     types: ["animatronics", "live-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1684,7 +1684,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-magic-kingdom",
+    parkSlug: "magic-kingdom-park",
     attractionSlug: "walt-disneys-enchanted-tiki-room",
     types: ["animatronics", "live-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1820,7 +1820,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   // ───────────────────────────────────────────────────────────────────────
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "rock-n-roller-coaster-starring-aerosmith",
     elements: [
       "launch",
@@ -1844,7 +1844,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "slinky-dog-dash",
     elements: [
       "launch",
@@ -1864,7 +1864,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "the-twilight-zone-tower-of-terror",
     types: ["drop-tower", "dark-ride", "pre-show", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1873,7 +1873,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "star-wars-rise-of-the-resistance",
     types: ["trackless-ride", "dark-ride", "animatronics", "pre-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1882,7 +1882,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "mickey-and-minnies-runaway-railway",
     types: ["trackless-ride", "dark-ride", "projection-mapping"],
     manufacturer: "Walt Disney Imagineering",
@@ -1891,7 +1891,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "millennium-falcon-smugglers-run",
     types: ["motion-simulator", "interactive-dark-ride", "pre-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1900,7 +1900,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "toy-story-mania",
     types: ["interactive-dark-ride", "dark-ride"],
     manufacturer: "Walt Disney Imagineering",
@@ -1909,7 +1909,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "star-tours-the-adventures-continue",
     types: ["motion-simulator", "pre-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1918,7 +1918,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-hollywood-studios",
+    parkSlug: "disneys-hollywood-studios",
     attractionSlug: "alien-swirling-saucers",
     types: ["flat-ride"],
     openedYear: 2018,
@@ -1929,7 +1929,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   // ───────────────────────────────────────────────────────────────────────
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "expedition-everest-legend-of-the-forbidden-mountain",
     // The mid-ride switch track that sends the train backwards is the whole
     // conceit — Vekoma built the track, Imagineering the show.
@@ -1950,7 +1950,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "avatar-flight-of-passage",
     types: ["flying-theater", "motion-simulator", "pre-show"],
     manufacturer: "Walt Disney Imagineering",
@@ -1959,7 +1959,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "navi-river-journey",
     types: ["boat-ride", "dark-ride", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1968,7 +1968,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "dinosaur",
     types: ["dark-ride", "motion-simulator", "animatronics"],
     manufacturer: "Walt Disney Imagineering",
@@ -1977,7 +1977,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "kali-river-rapids",
     types: ["river-rapids", "water-ride"],
     manufacturer: "Intamin",
@@ -1986,7 +1986,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
   },
   {
     citySlug: "orlando",
-    parkSlug: "disney-animal-kingdom",
+    parkSlug: "disneys-animal-kingdom-theme-park",
     attractionSlug: "kilimanjaro-safaris",
     types: ["dark-ride"],
     manufacturer: "Walt Disney Imagineering",
@@ -5193,12 +5193,16 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "sandusky",
     parkSlug: "cedar-point",
     attractionSlug: "rougarou",
+    // Still the 1996 Mantis track, only the trains changed in 2015 — so the
+    // third inversion is Mantis's inclined loop, not a zero-g roll. Four
+    // inversions, not five.
     elements: [
       "lifthill",
       "first-drop",
       "vertical-loop",
       "dive-loop",
-      "zero-g-roll",
+      "inclined-loop",
+      "trim-brake",
       "corkscrew",
       "brake-run",
     ],
@@ -5207,7 +5211,7 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     manufacturerTermId: "b-and-m",
     model: "Floorless Coaster",
     openedYear: 1996,
-    inversions: 5,
+    inversions: 4,
     stats: {
       topSpeedKmh: 96.6,
       heightM: 44.2,
@@ -5624,6 +5628,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "santa-clarita",
     parkSlug: "six-flags-magic-mountain",
     attractionSlug: "scream",
+    // The corkscrews are a pair and interlocking — listing one of them is what
+    // made the element list come up an inversion short of the published seven.
     elements: [
       "lifthill",
       "first-drop",
@@ -5631,6 +5637,9 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
       "dive-loop",
       "zero-g-roll",
       "cobra-roll",
+      "trim-brake",
+      "helix",
+      "corkscrew",
       "corkscrew",
       "brake-run",
     ],
@@ -5725,6 +5734,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "jackson-township",
     parkSlug: "six-flags-great-adventure",
     attractionSlug: "medusa",
+    // The corkscrews are a pair and interlocking — listing one of them is what
+    // made the element list come up an inversion short of the published seven.
     elements: [
       "lifthill",
       "first-drop",
@@ -5732,6 +5743,8 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
       "dive-loop",
       "zero-g-roll",
       "cobra-roll",
+      "helix",
+      "corkscrew",
       "corkscrew",
       "brake-run",
     ],
@@ -6018,12 +6031,16 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "hershey",
     parkSlug: "hersheypark",
     attractionSlug: "storm-runner",
+    // Neither an Immelmann nor a cobra roll nor a corkscrew: the three are a
+    // cobra loop — the first ever built, and the reason the glossary now has
+    // the term — and a flying snake dive, a heartline roll into a dive back
+    // down toward Spring Creek, which inverts twice on its own.
     elements: [
       "launch",
       "top-hat",
-      "immelmann",
-      "cobra-roll",
-      "corkscrew",
+      "cobra-loop",
+      "flying-snake-dive",
+      "airtime-hill",
       "brake-run",
     ],
     types: ["launch-coaster", "steel-coaster"],
@@ -6428,6 +6445,10 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "orlando",
     parkSlug: "seaworld-orlando",
     attractionSlug: "kraken",
+    // Two vertical loops, the second after the mid-course brake — the layout
+    // detail that separates Kraken from the Medusa/Scream floorless clones it
+    // otherwise reads like. SeaWorld publishes 7, which counts the cobra roll
+    // once; the list below is the physical layout.
     elements: [
       "lifthill",
       "first-drop",
@@ -6435,7 +6456,10 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
       "dive-loop",
       "zero-g-roll",
       "cobra-roll",
+      "trim-brake",
+      "vertical-loop",
       "corkscrew",
+      "flat-spin",
       "brake-run",
     ],
     types: ["floorless-coaster", "steel-coaster"],
@@ -7527,13 +7551,16 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "doswell",
     parkSlug: "kings-dominion",
     attractionSlug: "dominator",
+    // Not the Medusa/Scream layout it was filed under: Dominator has no dive
+    // loop and no zero-g roll. Loop, overbanked turn, cobra roll, then the
+    // interlocking corkscrews — which is exactly the 5 the park publishes.
     elements: [
       "lifthill",
       "first-drop",
       "vertical-loop",
-      "dive-loop",
-      "zero-g-roll",
+      "overbank",
       "cobra-roll",
+      "corkscrew",
       "corkscrew",
       "brake-run",
     ],
@@ -8787,10 +8814,13 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "agawam",
     parkSlug: "six-flags-new-england",
     attractionSlug: "batman-the-dark-knight",
+    // The dive loop was missing: loop, dive loop, zero-g roll and the pair of
+    // interlocking corkscrews are the five the park publishes.
     elements: [
       "lifthill",
       "first-drop",
       "vertical-loop",
+      "dive-loop",
       "zero-g-roll",
       "corkscrew",
       "corkscrew",
@@ -8903,13 +8933,17 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "vallejo",
     parkSlug: "six-flags-discovery-kingdom",
     attractionSlug: "medusa",
+    // Not the same layout as its east-coast namesake: the fourth inversion is
+    // a sea serpent roll — the first one B&M ever built — not a cobra roll,
+    // and the corkscrews are a pair.
     elements: [
       "lifthill",
       "first-drop",
       "vertical-loop",
       "dive-loop",
       "zero-g-roll",
-      "cobra-roll",
+      "sea-serpent",
+      "corkscrew",
       "corkscrew",
       "brake-run",
     ],
@@ -9125,13 +9159,20 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     citySlug: "allentown",
     parkSlug: "dorney-park",
     attractionSlug: "hydra",
-    // Opens with a "jojo roll" — an inversion before the lift hill, while the
-    // train is barely moving.
+    // Opens with a jojo roll — an inversion before the lift hill, while the
+    // train is barely moving. It is not an inline twist. There is no cutback
+    // either: after the lift come an inclined dive loop, a zero-g roll, a
+    // corkscrew, a cobra roll and a second corkscrew — the seven the park
+    // publishes.
     elements: [
-      "inline-twist",
+      "jojo-roll",
       "lifthill",
       "first-drop",
-      "cutback",
+      "dive-loop",
+      "zero-g-roll",
+      "corkscrew",
+      "cobra-roll",
+      "airtime-hill",
       "corkscrew",
       "brake-run",
     ],
@@ -10111,13 +10152,17 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "ocean-park",
     attractionSlug: "hair-raiser",
     // Built on the cliff edge above the South China Sea — the drop is over
-    // open water.
+    // open water. No corkscrew: the fourth inversion is an Immelmann, which
+    // alongside the dive loop reportedly made this the first B&M to carry
+    // both.
     elements: [
       "lifthill",
       "first-drop",
       "vertical-loop",
+      "dive-loop",
+      "airtime-hill",
       "zero-g-roll",
-      "corkscrew",
+      "immelmann",
       "brake-run",
     ],
     types: ["floorless-coaster", "terrain-coaster", "steel-coaster"],
@@ -11405,5 +11450,333 @@ export const RIDE_PROFILE_SEED: RideProfileSeedEntry[] = [
     parkSlug: "beto-carrero-world",
     attractionSlug: "tchibum",
     types: ["water-ride"],
+  },
+  // ───────────────────────────────────────────────────────────────────────
+  // Rides that carry an RCDB id but had no profile
+  // ───────────────────────────────────────────────────────────────────────
+  // The seed set out to cover every ride we hold an RCDB id for; these twenty
+  // were the remainder. Each was checked against its own id rather than
+  // against the ride it shares a name with — which is how the two
+  // "THE FLASH: Vertical Velocity" entries ended up as different machines
+  // from different decades, and why Fiesta Texas's "BATMAN The Ride" is not
+  // the B&M invert the name promises.
+  {
+    citySlug: "sevenum",
+    parkSlug: "attractiepark-toverland",
+    attractionSlug: "toos-express",
+    // Indoor family coaster lifted by a booster wheel, not a chain. Carried
+    // the name "Boomerang" from 2004 to 2018 without ever being one.
+    types: ["indoor-coaster", "family-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Junior Coaster",
+    openedYear: 2001,
+    inversions: 0,
+    stats: { lengthM: 320 },
+  },
+  {
+    citySlug: "ieper",
+    parkSlug: "bellewaerde",
+    attractionSlug: "boomerang",
+    // The first Boomerang to open anywhere in Europe. Three built inversions,
+    // counted the same way as every other Boomerang in this file — the park's
+    // six count the return trip.
+    elements: [
+      "lifthill",
+      "first-drop",
+      "cobra-roll",
+      "vertical-loop",
+      "lifthill",
+      "brake-run",
+    ],
+    types: ["boomerang", "shuttle-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Boomerang",
+    openedYear: 1984,
+    inversions: 3,
+  },
+  {
+    citySlug: "kasterlee",
+    parkSlug: "bobbejaanland",
+    attractionSlug: "dreamcatcher",
+    // Europe's first suspended coaster, opened as "Air Race" with aeroplane
+    // cars; re-themed in 2006. The cars swing, the track never inverts, and
+    // it has no named figures — so no element list.
+    types: ["suspended-coaster", "family-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Swinging Turns",
+    openedYear: 1987,
+    inversions: 0,
+  },
+  {
+    citySlug: "san-martin-de-la-vega",
+    parkSlug: "parque-warner-madrid",
+    attractionSlug: "superman-la-atraccion-de-acero",
+    elements: [
+      "lifthill",
+      "first-drop",
+      "vertical-loop",
+      "immelmann",
+      "zero-g-roll",
+      "cobra-roll",
+      "flat-spin",
+      "flat-spin",
+      "brake-run",
+    ],
+    types: ["floorless-coaster", "steel-coaster"],
+    manufacturer: "Bolliger & Mabillard",
+    manufacturerTermId: "b-and-m",
+    model: "Floorless Coaster",
+    openedYear: 2002,
+    inversions: 7,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "seaworld-san-antonio",
+    attractionSlug: "journey-to-atlantis",
+    // A Mack SuperSplash: boats, two rotating towers and a backwards camelback
+    // between them. The published layout names no figure we have a term for.
+    types: ["water-coaster", "steel-coaster"],
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+    model: "SuperSplash",
+    openedYear: 2007,
+    inversions: 0,
+  },
+  {
+    citySlug: "corfu",
+    parkSlug: "six-flags-darien-lake",
+    attractionSlug: "motocoaster",
+    // Zamperla's first motorbike coaster in the United States, off a flywheel
+    // launch. Opened as "Orange County Choppers Motocoaster".
+    types: ["launch-coaster", "family-coaster", "steel-coaster"],
+    manufacturer: "Zamperla",
+    manufacturerTermId: "zamperla",
+    model: "Motocoaster",
+    openedYear: 2008,
+    inversions: 0,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "batgirl-coaster-chase",
+    // One of the park's opening-day rides, as "Pied Piper".
+    types: ["family-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Junior Coaster",
+    openedYear: 1992,
+    inversions: 0,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "batman-the-ride",
+    // NOT the B&M inverted coaster the name carries at other Six Flags parks:
+    // this is an S&S 4D Free Spin. The six inversions are the cars flipping
+    // freely on magnetic kickers, only two of them built into the track — so
+    // there is no fixed element order to list.
+    types: ["fourth-dimension-coaster", "wing-coaster", "steel-coaster"],
+    manufacturer: "S&S – Sansei Technologies",
+    model: "4D Free Spin",
+    openedYear: 2015,
+    inversions: 6,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "superman-krypton-coaster",
+    // Drops off the quarry wall the park is built into.
+    elements: [
+      "lifthill",
+      "first-drop",
+      "vertical-loop",
+      "helix",
+      "zero-g-roll",
+      "cobra-roll",
+      "corkscrew",
+      "corkscrew",
+      "brake-run",
+    ],
+    types: ["floorless-coaster", "terrain-coaster", "steel-coaster"],
+    manufacturer: "Bolliger & Mabillard",
+    manufacturerTermId: "b-and-m",
+    model: "Floorless Coaster",
+    openedYear: 2000,
+    inversions: 6,
+  },
+  {
+    citySlug: "san-antonio",
+    parkSlug: "six-flags-fiesta-texas",
+    attractionSlug: "wonder-woman-golden-lasso-coaster",
+    // One of the two RMC single-rail prototypes of 2018.
+    elements: [
+      "lifthill",
+      "first-drop",
+      "dive-loop",
+      "airtime-hill",
+      "cutback",
+      "corkscrew",
+      "overbank",
+      "brake-run",
+    ],
+    types: ["single-rail-coaster", "steel-coaster"],
+    manufacturer: "Rocky Mountain Construction",
+    manufacturerTermId: "rmc",
+    model: "Raptor Track",
+    openedYear: 2018,
+    inversions: 3,
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "harley-quinn-crazy-train",
+    types: ["family-coaster", "steel-coaster"],
+    manufacturer: "Zierer",
+    model: "Tivoli - Large",
+    openedYear: 1999,
+    inversions: 0,
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "the-dark-knight-coaster",
+    // A wild mouse run entirely indoors, themed to Gotham.
+    types: ["wild-mouse", "indoor-coaster", "steel-coaster"],
+    manufacturer: "Mack Rides",
+    manufacturerTermId: "mack-rides",
+    model: "Wild Mouse",
+    openedYear: 2008,
+    inversions: 0,
+  },
+  {
+    citySlug: "jackson-township",
+    parkSlug: "six-flags-great-adventure",
+    attractionSlug: "the-flash-vertical-velocity",
+    // Shares a name with the Great America ride and nothing else: this is a
+    // Vekoma Super Boomerang from 2025, that one an Intamin impulse from 2001.
+    // Four inversions over two passes of two built ones.
+    types: ["boomerang", "shuttle-coaster", "launch-coaster", "steel-coaster"],
+    manufacturer: "Vekoma",
+    manufacturerTermId: "vekoma",
+    model: "Super Boomerang",
+    openedYear: 2025,
+    inversions: 4,
+  },
+  {
+    citySlug: "gurnee",
+    parkSlug: "six-flags-great-america",
+    attractionSlug: "the-flash-vertical-velocity",
+    // An impulse: launched back and forth between two 186 ft spikes, and
+    // upside down at no point despite standing riders vertical.
+    elements: ["launch", "spike", "brake-run"],
+    types: ["shuttle-coaster", "launch-coaster", "steel-coaster"],
+    manufacturer: "Intamin",
+    manufacturerTermId: "intamin",
+    model: "Impulse Coaster",
+    openedYear: 2001,
+    inversions: 0,
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "gold-rusher",
+    // The park's original coaster, running since opening day 1971.
+    elements: ["lifthill", "first-drop", "helix", "brake-run"],
+    types: ["mine-train", "steel-coaster"],
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+    model: "Mine Train",
+    openedYear: 1971,
+    inversions: 0,
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "the-riddlers-revenge",
+    // The largest stand-up coaster ever built. Two of its six inversions are
+    // dive loops, and both wrap around the lift hill.
+    elements: [
+      "lifthill",
+      "first-drop",
+      "vertical-loop",
+      "dive-loop",
+      "dive-loop",
+      "inclined-loop",
+      "corkscrew",
+      "corkscrew",
+      "brake-run",
+    ],
+    types: ["stand-up-coaster", "steel-coaster"],
+    manufacturer: "Bolliger & Mabillard",
+    manufacturerTermId: "b-and-m",
+    model: "Stand-Up Coaster",
+    openedYear: 1998,
+    inversions: 6,
+  },
+  {
+    citySlug: "santa-clarita",
+    parkSlug: "six-flags-magic-mountain",
+    attractionSlug: "wonder-woman-flight-of-courage",
+    // Three inversions, but no source states them in order — so the count
+    // stands alone rather than being guessed at from the sister prototype.
+    types: ["single-rail-coaster", "steel-coaster"],
+    manufacturer: "Rocky Mountain Construction",
+    manufacturerTermId: "rmc",
+    model: "Raptor Track",
+    openedYear: 2022,
+    inversions: 3,
+  },
+  {
+    citySlug: "austell",
+    parkSlug: "six-flags-over-georgia",
+    attractionSlug: "superman-ultimate-flight",
+    // Flying coaster: the pretzel loop is the first inversion and the inline
+    // twist the second, with the two horseshoes between them inverting nobody.
+    elements: [
+      "lifthill",
+      "first-drop",
+      "pretzel-loop",
+      "horseshoe",
+      "horseshoe",
+      "helix",
+      "inline-twist",
+      "brake-run",
+    ],
+    types: ["flying-coaster", "steel-coaster"],
+    manufacturer: "Bolliger & Mabillard",
+    manufacturerTermId: "b-and-m",
+    model: "Flying Coaster",
+    openedYear: 2002,
+    inversions: 2,
+  },
+  {
+    citySlug: "arlington",
+    parkSlug: "six-flags-over-texas",
+    attractionSlug: "mini-mine-train",
+    // Built three years after the park's full-size Runaway Mine Train, and
+    // shortened in 1997 to make room for Mr. Freeze.
+    elements: ["lifthill", "first-drop", "helix", "brake-run"],
+    types: ["mine-train", "family-coaster", "steel-coaster"],
+    manufacturer: "Arrow Dynamics",
+    manufacturerTermId: "arrow-dynamics",
+    model: "Mine Train",
+    openedYear: 1969,
+    inversions: 0,
+  },
+  {
+    citySlug: "orlando",
+    parkSlug: "universal-studios-at-universal-orlando",
+    attractionSlug: "revenge-of-the-mummy",
+    // Three LIM launches and a turntable, all indoors — a dark ride with a
+    // coaster inside it rather than a coaster with theming.
+    elements: ["launch", "turntable", "launch", "brake-run"],
+    types: ["indoor-coaster", "launch-coaster", "dark-ride", "steel-coaster"],
+    manufacturer: "Premier Rides",
+    manufacturerTermId: "premier-rides",
+    openedYear: 2004,
+    inversions: 0,
   },
 ];
