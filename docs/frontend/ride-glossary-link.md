@@ -16,16 +16,13 @@ animates it, and the glossary entry can list the other rides that have one.
 
 ## Shape
 
-| Layer          | File                                                         |
-| -------------- | ------------------------------------------------------------ |
-| Entity         | `src/attractions/entities/attraction-ride-profile.entity.ts` |
-| Seed data      | `src/attractions/data/ride-profile-seed.ts`                  |
-| Seed types     | `src/attractions/data/ride-profile-seed.types.ts`            |
-| Term allowlist | `src/attractions/data/glossary-term-ids.ts` (generated)      |
-| Service        | `src/attractions/services/ride-profile.service.ts`           |
-| DTO            | `src/attractions/dto/ride-profile.dto.ts`                    |
-| Controller     | `src/attractions/glossary-rides.controller.ts`               |
-| Seed job       | `src/queues/processors/manual-metadata.processor.ts`         |
+| Layer     | File                                                         |
+| --------- | ------------------------------------------------------------ |
+| Entity    | `src/attractions/entities/attraction-ride-profile.entity.ts` |
+| Data      | the `attraction_ride_profiles` table itself — see below      |
+| Service   | `src/attractions/services/ride-profile.service.ts` (read-only) |
+| DTO       | `src/attractions/dto/ride-profile.dto.ts`                    |
+| Controller | `src/attractions/glossary-rides.controller.ts`              |
 
 ```ts
 {
@@ -58,7 +55,7 @@ share a cell:
 | Column          | Written by                         | What it is               |
 | --------------- | ---------------------------------- | ------------------------ |
 | `stats`         | `RideStatsService` (Wikidata, CC0) | automatic, thin coverage |
-| `curated_stats` | the seed                           | hand-checked, deliberate |
+| `curated_stats` | hand-written SQL                   | hand-checked, deliberate |
 
 `mapRideProfile` merges them **field by field** with curated winning, so a ride
 can serve a curated speed next to an imported duration. The served object says
@@ -136,16 +133,75 @@ service's trigram indexes).
 ## Updating the data
 
 There is no upstream feed and there will not be one — nobody publishes ride
-layouts as data. The workflow is:
+layouts as data. **The `attraction_ride_profiles` rows are the source of
+truth.** There is no seed file, no `apply` job and no admin endpoint: you edit
+the table directly, and nothing in a deploy can overwrite what you wrote.
 
-1. Edit `src/attractions/data/ride-profile-seed.ts`.
-2. Deploy.
-3. `POST /v1/admin/apply-ride-profiles` — pure database work over a few hundred
-   rows, finishes in seconds. Idempotent; entries whose slugs match no
-   attraction are skipped silently (park and ride slugs drift as things are
-   renamed, and one stale line must not fail the run).
+In practice that means asking Claude to research a park and write the rows.
 
-In practice step 1 means asking Claude to research a park and extend the file.
+```sql
+UPDATE attraction_ride_profiles rp
+   SET elements   = '["lifthill","first-drop","vertical-loop","brake-run"]'::jsonb,
+       inversions = 1,
+       seeded_at  = now()
+  FROM attractions a, parks p
+ WHERE rp."attractionId" = a.id AND a."parkId" = p.id
+   AND p.slug = 'phantasialand' AND a.slug = 'black-mamba';
+```
+
+Match on `parks.slug` **and** `attractions.slug` together — park slugs are not
+globally unique (`disneyland-park` exists in Anaheim and in Paris), and ride
+names repeat across parks ("Goliath" is six different coasters).
+
+Three things the removed seed job used to do for you, which are now yours:
+
+- **Nothing validates term ids any more.** The old `ride-profile-seed.spec.ts`
+  checked every id against the frontend's exported allowlist and failed CI on a
+  typo. A misspelled id now reaches production and the ride page silently drops
+  that element, so the layout just reads short. Check a new id against
+  `park.fan → lib/glossary/data.ts` before writing it.
+- **Nothing evicts the caches.** The job used to invalidate
+  `park:integrated:{parkId}` and ping the frontend to revalidate. A direct write
+  becomes visible only as the TTLs expire — up to 6 h in Redis for a closed
+  park, plus 900 s at the Cloudflare edge.
+- **Nothing tells you a row went missing.** Park and ride slugs drift; the job
+  logged which curated entries had stopped matching. Renaming a park now
+  silently orphans nothing (rows key on `attractionId`, not slugs) — but a ride
+  that is deleted and re-created upstream loses its profile with no warning,
+  because the FK cascades.
+
+Sanity queries worth keeping to hand:
+
+```sql
+-- rides with an RCDB id and no profile at all
+SELECT p.slug, a.slug, a.rcdb_id
+  FROM attractions a
+  JOIN parks p ON p.id = a."parkId"
+  LEFT JOIN attraction_ride_profiles rp ON rp."attractionId" = a.id
+ WHERE rp."attractionId" IS NULL AND a.rcdb_id IS NOT NULL;
+
+-- profiles claiming inversions with an element list that has none
+SELECT p.slug, a.slug, rp.inversions, rp.elements
+  FROM attraction_ride_profiles rp
+  JOIN attractions a ON a.id = rp."attractionId"
+  JOIN parks p ON p.id = rp."parkId"
+ WHERE rp.inversions > 0 AND jsonb_array_length(rp.elements) > 0
+   AND NOT rp.elements ?| array['vertical-loop','corkscrew','immelmann',
+       'dive-loop','zero-g-roll','zero-g-stall','cobra-loop','cobra-roll',
+       'batwing','sea-serpent','sidewinder','inline-twist','heartline-roll',
+       'jojo-roll','flying-snake-dive','pretzel-loop','barrel-roll-drop',
+       'twisted-horseshoe-roll','step-up-under-flip','flat-spin','raven-turn',
+       'cutback','butterfly','bowtie','interlocking-loops','norwegian-loop',
+       'banana-roll','inclined-loop','scorpion-tail','celestial-spin'];
+
+-- identical element lists shared by several rides: the copy-paste tell that
+-- has now produced wrong data four times (SLCs, Boomerangs, B&M floorless)
+SELECT rp.elements, count(*), array_agg(a.slug)
+  FROM attraction_ride_profiles rp
+  JOIN attractions a ON a.id = rp."attractionId"
+ WHERE jsonb_array_length(rp.elements) > 4
+ GROUP BY rp.elements HAVING count(*) > 1 ORDER BY count(*) DESC;
+```
 
 ### Sourcing rules
 
@@ -187,25 +243,46 @@ looks equally authoritative whether or not anybody checked it:
 ## Keeping term ids honest
 
 Nothing at runtime can tell us a glossary term was renamed or removed — the
-ride page would just silently drop it and the layout would read short. So the
-frontend's full id list is mirrored here and checked by
-`ride-profile-seed.spec.ts`. Regenerate it from the **frontend** repo whenever
-a term is added, renamed or removed:
+ride page just silently drops it and the layout reads short. There used to be a
+mirrored allowlist (`glossary-term-ids.ts`) and a spec that failed CI on an
+unknown id; both went with the seed, because there is no longer a checked-in
+file to check. **The ids in the database are now unvalidated.**
+
+So before writing a term id, confirm it exists in the frontend repo:
 
 ```bash
-node scripts/export-glossary-term-ids.mjs \
-  > ../v4.api.park.fan/src/attractions/data/glossary-term-ids.ts
+grep "id: 'zero-g-stall'" ../park.fan/lib/glossary/data.ts
 ```
 
-The spec also enforces six invariants that catch real curation mistakes:
+And after renaming or removing a term in the frontend, find the rows that
+still reference it — nothing else will tell you:
+
+```sql
+SELECT p.slug, a.slug, rp.elements
+  FROM attraction_ride_profiles rp
+  JOIN attractions a ON a.id = rp."attractionId"
+  JOIN parks p ON p.id = rp."parkId"
+ WHERE rp.elements @> '["the-removed-id"]'
+    OR rp.types    @> '["the-removed-id"]'
+    OR rp.manufacturer_term_id = 'the-removed-id';
+```
+
+The invariants the spec used to enforce are still the right ones to check by
+hand — these are the mistakes that actually happened:
 
 - no unknown term ids,
-- no duplicate ride keys (a second entry would silently overwrite the first),
 - every coaster's element list starts with a lift, a launch or a drop (a layout
-  that starts mid-air means the list was truncated),
+  that starts mid-air means the list was truncated — Hydra's pre-lift jojo roll
+  is the one legitimate exception, so allow a figure or two before the lift),
 - no ride claims inversions while its element list contains no inverting figure
-  (this one caught four wrong entries on its first run),
+  (this caught four wrong entries the first time it ran),
 - every curated measurement is inside what a ride can physically be (5–260 km/h,
   1–200 m, 20–8500 m, 10–900 s) — the shape a unit slip takes,
 - no ride is taller than half its own track, which is what a length read in feet
-  next to a height read in metres looks like.
+  next to a height read in metres looks like,
+- and the one no automated check ever had: **two rides sharing a byte-identical
+  element list are a lead, not a fact.** Model families do share layouts, but
+  every time that pattern was actually chased down it turned up members that
+  were not that model at all — a "Boomerang" that is a family coaster, an "SLC"
+  that is an MK-900, a Vekoma that is a Schwarzkopf, a B&M floorless filed under
+  a sister ride's layout. Verify each one against its own RCDB id.

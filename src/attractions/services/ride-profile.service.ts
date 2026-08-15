@@ -1,65 +1,9 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnModuleInit,
-  Optional,
-} from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
-import {
-  AttractionRideProfile,
-  type RideMeasurements,
-} from "../entities/attraction-ride-profile.entity";
-import { RIDE_PROFILE_SEED } from "../data/ride-profile-seed";
-import {
-  RideProfileSeedEntry,
-  RideProfileSeedStats,
-} from "../data/ride-profile-seed.types";
+import { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
 
-/**
- * Widen the seed's optional measurements into the stored shape.
- *
- * The seed omits what it does not know, the column states null for it: an
- * absent field and a null one have to mean the same thing downstream, or a
- * merge that reads `undefined` would treat "we did not curate this" as a
- * curated value and shadow the imported one.
- */
-function toMeasurements(
-  stats: RideProfileSeedStats | undefined,
-): RideMeasurements | null {
-  if (!stats) return null;
-  const measurements: RideMeasurements = {
-    topSpeedKmh: stats.topSpeedKmh ?? null,
-    heightM: stats.heightM ?? null,
-    lengthM: stats.lengthM ?? null,
-    durationSeconds: stats.durationSeconds ?? null,
-  };
-  const hasAny = Object.values(measurements).some((value) => value !== null);
-  return hasAny ? measurements : null;
-}
-
-export interface RideProfileSeedResult {
-  written: number;
-  skipped: number;
-  /**
-   * The `citySlug/parkSlug/attractionSlug` of every entry that matched no
-   * attraction. Skipping is deliberate — ride slugs drift and one stale line
-   * must not fail the run — but a bare count makes that drift invisible: a
-   * curated ride silently stops being served and nothing says which one.
-   */
-  skippedKeys: string[];
-  /**
-   * The parks this run wrote into, with their written attractions. Writing the
-   * rows is only half the job: the park response is served from
-   * `park:integrated:{parkId}` (up to 6h old for a closed park), so without
-   * evicting those the new profiles stay invisible — and the frontend, told to
-   * revalidate, refetches the stale copy and pins it for a day.
-   */
-  touchedParks: TouchedPark[];
-}
-
-/** A park whose cached response a seed run invalidated. */
+/** A park whose cached response a write invalidated. */
 export interface TouchedPark {
   parkId: string;
   attractionIds: string[];
@@ -105,16 +49,14 @@ export function parseTermAttractionSort(
   return raw === "popularity" ? "popularity" : "park";
 }
 
-/** Injection token so tests can supply their own seed. */
-export const RIDE_PROFILE_SEED_TOKEN = "RIDE_PROFILE_SEED";
-
 /**
- * Owns the curated ride profiles: applies the seed, and serves both
- * directions of the ride ↔ glossary link.
+ * Serves both directions of the ride ↔ glossary link.
  *
- * Pure database work — the seed is a checked-in file, there is no upstream to
- * call. Applying it is idempotent, so re-running after an edit is safe and
- * cheap (a few hundred rows).
+ * Read-only. The curated profiles in `attraction_ride_profiles` are edited
+ * directly in the database — there is no seed file and no apply job to run,
+ * so nothing here writes the curation. `RideStatsService` still writes the
+ * `stats` column from Wikidata, which is a different writer for a different
+ * column.
  */
 @Injectable()
 export class RideProfileService implements OnModuleInit {
@@ -123,9 +65,6 @@ export class RideProfileService implements OnModuleInit {
   constructor(
     @InjectRepository(AttractionRideProfile)
     private readonly repo: Repository<AttractionRideProfile>,
-    @Optional()
-    @Inject(RIDE_PROFILE_SEED_TOKEN)
-    private readonly seed: RideProfileSeedEntry[] = RIDE_PROFILE_SEED,
   ) {}
 
   onModuleInit(): void {
@@ -153,113 +92,6 @@ export class RideProfileService implements OnModuleInit {
     } catch (err) {
       this.logger.debug(`Ride-profile GIN indexes not created: ${err}`);
     }
-  }
-
-  /**
-   * Write the curated seed to the database.
-   *
-   * A seed entry whose slugs match no attraction is skipped silently — park
-   * and ride slugs drift as things are renamed, and a stale line in the seed
-   * must not fail the whole run.
-   */
-  async apply(): Promise<RideProfileSeedResult> {
-    const entries = this.seed ?? RIDE_PROFILE_SEED;
-    const result: RideProfileSeedResult = {
-      written: 0,
-      skipped: 0,
-      skippedKeys: [],
-      touchedParks: [],
-    };
-    const seededAt = new Date();
-
-    // Resolve every slug triple in ONE query. Doing it per entry was ~500
-    // round-trips for a job whose whole point is to finish in seconds.
-    const rows = await this.repo.manager
-      .createQueryBuilder()
-      .select([
-        "attraction.id AS id",
-        'attraction."parkId" AS parkid',
-        'park."citySlug" AS cityslug',
-        "park.slug AS parkslug",
-        "attraction.slug AS attractionslug",
-      ])
-      .from("attractions", "attraction")
-      .innerJoin("parks", "park", 'park.id = attraction."parkId"')
-      .getRawMany<{
-        id: string;
-        parkid: string;
-        cityslug: string;
-        parkslug: string;
-        attractionslug: string;
-      }>();
-
-    const byKey = new Map(
-      rows.map((row) => [
-        `${row.cityslug}/${row.parkslug}/${row.attractionslug}`,
-        row,
-      ]),
-    );
-
-    const profiles: Partial<AttractionRideProfile>[] = [];
-    for (const entry of entries) {
-      const key = `${entry.citySlug}/${entry.parkSlug}/${entry.attractionSlug}`;
-      const match = byKey.get(key);
-      if (!match) {
-        result.skipped++;
-        result.skippedKeys.push(key);
-        continue;
-      }
-
-      profiles.push({
-        attractionId: match.id,
-        parkId: match.parkid,
-        elements: entry.elements ?? [],
-        types: entry.types ?? [],
-        manufacturerName: entry.manufacturer ?? null,
-        manufacturerTermId: entry.manufacturerTermId ?? null,
-        model: entry.model ?? null,
-        openedYear: entry.openedYear ?? null,
-        inversions: entry.inversions ?? null,
-        curatedStats: toMeasurements(entry.stats),
-        seededAt,
-      });
-    }
-
-    // Chunked upsert on the primary key: re-running after a seed edit updates
-    // in place instead of erroring, and never leaves a half-written table.
-    const CHUNK = 200;
-    for (let i = 0; i < profiles.length; i += CHUNK) {
-      await this.repo.upsert(profiles.slice(i, i + CHUNK), ["attractionId"]);
-    }
-    result.written = profiles.length;
-
-    // Every matched entry is upserted, changed or not, so this names every
-    // curated park rather than only the ones whose data actually moved. That
-    // is the honest granularity available here and the job is a manual,
-    // occasional one — over-evicting a warm park costs one rebuild, while
-    // under-evicting serves curated data that is invisible for hours.
-    const byPark = new Map<string, string[]>();
-    for (const profile of profiles) {
-      const ids = byPark.get(profile.parkId!) ?? [];
-      ids.push(profile.attractionId!);
-      byPark.set(profile.parkId!, ids);
-    }
-    result.touchedParks = [...byPark].map(([parkId, attractionIds]) => ({
-      parkId,
-      attractionIds,
-    }));
-
-    this.logger.log(
-      `🎢 Ride profiles applied: ${result.written} written, ${result.skipped} skipped (no matching attraction)`,
-    );
-    if (result.skippedKeys.length > 0) {
-      // Naming them is the whole point: a skipped entry is curated data that
-      // silently stops being served, and the only way to notice is to be told.
-      this.logger.warn(
-        `🎢 Ride profiles with no matching attraction: ${result.skippedKeys.join(", ")}`,
-      );
-    }
-    return result;
   }
 
   /** The profile for one attraction, or null when it has not been curated. */

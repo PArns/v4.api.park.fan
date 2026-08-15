@@ -38,7 +38,7 @@ describe("RideProfileService.findAttractionsByTerm ordering", () => {
     getRawMany: jest.fn(),
   };
   const repo = { createQueryBuilder: jest.fn(() => qb) };
-  const service = new RideProfileService(repo as never, [] as never);
+  const service = new RideProfileService(repo as never);
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -98,86 +98,5 @@ describe("RideProfileService.findAttractionsByTerm ordering", () => {
       expect.anything(),
       expect.anything(),
     );
-  });
-});
-
-/**
- * Writing the rows is only half of applying the seed. The park response is
- * served from `park:integrated:{parkId}` — up to six hours old for a closed
- * park — so unless the caller is told which parks to evict, the curated
- * profiles are written and stay invisible.
- */
-describe("RideProfileService.apply cache reporting", () => {
-  const manager = {
-    createQueryBuilder: jest.fn(() => ({
-      select: jest.fn().mockReturnThis(),
-      from: jest.fn().mockReturnThis(),
-      innerJoin: jest.fn().mockReturnThis(),
-      getRawMany: jest.fn().mockResolvedValue([
-        {
-          id: "a1",
-          parkid: "p1",
-          cityslug: "bruehl",
-          parkslug: "phantasialand",
-          attractionslug: "taron",
-        },
-        {
-          id: "a2",
-          parkid: "p1",
-          cityslug: "bruehl",
-          parkslug: "phantasialand",
-          attractionslug: "black-mamba",
-        },
-        {
-          id: "a3",
-          parkid: "p2",
-          cityslug: "rust",
-          parkslug: "europa-park",
-          attractionslug: "voltron-nevera",
-        },
-      ]),
-    })),
-  };
-  const repo = { manager, upsert: jest.fn() };
-
-  const entry = (
-    citySlug: string,
-    parkSlug: string,
-    attractionSlug: string,
-  ) => ({ citySlug, parkSlug, attractionSlug, elements: [], types: [] });
-
-  beforeEach(() => jest.clearAllMocks());
-
-  it("groups the written attractions by park", async () => {
-    const service = new RideProfileService(
-      repo as never,
-      [
-        entry("bruehl", "phantasialand", "taron"),
-        entry("bruehl", "phantasialand", "black-mamba"),
-        entry("rust", "europa-park", "voltron-nevera"),
-      ] as never,
-    );
-
-    const result = await service.apply();
-
-    expect(result.written).toBe(3);
-    expect(result.touchedParks).toEqual([
-      { parkId: "p1", attractionIds: ["a1", "a2"] },
-      { parkId: "p2", attractionIds: ["a3"] },
-    ]);
-  });
-
-  it("reports no parks when every seed entry misses", async () => {
-    // Slugs drift as rides are renamed. A run that matched nothing must not
-    // hand back parks to evict — there is nothing new to publish.
-    const service = new RideProfileService(
-      repo as never,
-      [entry("bruehl", "phantasialand", "renamed-since")] as never,
-    );
-
-    const result = await service.apply();
-
-    expect(result.written).toBe(0);
-    expect(result.touchedParks).toEqual([]);
   });
 });
