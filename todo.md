@@ -15,12 +15,16 @@ and both fail **silently** — that is what makes them worth tracking.
 - [x] **Nothing evicts caches after a curation write** — built:
       `POST /v1/admin/publish-ride-profiles` evicts every park whose profiles
       carry a recent `seeded_at`, revalidates, and queues the post-CDN sweep.
-- [ ] **Neither one runs by itself.** Both are manual calls, so they catch a
-      problem only when someone remembers to ask. The audit is the one that
-      wants a cadence — a daily cron that logs a warning when an id stops
-      resolving would turn a silent breakage into a visible one. The publish
-      endpoint is fine as a manual step: it belongs at the end of a curation
-      session, which is a human moment anyway.
+- [x] **Der Audit laeuft jetzt von selbst** — taeglich 06:30 auf der
+      manual-metadata-Queue. Er scheitert bewusst NICHT bei einer kaputten ID:
+      die IDs sind in Ordnung, bis das Frontend eine Umbenennung deployt, und
+      ein jede Nacht roter Job erzieht dazu, ihn zu ignorieren. Eine Warnung,
+      die die IDs und die betroffenen Rides nennt, ist das Signal; der Endpoint
+      bleibt fuer die Details. Ein unerreichbares Frontend wird als solches
+      geloggt und nicht als Kurations-Problem.
+- [ ] **`publish-ride-profiles` bleibt ein manueller Aufruf** — und das ist
+      richtig so: er gehoert ans Ende einer Kuratier-Sitzung, und die ist
+      ohnehin ein menschlicher Moment.
 
 **Curation left deliberately open:**
 - [x] **Universal Studios Florida ist zusammengefuehrt.** Der Queue-Times-Datensatz
