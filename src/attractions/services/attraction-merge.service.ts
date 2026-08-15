@@ -329,6 +329,7 @@ export class AttractionMergeService {
     "maximumHeight",
     "mayGetWet",
     "curatedMayGetWet",
+    "hasSingleRider",
     "rcdbId",
     "seasonMonths",
   ] as const;
