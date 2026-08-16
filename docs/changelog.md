@@ -6,7 +6,7 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
-### Fixed — a merged ride kept the wrong URL
+### Fixed — a merged ride kept the wrong URL *and* the wrong name
 
 `resolveSurvivingSlug` only knew one rule: if the winner's slug is the loser's
 with a number appended, take the loser's. That fits duplicates the sync made by
@@ -20,6 +20,21 @@ at `/main-train-2`** and **Mini Track' Tour Ride at `/lolipop-farm`**.
 So when neither slug is the other's stem, the survivor now takes whichever slug
 the surviving **name** produces. A public URL should read like the ride. Callers
 that pass no name keep the old behaviour exactly.
+
+The **name** had the same problem, and it is the one a visitor reads. The
+Queue-Times row usually wins a merge — it is the one ingestion still feeds — so
+merging Energylandia's duplicates would have settled every ride on its numbered
+spelling: `Abyssus (184)`, `Draken (155)`, `Frutti Loop (39)`. When two names
+differ *only* by that trailing number, the clean one now wins regardless of
+which row it came from. Any other difference is left to the winner; this is not
+the place to arbitrate between two genuinely different names.
+
+Scale, measured rather than assumed: Energylandia holds **138** attraction rows
+for a park Queue-Times lists 46 rides for, and **31** of those are duplicate
+pairs. The visible copy is the Queue-Times one — numbered name, no minimum
+height, no RCDB link — while the metadata sits on the `-2` twin beside it. The
+merge already inherits whatever the survivor lacks, so collapsing the pairs is
+what puts the ride and its facts back together.
 
 ### Fixed — a park's map number hid eight duplicates
 

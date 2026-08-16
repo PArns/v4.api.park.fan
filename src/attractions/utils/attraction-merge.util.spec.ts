@@ -1,4 +1,5 @@
 import {
+  resolveSurvivingName,
   resolveSurvivingSlug,
   isSafeToAutoMerge,
   chooseDuplicateWinner,
@@ -249,5 +250,33 @@ describe("resolveSurvivingSlug — slugs that do not derive from each other", ()
     expect(resolveSurvivingSlug("main-train-2", "choco-chip-creek")).toBe(
       "main-train-2",
     );
+  });
+});
+
+describe("resolveSurvivingName", () => {
+  it("drops the map number, whichever row it came from", () => {
+    // The Queue-Times row usually wins a merge — it is the one ingestion still
+    // feeds — so without this every Energylandia ride would settle on its
+    // numbered spelling.
+    expect(resolveSurvivingName("Abyssus (184)", "Abyssus")).toBe("Abyssus");
+    expect(resolveSurvivingName("Abyssus", "Abyssus (184)")).toBe("Abyssus");
+    expect(resolveSurvivingName("Draken (155)", "Draken")).toBe("Draken");
+  });
+
+  it("leaves genuinely different names to the winner", () => {
+    // Not the place to arbitrate between two real names.
+    expect(resolveSurvivingName("Kiddy Hawk", "Kiddy Hawk Cove")).toBe(
+      "Kiddy Hawk",
+    );
+    expect(resolveSurvivingName("Main Train", "Choco Chip Creek")).toBe(
+      "Main Train",
+    );
+  });
+
+  it("keeps a year that is part of the name", () => {
+    // "Spindeln - Nyhet 2026" has no bracket, so nothing is stripped.
+    expect(
+      resolveSurvivingName("Spindeln - Nyhet 2026", "Spindeln - Nyhet"),
+    ).toBe("Spindeln - Nyhet 2026");
   });
 });

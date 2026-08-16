@@ -134,3 +134,27 @@ export function chooseDuplicateWinner(
 
   return { winnerId: a.id, loserId: b.id };
 }
+
+/**
+ * Which of two names the surviving row should carry.
+ *
+ * Queue-Times puts some parks' own map numbers inside the ride name, and its
+ * row is usually the one that wins a merge — it is the one ingestion still
+ * feeds. Left alone, merging Energylandia's 31 duplicate pairs would have
+ * settled every ride on its numbered spelling: "Abyssus (184)", "Draken (155)",
+ * "Frutti Loop (39)".
+ *
+ * So when the two names differ only by that trailing number, the clean one
+ * wins, whichever row it came from. Any other difference is left alone — this
+ * is not the place to arbitrate between genuinely different names.
+ */
+export function resolveSurvivingName(
+  winnerName: string,
+  loserName: string,
+): string {
+  const strip = (n: string): string => n.replace(/\s*\(\d+\)\s*$/, "").trim();
+
+  if (strip(winnerName) !== strip(loserName)) return winnerName;
+
+  return strip(winnerName) === winnerName ? winnerName : loserName;
+}

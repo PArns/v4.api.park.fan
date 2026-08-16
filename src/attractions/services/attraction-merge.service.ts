@@ -11,6 +11,7 @@ import {
 } from "../../parks/utils/merge-dependencies";
 import {
   resolveSurvivingSlug,
+  resolveSurvivingName,
   isSafeToAutoMerge,
   chooseDuplicateWinner,
   DuplicateCandidate,
@@ -140,9 +141,11 @@ export class AttractionMergeService {
       const survivingSlug = resolveSurvivingSlug(
         winner.slug,
         loser.slug,
-        winner.name,
+        resolveSurvivingName(winner.name, loser.name),
       );
+      const survivingName = resolveSurvivingName(winner.name, loser.name);
       const renamed = survivingSlug !== winner.slug;
+      const rewordedName = survivingName !== winner.name;
 
       // The two sources fill in different columns — across the real duplicate
       // pairs the queue-times id sits only on the second row 33 times and the
@@ -150,17 +153,18 @@ export class AttractionMergeService {
       // overwriting what it already has.
       const inherited = this.inheritMissingMetadata(winner, loser);
 
-      if (renamed || Object.keys(inherited).length > 0) {
+      if (renamed || rewordedName || Object.keys(inherited).length > 0) {
         await manager.update(Attraction, winnerId, {
           ...inherited,
           ...(renamed ? { slug: survivingSlug } : {}),
+          ...(rewordedName ? { name: survivingName } : {}),
         });
       }
 
       return {
         winnerId,
         loserId,
-        name: winner.name,
+        name: survivingName,
         parkId: winner.parkId,
         survivingSlug,
         renamed,
