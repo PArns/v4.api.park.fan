@@ -6,6 +6,17 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a year in brackets is not a map number
+
+The rule that strips Queue-Times' map numbers from ride names took any trailing
+`(digits)`. Six Flags Great America runs `HAUNTED HOUSE: Texas Chainsaw
+Massacre (2022)`, and **a 2022 maze is not the 2023 one** — treating the year as
+a formatting artefact would have offered two distinct event attractions as a
+safe auto-merge.
+
+Now at most three digits. Every real map number in the data sits between 23 and
+224, and the only four-digit case in the whole table is that maze.
+
 ### Fixed — the duplicate detector counted ten pairs twice
 
 Pairs are found two ways now: a base slug beside a numbered one, and two rows
