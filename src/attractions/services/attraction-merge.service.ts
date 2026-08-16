@@ -201,7 +201,16 @@ export class AttractionMergeService {
       WITH slug_pairs AS (
         -- The original rule: "foo" next to "foo-2". Finds duplicates the sync
         -- created by appending a counter.
-        SELECT b.id AS base_id, s.id AS suffix_id, b."parkId" AS park_id
+        -- Ordered by id, not by which row holds the base slug. The two rules
+        -- below find many of the same pairs, and a UNION only removes exactly
+        -- equal tuples — so without a canonical order the same two rows appear
+        -- twice with their roles swapped. That inflated the count from 53 real
+        -- pairs to 63 rows, and each mirrored twin would have been merged a
+        -- second time against a row the first merge had already deleted.
+        -- Which row is "base" carries no meaning anyway: chooseDuplicateWinner
+        -- decides the survivor and is symmetric.
+        SELECT LEAST(b.id, s.id) AS base_id, GREATEST(b.id, s.id) AS suffix_id,
+               b."parkId" AS park_id
         FROM attractions s
         JOIN attractions b
           ON b."parkId" = s."parkId"

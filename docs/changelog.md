@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the duplicate detector counted ten pairs twice
+
+Pairs are found two ways now: a base slug beside a numbered one, and two rows
+sharing a Queue-Times id. Many pairs satisfy both — and a `UNION` only removes
+exactly equal tuples, so the same two rows arrived twice with their roles
+swapped. **63 rows for 53 real pairs.**
+
+Not destructive, but each mirrored twin would have been merged a second time
+against a row the first merge had already deleted, producing a spurious failure
+in the report. Both branches now key on `LEAST`/`GREATEST` of the ids. Which row
+is "base" carries no meaning anyway: `chooseDuplicateWinner` decides the
+survivor and is symmetric.
+
+Caught by not believing a number — the planned count jumped from 7 to 41 across
+a change that only touched name and slug resolution, which is more than that
+change could explain.
+
 ### Fixed — a merged ride kept the wrong URL *and* the wrong name
 
 `resolveSurvivingSlug` only knew one rule: if the winner's slug is the loser's

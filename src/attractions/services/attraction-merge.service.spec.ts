@@ -352,3 +352,40 @@ describe("AttractionMergeService — batch", () => {
     expect(merge).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * The detector finds duplicate pairs two ways — a base slug beside a numbered
+ * one, and two rows sharing a Queue-Times id — and many pairs satisfy both.
+ * A UNION only removes exactly equal tuples, so without a canonical order the
+ * same two rows arrive twice with their roles swapped: 63 rows for 53 real
+ * pairs, and every mirrored twin would be merged a second time against a row
+ * the first merge had already deleted.
+ */
+describe("AttractionMergeService — pair ordering", () => {
+  const findPairsSql = async (): Promise<string> => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new AttractionMergeService(
+      { query } as never,
+      {} as never,
+      {} as never,
+    );
+    await service.findDuplicatePairs();
+    return query.mock.calls[0][0] as string;
+  };
+
+  it("orders both branches canonically so the UNION can dedupe", async () => {
+    const sql = await findPairsSql();
+
+    // Both CTEs must key on ids, not on which row happens to hold the base
+    // slug — which row is "base" carries no meaning, since
+    // chooseDuplicateWinner decides the survivor and is symmetric.
+    expect(sql.match(/LEAST\([^)]*\) AS base_id/g) ?? []).toHaveLength(2);
+    expect(sql.match(/GREATEST\([^)]*\) AS suffix_id/g) ?? []).toHaveLength(2);
+  });
+
+  it("never offers a retired attraction for merge", async () => {
+    const sql = await findPairsSql();
+
+    expect(sql.match(/retired_at IS NULL/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+});
