@@ -11,6 +11,7 @@ import {
 } from "../../parks/utils/merge-dependencies";
 import {
   resolveSurvivingSlug,
+  resolveSurvivingName,
   isSafeToAutoMerge,
   chooseDuplicateWinner,
   DuplicateCandidate,
@@ -137,8 +138,14 @@ export class AttractionMergeService {
 
       // Only now is the base slug free: (parkId, slug) is unique, so the
       // rename has to follow the delete.
-      const survivingSlug = resolveSurvivingSlug(winner.slug, loser.slug);
+      const survivingSlug = resolveSurvivingSlug(
+        winner.slug,
+        loser.slug,
+        resolveSurvivingName(winner.name, loser.name),
+      );
+      const survivingName = resolveSurvivingName(winner.name, loser.name);
       const renamed = survivingSlug !== winner.slug;
+      const rewordedName = survivingName !== winner.name;
 
       // The two sources fill in different columns — across the real duplicate
       // pairs the queue-times id sits only on the second row 33 times and the
@@ -146,17 +153,18 @@ export class AttractionMergeService {
       // overwriting what it already has.
       const inherited = this.inheritMissingMetadata(winner, loser);
 
-      if (renamed || Object.keys(inherited).length > 0) {
+      if (renamed || rewordedName || Object.keys(inherited).length > 0) {
         await manager.update(Attraction, winnerId, {
           ...inherited,
           ...(renamed ? { slug: survivingSlug } : {}),
+          ...(rewordedName ? { name: survivingName } : {}),
         });
       }
 
       return {
         winnerId,
         loserId,
-        name: winner.name,
+        name: survivingName,
         parkId: winner.parkId,
         survivingSlug,
         renamed,
@@ -286,7 +294,11 @@ export class AttractionMergeService {
         suffixSlug: suffix.slug,
         winnerId,
         loserId,
-        survivingSlug: resolveSurvivingSlug(winner.slug, loser.slug),
+        survivingSlug: resolveSurvivingSlug(
+          winner.slug,
+          loser.slug,
+          winner.name,
+        ),
         safe,
         reason: safe
           ? "same ride (names agree once the map number is stripped)"

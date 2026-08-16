@@ -1,4 +1,5 @@
 import {
+  resolveSurvivingName,
   resolveSurvivingSlug,
   isSafeToAutoMerge,
   chooseDuplicateWinner,
@@ -209,5 +210,73 @@ describe("chooseDuplicateWinner", () => {
       winnerId: "a",
       loserId: "b",
     });
+  });
+});
+
+describe("resolveSurvivingSlug — slugs that do not derive from each other", () => {
+  it("takes the slug the surviving name produces", () => {
+    // Energylandia's duplicates are found by a shared Queue-Times id, and their
+    // slugs share no stem. The winner is whichever row ingestion still feeds,
+    // and its slug can be an unrelated leftover — without this the merge would
+    // have published "Choco Chip Creek" at /main-train-2.
+    expect(
+      resolveSurvivingSlug(
+        "main-train-2",
+        "choco-chip-creek",
+        "Choco Chip Creek",
+      ),
+    ).toBe("choco-chip-creek");
+    expect(
+      resolveSurvivingSlug(
+        "lolipop-farm",
+        "mini-track-tour-ride",
+        "Mini Track Tour Ride",
+      ),
+    ).toBe("mini-track-tour-ride");
+  });
+
+  it("keeps the winner's slug when it already matches the name", () => {
+    expect(resolveSurvivingSlug("draken-rc", "draken", "Draken")).toBe(
+      "draken",
+    );
+    expect(resolveSurvivingSlug("draken", "draken-rc", "Draken")).toBe(
+      "draken",
+    );
+  });
+
+  it("changes nothing when no name is supplied", () => {
+    // The base/suffix rule is unaffected: existing callers keep their behaviour.
+    expect(resolveSurvivingSlug("taron-2", "taron")).toBe("taron");
+    expect(resolveSurvivingSlug("main-train-2", "choco-chip-creek")).toBe(
+      "main-train-2",
+    );
+  });
+});
+
+describe("resolveSurvivingName", () => {
+  it("drops the map number, whichever row it came from", () => {
+    // The Queue-Times row usually wins a merge — it is the one ingestion still
+    // feeds — so without this every Energylandia ride would settle on its
+    // numbered spelling.
+    expect(resolveSurvivingName("Abyssus (184)", "Abyssus")).toBe("Abyssus");
+    expect(resolveSurvivingName("Abyssus", "Abyssus (184)")).toBe("Abyssus");
+    expect(resolveSurvivingName("Draken (155)", "Draken")).toBe("Draken");
+  });
+
+  it("leaves genuinely different names to the winner", () => {
+    // Not the place to arbitrate between two real names.
+    expect(resolveSurvivingName("Kiddy Hawk", "Kiddy Hawk Cove")).toBe(
+      "Kiddy Hawk",
+    );
+    expect(resolveSurvivingName("Main Train", "Choco Chip Creek")).toBe(
+      "Main Train",
+    );
+  });
+
+  it("keeps a year that is part of the name", () => {
+    // "Spindeln - Nyhet 2026" has no bracket, so nothing is stripped.
+    expect(
+      resolveSurvivingName("Spindeln - Nyhet 2026", "Spindeln - Nyhet"),
+    ).toBe("Spindeln - Nyhet 2026");
   });
 });
