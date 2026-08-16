@@ -280,3 +280,38 @@ describe("resolveSurvivingName", () => {
     ).toBe("Spindeln - Nyhet 2026");
   });
 });
+
+describe("map numbers versus years", () => {
+  const row = (over: Partial<DuplicateCandidate> = {}): DuplicateCandidate => ({
+    id: "a",
+    slug: "x",
+    name: "Alice in Wonderland",
+    queueTimesEntityId: null,
+    hasCoordinates: false,
+    recentQueueRows: 0,
+    totalQueueRows: 0,
+    createdAt: new Date("2026-01-01"),
+    ...over,
+  });
+
+  it("does not collapse two editions of a seasonal maze", () => {
+    // Six Flags Great America runs "HAUNTED HOUSE: Texas Chainsaw Massacre
+    // (2022)". A four-digit parenthetical is a year, and a 2022 maze is not
+    // the 2023 one — merging them would erase a distinct event attraction.
+    expect(
+      isSafeToAutoMerge(
+        row({ name: "HAUNTED HOUSE: Texas Chainsaw Massacre" }),
+        row({ id: "b", name: "HAUNTED HOUSE: Texas Chainsaw Massacre (2022)" }),
+      ),
+    ).toBe(false);
+    expect(resolveSurvivingName("Maze (2022)", "Maze")).toBe("Maze (2022)");
+  });
+
+  it("still strips the two- and three-digit map numbers", () => {
+    // Every real one in the data sits between 23 and 224.
+    expect(resolveSurvivingName("Energuś (23)", "Energuś")).toBe("Energuś");
+    expect(resolveSurvivingName("Honey Harbor (224)", "Honey Harbor")).toBe(
+      "Honey Harbor",
+    );
+  });
+});

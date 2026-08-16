@@ -61,7 +61,12 @@ function normalizeName(name: string): string {
       // where ThemeParks.wiki says "Draken" and "Frutti Loop". Stripping the
       // trailing number is what lets those two rows recognise each other; it
       // is an artefact of one source's formatting, not part of the name.
-      .replace(/\s*\(\d+\)\s*$/, "")
+      //
+      // At most three digits, because four is a YEAR and years are part of the
+      // name: Six Flags Great America runs "HAUNTED HOUSE: Texas Chainsaw
+      // Massacre (2022)", and a 2022 maze is not the 2023 one. Every real map
+      // number in the data is 2-3 digits (23 to 224).
+      .replace(/\s*\(\d{1,3}\)\s*$/, "")
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "")
   );
@@ -152,7 +157,8 @@ export function resolveSurvivingName(
   winnerName: string,
   loserName: string,
 ): string {
-  const strip = (n: string): string => n.replace(/\s*\(\d+\)\s*$/, "").trim();
+  const strip = (n: string): string =>
+    n.replace(/\s*\(\d{1,3}\)\s*$/, "").trim();
 
   if (strip(winnerName) !== strip(loserName)) return winnerName;
 
