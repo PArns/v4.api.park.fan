@@ -266,6 +266,15 @@ export class AttractionMergeService {
            AND q."timestamp" > now() - interval '90 days') AS suffix_total
       FROM pairs p
       JOIN parks pk ON pk.id = p.park_id
+      -- Pairs a human has already established are two different attractions.
+      -- Without this, Cedar Creek keeps being offered for merge against Cedar
+      -- Creek Mine Ride — a lazy river against a roller coaster — until
+      -- somebody stops reading carefully.
+      LEFT JOIN attraction_review_marks m
+             ON m.kind = 'not_a_duplicate'
+            AND m.attraction_id = LEAST(p.base_id, p.suffix_id)
+            AND m.other_attraction_id = GREATEST(p.base_id, p.suffix_id)
+      WHERE m.id IS NULL
       ORDER BY pk.name, p.base_slug
     `);
 

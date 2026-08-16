@@ -6,6 +6,41 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — somewhere to put "a human already checked this"
+
+Duplicate detection and retirement detection are behavioural: they describe
+what the feed is doing, not what is true. So every candidate they surface comes
+back tomorrow, however carefully it was investigated.
+
+That is not a small annoyance. A research round on 2026-08-16 established that
+**57 of 73** silenced attractions are alive — *Jurassic Park - The Ride* runs
+under an anniversary overlay name, *Marvel Cave* is central to a 2027 project,
+*Shock Wave* is stored rather than scrapped — and that **5 of the remaining
+duplicate pairs are genuinely different rides**: Cedar Creek is a lazy river
+beside Cedar Creek Mine Ride, KONDAALA is a kids' ride beside the KONDAA
+coaster. None of that could be written down anywhere. The same 64 questions
+would be re-asked until somebody answered one carelessly, and a merge cannot be
+undone.
+
+`attraction_review_marks` holds two kinds:
+
+- **`not_a_duplicate`** — permanent. Two different rides do not become one.
+  The pair is stored in a canonical id order, enforced by a CHECK constraint,
+  because a pair fact has no direction and storing both ways is how the
+  detector came to count 63 rows for 53 real pairs.
+- **`not_retired`** — often temporary, with an optional `recheck_after`.
+  Shock Wave is the case that argues for it: standing unused since March 2026
+  with no announcement either way, so a permanent mark would hide its eventual
+  retirement forever.
+
+Consumers: `findDuplicatePairs` excludes marked pairs, and the retirement
+candidate query — which until now existed only as documentation in `todo.md` —
+became `GET /v1/admin/retirement-candidates`, minus cleared rows. A mark table
+nothing reads is a comment.
+
+`detect-seasonal` and reverse-reconciliation deliberately do **not** consult
+marks. They describe the feed, and a human's verdict does not change that.
+
 ### Fixed — a year in brackets is not a map number
 
 The rule that strips Queue-Times' map numbers from ride names took any trailing
