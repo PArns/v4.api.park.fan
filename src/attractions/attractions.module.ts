@@ -18,6 +18,8 @@ import { PopularityModule } from "../popularity/popularity.module";
 import { RevalidationModule } from "../common/revalidation/revalidation.module";
 import { AttractionMergeService } from "./services/attraction-merge.service";
 import { AttractionRetirementService } from "./services/attraction-retirement.service";
+import { AttractionReviewService } from "./services/attraction-review.service";
+import { AttractionReviewMark } from "./entities/attraction-review-mark.entity";
 import { RideProfileService } from "./services/ride-profile.service";
 import { RideProfileAuditService } from "./services/ride-profile-audit.service";
 import { RideStatsService } from "./services/ride-stats.service";
@@ -32,6 +34,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
       AttractionRideProfile,
       QueueData,
       ScheduleEntry,
+      AttractionReviewMark,
     ]),
     ThemeParksModule,
     forwardRef(() => ParksModule),
@@ -51,6 +54,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionIntegrationService,
     AttractionMergeService,
     AttractionRetirementService,
+    AttractionReviewService,
     RideProfileService,
     RideProfileAuditService,
     RideStatsService,
@@ -61,6 +65,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
     AttractionIntegrationService,
     AttractionMergeService,
     AttractionRetirementService,
+    AttractionReviewService,
     RideProfileService,
     RideProfileAuditService,
     RideStatsService,

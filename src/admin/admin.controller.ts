@@ -43,6 +43,10 @@ import {
   AttractionRetirementService,
   RetirementRequest,
 } from "../attractions/services/attraction-retirement.service";
+import {
+  AttractionReviewService,
+  ReviewMarkRequest,
+} from "../attractions/services/attraction-review.service";
 
 /**
  * Admin Controller
@@ -83,6 +87,7 @@ export class AdminController {
     private readonly rideProfileAudit: RideProfileAuditService,
     private readonly dataQualityMonitor: DataQualityMonitorService,
     private readonly retirementService: AttractionRetirementService,
+    private readonly reviewService: AttractionReviewService,
   ) {}
 
   /**
@@ -108,6 +113,32 @@ export class AdminController {
    * for up to 24h plus the CDN window. Each entry carries the date and the
    * source it was established from; a retirement is a claim about the world.
    */
+  /**
+   * Record that a candidate has been investigated and is not a case.
+   *
+   * Both detectors are behavioural, so every candidate returns tomorrow however
+   * carefully it was checked. Without this the same questions get re-asked
+   * until somebody answers one carelessly — and a merge cannot be undone.
+   *
+   * `recheckAfter` matters: leave it null only when the answer cannot change.
+   * Shock Wave has stood unused since March 2026 with no announcement either
+   * way; a permanent mark there would hide its eventual retirement forever.
+   */
+  @Post("review-marks")
+  @ApiOperation({ summary: "Mark candidates as investigated and not a case" })
+  async recordReviewMarks(@Body() body: { marks: ReviewMarkRequest[] }) {
+    return { recorded: await this.reviewService.record(body.marks ?? []) };
+  }
+
+  @Get("retirement-candidates")
+  @ApiOperation({
+    summary: "Attractions whose feed went quiet, minus those already cleared",
+  })
+  async getRetirementCandidates() {
+    const candidates = await this.reviewService.findRetirementCandidates();
+    return { total: candidates.length, candidates };
+  }
+
   @Post("retire-attractions")
   @ApiOperation({ summary: "Retire attractions that no longer exist" })
   async retireAttractions(@Body() body: { retirements: RetirementRequest[] }) {
