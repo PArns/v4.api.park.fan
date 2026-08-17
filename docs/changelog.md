@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — matching names are not enough when one source names two things alike
+
+The auto-merge rule required only that two rows agree on name once punctuation
+and a map number are stripped. Heide Park shows why that is not sufficient:
+ThemeParks.wiki publishes **three separate attraction entities all called
+"PLAYGROUND"**. Their names agree perfectly, so the detector offered
+`playground-2` and `playground-3` as *safe* auto-merges — collapsing three real
+play areas into one, irreversibly.
+
+A duplicate arises because **two sources** describe one ride: a wiki UUID beside
+a Queue-Times id. Two ids issued by the *same* source are that source's own
+statement that these are two things. Auto-merge now requires the pair to span
+two sources; same-source pairs go to review with a reason that says so.
+
+Found while checking why Heide Park had three rows with one name — the detector
+had been about to act on them.
+
 ### Added — somewhere to put "a human already checked this"
 
 Duplicate detection and retirement detection are behavioural: they describe

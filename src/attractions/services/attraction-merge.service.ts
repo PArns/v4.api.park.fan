@@ -24,6 +24,7 @@ interface DuplicatePairRow {
   base_slug: string;
   base_name: string;
   base_qt: string | null;
+  base_external: string;
   base_geo: boolean;
   base_recent: string;
   base_total: string;
@@ -32,6 +33,7 @@ interface DuplicatePairRow {
   suffix_slug: string;
   suffix_name: string;
   suffix_qt: string | null;
+  suffix_external: string;
   suffix_geo: boolean;
   suffix_recent: string;
   suffix_total: string;
@@ -242,9 +244,11 @@ export class AttractionMergeService {
       pairs AS (
         SELECT b.id AS base_id, b.slug AS base_slug, b.name AS base_name,
                b.queue_times_entity_id AS base_qt,
+               b."externalId" AS base_external,
                (b.latitude IS NOT NULL) AS base_geo, b."createdAt" AS base_created,
                s.id AS suffix_id, s.slug AS suffix_slug, s.name AS suffix_name,
                s.queue_times_entity_id AS suffix_qt,
+               s."externalId" AS suffix_external,
                (s.latitude IS NOT NULL) AS suffix_geo, s."createdAt" AS suffix_created,
                b."parkId" AS park_id
         FROM (
@@ -283,6 +287,7 @@ export class AttractionMergeService {
         id: row.base_id,
         slug: row.base_slug,
         name: row.base_name,
+        externalId: row.base_external,
         queueTimesEntityId: row.base_qt,
         hasCoordinates: row.base_geo,
         recentQueueRows: Number(row.base_recent),
@@ -293,6 +298,7 @@ export class AttractionMergeService {
         id: row.suffix_id,
         slug: row.suffix_slug,
         name: row.suffix_name,
+        externalId: row.suffix_external,
         queueTimesEntityId: row.suffix_qt,
         hasCoordinates: row.suffix_geo,
         recentQueueRows: Number(row.suffix_recent),
@@ -320,7 +326,10 @@ export class AttractionMergeService {
         safe,
         reason: safe
           ? "same ride (names agree once the map number is stripped)"
-          : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
+          : base.externalId.startsWith("qt-ride-") ===
+              suffix.externalId.startsWith("qt-ride-")
+            ? `same name but two ids from one source — "${base.name}"; upstream calls these two things, review by hand`
+            : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
       };
     });
   }
