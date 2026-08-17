@@ -28,7 +28,7 @@
 - [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md) - Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 - [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
-- [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md) - **2026-08-15**: who owns which cell and what an absent fact may become. The three status regimes (real feed / free-flow `open_with_park` / `UNKNOWN` when no source reports a ride), `is_seasonal` vs `season_months` and why months derived from under a year of history are just our recording window (`MIN_OBSERVED_DAYS`), the two-writers curated-column rule, the 73-day `detect-seasonal` outage and the ThemeParks.wiki feed drops. Includes diagnostic SQL.
+- [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md) - **2026-08-15/17**: who owns which cell and what an absent fact may become. The three status regimes (real feed / free-flow `open_with_park` / `UNKNOWN` when no source reports a ride), `is_seasonal` vs `season_months` and why months derived from under a year of history are just our recording window (`MIN_OBSERVED_DAYS`), the two-writers curated-column rule, the 73-day `detect-seasonal` outage and the ThemeParks.wiki feed drops. Also: identity comes from the externalId and not the slug (§4a), review marks so a settled verdict is not re-litigated (§4b), and the duplicate-detection traps — map numbers in ride names, one source naming two things alike. Includes diagnostic SQL.
 - [Weather](docs/architecture/weather.md) - Open-Meteo sync (16-day forecast), park timezone handling, why parks may have empty weather (missing coordinates).
 
 ### 📊 Analytics & Logic
@@ -156,6 +156,14 @@ ml-service/            # 🐍 Python CatBoost Service
 - **Research, never recall.** Facts about real rides and parks (heights, wet
   flags, whether something is free-flow, seasons) come from the operator's own
   pages. A name pattern is not evidence.
+- **Identity is the `externalId`, never the slug.** A slug is a frozen name that
+  renames deliberately do not move, so 281 rows carry a slug that no longer
+  matches — that is the system working. Resolve a disputed name against the
+  upstream entity, not against what its slug implies.
+- **A behavioural detector cannot remember.** Duplicate and retirement detection
+  describe the feed, so a cleared candidate returns tomorrow unless the verdict
+  is written to `attraction_review_marks`. Give it a `recheck_after` whenever the
+  answer can change.
 
 ---
 

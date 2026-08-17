@@ -153,6 +153,86 @@ free-flow, which would otherwise have wiped a curated season.
 
 ---
 
+## 4a. Identity: the externalId, never the slug
+
+A slug is a **frozen name**. When a ride is renamed the sync updates `name` and
+deliberately leaves `slug` alone, so the public URL survives — 281 rows carry a
+slug that no longer matches their name, and that is the system working.
+
+So a slug can look incriminating and be nothing of the sort. On 2026-08-17 three
+rows had names that did not match their slugs (`wahoo-racer-twisted-whizzard`
+carrying "Wahoo Racer"), and the slugs were treated as the truth. Research
+proved that **no "Twisted Whizzard" and no "Discovery Bay - Treehouse" have ever
+existed** — two park indexes, two sitemaps, 650KB of raw pages and the Wayback
+CDX index, zero hits. Trusting the slugs would have invented two attractions.
+
+**Resolve identity from `externalId` against the upstream entity.** For a wiki
+UUID: `GET https://api.themeparks.wiki/v1/entity/<externalId>` returns the name
+that row is entitled to.
+
+### The one signature that does mean damage
+
+Not "slug does not match name" — that is 281 rows of normal history. The
+damaging shape is narrower:
+
+> **This row carries the name that another row's slug says it should have.**
+
+```sql
+WITH n AS (
+  SELECT a.id, a."parkId", a.name, a.slug, p.name AS park,
+         lower(regexp_replace(a.name, '[^A-Za-z0-9]', '', 'g')) AS name_norm,
+         replace(regexp_replace(a.slug, '-\d+$', ''), '-', '')  AS slug_norm
+    FROM attractions a JOIN parks p ON p.id = a."parkId"
+   WHERE a.retired_at IS NULL AND a."externalId" NOT LIKE 'qt-ride-%'
+)
+SELECT a.park, a.name, a.slug AS its_slug, b.slug AS name_belongs_to
+  FROM n a JOIN n b ON b."parkId" = a."parkId" AND b.id <> a.id
+ WHERE a.name_norm = b.slug_norm AND a.slug_norm <> a.name_norm;
+```
+
+Four rows matched, in three parks. The cause was `findExistingAttraction`'s name
+fallback: when an upstream entity is **renamed**, its new name stops matching its
+own row and matches the neighbour that currently holds that name — handing one
+ride's row to another. The fallback now refuses rows that already answer to
+another id from the same source; see `attraction-match.util.ts`.
+
+---
+
+## 4b. Review marks: what a human already settled
+
+Duplicate detection and retirement detection are **behavioural**. They describe
+what the feed is doing, not what is true, so every candidate they surface comes
+back tomorrow however carefully it was investigated.
+
+`attraction_review_marks` is where a verdict lives:
+
+| kind | lifetime | example |
+|---|---|---|
+| `not_a_duplicate` | permanent | Cedar Creek is a lazy river beside Cedar Creek Mine Ride, a coaster |
+| `not_retired` | optional `recheck_after` | Shock Wave has stood unused since March 2026 with no announcement either way |
+
+Set `recheck_after` whenever the answer can change. A permanent mark on Shock
+Wave would hide its eventual retirement forever; a permanent mark on Marvel Cave
+is right, because a landmark that plainly operates will not quietly stop.
+
+Pairs are stored in canonical id order behind a CHECK constraint: a pair fact has
+no direction, and storing both ways is how the detector once counted 63 rows for
+53 real pairs.
+
+`detect-seasonal` and reverse-reconciliation deliberately do **not** consult
+marks. They describe the feed; a human's verdict does not change that.
+
+### What research is worth
+
+Of 73 attractions whose feed went quiet, **16 were genuinely gone**. The rest:
+23 still operating, 5 mid-refurbishment with reopening dates, 5 seasonal, 5 not
+attractions at all (a land, a station, a show, a workshop), 2 renamed, the
+remainder unresolved. *Jurassic Park - The Ride* runs under an anniversary
+overlay name; *Marvel Cave* is central to a 2027 project. Acting on the feed
+signal alone would have deleted 57 existing rides.
+
+---
+
 ## 5. Incidents worth remembering
 
 ### 5.1 `detect-seasonal` was dead for 73 days
@@ -210,6 +290,27 @@ and read OPERATING again immediately, and Lítill Island and Water Playground ar
 held only pending season dates. A carousel with a zero wait is *not*
 automatically free-flow though — it has an operator and can be closed — so each
 needs researching individually (§7).
+
+---
+
+### 5.3 A map number in a ride name hid eight duplicates
+
+Queue-Times publishes some parks' own map numbers inside the ride name —
+Energylandia's feed says `Draken (155)` where the wiki says `Draken`. The park
+held **138 rows for 46 rides**. Stripping a trailing `(number)` before comparing
+names collapsed them to 97, with heights and RCDB links intact.
+
+Two traps: the strip is limited to **three digits**, because
+`HAUNTED HOUSE: Texas Chainsaw Massacre (2022)` is a year and a 2022 maze is not
+the 2023 one. And a shared Queue-Times id **finds** a pair but no longer
+**decides** it — Carowinds runs two slide complexes under one id.
+
+### 5.4 One source naming two things alike
+
+ThemeParks.wiki publishes three separate attraction entities at Heide Park all
+called `PLAYGROUND`. Their names agree perfectly, so name matching offered them
+as *safe* auto-merges. Two ids from the **same** source are that source saying
+these are two things; auto-merge now requires a pair to span two sources.
 
 ---
 
