@@ -6,6 +6,31 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — a "today" the forecast can be compared with
+
+The park header shows the live crowd badge next to the day's forecast, and the
+two regularly disagree — Phantasialand read `NORMAL` beside `SEHR HOCH`. Neither
+was wrong; they are not the same statistic. The live badge is a point-in-time
+ratio-vs-P50 spot reading, the forecast a day aggregate ÷ typical-day-peak.
+Placed side by side, they invite a comparison the numbers do not support.
+
+The value that *is* comparable already existed and was being discarded.
+`calculateCrowdLevelForDate` rates today the same way the forecast rates
+tomorrow (AVG-across-headliners of each ride's day-P90 ÷ typical-day-peak), but
+for today the calendar deliberately overwrites `crowdLevel` with the live
+occupancy so the calendar and the park overview agree — and that override is
+what threw the daily reading away.
+
+`CalendarDay.todayCrowdLevel` now carries it beside the override, with
+`todayCrowdLevelSamples` so a client can decide whether a thin morning reading
+is worth showing. Today only: on every other day `crowdLevel` already is this
+statistic. Absent rather than guessed when the park is not ratable, has no data
+yet, or is closed (§3/§4 — an absent fact never becomes a confident one).
+
+One consequence worth naming: the current month's cache outlives midnight (15
+min TTL), so a cached day could hand back a "today" field on what is now
+yesterday. `assembleFromMonthCaches` strips it, and a regression test covers it.
+
 ### Fixed — matching names are not enough when one source names two things alike
 
 The auto-merge rule required only that two rows agree on name once punctuation

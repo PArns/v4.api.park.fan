@@ -495,3 +495,106 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
     });
   });
 });
+
+/**
+ * `todayCrowdLevel` is the day's OWN daily rating for today — the value
+ * `crowdLevel` would carry if it were not overridden with the live spot
+ * reading. It exists so a surface can put "today so far" beside
+ * "forecast today" and have the two be the same kind of number.
+ *
+ * The trap it has to survive is the current month's cache: it outlives
+ * midnight (15 min TTL), so a cached month can hand back a day that WAS
+ * today carrying a field that only ever means "today".
+ */
+describe("CalendarService › assembleFromMonthCaches (private)", () => {
+  let service: CalendarService;
+
+  const noopRedis = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+    mget: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        { provide: ParksService, useValue: {} },
+        { provide: WeatherService, useValue: {} },
+        { provide: MLService, useValue: {} },
+        { provide: AnalyticsService, useValue: {} },
+        { provide: HolidaysService, useValue: {} },
+        { provide: AttractionsService, useValue: {} },
+        { provide: REDIS_CLIENT, useValue: noopRedis },
+        {
+          provide: getQueueToken("park-metadata"),
+          useValue: { add: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = module.get(CalendarService);
+  });
+
+  const park = { slug: "phantasialand", timezone: "Europe/Berlin" } as any;
+
+  const day = (date: string, extra: Record<string, unknown> = {}) =>
+    ({
+      date,
+      status: "OPERATING",
+      crowdLevel: "moderate" as CrowdLevel,
+      isToday: false,
+      isHoliday: false,
+      isBridgeDay: false,
+      isSchoolVacation: false,
+      ...extra,
+    }) as any;
+
+  const assemble = (
+    days: any[],
+    fromStr: string,
+    toStr: string,
+    today: string,
+  ) =>
+    (service as any).assembleFromMonthCaches(
+      [days],
+      park,
+      fromStr,
+      toStr,
+      today,
+    );
+
+  it("keeps todayCrowdLevel on the day that is actually today", () => {
+    const days = [
+      day("2026-08-17", {
+        todayCrowdLevel: "very_high",
+        todayCrowdLevelSamples: 420,
+      }),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-17");
+
+    expect(out.days[0].todayCrowdLevel).toBe("very_high");
+    expect(out.days[0].todayCrowdLevelSamples).toBe(420);
+  });
+
+  it("strips todayCrowdLevel from a cached day once midnight has passed", () => {
+    // Written yesterday, when 08-17 WAS today; the month cache survives into 08-18.
+    const days = [
+      day("2026-08-17", {
+        todayCrowdLevel: "very_high",
+        todayCrowdLevelSamples: 420,
+      }),
+      day("2026-08-18"),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-18", "2026-08-18");
+
+    const yesterday = out.days.find((d: any) => d.date === "2026-08-17");
+    expect(yesterday.todayCrowdLevel).toBeUndefined();
+    expect(yesterday.todayCrowdLevelSamples).toBeUndefined();
+    // crowdLevel is the same daily statistic, so nothing is lost for that day.
+    expect(yesterday.crowdLevel).toBe("moderate");
+  });
+});
