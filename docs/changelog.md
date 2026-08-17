@@ -31,6 +31,36 @@ One consequence worth naming: the current month's cache outlives midnight (15
 min TTL), so a cached day could hand back a "today" field on what is now
 yesterday. `assembleFromMonthCaches` strips it, and a regression test covers it.
 
+### Fixed — a rename upstream could hand one ride's row to its neighbour
+
+`findExistingAttraction` falls back to matching on name when no id lines up.
+The docstring already called the name "the weakest signal"; what it did not
+guard against is a name match claiming a row that **already holds an id from
+the same source**.
+
+A rename upstream is exactly that case. When Sea World's wiki entity
+`5a4ad529` changed from *Castaway Bay - Sky Climb* to *Wally the Walrus*, the
+incoming name stopped matching its own row — and matched the neighbouring
+*Wally the Walrus* row instead, overwriting that neighbour's name with the same
+string. Two rows called *Wally the Walrus*, one ride's identity gone. The same
+shape produced *Wahoo Racer* twice at Hurricane Harbor Arlington and *Discovery
+Bay* twice in New Jersey.
+
+The fallback now skips rows that already answer to another id from the incoming
+source. A row carrying its own wiki UUID has been claimed by the wiki; only
+rows with no id from this source may be matched by name — which is what the
+fallback exists for, adopting a Queue-Times-only row.
+
+**Scope, measured rather than assumed:** 281 rows have a slug that no longer
+matches their name, but that is normal — a slug is a frozen name and renames do
+not move it. The damaging signature is narrower: *this row carries the name that
+row's slug says it should have*. Exactly **4** rows match, all in the three
+parks above. This was a local incident, not a systemic leak.
+
+Identity comes from the `externalId`, never from the slug. All four names were
+restored from their upstream entities; the slugs stay as they are, because a
+public URL that already exists is worth more than a tidy one.
+
 ### Fixed — matching names are not enough when one source names two things alike
 
 The auto-merge rule required only that two rows agree on name once punctuation
