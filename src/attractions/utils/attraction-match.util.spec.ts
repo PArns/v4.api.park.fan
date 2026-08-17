@@ -1,4 +1,7 @@
-import { findExistingAttraction } from "./attraction-match.util";
+import {
+  findExistingAttraction,
+  AttractionMatchCandidate,
+} from "./attraction-match.util";
 
 /**
  * Every attraction sync path used to look up existing rows by `externalId`
@@ -139,5 +142,70 @@ describe("findExistingAttraction", () => {
     );
 
     expect(match).toBeNull();
+  });
+});
+
+/**
+ * On 2026-08 three parks ended up with two rows sharing one name and one ride's
+ * identity lost. The cause was a rename upstream: Sea World's entity 5a4ad529
+ * changed from "Castaway Bay - Sky Climb" to "Wally the Walrus", so the
+ * incoming name no longer matched its own row — and the name fallback handed it
+ * the neighbouring "Wally the Walrus" row instead.
+ */
+describe("findExistingAttraction — a rename must not steal a neighbour's row", () => {
+  const wikiRow = (over: Partial<AttractionMatchCandidate> = {}) => ({
+    id: "a",
+    externalId: "11111111-1111-1111-1111-111111111111",
+    slug: "wally-the-walrus",
+    name: "Wally the Walrus",
+    queueTimesEntityId: null,
+    ...over,
+  });
+
+  it("refuses to match by name a row that already holds a wiki id", () => {
+    // The incoming entity is a DIFFERENT wiki entity that has just been
+    // renamed to this row's name. Matching would rename the neighbour and
+    // leave the renamed ride to be inserted again as a duplicate.
+    const result = findExistingAttraction(
+      {
+        externalId: "5a4ad529-9f16-44d9-9535-6b4a92523d20",
+        name: "Wally the Walrus",
+      },
+      [wikiRow()],
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("still matches by name a row that has no id from this source", () => {
+    // A Queue-Times row being adopted by the wiki for the first time is
+    // exactly what the name fallback exists for.
+    const result = findExistingAttraction(
+      {
+        externalId: "5a4ad529-9f16-44d9-9535-6b4a92523d20",
+        name: "Wally the Walrus",
+      },
+      [wikiRow({ externalId: "qt-ride-16918" })],
+    );
+
+    expect(result?.id).toBe("a");
+  });
+
+  it("still prefers an exact externalId match over everything", () => {
+    const result = findExistingAttraction(
+      {
+        externalId: "5a4ad529-9f16-44d9-9535-6b4a92523d20",
+        name: "Something Else Entirely",
+      },
+      [
+        wikiRow(),
+        wikiRow({
+          id: "b",
+          externalId: "5a4ad529-9f16-44d9-9535-6b4a92523d20",
+        }),
+      ],
+    );
+
+    expect(result?.id).toBe("b");
   });
 });

@@ -40,6 +40,18 @@ export interface IncomingAttraction {
  * Order matters: identity first, then the cross-source ID, then the name.
  * The name is the weakest signal — parks legitimately have five rides called
  * "Restroom" — so it is only consulted when no ID lines up.
+ *
+ * And even then it must not claim a row that already has an identity from the
+ * SAME source. A rename upstream is exactly the case: when Sea World's entity
+ * 5a4ad529 changed from "Castaway Bay - Sky Climb" to "Wally the Walrus", the
+ * incoming name no longer matched its own row, matched the neighbouring
+ * "Wally the Walrus" row instead — and overwrote that neighbour's name with
+ * the same string, leaving two rows called "Wally the Walrus" and one ride's
+ * identity lost. The same shape produced "Wahoo Racer" twice at Hurricane
+ * Harbor Arlington and "Discovery Bay" twice in New Jersey.
+ *
+ * A row carrying its own wiki UUID has already been claimed by the wiki. Only
+ * rows with no id from this source, or none at all, may be matched by name.
  */
 export function findExistingAttraction(
   incoming: IncomingAttraction,
@@ -58,8 +70,20 @@ export function findExistingAttraction(
   }
 
   const normalizedIncoming = normalizeName(incoming.name);
+  const incomingSource = sourceOf(incoming.externalId);
   const byName = candidates.find(
-    (c) => c.name && normalizeName(c.name) === normalizedIncoming,
+    (c) =>
+      c.name &&
+      normalizeName(c.name) === normalizedIncoming &&
+      // Free to claim only if this row does not already answer to another id
+      // from the same source. Otherwise a rename hands one ride's row to its
+      // neighbour and both end up with the same name.
+      !(c.externalId && sourceOf(c.externalId) === incomingSource),
   );
   return byName ?? null;
+}
+
+/** Which upstream issued an id. Queue-Times ids carry a `qt-ride-` prefix. */
+function sourceOf(externalId: string): "queue-times" | "wiki" {
+  return externalId.startsWith("qt-ride-") ? "queue-times" : "wiki";
 }
