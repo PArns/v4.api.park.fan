@@ -58,6 +58,11 @@ describe("isSafeToAutoMerge", () => {
     id: "a",
     slug: "x",
     name: "Alice in Wonderland",
+    // A real duplicate is two SOURCES describing one ride, so the default pair
+    // is cross-source: row() is the wiki row, row({id:"b"}) the Queue-Times
+    // one. Tests that care about same-source pairs set externalId explicitly.
+    externalId:
+      over.id === "b" ? "qt-ride-1" : "11111111-1111-1111-1111-111111111111",
     queueTimesEntityId: null,
     hasCoordinates: false,
     recentQueueRows: 0,
@@ -161,6 +166,7 @@ describe("chooseDuplicateWinner", () => {
     id: "a",
     slug: "x",
     name: "Ride",
+    externalId: "44444444-4444-4444-4444-444444444444",
     queueTimesEntityId: null,
     hasCoordinates: false,
     recentQueueRows: 0,
@@ -286,6 +292,11 @@ describe("map numbers versus years", () => {
     id: "a",
     slug: "x",
     name: "Alice in Wonderland",
+    // A real duplicate is two SOURCES describing one ride, so the default pair
+    // is cross-source: row() is the wiki row, row({id:"b"}) the Queue-Times
+    // one. Tests that care about same-source pairs set externalId explicitly.
+    externalId:
+      over.id === "b" ? "qt-ride-1" : "11111111-1111-1111-1111-111111111111",
     queueTimesEntityId: null,
     hasCoordinates: false,
     recentQueueRows: 0,
@@ -313,5 +324,51 @@ describe("map numbers versus years", () => {
     expect(resolveSurvivingName("Honey Harbor (224)", "Honey Harbor")).toBe(
       "Honey Harbor",
     );
+  });
+});
+
+describe("two ids from one source are not a duplicate", () => {
+  const row = (over: Partial<DuplicateCandidate> = {}): DuplicateCandidate => ({
+    id: "a",
+    slug: "x",
+    name: "PLAYGROUND",
+    externalId: "11111111-1111-1111-1111-111111111111",
+    queueTimesEntityId: null,
+    hasCoordinates: false,
+    recentQueueRows: 0,
+    totalQueueRows: 0,
+    createdAt: new Date("2026-01-01"),
+    ...over,
+  });
+
+  it("refuses rows whose ids both come from the wiki", () => {
+    // Heide Park: ThemeParks.wiki publishes THREE separate attraction entities
+    // all called "PLAYGROUND". Their names agree perfectly, so name matching
+    // alone offered playground-2 and playground-3 as safe auto-merges — which
+    // would collapse three real play areas into one.
+    expect(
+      isSafeToAutoMerge(
+        row(),
+        row({ id: "b", externalId: "22222222-2222-2222-2222-222222222222" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses rows whose ids both come from Queue-Times", () => {
+    expect(
+      isSafeToAutoMerge(
+        row({ externalId: "qt-ride-1" }),
+        row({ id: "b", externalId: "qt-ride-2" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still accepts one row per source, which is what a duplicate is", () => {
+    expect(
+      isSafeToAutoMerge(
+        row({ externalId: "33333333-3333-3333-3333-333333333333" }),
+        row({ id: "b", externalId: "qt-ride-9" }),
+      ),
+    ).toBe(true);
   });
 });

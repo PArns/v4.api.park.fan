@@ -228,6 +228,9 @@ describe("AttractionMergeService — batch", () => {
     base_slug: "alice-in-wonderland",
     base_name: "Alice in Wonderland",
     base_qt: "12979",
+    // Cross-source, which is what a real duplicate is: a wiki row
+    // beside the Queue-Times row describing the same ride.
+    base_external: "11111111-1111-1111-1111-111111111111",
     base_geo: false,
     base_recent: 100,
     base_total: 4596,
@@ -236,6 +239,7 @@ describe("AttractionMergeService — batch", () => {
     suffix_slug: "alice-in-wonderland-2",
     suffix_name: "Alice in Wonderland",
     suffix_qt: "12979",
+    suffix_external: "qt-ride-1",
     suffix_geo: true,
     suffix_recent: 50,
     suffix_total: 2450,
@@ -272,7 +276,11 @@ describe("AttractionMergeService — batch", () => {
         base_name: "Main Train",
         suffix_name: "Choco Chip Creek (215)",
         base_qt: null,
+        // Cross-source, which is what a real duplicate is: a wiki row
+        // beside the Queue-Times row describing the same ride.
+        base_external: "11111111-1111-1111-1111-111111111111",
         suffix_qt: null,
+        suffix_external: "qt-ride-1",
       }),
     ]);
 
@@ -299,7 +307,11 @@ describe("AttractionMergeService — batch", () => {
         base_name: "Main Train",
         suffix_name: "Choco Chip Creek",
         base_qt: null,
+        // Cross-source, which is what a real duplicate is: a wiki row
+        // beside the Queue-Times row describing the same ride.
+        base_external: "11111111-1111-1111-1111-111111111111",
         suffix_qt: null,
+        suffix_external: "qt-ride-1",
       }),
     ]);
     const merge = jest
