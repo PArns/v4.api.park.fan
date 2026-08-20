@@ -1287,6 +1287,66 @@ export class AdminController {
   }
 
   /**
+   * The park duplicates, and which row a merge would keep.
+   *
+   * A read, which the park side did not have: detection lived inside
+   * `POST merge-duplicate-parks` behind `autoDetect: true`, and that flag
+   * merges everything it finds in the same call. So the only way to ask "what
+   * would you merge" was to merge it, and the admin's "search" button ended up
+   * sending `autoDetect: false` with no ids — a combination the endpoint
+   * answers with its own usage message and nothing else.
+   *
+   * `winnerId` is resolved by `determineMergeWinner`, the same function the
+   * merge uses, because the order two ids are typed in carries no weight and
+   * an operator who believes otherwise deletes the wrong park.
+   */
+  @Get("duplicate-parks")
+  @ApiOperation({
+    summary: "List parks that look like the same place, with the likely winner",
+  })
+  @ApiResponse({ status: 200, description: "Duplicate park pairs" })
+  async listDuplicateParks(): Promise<{
+    total: number;
+    pairs: Array<{
+      park1: { id: string; name: string; city: string | null };
+      park2: { id: string; name: string; city: string | null };
+      score: number;
+      reason: string;
+      winnerId: string | null;
+      loserId: string | null;
+    }>;
+  }> {
+    const duplicates = await this.parkValidatorService.findDuplicates();
+    if (duplicates.length === 0) return { total: 0, pairs: [] };
+
+    // One query for every park involved, rather than two per pair.
+    const parkRepo = this.parkValidatorService.getParkRepository();
+    const ids = Array.from(
+      new Set(duplicates.flatMap((d) => [d.park1.id, d.park2.id])),
+    );
+    const parks = await parkRepo.find({ where: { id: In(ids) } });
+    const parkById = new Map(parks.map((park) => [park.id, park]));
+
+    return {
+      total: duplicates.length,
+      pairs: duplicates.map((duplicate) => {
+        const park1 = parkById.get(duplicate.park1.id);
+        const park2 = parkById.get(duplicate.park2.id);
+        const verdict =
+          park1 && park2 ? determineMergeWinner(park1, park2) : null;
+        return {
+          park1: duplicate.park1,
+          park2: duplicate.park2,
+          score: duplicate.score,
+          reason: duplicate.reason,
+          winnerId: verdict?.winnerId ?? null,
+          loserId: verdict?.loserId ?? null,
+        };
+      }),
+    };
+  }
+
+  /**
    * Merge duplicate attraction rows.
    *
    * Defaults to a dry run — pass dryRun:false to actually write. Pairs flagged
@@ -1317,7 +1377,9 @@ export class AdminController {
         },
         winnerId: {
           type: "string",
-          description: "Merge exactly one pair: the row to keep",
+          description:
+            "Merge exactly one pair: the row to keep. Honours `dryRun` like " +
+            "the automatic path — send `dryRun: false` to actually merge.",
         },
         loserId: {
           type: "string",
@@ -1337,6 +1399,19 @@ export class AdminController {
     } = {},
   ): Promise<unknown> {
     if (body.winnerId && body.loserId) {
+      // `dryRun` governs this branch too. It did not: the pair went straight
+      // to `mergeAttractions`, which takes no such flag — so the admin's
+      // "Probelauf" button deleted the losing row for real, inside a
+      // transaction with no undo, and then displayed the outcome as a preview.
+      // The flag defaults to true here for the same reason it does below: the
+      // destructive reading of an unset parameter is the wrong one, and this
+      // endpoint's own documentation already promised the safe one.
+      if (body.dryRun !== false) {
+        return this.attractionMergeService.previewMerge(
+          body.winnerId,
+          body.loserId,
+        );
+      }
       return this.attractionMergeService.mergeAttractions(
         body.winnerId,
         body.loserId,
