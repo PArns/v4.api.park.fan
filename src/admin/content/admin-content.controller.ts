@@ -166,6 +166,11 @@ export class AdminContentController {
           country: park.country ?? null,
           countryCode: park.countryCode ?? null,
           timezone: park.timezone,
+          // The list feeds a map view as well as a table. `decimal` columns
+          // come back as strings from the driver, and a string latitude puts
+          // every marker at 0,0 without erroring.
+          latitude: toNumber(park.latitude),
+          longitude: toNumber(park.longitude),
           parkType: resolved.parkType,
           noWaitTimesReason: resolved.noWaitTimesReason,
           attractionCount: attractionCounts.get(park.id) ?? 0,
@@ -202,8 +207,8 @@ export class AdminContentController {
       countryCode: park.countryCode ?? null,
       region: park.region ?? null,
       timezone: park.timezone,
-      latitude: park.latitude ?? null,
-      longitude: park.longitude ?? null,
+      latitude: toNumber(park.latitude),
+      longitude: toNumber(park.longitude),
       externalId: park.externalId,
       dataSources: park.dataSources ?? [],
       attractionCount: attractionCount.get(park.id) ?? 0,
@@ -334,8 +339,8 @@ export class AdminContentController {
       url: park
         ? `https://park.fan/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}/${attraction.slug}`
         : null,
-      latitude: attraction.latitude ?? null,
-      longitude: attraction.longitude ?? null,
+      latitude: toNumber(attraction.latitude),
+      longitude: toNumber(attraction.longitude),
       retiredAt: attraction.retiredAt,
       retiredReason: attraction.retiredReason,
       fields: attractionFieldViews(attraction),
@@ -633,4 +638,15 @@ export class AdminContentController {
         .getRawMany();
     return new Map(rows.map((row) => [row.parkId, Number(row.count)]));
   }
+}
+
+/**
+ * Coordinates arrive as strings from the Postgres driver (`decimal` columns are
+ * not parsed to numbers, because they do not always fit one). A map that is
+ * handed "51.7861" places its marker at 0,0 and reports no error.
+ */
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
