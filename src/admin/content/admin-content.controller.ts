@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -91,6 +92,75 @@ export class AdminContentController {
     return {
       attraction: ATTRACTION_CURATED_FIELDS,
       park: PARK_CURATED_FIELDS,
+    };
+  }
+
+  @Get("resolve")
+  @ApiOperation({
+    summary: "Find a park or ride by slug",
+    description:
+      "The media database and the blog identify things by slug; this editor " +
+      "identifies them by id. Without a translation between the two, a photo " +
+      "of Taron cannot link to the ride it is of.",
+  })
+  async resolve(
+    @Query("parkSlug") parkSlug?: string,
+    @Query("rideSlug") rideSlug?: string,
+    @Query("citySlug") citySlug?: string,
+  ) {
+    if (!parkSlug) throw new BadRequestException("parkSlug is required");
+
+    // Park slugs are not globally unique — `disneyland-park` exists in Anaheim
+    // and in Paris — so a citySlug disambiguates when the caller has one, and
+    // an ambiguous answer is reported rather than guessed.
+    const parks = await this.parks.find({
+      where: citySlug ? { slug: parkSlug, citySlug } : { slug: parkSlug },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        citySlug: true,
+        curatedName: true,
+      },
+    });
+
+    if (parks.length === 0)
+      return { park: null, attraction: null, ambiguous: false };
+    if (parks.length > 1 && !citySlug) {
+      return {
+        park: null,
+        attraction: null,
+        ambiguous: true,
+        candidates: parks.map((park) => ({
+          id: park.id,
+          name: resolveCuratedPark(park).name,
+          citySlug: park.citySlug,
+        })),
+      };
+    }
+
+    const park = parks[0];
+    const attraction = rideSlug
+      ? await this.attractions.findOne({
+          where: { parkId: park.id, slug: rideSlug },
+          select: { id: true, name: true, slug: true, curatedName: true },
+        })
+      : null;
+
+    return {
+      park: {
+        id: park.id,
+        name: resolveCuratedPark(park).name,
+        slug: park.slug,
+      },
+      attraction: attraction
+        ? {
+            id: attraction.id,
+            name: resolveCuratedFacts(attraction).name,
+            slug: attraction.slug,
+          }
+        : null,
+      ambiguous: false,
     };
   }
 
@@ -306,6 +376,63 @@ export class AdminContentController {
           updatedAt: attraction.updatedAt,
         };
       }),
+    };
+  }
+
+  @Get("attractions")
+  @ApiOperation({
+    summary: "Find rides across every park",
+    description:
+      "The command palette's other half. Matches the curated name as well as " +
+      "the synced one, so a ride renamed last week is findable under the name " +
+      "it was given — the public search index only learns that on its next " +
+      "rebuild.",
+  })
+  async searchAttractions(
+    @Query("q") q?: string,
+    @Query("limit") limit?: string,
+  ) {
+    const term = q?.trim() ?? "";
+    if (term.length < 2) return { total: 0, attractions: [] };
+
+    const like = `%${term}%`;
+    const [rows, total] = await this.attractions
+      .createQueryBuilder("attraction")
+      .leftJoinAndSelect("attraction.park", "park")
+      .where("attraction.retired_at IS NULL")
+      .andWhere(
+        new Brackets((w) => {
+          w.where("attraction.name ILIKE :like", { like }).orWhere(
+            "attraction.curated_name ILIKE :like",
+            { like },
+          );
+        }),
+      )
+      // Exact matches first: "Taron" must not be buried under every ride whose
+      // name contains it.
+      .orderBy(
+        "CASE WHEN LOWER(COALESCE(attraction.curated_name, attraction.name)) = LOWER(:exact) THEN 0 ELSE 1 END",
+        "ASC",
+      )
+      .addOrderBy("attraction.name", "ASC")
+      .setParameter("exact", term)
+      .take(Math.min(Number(limit) || 12, 50))
+      .getManyAndCount();
+
+    return {
+      total,
+      attractions: rows.map((attraction) => ({
+        id: attraction.id,
+        name: resolveCuratedFacts(attraction).name,
+        upstreamName: attraction.name,
+        slug: attraction.slug,
+        park: attraction.park
+          ? {
+              id: attraction.park.id,
+              name: resolveCuratedPark(attraction.park).name,
+            }
+          : null,
+      })),
     };
   }
 
