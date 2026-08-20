@@ -348,12 +348,27 @@ describe("ParkSeasonService — column names never reach a query builder", () =>
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const source: string = require("fs").readFileSync(file, "utf8");
 
-    const offenders = [
-      ...source.matchAll(/\.(?:add)?orderBy\(\s*"([a-z]+\.[a-z_]+)"/gi),
-    ]
+    const offenders = [...source.matchAll(/\.(?:add)?orderBy\(\s*"([^"]+)"/gi)]
       .map((match) => match[1])
+      // A column name where a property belongs — resolvable only by luck.
+      .filter((reference) => /^[a-z]+\.[a-z_]+$/i.test(reference))
       .filter((reference) => reference.includes("_"));
 
-    expect(offenders).toEqual([]);
+    // The other half of the same trap: an ORDER BY string is split at its
+    // first dot and everything before it is taken for an alias, so a raw SQL
+    // expression asks for a table named `CASE WHEN LOWER(COALESCE(attraction`.
+    // Select the expression under a name and order by that name instead.
+    const expressions = [
+      ...source.matchAll(/\.(?:add)?orderBy\(\s*["`]([^"`]+)["`]/gi),
+    ]
+      .map((match) => match[1])
+      .filter(
+        (reference) => reference.includes("(") && reference.includes("."),
+      );
+
+    expect({ offenders, expressions }).toEqual({
+      offenders: [],
+      expressions: [],
+    });
   });
 });
