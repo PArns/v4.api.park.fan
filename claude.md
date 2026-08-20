@@ -50,6 +50,10 @@
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
 
+### 🔐 Admin
+- [Admin Authentication](docs/admin/authentication.md) - Accounts, opaque Redis sessions, scrypt passwords, TOTP, the two login rate-limit buckets, and the deprecated shared pass (`ADMIN_LEGACY_PASS`) with its switch-off.
+- [Curation](docs/admin/curation.md) - The curated columns, the field-descriptor contract the editor is generated from, the four-step publish order (write → evict Redis → revalidate → revalidate again after the CDN window), and undo.
+
 ### 💻 Development
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.

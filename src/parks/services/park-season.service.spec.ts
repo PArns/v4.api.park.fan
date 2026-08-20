@@ -322,3 +322,38 @@ describe("ParkSeasonService", () => {
     });
   });
 });
+
+/**
+ * The park editor answered every request with a TypeError.
+ *
+ * A query builder resolves `alias.name` through the entity's metadata, so a
+ * column name where a property belongs only survives as long as nothing looks
+ * it up. `list()` joins the park and paginates, which sends TypeORM down the
+ * route that maps ORDER BY through that metadata — `season.start_date` is not
+ * a property, and it read `databaseName` off `undefined`. The failure was
+ * invisible to the type checker, to lint, and to every unit test, and it took
+ * out `GET /v1/admin/content/parks/:id` completely.
+ *
+ * A source check rather than a query: reproducing it needs a real database,
+ * a join and a `take()` in one statement, and the mistake is a spelling one.
+ */
+describe("ParkSeasonService — column names never reach a query builder", () => {
+  const sources = [
+    "src/parks/services/park-season.service.ts",
+    "src/admin/content/admin-content.controller.ts",
+    "src/admin/auth/admin-audit.service.ts",
+  ];
+
+  it.each(sources)("orders %s by properties, not columns", (file) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const source: string = require("fs").readFileSync(file, "utf8");
+
+    const offenders = [
+      ...source.matchAll(/\.(?:add)?orderBy\(\s*"([a-z]+\.[a-z_]+)"/gi),
+    ]
+      .map((match) => match[1])
+      .filter((reference) => reference.includes("_"));
+
+    expect(offenders).toEqual([]);
+  });
+});

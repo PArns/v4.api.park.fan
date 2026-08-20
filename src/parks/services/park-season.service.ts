@@ -70,13 +70,19 @@ export class ParkSeasonService {
     const qb = this.seasons
       .createQueryBuilder("season")
       .leftJoinAndSelect("season.park", "park")
-      .orderBy("season.start_date", "DESC")
+      // Property names, not column names. A query builder resolves
+      // `alias.name` through the entity's metadata, and `start_date` is not a
+      // property — with a join and a `take()` in the same query, TypeORM takes
+      // the paginated route, looks the ORDER BY up in that metadata and reads
+      // `databaseName` off `undefined`. The park editor answered every request
+      // with that TypeError, because its season list is exactly this query.
+      .orderBy("season.startDate", "DESC")
       .addOrderBy("park.name", "ASC")
       .take(Math.min(query.limit ?? 100, 500))
       .skip(query.offset ?? 0);
 
     if (query.parkId)
-      qb.andWhere("season.park_id = :parkId", { parkId: query.parkId });
+      qb.andWhere("season.parkId = :parkId", { parkId: query.parkId });
     if (query.kind) qb.andWhere("season.kind = :kind", { kind: query.kind });
     if (query.status)
       qb.andWhere("season.status = :status", { status: query.status });
@@ -86,7 +92,7 @@ export class ParkSeasonService {
       // 27 Mar 2027 belongs to both years, and a query for 2027 that missed it
       // would tell an editor the park has nothing on file.
       qb.andWhere(
-        "season.start_date <= :yearEnd AND season.end_date >= :yearStart",
+        "season.startDate <= :yearEnd AND season.endDate >= :yearStart",
         {
           yearStart: `${query.year}-01-01`,
           yearEnd: `${query.year}-12-31`,
@@ -96,7 +102,7 @@ export class ParkSeasonService {
 
     if (query.current) {
       const today = new Date().toISOString().slice(0, 10);
-      qb.andWhere("season.start_date <= :today AND season.end_date >= :today", {
+      qb.andWhere("season.startDate <= :today AND season.endDate >= :today", {
         today,
       });
     }
@@ -185,10 +191,10 @@ export class ParkSeasonService {
     if (parkIds.length === 0) return new Map();
     const rows: Array<{ park_id: string; count: string }> = await this.seasons
       .createQueryBuilder("season")
-      .select("season.park_id", "park_id")
+      .select("season.parkId", "park_id")
       .addSelect("COUNT(*)", "count")
       .where({ parkId: In(parkIds) })
-      .groupBy("season.park_id")
+      .groupBy("season.parkId")
       .getRawMany();
     return new Map(rows.map((row) => [row.park_id, Number(row.count)]));
   }
@@ -219,12 +225,12 @@ export class ParkSeasonService {
   ): Promise<ParkSeason[]> {
     return this.seasons
       .createQueryBuilder("season")
-      .where("season.park_id = :parkId", { parkId })
-      .andWhere("season.start_date <= :to AND season.end_date >= :from", {
+      .where("season.parkId = :parkId", { parkId })
+      .andWhere("season.startDate <= :to AND season.endDate >= :from", {
         from,
         to,
       })
-      .orderBy("season.start_date", "ASC")
+      .orderBy("season.startDate", "ASC")
       .getMany();
   }
 
