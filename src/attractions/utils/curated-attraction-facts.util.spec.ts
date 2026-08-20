@@ -1,6 +1,7 @@
 import {
   isCurrentlyInSeason,
   resolveCuratedFacts,
+  type ResolvedCuratedFacts,
 } from "./curated-attraction-facts.util";
 
 describe("resolveCuratedFacts", () => {
@@ -197,31 +198,76 @@ describe("resolveCuratedFacts", () => {
 
   describe("isCurrentlyInSeason", () => {
     const july = new Date("2026-07-15T12:00:00Z");
+    const facts = (
+      partial: Partial<
+        Pick<
+          ResolvedCuratedFacts,
+          "isSeasonal" | "seasonMonths" | "seasonOutSince"
+        >
+      >,
+    ) => ({
+      isSeasonal: false,
+      seasonMonths: null,
+      seasonOutSince: null,
+      ...partial,
+    });
 
     it("answers for a seasonal ride with known months", () => {
       expect(
-        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [7, 8] }, july),
+        isCurrentlyInSeason(
+          facts({ isSeasonal: true, seasonMonths: [7, 8] }),
+          july,
+        ),
       ).toBe(true);
       expect(
-        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [1, 2] }, july),
+        isCurrentlyInSeason(
+          facts({ isSeasonal: true, seasonMonths: [1, 2] }),
+          july,
+        ),
       ).toBe(false);
     });
 
     it("is null for a non-seasonal ride", () => {
+      expect(isCurrentlyInSeason(facts({}), july)).toBeNull();
+    });
+
+    it("is null — not false — when nothing at all is known about when", () => {
+      // "Seasonal, but we do not know when" must not collapse into "closed",
+      // which would hide a ride we have simply not understood yet.
+      expect(isCurrentlyInSeason(facts({ isSeasonal: true }), july)).toBeNull();
       expect(
-        isCurrentlyInSeason({ isSeasonal: false, seasonMonths: null }, july),
+        isCurrentlyInSeason(
+          facts({ isSeasonal: true, seasonMonths: [] }),
+          july,
+        ),
       ).toBeNull();
     });
 
-    it("is null — not false — when the months are unknown", () => {
-      // "Seasonal, but we do not know when" must not collapse into "closed",
-      // which would hide the ride from the park page.
+    it("says 'not now' when the detector recorded when it last ran", () => {
+      // The months need 330 days of watching and the recording is 239 days
+      // old, so a seasonal ride carries a flag and no months — and an ice rink
+      // stayed on the August ride list because null means "do not hide".
+      // `seasonOutSince` is the evidence that already exists: fully closed on
+      // days the park was open, last seen running in January.
       expect(
-        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: null }, july),
-      ).toBeNull();
+        isCurrentlyInSeason(
+          facts({ isSeasonal: true, seasonOutSince: "2026-01-25" }),
+          july,
+        ),
+      ).toBe(false);
+    });
+
+    it("still prefers the months when there are any", () => {
       expect(
-        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [] }, july),
-      ).toBeNull();
+        isCurrentlyInSeason(
+          facts({
+            isSeasonal: true,
+            seasonMonths: [7],
+            seasonOutSince: "2026-01-25",
+          }),
+          july,
+        ),
+      ).toBe(true);
     });
   });
 });

@@ -274,6 +274,27 @@ export class Attraction {
   @Column({ name: "season_months", type: "jsonb", nullable: true })
   seasonMonths: number[] | null;
 
+  /**
+   * The last park-local day this ride was seen OPERATING, written whenever
+   * `detect-seasonal` flags it.
+   *
+   * It exists because `season_months` cannot be derived yet and will not be
+   * for a while: the months come from `MIN_OBSERVED_DAYS` = 330 days of
+   * watching, and the oldest row in `queue_data` is 239 days old — the whole
+   * recording started on 2025-12-24. So every seasonal ride carries a flag and
+   * no months, `isCurrentlyInSeason` answers "unknown", and an ice rink stays
+   * on the ride list through August.
+   *
+   * This is not the calendar, and deliberately not dressed up as one. It is
+   * the fact the detector already established in order to flag the ride at
+   * all: it has been fully closed on at least seven days the park was
+   * demonstrably open, and this is when it last ran. "Out of season now" is
+   * answerable from that; "which months does it run" is not, and still waits
+   * for a full cycle.
+   */
+  @Column({ name: "season_out_since", type: "date", nullable: true })
+  seasonOutSince: string | null;
+
   // When true: attraction is shown as OPERATING whenever the park is OPERATING,
   // regardless of queue data status. Use for free-flow attractions (playgrounds,
   // water play areas, climbing structures) that have no traditional queue but
