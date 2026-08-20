@@ -31,6 +31,8 @@ export interface CuratedFactsSource {
   curatedIsSeasonal?: boolean | null;
   seasonMonths?: number[] | null;
   curatedSeasonMonths?: number[] | null;
+  /** The last day the detector saw this ride OPERATING. See the entity. */
+  seasonOutSince?: string | null;
 }
 
 export interface ResolvedCuratedFacts {
@@ -43,6 +45,15 @@ export interface ResolvedCuratedFacts {
   mayGetWet: boolean | null;
   isSeasonal: boolean;
   seasonMonths: number[] | null;
+  /**
+   * The last day this ride was seen running, when the detector flagged it.
+   *
+   * Null for a curated seasonality — a human writing "this is seasonal" makes
+   * no claim about when it last ran, and the detector's date belongs to the
+   * detector's verdict.
+   */
+  seasonOutSince: string | null;
+
   /**
    * Whether the resolved seasonality came from a human.
    *
@@ -110,6 +121,9 @@ export function resolveCuratedFacts(
       : (attraction.seasonMonths ?? null);
 
   return {
+    seasonOutSince: seasonalityCurated
+      ? null
+      : (attraction.seasonOutSince ?? null),
     // `name` is the one field with no meaningful null: a ride always has a
     // name, and the curated column only ever replaces it.
     name: cleaned(attraction.curatedName) ?? attraction.name ?? "",
@@ -140,16 +154,28 @@ export function resolveCuratedFacts(
 /**
  * Whether a resolved seasonality says the ride is running this month.
  *
- * Null for anything not seasonal, and for a seasonal ride whose months are
- * unknown — the detector deliberately writes no months for entities it has
- * watched for under 330 days, and "seasonal, but we do not know when" must not
- * collapse into "not running", which would hide the ride.
+ * Three answers, and the third is the point. With months, it is a calendar
+ * question. Without months but with a `seasonOutSince`, it is a different
+ * question with a different source: the detector flagged this ride because it
+ * has been fully closed on days the park was demonstrably open, and it wrote
+ * down when it last ran. That says "not now" without claiming to know which
+ * months it does run — and "not now" is what a ride list needs in order to
+ * stop showing an ice rink in August.
+ *
+ * Null stays for the case it was written for: seasonal, and nothing else known.
+ * That must not collapse into "not running", which would hide a ride we have
+ * simply not understood yet.
  */
 export function isCurrentlyInSeason(
-  facts: Pick<ResolvedCuratedFacts, "isSeasonal" | "seasonMonths">,
+  facts: Pick<
+    ResolvedCuratedFacts,
+    "isSeasonal" | "seasonMonths" | "seasonOutSince"
+  >,
   now: Date = new Date(),
 ): boolean | null {
   if (!facts.isSeasonal) return null;
-  if (!facts.seasonMonths || facts.seasonMonths.length === 0) return null;
-  return facts.seasonMonths.includes(now.getMonth() + 1);
+  if (facts.seasonMonths && facts.seasonMonths.length > 0) {
+    return facts.seasonMonths.includes(now.getMonth() + 1);
+  }
+  return facts.seasonOutSince ? false : null;
 }

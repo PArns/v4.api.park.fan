@@ -312,6 +312,78 @@ export class QueuePercentileProcessor {
 
     this.logger.log(`   🔍 Found ${candidates.length} seasonal candidates`);
 
+    // Step 3a: drop the candidates whose "season" began at the same instant as
+    // everybody else's.
+    //
+    // On 2026-06-07 at 13:18 thirty-eight Europa-Park rides stopped reporting
+    // OPERATING within the same minute, and eighteen at Rulantica twenty-five
+    // minutes earlier. Universal Studios Singapore did it on 2026-04-25, Six
+    // Flags Fiesta Texas on 2026-04-12. The park stayed open, the rides kept
+    // being reported — as CLOSED, for months. To this detector that is the
+    // exact signature of a season, so it called half of Europa-Park seasonal.
+    //
+    // It is a source event: a feed that changed what it says about a class of
+    // rides. Forty seasons do not start in the same minute, and a real one is
+    // ragged — each ride has its own last day. So a cluster of candidates in
+    // one park sharing a last-OPERATING minute is not evidence of a season,
+    // and this job's whole doctrine is that it describes the feed rather than
+    // speaking for the operator. The honest answer for these rides is that we
+    // do not know, which is what NOT flagging them says.
+    // Clustered over today's candidates AND everything an earlier run already
+    // marked: a ride that stopped reporting in April is no longer a candidate
+    // (its current status has moved on) but still carries the flag, and no
+    // reset path can reach it — it will never report OPERATING again on its
+    // own. Both sets are the same question asked at different times.
+    const alreadyFlagged: Array<{ attractionId: string; parkId: string }> =
+      await this.dataSource.query(
+        `SELECT id AS "attractionId", "parkId"
+           FROM attractions
+          WHERE is_seasonal = true
+            AND retired_at IS NULL
+            AND NOT open_with_park
+            -- A human's verdict is not this job's to re-litigate.
+            AND curated_is_seasonal IS NULL`,
+      );
+    const clusterInput = [
+      ...candidates,
+      ...alreadyFlagged.filter(
+        (f) => !candidates.some((c) => c.attractionId === f.attractionId),
+      ),
+    ];
+    const lastOperating = await this.lastOperatingByAttraction(
+      clusterInput.map((c) => c.attractionId),
+    );
+    const feedEventIds = await this.findFeedEventCluster(
+      clusterInput,
+      lastOperating,
+    );
+    const survivingCandidates = candidates.filter(
+      (c) => !feedEventIds.has(c.attractionId),
+    );
+
+    if (feedEventIds.size > 0) {
+      // Written down, not just skipped: a run that silently drops candidates
+      // is indistinguishable from a run that found none.
+      this.logger.warn(
+        `   📡 Ignored ${feedEventIds.size} candidates whose last OPERATING falls in one shared minute per park — that is a feed change, not a season`,
+      );
+      // And cleared, because skipping them only stops the flag being written
+      // again; the ones an earlier run already wrote would stay forever. No
+      // reset path can reach them either: they will never report OPERATING
+      // again on their own.
+      const cleared = await this.dataSource.query(
+        `UPDATE attractions
+            SET is_seasonal = false, season_months = NULL, season_out_since = NULL
+          WHERE id = ANY($1::uuid[]) AND is_seasonal = true`,
+        [Array.from(feedEventIds)],
+      );
+      if (cleared[1] > 0) {
+        this.logger.log(
+          `   🧹 Cleared ${cleared[1]} attractions an earlier run marked seasonal on the same evidence`,
+        );
+      }
+    }
+
     // Step 3b: "Zero-history" candidates — never seen OPERATING at all, but CLOSED on
     // every park-open day in the lookback window (≥ MIN_PARK_OPEN_DAYS_CLOSED days).
     // Catches event-only rides (e.g. Halloween) at parks where we started tracking
@@ -393,9 +465,11 @@ export class QueuePercentileProcessor {
         ],
       );
 
-    const existingCandidateIds = new Set(candidates.map((c) => c.attractionId));
+    const existingCandidateIds = new Set(
+      survivingCandidates.map((c) => c.attractionId),
+    );
     const allCandidates = [
-      ...candidates,
+      ...survivingCandidates,
       ...zeroHistoryCandidates.filter(
         (c) => !existingCandidateIds.has(c.attractionId),
       ),
@@ -452,15 +526,40 @@ export class QueuePercentileProcessor {
       // One UPDATE for every candidate. The payload is a single jsonb object
       // (id → months) so there is no array-of-jsonb escaping to get wrong;
       // a JSON `null` is mapped back to SQL NULL to match the previous write.
-      const payload: Record<string, number[] | null> = {};
+      // `season_out_since` rides along: the last park-local day the ride was
+      // seen OPERATING. It is the fact this job already had to establish in
+      // order to flag anything — and, until `MIN_OBSERVED_DAYS` can be met, the
+      // only thing a seasonal ride can say about itself. Without it every
+      // flagged ride reads "seasonal, months unknown", `isCurrentlyInSeason`
+      // answers null, and an ice rink sits on the ride list in August.
+      const zeroHistoryLastOperating = await this.lastOperatingByAttraction(
+        zeroHistoryCandidates.map((c) => c.attractionId),
+      );
+      const payload: Record<
+        string,
+        { months: number[] | null; outSince: string | null }
+      > = {};
       for (const id of candidateIds) {
-        payload[id] = monthsById.get(id) ?? null;
+        payload[id] = {
+          months: monthsById.get(id) ?? null,
+          outSince:
+            lastOperating.get(id)?.day ??
+            zeroHistoryLastOperating.get(id)?.day ??
+            null,
+        };
       }
 
       await this.dataSource.query(
         `UPDATE attractions a
          SET is_seasonal = true,
-             season_months = CASE WHEN v.value = 'null'::jsonb THEN NULL ELSE v.value END
+             season_months = CASE
+               WHEN v.value->'months' = 'null'::jsonb THEN NULL
+               ELSE v.value->'months'
+             END,
+             season_out_since = CASE
+               WHEN v.value->>'outSince' IS NULL THEN NULL
+               ELSE (v.value->>'outSince')::date
+             END
          FROM jsonb_each($1::jsonb) v
          WHERE a.id = v.key::uuid`,
         [JSON.stringify(payload)],
@@ -468,7 +567,7 @@ export class QueuePercentileProcessor {
     }
 
     this.logger.log(
-      `✅ Attractions: marked ${allCandidates.length} as seasonal (${candidates.length} with history, ${zeroHistoryCandidates.length} zero-history).`,
+      `✅ Attractions: marked ${allCandidates.length} as seasonal (${survivingCandidates.length} with history, ${zeroHistoryCandidates.length} zero-history).`,
     );
 
     // ── Shows ──────────────────────────────────────────────────────────────
@@ -601,6 +700,111 @@ export class QueuePercentileProcessor {
     }
 
     this.logger.log(`✅ Shows: marked ${showCandidates.length} as seasonal.`);
+  }
+
+  /**
+   * The last moment each attraction was seen OPERATING, in park-local time.
+   *
+   * Two things read it: the feed-event guard below, and `season_out_since`,
+   * which is the only thing a seasonal ride can say about itself while the
+   * months are still out of reach.
+   */
+  private async lastOperatingByAttraction(
+    attractionIds: string[],
+  ): Promise<Map<string, { at: Date; day: string }>> {
+    if (attractionIds.length === 0) return new Map();
+
+    const rows: Array<{ attractionId: string; at: Date; day: string }> =
+      await this.dataSource.query(
+        `SELECT q."attractionId",
+                max(q.timestamp) AS at,
+                to_char(
+                  max(q.timestamp) AT TIME ZONE p.timezone, 'YYYY-MM-DD'
+                ) AS day
+           FROM queue_data q
+           JOIN attractions a ON a.id = q."attractionId"
+           JOIN parks p ON p.id = a."parkId"
+          WHERE q."attractionId" = ANY($1::uuid[])
+            AND q.status = 'OPERATING'
+          GROUP BY q."attractionId", p.timezone`,
+        [attractionIds],
+      );
+
+    return new Map(rows.map((row) => [row.attractionId, row]));
+  }
+
+  /**
+   * The candidates whose "season" started in the same minute as everybody
+   * else's, which is a feed changing rather than a park closing something.
+   *
+   * A real seasonal closure is ragged: each ride has its own last day, because
+   * each ride stops when it stops. A source event is not — it is one upstream
+   * write, and it lands on every affected ride in the same minute. That is the
+   * whole discriminator, and it is why this compares minutes rather than days:
+   * a park shutting for winter does close its rides on one *day*, and this
+   * must not mistake that for a feed change.
+   *
+   * Two thresholds, both needed. An absolute floor, because three rides
+   * sharing a minute is a coincidence a park can produce. And a share of the
+   * park, because five rides is a lot at a park with twelve and nothing at a
+   * park with two hundred.
+   */
+  private async findFeedEventCluster(
+    candidates: Array<{ attractionId: string; parkId: string }>,
+    lastOperating: Map<string, { at: Date; day: string }>,
+  ): Promise<Set<string>> {
+    const MIN_CLUSTER_SIZE = 5;
+    // 15 %, measured rather than chosen: the four clusters in production sit at
+    // 42 % (Europa-Park), 44 % (Rulantica), 49 % (Universal Studios Singapore)
+    // and 19 % (Six Flags Fiesta Texas), and Knott's Berry Farm at 17 %.
+    //
+    // The cost of the threshold is worth stating: a park that really does close
+    // a whole area on one evening produces the same shape, and this will
+    // decline to flag it. That is the direction to fail in — the flag then
+    // stays off and a curator can set `curated_is_seasonal`, which is a fact
+    // somebody checked, instead of the detector asserting a season it cannot
+    // tell from a feed change.
+    const MIN_PARK_SHARE = 0.15;
+    if (candidates.length === 0) return new Set<string>();
+
+    const trackedPerPark = await this.trackedAttractionsPerPark(
+      Array.from(new Set(candidates.map((c) => c.parkId))),
+    );
+
+    const clusters = findSharedMinuteClusters(
+      candidates,
+      lastOperating,
+      trackedPerPark,
+      { minSize: MIN_CLUSTER_SIZE, minParkShare: MIN_PARK_SHARE },
+    );
+
+    const ignored = new Set<string>();
+    for (const cluster of clusters) {
+      cluster.attractionIds.forEach((id) => ignored.add(id));
+      this.logger.warn(
+        `   📡 ${cluster.attractionIds.length} of ${cluster.tracked} tracked rides in park ${cluster.parkId} last reported OPERATING at ${cluster.minute}Z — reading that as a season would be reading the feed`,
+      );
+    }
+
+    return ignored;
+  }
+
+  /** Attractions a park has that this detector considers at all. */
+  private async trackedAttractionsPerPark(
+    parkIds: string[],
+  ): Promise<Map<string, number>> {
+    if (parkIds.length === 0) return new Map();
+    const rows: Array<{ parkId: string; tracked: string }> =
+      await this.dataSource.query(
+        `SELECT "parkId", COUNT(*)::text AS tracked
+           FROM attractions
+          WHERE "parkId" = ANY($1::uuid[])
+            AND retired_at IS NULL
+            AND NOT open_with_park
+          GROUP BY "parkId"`,
+        [parkIds],
+      );
+    return new Map(rows.map((row) => [row.parkId, Number(row.tracked)]));
   }
 
   /**
@@ -825,4 +1029,69 @@ export class QueuePercentileProcessor {
       throw error;
     }
   }
+}
+
+/**
+ * Groups of attractions in one park whose last OPERATING record falls in the
+ * same minute — one upstream write, not a season starting for all of them at
+ * once.
+ *
+ * Pure, and exported, because the thresholds are the whole judgement and a
+ * judgement worth arguing about is worth testing. Two of them: an absolute
+ * floor, because a handful of rides can share a minute by coincidence, and a
+ * share of the park, because five rides means something different at a park
+ * with twelve than at one with two hundred.
+ */
+export interface SharedMinuteCluster {
+  parkId: string;
+  minute: string;
+  tracked: number;
+  attractionIds: string[];
+}
+
+export function findSharedMinuteClusters(
+  candidates: Array<{ attractionId: string; parkId: string }>,
+  lastOperating: Map<string, { at: Date | string }>,
+  trackedPerPark: Map<string, number>,
+  thresholds: { minSize: number; minParkShare: number },
+): SharedMinuteCluster[] {
+  const byParkAndMinute = new Map<string, Map<string, string[]>>();
+
+  for (const candidate of candidates) {
+    const last = lastOperating.get(candidate.attractionId);
+    // Never OPERATING means there is no minute to share. Those belong to the
+    // zero-history rule, which asks a different question.
+    if (!last) continue;
+    const at = new Date(last.at);
+    // A row whose timestamp did not survive the trip is not evidence of
+    // anything, and `toISOString()` throws on an invalid date — which would
+    // take the whole nightly job down over one malformed value.
+    if (Number.isNaN(at.getTime())) continue;
+    const minute = at.toISOString().slice(0, 16);
+    const byMinute = byParkAndMinute.get(candidate.parkId) ?? new Map();
+    byMinute.set(minute, [
+      ...(byMinute.get(minute) ?? []),
+      candidate.attractionId,
+    ]);
+    byParkAndMinute.set(candidate.parkId, byMinute);
+  }
+
+  const clusters: SharedMinuteCluster[] = [];
+  for (const [parkId, byMinute] of byParkAndMinute) {
+    const tracked = trackedPerPark.get(parkId) ?? 0;
+    for (const [minute, attractionIds] of byMinute) {
+      if (attractionIds.length < thresholds.minSize) continue;
+      // An unknown park size cannot rule the cluster out; the floor already
+      // did the work.
+      if (
+        tracked > 0 &&
+        attractionIds.length / tracked < thresholds.minParkShare
+      ) {
+        continue;
+      }
+      clusters.push({ parkId, minute, tracked, attractionIds });
+    }
+  }
+
+  return clusters;
 }
