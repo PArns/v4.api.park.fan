@@ -4,11 +4,13 @@ import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { AdminController } from "./admin.controller";
+import { AdminAuthModule } from "./auth/admin-auth.module";
 import { SystemHealthService } from "./system-health.service";
 import { MonitoringModule } from "../monitoring/monitoring.module";
 
 @Module({
   imports: [
+    AdminAuthModule,
     MonitoringModule,
     RedisModule,
     ParksModule,
