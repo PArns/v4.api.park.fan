@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Not, Repository } from "typeorm";
+import { randomBytes } from "crypto";
 import { isIP } from "net";
 import {
   ADMIN_ROLES,
@@ -122,8 +123,13 @@ export class AdminAuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // randomBytes rather than Math.random: this value is only ever hashed and
+    // thrown away, so its unpredictability does not matter — but it is a
+    // password reaching a password hasher, and a scanner cannot tell that from
+    // one that does. Using the CSPRNG costs nothing and keeps the security
+    // path free of a "this one is fine" exception nobody will re-evaluate.
     this.decoyHash = await hashPassword(
-      "decoy-never-matches-" + Math.random().toString(36),
+      `decoy-never-matches-${randomBytes(16).toString("hex")}`,
     );
     try {
       await this.bootstrapFirstOwner();
@@ -346,7 +352,7 @@ export class AdminAuthService implements OnModuleInit {
     password: string;
   }): Promise<PublicAdminUser> {
     const email = input.email.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!looksLikeEmailAddress(email)) {
       throw new BadRequestException("A valid email address is required");
     }
     if (!ADMIN_ROLES.includes(input.role)) {
@@ -612,4 +618,36 @@ export class AdminAuthService implements OnModuleInit {
       { totpEnabled: false, totpSecret: null, totpLastStep: null },
     );
   }
+}
+
+/**
+ * A shape check for an email address, without a regex.
+ *
+ * The obvious `/^[^@\s]+@[^@\s]+\.[^@\s]+$/` is a backtracking trap: the two
+ * adjacent `[^@\s]+` around the dot make matching super-linear in the number
+ * of dots, so `a@` followed by a few thousand `!.` pairs burns CPU on a request
+ * that was always going to be rejected. The DTO caps the length, which bounds
+ * it — but the service is also callable from code that has no DTO in front of
+ * it, and a bound is not the same as a fix.
+ *
+ * This does the same job in one pass. It is deliberately not RFC 5322: nothing
+ * here needs to accept a quoted local part, and this is a shape check in front
+ * of a uniqueness constraint, not a claim that the address exists.
+ */
+export function looksLikeEmailAddress(value: string): boolean {
+  if (value.length === 0 || value.length > 320) return false;
+
+  const at = value.indexOf("@");
+  // Exactly one "@", with something on each side.
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+
+  const local = value.slice(0, at);
+  const domain = value.slice(at + 1);
+  if (domain.length === 0) return false;
+
+  // A single character class with no quantifier — linear, whatever the input.
+  if (/\s/.test(local) || /\s/.test(domain)) return false;
+
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
 }
