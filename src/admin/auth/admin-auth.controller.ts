@@ -197,7 +197,7 @@ export class AdminAuthController {
         "The shared legacy pass has no password to change",
       );
     }
-    const { reissuedToken } = await this.auth.changeOwnPassword(
+    const { reissuedToken, expiresAt } = await this.auth.changeOwnPassword(
       admin.userId,
       body.currentPassword,
       body.newPassword,
@@ -210,7 +210,7 @@ export class AdminAuthController {
       entityId: admin.userId,
       entityLabel: admin.email,
     });
-    return { status: "ok" as const, token: reissuedToken };
+    return { status: "ok" as const, token: reissuedToken, expiresAt };
   }
 
   // ── sessions ──────────────────────────────────────────────────────────────

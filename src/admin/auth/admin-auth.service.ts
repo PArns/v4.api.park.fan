@@ -497,7 +497,7 @@ export class AdminAuthService implements OnModuleInit {
     currentPassword: string,
     newPassword: string,
     keepToken: string | null,
-  ): Promise<{ reissuedToken: string | null }> {
+  ): Promise<{ reissuedToken: string | null; expiresAt: string | null }> {
     const user = await this.users.findOne({
       where: { id: userId },
       select: {
@@ -547,7 +547,7 @@ export class AdminAuthService implements OnModuleInit {
 
     const kept = keepToken ? await this.sessions.resolve(keepToken) : null;
     await this.sessions.destroyAllForUser(userId);
-    if (!kept) return { reissuedToken: null };
+    if (!kept) return { reissuedToken: null, expiresAt: null };
 
     // Re-issuing rather than sparing the old token: a password change is a
     // good moment for the session identifier to change too. It is returned
@@ -563,7 +563,15 @@ export class AdminAuthService implements OnModuleInit {
       userAgent: kept.userAgent,
       mustChangePassword: false,
     });
-    return { reissuedToken: issued.token };
+    // The new session's ceiling travels with the token. The caller writes a
+    // cookie from it, and without the date it had to guess: the frontend used
+    // the 12 h idle window, which slides server-side but not in a Max-Age, so
+    // an admin who changed their password was signed out that evening while the
+    // session behind the cookie still had six days left.
+    return {
+      reissuedToken: issued.token,
+      expiresAt: new Date(issued.session.expiresAt).toISOString(),
+    };
   }
 
   /**
