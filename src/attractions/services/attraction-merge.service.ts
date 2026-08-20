@@ -70,6 +70,15 @@ export interface AttractionMergeResult {
   renamed: boolean;
 }
 
+/** The same answer as a merge, minus the merge. See `previewMerge`. */
+export interface AttractionMergePreview extends AttractionMergeResult {
+  dryRun: true;
+  /** The slug that would stop resolving once the losing row is deleted. */
+  removedSlug: string;
+  /** Columns the survivor would take from the row about to disappear. */
+  inheritedColumns: string[];
+}
+
 /**
  * Collapses two rows that describe the same ride inside one park.
  *
@@ -88,6 +97,65 @@ export class AttractionMergeService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly revalidationService: RevalidationService,
   ) {}
+
+  /**
+   * What `mergeAttractions` would do, without doing any of it.
+   *
+   * The admin has a "Probelauf" button next to every duplicate pair, and the
+   * endpoint behind it documents `dryRun` as defaulting to true — but the
+   * single-pair branch handed the ids straight to `mergeAttractions`, which
+   * takes no such flag. So a rehearsal deleted the losing row for real, inside
+   * a transaction with no undo, and then rendered the outcome as a preview.
+   * The button was not even gated on the pair being safe, so the pairs most
+   * likely to be rehearsed were the ones the detector had refused to merge.
+   *
+   * Everything reported here is derived by the same functions the real merge
+   * uses, so the preview cannot drift from the act.
+   */
+  async previewMerge(
+    winnerId: string,
+    loserId: string,
+  ): Promise<AttractionMergePreview> {
+    if (winnerId === loserId) {
+      throw new Error(`Cannot merge attraction ${winnerId} into itself`);
+    }
+
+    const attractions = this.dataSource.getRepository(Attraction);
+    const [winner, loser] = await Promise.all([
+      attractions.findOne({ where: { id: winnerId } }),
+      attractions.findOne({ where: { id: loserId } }),
+    ]);
+
+    if (!winner || !loser) {
+      throw new Error(
+        `Attraction not found (winner: ${!!winner}, loser: ${!!loser})`,
+      );
+    }
+    if (winner.parkId !== loser.parkId) {
+      throw new Error(
+        `Attractions must live in the same park (${winner.parkId} vs ${loser.parkId}) — use ParkMergeService to merge across parks`,
+      );
+    }
+
+    const survivingName = resolveSurvivingName(winner.name, loser.name);
+    const survivingSlug = resolveSurvivingSlug(
+      winner.slug,
+      loser.slug,
+      survivingName,
+    );
+
+    return {
+      dryRun: true,
+      winnerId,
+      loserId,
+      parkId: winner.parkId,
+      name: survivingName,
+      survivingSlug,
+      renamed: survivingSlug !== winner.slug,
+      removedSlug: loser.slug,
+      inheritedColumns: Object.keys(this.inheritMissingMetadata(winner, loser)),
+    };
+  }
 
   async mergeAttractions(
     winnerId: string,

@@ -401,3 +401,110 @@ describe("AttractionMergeService — pair ordering", () => {
     expect(sql.match(/retired_at IS NULL/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+/**
+ * The rehearsal that was not one.
+ *
+ * `/v1/admin/merge-duplicate-attractions` documents `dryRun` as defaulting to
+ * true, and the admin has a "Probelauf" button beside every candidate pair.
+ * The single-pair branch ignored the flag and called `mergeAttractions`, so
+ * the rehearsal deleted the losing row inside a transaction with no undo and
+ * then displayed what it had just destroyed as a preview. Worse, the real
+ * merge button is disabled for pairs the detector marked "prüfen" and the
+ * rehearsal was not — so the pairs least safe to merge were the ones most
+ * likely to be rehearsed.
+ */
+describe("AttractionMergeService — previewMerge", () => {
+  const rows = [
+    {
+      id: "row-base",
+      slug: "alice-in-wonderland",
+      name: "Alice in Wonderland",
+      parkId: "park-blackpool",
+      queueTimesEntityId: null,
+      latitude: null,
+    },
+    {
+      id: "row-suffix",
+      slug: "alice-in-wonderland-2",
+      name: "Alice in Wonderland",
+      parkId: "park-blackpool",
+      queueTimesEntityId: 4711,
+      latitude: null,
+    },
+    {
+      id: "row-elsewhere",
+      slug: "alice-in-wonderland",
+      name: "Alice in Wonderland",
+      parkId: "park-efteling",
+    },
+  ];
+
+  const manager = {
+    findOne: jest.fn(),
+    query: jest.fn().mockResolvedValue([]),
+    delete: jest.fn(),
+    update: jest.fn(),
+  };
+
+  const serviceWith = () => {
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+    );
+    const dataSource = {
+      getRepository: jest.fn(() => ({ findOne })),
+      transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)),
+      query: jest.fn().mockResolvedValue([]),
+    };
+    return {
+      service: new AttractionMergeService(
+        dataSource as never,
+        {} as never,
+        {} as never,
+      ),
+      dataSource,
+    };
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("reports the surviving slug without writing anything", async () => {
+    const { service, dataSource } = serviceWith();
+
+    const preview = await service.previewMerge("row-suffix", "row-base");
+
+    expect(preview).toMatchObject({
+      dryRun: true,
+      survivingSlug: "alice-in-wonderland",
+      removedSlug: "alice-in-wonderland",
+      renamed: true,
+    });
+    // The whole point: no transaction was opened, so nothing was deleted.
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+  });
+
+  it("names the columns the survivor would inherit", async () => {
+    const { service } = serviceWith();
+
+    const preview = await service.previewMerge("row-base", "row-suffix");
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.renamed).toBe(false);
+  });
+
+  it("refuses the pairs the real merge refuses, and just as early", async () => {
+    const { service } = serviceWith();
+
+    await expect(service.previewMerge("row-base", "row-base")).rejects.toThrow(
+      /itself/i,
+    );
+    await expect(
+      service.previewMerge("row-base", "row-elsewhere"),
+    ).rejects.toThrow(/same park/i);
+    await expect(
+      service.previewMerge("row-base", "row-missing"),
+    ).rejects.toThrow(/not found/i);
+  });
+});
