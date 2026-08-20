@@ -15,6 +15,7 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../../parks/entities/park.entity";
+import { parseHttpUrl } from "../../common/utils/http-url.util";
 import { AdminAuditService } from "../auth/admin-audit.service";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import {
@@ -391,24 +392,8 @@ export class AdminCurationService {
             `${spec.label} must be at most ${spec.maxLength} characters`,
           );
         }
-        // Parsed rather than pattern-matched, and restricted to the two schemes
-        // a browser will follow. These end up as `href`s on a public page: a
-        // `javascript:` URL stored here would be a stored XSS with a curator's
-        // signature on it, and `data:` is the same trick with a different name.
-        let parsed: URL;
-        try {
-          parsed = new URL(trimmed);
-        } catch {
-          throw new BadRequestException(
-            `${spec.label} must be a full address, including https://`,
-          );
-        }
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-          throw new BadRequestException(
-            `${spec.label} must be an http(s) address`,
-          );
-        }
-        return parsed.toString();
+        // See `parseHttpUrl` — these end up as `href`s on a public page.
+        return parseHttpUrl(trimmed, spec.label);
       }
 
       case "enum": {

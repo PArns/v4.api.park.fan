@@ -8,6 +8,7 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
+import { redactUrl } from "../utils/redact-url.util";
 
 /**
  * Global logging interceptor for HTTP requests.
@@ -19,34 +20,13 @@ import { Request, Response } from "express";
  *
  * Filters out routine GET/POST requests to reduce log spam.
  *
- * URLs are redacted before they are written. The deprecated shared admin pass
- * travels as `?pass=<secret>` and this interceptor logs every request whose URL
- * contains `/admin`, so without this it wrote a full-privilege, non-expiring,
- * non-revocable credential into the application log on every scripted call —
- * readable by everyone who can reach the container logs, which is a much wider
- * group than the people who hold the secret.
+ * URLs go through `redactUrl` first, because this logs every request whose URL
+ * contains `/admin` and the deprecated shared pass travels in the query string.
+ * It only ever sees a request that returned, though: `tap()` below is a
+ * next-only observer, so a request that threw is logged by `HttpExceptionFilter`
+ * instead — which is why the redaction is a shared util and not a function in
+ * this file.
  */
-
-/** Query parameters whose value must never reach the log. */
-const REDACTED_PARAMS = new Set(["pass", "token", "password", "secret"]);
-
-export function redactUrl(url: string): string {
-  const cut = url.indexOf("?");
-  if (cut === -1) return url;
-
-  const path = url.slice(0, cut);
-  const params = new URLSearchParams(url.slice(cut + 1));
-  let touched = false;
-  for (const key of [...params.keys()]) {
-    if (REDACTED_PARAMS.has(key.toLowerCase())) {
-      params.set(key, "***");
-      touched = true;
-    }
-  }
-  if (!touched) return url;
-  const rest = params.toString();
-  return rest ? `${path}?${rest}` : path;
-}
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
   private readonly logger = new Logger("HTTP");

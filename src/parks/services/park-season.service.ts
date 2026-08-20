@@ -15,6 +15,7 @@ import {
 } from "../entities/park-season.entity";
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { parseHttpUrl } from "../../common/utils/http-url.util";
 
 export interface SeasonInput {
   kind: ParkSeasonKind;
@@ -343,11 +344,23 @@ export class ParkSeasonService {
       opensAt: input.opensAt?.trim() || null,
       closesAt: input.closesAt?.trim() || null,
       attractionIds,
-      url: input.url?.trim() || null,
-      sourceUrl: input.sourceUrl?.trim() || null,
+      // Both are rendered as links on the public park page, so they go through
+      // the same scheme check as a curated website rather than being trusted
+      // because an editor typed them.
+      url: this.optionalUrl(input.url, "url"),
+      sourceUrl: this.optionalUrl(input.sourceUrl, "sourceUrl"),
       confirmedAt: input.confirmedAt ? new Date(input.confirmedAt) : null,
       note: input.note?.trim() || null,
     };
+  }
+
+  private optionalUrl(
+    value: string | null | undefined,
+    field: string,
+  ): string | null {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    return parseHttpUrl(trimmed, field);
   }
 
   private requireDate(value: string, field: string): string {

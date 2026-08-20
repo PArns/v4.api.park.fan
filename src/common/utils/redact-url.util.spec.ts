@@ -1,11 +1,10 @@
-import { redactUrl } from "./logging.interceptor";
+import { redactUrl } from "./redact-url.util";
 
 describe("redactUrl", () => {
   it("hides the deprecated shared admin pass", () => {
-    // This interceptor logs every URL containing `/admin`, and the legacy path's
-    // transport is `?pass=<secret>` — a full-privilege credential that neither
-    // expires nor can be revoked, written into the application log on every
-    // scripted call.
+    // Two things log a URL, and the legacy path's transport is `?pass=<secret>`:
+    // a full-privilege credential that neither expires nor can be revoked,
+    // written into the application log on every scripted call.
     expect(redactUrl("/v1/admin/flush-cache?pass=S3CR3T")).toBe(
       "/v1/admin/flush-cache?pass=***",
     );

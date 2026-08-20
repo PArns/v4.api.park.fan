@@ -212,6 +212,18 @@ at most once a minute, granted a configurable role, and switchable off with
 Audit rows from that path say `actorEmail: 'legacy-pass'`, which is visibly not a
 person. That is the point.
 
+Because the secret travels in the query string, nothing may write a raw URL to
+the log. Two things write one, and they split the traffic between them:
+`LoggingInterceptor` logs from a `tap()`, which is a next-only observer, so it
+only ever sees a request that returned; every request that threw is logged by
+`HttpExceptionFilter` instead. Both call `redactUrl()`
+(`src/common/utils/redact-url.util.ts`) now. Redacting only the interceptor
+covered only the successful half, and the failing half is where the secret is
+most likely to appear: `cache/reset` refuses a call without `?confirm=true`, and
+the guard authenticates the pass and then refuses it on every endpoint carrying
+`@AdminLegacyAccess(false)`. Verified, rejected, and previously written to the
+log in full.
+
 ## Environment
 
 | Variable                                             | Meaning                                                                       |

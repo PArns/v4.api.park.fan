@@ -7,12 +7,21 @@ import {
   Logger,
 } from "@nestjs/common";
 import { Request, Response } from "express";
+import { redactUrl } from "../utils/redact-url.util";
 
 /**
  * Global exception filter for consistent error responses.
  * - Hides stack traces in production
  * - Provides clean, helpful error messages
  * - Maintains detailed logging for debugging
+ *
+ * Every URL written here is redacted first. This filter is the *only* thing
+ * that logs a request which threw — `LoggingInterceptor` logs from a `tap()`,
+ * which never runs on the error path — so it sees exactly the traffic that
+ * carries a credential and fails: a runbook call to `cache/reset` without
+ * `?confirm=true`, a mistyped action, and every request where the guard
+ * accepted the shared pass and then refused it for the endpoint. Without the
+ * redaction those wrote `?pass=<secret>` into the log in full.
  */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -23,6 +32,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
+    const url = redactUrl(request.url);
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = "Internal server error";
@@ -64,7 +74,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
           message = "An internal error occurred";
           error = "InternalServerError";
           this.logger.error(
-            `Sanitized error message containing sensitive information: ${request.method} ${request.url}`,
+            `Sanitized error message containing sensitive information: ${request.method} ${url}`,
             exception.stack,
           );
         } else {
@@ -83,13 +93,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (status >= 500) {
       // Server errors - log with full stack trace
       this.logger.error(
-        `${request.method} ${request.url} - Status: ${status}`,
+        `${request.method} ${url} - Status: ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     } else {
       // Client errors (4xx) - log as warning
       this.logger.warn(
-        `${request.method} ${request.url} - Status: ${status} - Message: ${
+        `${request.method} ${url} - Status: ${status} - Message: ${
           Array.isArray(message) ? message.join(", ") : message
         }`,
       );
@@ -99,7 +109,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const errorResponse: any = {
       statusCode: status,
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: url,
       message,
       ...(error && { error }),
     };

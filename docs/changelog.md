@@ -101,6 +101,30 @@ One consequence worth naming: the current month's cache outlives midnight (15
 min TTL), so a cached day could hand back a "today" field on what is now
 yesterday. `assembleFromMonthCaches` strips it, and a regression test covers it.
 
+### Fixed — the shared admin pass reached the log on every failed request
+
+The redaction added with the new authentication covered `LoggingInterceptor`,
+which logs from a `tap()` — a next-only observer. A request that throws never
+reaches it; `HttpExceptionFilter` logs that one, and it wrote `request.url`
+verbatim. So the protection covered exactly the requests that succeeded, and
+`?pass=<secret>` still went to the log on every 4xx and 5xx.
+
+That is not the rare case. `cache/reset` deliberately refuses a call without
+`?confirm=true`, and the guard authenticates the shared pass and then refuses it
+on every endpoint marked `@AdminLegacyAccess(false)` — a credential verified,
+rejected and written down, in a log readable by a much wider group than the
+people who hold it. The secret does not expire and cannot be revoked.
+
+`redactUrl` moved to `src/common/utils/redact-url.util.ts` and both writers use
+it, on all four sites in the filter including the `path` it puts in the error
+body.
+
+Season links got the same scheme check as a curated website while we were here.
+`ParkSeason.url` and `sourceUrl` are rendered as `<a href>` on the public park
+page and were stored as any trimmed string; they now go through the same
+`new URL()` + http/https parse. React refuses a `javascript:` href on its own,
+but that is the consumer's property and this API is public.
+
 ### Fixed — a rename upstream could hand one ride's row to its neighbour
 
 `findExistingAttraction` falls back to matching on name when no id lines up.

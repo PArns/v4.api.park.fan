@@ -177,6 +177,42 @@ describe("ParkSeasonService", () => {
       );
     });
 
+    it("refuses a link a browser would not follow", async () => {
+      // Both URLs are rendered as `<a href>` on the public park page. React
+      // happens to strip a `javascript:` href, but that is the consumer's
+      // property, not this API's, and this API is public.
+      const { service } = build();
+      await expect(
+        service.create(
+          "park-1",
+          { ...valid, url: "javascript:alert(1)" },
+          null,
+        ),
+      ).rejects.toThrow(/http\(s\) address/);
+      await expect(
+        service.create("park-1", { ...valid, sourceUrl: "not a url" }, null),
+      ).rejects.toThrow(/full address/);
+    });
+
+    it("stores an ordinary link and leaves an empty one null", async () => {
+      const { service, seasons } = build();
+      await service.create(
+        "park-1",
+        {
+          ...valid,
+          url: "  https://www.walibi.nl/fright-nights  ",
+          sourceUrl: "",
+        },
+        null,
+      );
+      expect(seasons.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://www.walibi.nl/fright-nights",
+          sourceUrl: null,
+        }),
+      );
+    });
+
     it("rejects a currency that is not ISO 4217", async () => {
       const { service } = build();
       await expect(
