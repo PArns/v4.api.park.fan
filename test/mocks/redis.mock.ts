@@ -12,8 +12,14 @@
  * jump forward a day without waiting one.
  */
 export class RedisMock {
-  private strings = new Map<string, { value: string; expiresAt: number | null }>();
-  private sets = new Map<string, { members: Set<string>; expiresAt: number | null }>();
+  private strings = new Map<
+    string,
+    { value: string; expiresAt: number | null }
+  >();
+  private sets = new Map<
+    string,
+    { members: Set<string>; expiresAt: number | null }
+  >();
 
   /** Overridable clock — tests advance this instead of sleeping. */
   now: () => number = () => Date.now();
@@ -22,7 +28,8 @@ export class RedisMock {
     entry: T | undefined,
   ): T | undefined {
     if (!entry) return undefined;
-    if (entry.expiresAt !== null && entry.expiresAt <= this.now()) return undefined;
+    if (entry.expiresAt !== null && entry.expiresAt <= this.now())
+      return undefined;
     return entry;
   }
 
@@ -127,7 +134,8 @@ export class RedisMock {
 
   /** Test helper: how many string keys are live right now. */
   size(): number {
-    return [...this.strings.keys()].filter((key) => this.alive(this.strings.get(key)))
-      .length;
+    return [...this.strings.keys()].filter((key) =>
+      this.alive(this.strings.get(key)),
+    ).length;
   }
 }
