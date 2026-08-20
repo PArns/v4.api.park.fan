@@ -91,6 +91,49 @@ describe("AdminLoginRateLimitService", () => {
     expect(await redis.get("admin:login:acct:you@park.fan")).toBeNull();
   });
 
+  it("stops a signed-in account from exhausting a six-digit code", async () => {
+    // Ten wrong codes and the endpoint is shut for the rest of the window.
+    // Without this the space is ~333k requests wide, which is minutes.
+    for (let i = 0; i < 10; i++) {
+      await limiter.recordActionFailure("totp-disable", "user-1");
+    }
+    const verdict = await limiter.checkAction("totp-disable", "user-1");
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  it("counts each sensitive action separately", async () => {
+    // Failing to change a password must not lock the enrolment endpoint, and
+    // one locked account must not lock another.
+    for (let i = 0; i < 10; i++) {
+      await limiter.recordActionFailure("change-password", "user-1");
+    }
+    expect((await limiter.checkAction("totp-begin", "user-1")).allowed).toBe(
+      true,
+    );
+    expect(
+      (await limiter.checkAction("change-password", "user-2")).allowed,
+    ).toBe(true);
+  });
+
+  it("clears an action's counter once the secret is right", async () => {
+    for (let i = 0; i < 9; i++) {
+      await limiter.recordActionFailure("totp-disable", "user-1");
+    }
+    await limiter.recordActionSuccess("totp-disable", "user-1");
+    for (let i = 0; i < 9; i++) {
+      await limiter.recordActionFailure("totp-disable", "user-1");
+    }
+    expect((await limiter.checkAction("totp-disable", "user-1")).allowed).toBe(
+      true,
+    );
+  });
+
+  it("stores no readable user id for a sensitive action", async () => {
+    await limiter.recordActionFailure("totp-disable", "user-1");
+    expect(await redis.get("admin:action:totp-disable:user-1")).toBeNull();
+  });
+
   it("fails open when Redis is unavailable", async () => {
     // The durable defence is the per-account lockout in Postgres. A Redis
     // outage must not lock every administrator out of their own admin.
@@ -109,5 +152,8 @@ describe("AdminLoginRateLimitService", () => {
       broken.recordFailure("198.51.100.7", "you@park.fan"),
     ).resolves.toBeUndefined();
     await expect(broken.recordSuccess("you@park.fan")).resolves.toBeUndefined();
+    expect((await broken.checkAction("totp-disable", "user-1")).allowed).toBe(
+      true,
+    );
   });
 });

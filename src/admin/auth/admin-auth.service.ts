@@ -510,8 +510,22 @@ export class AdminAuthService implements OnModuleInit {
     });
     if (!user) throw new NotFoundException("No such account");
 
+    const limit = await this.loginLimiter.checkAction(
+      "change-password",
+      userId,
+    );
+    if (!limit.allowed) {
+      throw new UnauthorizedException(
+        `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      );
+    }
+
     const ok = await verifyPassword(currentPassword ?? "", user.passwordHash);
-    if (!ok) throw new UnauthorizedException("Current password is incorrect");
+    if (!ok) {
+      await this.loginLimiter.recordActionFailure("change-password", userId);
+      throw new UnauthorizedException("Current password is incorrect");
+    }
+    await this.loginLimiter.recordActionSuccess("change-password", userId);
 
     const complaint = validatePasswordStrength(newPassword);
     if (complaint) throw new BadRequestException(complaint);
@@ -629,9 +643,17 @@ export class AdminAuthService implements OnModuleInit {
     // stolen session could enrol the attacker's own authenticator on the
     // victim's account — and since only an owner can clear the flag, that is a
     // lockout, not an inconvenience.
+    const limit = await this.loginLimiter.checkAction("totp-begin", userId);
+    if (!limit.allowed) {
+      throw new UnauthorizedException(
+        `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      );
+    }
     if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure("totp-begin", userId);
       throw new UnauthorizedException("Password is incorrect");
     }
+    await this.loginLimiter.recordActionSuccess("totp-begin", userId);
 
     const secret = generateTotpSecret();
     await this.users.update({ id: userId }, { totpSecret: secret });
@@ -686,6 +708,18 @@ export class AdminAuthService implements OnModuleInit {
         "Two-factor is mandatory on this deployment (ADMIN_REQUIRE_TOTP)",
       );
     }
+
+    // The code is six digits and three of them are valid at once, so this is
+    // the one endpoint in the admin where an attacker can realistically
+    // exhaust the secret. The global throttler will not help: it skips every
+    // request carrying the frontend's bypass key, which is every request the
+    // admin UI makes.
+    const limit = await this.loginLimiter.checkAction("totp-disable", userId);
+    if (!limit.allowed) {
+      throw new BadRequestException(
+        `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      );
+    }
     const user = await this.users.findOne({
       where: { id: userId },
       select: {
@@ -698,11 +732,16 @@ export class AdminAuthService implements OnModuleInit {
     if (!user?.totpEnabled)
       throw new BadRequestException("Two-factor is not enabled");
     if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure("totp-disable", userId);
       throw new UnauthorizedException("Password is incorrect");
     }
     const check = verifyTotp(user.totpSecret ?? "", code, null);
-    if (!check.valid) throw new BadRequestException("That code did not match");
+    if (!check.valid) {
+      await this.loginLimiter.recordActionFailure("totp-disable", userId);
+      throw new BadRequestException("That code did not match");
+    }
 
+    await this.loginLimiter.recordActionSuccess("totp-disable", userId);
     await this.users.update(
       { id: userId },
       { totpEnabled: false, totpSecret: null, totpLastStep: null },

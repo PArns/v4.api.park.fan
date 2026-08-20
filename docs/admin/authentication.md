@@ -85,6 +85,18 @@ down —
 the durable defence is the per-account lockout in Postgres, and a Redis outage
 must not lock every administrator out of their own admin.
 
+The same reasoning covers three endpoints a signed-in account can reach, through
+`checkAction` / `recordActionFailure` / `recordActionSuccess`: `auth/totp/begin`,
+`auth/totp/disable` and `auth/change-password`. Each one compares a guessable
+secret and each one would be `@Throttle()`d in vain. `totp/disable` is the sharp
+case: the code is six digits, `WINDOW_STEPS = 1` makes three of them valid at any
+moment, so somebody holding a stolen session and the account password needs
+around 333k unthrottled requests to take the second factor off — minutes of
+scripting. Ten failures per account per action per fifteen minutes ends that.
+The buckets are keyed by action **and** user id, so a mistyped password on the
+change-password form does not shut the enrolment endpoint, and a correct secret
+clears the account's counter for that action.
+
 ### TOTP is implemented here
 
 Thirty lines of HMAC and a base32 codec, and the alternative is a dependency in

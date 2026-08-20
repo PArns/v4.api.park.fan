@@ -31,6 +31,19 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 const IP_PREFIX = "admin:login:ip:";
 const ACCOUNT_PREFIX = "admin:login:acct:";
+const ACTION_PREFIX = "admin:action:";
+
+/**
+ * The window and ceiling for a guessable secret that is not a password.
+ *
+ * Tighter than the login's, because the secrets these protect are small: a TOTP
+ * code is six digits and three of them are valid at any moment, so an
+ * unthrottled attacker needs ~333k requests — minutes, not years. The login's
+ * secret is a passphrase and its limiter is sized against a spray, not against
+ * exhausting the space.
+ */
+const ACTION_WINDOW_SECONDS = 15 * 60;
+const ACTION_MAX_FAILURES = 10;
 
 const IP_WINDOW_SECONDS = 15 * 60;
 const IP_MAX_FAILURES = 25;
@@ -99,6 +112,63 @@ export class AdminLoginRateLimitService {
   async recordSuccess(email: string): Promise<void> {
     try {
       await this.redis.del(ACCOUNT_PREFIX + hash(email));
+    } catch {
+      // Best effort.
+    }
+  }
+
+  /**
+   * The same counter, for a sensitive action by an already-signed-in account.
+   *
+   * The global throttler cannot do this either, for the same reason it cannot
+   * do the login: it skips any request carrying a valid bypass key, and the
+   * admin UI sends one on every server-side call. So `@Throttle()` on
+   * `totp/disable` would be skipped for every request the admin actually
+   * makes.
+   *
+   * What that leaves unprotected is not theoretical. `totp/disable` takes a
+   * six-digit code, three of which are valid at any moment; an attacker
+   * holding a stolen session and the account password needs about 333k
+   * unthrottled requests to remove the second factor, which is minutes.
+   */
+  async checkAction(
+    action: string,
+    subject: string,
+  ): Promise<RateLimitVerdict> {
+    try {
+      const key = ACTION_PREFIX + action + ":" + hash(subject);
+      const raw = await this.redis.get(key);
+      const count = raw ? Number.parseInt(raw, 10) : 0;
+      if (count >= ACTION_MAX_FAILURES) {
+        const ttl = await this.redis.ttl(key);
+        return {
+          allowed: false,
+          retryAfterSeconds: ttl > 0 ? ttl : ACTION_WINDOW_SECONDS,
+          reason: "account",
+        };
+      }
+      return { allowed: true, retryAfterSeconds: 0, reason: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Action rate-limit check unavailable: ${message}`);
+      return { allowed: true, retryAfterSeconds: 0, reason: null };
+    }
+  }
+
+  async recordActionFailure(action: string, subject: string): Promise<void> {
+    try {
+      await this.bump(
+        ACTION_PREFIX + action + ":" + hash(subject),
+        ACTION_WINDOW_SECONDS,
+      );
+    } catch {
+      // Best effort — see check().
+    }
+  }
+
+  async recordActionSuccess(action: string, subject: string): Promise<void> {
+    try {
+      await this.redis.del(ACTION_PREFIX + action + ":" + hash(subject));
     } catch {
       // Best effort.
     }
