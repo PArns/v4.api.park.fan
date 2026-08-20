@@ -129,6 +129,19 @@ export const CURATED_PARK_COLUMNS = [
 
 export type CuratedParkColumn = (typeof CURATED_PARK_COLUMNS)[number];
 
+/**
+ * The same list as physical column names, for the places that write SQL.
+ *
+ * Derived rather than typed out twice: every curated column on the entity is
+ * named the snake_case of its property, and the spec asserts the derivation
+ * against the real names so an irregular one fails the suite instead of
+ * silently dropping out of a query.
+ */
+export const CURATED_PARK_DB_COLUMNS: readonly string[] =
+  CURATED_PARK_COLUMNS.map((column) =>
+    column.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+  );
+
 export function resolveCuratedPark(
   park: CuratedParkSource,
 ): ResolvedCuratedPark {

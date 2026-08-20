@@ -1,4 +1,6 @@
 import {
+  CURATED_PARK_COLUMNS,
+  CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
   resolveNoWaitTimesReason,
   resolveParkInfo,
@@ -152,5 +154,35 @@ describe("resolveParkInfo", () => {
     });
     expect(info?.openedYear).toBeNull();
     expect(info?.areaHectares).toBeNull();
+  });
+});
+
+describe("CURATED_PARK_DB_COLUMNS", () => {
+  it("matches the physical column names on the entity", () => {
+    // The list is derived by lowercasing camelCase, and it goes straight into
+    // SQL. A future column whose `name:` does not follow that rule would drop
+    // out of the "nothing curated yet" filter without any error — this pins
+    // the fifteen that exist.
+    expect(CURATED_PARK_DB_COLUMNS).toEqual([
+      "curated_name",
+      "curated_park_type",
+      "curated_no_wait_times_reason",
+      "curated_website",
+      "curated_tickets_url",
+      "curated_wikipedia_url",
+      "curated_instagram_url",
+      "curated_facebook_url",
+      "curated_youtube_url",
+      "curated_street_address",
+      "curated_postal_code",
+      "curated_phone",
+      "curated_opened_year",
+      "curated_area_hectares",
+      "curation_note",
+    ]);
+  });
+
+  it("names one column per curated property", () => {
+    expect(CURATED_PARK_DB_COLUMNS).toHaveLength(CURATED_PARK_COLUMNS.length);
   });
 });

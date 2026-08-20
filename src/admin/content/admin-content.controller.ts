@@ -21,7 +21,10 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../../parks/entities/park.entity";
 import { ParkSeason } from "../../parks/entities/park-season.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
-import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
+import {
+  CURATED_PARK_DB_COLUMNS,
+  resolveCuratedPark,
+} from "../../parks/utils/curated-park-facts.util";
 import { AdminAuthGuard } from "../auth/admin-auth.guard";
 import { AdminMinRole, CurrentAdmin } from "../auth/admin-auth.decorators";
 import {
@@ -199,24 +202,28 @@ export class AdminContentController {
         country: country.toUpperCase(),
       });
     }
+    // Both branches read every curated column, from the one list. Typed out by
+    // hand they covered four of fifteen, so a park with a website, an address
+    // and a phone number still counted as "nothing curated yet" — and the
+    // triage list kept handing it back to the next editor.
     if (curated === "only") {
       qb.andWhere(
         new Brackets((w) => {
-          w.where("park.curated_name IS NOT NULL")
-            .orWhere("park.curated_park_type IS NOT NULL")
-            .orWhere("park.curated_no_wait_times_reason IS NOT NULL")
-            .orWhere("park.curation_note IS NOT NULL");
+          CURATED_PARK_DB_COLUMNS.forEach((column, index) => {
+            const condition = `park.${column} IS NOT NULL`;
+            if (index === 0) w.where(condition);
+            else w.orWhere(condition);
+          });
         }),
       );
     }
     if (curated === "none") {
-      // The exact inverse of the branch above, `curation_note` included: an
-      // editor working the "nothing curated yet" list should not keep being
-      // handed a park somebody has already written notes on.
-      qb.andWhere("park.curated_name IS NULL")
-        .andWhere("park.curated_park_type IS NULL")
-        .andWhere("park.curated_no_wait_times_reason IS NULL")
-        .andWhere("park.curation_note IS NULL");
+      // The exact inverse, `curation_note` included: an editor working the
+      // "nothing curated yet" list should not keep being handed a park
+      // somebody has already written notes on.
+      for (const column of CURATED_PARK_DB_COLUMNS) {
+        qb.andWhere(`park.${column} IS NULL`);
+      }
     }
 
     const [rows, total] = await qb.getManyAndCount();
