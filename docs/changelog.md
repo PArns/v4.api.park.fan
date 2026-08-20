@@ -6,6 +6,76 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the admin had no authentication, and now it has one
+
+`/admin/**` was reachable by anyone who found the path. Nothing in the
+application asked who was calling: a Cloudflare Access rule in front of the
+deployment was the entire access control, and it does not travel with the API.
+`AdminAuthGuard` now sits on every admin controller.
+
+Sessions are opaque random tokens in Redis, not JWTs, and that is the whole
+decision: a JWT cannot be revoked, and "deactivate this account now" has to mean
+now when the account can merge parks. Redis stores the SHA-256 of the token, so
+a dump hands an attacker hashes they cannot present. Two clocks bound a session —
+idle expiry slides on every request, absolute expiry (7 days) does not.
+
+Passwords are scrypt with the parameters written into the stored hash, so the
+cost can be raised later without invalidating anybody: `needsRehash` upgrades a
+hash on its owner's next successful login, the one moment the plaintext exists.
+Policy is length only, 12 characters. TOTP is thirty lines of HMAC-SHA1 and a
+base32 codec rather than a dependency, with a consumed-step guard so a code
+cannot be replayed inside its own window.
+
+Four roles, ranked rather than enumerated (`owner > editor > author > viewer`),
+and `@AdminMinRole('editor')` states the floor. Every write is audited with the
+changed fields only, before and after, which is what makes the undo in
+`admin/content/history/:id/undo` possible.
+
+The rate limiting is deliberately not `@Throttle()`. `CfThrottlerGuard` skips
+any request carrying a valid `THROTTLE_BYPASS_KEYS` value and our own frontend
+sends one on every server-side call, so a throttle on the login handler would
+have been enforced against everybody except the admin UI. `AdminLoginRateLimitService`
+counts in Redis instead, by address and by account, and the same mechanism covers
+`totp/begin`, `totp/disable` and `change-password`. That last one matters: the
+code is six digits and three are valid at once, so an unthrottled attacker with
+a stolen session needs about 333k requests to remove the second factor.
+
+Details: `docs/admin/authentication.md`.
+
+### Added — curated columns for the fields a sync keeps getting wrong
+
+The doctrine was already in the codebase for a handful of attraction fields:
+the sync owns its column, a human owns a parallel `curated_*` column, and reads
+merge them. Neither writer ever touches the other's cell, so a re-sync cannot
+silently undo an editorial decision and an editorial decision cannot be mistaken
+for upstream data.
+
+That set now covers what people actually needed to correct: `curated_name`,
+`curated_land_name`, `curated_attraction_type`, `curated_maximum_height`,
+`curated_is_seasonal` and `curated_season_months` on attractions,
+`curated_name`, `curated_park_type`, `curated_no_wait_times_reason` and a free
+`curation_note` on parks. Seasonality resolves as a pair, never half: a curated
+month list without a curated flag would have described a season nobody said
+exists.
+
+`park_seasons` is new and is not a curated column, because it is not a field the
+sync has an opinion about — opening periods, Halloween and Winter Dream, with a
+kind, a status, a date range and an optional explicit day list (`null` means
+every day in the range; an empty list would mean a season with no days, which is
+why it is never written).
+
+The editor is generated from field descriptors rather than hand-built per field,
+so each one reports its synced value, its curated value, the resolved value and
+whether it is overridden. `curated_timezone` was designed and then deliberately
+dropped: 206 places read the park's timezone directly and half a resolution is
+worse than none.
+
+Publishing writes, invalidates the park caches, revalidates the frontend tags
+and then sweeps a second time 16 minutes later, because the CDN in front of the
+frontend needs that long to settle and a single sweep left the old page up.
+
+Details: `docs/admin/curation.md`.
+
 ### Added — a "today" the forecast can be compared with
 
 The park header shows the live crowd badge next to the day's forecast, and the
@@ -14,7 +84,7 @@ was wrong; they are not the same statistic. The live badge is a point-in-time
 ratio-vs-P50 spot reading, the forecast a day aggregate ÷ typical-day-peak.
 Placed side by side, they invite a comparison the numbers do not support.
 
-The value that *is* comparable already existed and was being discarded.
+The value that _is_ comparable already existed and was being discarded.
 `calculateCrowdLevelForDate` rates today the same way the forecast rates
 tomorrow (AVG-across-headliners of each ride's day-P90 ÷ typical-day-peak), but
 for today the calendar deliberately overwrites `crowdLevel` with the live
@@ -39,12 +109,12 @@ guard against is a name match claiming a row that **already holds an id from
 the same source**.
 
 A rename upstream is exactly that case. When Sea World's wiki entity
-`5a4ad529` changed from *Castaway Bay - Sky Climb* to *Wally the Walrus*, the
+`5a4ad529` changed from _Castaway Bay - Sky Climb_ to _Wally the Walrus_, the
 incoming name stopped matching its own row — and matched the neighbouring
-*Wally the Walrus* row instead, overwriting that neighbour's name with the same
-string. Two rows called *Wally the Walrus*, one ride's identity gone. The same
-shape produced *Wahoo Racer* twice at Hurricane Harbor Arlington and *Discovery
-Bay* twice in New Jersey.
+_Wally the Walrus_ row instead, overwriting that neighbour's name with the same
+string. Two rows called _Wally the Walrus_, one ride's identity gone. The same
+shape produced _Wahoo Racer_ twice at Hurricane Harbor Arlington and _Discovery
+Bay_ twice in New Jersey.
 
 The fallback now skips rows that already answer to another id from the incoming
 source. A row carrying its own wiki UUID has been claimed by the wiki; only
@@ -53,8 +123,8 @@ fallback exists for, adopting a Queue-Times-only row.
 
 **Scope, measured rather than assumed:** 281 rows have a slug that no longer
 matches their name, but that is normal — a slug is a frozen name and renames do
-not move it. The damaging signature is narrower: *this row carries the name that
-row's slug says it should have*. Exactly **4** rows match, all in the three
+not move it. The damaging signature is narrower: _this row carries the name that
+row's slug says it should have_. Exactly **4** rows match, all in the three
 parks above. This was a local incident, not a systemic leak.
 
 Identity comes from the `externalId`, never from the slug. All four names were
@@ -67,11 +137,11 @@ The auto-merge rule required only that two rows agree on name once punctuation
 and a map number are stripped. Heide Park shows why that is not sufficient:
 ThemeParks.wiki publishes **three separate attraction entities all called
 "PLAYGROUND"**. Their names agree perfectly, so the detector offered
-`playground-2` and `playground-3` as *safe* auto-merges — collapsing three real
+`playground-2` and `playground-3` as _safe_ auto-merges — collapsing three real
 play areas into one, irreversibly.
 
 A duplicate arises because **two sources** describe one ride: a wiki UUID beside
-a Queue-Times id. Two ids issued by the *same* source are that source's own
+a Queue-Times id. Two ids issued by the _same_ source are that source's own
 statement that these are two things. Auto-merge now requires the pair to span
 two sources; same-source pairs go to review with a reason that says so.
 
@@ -85,9 +155,9 @@ what the feed is doing, not what is true. So every candidate they surface comes
 back tomorrow, however carefully it was investigated.
 
 That is not a small annoyance. A research round on 2026-08-16 established that
-**57 of 73** silenced attractions are alive — *Jurassic Park - The Ride* runs
-under an anniversary overlay name, *Marvel Cave* is central to a 2027 project,
-*Shock Wave* is stored rather than scrapped — and that **5 of the remaining
+**57 of 73** silenced attractions are alive — _Jurassic Park - The Ride_ runs
+under an anniversary overlay name, _Marvel Cave_ is central to a 2027 project,
+_Shock Wave_ is stored rather than scrapped — and that **5 of the remaining
 duplicate pairs are genuinely different rides**: Cedar Creek is a lazy river
 beside Cedar Creek Mine Ride, KONDAALA is a kids' ride beside the KONDAA
 coaster. None of that could be written down anywhere. The same 64 questions
@@ -141,7 +211,7 @@ Caught by not believing a number — the planned count jumped from 7 to 41 acros
 a change that only touched name and slug resolution, which is more than that
 change could explain.
 
-### Fixed — a merged ride kept the wrong URL *and* the wrong name
+### Fixed — a merged ride kept the wrong URL _and_ the wrong name
 
 `resolveSurvivingSlug` only knew one rule: if the winner's slug is the loser's
 with a number appended, take the loser's. That fits duplicates the sync made by
@@ -160,7 +230,7 @@ The **name** had the same problem, and it is the one a visitor reads. The
 Queue-Times row usually wins a merge — it is the one ingestion still feeds — so
 merging Energylandia's duplicates would have settled every ride on its numbered
 spelling: `Abyssus (184)`, `Draken (155)`, `Frutti Loop (39)`. When two names
-differ *only* by that trailing number, the clean one now wins regardless of
+differ _only_ by that trailing number, the clean one now wins regardless of
 which row it came from. Any other difference is left to the winner; this is not
 the place to arbitrate between two genuinely different names.
 
@@ -219,8 +289,8 @@ A demolished ride is not "closed today" and it is not "unknown" either. Both of
 those describe a state it could come back from, and the API had no way to say
 the third thing. So Disney's **Dino-Sue**, torn down with DinoLand in February
 2026, sat in Animal Kingdom's attraction list regardless — as did Animal
-Kingdom's *Affection Section* and *Animation Experience*, and Ocean Park's
-*North Pole Encounter*.
+Kingdom's _Affection Section_ and _Animation Experience_, and Ocean Park's
+_North Pole Encounter_.
 
 `attractions.retired_at` + `retired_reason`. The reason carries the **source
 URL**: a retirement is a claim about the world, so it travels with its evidence.
@@ -393,7 +463,7 @@ into three copies.
 **Ownership boundary, and it is the load-bearing part.** The nightly detector
 would have erased every curated season it was given:
 
-- Step 2b (the self-heal added last change) cleared `season_months` on *every*
+- Step 2b (the self-heal added last change) cleared `season_months` on _every_
   free-flow row. It is now scoped to rows where the months are already NULL —
   the mislabel's exact signature, since the detector cannot derive months for an
   attraction it never sees OPERATING. Months on a free-flow row are therefore
@@ -406,7 +476,7 @@ Same two-writers rule as `curated_may_get_wet` and `curated_minimum_height`: the
 sync owns its cell, the human owns theirs, and neither writes the other's.
 
 No months were curated in this change — the four held attractions need their
-operators' season *dates* researched first, and "summer" is not a month list.
+operators' season _dates_ researched first, and "summer" is not a month list.
 
 ### Fixed — a playground is not a season
 
@@ -421,7 +491,7 @@ permanent.
 Phantasialand showed both halves of the damage. Three of its four free-flow
 attractions carried `isSeasonal: true` with no months while serving
 `status: OPERATING`. And **Avoras** — a walk-in climbing course the park
-advertises as open *"ganzjährig im Sommer wie auch im Wintertraum"* — was
+advertises as open _"ganzjährig im Sommer wie auch im Wintertraum"_ — was
 reported out of season in August.
 
 Avoras also exposes a second, subtler trap worth naming: its `season_months`
@@ -450,9 +520,9 @@ open in the wrong month.
 Phantasialand runs two water attractions side by side and ThemeParks.wiki has
 their rules swapped: it gives `NEW: Winni Splash` a `minimumHeight` of 100 and
 `NEW: Wavy Battle` nothing. The park's own Nutzungsbedingungen say the opposite
-— Winni Splash's board reads *"Kinder unter 1,00 m Körpergröße dürfen nur in
-Begleitung Erwachsener spielen"* (a supervision threshold, no limit), Wavy
-Battle's reads *"Kindern unter 1,00 m Körpergröße ist das Betreten verboten"*
+— Winni Splash's board reads _"Kinder unter 1,00 m Körpergröße dürfen nur in
+Begleitung Erwachsener spielen"_ (a supervision threshold, no limit), Wavy
+Battle's reads _"Kindern unter 1,00 m Körpergröße ist das Betreten verboten"_
 (a real minimum). So a playground that welcomes accompanied toddlers advertised
 a 100 cm limit while the one that genuinely turns them away advertised none.
 Both soak you; only one said so.
@@ -463,7 +533,7 @@ wiki publishes a number, so a correction has to sit **beside** that cell rather
 than in it. Always centimetres, `null` means "nothing to correct", and **`0`
 means "no minimum height"** — barely a sentinel, since a 0 cm minimum excludes
 nobody, and the only way a correction can override an upstream number with
-*nothing*.
+_nothing_.
 
 Both DTO mappers had grown their own copy of `curatedMayGetWet ?? mayGetWet`,
 which is precisely how the free-flow status rule drifted into a shipped bug.
@@ -604,7 +674,7 @@ difference is the whole design:
 ### Fixed — two RCDB ids pointed at somebody else's ride
 
 `rcdb_id` was matched to attractions by park proximity and normalised name, and
-that has one failure mode: where two parks hold a ride of the *same name*, both
+that has one failure mode: where two parks hold a ride of the _same name_, both
 can inherit the one id. Both cases were real. RCDB 3 is the Demon at Six Flags
 Great America in Gurnee, and Santa Clara's identical twin — the other half of
 the Marriott pair — carried it too. RCDB 9720 is the Magic Kingdom's Seven
