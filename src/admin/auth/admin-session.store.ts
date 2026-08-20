@@ -36,6 +36,9 @@ const TOUCH_INTERVAL_SECONDS = 60;
 const SESSION_PREFIX = "admin:session:";
 const USER_SESSIONS_PREFIX = "admin:sessions:";
 
+/** Length of the short id `listForUser` reports and `destroyByShortId` takes. */
+const SHORT_ID_LENGTH = 12;
+
 export interface AdminSession {
   userId: string;
   email: string;
@@ -52,6 +55,16 @@ export interface AdminSession {
   /** Set while the account still owes us a password change: the guard lets
    *  such a session reach the change-password endpoint and nothing else. */
   mustChangePassword: boolean;
+
+  /**
+   * Set when `ADMIN_REQUIRE_TOTP` is on and this account has not enrolled.
+   *
+   * Treated exactly like a pending password change: the session exists — the
+   * account has to be able to reach the enrolment endpoints, so refusing it
+   * outright would lock out precisely the people who need to enrol — but it
+   * reaches nothing else until the second factor is in place.
+   */
+  mustEnrolTotp?: boolean;
 }
 
 export interface IssuedSession {
@@ -145,7 +158,10 @@ export class AdminSessionStore {
   async patchUserSessions(
     userId: string,
     patch: Partial<
-      Pick<AdminSession, "role" | "mustChangePassword" | "displayName">
+      Pick<
+        AdminSession,
+        "role" | "mustChangePassword" | "mustEnrolTotp" | "displayName"
+      >
     >,
   ): Promise<number> {
     const hashes = await this.redis.smembers(USER_SESSIONS_PREFIX + userId);
@@ -240,7 +256,7 @@ export class AdminSessionStore {
           ...session,
           // The first 12 hex characters of the token hash: enough to name a
           // session in a revoke button, useless for presenting one.
-          id: tokenHash.slice(0, 12),
+          id: tokenHash.slice(0, SHORT_ID_LENGTH),
           current: tokenHash === currentHash,
         });
       } catch {
@@ -254,9 +270,17 @@ export class AdminSessionStore {
 
   /** Revoke one session of a user by the short id `listForUser` reports. */
   async destroyByShortId(userId: string, shortId: string): Promise<boolean> {
+    // Compared exactly against the first twelve characters, not by prefix. A
+    // prefix match meant `DELETE …/sessions/a` revoked whichever session's hash
+    // happened to start with `a` first in SMEMBERS order — possibly the current
+    // one, possibly a colleague's — and answered 204 without saying which.
+    if (shortId.length !== SHORT_ID_LENGTH) return false;
+
     const indexKey = USER_SESSIONS_PREFIX + userId;
     const hashes = await this.redis.smembers(indexKey);
-    const match = hashes.find((h) => h.startsWith(shortId));
+    const match = hashes.find(
+      (hash) => hash.slice(0, SHORT_ID_LENGTH) === shortId,
+    );
     if (!match) return false;
     await this.destroyByHash(userId, match);
     return true;

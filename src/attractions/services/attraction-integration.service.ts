@@ -47,6 +47,7 @@ import { ParkEnrichmentService } from "../../parks/services/park-enrichment.serv
 import { RideProfileService } from "./ride-profile.service";
 import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * Attraction Integration Service
@@ -285,7 +286,11 @@ export class AttractionIntegrationService {
       isFreeFlowOpen({
         openWithPark: attraction.openWithPark,
         parkStatus,
-        seasonMonths: attraction.seasonMonths,
+        // Resolved, not raw. The park payload's ride list already reads the
+        // curated months here, and reading the raw ones in this path made the
+        // two disagree: the same ride showed as running on the park page and
+        // closed on its own page, on a date a human had explicitly written down.
+        seasonMonths: resolveCuratedFacts(attraction).seasonMonths,
         parkTimezone: attraction.park?.timezone,
       })
     ) {

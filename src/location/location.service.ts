@@ -212,12 +212,22 @@ export class LocationService {
         continentSlug: true,
         countrySlug: true,
         citySlug: true,
+        // The curated columns have to be on every projection that later calls
+        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
+        // back to the synced name and reports nothing — a silent no-op that
+        // makes one endpoint show a curated name while its neighbour shows the
+        // upstream one.
+        curatedName: true,
+        curatedParkType: true,
+        curatedNoWaitTimesReason: true,
       },
     });
 
     const index: ParkLocationEntry[] = rows.map((p) => ({
       id: p.id,
-      name: p.name,
+      // Resolved, like every other place a park name reaches a visitor. The
+      // projection above selects the curated columns for exactly this call.
+      name: resolveCuratedPark(p).name,
       slug: p.slug,
       latitude: Number(p.latitude),
       longitude: Number(p.longitude),
@@ -389,7 +399,7 @@ export class LocationService {
     // Build park info
     const parkInfo: NearbyParkInfoDto = {
       id: park.id,
-      name: park.name,
+      name: resolveCuratedPark(park).name,
       slug: park.slug,
       distance: Math.round(
         calculateHaversineDistance(
@@ -505,7 +515,10 @@ export class LocationService {
         const todayEntry = integrated.schedule?.find((s) => s.date === today);
         return {
           id: park.id,
-          name: park.name,
+          // Resolved here as well as on the miss path below: reading the raw
+          // name on a cache hit made the card's name depend on whether
+          // `park:integrated:<id>` happened to be warm.
+          name: resolveCuratedPark(park).name,
           slug: park.slug,
           distance,
           city: park.city || null,

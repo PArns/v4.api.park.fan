@@ -13,16 +13,16 @@ which is not a hypothetical: it is why `curated_may_get_wet` and
 
 ### Attractions
 
-| Curated column | Corrects | Written by |
-| --- | --- | --- |
-| `curated_name` | `name` | ThemeParks.wiki sync |
-| `curated_land_name` | `land_name` | Queue-Times sync |
-| `curated_attraction_type` | `attraction_type` | sync |
-| `curated_minimum_height` | `minimum_height` | children-metadata / six-flags-heights |
-| `curated_maximum_height` | `maximum_height` | children-metadata |
-| `curated_may_get_wet` | `may_get_wet` | children-metadata |
-| `curated_is_seasonal` | `is_seasonal` | the nightly `detect-seasonal` job |
-| `curated_season_months` | `season_months` | `detect-seasonal` |
+| Curated column            | Corrects          | Written by                            |
+| ------------------------- | ----------------- | ------------------------------------- |
+| `curated_name`            | `name`            | ThemeParks.wiki sync                  |
+| `curated_land_name`       | `land_name`       | Queue-Times sync                      |
+| `curated_attraction_type` | `attraction_type` | sync                                  |
+| `curated_minimum_height`  | `minimum_height`  | children-metadata / six-flags-heights |
+| `curated_maximum_height`  | `maximum_height`  | children-metadata                     |
+| `curated_may_get_wet`     | `may_get_wet`     | children-metadata                     |
+| `curated_is_seasonal`     | `is_seasonal`     | the nightly `detect-seasonal` job     |
+| `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
 
 Human-only, with no sync behind them: `has_single_rider`, `open_with_park`,
 `rcdb_id`, `retired_at` / `retired_reason`, and the whole
@@ -45,7 +45,7 @@ Three of the merges are more than a `??`:
 **Heights.** `0` means "there is no minimum at all" — a correction overriding
 an upstream number with nothing — not a 0 cm limit. Phantasialand's Winni Splash
 is the worked example: the wiki publishes 100, while the park's own conditions
-say children under 1.00 m may play *when accompanied*, which is no minimum.
+say children under 1.00 m may play _when accompanied_, which is no minimum.
 Treating 0 as falsy silently restores the wrong upstream number.
 
 **The unit.** `minimum_height_unit` describes a number, so it must never be
@@ -132,7 +132,7 @@ Never sort it, never dedupe it.
 `park_seasons` is a table because it cannot be derived. `schedule_entries`
 already knows when a park is open and is no help: a park running Halloween
 Fright Nights and a park having a normal late-closing Saturday produce the same
-row. The difference is what the park is *doing*, which exists in no feed we
+row. The difference is what the park is _doing_, which exists in no feed we
 ingest — until now it existed only in prose, in the Halloween guide, in six
 languages.
 
@@ -150,6 +150,33 @@ Read publicly at `GET /v1/parks/:continent/:country/:city/:park/seasons`,
 deliberately its own request rather than a field on the park payload: that one
 is fetched for every park page and re-polled every five minutes, while seasons
 change a few times a year.
+
+## Two things the editor has to know about a column
+
+**What "nothing decided" looks like.** Almost every curated column is nullable
+and empty means nothing was decided. `open_with_park` is `boolean NOT NULL
+DEFAULT false`, so its "nothing decided" is `false` — clearing the field writes
+that, not null, and a stored `false` is not an override. Getting the first wrong
+is an UPDATE the database rejects; getting the second wrong put a "curated"
+badge on every attraction in the catalogue. The field descriptor carries
+`defaultValue` so the editor does not have to know which columns are which.
+
+**That a projection must select it.** `resolveCuratedPark` and
+`resolveCuratedFacts` read properties off an entity. Handed a row from a query
+whose `select` omits the curated columns, they read `undefined`, fall back to
+the synced value and report nothing — a silent no-op. Discovery's geo structure,
+the country summary, the `/nearby` coordinate index and three of the search
+projections each needed the columns added for exactly this reason, and the geo
+structure is cached for 24 hours, so the no-op would have outlived several
+curation sessions.
+
+## Undo
+
+An undo refuses when the field has moved on. Editor A sets a height null→120,
+editor B corrects it 120→140; undoing A's entry without the check writes null
+and silently discards B's work, leaving B's entry standing in the log as though
+it were current. The check is "is this field still where that entry left it",
+which is exactly what an undo is entitled to assume.
 
 ## Merges
 

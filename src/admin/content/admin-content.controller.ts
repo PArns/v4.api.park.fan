@@ -210,9 +210,13 @@ export class AdminContentController {
       );
     }
     if (curated === "none") {
+      // The exact inverse of the branch above, `curation_note` included: an
+      // editor working the "nothing curated yet" list should not keep being
+      // handed a park somebody has already written notes on.
       qb.andWhere("park.curated_name IS NULL")
         .andWhere("park.curated_park_type IS NULL")
-        .andWhere("park.curated_no_wait_times_reason IS NULL");
+        .andWhere("park.curated_no_wait_times_reason IS NULL")
+        .andWhere("park.curation_note IS NULL");
     }
 
     const [rows, total] = await qb.getManyAndCount();
@@ -348,13 +352,13 @@ export class AdminContentController {
     }
 
     const rows = await qb.getMany();
-    const profiles = await Promise.all(
-      rows.map((row) => this.rideProfiles.find(row.id)),
+    const withProfile = await this.rideProfiles.findIdsWithProfile(
+      rows.map((row) => row.id),
     );
 
     return {
       total: rows.length,
-      attractions: rows.map((attraction, index) => {
+      attractions: rows.map((attraction) => {
         const resolved = resolveCuratedFacts(attraction);
         return {
           id: attraction.id,
@@ -369,7 +373,7 @@ export class AdminContentController {
           seasonMonths: resolved.seasonMonths,
           seasonalityCurated: resolved.seasonalityCurated,
           retiredAt: attraction.retiredAt,
-          hasRideProfile: profiles[index] !== null,
+          hasRideProfile: withProfile.has(attraction.id),
           curatedFieldCount: attractionFieldViews(attraction).filter(
             (f) => f.overridden,
           ).length,

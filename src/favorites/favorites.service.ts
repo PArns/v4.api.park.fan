@@ -52,6 +52,7 @@ import {
   formatTodaySchedule,
   formatNextSchedule,
 } from "../common/utils/schedule.util";
+import { resolveCuratedFacts } from "../attractions/utils/curated-attraction-facts.util";
 
 /**
  * Favorites Service
@@ -500,7 +501,13 @@ export class FavoritesService {
 
         return {
           id: park.id,
-          name: park.name,
+          // Resolved here as well as in the fallback below. Reading `park.name`
+          // on the cache-hit path made the answer depend on whether
+          // `park:integrated:<id>` happened to be warm: the card showed the
+          // curated name on a miss and the upstream one on a hit, flipping on
+          // a five-minute cycle while the park's own page showed the curated
+          // one throughout.
+          name: resolveCuratedPark(park).name,
           slug: park.slug,
           distance,
           city: park.city || null,
@@ -695,7 +702,11 @@ export class FavoritesService {
         const freeFlowOpen = isFreeFlowOpen({
           openWithPark: attraction.openWithPark,
           parkStatus,
-          seasonMonths: attraction.seasonMonths,
+          // Resolved, not raw. The park payload's ride list already reads the
+          // curated months here, and reading the raw ones in this path made the
+          // two disagree: the same ride showed as running on the park page and
+          // closed on its own page, on a date a human had explicitly written down.
+          seasonMonths: resolveCuratedFacts(attraction).seasonMonths,
           parkTimezone: attraction.park?.timezone,
         });
         if (freeFlowOpen) {

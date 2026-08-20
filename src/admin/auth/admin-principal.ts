@@ -20,6 +20,8 @@ export interface AdminPrincipal {
   legacy: boolean;
   ip: string | null;
   mustChangePassword: boolean;
+  /** True while `ADMIN_REQUIRE_TOTP` is on and this account has not enrolled. */
+  mustEnrolTotp: boolean;
 }
 
 /** Express's Request, once the guard has attached the principal. */

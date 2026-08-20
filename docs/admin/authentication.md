@@ -26,7 +26,7 @@ stays where it is; this is the second lock, on the inside of the same door.
 ### Sessions are opaque tokens in Redis, not JWTs
 
 An admin session grants the right to merge parks and retire attractions, so "log
-this device out now" and "deactivate this account now" have to mean *now* — and
+this device out now" and "deactivate this account now" have to mean _now_ — and
 a JWT cannot be revoked. Statelessness buys nothing here either: every admin
 request already touches Postgres.
 
@@ -59,7 +59,7 @@ push people towards `Password1!`, which is shorter and worse.
 value — and our own frontend sends exactly that on every server-side call. Since
 the admin UI reaches this API only through that proxy, a `@Throttle()` on the
 login handler would be skipped for every real login attempt and enforced only
-against callers who are *not* the admin UI. The precise inverse of what is
+against callers who are _not_ the admin UI. The precise inverse of what is
 wanted.
 
 So `AdminLoginRateLimitService` counts in Redis, unconditionally, in two buckets:
@@ -68,10 +68,20 @@ So `AdminLoginRateLimitService` counts in Redis, unconditionally, in two buckets
   lockout never sees this, because each account only fails once or twice.
 - **by account** — many places guessing one account. Overlaps the lockout on
   purpose: the lockout is durable and visible to an owner, this one is cheap and
-  sheds load *before* ~100 ms of scrypt is spent.
+  sheds load _before_ ~100 ms of scrypt is spent.
 
-Both count failures only, both use a fixed window (a sliding one lets a slow
-attacker hold the door shut forever), and both fail **open** if Redis is down —
+The password is verified **before** the lockout is reported, and the lockout is
+reported only to somebody who got the password right. Answering "locked" first
+made the endpoint an account-existence oracle: eight wrong guesses at an address
+that has an account produce a distinctive ninth answer, while an address that has
+none produces nine identical 401s. And an expired lockout resets its counter — it
+used to leave the count at the threshold, so a single wrong password re-locked
+the account immediately, and one bad guess every fifteen minutes kept it shut
+forever without either rate-limit bucket ever firing.
+
+Both buckets count failures only, both use a fixed window (a sliding one lets a
+slow attacker hold the door shut forever), and both fail **open** if Redis is
+down —
 the durable defence is the per-account lockout in Postgres, and a Redis outage
 must not lock every administrator out of their own admin.
 
@@ -82,8 +92,25 @@ the trust path of the login. The consumed step is stored, which makes each code
 single-use: without that, a six-digit code observed once — over a shoulder, off
 a proxy log — stays valid for the rest of its 30-second window.
 
-Disabling it needs the password **and** a current code. A stolen session must not
-be able to remove the second factor; a stolen password must not either.
+Enrolling and disabling both need the password. A stolen session must not be
+able to remove the second factor — and it must not be able to _add_ one either:
+enrolling an attacker's authenticator on somebody else's account is a lockout,
+not an inconvenience. Disabling additionally needs a current code.
+
+**Recovery.** An owner can clear another account's second factor
+(`POST /v1/admin/auth/users/:id/reset-totp`), which also ends every session of
+that account. There has to be a path: a lost or wiped phone otherwise leaves its
+account answering `totp-required` forever, because `totp/disable` cannot be
+reached without a code. Keep two owner accounts — with one, the only owner losing
+their phone locks out the whole admin surface, and the way back is a row edited
+by hand.
+
+**`ADMIN_REQUIRE_TOTP` is enforced at the login**, not just on the disable
+endpoint. An account that has not enrolled still gets a session — refusing it
+outright would lock out precisely the people who need to enrol — but the session
+carries the debt and reaches only the enrolment endpoints, exactly like a pending
+password change. Enrolling clears it on the sessions that are already open, so
+nobody has to sign out and back in to use the admin they just unlocked.
 
 ## Roles
 
@@ -91,12 +118,12 @@ be able to remove the second factor; a stolen password must not either.
 endpoint that asks for "editor or above" keeps meaning that when a role is added
 between them.
 
-| Role | May |
-| --- | --- |
-| `owner` | Everything, including accounts and the destructive maintenance — merges, retirements, repair, a full cache reset. There is always at least one. |
-| `editor` | Curated content: names, seasons, heights, ride profiles. Job triggers. |
-| `author` | Blog posts and media metadata, not park data. |
-| `viewer` | Dashboards. Writes nothing. |
+| Role     | May                                                                                                                                             |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`  | Everything, including accounts and the destructive maintenance — merges, retirements, repair, a full cache reset. There is always at least one. |
+| `editor` | Curated content: names, seasons, heights, ride profiles. Job triggers.                                                                          |
+| `author` | Blog posts and media metadata, not park data.                                                                                                   |
+| `viewer` | Dashboards. Writes nothing.                                                                                                                     |
 
 Declared with `@AdminMinRole('editor')`. Undecorated endpoints require any valid
 session.
@@ -144,14 +171,14 @@ person. That is the point.
 
 ## Environment
 
-| Variable | Meaning |
-| --- | --- |
-| `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` | First owner, first boot only. |
-| `ADMIN_LEGACY_PASS` | The deprecated shared secret. Empty ⇒ unavailable. |
-| `ADMIN_LEGACY_PASS_ENABLED` | `false` closes that path while the secret is still set. |
-| `ADMIN_LEGACY_PASS_ROLE` | What the shared secret may do. Defaults to `owner` — what it effectively had. |
-| `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES` | Per-account lockout. Defaults 8 / 15. |
-| `ADMIN_REQUIRE_TOTP` | `true` makes two-factor mandatory and un-removable. |
+| Variable                                             | Meaning                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` | First owner, first boot only.                                                 |
+| `ADMIN_LEGACY_PASS`                                  | The deprecated shared secret. Empty ⇒ unavailable.                            |
+| `ADMIN_LEGACY_PASS_ENABLED`                          | `false` closes that path while the secret is still set.                       |
+| `ADMIN_LEGACY_PASS_ROLE`                             | What the shared secret may do. Defaults to `owner` — what it effectively had. |
+| `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES`         | Per-account lockout. Defaults 8 / 15.                                         |
+| `ADMIN_REQUIRE_TOTP`                                 | `true` makes two-factor mandatory and un-removable.                           |
 
 Schema changes land through TypeORM `synchronize` on boot — there are no
 migrations — so `admin_users` and `admin_audit_log` appear on the next deploy.

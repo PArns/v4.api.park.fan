@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import axios from "axios";
 import {
   AttractionRideProfile,
@@ -71,6 +71,23 @@ export class AdminRideProfileService {
 
   async find(attractionId: string): Promise<AttractionRideProfile | null> {
     return this.profiles.findOne({ where: { attractionId } });
+  }
+
+  /**
+   * Which of these attractions have a profile at all.
+   *
+   * One query rather than one per ride: the park list asks this for every
+   * attraction it shows, and Europa-Park has about a hundred — a hundred
+   * concurrent single-row lookups was comfortably the slowest thing the admin
+   * did, and it got slower with the park.
+   */
+  async findIdsWithProfile(attractionIds: string[]): Promise<Set<string>> {
+    if (attractionIds.length === 0) return new Set();
+    const rows = await this.profiles.find({
+      where: { attractionId: In(attractionIds) },
+      select: { attractionId: true },
+    });
+    return new Set(rows.map((row) => row.attractionId));
   }
 
   async upsert(

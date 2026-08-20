@@ -17,7 +17,7 @@ import { Throttle } from "@nestjs/throttler";
 import { AdminAuthService, toPublicUser } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
-import { AdminAuthGuard } from "./admin-auth.guard";
+import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import {
   AdminAllowPendingPassword,
   AdminMinRole,
@@ -30,6 +30,7 @@ import {
   AdminCreateUserDto,
   AdminLoginDto,
   AdminResetPasswordDto,
+  AdminTotpBeginDto,
   AdminTotpConfirmDto,
   AdminTotpDisableDto,
   AdminUpdateUserDto,
@@ -116,6 +117,7 @@ export class AdminAuthController {
         legacy: false,
         ip: clientIp(request),
         mustChangePassword: result.session.mustChangePassword,
+        mustEnrolTotp: result.session.mustEnrolTotp === true,
       },
       action: "auth.login",
       entityType: "admin_user",
@@ -133,6 +135,7 @@ export class AdminAuthController {
         displayName: result.session.displayName,
         role: result.session.role,
         mustChangePassword: result.session.mustChangePassword,
+        mustEnrolTotp: result.session.mustEnrolTotp === true,
       },
     };
   }
@@ -162,12 +165,17 @@ export class AdminAuthController {
         role: admin.role,
         legacy: true,
         mustChangePassword: false,
+        mustEnrolTotp: false,
         totpEnabled: false,
       };
     }
     const user = admin.userId ? await this.auth.findById(admin.userId) : null;
     if (!user) throw new UnauthorizedException("Session no longer valid");
-    return { ...toPublicUser(user), legacy: false };
+    return {
+      ...toPublicUser(user),
+      legacy: false,
+      mustEnrolTotp: admin.mustEnrolTotp,
+    };
   }
 
   @Post("change-password")
@@ -258,20 +266,29 @@ export class AdminAuthController {
   // ── two-factor ────────────────────────────────────────────────────────────
 
   @Post("totp/begin")
+  @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({
     summary: "Start two-factor enrolment",
     description:
-      "Returns the secret and its otpauth:// URI. Two-factor stays OFF until " +
-      "a code from the app confirms the secret arrived intact.",
+      "Returns the secret and its otpauth:// URI. Needs the account password: " +
+      "a stolen session must not be able to enrol an attacker's authenticator, " +
+      "which — since only an owner can clear the flag — would be a lockout. " +
+      "Two-factor stays OFF until a code from the app confirms the secret " +
+      "arrived intact.",
   })
-  async beginTotp(@CurrentAdmin() admin: AdminPrincipal) {
+  async beginTotp(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Body() body: AdminTotpBeginDto,
+  ) {
     if (!admin.userId)
       throw new UnauthorizedException("No account behind this session");
-    return this.auth.beginTotpEnrolment(admin.userId);
+    return this.auth.beginTotpEnrolment(admin.userId, body.password);
   }
 
   @Post("totp/confirm")
+  @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Confirm and enable two-factor" })
   async confirmTotp(
@@ -379,6 +396,33 @@ export class AdminAuthController {
     return user;
   }
 
+  @Post("users/:id/reset-totp")
+  @AdminMinRole("owner")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Clear another account's second factor",
+    description:
+      "The recovery path. A lost or wiped phone otherwise leaves its account " +
+      "answering `totp-required` forever — `totp/disable` needs a code, and " +
+      "nothing else touched the flag. Ends every session of that account too: " +
+      "if the factor is being cleared because a device is gone, so is any " +
+      "session on it.",
+  })
+  async resetTotp(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+  ): Promise<void> {
+    await this.auth.clearTotp(id);
+    const user = await this.auth.findById(id);
+    await this.audit.record({
+      actor: admin,
+      action: "user.reset-totp",
+      entityType: "admin_user",
+      entityId: id,
+      entityLabel: user?.email ?? id,
+    });
+  }
+
   @Post("users/:id/reset-password")
   @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
@@ -404,14 +448,4 @@ export class AdminAuthController {
     });
     return result;
   }
-}
-
-function clientIp(request: RequestWithAdmin): string | null {
-  const cf = request.headers?.["cf-connecting-ip"];
-  if (typeof cf === "string" && cf) return cf;
-  const forwarded = request.headers?.["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded) {
-    return forwarded.split(",")[0].trim();
-  }
-  return request.ip ?? null;
 }

@@ -118,6 +118,22 @@ describe("AdminSessionStore", () => {
     expect(await store.listForUser("user-1")).toHaveLength(0);
   });
 
+  it("refuses a short id that is not exactly twelve characters", async () => {
+    // A prefix match meant `DELETE …/sessions/a` revoked whichever session's
+    // hash happened to start with `a` first — possibly the current one — and
+    // answered 204 without saying which.
+    const { token } = await store.create(baseSession);
+    const [listed] = await store.listForUser("user-1", token);
+
+    expect(await store.destroyByShortId("user-1", listed.id.slice(0, 1))).toBe(
+      false,
+    );
+    expect(await store.destroyByShortId("user-1", `${listed.id}extra`)).toBe(
+      false,
+    );
+    expect(await store.resolve(token)).not.toBeNull();
+  });
+
   it("revokes one session by its short id", async () => {
     const a = await store.create(baseSession);
     const b = await store.create(baseSession);

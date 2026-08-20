@@ -9,7 +9,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { Redis } from "ioredis";
-import { IsNull, Repository } from "typeorm";
+import { IsNull, Not, Repository } from "typeorm";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
@@ -127,6 +127,25 @@ export class AdminCurationService {
     // empty edits and bury the real ones.
     if (changed.length === 0) {
       return { entity: attraction, changed: [], auditId: null };
+    }
+
+    // One RCDB id must never sit on two attractions. Nothing in the database
+    // enforces it, and the consequence is not cosmetic: the ride page links to
+    // a different ride, and RideStatsService joins Wikidata on this id and
+    // hands both rows the same height, speed and length. Two rides already did
+    // this once, from a name-based match across parks holding a ride of the
+    // same name.
+    if (changed.includes("rcdbId") && attraction.rcdbId !== null) {
+      const clash = await this.attractions.findOne({
+        where: { rcdbId: attraction.rcdbId, id: Not(attraction.id) },
+        relations: ["park"],
+      });
+      if (clash) {
+        throw new BadRequestException(
+          `RCDB id ${attraction.rcdbId} already belongs to "${clash.name}"` +
+            `${clash.park ? ` (${clash.park.name})` : ""}. One id points at one ride.`,
+        );
+      }
     }
 
     await this.attractions.save(attraction);
@@ -250,6 +269,35 @@ export class AdminCurationService {
       throw new BadRequestException("That entry names no entity to undo");
     }
 
+    // Refuse to undo a change something else has already changed again.
+    //
+    // Without this, undoing an older entry silently discards every correction
+    // made since: editor A sets a height null→120, editor B corrects it
+    // 120→140, somebody undoes A's entry and the column becomes null — B's work
+    // gone, B's entry still standing in the log as though it were current. The
+    // check is "is the field still where this entry left it", which is exactly
+    // the question an undo is entitled to assume.
+    const current = (entry.entityType === "attraction"
+      ? await this.findAttraction(entry.entityId)
+      : await this.findPark(entry.entityId)) as unknown as Record<
+      string,
+      unknown
+    >;
+
+    const drifted = Object.entries(entry.after ?? {}).filter(
+      ([key, value]) =>
+        JSON.stringify(current[key] ?? null) !== JSON.stringify(value ?? null),
+    );
+    if (drifted.length > 0) {
+      throw new BadRequestException(
+        `This change has been overwritten since — ${drifted
+          .map(([key]) => key)
+          .join(
+            ", ",
+          )} no longer holds the value it set. Undo the newer change first.`,
+      );
+    }
+
     const patch: CurationPatch = {
       fields: entry.before,
       reason: `Undo of ${entry.action} from ${entry.createdAt.toISOString()}`,
@@ -296,7 +344,19 @@ export class AdminCurationService {
   }
 
   private coerce(spec: CuratedFieldSpec, raw: unknown): unknown {
-    if (raw === null || raw === undefined) return null;
+    // Clearing a field writes what "nothing decided" is for that column — null
+    // for almost all of them, `false` for `open_with_park`, which is NOT NULL.
+    // Writing null there is an UPDATE the database rejects, and the editor
+    // offers to clear it because the stored `false` looked like a correction.
+    const unset = spec.defaultValue ?? null;
+    if (raw === null || raw === undefined) return unset;
+
+    // An emptied numeric input is "no correction", not zero — and on a curated
+    // height, zero is a positive claim that the ride has no minimum at all.
+    // The admin sends null, but curl and any future client will send "".
+    if (raw === "" && (spec.type === "number" || spec.type === "months")) {
+      return unset;
+    }
 
     switch (spec.type) {
       case "text":
@@ -306,7 +366,7 @@ export class AdminCurationService {
         }
         const trimmed = raw.trim();
         // An emptied input clears the correction rather than storing "".
-        return trimmed.length === 0 ? null : trimmed;
+        return trimmed.length === 0 ? unset : trimmed;
       }
 
       case "enum": {
@@ -314,7 +374,7 @@ export class AdminCurationService {
           throw new BadRequestException(`${spec.label} must be text`);
         }
         const trimmed = raw.trim();
-        if (trimmed.length === 0) return null;
+        if (trimmed.length === 0) return unset;
         if (spec.options && !spec.options.includes(trimmed)) {
           throw new BadRequestException(
             `${spec.label} must be one of: ${spec.options.join(", ")}`,
@@ -359,7 +419,7 @@ export class AdminCurationService {
         }
         // An empty list would say "operates in no month at all", which is what
         // retirement is for. It clears the correction instead.
-        if (raw.length === 0) return null;
+        if (raw.length === 0) return unset;
         const months = raw.map((entry) =>
           typeof entry === "string" ? Number(entry) : entry,
         );

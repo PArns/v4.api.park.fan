@@ -56,7 +56,7 @@ export class ParkSeasonsController {
     parkId: string;
     from: string;
     to: string;
-    seasons: ParkSeason[];
+    seasons: PublicParkSeason[];
   }> {
     const park = await this.parks.findOne({
       where: { continentSlug, countrySlug, citySlug, slug },
@@ -80,9 +80,64 @@ export class ParkSeasonsController {
       parkId: park.id,
       from: rangeFrom,
       to: rangeTo,
-      seasons: await this.seasons.forParkInRange(park.id, rangeFrom, rangeTo),
+      seasons: (
+        await this.seasons.forParkInRange(park.id, rangeFrom, rangeTo)
+      ).map(toPublicSeason),
     };
   }
+}
+
+/**
+ * A season as a visitor may see it.
+ *
+ * Mapped rather than returned raw, and the two fields that go are the reason.
+ * `updatedBy` is an admin account's uuid — the same identifier the admin API
+ * filters audit rows by — and returning it from an unauthenticated endpoint
+ * correlates every season on the site to a specific administrator. `note` is
+ * the editor's own working note ("their site only publishes this as a PDF"),
+ * written for the next curator and not for the public.
+ *
+ * Everything else is exactly what a season is for.
+ */
+export interface PublicParkSeason {
+  id: string;
+  kind: string;
+  name: string | null;
+  startDate: string;
+  endDate: string;
+  dates: string[] | null;
+  status: string;
+  separateTicket: boolean;
+  priceFrom: string | null;
+  priceCurrency: string | null;
+  opensAt: string | null;
+  closesAt: string | null;
+  attractionIds: string[] | null;
+  url: string | null;
+  sourceUrl: string | null;
+  /** When this was last checked against the source, so a page can say "as of". */
+  confirmedAt: string | null;
+}
+
+function toPublicSeason(season: ParkSeason): PublicParkSeason {
+  return {
+    id: season.id,
+    kind: season.kind,
+    name: season.name,
+    startDate: season.startDate,
+    endDate: season.endDate,
+    dates: season.dates,
+    status: season.status,
+    separateTicket: season.separateTicket,
+    priceFrom: season.priceFrom,
+    priceCurrency: season.priceCurrency,
+    opensAt: season.opensAt,
+    closesAt: season.closesAt,
+    attractionIds: season.attractionIds,
+    url: season.url,
+    sourceUrl: season.sourceUrl,
+    confirmedAt: season.confirmedAt ? season.confirmedAt.toISOString() : null,
+  };
 }
 
 function isDate(value: string | undefined): value is string {

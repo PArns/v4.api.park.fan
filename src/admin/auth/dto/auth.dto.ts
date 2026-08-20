@@ -104,6 +104,18 @@ export class AdminResetPasswordDto {
   newPassword: string;
 }
 
+export class AdminTotpBeginDto {
+  @ApiProperty({
+    description:
+      "The account password. Enrolment needs it for the same reason disabling " +
+      "does — a stolen session must not be able to put its own authenticator " +
+      "on somebody else's account.",
+  })
+  @IsString()
+  @MaxLength(256)
+  password: string;
+}
+
 export class AdminTotpConfirmDto {
   @ApiProperty({ example: "492013" })
   @IsString()

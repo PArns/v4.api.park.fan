@@ -610,6 +610,9 @@ export class SearchService implements OnModuleInit {
           "park.id",
           "park.slug",
           "park.name",
+          // Selected because the mapper resolves it — a projection without it
+          // makes the resolution a silent no-op.
+          "park.curatedName",
           "park.latitude",
           "park.longitude",
           "park.continentSlug",
@@ -724,10 +727,19 @@ export class SearchService implements OnModuleInit {
           "attraction.id",
           "attraction.slug",
           "attraction.name",
+          // Selected because the mappers below resolve them. A projection that
+          // omits a curated column turns its resolver into a no-op that
+          // reports nothing.
+          "attraction.curatedName",
           "attraction.landName",
+          "attraction.curatedLandName",
+          "attraction.curatedAttractionType",
+          "attraction.curatedIsSeasonal",
+          "attraction.curatedSeasonMonths",
           "park.id",
           "park.slug",
           "park.name",
+          "park.curatedName",
           "park.latitude",
           "park.longitude",
           "park.continentSlug",
@@ -832,6 +844,11 @@ export class SearchService implements OnModuleInit {
         "park.id",
         "park.slug",
         "park.name",
+        // Selected because `mapParkForIndex` resolves it. Left off, the
+        // resolver reads `undefined` and quietly serves the upstream name —
+        // so a show hit and a park hit in the same result list would disagree
+        // about what the park is called.
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",
@@ -921,6 +938,11 @@ export class SearchService implements OnModuleInit {
         "park.id",
         "park.slug",
         "park.name",
+        // Selected because `mapParkForIndex` resolves it. Left off, the
+        // resolver reads `undefined` and quietly serves the upstream name —
+        // so a show hit and a park hit in the same result list would disagree
+        // about what the park is called.
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",
@@ -1130,7 +1152,7 @@ export class SearchService implements OnModuleInit {
     return parks.map((park) => ({
       type: "park" as const,
       id: park.id,
-      name: park.name,
+      name: resolveCuratedPark(park).name,
       slug: park.slug,
       url: buildParkUrl(park),
       latitude: park.latitude ? Number(park.latitude) : null,
@@ -1278,7 +1300,7 @@ export class SearchService implements OnModuleInit {
       return {
         type: "attraction" as const,
         id: attraction.id,
-        name: attraction.name,
+        name: resolveCuratedFacts(attraction).name,
         slug: cleanSlugSuffix(attraction.slug),
         url: attraction.park
           ? buildAttractionUrl(attraction.park, {
@@ -1308,7 +1330,7 @@ export class SearchService implements OnModuleInit {
         parentPark: attraction.park
           ? {
               id: attraction.park.id,
-              name: attraction.park.name,
+              name: resolveCuratedPark(attraction.park).name,
               slug: attraction.park.slug,
               url: buildParkUrl(attraction.park),
             }
@@ -1380,8 +1402,10 @@ export class SearchService implements OnModuleInit {
         showTimes: isParkOpen ? showTimesMap.get(show.id) || null : null,
         parentPark: show.park
           ? {
+              // Resolved, so a show hit and a park hit in the same result list
+              // agree about what the park is called.
+              name: resolveCuratedPark(show.park).name,
               id: show.park.id,
-              name: show.park.name,
               slug: show.park.slug,
               url: buildParkUrl(show.park),
             }
@@ -1434,8 +1458,8 @@ export class SearchService implements OnModuleInit {
       resort: restaurant.park?.destination?.name || null,
       parentPark: restaurant.park
         ? {
+            name: resolveCuratedPark(restaurant.park).name,
             id: restaurant.park.id,
-            name: restaurant.park.name,
             slug: restaurant.park.slug,
             url: buildParkUrl(restaurant.park),
           }
@@ -1929,6 +1953,11 @@ export class SearchService implements OnModuleInit {
         "park.id",
         "park.slug",
         "park.name",
+        // Selected because `mapParkForIndex` resolves it. Left off, the
+        // resolver reads `undefined` and quietly serves the upstream name —
+        // so a show hit and a park hit in the same result list would disagree
+        // about what the park is called.
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",
@@ -1962,6 +1991,11 @@ export class SearchService implements OnModuleInit {
         "park.id",
         "park.slug",
         "park.name",
+        // Selected because `mapParkForIndex` resolves it. Left off, the
+        // resolver reads `undefined` and quietly serves the upstream name —
+        // so a show hit and a park hit in the same result list would disagree
+        // about what the park is called.
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",

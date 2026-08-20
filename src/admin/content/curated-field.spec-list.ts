@@ -39,6 +39,18 @@ export interface CuratedFieldSpec {
   max?: number;
   /** Shown under the input. Say what the field means, not how to type it. */
   hint?: string;
+  /**
+   * What the column holds when nobody has decided anything.
+   *
+   * `null` for almost everything — a curated column is empty until somebody
+   * fills it. `open_with_park` is the exception and the reason this exists: it
+   * is `boolean NOT NULL DEFAULT false`, so "not set" is `false`, not null.
+   * Two things follow, and both were wrong before this field existed. Clearing
+   * the input must write `false` rather than null, or the UPDATE violates the
+   * constraint. And a stored `false` must NOT count as an override, or every
+   * ride in the catalogue shows a "curated" badge it never earned.
+   */
+  defaultValue?: unknown;
 }
 
 export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
@@ -146,6 +158,8 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     syncedKey: null,
     resolvedKey: "openWithPark",
     group: "Facilities",
+    // NOT NULL with a default of false — see `defaultValue`.
+    defaultValue: false,
     hint:
       "Free-flow attractions — playgrounds, splash pads — that have no queue " +
       "and are accessible whenever the park is open.",
@@ -222,6 +236,12 @@ export interface CuratedFieldView {
   overridden: boolean;
   /** True when there is no sync behind this field at all. */
   humanOnly: boolean;
+  /**
+   * What "nothing decided" looks like for this field — null for almost
+   * everything, `false` for the one NOT NULL column. The editor needs it to
+   * know what clearing an input should write.
+   */
+  defaultValue: unknown;
   options?: readonly string[];
   unit?: string;
   min?: number;
@@ -247,6 +267,8 @@ function buildViews(
       ? readKey(resolved, spec.resolvedKey)
       : curatedValue;
 
+    const unset = spec.defaultValue ?? null;
+
     return {
       key: spec.key,
       label: spec.label,
@@ -255,12 +277,19 @@ function buildViews(
       syncedValue,
       curatedValue,
       resolvedValue,
-      // A curated value equal to the synced one is not an override — it is
-      // somebody having typed what was already true, and marking it as a
+      defaultValue: unset,
+      // Compared against what "nothing decided" looks like, not against null.
+      // For a NOT NULL column that is `false`, and comparing against null
+      // instead put a "curated" badge on every attraction in the catalogue —
+      // `open_with_park` is false on all of them.
+      //
+      // A curated value equal to the synced one is not an override either: it
+      // is somebody having typed what was already true, and marking it as a
       // correction would put a badge on a row nobody changed.
       overridden:
         curatedValue !== null &&
         curatedValue !== undefined &&
+        JSON.stringify(curatedValue) !== JSON.stringify(unset) &&
         JSON.stringify(curatedValue) !== JSON.stringify(syncedValue),
       humanOnly: spec.syncedKey === null,
       ...(spec.options ? { options: spec.options } : {}),

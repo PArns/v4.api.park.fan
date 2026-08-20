@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { timingSafeEqual } from "crypto";
+import { isIP } from "net";
 import { AdminSessionStore } from "./admin-session.store";
 import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
 import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
@@ -82,14 +83,16 @@ export class AdminAuthGuard implements CanActivate {
       );
     }
 
-    if (principal.mustChangePassword) {
+    if (principal.mustChangePassword || principal.mustEnrolTotp) {
       const allowed = this.reflector.getAllAndOverride<boolean>(
         ADMIN_ALLOW_PENDING_PASSWORD_KEY,
         targets,
       );
       if (!allowed) {
         throw new ForbiddenException(
-          "This account must choose a new password before it can do anything else",
+          principal.mustChangePassword
+            ? "This account must choose a new password before it can do anything else"
+            : "This deployment requires two-factor: enrol before doing anything else",
         );
       }
     }
@@ -120,6 +123,7 @@ export class AdminAuthGuard implements CanActivate {
       legacy: false,
       ip: clientIp(request),
       mustChangePassword: session.mustChangePassword,
+      mustEnrolTotp: session.mustEnrolTotp === true,
     };
   }
 
@@ -141,8 +145,14 @@ export class AdminAuthGuard implements CanActivate {
     const now = Date.now();
     if (now - this.legacyUseWarnedAt > 60_000) {
       this.legacyUseWarnedAt = now;
+      // The path WITHOUT its query string. `originalUrl` carries `?pass=…`,
+      // and this line was writing the shared admin secret into the application
+      // log in cleartext on every scripted call — readable by everyone with
+      // access to the container logs, which is a far wider group than the
+      // people who hold the secret.
+      const path = (request.originalUrl ?? request.url ?? "?").split("?")[0];
       this.logger.warn(
-        `⚠️  Deprecated shared admin pass used for ${request.method} ${request.originalUrl ?? request.url ?? "?"} — migrate the caller to a session token`,
+        `⚠️  Deprecated shared admin pass used for ${request.method} ${path} — migrate the caller to a session token`,
       );
     }
 
@@ -155,6 +165,7 @@ export class AdminAuthGuard implements CanActivate {
       legacy: true,
       ip: clientIp(request),
       mustChangePassword: false,
+      mustEnrolTotp: false,
     };
   }
 }
@@ -177,15 +188,25 @@ function constantTimeEquals(a: string, b: string): boolean {
 
 /**
  * The requesting address, preferring Cloudflare's header — same order as
- * CfThrottlerGuard, so the address in an audit row and the address a rate
- * limit was counted against are the same one.
+ * CfThrottlerGuard, and validated the same way for the same reason.
+ *
+ * Both headers are forgeable by anything reaching the origin directly, so an
+ * unvalidated value lets a caller send a fresh garbage "address" per request:
+ * every login failure then lands in its own rate-limit bucket, the per-address
+ * limiter never fires, and each attempt leaves a Redis key alive for fifteen
+ * minutes. Requiring a syntactically valid IP closes both — a forged but valid
+ * address is still one of ~4 billion, not unbounded.
  */
-function clientIp(request: RequestWithAdmin): string | null {
+export function clientIp(request: RequestWithAdmin): string | null {
   const cf = request.headers?.["cf-connecting-ip"];
-  if (typeof cf === "string" && cf) return cf;
+  if (typeof cf === "string" && isIP(cf)) return cf;
+
   const forwarded = request.headers?.["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded) {
-    return forwarded.split(",")[0].trim();
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    const first = forwarded.split(",")[0].trim();
+    if (isIP(first)) return first;
   }
-  return request.ip ?? null;
+
+  const direct = request.ip;
+  return typeof direct === "string" && isIP(direct) ? direct : null;
 }

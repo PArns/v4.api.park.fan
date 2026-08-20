@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Not, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { isIP } from "net";
 import {
@@ -233,17 +233,43 @@ export class AdminAuthService implements OnModuleInit {
       throw new UnauthorizedException("Invalid credentials");
     }
 
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      const retryAfterSeconds = Math.ceil(
-        (user.lockedUntil.getTime() - Date.now()) / 1000,
-      );
-      return { outcome: "locked", retryAfterSeconds };
-    }
+    const lockedUntil = user.lockedUntil?.getTime() ?? 0;
+    const locked = lockedUntil > Date.now();
 
+    // The password is verified even while locked, and the lockout is reported
+    // only to somebody who got it right. Answering "locked" before checking
+    // made the endpoint an account-existence oracle: eight wrong guesses at an
+    // address that HAS an account produce a distinctive ninth answer, while an
+    // address that has none produces nine identical 401s. Verifying first
+    // costs the attacker ~100 ms of scrypt per probe and tells them nothing.
     const passwordOk = await verifyPassword(
       request.password ?? "",
       user.passwordHash,
     );
+
+    if (locked) {
+      if (!passwordOk) {
+        await this.loginLimiter.recordFailure(request.ip ?? null, email);
+        throw new UnauthorizedException("Invalid credentials");
+      }
+      return {
+        outcome: "locked",
+        retryAfterSeconds: Math.ceil((lockedUntil - Date.now()) / 1000),
+      };
+    }
+
+    // A lockout that has expired must take its counter with it. Leaving the
+    // count at the threshold meant the next single wrong password re-locked the
+    // account immediately — one bad guess every fifteen minutes, 96 a day, and
+    // the account is shut forever with neither rate-limit bucket ever firing.
+    if (lockedUntil > 0 && !locked && user.failedLoginCount > 0) {
+      user.failedLoginCount = 0;
+      user.lockedUntil = null;
+      await this.users.update(
+        { id: user.id },
+        { failedLoginCount: 0, lockedUntil: null },
+      );
+    }
 
     if (!passwordOk) {
       await this.recordFailedLogin(user);
@@ -259,6 +285,16 @@ export class AdminAuthService implements OnModuleInit {
       await this.loginLimiter.recordFailure(request.ip ?? null, email);
       throw new UnauthorizedException("Invalid credentials");
     }
+
+    // Mandatory two-factor, enforced where it has to be: at the login. It used
+    // to gate only the "turn it off again" endpoint, which means an operator
+    // could set ADMIN_REQUIRE_TOTP=true, reasonably conclude two-factor was
+    // mandatory, and have every account that never enrolled keep signing in
+    // with a password alone. The session is still issued — refusing it outright
+    // would lock out the very accounts that need to enrol — but it carries the
+    // debt, and the guard lets such a session reach only the enrolment
+    // endpoints, exactly like a pending password change.
+    const owesEnrolment = isTotpRequired() && !user.totpEnabled;
 
     if (user.totpEnabled) {
       if (!request.totpCode) return { outcome: "totp-required" };
@@ -305,6 +341,7 @@ export class AdminAuthService implements OnModuleInit {
       ip,
       userAgent: request.userAgent?.slice(0, 300) ?? null,
       mustChangePassword: user.mustChangePassword,
+      mustEnrolTotp: owesEnrolment,
     });
 
     return { outcome: "ok", token: issued.token, session: issued.session };
@@ -402,25 +439,38 @@ export class AdminAuthService implements OnModuleInit {
     const losingOwner =
       user.role === "owner" &&
       ((patch.role && patch.role !== "owner") || patch.isActive === false);
-    if (losingOwner) {
-      const otherOwners = await this.users.count({
-        where: { role: "owner", isActive: true, id: Not(user.id) },
-      });
-      if (otherOwners === 0) {
-        throw new BadRequestException(
-          "This is the last active owner — promote another account first",
-        );
-      }
-    }
 
-    Object.assign(user, {
+    const changes = {
       ...(patch.displayName !== undefined
         ? { displayName: patch.displayName.trim() }
         : {}),
       ...(patch.role !== undefined ? { role: patch.role } : {}),
       ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
-    });
-    const saved = await this.users.save(user);
+    };
+
+    // Counted and written in one transaction, with the other owners locked for
+    // its duration. As a plain read-then-write, two requests demoting the two
+    // remaining owners in the same tick both see one other owner, both pass,
+    // and the deployment ends with none — every owner-only endpoint unreachable
+    // and no way back through the API.
+    const saved = losingOwner
+      ? await this.users.manager.transaction(async (manager) => {
+          const otherOwners = await manager
+            .createQueryBuilder(AdminUser, "u")
+            .setLock("pessimistic_write")
+            .where("u.role = :role", { role: "owner" })
+            .andWhere("u.is_active = true")
+            .andWhere("u.id != :id", { id: user.id })
+            .getCount();
+          if (otherOwners === 0) {
+            throw new BadRequestException(
+              "This is the last active owner — promote another account first",
+            );
+          }
+          Object.assign(user, changes);
+          return manager.save(user);
+        })
+      : await this.users.save(Object.assign(user, changes));
 
     if (patch.isActive === false) {
       await this.sessions.destroyAllForUser(id);
@@ -532,6 +582,28 @@ export class AdminAuthService implements OnModuleInit {
     return { mustChangePassword: true };
   }
 
+  /**
+   * An owner clears another account's second factor.
+   *
+   * The recovery path, and there has to be one. A phone that is lost or wiped
+   * leaves its account answering `totp-required` on every attempt forever:
+   * `totp/disable` cannot be reached without a code, `reset-password` does not
+   * touch the flag, and nothing else did either. On a deployment with one owner
+   * that is the whole admin surface, permanently.
+   *
+   * Every session of the account goes with it — if the second factor is being
+   * cleared because a device is gone, any session on that device is gone too.
+   */
+  async clearTotp(id: string): Promise<void> {
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException("No such account");
+    await this.users.update(
+      { id },
+      { totpEnabled: false, totpSecret: null, totpLastStep: null },
+    );
+    await this.sessions.destroyAllForUser(id);
+  }
+
   // ── TOTP enrolment ────────────────────────────────────────────────────────
 
   /**
@@ -543,11 +615,22 @@ export class AdminAuthService implements OnModuleInit {
    */
   async beginTotpEnrolment(
     userId: string,
+    password: string,
   ): Promise<{ secret: string; uri: string }> {
-    const user = await this.users.findOne({ where: { id: userId } });
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: { id: true, email: true, passwordHash: true, totpEnabled: true },
+    });
     if (!user) throw new NotFoundException("No such account");
     if (user.totpEnabled) {
       throw new BadRequestException("Two-factor is already enabled");
+    }
+    // The password, for the same reason disabling needs one. Without it a
+    // stolen session could enrol the attacker's own authenticator on the
+    // victim's account — and since only an owner can clear the flag, that is a
+    // lockout, not an inconvenience.
+    if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      throw new UnauthorizedException("Password is incorrect");
     }
 
     const secret = generateTotpSecret();
@@ -577,6 +660,13 @@ export class AdminAuthService implements OnModuleInit {
       { id: userId },
       { totpEnabled: true, totpLastStep: String(check.step ?? totpStep()) },
     );
+
+    // Clear the enrolment debt on the sessions that are already open. Without
+    // this, an account signing in under ADMIN_REQUIRE_TOTP would enrol and then
+    // still be refused everything, because the session it enrolled with still
+    // says it owes one — it would have to sign out and back in to use the admin
+    // it just unlocked.
+    await this.sessions.patchUserSessions(userId, { mustEnrolTotp: false });
   }
 
   /**

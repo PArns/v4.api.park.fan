@@ -237,6 +237,14 @@ export class DiscoveryService {
         "citySlug",
         "latitude",
         "longitude",
+        // The curated columns have to be on every projection that later calls
+        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
+        // back to the synced name and reports nothing — and this particular
+        // projection is cached for 24 hours, so the silent no-op would outlive
+        // several curation sessions.
+        "curatedName",
+        "curatedParkType",
+        "curatedNoWaitTimesReason",
       ],
       order: {
         continent: "ASC",
@@ -693,6 +701,9 @@ export class DiscoveryService {
         "citySlug",
         "continentSlug",
         "countrySlug",
+        // See the note on the geo-structure projection: a resolver handed a
+        // row without these columns quietly reports the upstream name.
+        "curatedName",
       ],
     });
 

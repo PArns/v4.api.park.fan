@@ -21,6 +21,7 @@ const ACTOR: AdminPrincipal = {
   legacy: false,
   ip: null,
   mustChangePassword: false,
+  mustEnrolTotp: false,
 };
 
 function build(
@@ -91,6 +92,7 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     mayGetWet: null,
     curatedMayGetWet: null,
     hasSingleRider: null,
+    openWithPark: false,
     rcdbId: null,
     ...overrides,
   };
@@ -332,6 +334,106 @@ describe("AdminCurationService", () => {
     });
   });
 
+  describe("clearing a field", () => {
+    it("writes the column default, not null, for a NOT NULL column", async () => {
+      // `open_with_park` is `boolean NOT NULL DEFAULT false`. Writing null
+      // there is an UPDATE Postgres rejects, and the editor offered to clear it
+      // because a stored `false` looked like a correction.
+      const attraction = anAttraction({ openWithPark: true });
+      const { service, attractions } = build(attraction);
+
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { openWithPark: null } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.openWithPark).toBe(false);
+    });
+
+    it("writes null for a nullable column", async () => {
+      const attraction = anAttraction({ curatedName: "TARON" });
+      const { service, attractions } = build(attraction);
+
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedName: null } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedName).toBeNull();
+    });
+
+    it("reads an emptied numeric input as 'no correction', not as zero", async () => {
+      // A client that serialises an emptied field as "" — curl, a script —
+      // means to withdraw the correction. Stored as 0 it becomes the opposite:
+      // a positive claim that the ride has no minimum height.
+      const attraction = anAttraction({ curatedMinimumHeight: 120 });
+      const { service, attractions } = build(attraction);
+
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedMinimumHeight: "" } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedMinimumHeight).toBeNull();
+    });
+  });
+
+  describe("rcdbId", () => {
+    it("refuses an id that already belongs to another ride", async () => {
+      // One id must never sit on two attractions: the ride page would link to
+      // a different ride, and the Wikidata import joins on it and would hand
+      // both rows the same measurements.
+      const { service, attractions } = build(anAttraction());
+      attractions.findOne = jest.fn(async (options: unknown) => {
+        const where =
+          (options as { where?: Record<string, unknown> }).where ?? {};
+        // The clash lookup asks by rcdbId; the entity lookup asks by id.
+        if ("rcdbId" in where) {
+          return {
+            id: "ride-2",
+            name: "Black Mamba",
+            park: { name: "Phantasialand" },
+          };
+        }
+        return anAttraction();
+      }) as never;
+
+      await expect(
+        service.curateAttraction("ride-1", { fields: { rcdbId: 4489 } }, ACTOR),
+      ).rejects.toThrow(/already belongs to "Black Mamba"/);
+    });
+
+    it("accepts an id nothing else holds", async () => {
+      const { service, attractions } = build(anAttraction());
+      const original = attractions.findOne;
+      attractions.findOne = jest.fn(async (options: unknown) => {
+        const where =
+          (options as { where?: Record<string, unknown> }).where ?? {};
+        if ("rcdbId" in where) return null;
+        return (original as unknown as () => Promise<unknown>)();
+      }) as never;
+
+      await expect(
+        service.curateAttraction("ride-1", { fields: { rcdbId: 4489 } }, ACTOR),
+      ).resolves.toMatchObject({ changed: ["rcdbId"] });
+    });
+  });
+
   describe("undo", () => {
     it("puts the previous value back and marks the original reverted", async () => {
       const attraction = anAttraction({ curatedName: "TARON" });
@@ -355,6 +457,29 @@ describe("AdminCurationService", () => {
       >;
       expect(saved.curatedName).toBeNull();
       expect(audit.markReverted).toHaveBeenCalledWith("audit-0", "audit-1");
+    });
+
+    it("refuses to undo a change something else has already changed again", async () => {
+      // Editor A sets a height null→120, editor B corrects it 120→140. Undoing
+      // A's entry without this check writes null and silently discards B's
+      // work, leaving B's entry standing in the log as though it were current.
+      const attraction = anAttraction({ curatedMinimumHeight: 140 });
+      const { service, audit, attractions } = build(attraction);
+      audit.findOne = jest.fn(async (): Promise<unknown> => ({
+        id: "audit-A",
+        entityType: "attraction",
+        entityId: "ride-1",
+        action: "attraction.curate",
+        before: { curatedMinimumHeight: null },
+        after: { curatedMinimumHeight: 120 },
+        revertedBy: null,
+        createdAt: new Date("2026-08-20T10:00:00Z"),
+      }));
+
+      await expect(service.revert("audit-A", ACTOR)).rejects.toThrow(
+        /overwritten since/,
+      );
+      expect(attractions.save).not.toHaveBeenCalled();
     });
 
     it("refuses to undo the same change twice", async () => {
