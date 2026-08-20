@@ -180,7 +180,7 @@ export class AdminAuthGuard implements CanActivate {
       userId: null,
       email: "legacy-pass",
       displayName: "Legacy shared pass",
-      role: getLegacyAdminPassRole() as AdminRole,
+      role: getLegacyAdminPassRole(),
       sessionToken: null,
       legacy: true,
       ip: clientIp(request),
@@ -203,8 +203,16 @@ function isFromTrustedProxy(request: RequestWithAdmin): boolean {
   if (keys.length === 0) return false;
   const provided = request.headers?.[getThrottleBypassHeader()];
   const values = Array.isArray(provided) ? provided : [provided];
+  // Compared the same way as the shared pass below, and for the same reason:
+  // `keys.includes(value)` is JS string equality, which stops at the first
+  // differing byte. What this secret unlocks is not cosmetic — proving "this
+  // came through our own frontend" is what makes `clientIp` trust the caller's
+  // `x-forwarded-for`, and that address is the key every login rate-limit
+  // bucket is derived from.
   return values.some(
-    (value) => typeof value === "string" && keys.includes(value),
+    (value) =>
+      typeof value === "string" &&
+      keys.some((key) => constantTimeEquals(value, key)),
   );
 }
 

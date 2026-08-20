@@ -557,6 +557,12 @@ export class ParkMergeService {
         theirs !== undefined
       ) {
         (updates as Record<string, unknown>)[column] = theirs;
+        // Written onto the in-memory row as well as into the UPDATE. The
+        // caller still holds this object, and `logDroppedCuration` reads it
+        // just before the DELETE to say what is about to be lost — against a
+        // stale row it named every field that had just been inherited
+        // successfully, which is the one line that has to be trustworthy.
+        row[column] = theirs;
         inherited.push(column);
       }
     }

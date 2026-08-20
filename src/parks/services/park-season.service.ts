@@ -349,7 +349,7 @@ export class ParkSeasonService {
       // because an editor typed them.
       url: this.optionalUrl(input.url, "url"),
       sourceUrl: this.optionalUrl(input.sourceUrl, "sourceUrl"),
-      confirmedAt: input.confirmedAt ? new Date(input.confirmedAt) : null,
+      confirmedAt: this.optionalTimestamp(input.confirmedAt, "confirmedAt"),
       note: input.note?.trim() || null,
     };
   }
@@ -361,6 +361,29 @@ export class ParkSeasonService {
     const trimmed = value?.trim();
     if (!trimmed) return null;
     return parseHttpUrl(trimmed, field);
+  }
+
+  /**
+   * A timestamp an editor typed, or null.
+   *
+   * Parsed here rather than handed to `new Date()` at the call site: an
+   * unparseable string becomes an Invalid Date, which TypeORM sends to a
+   * `timestamptz` column and Postgres refuses — so a typo in one optional
+   * field answered 500 with nothing naming the field, while every other date
+   * on the same form answers 400 through `requireDate`.
+   */
+  private optionalTimestamp(
+    value: string | null | undefined,
+    field: string,
+  ): Date | null {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(
+        `${field} must be an ISO 8601 timestamp, e.g. 2026-08-20T09:00:00Z`,
+      );
+    }
+    return parsed;
   }
 
   private requireDate(value: string, field: string): string {

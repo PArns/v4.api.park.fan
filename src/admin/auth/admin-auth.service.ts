@@ -73,10 +73,28 @@ export function truncateIp(ip: string | null | undefined): string | null {
     return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
   }
   if (isIP(clean) === 6) {
-    const groups = clean.split(":");
-    return `${groups.slice(0, 3).join(":")}::/48`;
+    return `${expandIpv6(clean).slice(0, 3).join(":")}::/48`;
   }
   return null;
+}
+
+/**
+ * The eight hextets of an IPv6 address, with `::` written out.
+ *
+ * Needed because almost every real address is compressed, and slicing the
+ * first three groups off the compressed text does not give the first three
+ * hextets: `2001:db8::1` splits into `["2001","db8","","1"]`, so the naive
+ * version produced `2001:db8:::/48` — not a prefix, not comparable to the
+ * next login's, and stored as though it were.
+ */
+function expandIpv6(address: string): string[] {
+  const [head, tail] = address.split("::");
+  const headGroups = head ? head.split(":").filter(Boolean) : [];
+  if (tail === undefined) return headGroups;
+
+  const tailGroups = tail ? tail.split(":").filter(Boolean) : [];
+  const missing = Math.max(0, 8 - headGroups.length - tailGroups.length);
+  return [...headGroups, ...Array<string>(missing).fill("0"), ...tailGroups];
 }
 
 export function toPublicUser(user: AdminUser): PublicAdminUser {

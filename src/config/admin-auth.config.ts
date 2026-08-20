@@ -1,3 +1,9 @@
+import { Logger } from "@nestjs/common";
+import {
+  ADMIN_ROLES,
+  type AdminRole,
+} from "../admin/auth/entities/admin-user.entity";
+
 /**
  * Admin authentication config.
  *
@@ -40,10 +46,31 @@ export function isLegacyAdminPassEnabled(): boolean {
  * no exceptions — and quietly narrowing it would break the runbooks it exists
  * to keep working. Narrow it deliberately with `ADMIN_LEGACY_PASS_ROLE=editor`
  * once the destructive scripts have accounts of their own.
+ *
+ * A value that is not one of the four roles falls back to the default and says
+ * so. Passed through unchecked it reached `roleAtLeast` as an unknown key, so
+ * `ADMIN_ROLE_RANK[role] >= 0` compared `undefined` and every runbook call was
+ * refused with "this account is \"admin\"" — on endpoints with no role
+ * requirement at all, and with nothing at boot to point at the typo.
  */
-export function getLegacyAdminPassRole(): string {
-  return process.env.ADMIN_LEGACY_PASS_ROLE || "owner";
+export function getLegacyAdminPassRole(): AdminRole {
+  const configured = process.env.ADMIN_LEGACY_PASS_ROLE?.trim();
+  if (!configured) return "owner";
+  if ((ADMIN_ROLES as readonly string[]).includes(configured)) {
+    return configured as AdminRole;
+  }
+  if (!warnedAboutLegacyRole) {
+    warnedAboutLegacyRole = true;
+    new Logger("AdminAuthConfig").error(
+      `ADMIN_LEGACY_PASS_ROLE="${configured}" is not one of ${ADMIN_ROLES.join(
+        ", ",
+      )} — falling back to "owner"`,
+    );
+  }
+  return "owner";
 }
+
+let warnedAboutLegacyRole = false;
 
 /**
  * The first account, created on boot when the table is empty.
