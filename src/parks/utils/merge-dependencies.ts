@@ -155,6 +155,19 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
     strategy: "move",
     conflictColumns: ["slug"],
   },
+  {
+    // The same "curated, cascade-deleted, irreplaceable" case as the aliases
+    // above. Nothing syncs a season — every row is a person reading a park's
+    // own calendar — and the FK is ON DELETE CASCADE, so leaving it off this
+    // list means a merge deletes it inside the transaction and reports
+    // success. `park_id`, not `parkId`: the column name goes into raw SQL and
+    // this table has no camelCase one. No conflictColumns — the table has no
+    // unique key, and two overlapping seasons after a merge are a curation
+    // question, not a constraint violation.
+    table: "park_seasons",
+    column: "park_id",
+    strategy: "move",
+  },
   { table: "park_p90_baselines", column: "parkId", strategy: "discard" },
   {
     table: "weather_warnings",
@@ -179,6 +192,44 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
  */
 export function attractionTablesMissingFrom(known: string[]): string[] {
   const declared = new Set(ATTRACTION_DEPENDENCIES.map((d) => d.table));
+  return known.filter((table) => !declared.has(table)).sort();
+}
+
+/**
+ * Park-scoped tables `mergeParks` migrates by hand, before it reaches
+ * `PARK_DEPENDENCIES`.
+ *
+ * Listed here only so `parkTablesMissingFrom` can tell "handled elsewhere"
+ * apart from "forgotten". Keep it in step with steps 2-5 of `mergeParks`.
+ */
+export const PARK_TABLES_HANDLED_INLINE = [
+  "attractions",
+  "shows",
+  "restaurants",
+  "park_daily_stats",
+  "schedule_entries",
+  "park_p50_baselines",
+  "park_occupancy",
+  "headliner_attractions",
+  "weather_data",
+  "external_entity_mapping",
+] as const;
+
+/**
+ * Park-referencing tables nothing in the merge accounts for.
+ *
+ * The attraction side has had this guard from the start; the park side did not,
+ * which is how `park_seasons` — hand-written, cascade-deleted, reproducible
+ * from no feed — was destroyed by every merge without a log line. The point is
+ * not this one table but the next one: a new park-scoped entity fails the suite
+ * until somebody has decided whether it moves, is discarded, or is handled by
+ * hand.
+ */
+export function parkTablesMissingFrom(known: string[]): string[] {
+  const declared = new Set<string>([
+    ...PARK_DEPENDENCIES.map((d) => d.table),
+    ...PARK_TABLES_HANDLED_INLINE,
+  ]);
   return known.filter((table) => !declared.has(table)).sort();
 }
 

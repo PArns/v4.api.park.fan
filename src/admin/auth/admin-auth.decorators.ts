@@ -9,6 +9,7 @@ import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
 export const ADMIN_PUBLIC_KEY = "adminPublic";
 export const ADMIN_MIN_ROLE_KEY = "adminMinRole";
 export const ADMIN_ALLOW_PENDING_PASSWORD_KEY = "adminAllowPendingPassword";
+export const ADMIN_LEGACY_ALLOWED_KEY = "adminLegacyAllowed";
 
 /**
  * Marks an endpoint as reachable without a session — the login form, and
@@ -39,6 +40,28 @@ export const AdminMinRole = (
  */
 export const AdminAllowPendingPassword = (): MethodDecorator =>
   SetMetadata(ADMIN_ALLOW_PENDING_PASSWORD_KEY, true);
+
+/**
+ * Whether the deprecated shared pass may reach this endpoint.
+ *
+ * Three states, and the third is the point: unset means "no opinion", which is
+ * how every job and merge endpoint the runbooks call keeps working. `false` on
+ * a controller class refuses the shared pass for everything on it, and `true`
+ * on one handler brings that handler back — `getAllAndOverride` reads the
+ * handler before the class.
+ *
+ * It exists because the shared pass runs as `owner` by default, and owner is
+ * what `POST auth/users` asks for. A secret that lives in a runbook and a
+ * Cloudflare rule could therefore mint a real, permanent, password-holding
+ * admin account, and the audit row would say `legacy-pass` — visibly nobody.
+ * Account management is the one surface where "whoever has the secret" is not
+ * an acceptable answer, so the auth controller says `false` and names its two
+ * exceptions rather than waiting to be told about a new endpoint.
+ */
+export const AdminLegacyAccess = (
+  allowed: boolean,
+): MethodDecorator & ClassDecorator =>
+  SetMetadata(ADMIN_LEGACY_ALLOWED_KEY, allowed);
 
 /** Injects the authenticated principal into a handler parameter. */
 export const CurrentAdmin = createParamDecorator(

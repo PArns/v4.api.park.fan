@@ -4,11 +4,12 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { AdminAuthGuard } from "./admin-auth.guard";
+import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import { AdminSessionStore } from "./admin-session.store";
 import { RedisMock } from "../../../test/mocks/redis.mock";
 import {
   ADMIN_ALLOW_PENDING_PASSWORD_KEY,
+  ADMIN_LEGACY_ALLOWED_KEY,
   ADMIN_MIN_ROLE_KEY,
   ADMIN_PUBLIC_KEY,
 } from "./admin-auth.decorators";
@@ -54,6 +55,7 @@ describe("AdminAuthGuard", () => {
   async function tokenFor(
     role: AdminRole,
     mustChangePassword = false,
+    mustEnrolTotp = false,
   ): Promise<string> {
     const { token } = await sessions.create({
       userId: "user-1",
@@ -63,6 +65,7 @@ describe("AdminAuthGuard", () => {
       ip: null,
       userAgent: null,
       mustChangePassword,
+      mustEnrolTotp,
     });
     return token;
   }
@@ -233,6 +236,46 @@ describe("AdminAuthGuard", () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
+    it("cannot manage accounts, whatever role it was given", async () => {
+      // The pass defaults to owner, and owner is what POST auth/users takes.
+      // A secret from a runbook must not be able to mint a real account whose
+      // audit trail then says "legacy-pass".
+      process.env.ADMIN_LEGACY_PASS = LEGACY;
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: false }),
+        sessions,
+      );
+      await expect(
+        guard.canActivate(contextFor({ query: { pass: LEGACY } })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("still reaches the handlers that say so", async () => {
+      // `me` and `logout` are on the same refusing controller and have to keep
+      // working, or the frontend cannot render its legacy banner.
+      process.env.ADMIN_LEGACY_PASS = LEGACY;
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: true }),
+        sessions,
+      );
+      await expect(
+        guard.canActivate(contextFor({ query: { pass: LEGACY } })),
+      ).resolves.toBe(true);
+    });
+
+    it("leaves a real owner session alone on the same endpoint", async () => {
+      const token = await tokenFor("owner");
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: false }),
+        sessions,
+      );
+      await expect(
+        guard.canActivate(
+          contextFor({ headers: { authorization: `Bearer ${token}` } }),
+        ),
+      ).resolves.toBe(true);
+    });
+
     it("never wins over a valid session", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
       const token = await tokenFor("viewer");
@@ -246,5 +289,77 @@ describe("AdminAuthGuard", () => {
         (context.switchToHttp().getRequest() as RequestWithAdmin).admin,
       ).toMatchObject({ legacy: false, role: "viewer" });
     });
+  });
+});
+
+describe("clientIp", () => {
+  const previousKeys = process.env.THROTTLE_BYPASS_KEYS;
+
+  afterEach(() => {
+    if (previousKeys === undefined) delete process.env.THROTTLE_BYPASS_KEYS;
+    else process.env.THROTTLE_BYPASS_KEYS = previousKeys;
+  });
+
+  function request(headers: Record<string, string>): RequestWithAdmin {
+    return { headers } as unknown as RequestWithAdmin;
+  }
+
+  it("takes the forwarded address when the caller is our own frontend", () => {
+    // Behind Cloudflare, `cf-connecting-ip` on this request describes the
+    // Vercel function, not the person at the keyboard. Preferring it put every
+    // administrator in the world into one rate-limit bucket.
+    process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
+    expect(
+      clientIp(
+        request({
+          "x-auth-key": "front-end-key",
+          "x-forwarded-for": "198.51.100.7, 203.0.113.9",
+          "cf-connecting-ip": "203.0.113.9",
+        }),
+      ),
+    ).toBe("198.51.100.7");
+  });
+
+  it("keeps Cloudflare's header for everyone else", () => {
+    process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
+    expect(
+      clientIp(
+        request({
+          "x-forwarded-for": "198.51.100.7",
+          "cf-connecting-ip": "203.0.113.9",
+        }),
+      ),
+    ).toBe("203.0.113.9");
+  });
+
+  it("does not trust a wrong bypass key", () => {
+    process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
+    expect(
+      clientIp(
+        request({
+          "x-auth-key": "guessed",
+          "x-forwarded-for": "198.51.100.7",
+          "cf-connecting-ip": "203.0.113.9",
+        }),
+      ),
+    ).toBe("203.0.113.9");
+  });
+
+  it("ignores a forwarded value that is not an address", () => {
+    process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
+    expect(
+      clientIp(
+        request({
+          "x-auth-key": "front-end-key",
+          "x-forwarded-for": "not-an-ip",
+          "cf-connecting-ip": "203.0.113.9",
+        }),
+      ),
+    ).toBe("203.0.113.9");
+  });
+
+  it("has nothing to say when no header carries an address", () => {
+    delete process.env.THROTTLE_BYPASS_KEYS;
+    expect(clientIp(request({}))).toBeNull();
   });
 });

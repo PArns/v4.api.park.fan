@@ -575,8 +575,21 @@ export class AdminContentController {
       entityType: "attraction",
       entityId: id,
       entityLabel: attraction.name,
+      // Same reasoning as the season delete: the row is hand-assembled from
+      // the park's own page, the manufacturer and a cross-check, and nothing
+      // regenerates it. Recording two of its nine fields means the audit row
+      // can say a profile was deleted but not what it said.
       before: before
-        ? { elements: before.elements, types: before.types }
+        ? {
+            elements: before.elements,
+            types: before.types,
+            manufacturerName: before.manufacturerName,
+            manufacturerTermId: before.manufacturerTermId,
+            model: before.model,
+            openedYear: before.openedYear,
+            inversions: before.inversions,
+            curatedStats: before.curatedStats,
+          }
         : null,
     });
     await this.curation.publish(attraction.parkId, [id]);
@@ -706,10 +719,29 @@ export class AdminContentController {
       entityType: "park_season",
       entityId: id,
       entityLabel: `${season.kind} ${season.startDate}`,
+      // The whole row, not a summary. A season is hand-researched — an outer
+      // range plus, for a Walibi-style Halloween, twenty-odd individually
+      // picked dates and the source they were read from — and the delete is a
+      // hard one that no undo covers. Three fields in the audit row is a
+      // record of the fact that something was destroyed; this is a record of
+      // what, and enough to type it back in.
       before: {
+        parkId: season.parkId,
         kind: season.kind,
+        name: season.name,
         startDate: season.startDate,
         endDate: season.endDate,
+        dates: season.dates,
+        status: season.status,
+        separateTicket: season.separateTicket,
+        priceFrom: season.priceFrom,
+        priceCurrency: season.priceCurrency,
+        opensAt: season.opensAt,
+        closesAt: season.closesAt,
+        attractionIds: season.attractionIds,
+        url: season.url,
+        sourceUrl: season.sourceUrl,
+        note: season.note,
       },
     });
     await this.curation.publish(season.parkId, []);

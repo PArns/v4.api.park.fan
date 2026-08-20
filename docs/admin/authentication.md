@@ -97,6 +97,37 @@ The buckets are keyed by action **and** user id, so a mistyped password on the
 change-password form does not shut the enrolment endpoint, and a correct secret
 clears the account's counter for that action.
 
+### The shared pass cannot manage accounts
+
+Whatever role it is given. It defaults to `owner`, and `owner` is exactly what
+`POST admin/auth/users` asks for — so a secret that lives in a runbook and a
+Cloudflare rule could mint a real, permanent, password-holding admin account,
+and the audit row would attribute it to `legacy-pass`, which is visibly nobody.
+
+`AdminLegacyAccess(false)` sits on the whole `AdminAuthController` class and
+`true` on the two handlers that must keep working for a legacy caller (`me`,
+which the frontend reads to draw the legacy banner, and `logout`). Three states
+rather than two: unset means "no opinion", which is how every job and merge
+endpoint the runbooks call keeps working, and a `false` on a class is inherited
+by any account endpoint added later. The alternative — an opt-in decorator on
+the account handlers — fails open, and this codebase's rule is the other way
+round.
+
+### The address the limiter counts
+
+`clientIp` prefers the forwarded address over `cf-connecting-ip` for one kind
+of caller: a request carrying a configured throttle-bypass key, which is a
+shared secret only our own frontend holds. For everyone else the Cloudflare
+header still wins.
+
+The flip matters because api.park.fan is itself behind Cloudflare, so on a
+request from the admin UI `cf-connecting-ip` describes Cloudflare's client —
+the Vercel function — and not the person at the keyboard. Preferring it put
+every administrator in the world into one bucket: a password spray across many
+accounts was invisible, and the first person to mistype their password
+exhausted the limit for everybody. Both headers stay `isIP()`-validated, which
+is what bounds the Redis key space.
+
 ### TOTP is implemented here
 
 Thirty lines of HMAC and a base32 codec, and the alternative is a dependency in
@@ -188,7 +219,7 @@ person. That is the point.
 | `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` | First owner, first boot only.                                                 |
 | `ADMIN_LEGACY_PASS`                                  | The deprecated shared secret. Empty ⇒ unavailable.                            |
 | `ADMIN_LEGACY_PASS_ENABLED`                          | `false` closes that path while the secret is still set.                       |
-| `ADMIN_LEGACY_PASS_ROLE`                             | What the shared secret may do. Defaults to `owner` — what it effectively had. |
+| `ADMIN_LEGACY_PASS_ROLE`                             | What the shared secret may do. Defaults to `owner`, never account management. |
 | `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES`         | Per-account lockout. Defaults 8 / 15.                                         |
 | `ADMIN_REQUIRE_TOTP`                                 | `true` makes two-factor mandatory and un-removable.                           |
 

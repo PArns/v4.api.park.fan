@@ -506,6 +506,11 @@ export class AdminAuthService implements OnModuleInit {
         passwordHash: true,
         role: true,
         displayName: true,
+        // Needed to re-derive the enrolment debt below. Without it TypeORM
+        // omits the property, `!user.totpEnabled` is true for everybody, and
+        // every enrolled admin lands in an enrolment screen after a password
+        // change.
+        totpEnabled: true,
       },
     });
     if (!user) throw new NotFoundException("No such account");
@@ -562,6 +567,12 @@ export class AdminAuthService implements OnModuleInit {
       ip: kept.ip,
       userAgent: kept.userAgent,
       mustChangePassword: false,
+      // Derived from the row, not carried from `kept`: a session must never
+      // outrank the account it belongs to. Left out entirely, the new session
+      // read as "enrolled" — and since change-password is one of the two
+      // endpoints a debt-carrying session may reach, changing a password was a
+      // way to walk out of a mandatory second factor.
+      mustEnrolTotp: isTotpRequired() && !user.totpEnabled,
     });
     // The new session's ceiling travels with the token. The caller writes a
     // cookie from it, and without the date it had to guess: the frontend used

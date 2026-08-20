@@ -21,6 +21,7 @@ import {
   calculateParkPriority as _calculateParkPriority,
   hasScheduleData as _hasScheduleData,
 } from "../utils/park-merge.util";
+import { CURATED_PARK_COLUMNS } from "../utils/curated-park-facts.util";
 
 export interface MergeResult {
   success: boolean;
@@ -222,6 +223,8 @@ export class ParkMergeService {
         }
 
         // 6. Delete the loser park (now empty of related data)
+        // Last chance to say what is disappearing.
+        this.logDroppedCuration(winner, loser);
         await manager.delete(Park, loser.id);
 
         this.logger.log(
@@ -536,10 +539,62 @@ export class ParkMergeService {
     if (!winner.wartezeitenEntityId && loser.wartezeitenEntityId)
       updates.wartezeitenEntityId = loser.wartezeitenEntityId;
 
+    // The curated columns travel with the ids, and behind the same gate. A
+    // street address, a phone number or an opening year is a fact about a
+    // place: if the two rows are far enough apart that we refuse to believe
+    // they are one park, copying Adventure Island's address onto Islands of
+    // Adventure is worse than copying nothing. Only into an empty cell — the
+    // winner's own curation always wins.
+    const inherited: string[] = [];
+    const row = winner as unknown as Record<string, unknown>;
+    const losing = loser as unknown as Record<string, unknown>;
+    for (const column of CURATED_PARK_COLUMNS) {
+      const mine = row[column];
+      const theirs = losing[column];
+      if (
+        (mine === null || mine === undefined) &&
+        theirs !== null &&
+        theirs !== undefined
+      ) {
+        (updates as Record<string, unknown>)[column] = theirs;
+        inherited.push(column);
+      }
+    }
+    if (inherited.length > 0) {
+      this.logger.log(
+        `🧾 Carried ${inherited.length} curated field(s) from "${loser.name}": ${inherited.join(", ")}`,
+      );
+    }
+
     if (Object.keys(updates).length > 0) {
       await manager.update(Park, winner.id, updates);
     }
     return [];
+  }
+
+  /**
+   * What the loser was carrying that the winner will not inherit.
+   *
+   * Called right before the DELETE, so the one record of a curation that is
+   * about to cease to exist is a log line somebody can find. Hand-written
+   * values are reproducible from no feed; the least this can do is name them.
+   */
+  private logDroppedCuration(winner: Park, loser: Park): void {
+    const row = winner as unknown as Record<string, unknown>;
+    const losing = loser as unknown as Record<string, unknown>;
+    const dropped = CURATED_PARK_COLUMNS.filter((column) => {
+      const theirs = losing[column];
+      if (theirs === null || theirs === undefined) return false;
+      return row[column] !== theirs;
+    });
+    if (dropped.length === 0) return;
+
+    this.logger.warn(
+      `🗑️  Deleting "${loser.name}" with curated values the winner keeps its own of: ` +
+        dropped
+          .map((column) => `${column}=${JSON.stringify(losing[column])}`)
+          .join(", "),
+    );
   }
 
   private async invalidateParkCaches(

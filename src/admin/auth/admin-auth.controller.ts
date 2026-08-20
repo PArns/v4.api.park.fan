@@ -20,6 +20,7 @@ import { AdminAuditService } from "./admin-audit.service";
 import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import {
   AdminAllowPendingPassword,
+  AdminLegacyAccess,
   AdminMinRole,
   AdminPublic,
   CurrentAdmin,
@@ -51,6 +52,11 @@ import {
 @ApiTags("admin")
 @Controller("admin/auth")
 @UseGuards(AdminAuthGuard)
+// Account management is not something a secret from a runbook may do. The
+// shared pass runs as owner, and owner is exactly what creating an account
+// takes — so the whole controller refuses it and the two handlers that must
+// keep working for a legacy caller say so themselves.
+@AdminLegacyAccess(false)
 export class AdminAuthController {
   constructor(
     private readonly auth: AdminAuthService,
@@ -142,6 +148,7 @@ export class AdminAuthController {
 
   @Post("logout")
   @AdminAllowPendingPassword()
+  @AdminLegacyAccess(true)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Sign out of this session" })
   async logout(@CurrentAdmin() admin: AdminPrincipal): Promise<void> {
@@ -150,6 +157,7 @@ export class AdminAuthController {
 
   @Get("me")
   @AdminAllowPendingPassword()
+  @AdminLegacyAccess(true)
   @ApiOperation({
     summary: "Who this session belongs to",
     description:

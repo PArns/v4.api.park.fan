@@ -1,5 +1,7 @@
+import { CURATED_PARK_COLUMNS } from "../../parks/utils/curated-park-facts.util";
 import {
   ATTRACTION_CURATED_FIELDS,
+  PARK_CURATED_KEYS,
   attractionFieldViews,
   parkFieldViews,
 } from "./curated-field.spec-list";
@@ -126,5 +128,18 @@ describe("curated field views", () => {
     expect(name.syncedValue).toBe("Disney's Hollywood Studios");
     expect(name.resolvedValue).toBe("Hollywood Studios");
     expect(name.overridden).toBe(true);
+  });
+});
+
+describe("the park column list and the editor's descriptors", () => {
+  it("know exactly the same columns", () => {
+    // Two places have to learn about a new curated park column: the editor,
+    // which generates itself from the descriptors, and the merge, which copies
+    // the list onto the winning row before deleting the losing one. They were
+    // written months apart and the second one was forgotten, which cost every
+    // curated value on a merged park. This test is the reminder.
+    expect([...PARK_CURATED_KEYS].sort()).toEqual(
+      [...CURATED_PARK_COLUMNS].sort(),
+    );
   });
 });

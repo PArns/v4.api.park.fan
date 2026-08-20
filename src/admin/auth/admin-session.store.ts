@@ -63,8 +63,14 @@ export interface AdminSession {
    * account has to be able to reach the enrolment endpoints, so refusing it
    * outright would lock out precisely the people who need to enrol — but it
    * reaches nothing else until the second factor is in place.
+   *
+   * Required, not optional, so the compiler names every place that issues a
+   * session. It was optional once and the password-change path quietly left it
+   * out, which read as "enrolled" and turned a password change into a way past
+   * the gate. Reads stay defensive (`=== true`) for the sessions already in
+   * Redis, which were written without it.
    */
-  mustEnrolTotp?: boolean;
+  mustEnrolTotp: boolean;
 }
 
 export interface IssuedSession {

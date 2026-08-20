@@ -97,6 +97,38 @@ export function resolveNoWaitTimesReason(
   return getNoLiveWaitTimesReason(park.citySlug, park.slug);
 }
 
+/**
+ * Every hand-written column on a park row, in one list.
+ *
+ * It exists because a merge deletes the losing row. The attraction side learned
+ * this already and says so at `attraction-merge.service.ts`: a curation that
+ * lived only on the loser is gone with no trace. The park side had no such
+ * list, and by the time the info block landed it had more curated columns than
+ * the attraction does.
+ *
+ * Keep it complete. `curated-field.spec-list.spec.ts` asserts it matches the
+ * editor's descriptors, so a new column fails the suite until both know it.
+ */
+export const CURATED_PARK_COLUMNS = [
+  "curatedName",
+  "curatedParkType",
+  "curatedNoWaitTimesReason",
+  "curatedWebsite",
+  "curatedTicketsUrl",
+  "curatedWikipediaUrl",
+  "curatedInstagramUrl",
+  "curatedFacebookUrl",
+  "curatedYoutubeUrl",
+  "curatedStreetAddress",
+  "curatedPostalCode",
+  "curatedPhone",
+  "curatedOpenedYear",
+  "curatedAreaHectares",
+  "curationNote",
+] as const;
+
+export type CuratedParkColumn = (typeof CURATED_PARK_COLUMNS)[number];
+
 export function resolveCuratedPark(
   park: CuratedParkSource,
 ): ResolvedCuratedPark {

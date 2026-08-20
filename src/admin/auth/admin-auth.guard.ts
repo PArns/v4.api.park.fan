@@ -14,6 +14,7 @@ import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
 import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
 import {
   ADMIN_ALLOW_PENDING_PASSWORD_KEY,
+  ADMIN_LEGACY_ALLOWED_KEY,
   ADMIN_MIN_ROLE_KEY,
   ADMIN_PUBLIC_KEY,
 } from "./admin-auth.decorators";
@@ -22,6 +23,10 @@ import {
   getLegacyAdminPassRole,
   isLegacyAdminPassEnabled,
 } from "../../config/admin-auth.config";
+import {
+  getThrottleBypassHeader,
+  getThrottleBypassKeys,
+} from "../../common/throttler/throttler.config";
 
 /**
  * The guard on every administrative endpoint.
@@ -80,6 +85,21 @@ export class AdminAuthGuard implements CanActivate {
     if (!roleAtLeast(principal.role, minRole)) {
       throw new ForbiddenException(
         `This action needs the "${minRole}" role or above; this account is "${principal.role}"`,
+      );
+    }
+
+    // A surface can refuse the shared pass whatever role it was given. See
+    // `AdminLegacyAccess`: the pass defaults to owner, and owner is what
+    // creating an admin account takes.
+    if (
+      principal.legacy &&
+      this.reflector.getAllAndOverride<boolean>(
+        ADMIN_LEGACY_ALLOWED_KEY,
+        targets,
+      ) === false
+    ) {
+      throw new ForbiddenException(
+        "The deprecated shared pass cannot manage admin accounts — sign in with an owner account",
       );
     }
 
@@ -170,6 +190,24 @@ export class AdminAuthGuard implements CanActivate {
   }
 }
 
+/**
+ * Whether this request came through our own frontend.
+ *
+ * The throttle-bypass key is the only thing that distinguishes it: it is a
+ * shared secret configured on both sides, and the admin UI reaches this API
+ * exclusively through the Next proxy that sends it. Not `CF_ORIGIN_SECRET`,
+ * which defaults to empty and which the frontend never sends.
+ */
+function isFromTrustedProxy(request: RequestWithAdmin): boolean {
+  const keys = getThrottleBypassKeys();
+  if (keys.length === 0) return false;
+  const provided = request.headers?.[getThrottleBypassHeader()];
+  const values = Array.isArray(provided) ? provided : [provided];
+  return values.some(
+    (value) => typeof value === "string" && keys.includes(value),
+  );
+}
+
 /** Length-safe constant-time comparison. */
 function constantTimeEquals(a: string, b: string): boolean {
   if (!a || !b) return false;
@@ -187,17 +225,37 @@ function constantTimeEquals(a: string, b: string): boolean {
 }
 
 /**
- * The requesting address, preferring Cloudflare's header — same order as
- * CfThrottlerGuard, and validated the same way for the same reason.
+ * The requesting address.
  *
- * Both headers are forgeable by anything reaching the origin directly, so an
- * unvalidated value lets a caller send a fresh garbage "address" per request:
- * every login failure then lands in its own rate-limit bucket, the per-address
- * limiter never fires, and each attempt leaves a Redis key alive for fifteen
- * minutes. Requiring a syntactically valid IP closes both — a forged but valid
- * address is still one of ~4 billion, not unbounded.
+ * The order flips depending on who is calling, and that is the whole point.
+ *
+ * For a request that arrives through our own frontend — provable, because it
+ * carries a configured throttle-bypass key, which is a shared secret the
+ * frontend sends on every server-side call — the real administrator's address
+ * is the one the frontend forwarded in `x-forwarded-for`. `cf-connecting-ip`
+ * on that request is Cloudflare describing *its* client, which is the Vercel
+ * function: one address for every administrator in the world. Preferring it
+ * put every login failure into one bucket, so a spray was invisible and the
+ * first person to mistype their password exhausted the limit for everyone.
+ *
+ * For anything else reaching the origin directly, Cloudflare's header is the
+ * better answer and the order stays as it was.
+ *
+ * Both headers are forgeable, so an unvalidated value lets a caller send a
+ * fresh garbage "address" per request: every failure lands in its own bucket
+ * and each attempt leaves a Redis key alive for fifteen minutes. Requiring a
+ * syntactically valid IP closes both — a forged but valid address is still one
+ * of ~4 billion, not unbounded.
  */
 export function clientIp(request: RequestWithAdmin): string | null {
+  if (isFromTrustedProxy(request)) {
+    const forwarded = request.headers?.["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.length > 0) {
+      const first = forwarded.split(",")[0].trim();
+      if (isIP(first)) return first;
+    }
+  }
+
   const cf = request.headers?.["cf-connecting-ip"];
   if (typeof cf === "string" && isIP(cf)) return cf;
 
