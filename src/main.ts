@@ -138,7 +138,7 @@ async function bootstrap(): Promise<void> {
           }
         },
         credentials: true,
-        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
       });
     } else {
@@ -160,7 +160,7 @@ async function bootstrap(): Promise<void> {
     app.enableCors({
       origin: devOrigins,
       credentials: false,
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
     });
   }
@@ -231,15 +231,20 @@ async function bootstrap(): Promise<void> {
       // Admin tag with security notice
       .addTag(
         "admin",
-        "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION via Cloudflare",
+        "🔒 Administrative endpoints — require a signed-in administrator",
       )
-      // Security schemes (Cloudflare API Key via query parameter)
-      .addApiKey(
+      // Admin session token. Obtain one from POST /v1/admin/auth/login and
+      // send it as `Authorization: Bearer <token>`. The old `?pass=` query key
+      // still authenticates while ADMIN_LEGACY_PASS is configured, but it is
+      // deprecated and is deliberately no longer what the docs teach.
+      .addBearerAuth(
         {
-          type: "apiKey",
-          name: "pass",
-          in: "query",
-          description: "Admin API key (Cloudflare protected - production only)",
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "opaque",
+          description:
+            "Admin session token from POST /v1/admin/auth/login. Opaque and " +
+            "revocable — it is looked up in Redis on every request, not decoded.",
         },
         "admin-auth",
       )

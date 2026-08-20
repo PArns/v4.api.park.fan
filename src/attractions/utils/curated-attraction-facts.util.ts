@@ -1,46 +1,124 @@
 /**
  * Merges the hand-curated attraction facts over the synced ones.
  *
- * Height and the wet flag each live in two columns: the one the ThemeParks.wiki
- * detail sync owns, and the one only a human writes. The sync overwrites its
- * own cell on every run, so a correction has to sit beside it rather than in
- * it — and the read side has to know that.
+ * Every fact here lives in two columns: the one a sync owns and overwrites on
+ * every run, and the one only a human writes. A correction put in the synced
+ * cell survives until the next poll, so it has to sit beside it — and the read
+ * side has to know that.
  *
- * It is a function rather than two `??` expressions because those `??`
+ * It is a function rather than a handful of `??` expressions because those
  * expressions were already copied into both DTO mappers, and a rule kept in two
  * places is a rule that drifts. The free-flow status flag drifted exactly that
- * way and shipped a bug.
+ * way and shipped a bug. Every new curated column belongs in here, not at the
+ * call site.
  */
 
 export interface CuratedFactsSource {
+  name?: string | null;
+  curatedName?: string | null;
+  landName?: string | null;
+  curatedLandName?: string | null;
+  attractionType?: string | null;
+  curatedAttractionType?: string | null;
   minimumHeight?: number | null;
   curatedMinimumHeight?: number | null;
   minimumHeightUnit?: "cm" | "in" | null;
+  maximumHeight?: number | null;
+  curatedMaximumHeight?: number | null;
   mayGetWet?: boolean | null;
   curatedMayGetWet?: boolean | null;
+  isSeasonal?: boolean | null;
+  curatedIsSeasonal?: boolean | null;
+  seasonMonths?: number[] | null;
+  curatedSeasonMonths?: number[] | null;
 }
 
 export interface ResolvedCuratedFacts {
+  name: string;
+  landName: string | null;
+  attractionType: string | null;
   minimumHeight: number | null;
   minimumHeightUnit: "cm" | "in" | null;
+  maximumHeight: number | null;
   mayGetWet: boolean | null;
+  isSeasonal: boolean;
+  seasonMonths: number[] | null;
+  /**
+   * Whether the resolved seasonality came from a human.
+   *
+   * The detector rewrites its own columns nightly, so "a person disagreed with
+   * the detector" is a fact worth keeping visible — the admin renders it as an
+   * override badge, and it is how somebody notices that a curation is now
+   * stale because the ride reopened.
+   */
+  seasonalityCurated: boolean;
+}
+
+/**
+ * A curated height of 0 means "no minimum/maximum at all", not a 0 cm limit.
+ *
+ * It is not really a sentinel — a 0 cm minimum excludes nobody — and it is how
+ * a correction says "upstream's number is wrong and the truth is none".
+ * Phantasialand's Winni Splash is the worked example: the wiki publishes 100,
+ * while the park's own Nutzungsbedingungen say children under 1.00 m may play
+ * *when accompanied*, which is no minimum at all.
+ */
+function resolveHeight(
+  curated: number | null | undefined,
+  synced: number | null | undefined,
+): number | null {
+  if (curated !== null && curated !== undefined) {
+    return curated > 0 ? curated : null;
+  }
+  return synced ?? null;
+}
+
+/** Trimmed, or null when the curated string is absent or only whitespace. */
+function cleaned(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function resolveCuratedFacts(
   attraction: CuratedFactsSource,
 ): ResolvedCuratedFacts {
-  const curated = attraction.curatedMinimumHeight;
+  const minimumHeight = resolveHeight(
+    attraction.curatedMinimumHeight,
+    attraction.minimumHeight,
+  );
 
-  // 0 is a curated "no minimum height", not a 0 cm limit — it is how a
-  // correction overrides an upstream number with nothing at all.
-  const minimumHeight =
-    curated !== null && curated !== undefined
-      ? curated > 0
-        ? curated
-        : null
-      : (attraction.minimumHeight ?? null);
+  // Seasonality is resolved as a pair rather than field by field, because the
+  // two halves are one statement. A curated `false` ("the detector is wrong,
+  // this ride is not seasonal") must take the months down with it, or the API
+  // serves a not-seasonal ride carrying a list of the months it operates in.
+  const curatedIsSeasonal = attraction.curatedIsSeasonal;
+  const curatedMonths = attraction.curatedSeasonMonths;
+  const seasonalityCurated =
+    (curatedIsSeasonal !== null && curatedIsSeasonal !== undefined) ||
+    (Array.isArray(curatedMonths) && curatedMonths.length > 0);
+
+  const isSeasonal = seasonalityCurated
+    ? (curatedIsSeasonal ??
+      (Array.isArray(curatedMonths) && curatedMonths.length > 0))
+    : (attraction.isSeasonal ?? false);
+
+  const seasonMonths = !isSeasonal
+    ? null
+    : Array.isArray(curatedMonths) && curatedMonths.length > 0
+      ? curatedMonths
+      : (attraction.seasonMonths ?? null);
 
   return {
+    // `name` is the one field with no meaningful null: a ride always has a
+    // name, and the curated column only ever replaces it.
+    name: cleaned(attraction.curatedName) ?? attraction.name ?? "",
+    landName:
+      cleaned(attraction.curatedLandName) ?? attraction.landName ?? null,
+    attractionType:
+      cleaned(attraction.curatedAttractionType) ??
+      attraction.attractionType ??
+      null,
     minimumHeight,
     // The unit only describes a number. Carrying "cm" next to a null height
     // would leave a ride page rendering a bare unit. When curation supplies a
@@ -48,6 +126,30 @@ export function resolveCuratedFacts(
     // curated figure so far is the metric one off the park's own sign.
     minimumHeightUnit:
       minimumHeight === null ? null : (attraction.minimumHeightUnit ?? "cm"),
+    maximumHeight: resolveHeight(
+      attraction.curatedMaximumHeight,
+      attraction.maximumHeight,
+    ),
     mayGetWet: attraction.curatedMayGetWet ?? attraction.mayGetWet ?? null,
+    isSeasonal,
+    seasonMonths,
+    seasonalityCurated,
   };
+}
+
+/**
+ * Whether a resolved seasonality says the ride is running this month.
+ *
+ * Null for anything not seasonal, and for a seasonal ride whose months are
+ * unknown — the detector deliberately writes no months for entities it has
+ * watched for under 330 days, and "seasonal, but we do not know when" must not
+ * collapse into "not running", which would hide the ride.
+ */
+export function isCurrentlyInSeason(
+  facts: Pick<ResolvedCuratedFacts, "isSeasonal" | "seasonMonths">,
+  now: Date = new Date(),
+): boolean | null {
+  if (!facts.isSeasonal) return null;
+  if (!facts.seasonMonths || facts.seasonMonths.length === 0) return null;
+  return facts.seasonMonths.includes(now.getMonth() + 1);
 }

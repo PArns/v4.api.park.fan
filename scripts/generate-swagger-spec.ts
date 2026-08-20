@@ -146,15 +146,20 @@ async function generateSwaggerSpec(): Promise<void> {
     // Admin tag with security notice
     .addTag(
       "admin",
-      "⚠️ Administrative endpoints - PROTECTED IN PRODUCTION via Cloudflare",
+      "🔒 Administrative endpoints — require a signed-in administrator",
     )
-    // Security schemes (Cloudflare API Key via query parameter)
-    .addApiKey(
+    // Admin session token. This is the spec that actually ships:
+    // dist/swagger-spec.json is loaded in preference to generating one at
+    // runtime, so the scheme here and the one in src/main.ts have to change
+    // together or production keeps advertising whichever this file says.
+    .addBearerAuth(
       {
-        type: "apiKey",
-        name: "pass",
-        in: "query",
-        description: "Admin API key (Cloudflare protected - production only)",
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "opaque",
+        description:
+          "Admin session token from POST /v1/admin/auth/login. Opaque and " +
+          "revocable — it is looked up in Redis on every request, not decoded.",
       },
       "admin-auth",
     )

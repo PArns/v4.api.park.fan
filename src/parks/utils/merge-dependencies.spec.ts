@@ -2,6 +2,7 @@ import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
   attractionTablesMissingFrom,
+  parkTablesMissingFrom,
   applyMergeDependencies,
 } from "./merge-dependencies";
 
@@ -57,6 +58,52 @@ describe("merge dependency tables", () => {
   it("never lists the same table twice", () => {
     const tables = ATTRACTION_DEPENDENCIES.map((d) => d.table);
     expect(tables).toHaveLength(new Set(tables).size);
+  });
+
+  /**
+   * The park-side counterpart, and it did not exist until a merge ate a set of
+   * hand-researched seasons. Same snapshot rule as the attraction list above.
+   */
+  const PARK_REFERENCING_TABLES = [
+    "attraction_day_operating",
+    "attraction_hourly_history",
+    "attraction_p50_baselines",
+    "attraction_p90_baselines",
+    "attraction_rope_drop",
+    "attraction_typical_waits",
+    "attractions",
+    "external_entity_mapping",
+    "headliner_attractions",
+    "ml_accuracy_comparisons",
+    "ml_prediction_anomalies",
+    "park_daily_stats",
+    "park_occupancy",
+    "park_p50_baselines",
+    "park_p90_baselines",
+    "park_seasons",
+    "park_slug_aliases",
+    "queue_data_aggregates",
+    "restaurants",
+    "schedule_entries",
+    "shows",
+    "weather_data",
+    "weather_warnings",
+  ];
+
+  it("declares a strategy for every table that references a park", () => {
+    expect(parkTablesMissingFrom(PARK_REFERENCING_TABLES)).toEqual([]);
+  });
+
+  it("reparents park_seasons instead of letting the CASCADE eat them", () => {
+    // A season is written by a person reading a park's calendar and exists in
+    // no feed. The FK is ON DELETE CASCADE, so an undeclared table is not an
+    // error at merge time — it is a silent deletion inside the transaction.
+    const seasons = PARK_DEPENDENCIES.find((d) => d.table === "park_seasons");
+    expect(seasons?.strategy).toBe("move");
+    // The physical column. `parkId` is only the TypeScript property, and this
+    // name is interpolated straight into SQL.
+    expect(seasons?.column).toBe("park_id");
+    expect(seasons?.conflictColumns).toBeUndefined();
   });
 
   it("moves queue data rather than discarding it", () => {

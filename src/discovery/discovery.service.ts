@@ -26,7 +26,7 @@ import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
 import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 
 /**
  * Open/closed plus the wait-time aggregates for every park, in one query.
@@ -237,6 +237,14 @@ export class DiscoveryService {
         "citySlug",
         "latitude",
         "longitude",
+        // The curated columns have to be on every projection that later calls
+        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
+        // back to the synced name and reports nothing — and this particular
+        // projection is cached for 24 hours, so the silent no-op would outlive
+        // several curation sessions.
+        "curatedName",
+        "curatedParkType",
+        "curatedNoWaitTimesReason",
       ],
       order: {
         continent: "ASC",
@@ -319,16 +327,15 @@ export class DiscoveryService {
       // Add park reference
       const parkBaseUrl = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
 
+      const curatedPark = resolveCuratedPark(park);
       const parkRef: ParkReferenceDto = {
         id: park.id,
-        name: park.name,
+        name: curatedPark.name,
         slug: park.slug,
         url: parkBaseUrl,
         timezone: park.timezone,
         hasOperatingSchedule: scheduleFlags.get(park.id) ?? false,
-        liveWaitTimes: buildLiveWaitTimes(
-          getNoLiveWaitTimesReason(park.citySlug, park.slug),
-        ),
+        liveWaitTimes: buildLiveWaitTimes(curatedPark.noWaitTimesReason),
         // Coordinates so listing clients can show "X km away" without a per-park
         // lookup. `decimal` columns come back as strings from the driver — coerce.
         latitude: toCoordinate(park.latitude),
@@ -694,6 +701,9 @@ export class DiscoveryService {
         "citySlug",
         "continentSlug",
         "countrySlug",
+        // See the note on the geo-structure projection: a resolver handed a
+        // row without these columns quietly reports the upstream name.
+        "curatedName",
       ],
     });
 
@@ -757,7 +767,7 @@ export class DiscoveryService {
       const vals = parkScoreMap.get(park.id) ?? [];
       const avgP50 = avg(vals);
       return {
-        name: park.name,
+        name: resolveCuratedPark(park).name,
         slug: park.slug,
         city: park.city,
         path: `/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`,

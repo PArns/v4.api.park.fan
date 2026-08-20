@@ -2,16 +2,26 @@ import { CallHandler, ExecutionContext } from "@nestjs/common";
 import { of, firstValueFrom } from "rxjs";
 import { ExcludeNullInterceptor } from "./exclude-null.interceptor";
 
-function ctxWithQuery(query: Record<string, unknown> = {}): ExecutionContext {
+function ctxWithQuery(
+  query: Record<string, unknown> = {},
+  url = "/v1/parks/europe/germany/bruehl/phantasialand",
+): ExecutionContext {
   return {
-    switchToHttp: () => ({ getRequest: () => ({ query }) }),
+    switchToHttp: () => ({ getRequest: () => ({ query, url }) }),
   } as unknown as ExecutionContext;
 }
 
 const handlerOf = (body: unknown): CallHandler => ({ handle: () => of(body) });
 
-const run = (interceptor: ExcludeNullInterceptor, body: unknown, query = {}) =>
-  firstValueFrom(interceptor.intercept(ctxWithQuery(query), handlerOf(body)));
+const run = (
+  interceptor: ExcludeNullInterceptor,
+  body: unknown,
+  query = {},
+  url?: string,
+) =>
+  firstValueFrom(
+    interceptor.intercept(ctxWithQuery(query, url), handlerOf(body)),
+  );
 
 describe("ExcludeNullInterceptor", () => {
   const interceptor = new ExcludeNullInterceptor();
@@ -80,5 +90,73 @@ describe("ExcludeNullInterceptor", () => {
     const out = await run(interceptor, body, { debug: "true" });
     expect(out).toBe(body); // untouched, nulls preserved
     expect((out as Record<string, unknown>).b).toBeNull();
+  });
+
+  describe("the admin surface is exempt", () => {
+    // On /v1/admin/* a null is data, not clutter. The curated-field editor
+    // reads syncedValue / curatedValue / resolvedValue, each of which is null
+    // exactly when there is nothing there — which is the common case and the
+    // most informative one. Stripped, the editor cannot tell "no correction on
+    // this field" from "this field does not exist".
+    const curatedField = {
+      key: "curatedMinimumHeight",
+      syncedValue: 100,
+      curatedValue: null,
+      resolvedValue: 100,
+      overridden: false,
+    };
+
+    it("keeps nulls under /v1/admin", async () => {
+      const out = await run(
+        interceptor,
+        { fields: [curatedField] },
+        {},
+        "/v1/admin/content/attractions/abc",
+      );
+      expect(out).toEqual({ fields: [curatedField] });
+    });
+
+    it("keeps a season's null `dates`, which means 'every day'", async () => {
+      // Null here is not an absent field: it is the difference between a
+      // season that runs daily and one that runs on listed days only.
+      const out = (await run(
+        interceptor,
+        { startDate: "2026-10-03", endDate: "2026-11-01", dates: null },
+        {},
+        "/v1/admin/content/seasons/s1",
+      )) as Record<string, unknown>;
+      expect("dates" in out).toBe(true);
+      expect(out.dates).toBeNull();
+    });
+
+    it("still strips on a public path", async () => {
+      const out = (await run(
+        interceptor,
+        { name: "Taron", curatedName: null },
+        {},
+        "/v1/parks/europe/germany/bruehl/phantasialand",
+      )) as Record<string, unknown>;
+      expect("curatedName" in out).toBe(false);
+    });
+
+    it("does not mistake a slug containing 'admin' for the admin surface", async () => {
+      const out = (await run(
+        interceptor,
+        { name: "Badminton Park", note: null },
+        {},
+        "/v1/parks/europe/uk/london/badminton-park",
+      )) as Record<string, unknown>;
+      expect("note" in out).toBe(false);
+    });
+
+    it("matches the admin path even with a query string attached", async () => {
+      const out = (await run(
+        interceptor,
+        { curatedValue: null },
+        {},
+        "/v1/admin/content/parks?q=phantasialand",
+      )) as Record<string, unknown>;
+      expect("curatedValue" in out).toBe(true);
+    });
   });
 });
