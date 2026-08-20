@@ -7,7 +7,9 @@ import {
   Logger,
 } from "@nestjs/common";
 import { Request, Response } from "express";
+import { randomBytes } from "crypto";
 import { redactUrl } from "../utils/redact-url.util";
+import { logToFile } from "../utils/file-logger.util";
 
 /**
  * Global exception filter for consistent error responses.
@@ -90,12 +92,44 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     // Log full error details (including stack) for debugging
+    let reference: string | undefined;
     if (status >= 500) {
+      // A short id that travels both ways: it goes into the response body and
+      // into the log line, so a screenshot of an error in the admin is enough
+      // to find the stack that produced it. Before this, a 500 in the admin
+      // was a message with no way back to the request — the park editor's
+      // TypeORM failure had to be reproduced against production data to be
+      // read at all, because the only copy of the stack was in a container log
+      // nobody could reach without a deploy console.
+      reference = randomBytes(3).toString("hex");
+
       // Server errors - log with full stack trace
       this.logger.error(
-        `${request.method} ${url} - Status: ${status}`,
+        `${request.method} ${url} - Status: ${status} - Ref: ${reference}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
+
+      // And to disk, in the same dated files as the slow queries, because the
+      // container log is rotated by the platform and lost on every redeploy.
+      logToFile("api-errors", {
+        reference,
+        method: request.method,
+        url,
+        status,
+        name: exception instanceof Error ? exception.name : typeof exception,
+        message:
+          exception instanceof Error ? exception.message : String(exception),
+        stack:
+          exception instanceof Error
+            ? exception.stack?.split("\n").slice(0, 12).join("\n")
+            : undefined,
+        // TypeORM's QueryFailedError carries the statement it choked on, which
+        // is usually the whole diagnosis. The parameters are deliberately NOT
+        // written: they are user input and a login's are a password's
+        // neighbours.
+        query: readQuery(exception),
+        parameterCount: readParameterCount(exception),
+      });
     } else {
       // Client errors (4xx) - log as warning
       this.logger.warn(
@@ -112,6 +146,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       path: url,
       message,
       ...(error && { error }),
+      // Only on a server error, and only ever an opaque handle: it says
+      // nothing about the failure, it just names the log line that does.
+      ...(reference && { reference }),
     };
 
     // Only include stack trace in development
@@ -121,4 +158,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     response.status(status).json(errorResponse);
   }
+}
+
+/** The statement a TypeORM `QueryFailedError` failed on, truncated. */
+function readQuery(exception: unknown): string | undefined {
+  const query = (exception as { query?: unknown })?.query;
+  return typeof query === "string" ? query.slice(0, 2000) : undefined;
+}
+
+/** How many parameters it carried — the values stay out of the log. */
+function readParameterCount(exception: unknown): number | undefined {
+  const parameters = (exception as { parameters?: unknown })?.parameters;
+  return Array.isArray(parameters) ? parameters.length : undefined;
 }

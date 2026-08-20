@@ -112,7 +112,8 @@ export class AdminAuditService {
   }> {
     const qb = this.auditRepository
       .createQueryBuilder("log")
-      .orderBy("log.created_at", "DESC")
+      // Property name — see the note in ParkSeasonService.list().
+      .orderBy("log.createdAt", "DESC")
       .take(Math.min(query.limit ?? 50, 200))
       .skip(query.offset ?? 0);
 
