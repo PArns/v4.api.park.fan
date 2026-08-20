@@ -36,15 +36,36 @@ import { map } from "rxjs/operators";
  * Usage:
  * - GET /v1/parks/magic-kingdom-park          → null values removed
  * - GET /v1/parks/magic-kingdom-park?debug=true → null values included
+ *
+ * The administrative surface is exempt, and that is not a convenience.
+ * `/v1/admin/*` answers with curated-field descriptors whose whole purpose is
+ * to say what a field is: `syncedValue`, `curatedValue` and `resolvedValue`
+ * are each null exactly when there is nothing there, which is the common case
+ * and the most informative one. Stripped, an editor cannot tell "no correction
+ * on this field" from "this field does not exist", and the PATCH contract —
+ * send `null` to clear a correction — cannot survive a GET → edit → PATCH
+ * round trip, because the null never arrived. The same applies to
+ * `park_seasons`, where `dates: null` MEANS "every day between start and end"
+ * and must stay distinguishable from an empty array.
+ *
+ * Matched as a path segment, the same way CacheControlInterceptor decides what
+ * is private, so the two cannot disagree about what counts as admin.
  */
+/** "/admin" as a path segment, so a slug like ".../adminton-park" is not one. */
+const ADMIN_PATH = /\/admin(\/|$|\?)/;
+
 @Injectable()
 export class ExcludeNullInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
     const debug = request.query?.debug === "true";
+    const path: string = request.route?.path ?? request.url ?? "";
 
-    // If debug mode, skip null removal
-    if (debug) {
+    // Debug mode, or the admin surface, where a null is data — see the class
+    // doc. Deliberately not "the client can pass ?debug=true": that also
+    // un-strips nested payloads the admin does not control, and it is one
+    // forgotten call site away from a silently broken form.
+    if (debug || ADMIN_PATH.test(path)) {
       return next.handle();
     }
 

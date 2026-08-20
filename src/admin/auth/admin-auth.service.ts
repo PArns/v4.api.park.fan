@@ -125,7 +125,20 @@ export class AdminAuthService implements OnModuleInit {
     this.decoyHash = await hashPassword(
       "decoy-never-matches-" + Math.random().toString(36),
     );
-    await this.bootstrapFirstOwner();
+    try {
+      await this.bootstrapFirstOwner();
+    } catch (error) {
+      // This is the only thing in the login path that touches the database at
+      // module init, and module init also runs during `pnpm build`'s Swagger
+      // generation — which points at DB_HOST=127.0.0.1 DB_PORT=1 on purpose.
+      // A failure here means "no bootstrap account was created", never "the
+      // build is broken".
+      this.logger.error(
+        `Bootstrap owner check failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
