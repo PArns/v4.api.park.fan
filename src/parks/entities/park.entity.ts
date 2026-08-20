@@ -223,6 +223,80 @@ export class Park {
   })
   curatedNoWaitTimesReason: string | null;
 
+  // ─── the facts no feed carries ────────────────────────────────────────────
+  // Everything below has exactly one writer, a human, and is here for the same
+  // reason `has_single_rider` is on the attraction: neither ThemeParks.wiki nor
+  // Queue-Times nor Wartezeiten.app states any of it, so there is no column to
+  // correct and nothing to merge. A park's own address is not a wait time.
+  //
+  // They are grouped in the editor as Links / Kontakt / Eckdaten and reach the
+  // frontend as one `info` object on the park detail payload, never on the
+  // listings: the card overlay re-fetches its nine fields every five minutes
+  // and a postal code has no business in that budget.
+
+  /**
+   * The park's own site.
+   *
+   * Deliberately one URL and not one per locale. Most parks answer a plain
+   * `europapark.de` with the visitor's own language, the ones that do not are a
+   * redirect away from it, and a six-column set would be six columns nobody
+   * fills for 212 parks. If a park ever needs a language-specific address, that
+   * is a season-style row, not a wider column here.
+   */
+  @Column({ name: "curated_website", type: "text", nullable: true })
+  curatedWebsite: string | null;
+
+  /** Where tickets are actually bought — often a different host from the site. */
+  @Column({ name: "curated_tickets_url", type: "text", nullable: true })
+  curatedTicketsUrl: string | null;
+
+  /** The article, for a reader who wants the history rather than the queue. */
+  @Column({ name: "curated_wikipedia_url", type: "text", nullable: true })
+  curatedWikipediaUrl: string | null;
+
+  @Column({ name: "curated_instagram_url", type: "text", nullable: true })
+  curatedInstagramUrl: string | null;
+
+  @Column({ name: "curated_facebook_url", type: "text", nullable: true })
+  curatedFacebookUrl: string | null;
+
+  @Column({ name: "curated_youtube_url", type: "text", nullable: true })
+  curatedYoutubeUrl: string | null;
+
+  /**
+   * Street and house number.
+   *
+   * The geocoding fills `city`, `country` and coordinates and stops there, so
+   * the one line somebody needs to type into a navigation system is the one
+   * line we do not have. It also completes the `PostalAddress` in the park
+   * page's structured data, which until now claimed a locality and no street.
+   */
+  @Column({ name: "curated_street_address", type: "text", nullable: true })
+  curatedStreetAddress: string | null;
+
+  @Column({ name: "curated_postal_code", type: "text", nullable: true })
+  curatedPostalCode: string | null;
+
+  /** Stored as it should be dialled, including the country code. */
+  @Column({ name: "curated_phone", type: "text", nullable: true })
+  curatedPhone: string | null;
+
+  /** The year it opened to the public, not the year the company was founded. */
+  @Column({ name: "curated_opened_year", type: "int", nullable: true })
+  curatedOpenedYear: number | null;
+
+  /**
+   * Area in hectares — `double precision`, because a quarter of the parks worth
+   * recording are under 30 ha and rounding those to whole hectares throws away
+   * the digit that distinguishes them.
+   */
+  @Column({
+    name: "curated_area_hectares",
+    type: "double precision",
+    nullable: true,
+  })
+  curatedAreaHectares: number | null;
+
   /**
    * Free-text note for whoever reads this row next.
    *

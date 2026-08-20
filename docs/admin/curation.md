@@ -30,9 +30,38 @@ Human-only, with no sync behind them: `has_single_rider`, `open_with_park`,
 
 ### Parks
 
-`curated_name`, `curated_park_type`, `curated_no_wait_times_reason`,
-`curation_note`. Before this there were none at all — the only park-level
-curation was a hardcoded list in `live-wait-time-sources.ts`.
+Corrections to a synced column: `curated_name`, `curated_park_type`. Plus
+`curated_no_wait_times_reason` and the internal `curation_note`. Before this
+there were none at all — the only park-level curation was a hardcoded list in
+`live-wait-time-sources.ts`.
+
+### Park facts nothing syncs
+
+Eleven columns with one writer and nothing to merge, because no feed states any
+of them:
+
+| Group   | Columns                                                                                                                                   |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Links   | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url` |
+| Contact | `curated_street_address`, `curated_postal_code`, `curated_phone`                                                                          |
+| Facts   | `curated_opened_year`, `curated_area_hectares`                                                                                            |
+
+They reach the frontend as one `info` object on the **park detail** payload
+(`resolveParkInfo`), and the object is `null` — not an object of nulls — until
+somebody has written at least one of them. Never on the listings: the card
+overlay re-downloads its fields every five minutes and a postal code has no
+business in that budget.
+
+Two decisions worth keeping:
+
+- **One website, not one per locale.** Most parks answer their own domain in
+  the visitor's language and the rest are a redirect away; six columns nobody
+  fills for 212 parks is a worse trade than one that is occasionally in the
+  wrong language.
+- **A URL is parsed, not pattern-matched.** `coerce` runs it through `new URL()`
+  and accepts `http:` and `https:` only. These values become `href`s on a public
+  page, so a stored `javascript:` URL would be cross-site scripting with an
+  audit row naming the curator who typed it.
 
 ## Reading
 

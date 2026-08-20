@@ -24,6 +24,38 @@ export interface CuratedParkSource {
   citySlug?: string | null;
   slug?: string | null;
   curatedNoWaitTimesReason?: string | null;
+  curatedWebsite?: string | null;
+  curatedTicketsUrl?: string | null;
+  curatedWikipediaUrl?: string | null;
+  curatedInstagramUrl?: string | null;
+  curatedFacebookUrl?: string | null;
+  curatedYoutubeUrl?: string | null;
+  curatedStreetAddress?: string | null;
+  curatedPostalCode?: string | null;
+  curatedPhone?: string | null;
+  curatedOpenedYear?: number | null;
+  curatedAreaHectares?: number | null;
+}
+
+/**
+ * The hand-written facts about a park, as the API serves them.
+ *
+ * One object rather than eleven top-level fields, because they belong together
+ * on the page and because a client can then ask one question — "is there
+ * anything to show" — instead of eleven.
+ */
+export interface ParkInfo {
+  website: string | null;
+  ticketsUrl: string | null;
+  wikipediaUrl: string | null;
+  instagramUrl: string | null;
+  facebookUrl: string | null;
+  youtubeUrl: string | null;
+  streetAddress: string | null;
+  postalCode: string | null;
+  phone: string | null;
+  openedYear: number | null;
+  areaHectares: number | null;
 }
 
 export interface ResolvedCuratedPark {
@@ -73,4 +105,36 @@ export function resolveCuratedPark(
     parkType: cleaned(park.curatedParkType) ?? park.parkType ?? "THEME_PARK",
     noWaitTimesReason: resolveNoWaitTimesReason(park),
   };
+}
+
+function positive(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+/**
+ * The curated info block, or null when nobody has written anything.
+ *
+ * Null rather than an object of nulls: the global interceptor strips null keys
+ * from public responses, so an untouched park would otherwise carry an empty
+ * `info: {}` — a thing the frontend has to test for separately from "absent",
+ * for no gain.
+ */
+export function resolveParkInfo(park: CuratedParkSource): ParkInfo | null {
+  const info: ParkInfo = {
+    website: cleaned(park.curatedWebsite),
+    ticketsUrl: cleaned(park.curatedTicketsUrl),
+    wikipediaUrl: cleaned(park.curatedWikipediaUrl),
+    instagramUrl: cleaned(park.curatedInstagramUrl),
+    facebookUrl: cleaned(park.curatedFacebookUrl),
+    youtubeUrl: cleaned(park.curatedYoutubeUrl),
+    streetAddress: cleaned(park.curatedStreetAddress),
+    postalCode: cleaned(park.curatedPostalCode),
+    phone: cleaned(park.curatedPhone),
+    openedYear: positive(park.curatedOpenedYear),
+    areaHectares: positive(park.curatedAreaHectares),
+  };
+
+  return Object.values(info).some((value) => value !== null) ? info : null;
 }

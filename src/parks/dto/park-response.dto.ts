@@ -26,7 +26,9 @@ export class ParkResponseDto {
   slug: string;
 
   @ApiProperty({
-    description: "Official website URL",
+    description:
+      "This park's page on park.fan. The park's own site is `info.website` " +
+      "on the detail endpoint — it is not carried in listings.",
     required: false,
     nullable: true,
   })

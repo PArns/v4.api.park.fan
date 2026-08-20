@@ -19,7 +19,11 @@ import {
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
-import { resolveCuratedPark } from "../utils/curated-park-facts.util";
+import {
+  resolveCuratedPark,
+  resolveParkInfo,
+  type ParkInfo,
+} from "../utils/curated-park-facts.util";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -476,11 +480,20 @@ export class ParkWithAttractionsDto {
   slug: string;
 
   @ApiProperty({
-    description: "Official website URL",
+    description: "This park's page on park.fan",
     required: false,
     nullable: true,
   })
   url: string | null;
+
+  @ApiProperty({
+    description:
+      "Hand-curated facts no feed carries: the park's own site, tickets, " +
+      "address, phone, opening year, area. Absent when nothing is curated.",
+    required: false,
+    nullable: true,
+  })
+  info: ParkInfo | null;
 
   @ApiProperty({ description: "Country name", required: false, nullable: true })
   country: string | null;
@@ -623,6 +636,7 @@ export class ParkWithAttractionsDto {
       name: curatedPark.name,
       slug: park.slug,
       url: buildParkUrl(park),
+      info: resolveParkInfo(park),
 
       country: park.country || null,
       city: park.city || null,

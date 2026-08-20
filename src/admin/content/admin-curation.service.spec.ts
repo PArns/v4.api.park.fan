@@ -317,6 +317,96 @@ describe("AdminCurationService", () => {
       ).rejects.toThrow(/must be true or false/);
     });
 
+    it("stores a URL only if a browser would follow it", async () => {
+      // These end up as href on a public park page. A `javascript:` URL in a
+      // curated column is stored XSS with a curator's name on the audit row.
+      const park = { id: "park-1", name: "Phantasialand" };
+      for (const bad of [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "phantasialand.de",
+        "ftp://files.phantasialand.de/",
+      ]) {
+        const { service } = build(null, { ...park });
+        await expect(
+          service.curatePark(
+            "park-1",
+            { fields: { curatedWebsite: bad } },
+            ACTOR,
+          ),
+        ).rejects.toThrow();
+      }
+    });
+
+    it("keeps a good URL and clears an emptied one", async () => {
+      const { service, parks } = build(null, {
+        id: "park-1",
+        name: "Phantasialand",
+        curatedWebsite: null,
+      });
+      await service.curatePark(
+        "park-1",
+        { fields: { curatedWebsite: "  https://www.phantasialand.de/  " } },
+        ACTOR,
+      );
+      const saved = parks.save.mock.calls[0][0] as Record<string, unknown>;
+      expect(saved.curatedWebsite).toBe("https://www.phantasialand.de/");
+
+      const cleared = build(null, {
+        id: "park-1",
+        name: "Phantasialand",
+        curatedWebsite: "https://www.phantasialand.de/",
+      });
+      await cleared.service.curatePark(
+        "park-1",
+        { fields: { curatedWebsite: "" } },
+        ACTOR,
+      );
+      const second = cleared.parks.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(second.curatedWebsite).toBeNull();
+    });
+
+    it("rejects a URL past the length a real address has", async () => {
+      const { service } = build(null, { id: "park-1", name: "Phantasialand" });
+      await expect(
+        service.curatePark(
+          "park-1",
+          { fields: { curatedWebsite: `https://x.de/${"a".repeat(600)}` } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/at most 500/);
+    });
+
+    it("keeps a fractional area but rounds past two decimals", async () => {
+      // Park areas are published to one decimal at best; storing 28.333333
+      // would be inventing precision the source does not have.
+      const { service, parks } = build(null, {
+        id: "park-1",
+        name: "Phantasialand",
+      });
+      await service.curatePark(
+        "park-1",
+        { fields: { curatedAreaHectares: 28.333333 } },
+        ACTOR,
+      );
+      const saved = parks.save.mock.calls[0][0] as Record<string, unknown>;
+      expect(saved.curatedAreaHectares).toBe(28.33);
+    });
+
+    it("refuses a year outside the range a park can have opened in", async () => {
+      const { service } = build(null, { id: "park-1", name: "Phantasialand" });
+      await expect(
+        service.curatePark(
+          "park-1",
+          { fields: { curatedOpenedYear: 12 } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/at least 1550/);
+    });
+
     it("rejects an enum value outside the options", async () => {
       const park = {
         id: "park-1",

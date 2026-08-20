@@ -354,7 +354,12 @@ export class AdminCurationService {
     // An emptied numeric input is "no correction", not zero — and on a curated
     // height, zero is a positive claim that the ride has no minimum at all.
     // The admin sends null, but curl and any future client will send "".
-    if (raw === "" && (spec.type === "number" || spec.type === "months")) {
+    if (
+      raw === "" &&
+      (spec.type === "number" ||
+        spec.type === "decimal" ||
+        spec.type === "months")
+    ) {
       return unset;
     }
 
@@ -366,7 +371,44 @@ export class AdminCurationService {
         }
         const trimmed = raw.trim();
         // An emptied input clears the correction rather than storing "".
-        return trimmed.length === 0 ? unset : trimmed;
+        if (trimmed.length === 0) return unset;
+        if (spec.maxLength !== undefined && trimmed.length > spec.maxLength) {
+          throw new BadRequestException(
+            `${spec.label} must be at most ${spec.maxLength} characters`,
+          );
+        }
+        return trimmed;
+      }
+
+      case "url": {
+        if (typeof raw !== "string") {
+          throw new BadRequestException(`${spec.label} must be text`);
+        }
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) return unset;
+        if (spec.maxLength !== undefined && trimmed.length > spec.maxLength) {
+          throw new BadRequestException(
+            `${spec.label} must be at most ${spec.maxLength} characters`,
+          );
+        }
+        // Parsed rather than pattern-matched, and restricted to the two schemes
+        // a browser will follow. These end up as `href`s on a public page: a
+        // `javascript:` URL stored here would be a stored XSS with a curator's
+        // signature on it, and `data:` is the same trick with a different name.
+        let parsed: URL;
+        try {
+          parsed = new URL(trimmed);
+        } catch {
+          throw new BadRequestException(
+            `${spec.label} must be a full address, including https://`,
+          );
+        }
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          throw new BadRequestException(
+            `${spec.label} must be an http(s) address`,
+          );
+        }
+        return parsed.toString();
       }
 
       case "enum": {
@@ -409,6 +451,25 @@ export class AdminCurationService {
           );
         }
         return value;
+      }
+
+      case "decimal": {
+        const value = typeof raw === "string" ? Number(raw) : raw;
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          throw new BadRequestException(`${spec.label} must be a number`);
+        }
+        if (spec.min !== undefined && value < spec.min) {
+          throw new BadRequestException(
+            `${spec.label} must be at least ${spec.min}`,
+          );
+        }
+        if (spec.max !== undefined && value > spec.max) {
+          throw new BadRequestException(
+            `${spec.label} must be at most ${spec.max}`,
+          );
+        }
+        // Two decimals is more than any park's area is known to.
+        return Math.round(value * 100) / 100;
       }
 
       case "months": {

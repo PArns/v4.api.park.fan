@@ -21,7 +21,14 @@ import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
  */
 
 export type CuratedFieldType =
-  "text" | "longtext" | "number" | "boolean" | "enum" | "months";
+  | "text"
+  | "longtext"
+  | "number"
+  | "decimal"
+  | "boolean"
+  | "enum"
+  | "months"
+  | "url";
 
 export interface CuratedFieldSpec {
   /** The curated column's TS property name — also the PATCH body key. */
@@ -37,6 +44,9 @@ export interface CuratedFieldSpec {
   unit?: string;
   min?: number;
   max?: number;
+  /** Text and url only. A stored value longer than this is somebody pasting a
+   *  page into a field, not a fact. */
+  maxLength?: number;
   /** Shown under the input. Say what the field means, not how to type it. */
   hint?: string;
   /**
@@ -214,6 +224,115 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "look identical.",
   },
   {
+    key: "curatedWebsite",
+    label: "Official website",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+    hint: "The park's own front page. One address for all six languages — most parks answer in the visitor's.",
+  },
+  {
+    key: "curatedTicketsUrl",
+    label: "Tickets",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+    hint: "The shop, when it is somewhere other than the front page. Leave empty if it is not.",
+  },
+  {
+    key: "curatedWikipediaUrl",
+    label: "Wikipedia",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+    hint: "Any language — the article links to its own translations.",
+  },
+  {
+    key: "curatedInstagramUrl",
+    label: "Instagram",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+  },
+  {
+    key: "curatedFacebookUrl",
+    label: "Facebook",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+  },
+  {
+    key: "curatedYoutubeUrl",
+    label: "YouTube",
+    type: "url",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Links",
+    maxLength: 500,
+  },
+  {
+    key: "curatedStreetAddress",
+    label: "Street",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Contact",
+    maxLength: 200,
+    hint: "Street and number. The geocoding gives us the city and stops there.",
+  },
+  {
+    key: "curatedPostalCode",
+    label: "Postal code",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Contact",
+    maxLength: 20,
+  },
+  {
+    key: "curatedPhone",
+    label: "Phone",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Contact",
+    maxLength: 40,
+    hint: "As it should be dialled from abroad, with the country code.",
+  },
+  {
+    key: "curatedOpenedYear",
+    label: "Opened",
+    type: "number",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Facts",
+    min: 1550,
+    max: 2100,
+    hint: "The year it opened to the public. Bakken says 1583, so the floor is low on purpose.",
+  },
+  {
+    key: "curatedAreaHectares",
+    label: "Area",
+    type: "decimal",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Facts",
+    unit: "ha",
+    min: 0,
+    max: 100000,
+    hint: "The area open to visitors, not the company's land holdings.",
+  },
+  {
     key: "curationNote",
     label: "Curation note",
     type: "longtext",
@@ -246,6 +365,7 @@ export interface CuratedFieldView {
   unit?: string;
   min?: number;
   max?: number;
+  maxLength?: number;
   hint?: string;
 }
 
@@ -296,6 +416,7 @@ function buildViews(
       ...(spec.unit ? { unit: spec.unit } : {}),
       ...(spec.min !== undefined ? { min: spec.min } : {}),
       ...(spec.max !== undefined ? { max: spec.max } : {}),
+      ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
       ...(spec.hint ? { hint: spec.hint } : {}),
     };
   });
