@@ -1,97 +1,227 @@
-import { resolveCuratedFacts } from "./curated-attraction-facts.util";
+import {
+  isCurrentlyInSeason,
+  resolveCuratedFacts,
+} from "./curated-attraction-facts.util";
 
-/**
- * The worked example throughout is Phantasialand's pair of water attractions,
- * where upstream put the height on the wrong one: Wavy Battle forbids entry
- * below 1.00 m and the wiki carries nothing, Winni Splash only wants an adult
- * along and the wiki carries 100.
- */
 describe("resolveCuratedFacts", () => {
-  describe("minimum height", () => {
-    it("passes the synced height through when nothing is curated", () => {
+  describe("name", () => {
+    it("prefers the curated name", () => {
       expect(
-        resolveCuratedFacts({ minimumHeight: 140, minimumHeightUnit: "cm" }),
-      ).toMatchObject({ minimumHeight: 140, minimumHeightUnit: "cm" });
+        resolveCuratedFacts({ name: "Taron", curatedName: "TARON" }).name,
+      ).toBe("TARON");
     });
 
-    it("lets a curated height beat the synced one", () => {
-      expect(
-        resolveCuratedFacts({
-          minimumHeight: 120,
-          curatedMinimumHeight: 100,
-          minimumHeightUnit: "cm",
-        }).minimumHeight,
-      ).toBe(100);
+    it("falls back to the synced name", () => {
+      expect(resolveCuratedFacts({ name: "Taron" }).name).toBe("Taron");
     });
 
-    it("reads a curated 0 as no minimum height at all", () => {
-      // Winni Splash: the wiki's 100 is a supervision threshold, not a limit.
-      // Zero is how a correction says "the truth is none" — null could not,
-      // because null already means "nothing curated here".
+    it("ignores a curated name that is only whitespace", () => {
+      // An editor clearing the field sends "" or "  "; that means "no
+      // override", not "this ride has no name".
       expect(
-        resolveCuratedFacts({
-          minimumHeight: 100,
-          curatedMinimumHeight: 0,
-          minimumHeightUnit: "cm",
-        }).minimumHeight,
-      ).toBeNull();
+        resolveCuratedFacts({ name: "Taron", curatedName: "   " }).name,
+      ).toBe("Taron");
     });
 
-    it("supplies a height for a ride the sync knows nothing about", () => {
-      // Wavy Battle: upstream has no number, the park's sign does.
+    it("trims a curated name", () => {
       expect(
-        resolveCuratedFacts({ curatedMinimumHeight: 100 }).minimumHeight,
-      ).toBe(100);
+        resolveCuratedFacts({ name: "Taron", curatedName: " Taron " }).name,
+      ).toBe("Taron");
     });
   });
 
-  describe("height unit", () => {
-    it("drops the unit when there is no height to label", () => {
-      // A dangling "cm" next to a null height renders as a bare unit.
+  describe("minimum height", () => {
+    it("prefers the correction", () => {
       expect(
-        resolveCuratedFacts({
-          minimumHeight: 100,
-          curatedMinimumHeight: 0,
-          minimumHeightUnit: "cm",
-        }).minimumHeightUnit,
+        resolveCuratedFacts({ minimumHeight: 100, curatedMinimumHeight: 120 })
+          .minimumHeight,
+      ).toBe(120);
+    });
+
+    it("reads a curated 0 as 'no minimum at all'", () => {
+      // Winni Splash: the wiki publishes 100, the park's own conditions say
+      // children under 1.00 m may play when accompanied — no minimum.
+      expect(
+        resolveCuratedFacts({ minimumHeight: 100, curatedMinimumHeight: 0 })
+          .minimumHeight,
       ).toBeNull();
-      expect(resolveCuratedFacts({}).minimumHeightUnit).toBeNull();
     });
 
-    it("keeps the published unit so US signage stays in inches", () => {
-      expect(
-        resolveCuratedFacts({ minimumHeight: 122, minimumHeightUnit: "in" }),
-      ).toMatchObject({ minimumHeight: 122, minimumHeightUnit: "in" });
+    it("keeps the synced value when nothing is curated", () => {
+      expect(resolveCuratedFacts({ minimumHeight: 100 }).minimumHeight).toBe(
+        100,
+      );
     });
 
-    it("labels a curated-only height in centimetres", () => {
+    it("never emits a unit next to a null height", () => {
+      const facts = resolveCuratedFacts({
+        minimumHeight: 100,
+        curatedMinimumHeight: 0,
+        minimumHeightUnit: "in",
+      });
+      expect(facts.minimumHeight).toBeNull();
+      expect(facts.minimumHeightUnit).toBeNull();
+    });
+
+    it("defaults a curated height with no recorded unit to centimetres", () => {
+      const facts = resolveCuratedFacts({ curatedMinimumHeight: 130 });
+      expect(facts).toMatchObject({
+        minimumHeight: 130,
+        minimumHeightUnit: "cm",
+      });
+    });
+
+    it("keeps the published unit when the height came from the sync", () => {
       expect(
-        resolveCuratedFacts({ curatedMinimumHeight: 100 }).minimumHeightUnit,
-      ).toBe("cm");
+        resolveCuratedFacts({ minimumHeight: 132, minimumHeightUnit: "in" })
+          .minimumHeightUnit,
+      ).toBe("in");
+    });
+  });
+
+  describe("maximum height", () => {
+    it("follows the same 0-means-none convention", () => {
+      expect(
+        resolveCuratedFacts({ maximumHeight: 140, curatedMaximumHeight: 0 })
+          .maximumHeight,
+      ).toBeNull();
+      expect(
+        resolveCuratedFacts({ maximumHeight: 140, curatedMaximumHeight: 120 })
+          .maximumHeight,
+      ).toBe(120);
     });
   });
 
   describe("may get wet", () => {
-    it("prefers the curated flag over the synced one", () => {
+    it("prefers the correction, including a curated false", () => {
+      // Genting SkyWorlds' shot tower is flagged as a water ride upstream and
+      // is not one — so a curated `false` has to beat a synced `true`.
       expect(
         resolveCuratedFacts({ mayGetWet: true, curatedMayGetWet: false })
           .mayGetWet,
       ).toBe(false);
-      expect(
-        resolveCuratedFacts({ mayGetWet: null, curatedMayGetWet: true })
-          .mayGetWet,
-      ).toBe(true);
     });
 
-    it("stays null when neither writer knows", () => {
-      // Null is "unknown", not "dry" — most rides simply have no flag.
+    it("stays null when neither side knows", () => {
       expect(resolveCuratedFacts({}).mayGetWet).toBeNull();
     });
+  });
 
-    it("does not let a curated false read as unknown", () => {
-      expect(resolveCuratedFacts({ curatedMayGetWet: false }).mayGetWet).toBe(
-        false,
-      );
+  describe("seasonality", () => {
+    it("passes the detector's verdict through untouched", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [4, 5, 6, 7, 8, 9],
+      });
+      expect(facts).toMatchObject({
+        isSeasonal: true,
+        seasonMonths: [4, 5, 6, 7, 8, 9],
+        seasonalityCurated: false,
+      });
+    });
+
+    it("lets a curated false overrule the detector", () => {
+      // A ride closed for a year-long refurbishment looks exactly like a
+      // seasonal one to a behavioural detector.
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [1, 2, 3],
+        curatedIsSeasonal: false,
+      });
+      expect(facts.isSeasonal).toBe(false);
+      expect(facts.seasonalityCurated).toBe(true);
+    });
+
+    it("takes the months down with a curated false", () => {
+      // Serving seasonMonths on a ride the API just called not-seasonal is the
+      // half-applied override this pairing exists to prevent.
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [1, 2, 3],
+        curatedIsSeasonal: false,
+      });
+      expect(facts.seasonMonths).toBeNull();
+    });
+
+    it("lets curated months stand in for months the detector could not derive", () => {
+      // The detector writes no months below 330 observed days, on purpose.
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: null,
+        curatedSeasonMonths: [7, 8],
+      });
+      expect(facts).toMatchObject({
+        isSeasonal: true,
+        seasonMonths: [7, 8],
+        seasonalityCurated: true,
+      });
+    });
+
+    it("infers seasonality from curated months alone", () => {
+      const facts = resolveCuratedFacts({ curatedSeasonMonths: [10] });
+      expect(facts.isSeasonal).toBe(true);
+      expect(facts.seasonMonths).toEqual([10]);
+    });
+
+    it("lets a curated true stand without months", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: false,
+        curatedIsSeasonal: true,
+      });
+      expect(facts).toMatchObject({
+        isSeasonal: true,
+        seasonMonths: null,
+        seasonalityCurated: true,
+      });
+    });
+
+    it("prefers curated months over the detector's", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [1, 2, 3, 4, 12],
+        curatedSeasonMonths: [4, 5, 6],
+      });
+      expect(facts.seasonMonths).toEqual([4, 5, 6]);
+    });
+
+    it("treats an empty curated array as no override", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [7],
+        curatedSeasonMonths: [],
+      });
+      expect(facts.seasonMonths).toEqual([7]);
+      expect(facts.seasonalityCurated).toBe(false);
+    });
+  });
+
+  describe("isCurrentlyInSeason", () => {
+    const july = new Date("2026-07-15T12:00:00Z");
+
+    it("answers for a seasonal ride with known months", () => {
+      expect(
+        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [7, 8] }, july),
+      ).toBe(true);
+      expect(
+        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [1, 2] }, july),
+      ).toBe(false);
+    });
+
+    it("is null for a non-seasonal ride", () => {
+      expect(
+        isCurrentlyInSeason({ isSeasonal: false, seasonMonths: null }, july),
+      ).toBeNull();
+    });
+
+    it("is null — not false — when the months are unknown", () => {
+      // "Seasonal, but we do not know when" must not collapse into "closed",
+      // which would hide the ride from the park page.
+      expect(
+        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: null }, july),
+      ).toBeNull();
+      expect(
+        isCurrentlyInSeason({ isSeasonal: true, seasonMonths: [] }, july),
+      ).toBeNull();
     });
   });
 });

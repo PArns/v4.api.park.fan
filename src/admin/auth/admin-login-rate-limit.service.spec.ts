@@ -15,7 +15,11 @@ describe("AdminLoginRateLimitService", () => {
 
   it("allows a first attempt", async () => {
     const verdict = await limiter.check("198.51.100.7", "you@park.fan");
-    expect(verdict).toEqual({ allowed: true, retryAfterSeconds: 0, reason: null });
+    expect(verdict).toEqual({
+      allowed: true,
+      retryAfterSeconds: 0,
+      reason: null,
+    });
   });
 
   it("shuts one account down after ten failures, whatever the address", async () => {
@@ -34,7 +38,10 @@ describe("AdminLoginRateLimitService", () => {
     for (let i = 0; i < 25; i++) {
       await limiter.recordFailure("198.51.100.7", `victim-${i}@park.fan`);
     }
-    const verdict = await limiter.check("198.51.100.7", "someone-else@park.fan");
+    const verdict = await limiter.check(
+      "198.51.100.7",
+      "someone-else@park.fan",
+    );
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toBe("ip");
   });
@@ -53,9 +60,11 @@ describe("AdminLoginRateLimitService", () => {
   });
 
   it("forgets an account's failures once it succeeds", async () => {
-    for (let i = 0; i < 9; i++) await limiter.recordFailure(null, "you@park.fan");
+    for (let i = 0; i < 9; i++)
+      await limiter.recordFailure(null, "you@park.fan");
     await limiter.recordSuccess("you@park.fan");
-    for (let i = 0; i < 9; i++) await limiter.recordFailure(null, "you@park.fan");
+    for (let i = 0; i < 9; i++)
+      await limiter.recordFailure(null, "you@park.fan");
     expect((await limiter.check(null, "you@park.fan")).allowed).toBe(true);
   });
 
@@ -64,13 +73,14 @@ describe("AdminLoginRateLimitService", () => {
       await limiter.recordFailure("198.51.100.7", `victim-${i}@park.fan`);
     }
     await limiter.recordSuccess("victim-0@park.fan");
-    expect((await limiter.check("198.51.100.7", "victim-1@park.fan")).allowed).toBe(
-      false,
-    );
+    expect(
+      (await limiter.check("198.51.100.7", "victim-1@park.fan")).allowed,
+    ).toBe(false);
   });
 
   it("is case-insensitive about the account, so casing is not a free retry", async () => {
-    for (let i = 0; i < 10; i++) await limiter.recordFailure(null, "You@Park.Fan");
+    for (let i = 0; i < 10; i++)
+      await limiter.recordFailure(null, "You@Park.Fan");
     expect((await limiter.check(null, "you@park.fan")).allowed).toBe(false);
   });
 
@@ -92,7 +102,9 @@ describe("AdminLoginRateLimitService", () => {
       ttl: () => Promise.reject(new Error("connection refused")),
     } as never);
 
-    expect((await broken.check("198.51.100.7", "you@park.fan")).allowed).toBe(true);
+    expect((await broken.check("198.51.100.7", "you@park.fan")).allowed).toBe(
+      true,
+    );
     await expect(
       broken.recordFailure("198.51.100.7", "you@park.fan"),
     ).resolves.toBeUndefined();

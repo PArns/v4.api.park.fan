@@ -31,6 +31,8 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { SearchCounts } from "./types/search-counts.type";
 import { PopularityService } from "../popularity/popularity.service";
 import { logToFile } from "../common/utils/file-logger.util";
+import { resolveCuratedFacts } from "../attractions/utils/curated-attraction-facts.util";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 
 interface ParkIndexData {
   id: string;
@@ -1831,6 +1833,7 @@ export class SearchService implements OnModuleInit {
         "park.id",
         "park.slug",
         "park.name",
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",
@@ -1851,7 +1854,9 @@ export class SearchService implements OnModuleInit {
     return {
       id: park.id,
       slug: park.slug,
-      name: park.name,
+      // Resolved, not raw — a park curated to its signage name has to be
+      // findable under that name.
+      name: resolveCuratedPark(park).name,
       latitude: park.latitude ?? null,
       longitude: park.longitude ?? null,
       continentSlug: park.continentSlug,
@@ -1876,10 +1881,13 @@ export class SearchService implements OnModuleInit {
         "attraction.id",
         "attraction.slug",
         "attraction.name",
+        "attraction.curatedName",
         "attraction.landName",
+        "attraction.curatedLandName",
         "park.id",
         "park.slug",
         "park.name",
+        "park.curatedName",
         "park.latitude",
         "park.longitude",
         "park.continentSlug",
@@ -1893,13 +1901,20 @@ export class SearchService implements OnModuleInit {
         "destination.name",
       ])
       .getMany();
-    return rows.map((a) => ({
-      id: a.id,
-      slug: a.slug,
-      name: a.name,
-      landName: a.landName ?? null,
-      park: a.park ? this.mapParkForIndex(a.park) : null,
-    }));
+    return rows.map((a) => {
+      // The index carries the RESOLVED name, so a curated rename is findable
+      // by the name it now shows under. The SQL fallback path still matches
+      // the upstream column — between them, both names find the ride, which is
+      // what somebody typing either of them wants.
+      const curated = resolveCuratedFacts(a);
+      return {
+        id: a.id,
+        slug: a.slug,
+        name: curated.name,
+        landName: curated.landName,
+        park: a.park ? this.mapParkForIndex(a.park) : null,
+      };
+    });
   }
 
   private async loadShowIndexFromDb(): Promise<ShowIndexEntry[]> {

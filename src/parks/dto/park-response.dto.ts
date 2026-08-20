@@ -5,7 +5,7 @@ import { WeatherItemDto } from "./weather-item.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
+import { resolveCuratedPark } from "../utils/curated-park-facts.util";
 
 /**
  * Park Response DTO
@@ -170,9 +170,11 @@ export class ParkResponseDto {
   schedule?: ScheduleItemDto[];
 
   static fromEntity(park: Park): ParkResponseDto {
+    const curated = resolveCuratedPark(park);
+
     return {
       id: park.id,
-      name: park.name,
+      name: curated.name,
       slug: park.slug,
       url: buildParkUrl(park),
 
@@ -187,9 +189,7 @@ export class ParkResponseDto {
       hasOperatingSchedule: false, // Default, overwritten by services
       // Derived from the entity, not from live data: whether a source exists is
       // a property of the park, so every path that builds this DTO gets it right.
-      liveWaitTimes: buildLiveWaitTimes(
-        getNoLiveWaitTimesReason(park.citySlug, park.slug),
-      ),
+      liveWaitTimes: buildLiveWaitTimes(curated.noWaitTimesReason),
       status: "CLOSED", // Default, overwritten by service
     };
   }

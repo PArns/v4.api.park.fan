@@ -12,8 +12,12 @@ describe("password.util", () => {
 
   it("round-trips a password", async () => {
     const hash = await hashPassword("correct horse battery staple");
-    expect(await verifyPassword("correct horse battery staple", hash)).toBe(true);
-    expect(await verifyPassword("Correct horse battery staple", hash)).toBe(false);
+    expect(await verifyPassword("correct horse battery staple", hash)).toBe(
+      true,
+    );
+    expect(await verifyPassword("Correct horse battery staple", hash)).toBe(
+      false,
+    );
   });
 
   it("salts each hash, so two identical passwords do not share a digest", async () => {

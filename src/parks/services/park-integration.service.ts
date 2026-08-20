@@ -53,6 +53,7 @@ import {
   currentSlotStartMs,
   ttlSecondsToNextBoundary,
 } from "../../common/utils/best-visit-times.util";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * Park Integration Service
@@ -580,7 +581,12 @@ export class ParkIntegrationService {
       const openWithPark = new Map<string, number[] | null>(
         (park.attractions ?? [])
           .filter((a) => a.openWithPark)
-          .map((a) => [a.id, a.seasonMonths ?? null]),
+          // Resolved months, so a curated season governs the free-flow gate
+          // too. On these rows the months are hand-written either way — the
+          // detector can never derive them for something it never sees
+          // OPERATING — but a curated `is_seasonal: false` has to be able to
+          // take them out of play.
+          .map((a) => [a.id, resolveCuratedFacts(a).seasonMonths]),
       );
 
       for (const attraction of dto.attractions) {

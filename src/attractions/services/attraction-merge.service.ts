@@ -391,6 +391,12 @@ export class AttractionMergeService {
    * Columns worth carrying over from the losing row. Deliberately excludes
    * `externalId` (unique, and the survivor keeps its own identity) and `slug`
    * (handled by resolveSurvivingSlug).
+   *
+   * Every `curated_*` column has to be on this list, and stay on it. A merge
+   * deletes the losing row, so a curation that lived only there is gone with
+   * no trace and nothing to notice it by — the value simply reverts to
+   * whatever the sync last wrote, months after anybody remembers deciding
+   * otherwise. Add a curated column to the entity, add it here.
    */
   private static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",
@@ -403,6 +409,12 @@ export class AttractionMergeService {
     "mayGetWet",
     "curatedMayGetWet",
     "curatedMinimumHeight",
+    "curatedMaximumHeight",
+    "curatedName",
+    "curatedLandName",
+    "curatedAttractionType",
+    "curatedIsSeasonal",
+    "curatedSeasonMonths",
     "retiredAt",
     "retiredReason",
     "hasSingleRider",

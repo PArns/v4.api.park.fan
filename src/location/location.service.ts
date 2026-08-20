@@ -30,7 +30,7 @@ import {
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import {
   formatTodaySchedule,
@@ -549,7 +549,7 @@ export class LocationService {
       const stats = statisticsMap.get(park.id);
       return {
         id: park.id,
-        name: park.name,
+        name: resolveCuratedPark(park).name,
         slug: park.slug,
         distance,
         city: park.city || null,
@@ -557,7 +557,7 @@ export class LocationService {
         status: statusMap.get(park.id) || "CLOSED",
         hasOperatingSchedule: operatingScheduleMap.get(park.id) || false,
         liveWaitTimes: buildLiveWaitTimes(
-          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+          resolveCuratedPark(park).noWaitTimesReason,
         ),
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,

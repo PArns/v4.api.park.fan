@@ -54,7 +54,10 @@ export function getLegacyAdminPassRole(): string {
  * (the account is created owing a password change, so the API enforces that
  * rather than trusting the operator to remember).
  */
-export function getBootstrapAdmin(): { email: string; password: string } | null {
+export function getBootstrapAdmin(): {
+  email: string;
+  password: string;
+} | null {
   const email = process.env.ADMIN_BOOTSTRAP_EMAIL?.trim().toLowerCase();
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
   if (!email || !password) return null;
@@ -70,12 +73,18 @@ export function getBootstrapAdmin(): { email: string; password: string } | null 
  * fire or lock out the only person using it.
  */
 export function getLoginLockoutThreshold(): number {
-  const raw = Number.parseInt(process.env.ADMIN_LOGIN_LOCKOUT_THRESHOLD ?? "", 10);
+  const raw = Number.parseInt(
+    process.env.ADMIN_LOGIN_LOCKOUT_THRESHOLD ?? "",
+    10,
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : 8;
 }
 
 export function getLoginLockoutMinutes(): number {
-  const raw = Number.parseInt(process.env.ADMIN_LOGIN_LOCKOUT_MINUTES ?? "", 10);
+  const raw = Number.parseInt(
+    process.env.ADMIN_LOGIN_LOCKOUT_MINUTES ?? "",
+    10,
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : 15;
 }
 

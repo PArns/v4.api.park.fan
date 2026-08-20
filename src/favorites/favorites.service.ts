@@ -35,7 +35,7 @@ import {
 } from "./dto/favorites-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import {
   calculateHaversineDistance,
   GeoCoordinate,
@@ -543,14 +543,14 @@ export class FavoritesService {
       const fb = fallbackMap.get(park.id);
       return {
         id: park.id,
-        name: park.name,
+        name: resolveCuratedPark(park).name,
         slug: park.slug,
         distance,
         city: park.city || null,
         country: park.country || null,
         status: fb?.status || "CLOSED",
         liveWaitTimes: buildLiveWaitTimes(
-          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+          resolveCuratedPark(park).noWaitTimesReason,
         ),
         totalAttractions: fb?.totalAttractions || 0,
         operatingAttractions: fb?.operatingAttractions || 0,

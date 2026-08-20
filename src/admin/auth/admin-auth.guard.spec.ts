@@ -1,4 +1,8 @@
-import { ExecutionContext, ForbiddenException, UnauthorizedException } from "@nestjs/common";
+import {
+  ExecutionContext,
+  ForbiddenException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { AdminAuthGuard } from "./admin-auth.guard";
 import { AdminSessionStore } from "./admin-session.store";
@@ -12,9 +16,7 @@ import type { AdminRole } from "./entities/admin-user.entity";
 import type { RequestWithAdmin } from "./admin-principal";
 
 /** A context whose metadata answers come from a plain object. */
-function contextFor(
-  request: Partial<RequestWithAdmin>,
-): ExecutionContext {
+function contextFor(request: Partial<RequestWithAdmin>): ExecutionContext {
   const full = {
     headers: {},
     query: {},
@@ -89,9 +91,8 @@ describe("AdminAuthGuard", () => {
     const context = contextFor(request);
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
-    const attached = (
-      context.switchToHttp().getRequest() as RequestWithAdmin
-    ).admin;
+    const attached = (context.switchToHttp().getRequest() as RequestWithAdmin)
+      .admin;
     expect(attached).toMatchObject({
       userId: "user-1",
       role: "editor",
@@ -104,7 +105,9 @@ describe("AdminAuthGuard", () => {
     await sessions.destroy(token);
     const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
     await expect(
-      guard.canActivate(contextFor({ headers: { authorization: `Bearer ${token}` } })),
+      guard.canActivate(
+        contextFor({ headers: { authorization: `Bearer ${token}` } }),
+      ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 

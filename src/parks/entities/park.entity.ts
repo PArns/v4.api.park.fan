@@ -159,6 +159,80 @@ export class Park {
   @Index()
   wartezeitenEntityId: string | null; // The UUID from Wartezeiten.app
 
+  // ─── curated columns ──────────────────────────────────────────────────────
+  // Everything above is written by a sync or a job. Everything here is written
+  // only by a human, through the admin curation endpoints, and is merged over
+  // its counterpart on read — see `resolveCuratedPark`. The rule is the one the
+  // attraction heights already follow: two writers, no shared cell. Put a
+  // correction in a synced column and the next run silently reverts it.
+
+  /**
+   * The park's name as it should be shown.
+   *
+   * The metadata sync writes `name` from ThemeParks.wiki, whose names are
+   * legal-ish and long ("Disney's Hollywood Studios", "Universal Studios
+   * Florida — a Universal Destinations & Experiences park"), while the name on
+   * the signage and in every conversation about the place is shorter.
+   *
+   * Display only. `slug` and the geographic path are NOT regenerated from it,
+   * because a park's URL is a published address: changing it is
+   * `ParkRenameService`'s job, which writes a `park_slug_aliases` row so the
+   * old path keeps redirecting. Renaming for display and renaming the address
+   * are different decisions and stay different operations.
+   */
+  @Column({ name: "curated_name", type: "text", nullable: true })
+  curatedName: string | null;
+
+  /**
+   * `THEME_PARK` / `WATER_PARK`, corrected.
+   *
+   * `park_type` is inferred upstream and gets combined resorts wrong — a water
+   * park sharing a destination with a theme park is routinely filed as the
+   * latter, which puts it in the wrong listings and gives it the wrong crowd
+   * expectations.
+   */
+  @Column({ name: "curated_park_type", type: "text", nullable: true })
+  curatedParkType: string | null;
+
+  // Timezone is deliberately NOT curated here, and the reason is worth writing
+  // down so it does not get "fixed" later. `timezone` is read at 206 call
+  // sites — every schedule, every park-local date, the whole seasonality month
+  // derivation. A curated column resolved only in the DTO would show the right
+  // zone on the park page while the calendar underneath it stayed wrong, which
+  // is worse than not offering the correction at all. Correcting a timezone
+  // means correcting `timezone` itself, which is the sync's cell; that needs a
+  // sync-side guard, not a second column.
+
+  /**
+   * Why this park's wait times cannot be read, or null when they can.
+   *
+   * The same fact `PARKS_WITHOUT_LIVE_WAIT_TIMES` holds in code, and for the
+   * same reason: from outside, a park with no source and a park shut for the
+   * night are byte-identical in the payload, so this can never be derived. The
+   * column exists so the next Hansa-Park can be recorded by whoever noticed,
+   * in the admin, instead of waiting for a deploy — the code list stays as the
+   * seed and the fallback.
+   *
+   * Values are the `NoLiveWaitTimesReason` strings, which the frontend
+   * translates, so they are contract: `in_park_app_only` | `not_published`.
+   */
+  @Column({
+    name: "curated_no_wait_times_reason",
+    type: "text",
+    nullable: true,
+  })
+  curatedNoWaitTimesReason: string | null;
+
+  /**
+   * Free-text note for whoever reads this row next.
+   *
+   * Not shown to visitors. It is where "the park's own site lists opening
+   * hours only in a PDF" goes — the context that explains why the other
+   * curated columns on this row say what they say.
+   */
+  @Column({ name: "curation_note", type: "text", nullable: true })
+  curationNote: string | null;
+
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 

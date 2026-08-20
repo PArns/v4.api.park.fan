@@ -13,10 +13,13 @@ import {
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
-import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import {
+  isCurrentlyInSeason,
+  resolveCuratedFacts,
+} from "../../attractions/utils/curated-attraction-facts.util";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
+import { resolveCuratedPark } from "../utils/curated-park-facts.util";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -614,9 +617,10 @@ export class ParkWithAttractionsDto {
   };
 
   static fromEntity(park: Park): ParkWithAttractionsDto {
+    const curatedPark = resolveCuratedPark(park);
     return {
       id: park.id,
-      name: park.name,
+      name: curatedPark.name,
       slug: park.slug,
       url: buildParkUrl(park),
 
@@ -630,9 +634,7 @@ export class ParkWithAttractionsDto {
       // Derived from the entity, not from live data: whether a source exists is
       // a property of the park, and it must be right even on the paths that
       // never reach ParkIntegrationService.
-      liveWaitTimes: buildLiveWaitTimes(
-        getNoLiveWaitTimesReason(park.citySlug, park.slug),
-      ),
+      liveWaitTimes: buildLiveWaitTimes(curatedPark.noWaitTimesReason),
       status: "CLOSED", // Default to ensure order
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,
@@ -640,19 +642,9 @@ export class ParkWithAttractionsDto {
       attractions: park.attractions
         ? park.attractions.map((attraction) => {
             const curated = resolveCuratedFacts(attraction);
-            const isSeasonal = attraction.isSeasonal || false;
-            const seasonMonths = attraction.seasonMonths || null;
-            let isCurrentlyInSeason: boolean | null = null;
-            if (isSeasonal) {
-              const currentMonth = new Date().getMonth() + 1; // 1-based
-              isCurrentlyInSeason =
-                seasonMonths !== null && seasonMonths.length > 0
-                  ? seasonMonths.includes(currentMonth)
-                  : null; // seasonal but unknown when → null (don't hide)
-            }
             return {
               id: attraction.id,
-              name: attraction.name,
+              name: curated.name,
               slug: attraction.slug,
               latitude:
                 attraction.latitude !== undefined ? attraction.latitude : null,
@@ -660,14 +652,16 @@ export class ParkWithAttractionsDto {
                 attraction.longitude !== undefined
                   ? attraction.longitude
                   : null,
-              land: attraction.landName || null,
+              land: curated.landName,
               url: buildAttractionUrl(park, attraction) || null,
-              isSeasonal,
-              seasonMonths,
-              isCurrentlyInSeason,
+              isSeasonal: curated.isSeasonal,
+              seasonMonths: curated.seasonMonths,
+              // Seasonal but unknown when → null, deliberately: it must not
+              // collapse into "not running", which would hide the ride.
+              isCurrentlyInSeason: isCurrentlyInSeason(curated),
               minimumHeight: curated.minimumHeight,
               minimumHeightUnit: curated.minimumHeightUnit,
-              maximumHeight: attraction.maximumHeight ?? null,
+              maximumHeight: curated.maximumHeight,
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
               rcdbId: attraction.rcdbId ?? null,

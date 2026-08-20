@@ -151,6 +151,94 @@ export class Attraction {
   curatedMinimumHeight: number | null;
 
   /**
+   * The ride's name as it should be shown, when upstream's is wrong.
+   *
+   * The sync writes `name` from ThemeParks.wiki on every run, so a correction
+   * put there survives until the next poll — the same two-writers problem as
+   * the height columns, and the reason this is a separate cell.
+   *
+   * It is a DISPLAY name and nothing else. `slug` is deliberately NOT
+   * regenerated from it: attraction URLs are indexed, linked from blog posts
+   * and stored in the media sidecars, and unlike parks there is no
+   * `attraction_slug_aliases` table to redirect an old path — a slug change
+   * here is a permanent 404 with nothing recording where the ride went. So a
+   * ride can be renamed on the page while keeping the address it has always
+   * had, which is also what a visitor following an old link wants.
+   *
+   * Read it through `resolveCuratedAttraction`, never inline.
+   */
+  @Column({ name: "curated_name", type: "text", nullable: true })
+  curatedName: string | null;
+
+  /**
+   * The land the ride actually stands in, when Queue-Times says otherwise or
+   * says nothing.
+   *
+   * `land_name` comes from Queue-Times and is missing for whole parks and
+   * stale for the rest — a land renamed with a re-theme keeps its old name
+   * upstream for years. The wait-times sync rewrites the column, so this one
+   * sits beside it.
+   */
+  @Column({ name: "curated_land_name", type: "text", nullable: true })
+  curatedLandName: string | null;
+
+  /**
+   * What kind of attraction this is, hand-corrected.
+   *
+   * Upstream's `attractionType` is coarse and occasionally wrong (water rides
+   * filed as ATTRACTION, walkthroughs filed as RIDE). Note this is NOT the
+   * ride-type glossary terms — those live in `attraction_ride_profiles.types`
+   * and answer a different question ("launch coaster", "omnimover").
+   */
+  @Column({ name: "curated_attraction_type", type: "text", nullable: true })
+  curatedAttractionType: string | null;
+
+  /**
+   * The maximum rider height, hand-corrected. Centimetres, like the minimum.
+   *
+   * `maximum_height` is sync-written and populated for about 2 % of rides, so
+   * nearly every kiddie ride's limit has to be read off the park's own signage
+   * and written here. **0 means "no maximum"**, mirroring the minimum's
+   * convention so a correction can override an upstream number with nothing.
+   */
+  @Column({ name: "curated_maximum_height", type: "int", nullable: true })
+  curatedMaximumHeight: number | null;
+
+  /**
+   * Whether this ride is seasonal, decided by a human rather than by the
+   * detector.
+   *
+   * `is_seasonal` and `season_months` are written nightly by `detect-seasonal`,
+   * which is behavioural: it reports what the feed has been doing. That is the
+   * right default and it is wrong in two recurring ways. A ride closed for a
+   * year-long refurbishment looks exactly like a seasonal one, and a genuinely
+   * seasonal ride whose park we have watched for under 330 days gets flagged
+   * with no months at all, because the detector refuses to derive a season
+   * from a recording window (that guard is what cleaned up 340 attractions and
+   * 954 shows on 2026-08-15).
+   *
+   * Neither case can be fixed in the detector's own columns: it rewrites them
+   * every night. So a human writes here instead, and
+   * `resolveCuratedAttraction` prefers it. `false` is meaningful — it says
+   * "the detector is wrong, this is not seasonal" — which is why the column is
+   * a nullable boolean and not a flag.
+   */
+  @Column({ name: "curated_is_seasonal", type: "boolean", nullable: true })
+  curatedIsSeasonal: boolean | null;
+
+  /**
+   * The months (1–12) this ride actually operates in, hand-written.
+   *
+   * Independent of `curated_is_seasonal`: an editor may know a ride is
+   * seasonal without knowing its months yet, and may know the months while
+   * agreeing with the detector that it is seasonal. An empty array is not the
+   * same as null — it would mean "operates in no month", which is what
+   * retirement is for, so the curation endpoint rejects it.
+   */
+  @Column({ name: "curated_season_months", type: "jsonb", nullable: true })
+  curatedSeasonMonths: number[] | null;
+
+  /**
    * Whether the ride has a single-rider line at all — a static fact about the
    * queue layout, not a live reading.
    *
