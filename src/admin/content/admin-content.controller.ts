@@ -421,10 +421,18 @@ export class AdminContentController {
       )
       // Exact matches first: "Taron" must not be buried under every ride whose
       // name contains it.
-      .orderBy(
+      //
+      // Selected under a name and ordered by that name, rather than handing the
+      // expression to `orderBy` directly: a query builder splits an ORDER BY
+      // string at its first dot and treats everything before it as an alias, so
+      // this one asked for a table called `CASE WHEN LOWER(COALESCE(attraction`
+      // and threw "alias was not found. Maybe you forgot to join it?" — which
+      // is to say the command palette could not find a single ride.
+      .addSelect(
         "CASE WHEN LOWER(COALESCE(attraction.curated_name, attraction.name)) = LOWER(:exact) THEN 0 ELSE 1 END",
-        "ASC",
+        "exact_rank",
       )
+      .orderBy("exact_rank", "ASC")
       .addOrderBy("attraction.name", "ASC")
       .setParameter("exact", term)
       .take(Math.min(Number(limit) || 12, 50))
