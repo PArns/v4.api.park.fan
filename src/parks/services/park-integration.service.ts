@@ -40,6 +40,7 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
+import { statusWithoutLiveData } from "../../common/utils/no-live-data-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -590,8 +591,6 @@ export class ParkIntegrationService {
       );
 
       for (const attraction of dto.attractions) {
-        totalAttractionsCount++;
-
         // Get current queue data for this attraction from the bulk result
         const queueData = queueDataMap.get(attraction.id) || [];
 
@@ -643,8 +642,13 @@ export class ParkIntegrationService {
           // If the Park is OPERATING, but we have no data for this ride (filtered out as stale),
           // we assume the ride is OPERATING (unknown wait time) rather than CLOSED.
           // This prevents the "Park Open, All Rides Closed" issue when the live feed stops updating.
-          attraction.status =
-            dto.status === "OPERATING" ? "OPERATING" : "CLOSED";
+          // Except for a ride the season has already answered for — see the util
+          // for the ice rink this list served as "geöffnet, sehr wenig los" in
+          // August while the ride's own page said CLOSED off the same silence.
+          attraction.status = statusWithoutLiveData(
+            dto.status,
+            attraction.isCurrentlyInSeason,
+          );
         }
 
         // A free-flow attraction is open whenever the park is. Applied after the
@@ -672,8 +676,27 @@ export class ParkIntegrationService {
 
         // Count operating attractions based on EFFECTIVE status
         // This ensures closed parks show 0 operating attractions
-        if (attraction.effectiveStatus === "OPERATING") {
-          totalOperatingCount++;
+        //
+        // Both counters skip a ride the season has closed, which is why the
+        // total is counted down here rather than at the top of the loop: "12 von
+        // 45 geöffnet" is a statement about what a visitor could queue for
+        // today, and an ice rink that cannot open before November is neither one
+        // of the 45 nor one of the 33 closed ones. Left in, Phantasialand's
+        // summer looks emptier than it is and the deficit is a rink.
+        //
+        // Unless it is actually running: a live OPERATING row means the season
+        // on file is behind the park, and a ride you can queue for belongs in
+        // both numbers. Only a hard `false` — "seasonal, and nothing else known"
+        // keeps counting, same as everywhere else.
+        const closedByTheSeason =
+          attraction.isCurrentlyInSeason === false &&
+          attraction.effectiveStatus !== "OPERATING";
+
+        if (!closedByTheSeason) {
+          totalAttractionsCount++;
+          if (attraction.effectiveStatus === "OPERATING") {
+            totalOperatingCount++;
+          }
         }
 
         // Attach ML predictions

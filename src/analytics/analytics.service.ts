@@ -1,6 +1,7 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { safeJsonParse } from "../common/utils/json.util";
+import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -1407,8 +1408,14 @@ export class AnalyticsService {
       attraction_counts AS (
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
-        FROM attractions
-        WHERE "parkId" = $1::uuid
+        FROM attractions a
+        LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
+        WHERE a."parkId" = $1::uuid
+        -- A ride the season has closed counts for neither half of
+        -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
+        -- OPERATING row still overrides it: the season on file is then behind
+        -- the park, and a ride you can queue for belongs in both numbers.
+          AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $5 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1421,6 +1428,7 @@ export class AnalyticsService {
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1::uuid
+        AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
         parkId, // $1
@@ -1497,8 +1505,14 @@ export class AnalyticsService {
       attraction_counts AS (
         -- Total attraction count
         SELECT COUNT(*) as total_attractions
-        FROM attractions
-        WHERE "parkId" = $1::uuid
+        FROM attractions a
+        LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
+        WHERE a."parkId" = $1::uuid
+        -- A ride the season has closed counts for neither half of
+        -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
+        -- OPERATING row still overrides it: the season on file is then behind
+        -- the park, and a ride you can queue for belongs in both numbers.
+          AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1511,6 +1525,7 @@ export class AnalyticsService {
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1::uuid
+        AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
         parkId,
@@ -3068,6 +3083,11 @@ export class AnalyticsService {
           )::int AS closed
         FROM attractions a
         LEFT JOIN latest_updates lu ON lu."attractionId" = a.id
+        -- A ride the season has closed counts for neither half of
+        -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
+        -- OPERATING row still overrides it: the season on file is then behind
+        -- the park, and a ride you can queue for belongs in both numbers.
+        WHERE NOT ${attractionIsOutOfSeason("a")} OR lu.status = 'OPERATING'
         GROUP BY a."parkId"
       ),
       park_stats AS (

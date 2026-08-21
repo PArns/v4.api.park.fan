@@ -25,6 +25,7 @@ import {
 import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
 import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
+import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 
@@ -63,7 +64,8 @@ export const LIVE_STATS_SQL = `
           a.id as "attractionId",
           a."parkId",
           qd."waitTime",
-          qd."status"
+          qd."status",
+          ${attractionIsOutOfSeason("a")} as out_of_season
         FROM attractions a
         JOIN LATERAL (
           SELECT "waitTime", "status"
@@ -89,6 +91,11 @@ export const LIVE_STATS_SQL = `
           COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
           COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
         FROM latest_attraction_data lad
+        -- A ride the season has closed is not one of the park's rides today: it
+        -- belongs in neither half of "12 von 45 geöffnet". Unless it is actually
+        -- running, in which case the season on file is behind the park and a
+        -- visitor can queue for it — the rule the park payload applies too.
+        WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'
         GROUP BY lad."parkId"
       )
       SELECT
@@ -104,7 +111,16 @@ export const LIVE_STATS_SQL = `
         COALESCE(stats.avg_wait, 0) as avg_wait,
         COALESCE(stats.operating_count, 0) as operating_conf_count,
         COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
-        (SELECT COUNT(*)::int FROM attractions a WHERE a."parkId" = p.id) as total_attractions
+        (SELECT COUNT(*)::int FROM attractions a
+          WHERE a."parkId" = p.id
+            AND (
+              NOT ${attractionIsOutOfSeason("a")}
+              OR a.id IN (
+                SELECT lad."attractionId" FROM latest_attraction_data lad
+                 WHERE lad.status = 'OPERATING'
+              )
+            )
+        ) as total_attractions
       FROM parks p
       LEFT JOIN park_schedules ps ON ps."parkId" = p.id
       LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
