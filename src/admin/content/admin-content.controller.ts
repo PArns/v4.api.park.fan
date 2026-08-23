@@ -14,7 +14,12 @@ import {
   UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
-import { ApiOperation, ApiSecurity, ApiTags } from "@nestjs/swagger";
+import {
+  ApiOperation,
+  ApiResponse,
+  ApiSecurity,
+  ApiTags,
+} from "@nestjs/swagger";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Brackets, Repository } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -25,6 +30,7 @@ import {
   CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
 } from "../../parks/utils/curated-park-facts.util";
+import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
 import { AdminAuthGuard } from "../auth/admin-auth.guard";
 import { AdminMinRole, CurrentAdmin } from "../auth/admin-auth.decorators";
 import {
@@ -164,6 +170,109 @@ export class AdminContentController {
           }
         : null,
       ambiguous: false,
+    };
+  }
+
+  /**
+   * The dashboard's numbers, in one query round.
+   *
+   * A dashboard that assembles itself from five list endpoints and counts the
+   * rows in the browser is a dashboard that lies at the first `limit`: the park
+   * list caps at 500, the audit at 200, and neither says so on the tile it
+   * feeds. These are `COUNT(*)`s over indexed columns instead — cheap, exact,
+   * and phrased as the questions the tiles ask rather than as tables.
+   *
+   * "Curated" means at least one hand-written column carries a value. That is
+   * the definition the editor's badge uses, so the tile and the row agree.
+   */
+  @Get("overview")
+  @ApiOperation({ summary: "The counts behind the admin dashboard" })
+  @ApiResponse({
+    status: 200,
+    description: "Coverage, backlog and recent work",
+  })
+  async overview(): Promise<{
+    parks: { total: number; curated: number; withSeasons: number };
+    attractions: {
+      total: number;
+      curated: number;
+      withRideProfile: number;
+      seasonal: number;
+      seasonalWithoutMonths: number;
+    };
+    seasons: { total: number; running: number; upcoming: number };
+    curations: {
+      last30Days: number;
+      perDay: Array<{ day: string; count: number }>;
+    };
+  }> {
+    const parkColumns = CURATED_PARK_DB_COLUMNS.map(
+      (c) => `p.${c} IS NOT NULL`,
+    ).join(" OR ");
+    const attractionColumns = ATTRACTION_CURATED_DB_COLUMNS.map(
+      (c) => `a.${c} IS NOT NULL`,
+    ).join(" OR ");
+
+    const [parks, attractions, seasons, perDay] = await Promise.all([
+      this.parks.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE ${parkColumns})::int AS curated,
+                COUNT(*) FILTER (
+                  WHERE EXISTS (SELECT 1 FROM park_seasons s WHERE s.park_id = p.id)
+                )::int AS "withSeasons"
+           FROM parks p`,
+      ),
+      this.attractions.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE ${attractionColumns})::int AS curated,
+                COUNT(*) FILTER (
+                  WHERE EXISTS (
+                    -- The ride-profile table keeps TypeORM's camelCase column
+                    -- name; every other table here is snake_case.
+                    SELECT 1 FROM attraction_ride_profiles r
+                     WHERE r."attractionId" = a.id
+                  )
+                )::int AS "withRideProfile",
+                COUNT(*) FILTER (WHERE a.is_seasonal)::int AS seasonal,
+                COUNT(*) FILTER (
+                  WHERE a.is_seasonal
+                    AND a.season_months IS NULL
+                    AND a.curated_season_months IS NULL
+                )::int AS "seasonalWithoutMonths"
+           FROM attractions a
+          WHERE a.retired_at IS NULL`,
+      ),
+      this.parks.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (
+                  WHERE s.start_date <= CURRENT_DATE AND s.end_date >= CURRENT_DATE
+                )::int AS running,
+                COUNT(*) FILTER (WHERE s.start_date > CURRENT_DATE)::int AS upcoming
+           FROM park_seasons s`,
+      ),
+      // The admin's own work, by day. Grouped in Postgres rather than by
+      // reading 200 audit rows into the browser and bucketing them there —
+      // that page size is a display limit and would quietly become the graph's.
+      this.parks.query(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+                COUNT(*)::int AS count
+           FROM admin_audit_log
+          WHERE created_at >= NOW() - INTERVAL '30 days'
+            AND action LIKE '%.curate'
+          GROUP BY 1
+          ORDER BY 1`,
+      ),
+    ]);
+
+    const rows = perDay as Array<{ day: string; count: number }>;
+    return {
+      parks: parks[0],
+      attractions: attractions[0],
+      seasons: seasons[0],
+      curations: {
+        last30Days: rows.reduce((sum, row) => sum + Number(row.count), 0),
+        perDay: rows.map((row) => ({ day: row.day, count: Number(row.count) })),
+      },
     };
   }
 
