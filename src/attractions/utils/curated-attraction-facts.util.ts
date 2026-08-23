@@ -91,6 +91,27 @@ function cleaned(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * Every hand-written column on an attraction row, as physical column names.
+ *
+ * The park side has had this since the merge learned to carry curation across
+ * (`CURATED_PARK_COLUMNS`); this is the same list for the other half, and it
+ * exists for the same reason a list beats a hand-typed WHERE clause: the
+ * "uncurated" filter in the admin covered four of fifteen park columns for a
+ * while, so parks with a website, an address and a phone number kept being
+ * handed to the next editor as untouched.
+ */
+export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
+  "curated_name",
+  "curated_land_name",
+  "curated_attraction_type",
+  "curated_minimum_height",
+  "curated_maximum_height",
+  "curated_may_get_wet",
+  "curated_is_seasonal",
+  "curated_season_months",
+];
+
 export function resolveCuratedFacts(
   attraction: CuratedFactsSource,
 ): ResolvedCuratedFacts {
