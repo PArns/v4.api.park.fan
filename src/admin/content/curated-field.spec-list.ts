@@ -63,6 +63,19 @@ export interface CuratedFieldSpec {
   defaultValue?: unknown;
 }
 
+/**
+ * `label`, `group` and `hint` are German, and they are the only German strings
+ * in this repository.
+ *
+ * They are not documentation — they are the words the editor renders. The admin
+ * at park.fan/admin is deliberately unlocalized German (see its layout: "a
+ * surface three people use in one language"), so an English label there is not
+ * a language choice, it is a half-finished screen: "Minimum height" over a
+ * field, under a heading that says "Kuratierte Felder".
+ *
+ * Everything else in this file — the comments, the reasoning — stays English
+ * like the rest of the codebase.
+ */
 export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   {
     key: "curatedName",
@@ -70,121 +83,131 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     type: "text",
     syncedKey: "name",
     resolvedKey: "name",
-    group: "Identity",
+    group: "Identität",
     hint:
-      "Display name only — the slug and the ride's URL stay as they are. " +
-      "There is no redirect table for attractions, so a changed address is a " +
-      "permanent 404.",
+      "Nur der Anzeigename — Slug und Adresse der Bahn bleiben, wie sie sind. " +
+      "Für Attraktionen gibt es keine Weiterleitungstabelle, eine geänderte " +
+      "Adresse wäre also dauerhaft ein 404.",
   },
   {
     key: "curatedLandName",
-    label: "Land",
+    label: "Themenbereich",
     type: "text",
     syncedKey: "landName",
     resolvedKey: "landName",
-    group: "Identity",
-    hint: "Queue-Times' land names are missing for whole parks and go stale after a re-theme.",
+    group: "Identität",
+    hint:
+      "Queue-Times fehlen die Bereichsnamen für ganze Parks, und nach einem " +
+      "Umbau bleiben sie stehen.",
   },
   {
     key: "curatedAttractionType",
-    label: "Type",
+    label: "Art",
     type: "text",
     syncedKey: "attractionType",
     resolvedKey: "attractionType",
-    group: "Identity",
-    hint: "Upstream's coarse category. The ride-type glossary terms live on the ride profile.",
+    group: "Identität",
+    hint:
+      "Die grobe Kategorie des Upstreams. Die Glossarbegriffe zur Bahnart " +
+      "stehen im Ride-Profil.",
   },
   {
     key: "curatedMinimumHeight",
-    label: "Minimum height",
+    label: "Mindestgröße",
     type: "number",
     syncedKey: "minimumHeight",
     resolvedKey: "minimumHeight",
-    group: "Restrictions",
+    group: "Einschränkungen",
     unit: "cm",
     min: 0,
     max: 250,
-    hint: "0 means there is no minimum at all — not a 0 cm limit. Leave empty to accept upstream.",
+    hint:
+      "0 heißt: gar keine Mindestgröße — nicht 0 cm. Leer lassen heißt: der " +
+      "Upstream-Wert gilt.",
   },
   {
     key: "curatedMaximumHeight",
-    label: "Maximum height",
+    label: "Maximalgröße",
     type: "number",
     syncedKey: "maximumHeight",
     resolvedKey: "maximumHeight",
-    group: "Restrictions",
+    group: "Einschränkungen",
     unit: "cm",
     min: 0,
     max: 250,
-    hint: "0 means there is no maximum. Upstream carries one for about 2 % of rides.",
+    hint:
+      "0 heißt: keine Obergrenze. Der Upstream führt eine für etwa 2 % der " +
+      "Bahnen.",
   },
   {
     key: "curatedMayGetWet",
-    label: "May get wet",
+    label: "Man wird nass",
     type: "boolean",
     syncedKey: "mayGetWet",
     resolvedKey: "mayGetWet",
-    group: "Restrictions",
-    hint: "Upstream fills this for a few dozen of ~7000 rides and is occasionally wrong where it does.",
+    group: "Einschränkungen",
+    hint:
+      "Der Upstream füllt das bei ein paar Dutzend von ~7000 Bahnen — und liegt " +
+      "dort gelegentlich daneben.",
   },
   {
     key: "curatedIsSeasonal",
-    label: "Seasonal",
+    label: "Saisonal",
     type: "boolean",
     syncedKey: "isSeasonal",
     resolvedKey: "isSeasonal",
-    group: "Season",
+    group: "Saison",
     hint:
-      "The nightly detector reports what the feed does. Set false for a ride " +
-      "closed for a long refurbishment — that looks identical to a season from " +
-      "the outside.",
+      'Der nächtliche Detektor beschreibt, was der Feed tut. Auf „nein" setzen ' +
+      "bei einer Bahn in langer Revision — von außen sieht die aus wie eine " +
+      "Saison.",
   },
   {
     key: "curatedSeasonMonths",
-    label: "Operating months",
+    label: "Betriebsmonate",
     type: "months",
     syncedKey: "seasonMonths",
     resolvedKey: "seasonMonths",
-    group: "Season",
+    group: "Saison",
     hint:
-      "The detector writes no months for anything watched under 330 days, on " +
-      "purpose — derived months would just be the recording window.",
+      "Unter 330 Tagen Beobachtung schreibt der Detektor absichtlich keine " +
+      "Monate — abgeleitete wären nur unser Aufzeichnungsfenster.",
   },
   {
     key: "hasSingleRider",
-    label: "Single-rider line",
+    label: "Single-Rider-Schlange",
     type: "boolean",
     syncedKey: null,
     resolvedKey: "hasSingleRider",
-    group: "Facilities",
+    group: "Ausstattung",
     hint:
-      "Whether the queue exists at all, not whether it is open right now. " +
-      "Nothing syncs this.",
+      "Ob es sie überhaupt gibt, nicht ob sie gerade offen ist. Das synchronisiert " +
+      "nichts.",
   },
   {
     key: "openWithPark",
-    label: "Open with the park",
+    label: "Offen mit dem Park",
     type: "boolean",
     syncedKey: null,
     resolvedKey: "openWithPark",
-    group: "Facilities",
+    group: "Ausstattung",
     // NOT NULL with a default of false — see `defaultValue`.
     defaultValue: false,
     hint:
-      "Free-flow attractions — playgrounds, splash pads — that have no queue " +
-      "and are accessible whenever the park is open.",
+      "Frei zugängliche Attraktionen — Spielplätze, Wasserspielplätze — ohne " +
+      "Warteschlange, offen, solange der Park offen ist.",
   },
   {
     key: "rcdbId",
-    label: "RCDB id",
+    label: "RCDB-Id",
     type: "number",
     syncedKey: null,
     resolvedKey: "rcdbId",
     group: "Links",
     min: 1,
     hint:
-      "rcdb.com/<id>.htm. One id must never sit on two rides — it would point " +
-      "a ride page at a different ride, and the Wikidata stats import joins on it.",
+      "rcdb.com/<id>.htm. Eine Id darf nie an zwei Bahnen hängen — die Bahnseite " +
+      "zeigte sonst auf eine andere Bahn, und der Wikidata-Import joint darauf.",
   },
 ];
 
@@ -195,43 +218,45 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     type: "text",
     syncedKey: "name",
     resolvedKey: "name",
-    group: "Identity",
+    group: "Identität",
     hint:
-      "Display name only. Changing the park's address is a rename, which " +
-      "writes a redirect — a different operation.",
+      "Nur der Anzeigename. Die Adresse eines Parks zu ändern ist eine " +
+      "Umbenennung, die eine Weiterleitung schreibt — ein anderer Vorgang.",
   },
   {
     key: "curatedParkType",
-    label: "Park type",
+    label: "Parkart",
     type: "enum",
     syncedKey: "parkType",
     resolvedKey: "parkType",
-    group: "Identity",
+    group: "Identität",
     options: ["THEME_PARK", "WATER_PARK"],
-    hint: "Upstream files water parks inside a combined resort as theme parks.",
+    hint: "Der Upstream führt Wasserparks innerhalb eines Resorts als Freizeitparks.",
   },
   {
     key: "curatedNoWaitTimesReason",
-    label: "Wait times unreadable",
+    label: "Wartezeiten nicht lesbar",
     type: "enum",
     syncedKey: null,
     resolvedKey: "noWaitTimesReason",
-    group: "Data sources",
+    group: "Datenquellen",
     options: ["in_park_app_only", "not_published"],
     hint:
-      "Set this only for a park that publishes wait times nowhere we can read. " +
-      "It cannot be derived: at 03:00 such a park and a park shut for the night " +
-      "look identical.",
+      "Nur für einen Park setzen, der seine Wartezeiten nirgends veröffentlicht, " +
+      "wo wir sie lesen können. Ableiten lässt sich das nicht: um 03:00 sieht so " +
+      "ein Park aus wie einer, der über Nacht geschlossen hat.",
   },
   {
     key: "curatedWebsite",
-    label: "Official website",
+    label: "Offizielle Website",
     type: "url",
     syncedKey: null,
     resolvedKey: null,
     group: "Links",
     maxLength: 500,
-    hint: "The park's own front page. One address for all six languages — most parks answer in the visitor's.",
+    hint:
+      "Die eigene Startseite des Parks. Eine Adresse für alle sechs Sprachen — " +
+      "die meisten Parks antworten in der des Besuchers.",
   },
   {
     key: "curatedTicketsUrl",
@@ -241,7 +266,7 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     resolvedKey: null,
     group: "Links",
     maxLength: 500,
-    hint: "The shop, when it is somewhere other than the front page. Leave empty if it is not.",
+    hint: "Der Shop, wenn er woanders liegt als die Startseite. Sonst leer lassen.",
   },
   {
     key: "curatedWikipediaUrl",
@@ -251,7 +276,7 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     resolvedKey: null,
     group: "Links",
     maxLength: 500,
-    hint: "Any language — the article links to its own translations.",
+    hint: "Beliebige Sprache — der Artikel verlinkt seine Übersetzungen selbst.",
   },
   {
     key: "curatedInstagramUrl",
@@ -282,64 +307,66 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   },
   {
     key: "curatedStreetAddress",
-    label: "Street",
+    label: "Straße",
     type: "text",
     syncedKey: null,
     resolvedKey: null,
-    group: "Contact",
+    group: "Kontakt",
     maxLength: 200,
-    hint: "Street and number. The geocoding gives us the city and stops there.",
+    hint: "Straße und Hausnummer. Das Geocoding liefert die Stadt und hört da auf.",
   },
   {
     key: "curatedPostalCode",
-    label: "Postal code",
+    label: "PLZ",
     type: "text",
     syncedKey: null,
     resolvedKey: null,
-    group: "Contact",
+    group: "Kontakt",
     maxLength: 20,
   },
   {
     key: "curatedPhone",
-    label: "Phone",
+    label: "Telefon",
     type: "text",
     syncedKey: null,
     resolvedKey: null,
-    group: "Contact",
+    group: "Kontakt",
     maxLength: 40,
-    hint: "As it should be dialled from abroad, with the country code.",
+    hint: "So, wie man aus dem Ausland wählt, mit Ländervorwahl.",
   },
   {
     key: "curatedOpenedYear",
-    label: "Opened",
+    label: "Eröffnet",
     type: "number",
     syncedKey: null,
     resolvedKey: null,
-    group: "Facts",
+    group: "Eckdaten",
     min: 1550,
     max: 2100,
-    hint: "The year it opened to the public. Bakken says 1583, so the floor is low on purpose.",
+    hint:
+      "Das Jahr der Eröffnung für Besucher. Bakken sagt 1583, deshalb liegt die " +
+      "Untergrenze so tief.",
   },
   {
     key: "curatedAreaHectares",
-    label: "Area",
+    label: "Fläche",
     type: "decimal",
     syncedKey: null,
     resolvedKey: null,
-    group: "Facts",
+    group: "Eckdaten",
     unit: "ha",
     min: 0,
     max: 100000,
-    hint: "The area open to visitors, not the company's land holdings.",
+    hint: "Die für Besucher zugängliche Fläche, nicht der Grundbesitz der Firma.",
   },
   {
     key: "curationNote",
-    label: "Curation note",
+    label: "Notiz",
     type: "longtext",
     syncedKey: null,
     resolvedKey: null,
-    group: "Notes",
-    hint: "Not shown to visitors. Context for whoever reads this row next.",
+    group: "Notizen",
+    hint: "Sehen Besucher nicht. Kontext für den, der diese Zeile als Nächstes liest.",
   },
 ];
 
