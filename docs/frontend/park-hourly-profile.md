@@ -72,7 +72,7 @@ interface ParkHourlyProfile {
 
 ## Which hours become columns
 
-Two tests, and an hour must pass both:
+Three tests, and an hour must pass all of them:
 
 1. **10 measured days** across the window — an absolute floor for small or young
    parks.
@@ -84,7 +84,16 @@ Two tests, and an hour must pass both:
    Measuring each hour against the hours the park is _always_ open scales to
    both.
 
-The day count behind this is **per (ride, hour)** — the days that hour was
+3. **At least half the rides in the table report it.** The two day-count tests
+   ask the _best-observed_ ride whether an hour exists, so one ride is enough to
+   mint a column: Europa-Park opened at 07:00 and 08:00 with seven of eight rows
+   empty, which is the hotel guests' early entry through one queue, not an hour
+   of the park's day. This test runs after the ranking and the `topN` cut, so it
+   asks the rides the table will actually show. `peakHour` is recomputed against
+   the trimmed axis — a peak in a cut hour would point at a column the response
+   no longer carries.
+
+The day count behind the first two is **per (ride, hour)** — the days that hour was
 measured. It is not the ride's `sample_days`, which counts its measured days
 across the whole window and is identical for all 24 of its hours. Reading the
 wrong one is what shipped 21:00–23:00 columns for Europa-Park at 58–68 minutes:

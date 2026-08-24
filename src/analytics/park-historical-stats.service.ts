@@ -41,7 +41,7 @@ const MIN_SAMPLES_PER_HOUR = 2;
 const DEFAULT_MIN_ATTRACTION_DAYS = 20;
 
 /** Hourly-profile schema version (see ParkHourlyProfileDto). */
-const HOURLY_SCHEMA_VERSION = 2;
+const HOURLY_SCHEMA_VERSION = 3;
 
 /**
  * An hour needs this many measured days across the window to be drawn at all.
@@ -61,6 +61,17 @@ const MIN_DAYS_PER_HOUR = 10;
  * frontend's quietest-day rule, and for the same reason.
  */
 const MIN_HOUR_DAY_RATIO = 0.4;
+
+/**
+ * …and this share of the rides in the table must actually report it.
+ *
+ * The day-count tests above ask the BEST-observed ride whether an hour exists,
+ * so one ride is enough to mint a column. Europa-Park then opened at 07:00 and
+ * 08:00 with seven of eight rows empty: that is the hotel guests' early entry
+ * through one queue, not an hour of the park's day. A column the table cannot
+ * fill is width taken from a matrix that has to fit on a phone.
+ */
+const MIN_HOUR_RIDE_RATIO = 0.5;
 
 /** One operating day's headliner-only values (peak + typical wait). */
 interface DayValue {
@@ -274,7 +285,7 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
-    const cacheKey = `park:hourly-profile:v2:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cacheKey = `park:hourly-profile:v3:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -388,34 +399,48 @@ export class ParkHistoricalStatsService {
       byAttraction.set(slug, entry);
     }
 
-    const attractions: HourlyProfileAttractionDto[] = [...byAttraction.values()]
-      .map((a) => {
-        const p50 = hours.map((h) => a.p50.get(h) ?? null);
-        const p90 = hours.map((h) => a.p90.get(h) ?? null);
-        let peakHour: number | null = null;
-        let peakValue = -1;
-        hours.forEach((h, i) => {
-          const v = p50[i];
-          if (v != null && v > peakValue) {
-            peakValue = v;
-            peakHour = h;
-          }
-        });
-        return {
-          attractionSlug: a.slug,
-          attractionName: a.name,
-          land: a.land,
-          p50,
-          p90,
-          peakHour,
-          sampleDays: a.sampleDays,
-          _peak: peakValue,
-        };
-      })
-      .filter((a) => a._peak >= 0)
-      .sort((a, b) => b._peak - a._peak)
-      .slice(0, topN)
-      .map(({ _peak, ...rest }) => rest);
+    // Rank and cut first, so the coverage test below asks the rides the table
+    // will actually show rather than the up-to-60 the SQL over-fetched.
+    const ranked = [...byAttraction.values()]
+      .map((a) => ({
+        ...a,
+        peak: Math.max(-1, ...[...a.p50.values()]),
+      }))
+      .filter((a) => a.peak >= 0)
+      .sort((a, b) => b.peak - a.peak)
+      .slice(0, topN);
+
+    // An hour half the table cannot fill is not an hour of the park's day.
+    const visibleHours = hours.filter(
+      (h) =>
+        ranked.filter((a) => a.p50.has(h)).length >=
+        ranked.length * MIN_HOUR_RIDE_RATIO,
+    );
+
+    const attractions: HourlyProfileAttractionDto[] = ranked.map((a) => {
+      const p50 = visibleHours.map((h) => a.p50.get(h) ?? null);
+      const p90 = visibleHours.map((h) => a.p90.get(h) ?? null);
+      // Recomputed against the trimmed axis: a peak that fell outside it would
+      // point at a column the response no longer carries.
+      let peakHour: number | null = null;
+      let peakValue = -1;
+      visibleHours.forEach((h, i) => {
+        const v = p50[i];
+        if (v != null && v > peakValue) {
+          peakValue = v;
+          peakHour = h;
+        }
+      });
+      return {
+        attractionSlug: a.slug,
+        attractionName: a.name,
+        land: a.land,
+        p50,
+        p90,
+        peakHour,
+        sampleDays: a.sampleDays,
+      };
+    });
 
     const totalSampleDays = attractions.reduce(
       (max, a) => Math.max(max, a.sampleDays),
@@ -423,7 +448,7 @@ export class ParkHistoricalStatsService {
     );
 
     return {
-      hours,
+      hours: visibleHours,
       attractions,
       meta: {
         parkSlug: park.slug,
@@ -434,7 +459,7 @@ export class ParkHistoricalStatsService {
         // Two independent ways to have nothing worth drawing: no ride cleared
         // the sample floor, or the park's hours are so ragged that no single
         // hour was measured on enough days to be a column.
-        displayable: hours.length >= 3 && attractions.length > 0,
+        displayable: visibleHours.length >= 3 && attractions.length > 0,
         generatedAt: new Date().toISOString(),
         schemaVersion: HOURLY_SCHEMA_VERSION,
       },
