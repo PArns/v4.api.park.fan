@@ -6,6 +6,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { safeJsonParse } from "../common/utils/json.util";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { Park } from "../parks/entities/park.entity";
 import {
@@ -221,8 +222,8 @@ export class ParkHistoricalStatsService {
       month: g.key,
       avgCrowdScore: this.toCrowdScore(g.avgP50),
       avgCrowdLevel: this.toCrowdLevel(g.avgP90, typicalDayPeak),
-      avgWaitP50: Math.round(g.avgP50),
-      avgWaitP90: Math.round(g.avgP90),
+      avgWaitP50: roundToNearest5Minutes(g.avgP50),
+      avgWaitP90: roundToNearest5Minutes(g.avgP90),
       sampleDays: g.sampleDays,
     }));
 
@@ -233,16 +234,26 @@ export class ParkHistoricalStatsService {
       dayOfWeek: g.key,
       avgCrowdScore: this.toCrowdScore(g.avgP50),
       avgCrowdLevel: this.toCrowdLevel(g.avgP90, typicalDayPeak),
-      avgWaitP50: Math.round(g.avgP50),
-      avgWaitP90: Math.round(g.avgP90),
+      avgWaitP50: roundToNearest5Minutes(g.avgP50),
+      avgWaitP90: roundToNearest5Minutes(g.avgP90),
       sampleDays: g.sampleDays,
     }));
 
+    // Every minute figure this service emits goes through
+    // `roundToNearest5Minutes`, the same helper the calendar, the PCN serving
+    // path and the typical-waits job use. Parks post their waits in five-minute
+    // steps, so a stored p50 is always a multiple of five — but PERCENTILE_CONT
+    // interpolates between two of them and AVG() across days blurs the rest, and
+    // the table then printed 51, 53, 47: readings no park has ever displayed and
+    // no visitor can be shown. The crowd score and level a few lines up keep the
+    // RAW averages deliberately: they are ratios against the typical day peak,
+    // and coarsening the input before dividing would move rides across a tier
+    // boundary for no reason.
     const topAttractions: TopAttractionStatDto[] = topAttrRaw.map((r, i) => ({
       attractionSlug: r.slug as string,
       attractionName: r.name as string,
-      avgWaitP50: Math.round(Number(r.avg_p50)),
-      avgWaitP90: Math.round(Number(r.avg_p90)),
+      avgWaitP50: roundToNearest5Minutes(Number(r.avg_p50)),
+      avgWaitP90: roundToNearest5Minutes(Number(r.avg_p90)),
       sampleDays: Number(r.sample_days),
       rank: i + 1,
       land: (r.land as string | null) ?? null,
@@ -392,8 +403,13 @@ export class ParkHistoricalStatsService {
       // and to the odd hour a single ride stayed open for, and one such cell
       // next to a column of well-measured ones reads as a comparable value.
       if (Number(r.hour_days) >= MIN_DAYS_PER_HOUR) {
-        entry.p50.set(hour, Math.round(Number(r.p50)));
-        entry.p90.set(hour, Math.round(Number(r.p90)));
+        // Stored RAW. Rounding happens once, on the way out — the ordering
+        // decisions below (which ride ranks where, which hour is its peak) read
+        // these, and five-minute buckets create ties that a raw comparison does
+        // not have: a ride reading 51 at 11:00 and 53 at 12:00 peaks at noon,
+        // but rounded both are 50 and the first hour wins by accident.
+        entry.p50.set(hour, Number(r.p50));
+        entry.p90.set(hour, Number(r.p90));
       }
       entry.sampleDays = Math.max(entry.sampleDays, Number(r.sample_days));
       byAttraction.set(slug, entry);
@@ -418,25 +434,26 @@ export class ParkHistoricalStatsService {
     );
 
     const attractions: HourlyProfileAttractionDto[] = ranked.map((a) => {
-      const p50 = visibleHours.map((h) => a.p50.get(h) ?? null);
-      const p90 = visibleHours.map((h) => a.p90.get(h) ?? null);
       // Recomputed against the trimmed axis: a peak that fell outside it would
-      // point at a column the response no longer carries.
+      // point at a column the response no longer carries. Decided on the raw
+      // values, before the five-minute rounding flattens neighbouring hours.
       let peakHour: number | null = null;
       let peakValue = -1;
-      visibleHours.forEach((h, i) => {
-        const v = p50[i];
+      for (const h of visibleHours) {
+        const v = a.p50.get(h);
         if (v != null && v > peakValue) {
           peakValue = v;
           peakHour = h;
         }
-      });
+      }
+      const round = (v: number | undefined) =>
+        v == null ? null : roundToNearest5Minutes(v);
       return {
         attractionSlug: a.slug,
         attractionName: a.name,
         land: a.land,
-        p50,
-        p90,
+        p50: visibleHours.map((h) => round(a.p50.get(h))),
+        p90: visibleHours.map((h) => round(a.p90.get(h))),
         peakHour,
         sampleDays: a.sampleDays,
       };
