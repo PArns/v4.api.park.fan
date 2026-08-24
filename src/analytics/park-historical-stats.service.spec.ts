@@ -511,6 +511,60 @@ describe("ParkHistoricalStatsService", () => {
       ).toBe(12);
     });
 
+    it("reports every wait in five-minute steps", async () => {
+      // Parks post their waits in five-minute steps, so a stored p50 is always a
+      // multiple of five — but PERCENTILE_CONT interpolates between two of them
+      // and AVG() across days blurs the rest. 51 and 53 are readings no park has
+      // ever displayed, and the table used to print them verbatim.
+      aggregateQuery.mockImplementation(
+        routeHourly(
+          [10, 11, 12].map((hour_of_day, i) => ({
+            slug: "voletarium",
+            name: "Voletarium",
+            land: "Iceland",
+            hour_of_day,
+            p50: [51, 53, 47][i],
+            p90: [58, 62, 54][i],
+            hour_days: 115,
+            sample_days: 120,
+          })),
+        ),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      const vol = result.attractions.find(
+        (a) => a.attractionSlug === "voletarium",
+      )!;
+      for (const v of [...vol.p50, ...vol.p90]) {
+        if (v != null) expect(v % 5).toBe(0);
+      }
+      expect(vol.p50).toEqual([50, 55, 45]);
+      expect(vol.p90).toEqual([60, 60, 55]);
+    });
+
+    it("picks the peak hour before rounding, not after", async () => {
+      // 51 and 53 both round to 50. Deciding the peak on the rounded values
+      // makes the EARLIER hour win a tie that does not exist in the data.
+      aggregateQuery.mockImplementation(
+        routeHourly(
+          [10, 11, 12].map((hour_of_day, i) => ({
+            slug: "voletarium",
+            name: "Voletarium",
+            land: "Iceland",
+            hour_of_day,
+            p50: [51, 53, 47][i],
+            p90: [58, 62, 54][i],
+            hour_days: 115,
+            sample_days: 120,
+          })),
+        ),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      expect(
+        result.attractions.find((a) => a.attractionSlug === "voletarium")!
+          .peakHour,
+      ).toBe(11);
+    });
+
     it("ranks by the busiest hour, not the all-day average", async () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
       const result = await service.getParkHourlyProfile(park, 1, 8);
