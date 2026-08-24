@@ -373,6 +373,108 @@ describe("ParkHistoricalStatsService", () => {
       expect(late.p50[result.hours.indexOf(10)]).toBe(30);
     });
 
+    /**
+     * Two further well-measured rides, so a coverage test has a table big
+     * enough to express "one ride out of many" — the production case was one
+     * of eight. With the base fixture's two rides, one reporting an hour IS
+     * half of them, which the rule lets through by design.
+     */
+    const extraRides = ["blue-fire", "silver-star"].flatMap((slug) =>
+      [
+        [9, 18, 24],
+        [10, 26, 34],
+        [11, 24, 31],
+        [12, 20, 27],
+      ].map(([h, p50, p90]) => ({
+        slug,
+        name: slug,
+        land: null,
+        hour_of_day: h,
+        p50,
+        p90,
+        hour_days: 114,
+        sample_days: 117,
+      })),
+    );
+
+    it("drops an hour that only one ride in the table can fill", async () => {
+      // Europa-Park's hotel guests enter at 08:15 through one queue. The hour
+      // clears both day-count tests on that ride alone, and shipped a column
+      // with seven of eight rows empty.
+      aggregateQuery.mockImplementation(
+        routeHourly([
+          ...hourRows,
+          ...extraRides,
+          {
+            slug: "voletarium",
+            name: "Voletarium",
+            land: "Iceland",
+            hour_of_day: 7,
+            p50: 0,
+            p90: 2,
+            hour_days: 115,
+            sample_days: 120,
+          },
+        ]),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      // One of four rides reports 07:00.
+      expect(result.hours).not.toContain(7);
+      expect(
+        result.attractions.every((a) => a.p50.length === result.hours.length),
+      ).toBe(true);
+    });
+
+    it("keeps an hour once half the table reports it", async () => {
+      aggregateQuery.mockImplementation(
+        routeHourly([
+          ...hourRows,
+          ...extraRides,
+          ...["voletarium", "wodan"].map((slug) => ({
+            slug,
+            name: slug,
+            land: null,
+            hour_of_day: 8,
+            p50: 12,
+            p90: 18,
+            hour_days: 115,
+            sample_days: 120,
+          })),
+        ]),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      // Two of four — exactly the share the rule admits.
+      expect(result.hours).toContain(8);
+    });
+
+    it("recomputes peakHour against the trimmed axis", async () => {
+      // Voletarium's highest reading sits in an hour only it reports, so that
+      // hour is cut — peakHour must move to a column the response still has.
+      aggregateQuery.mockImplementation(
+        routeHourly([
+          ...hourRows,
+          ...extraRides,
+          {
+            slug: "voletarium",
+            name: "Voletarium",
+            land: "Iceland",
+            hour_of_day: 7,
+            p50: 200,
+            p90: 220,
+            hour_days: 115,
+            sample_days: 120,
+          },
+        ]),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      const vol = result.attractions.find(
+        (a) => a.attractionSlug === "voletarium",
+      )!;
+      expect(result.hours).not.toContain(7);
+      expect(vol.peakHour).toBe(10);
+      expect(result.hours).toContain(vol.peakHour!);
+    });
+
     it("measures an hour against the best-observed hour, not a flat threshold", async () => {
       // A winter-only evening hour: 40 measured days clears the absolute floor
       // of 10 but is well under 40 % of the 118 days the midday hours carry.

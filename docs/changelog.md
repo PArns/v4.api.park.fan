@@ -6,6 +6,24 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — eine Stunde, die eine einzige Bahn meldet, ist keine Spalte
+
+Nach dem vorigen Fix blieben 7 und 8 Uhr als Spalten stehen, in denen sieben
+beziehungsweise sechs von acht Bahnen leer waren. Das ist die Frühöffnung für
+Hotelgäste durch eine einzelne Warteschlange, nicht eine Stunde des Parktags –
+und es kostet zwei Spalten am linken Rand einer Matrix, die auf ein Handy passen
+muss.
+
+Die beiden Messtage-Prüfungen fragen die **bestbeobachtete** Bahn, ob es eine
+Stunde gibt, also genügt eine Bahn, um eine Spalte zu erzeugen. Dazu kommt jetzt
+eine dritte Bedingung: mindestens die Hälfte der Bahnen in der Tabelle muss die
+Stunde melden. Sie läuft nach der Sortierung und dem `topN`-Schnitt, fragt also
+die Bahnen, die tatsächlich gezeigt werden. `peakHour` wird gegen die gekürzte
+Achse neu berechnet, sonst zeigt es auf eine Spalte, die die Antwort nicht mehr
+enthält.
+
+`schemaVersion` ist 3, der Redis-Key liegt auf `v3`.
+
 ### Fixed — das Stundenprofil zeichnete Spalten für Stunden, in denen der Park zu hat
 
 Europa-Park kam mit Spalten für 21, 22 und 23 Uhr heraus, mit Werten zwischen 58
