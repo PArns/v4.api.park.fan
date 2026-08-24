@@ -28,7 +28,7 @@
 - [Calendar, Schedule & ML Rules](docs/architecture/calendar-schedule-and-ml-rules.md) - Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
 - [Caching Strategy](docs/architecture/caching-strategy.md) - Redis keys and TTLs.
 - [Location Resolution & GeoIP](docs/architecture/location-resolution.md) - User location from lat/lng or IP (GeoLite2-City); used by nearby and favorites.
-- [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md) - **2026-08-15**: who owns which cell and what an absent fact may become. The three status regimes (real feed / free-flow `open_with_park` / `UNKNOWN` when no source reports a ride), `is_seasonal` vs `season_months` and why months derived from under a year of history are just our recording window (`MIN_OBSERVED_DAYS`), the two-writers curated-column rule, the 73-day `detect-seasonal` outage and the ThemeParks.wiki feed drops. Includes diagnostic SQL.
+- [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md) - **2026-08-15/17**: who owns which cell and what an absent fact may become. The three status regimes (real feed / free-flow `open_with_park` / `UNKNOWN` when no source reports a ride), `is_seasonal` vs `season_months` and why months derived from under a year of history are just our recording window (`MIN_OBSERVED_DAYS`), the two-writers curated-column rule, the 73-day `detect-seasonal` outage and the ThemeParks.wiki feed drops. Also: identity comes from the externalId and not the slug (§4a), review marks so a settled verdict is not re-litigated (§4b), and the duplicate-detection traps — map numbers in ride names, one source naming two things alike. Includes diagnostic SQL.
 - [Weather](docs/architecture/weather.md) - Open-Meteo sync (16-day forecast), park timezone handling, why parks may have empty weather (missing coordinates).
 
 ### 📊 Analytics & Logic
@@ -50,6 +50,10 @@
 ### 💾 Database
 - [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
 
+### 🔐 Admin
+- [Admin Authentication](docs/admin/authentication.md) - Accounts, opaque Redis sessions, scrypt passwords, TOTP, the two login rate-limit buckets, and the deprecated shared pass (`ADMIN_LEGACY_PASS`) with its switch-off.
+- [Curation](docs/admin/curation.md) - The curated columns, the field-descriptor contract the editor is generated from, the four-step publish order (write → evict Redis → revalidate → revalidate again after the CDN window), and undo.
+
 ### 💻 Development
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
@@ -61,6 +65,7 @@
 - [Precomputed best-days endpoint (`/best-days`)](docs/frontend/best-days-endpoint.md) - Lean today→+90d projection (status/crowd/holiday flags + optional weekday aggregate) served from a materialized Redis snapshot the calendar warmup refreshes; p99 < 300 ms, CDN-cached, fires the on-change revalidation webhook.
 - [Calendar: status (UNKNOWN vs CLOSED)](docs/frontend/calendar-schedule-status.md) - How to display opening hours and status in the calendar UI.
 - [Parks we cannot read (`liveWaitTimes`)](docs/frontend/live-wait-times-availability.md) - Parks that publish wait times only inside their own app/WLAN (Hansa-Park). Curated in `parks/data/live-wait-time-sources.ts`; `available: false` is about the source, not freshness. The API skips the optimistic ride fallback (rides read `UNKNOWN`), rates crowds `unknown` and withholds forecasts — but a client that ignores the flag still renders an empty park as a quiet one.
+- [The park's day shape (`/stats/hourly`)](docs/frontend/park-hourly-profile.md) - Median and busy wait per hour of the operating day, ride by ride, in ~2 KB where the attraction detail endpoint costs ~53 KB per ride. `hours` is derived from the data (an hour needs 10 measured days to be a column), the ranking is by each ride's **busiest hour** not its daily average, and the bucket is read in the park's timezone. Also documents the `topAttractions` sample floor that stopped a one-day average from leading a park's top-ten.
 - [Ride P50/P90 stats (`typicalWaits`)](docs/frontend/ride-typical-waits.md) - The typical (P50) vs busy (P90) peak-wait stats on the attraction detail endpoint: shape, `displayable` gate, weekday/weekend + per-day breakdown, record peak.
 - [Ride ↔ Glossary link (`rideProfile`)](docs/frontend/ride-glossary-link.md) - Curated per-ride track figures, ride type, manufacturer and opening year, stored as **glossary term ids** so a ride page can link into the glossary and the glossary can list the rides that feature a term. **The `attraction_ride_profiles` rows ARE the source of truth** — edited directly in the DB, no seed file and no apply job; reverse lookup at `/v1/glossary/terms/:termId/attractions`.
 - [Severe-weather warnings (`weather.warnings`)](docs/frontend/weather-warnings.md) - The `WeatherWarningDto[]` on the park weather + nowcast (MeteoGate/DWD): shape, de/en localization, severity→colour, validity, banner rendering, EU-only coverage.
@@ -156,6 +161,14 @@ ml-service/            # 🐍 Python CatBoost Service
 - **Research, never recall.** Facts about real rides and parks (heights, wet
   flags, whether something is free-flow, seasons) come from the operator's own
   pages. A name pattern is not evidence.
+- **Identity is the `externalId`, never the slug.** A slug is a frozen name that
+  renames deliberately do not move, so 281 rows carry a slug that no longer
+  matches — that is the system working. Resolve a disputed name against the
+  upstream entity, not against what its slug implies.
+- **A behavioural detector cannot remember.** Duplicate and retirement detection
+  describe the feed, so a cleared candidate returns tomorrow unless the verdict
+  is written to `attraction_review_marks`. Give it a `recheck_after` whenever the
+  answer can change.
 
 ---
 

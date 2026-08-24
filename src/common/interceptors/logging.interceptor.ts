@@ -8,6 +8,7 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
+import { redactUrl } from "../utils/redact-url.util";
 
 /**
  * Global logging interceptor for HTTP requests.
@@ -18,6 +19,13 @@ import { Request, Response } from "express";
  * - Admin/ML endpoints
  *
  * Filters out routine GET/POST requests to reduce log spam.
+ *
+ * URLs go through `redactUrl` first, because this logs every request whose URL
+ * contains `/admin` and the deprecated shared pass travels in the query string.
+ * It only ever sees a request that returned, though: `tap()` below is a
+ * next-only observer, so a request that threw is logged by `HttpExceptionFilter`
+ * instead — which is why the redaction is a shared util and not a function in
+ * this file.
  */
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
@@ -28,7 +36,8 @@ export class LoggingInterceptor implements NestInterceptor {
     const request = ctx.getRequest<Request>();
     const response = ctx.getResponse<Response>();
 
-    const { method, url, ip } = request;
+    const { method, ip } = request;
+    const url = redactUrl(request.url);
 
     const startTime = Date.now();
 

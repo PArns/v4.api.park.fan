@@ -34,6 +34,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { forwardRef } from "@nestjs/common";
 import { HolidaysModule } from "../holidays/holidays.module";
 import { BullModule } from "@nestjs/bull";
+import { AdminAuthModule } from "../admin/auth/admin-auth.module";
 
 @Module({
   imports: [
@@ -42,6 +43,14 @@ import { BullModule } from "@nestjs/bull";
     }),
     WeatherModule,
     AnalyticsModule,
+    // The four write endpoints on MLMonitoringController carry
+    // `AdminAuthGuard`, and Nest resolves a controller's guards from the
+    // module that declares the controller. AdminAuthModule is @Global, so the
+    // full application graph would supply it via AdminModule — but only once
+    // something imports it, which is not true of a test or a script that pulls
+    // MLModule on its own. Importing it here makes the module carry its own
+    // dependency instead of relying on somebody else having loaded it.
+    AdminAuthModule,
     forwardRef(() => ParksModule),
     TypeOrmModule.forFeature([
       WaitTimePrediction,

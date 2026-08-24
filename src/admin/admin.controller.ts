@@ -11,6 +11,8 @@ import {
   HttpException,
   BadRequestException,
   Logger,
+  UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -38,6 +40,9 @@ import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
+import { AdminAuthGuard } from "./auth/admin-auth.guard";
+import { AdminMinRole } from "./auth/admin-auth.decorators";
+import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
 import {
   AttractionRetirementService,
@@ -51,15 +56,27 @@ import {
 /**
  * Admin Controller
  *
- * ⚠️ SECURITY NOTICE:
- * These administrative endpoints are protected in production via Cloudflare.
- * Access requires `pass=XXX` query parameter with valid API key.
+ * Every endpoint here needs a signed-in administrator — see `AdminAuthGuard`,
+ * which is on the class rather than on each method so that a new endpoint is
+ * protected by default and has to opt OUT to be public.
  *
- * On development/local environments, endpoints are accessible without authentication.
+ * That is a change of posture, not a tightening of one. Until it, these
+ * endpoints were documented as "protected in production via Cloudflare", which
+ * describes traffic arriving through Cloudflare and says nothing about traffic
+ * that does not: this application never checked the `pass` parameter it
+ * advertised, in any environment, so anything able to reach the origin could
+ * merge parks, retire attractions or flush every cache. Cloudflare's rule stays
+ * where it is; this is the second lock, on the inside of the same door.
+ *
+ * Roles follow what an action costs to get wrong. Reads need any session.
+ * Job triggers and curation need `editor`. The handful that cannot be undone —
+ * merges, retirements, repair, a full cache reset — need `owner`.
  */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
 @Controller("admin")
+@UseGuards(AdminAuthGuard)
+@UseInterceptors(AdminAuditInterceptor)
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
@@ -125,6 +142,7 @@ export class AdminController {
    * way; a permanent mark there would hide its eventual retirement forever.
    */
   @Post("review-marks")
+  @AdminMinRole("editor")
   @ApiOperation({ summary: "Mark candidates as investigated and not a case" })
   async recordReviewMarks(@Body() body: { marks: ReviewMarkRequest[] }) {
     return { recorded: await this.reviewService.record(body.marks ?? []) };
@@ -140,6 +158,7 @@ export class AdminController {
   }
 
   @Post("retire-attractions")
+  @AdminMinRole("owner")
   @ApiOperation({ summary: "Retire attractions that no longer exist" })
   async retireAttractions(@Body() body: { retirements: RetirementRequest[] }) {
     const retired = await this.retirementService.retire(body.retirements ?? []);
@@ -147,6 +166,7 @@ export class AdminController {
   }
 
   @Post("unretire-attraction/:id")
+  @AdminMinRole("owner")
   @ApiOperation({ summary: "Undo a retirement" })
   async unretireAttraction(@Param("id") id: string) {
     return { restored: await this.retirementService.unretire(id) };
@@ -314,6 +334,7 @@ export class AdminController {
    * Useful after code changes to holiday storage logic.
    */
   @Post("sync-holidays")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger holiday sync",
@@ -343,6 +364,7 @@ export class AdminController {
    * Useful for testing duplicate detection and matching improvements.
    */
   @Post("sync-parks")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger park metadata sync",
@@ -371,6 +393,7 @@ export class AdminController {
    * Updates holiday/bridge day metadata in schedule entries.
    */
   @Post("fill-schedule-gaps")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Fill schedule gaps",
@@ -404,6 +427,7 @@ export class AdminController {
    * corrections live in `curated_may_get_wet` and are never touched here.
    */
   @Post("sync-attraction-details")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger attraction detail sync",
@@ -436,6 +460,7 @@ export class AdminController {
    * Useful for fixing missing countryCode fields.
    */
   @Post("enrich-parks")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger park enrichment",
@@ -464,6 +489,7 @@ export class AdminController {
    * Forces a complete model retraining with latest data.
    */
   @Post("train-ml-model")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger ML training",
@@ -491,6 +517,7 @@ export class AdminController {
    * first models otherwise don't exist until then); `forecast`/`score` are for testing.
    */
   @Post("pcn/:action")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger a PCN shadow job (train | forecast | score)",
@@ -522,6 +549,7 @@ export class AdminController {
    * writes shape_forecasts and `score` writes the shape_comparisons board.
    */
   @Post("shape/:action")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger a Shape shadow job (build | forecast | score)",
@@ -553,6 +581,7 @@ export class AdminController {
    * Refreshes MAE/MAPE/R2 metrics for all attractions.
    */
   @Post("aggregate-accuracy-stats")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger accuracy stats aggregation",
@@ -588,6 +617,7 @@ export class AdminController {
    * by any upstream source).
    */
   @Post("detect-seasonal")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Trigger seasonal detection",
@@ -623,6 +653,7 @@ export class AdminController {
    * controlled window — it may decompress old TimescaleDB chunks.
    */
   @Post("dedupe-percentile-aggregates")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Dedupe percentile aggregates",
@@ -655,6 +686,7 @@ export class AdminController {
    * while preserving Bull queue jobs and system caches.
    */
   @Post("flush-cache")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Flush park cache",
@@ -743,6 +775,7 @@ export class AdminController {
    * 4. Live Data (70) - Current wait times and schedules
    */
   @Post("cache/reset")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Complete cache reset and rebuild",
@@ -814,6 +847,7 @@ export class AdminController {
    * and optionally repairs found issues automatically.
    */
   @Post("validate-and-repair-parks")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Validate and repair parks",
@@ -1047,6 +1081,7 @@ export class AdminController {
    * past the CDN window.
    */
   @Post("publish-ride-profiles")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Publish hand-curated ride profiles",
@@ -1100,6 +1135,7 @@ export class AdminController {
    * later run.
    */
   @Post("import-ride-stats")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Import ride measurements from Wikidata",
@@ -1127,6 +1163,7 @@ export class AdminController {
    * weekly on its own; this is for filling the gap on demand.
    */
   @Post("sync-six-flags-heights")
+  @AdminMinRole("editor")
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: "Fill missing ride heights from the Six Flags sites",
@@ -1158,6 +1195,7 @@ export class AdminController {
    * already-indexed URLs.
    */
   @Post("parks/:id/correct-location")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Correct a park's city and/or coordinates",
@@ -1249,12 +1287,73 @@ export class AdminController {
   }
 
   /**
+   * The park duplicates, and which row a merge would keep.
+   *
+   * A read, which the park side did not have: detection lived inside
+   * `POST merge-duplicate-parks` behind `autoDetect: true`, and that flag
+   * merges everything it finds in the same call. So the only way to ask "what
+   * would you merge" was to merge it, and the admin's "search" button ended up
+   * sending `autoDetect: false` with no ids — a combination the endpoint
+   * answers with its own usage message and nothing else.
+   *
+   * `winnerId` is resolved by `determineMergeWinner`, the same function the
+   * merge uses, because the order two ids are typed in carries no weight and
+   * an operator who believes otherwise deletes the wrong park.
+   */
+  @Get("duplicate-parks")
+  @ApiOperation({
+    summary: "List parks that look like the same place, with the likely winner",
+  })
+  @ApiResponse({ status: 200, description: "Duplicate park pairs" })
+  async listDuplicateParks(): Promise<{
+    total: number;
+    pairs: Array<{
+      park1: { id: string; name: string; city: string | null };
+      park2: { id: string; name: string; city: string | null };
+      score: number;
+      reason: string;
+      winnerId: string | null;
+      loserId: string | null;
+    }>;
+  }> {
+    const duplicates = await this.parkValidatorService.findDuplicates();
+    if (duplicates.length === 0) return { total: 0, pairs: [] };
+
+    // One query for every park involved, rather than two per pair.
+    const parkRepo = this.parkValidatorService.getParkRepository();
+    const ids = Array.from(
+      new Set(duplicates.flatMap((d) => [d.park1.id, d.park2.id])),
+    );
+    const parks = await parkRepo.find({ where: { id: In(ids) } });
+    const parkById = new Map(parks.map((park) => [park.id, park]));
+
+    return {
+      total: duplicates.length,
+      pairs: duplicates.map((duplicate) => {
+        const park1 = parkById.get(duplicate.park1.id);
+        const park2 = parkById.get(duplicate.park2.id);
+        const verdict =
+          park1 && park2 ? determineMergeWinner(park1, park2) : null;
+        return {
+          park1: duplicate.park1,
+          park2: duplicate.park2,
+          score: duplicate.score,
+          reason: duplicate.reason,
+          winnerId: verdict?.winnerId ?? null,
+          loserId: verdict?.loserId ?? null,
+        };
+      }),
+    };
+  }
+
+  /**
    * Merge duplicate attraction rows.
    *
    * Defaults to a dry run — pass dryRun:false to actually write. Pairs flagged
    * for review are never merged, whatever the flags say.
    */
   @Post("merge-duplicate-attractions")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Merge duplicate attraction rows within parks",
@@ -1278,7 +1377,9 @@ export class AdminController {
         },
         winnerId: {
           type: "string",
-          description: "Merge exactly one pair: the row to keep",
+          description:
+            "Merge exactly one pair: the row to keep. Honours `dryRun` like " +
+            "the automatic path — send `dryRun: false` to actually merge.",
         },
         loserId: {
           type: "string",
@@ -1298,6 +1399,19 @@ export class AdminController {
     } = {},
   ): Promise<unknown> {
     if (body.winnerId && body.loserId) {
+      // `dryRun` governs this branch too. It did not: the pair went straight
+      // to `mergeAttractions`, which takes no such flag — so the admin's
+      // "Probelauf" button deleted the losing row for real, inside a
+      // transaction with no undo, and then displayed the outcome as a preview.
+      // The flag defaults to true here for the same reason it does below: the
+      // destructive reading of an unset parameter is the wrong one, and this
+      // endpoint's own documentation already promised the safe one.
+      if (body.dryRun !== false) {
+        return this.attractionMergeService.previewMerge(
+          body.winnerId,
+          body.loserId,
+        );
+      }
       return this.attractionMergeService.mergeAttractions(
         body.winnerId,
         body.loserId,
@@ -1316,6 +1430,7 @@ export class AdminController {
    * Identifies and merges duplicate parks, or merges specific parks if IDs are provided.
    */
   @Post("merge-duplicate-parks")
+  @AdminMinRole("owner")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Merge duplicate parks",

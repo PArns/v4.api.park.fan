@@ -13,7 +13,10 @@ import {
 import { HistoryDayDto } from "./history-day.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
-import { resolveCuratedFacts } from "../utils/curated-attraction-facts.util";
+import {
+  isCurrentlyInSeason,
+  resolveCuratedFacts,
+} from "../utils/curated-attraction-facts.util";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
@@ -466,7 +469,10 @@ export class AttractionResponseDto {
 
     return {
       id: attraction.id,
-      name: attraction.name,
+      // Curated name, when a human wrote one: the sync rewrites `name` on
+      // every run, so a correction lives in its own column. The slug is
+      // deliberately untouched — see the entity.
+      name: curated.name,
       slug: cleanSlugSuffix(attraction.slug),
 
       status: "CLOSED", // Default
@@ -477,13 +483,13 @@ export class AttractionResponseDto {
 
       park: mapParkSummary(attraction.park),
 
-      land: attraction.landName || null,
+      land: curated.landName,
 
-      isSeasonal: attraction.isSeasonal || false,
-      seasonMonths: attraction.seasonMonths || null,
+      isSeasonal: curated.isSeasonal,
+      seasonMonths: curated.seasonMonths,
       minimumHeight: curated.minimumHeight,
       minimumHeightUnit: curated.minimumHeightUnit,
-      maximumHeight: attraction.maximumHeight ?? null,
+      maximumHeight: curated.maximumHeight,
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
       rcdbId: attraction.rcdbId ?? null,
@@ -491,13 +497,7 @@ export class AttractionResponseDto {
         ? attraction.retiredAt.toISOString()
         : null,
       retiredReason: attraction.retiredReason ?? null,
-      isCurrentlyInSeason: (() => {
-        if (!attraction.isSeasonal) return null;
-        if (!attraction.seasonMonths || attraction.seasonMonths.length === 0)
-          return null;
-        const currentMonth = new Date().getMonth() + 1;
-        return attraction.seasonMonths.includes(currentMonth);
-      })(),
+      isCurrentlyInSeason: isCurrentlyInSeason(curated),
 
       hourlyForecast: [],
       forecasts: [],

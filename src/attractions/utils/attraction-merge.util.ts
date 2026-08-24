@@ -45,6 +45,8 @@ export interface DuplicateCandidate {
   id: string;
   slug: string;
   name: string;
+  /** The upstream id. `qt-ride-*` marks a Queue-Times row; a UUID a wiki one. */
+  externalId: string;
   queueTimesEntityId: string | null;
   hasCoordinates: boolean;
   /** Rows written in the last 7 days — i.e. is ingestion still feeding this row. */
@@ -101,7 +103,26 @@ export function isSafeToAutoMerge(
   a: DuplicateCandidate,
   b: DuplicateCandidate,
 ): boolean {
-  return normalizeName(a.name) === normalizeName(b.name);
+  if (normalizeName(a.name) !== normalizeName(b.name)) return false;
+
+  // Matching names are not enough when ONE source issued both ids. A duplicate
+  // arises because two sources describe one ride — a wiki UUID beside a
+  // Queue-Times id. Two ids from the same source are that source's own
+  // statement that these are two things.
+  //
+  // Heide Park is the case: ThemeParks.wiki publishes three separate
+  // attraction entities all called "PLAYGROUND". Their names agree perfectly,
+  // and merging them would collapse three real play areas into one.
+  return !sameSource(a.externalId, b.externalId);
+}
+
+/** Which upstream issued an id. Queue-Times rows carry a `qt-ride-` prefix. */
+function sourceOf(externalId: string): "queue-times" | "wiki" {
+  return externalId.startsWith("qt-ride-") ? "queue-times" : "wiki";
+}
+
+function sameSource(a: string, b: string): boolean {
+  return sourceOf(a) === sourceOf(b);
 }
 
 /**

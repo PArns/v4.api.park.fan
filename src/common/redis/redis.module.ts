@@ -11,10 +11,37 @@ export const REDIS_CLIENT = "REDIS_CLIENT";
       provide: REDIS_CLIENT,
       useFactory: (configService: ConfigService) => {
         if (process.env.SKIP_REDIS === "true") {
+          // A stub that answers "nothing cached" to everything, rather than a
+          // partial one that throws on the first command nobody thought of.
+          // It used to carry five methods, which was enough for the read paths
+          // that existed when it was written and a TypeError for the admin
+          // session store, whose whole job is del/sadd/srem/smembers/expire —
+          // so a build with SKIP_REDIS could boot and then fail every login.
+          // Everything here returns the empty answer for its type: no key, no
+          // members, no TTL. Callers already treat a miss as normal.
           return {
             on: () => {},
             get: () => Promise.resolve(null),
+            mget: (...keys: string[]) => Promise.resolve(keys.map(() => null)),
             set: () => Promise.resolve("OK"),
+            setex: () => Promise.resolve("OK"),
+            del: () => Promise.resolve(0),
+            keys: () => Promise.resolve([]),
+            incr: () => Promise.resolve(1),
+            expire: () => Promise.resolve(0),
+            ttl: () => Promise.resolve(-2),
+            sadd: () => Promise.resolve(0),
+            srem: () => Promise.resolve(0),
+            smembers: () => Promise.resolve([]),
+            pipeline: () => ({
+              set: function () {
+                return this;
+              },
+              del: function () {
+                return this;
+              },
+              exec: () => Promise.resolve([]),
+            }),
             quit: () => Promise.resolve("OK"),
             disconnect: () => Promise.resolve("OK"),
             readonly: true,

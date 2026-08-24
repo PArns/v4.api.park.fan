@@ -371,6 +371,34 @@ export class CalendarService {
       }
     });
 
+    // Today's OWN daily rating, captured before the live override below replaces it.
+    // `crowdLevel` for today is deliberately the live spot reading, which is a
+    // ratio-vs-P50 point-in-time signal — NOT comparable with predictedCrowdLevel
+    // (a daily aggregate ÷ typical-day-peak). This keeps the daily-regime value so a
+    // client can put "today so far" next to "forecast today" and have the pair mean
+    // something. Today only: past days already carry it as `crowdLevel`.
+    let todayCrowdLevel: CrowdLevel | undefined;
+    let todayCrowdLevelSamples: number | undefined;
+    if (today >= fromStr && today <= toStr) {
+      const todayRating = await this.analyticsService
+        .calculateCrowdLevelForDate(park.id, "park", today, park.timezone)
+        .catch((err) => {
+          this.logger.warn(
+            `Today crowd level unavailable for ${park.slug}: ${err.message}`,
+          );
+          return null;
+        });
+      // "unknown" means no usable baseline — an absent fact, not a rating (§3/§4).
+      if (
+        todayRating?.hasData &&
+        todayRating.crowdLevel !== "unknown" &&
+        todayRating.sampleCount > 0
+      ) {
+        todayCrowdLevel = todayRating.crowdLevel;
+        todayCrowdLevelSamples = todayRating.sampleCount;
+      }
+    }
+
     // For today: override crowdLevel with real-time occupancy (current spot wait) so the calendar
     // matches the park overview. calculateCrowdLevelForDate uses P50 of the whole day so far
     // (morning + afternoon averaged), while the park overview uses the current spot wait —
@@ -438,6 +466,18 @@ export class CalendarService {
       }),
     );
 
+    // Attach today's own daily rating (captured above, before the live override).
+    // Set here rather than threaded through buildCalendarDay's already 17-argument
+    // signature — it belongs to exactly one day. Skipped when the park is shut: a
+    // closed day has no day-peak to rate, and `crowdLevel` already reads "closed".
+    if (todayCrowdLevel) {
+      const todayDay = days.find((d) => d.date === today);
+      if (todayDay && todayDay.crowdLevel !== "closed") {
+        todayDay.todayCrowdLevel = todayCrowdLevel;
+        todayDay.todayCrowdLevelSamples = todayCrowdLevelSamples;
+      }
+    }
+
     // Build response
     const response: IntegratedCalendarResponse = {
       meta: {
@@ -483,6 +523,13 @@ export class CalendarService {
         ...d,
         status: d.status ?? "UNKNOWN",
         recommendation: d.date < today ? undefined : d.recommendation,
+        // `todayCrowdLevel` is a today-only field, but the current month's cache
+        // outlives midnight (15 min TTL), so a cached entry can still carry it on
+        // what is now yesterday — where `crowdLevel` is already the same daily
+        // statistic. Strip it rather than serve a "today" reading for a past day.
+        todayCrowdLevel: d.date === today ? d.todayCrowdLevel : undefined,
+        todayCrowdLevelSamples:
+          d.date === today ? d.todayCrowdLevelSamples : undefined,
       }));
     return {
       meta: {

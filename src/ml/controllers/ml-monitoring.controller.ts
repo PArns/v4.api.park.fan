@@ -7,6 +7,8 @@ import {
   Body,
   ParseIntPipe,
   DefaultValuePipe,
+  UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -21,6 +23,33 @@ import { MLAnomalyDetectionService } from "../services/ml-anomaly-detection.serv
 import { MLDriftMonitoringService } from "../services/ml-drift-monitoring.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
 import { MLDriftDto } from "../dto/ml-drift.dto";
+import { AdminAuthGuard } from "../../admin/auth/admin-auth.guard";
+import { AdminMinRole } from "../../admin/auth/admin-auth.decorators";
+import { AdminAuditInterceptor } from "../../admin/auth/admin-audit.interceptor";
+
+/**
+ * The four state-changing endpoints on this controller, guarded one by one.
+ *
+ * Not on the class, deliberately. Eight of the twelve handlers are reads the
+ * admin ML dashboard fetches through a GET-only passthrough that sends no
+ * Authorization header, so a class guard would need `@AdminPublic()` sprinkled
+ * over all eight — which inverts the rule the rest of the admin follows, that a
+ * forgotten decorator locks something down rather than opening it up. Here the
+ * asymmetry is the other way round: the reads are already public, and it is the
+ * writes that were never brought under the guard when the rest of the admin
+ * was.
+ */
+const AdminWrite = () =>
+  function (
+    target: object,
+    key: string | symbol,
+    descriptor: PropertyDescriptor,
+  ) {
+    UseGuards(AdminAuthGuard)(target, key, descriptor);
+    UseInterceptors(AdminAuditInterceptor)(target, key, descriptor);
+    AdminMinRole("editor")(target, key, descriptor);
+    return descriptor;
+  };
 
 /**
  * ML Monitoring Controller
@@ -133,6 +162,7 @@ export class MLMonitoringController {
    * Acknowledge alert
    */
   @Post("alerts/:id/acknowledge")
+  @AdminWrite()
   @ApiOperation({
     summary: "Acknowledge an alert",
     description: "Marks an alert as acknowledged",
@@ -152,6 +182,7 @@ export class MLMonitoringController {
    * Resolve alert
    */
   @Post("alerts/:id/resolve")
+  @AdminWrite()
   @ApiOperation({
     summary: "Resolve an alert",
     description: "Marks an alert as resolved",
@@ -168,6 +199,7 @@ export class MLMonitoringController {
    * Check and create alerts (manual trigger)
    */
   @Post("alerts/check")
+  @AdminWrite()
   @ApiOperation({
     summary: "Check for issues and create alerts",
     description: "Manually triggers alert check (usually done by cron job)",
@@ -255,6 +287,7 @@ export class MLMonitoringController {
    * Detect anomalies (manual trigger)
    */
   @Post("anomalies/detect")
+  @AdminWrite()
   @ApiOperation({
     summary: "Detect anomalies in recent predictions",
     description:

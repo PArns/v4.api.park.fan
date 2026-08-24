@@ -5,7 +5,6 @@ import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
-import { formatInTimeZone } from "date-fns-tz";
 import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -30,7 +29,11 @@ import {
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
+import {
+  resolveCuratedFacts,
+  isCurrentlyInSeason as isCurrentlyInSeasonFor,
+} from "../attractions/utils/curated-attraction-facts.util";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import {
   formatTodaySchedule,
@@ -212,12 +215,22 @@ export class LocationService {
         continentSlug: true,
         countrySlug: true,
         citySlug: true,
+        // The curated columns have to be on every projection that later calls
+        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
+        // back to the synced name and reports nothing — a silent no-op that
+        // makes one endpoint show a curated name while its neighbour shows the
+        // upstream one.
+        curatedName: true,
+        curatedParkType: true,
+        curatedNoWaitTimesReason: true,
       },
     });
 
     const index: ParkLocationEntry[] = rows.map((p) => ({
       id: p.id,
-      name: p.name,
+      // Resolved, like every other place a park name reaches a visitor. The
+      // projection above selects the curated columns for exactly this call.
+      name: resolveCuratedPark(p).name,
       slug: p.slug,
       latitude: Number(p.latitude),
       longitude: Number(p.longitude),
@@ -307,10 +320,11 @@ export class LocationService {
       userLocation,
     );
 
-    // Month (1-based) in the park's timezone, used to evaluate seasonal
-    // availability against each attraction's seasonMonths.
-    const currentMonth = Number(
-      formatInTimeZone(new Date(), park.timezone || "UTC", "M"),
+    // "Which month is it" is a park-local question, so the resolver below is
+    // handed a date positioned on the park's own day rather than the server's.
+    // Noon, so no timezone the server might be in can push it over a boundary.
+    const parkLocalNow = new Date(
+      `${getCurrentDateInTimezone(park.timezone || "UTC")}T12:00:00`,
     );
 
     // Build ride DTOs (no async needed inside map)
@@ -345,17 +359,22 @@ export class LocationService {
         }
 
         // Seasonal availability: only meaningful for seasonal attractions.
-        // seasonal-but-unknown-months → null (don't hide), mirroring
+        // seasonal-but-unknown → null (don't hide), mirroring
         // ParkWithAttractionsDto / AttractionResponseDto semantics.
-        const isSeasonal = attraction.isSeasonal || false;
-        const seasonMonths = attraction.seasonMonths || null;
-        let isCurrentlyInSeason: boolean | null = null;
-        if (isSeasonal) {
-          isCurrentlyInSeason =
-            seasonMonths !== null && seasonMonths.length > 0
-              ? seasonMonths.includes(currentMonth)
-              : null;
-        }
+        //
+        // Through the shared resolver, not off the raw columns. This path had
+        // its own copy of the rule and it was two facts short: a curated season
+        // was ignored here while the park page honoured it, and a ride flagged
+        // with a `season_out_since` but no months — which is most of them, since
+        // the detector needs 330 days of watching before it can name a month —
+        // read as in season and stayed on the in-park list.
+        const curated = resolveCuratedFacts(attraction);
+        const isSeasonal = curated.isSeasonal;
+        const seasonMonths = curated.seasonMonths;
+        const isCurrentlyInSeason = isCurrentlyInSeasonFor(
+          curated,
+          parkLocalNow,
+        );
 
         return {
           id: attraction.id,
@@ -389,7 +408,7 @@ export class LocationService {
     // Build park info
     const parkInfo: NearbyParkInfoDto = {
       id: park.id,
-      name: park.name,
+      name: resolveCuratedPark(park).name,
       slug: park.slug,
       distance: Math.round(
         calculateHaversineDistance(
@@ -505,7 +524,10 @@ export class LocationService {
         const todayEntry = integrated.schedule?.find((s) => s.date === today);
         return {
           id: park.id,
-          name: park.name,
+          // Resolved here as well as on the miss path below: reading the raw
+          // name on a cache hit made the card's name depend on whether
+          // `park:integrated:<id>` happened to be warm.
+          name: resolveCuratedPark(park).name,
           slug: park.slug,
           distance,
           city: park.city || null,
@@ -549,7 +571,7 @@ export class LocationService {
       const stats = statisticsMap.get(park.id);
       return {
         id: park.id,
-        name: park.name,
+        name: resolveCuratedPark(park).name,
         slug: park.slug,
         distance,
         city: park.city || null,
@@ -557,7 +579,7 @@ export class LocationService {
         status: statusMap.get(park.id) || "CLOSED",
         hasOperatingSchedule: operatingScheduleMap.get(park.id) || false,
         liveWaitTimes: buildLiveWaitTimes(
-          getNoLiveWaitTimesReason(park.citySlug, park.slug),
+          resolveCuratedPark(park).noWaitTimesReason,
         ),
         totalAttractions: stats?.totalAttractions || 0,
         operatingAttractions: stats?.operatingAttractions || 0,

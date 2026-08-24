@@ -3,7 +3,7 @@ import {
   LiveWaitTimesDto,
   buildLiveWaitTimes,
 } from "../../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
 
 /**
  * Compact parent-park block embedded in attraction/show/restaurant
@@ -46,16 +46,15 @@ export function mapParkSummary(
   park: Park | null | undefined,
 ): ParkSummaryDto | null {
   if (!park) return null;
+  const curated = resolveCuratedPark(park);
   return {
     id: park.id,
-    name: park.name,
+    name: curated.name,
     slug: park.slug,
     timezone: park.timezone,
     continent: park.continent || null,
     country: park.country || null,
     city: park.city || null,
-    liveWaitTimes: buildLiveWaitTimes(
-      getNoLiveWaitTimesReason(park.citySlug, park.slug),
-    ),
+    liveWaitTimes: buildLiveWaitTimes(curated.noWaitTimesReason),
   };
 }

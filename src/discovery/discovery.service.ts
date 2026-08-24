@@ -25,8 +25,9 @@ import {
 import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
 import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
+import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
-import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 
 /**
  * Open/closed plus the wait-time aggregates for every park, in one query.
@@ -63,7 +64,8 @@ export const LIVE_STATS_SQL = `
           a.id as "attractionId",
           a."parkId",
           qd."waitTime",
-          qd."status"
+          qd."status",
+          ${attractionIsOutOfSeason("a")} as out_of_season
         FROM attractions a
         JOIN LATERAL (
           SELECT "waitTime", "status"
@@ -89,6 +91,11 @@ export const LIVE_STATS_SQL = `
           COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
           COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
         FROM latest_attraction_data lad
+        -- A ride the season has closed is not one of the park's rides today: it
+        -- belongs in neither half of "12 von 45 geöffnet". Unless it is actually
+        -- running, in which case the season on file is behind the park and a
+        -- visitor can queue for it — the rule the park payload applies too.
+        WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'
         GROUP BY lad."parkId"
       )
       SELECT
@@ -104,7 +111,16 @@ export const LIVE_STATS_SQL = `
         COALESCE(stats.avg_wait, 0) as avg_wait,
         COALESCE(stats.operating_count, 0) as operating_conf_count,
         COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
-        (SELECT COUNT(*)::int FROM attractions a WHERE a."parkId" = p.id) as total_attractions
+        (SELECT COUNT(*)::int FROM attractions a
+          WHERE a."parkId" = p.id
+            AND (
+              NOT ${attractionIsOutOfSeason("a")}
+              OR a.id IN (
+                SELECT lad."attractionId" FROM latest_attraction_data lad
+                 WHERE lad.status = 'OPERATING'
+              )
+            )
+        ) as total_attractions
       FROM parks p
       LEFT JOIN park_schedules ps ON ps."parkId" = p.id
       LEFT JOIN parks_with_schedule pws ON pws."parkId" = p.id
@@ -237,6 +253,14 @@ export class DiscoveryService {
         "citySlug",
         "latitude",
         "longitude",
+        // The curated columns have to be on every projection that later calls
+        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
+        // back to the synced name and reports nothing — and this particular
+        // projection is cached for 24 hours, so the silent no-op would outlive
+        // several curation sessions.
+        "curatedName",
+        "curatedParkType",
+        "curatedNoWaitTimesReason",
       ],
       order: {
         continent: "ASC",
@@ -319,16 +343,15 @@ export class DiscoveryService {
       // Add park reference
       const parkBaseUrl = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
 
+      const curatedPark = resolveCuratedPark(park);
       const parkRef: ParkReferenceDto = {
         id: park.id,
-        name: park.name,
+        name: curatedPark.name,
         slug: park.slug,
         url: parkBaseUrl,
         timezone: park.timezone,
         hasOperatingSchedule: scheduleFlags.get(park.id) ?? false,
-        liveWaitTimes: buildLiveWaitTimes(
-          getNoLiveWaitTimesReason(park.citySlug, park.slug),
-        ),
+        liveWaitTimes: buildLiveWaitTimes(curatedPark.noWaitTimesReason),
         // Coordinates so listing clients can show "X km away" without a per-park
         // lookup. `decimal` columns come back as strings from the driver — coerce.
         latitude: toCoordinate(park.latitude),
@@ -694,6 +717,9 @@ export class DiscoveryService {
         "citySlug",
         "continentSlug",
         "countrySlug",
+        // See the note on the geo-structure projection: a resolver handed a
+        // row without these columns quietly reports the upstream name.
+        "curatedName",
       ],
     });
 
@@ -757,7 +783,7 @@ export class DiscoveryService {
       const vals = parkScoreMap.get(park.id) ?? [];
       const avgP50 = avg(vals);
       return {
-        name: park.name,
+        name: resolveCuratedPark(park).name,
         slug: park.slug,
         city: park.city,
         path: `/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`,

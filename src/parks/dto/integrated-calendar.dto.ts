@@ -302,6 +302,28 @@ export class CalendarDay {
   })
   peakLoad?: CrowdLevel | "closed";
 
+  @ApiProperty({
+    description:
+      "TODAY ONLY: the day's own measured crowd level — AVG-across-headliners of each ride's " +
+      "day-P90 so far ÷ the typical-day-peak baseline. This is what `crowdLevel` would hold for " +
+      "today if it were not overridden with the live occupancy, and it is the ONLY value directly " +
+      "comparable to `predictedCrowdLevel` (same numerator regime, same denominator): live " +
+      "`crowdLevel` is a point-in-time ratio-vs-P50 reading, this is a daily aggregate. " +
+      "Absent before the day has enough samples to rate (see `todayCrowdLevelSamples`), on days " +
+      "the park is not ratable, and on every day that is not today.",
+    enum: CROWD_LEVEL_VALUES,
+    required: false,
+  })
+  todayCrowdLevel?: CrowdLevel;
+
+  @ApiProperty({
+    description:
+      "TODAY ONLY: how many queue observations `todayCrowdLevel` was computed from. Lets a client " +
+      "decide whether a morning reading is worth showing next to the forecast.",
+    required: false,
+  })
+  todayCrowdLevelSamples?: number;
+
   @ApiProperty({ type: () => WeatherSummary, required: false })
   weather?: WeatherSummary;
 

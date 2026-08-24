@@ -24,6 +24,7 @@ interface DuplicatePairRow {
   base_slug: string;
   base_name: string;
   base_qt: string | null;
+  base_external: string;
   base_geo: boolean;
   base_recent: string;
   base_total: string;
@@ -32,6 +33,7 @@ interface DuplicatePairRow {
   suffix_slug: string;
   suffix_name: string;
   suffix_qt: string | null;
+  suffix_external: string;
   suffix_geo: boolean;
   suffix_recent: string;
   suffix_total: string;
@@ -68,6 +70,15 @@ export interface AttractionMergeResult {
   renamed: boolean;
 }
 
+/** The same answer as a merge, minus the merge. See `previewMerge`. */
+export interface AttractionMergePreview extends AttractionMergeResult {
+  dryRun: true;
+  /** The slug that would stop resolving once the losing row is deleted. */
+  removedSlug: string;
+  /** Columns the survivor would take from the row about to disappear. */
+  inheritedColumns: string[];
+}
+
 /**
  * Collapses two rows that describe the same ride inside one park.
  *
@@ -86,6 +97,65 @@ export class AttractionMergeService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly revalidationService: RevalidationService,
   ) {}
+
+  /**
+   * What `mergeAttractions` would do, without doing any of it.
+   *
+   * The admin has a "Probelauf" button next to every duplicate pair, and the
+   * endpoint behind it documents `dryRun` as defaulting to true — but the
+   * single-pair branch handed the ids straight to `mergeAttractions`, which
+   * takes no such flag. So a rehearsal deleted the losing row for real, inside
+   * a transaction with no undo, and then rendered the outcome as a preview.
+   * The button was not even gated on the pair being safe, so the pairs most
+   * likely to be rehearsed were the ones the detector had refused to merge.
+   *
+   * Everything reported here is derived by the same functions the real merge
+   * uses, so the preview cannot drift from the act.
+   */
+  async previewMerge(
+    winnerId: string,
+    loserId: string,
+  ): Promise<AttractionMergePreview> {
+    if (winnerId === loserId) {
+      throw new Error(`Cannot merge attraction ${winnerId} into itself`);
+    }
+
+    const attractions = this.dataSource.getRepository(Attraction);
+    const [winner, loser] = await Promise.all([
+      attractions.findOne({ where: { id: winnerId } }),
+      attractions.findOne({ where: { id: loserId } }),
+    ]);
+
+    if (!winner || !loser) {
+      throw new Error(
+        `Attraction not found (winner: ${!!winner}, loser: ${!!loser})`,
+      );
+    }
+    if (winner.parkId !== loser.parkId) {
+      throw new Error(
+        `Attractions must live in the same park (${winner.parkId} vs ${loser.parkId}) — use ParkMergeService to merge across parks`,
+      );
+    }
+
+    const survivingName = resolveSurvivingName(winner.name, loser.name);
+    const survivingSlug = resolveSurvivingSlug(
+      winner.slug,
+      loser.slug,
+      survivingName,
+    );
+
+    return {
+      dryRun: true,
+      winnerId,
+      loserId,
+      parkId: winner.parkId,
+      name: survivingName,
+      survivingSlug,
+      renamed: survivingSlug !== winner.slug,
+      removedSlug: loser.slug,
+      inheritedColumns: Object.keys(this.inheritMissingMetadata(winner, loser)),
+    };
+  }
 
   async mergeAttractions(
     winnerId: string,
@@ -242,9 +312,11 @@ export class AttractionMergeService {
       pairs AS (
         SELECT b.id AS base_id, b.slug AS base_slug, b.name AS base_name,
                b.queue_times_entity_id AS base_qt,
+               b."externalId" AS base_external,
                (b.latitude IS NOT NULL) AS base_geo, b."createdAt" AS base_created,
                s.id AS suffix_id, s.slug AS suffix_slug, s.name AS suffix_name,
                s.queue_times_entity_id AS suffix_qt,
+               s."externalId" AS suffix_external,
                (s.latitude IS NOT NULL) AS suffix_geo, s."createdAt" AS suffix_created,
                b."parkId" AS park_id
         FROM (
@@ -283,6 +355,7 @@ export class AttractionMergeService {
         id: row.base_id,
         slug: row.base_slug,
         name: row.base_name,
+        externalId: row.base_external,
         queueTimesEntityId: row.base_qt,
         hasCoordinates: row.base_geo,
         recentQueueRows: Number(row.base_recent),
@@ -293,6 +366,7 @@ export class AttractionMergeService {
         id: row.suffix_id,
         slug: row.suffix_slug,
         name: row.suffix_name,
+        externalId: row.suffix_external,
         queueTimesEntityId: row.suffix_qt,
         hasCoordinates: row.suffix_geo,
         recentQueueRows: Number(row.suffix_recent),
@@ -320,7 +394,10 @@ export class AttractionMergeService {
         safe,
         reason: safe
           ? "same ride (names agree once the map number is stripped)"
-          : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
+          : base.externalId.startsWith("qt-ride-") ===
+              suffix.externalId.startsWith("qt-ride-")
+            ? `same name but two ids from one source — "${base.name}"; upstream calls these two things, review by hand`
+            : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
       };
     });
   }
@@ -382,6 +459,12 @@ export class AttractionMergeService {
    * Columns worth carrying over from the losing row. Deliberately excludes
    * `externalId` (unique, and the survivor keeps its own identity) and `slug`
    * (handled by resolveSurvivingSlug).
+   *
+   * Every `curated_*` column has to be on this list, and stay on it. A merge
+   * deletes the losing row, so a curation that lived only there is gone with
+   * no trace and nothing to notice it by — the value simply reverts to
+   * whatever the sync last wrote, months after anybody remembers deciding
+   * otherwise. Add a curated column to the entity, add it here.
    */
   private static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",
@@ -394,6 +477,12 @@ export class AttractionMergeService {
     "mayGetWet",
     "curatedMayGetWet",
     "curatedMinimumHeight",
+    "curatedMaximumHeight",
+    "curatedName",
+    "curatedLandName",
+    "curatedAttractionType",
+    "curatedIsSeasonal",
+    "curatedSeasonMonths",
     "retiredAt",
     "retiredReason",
     "hasSingleRider",
