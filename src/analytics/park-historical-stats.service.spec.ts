@@ -247,9 +247,17 @@ describe("ParkHistoricalStatsService", () => {
 
   describe("getParkHourlyProfile", () => {
     /**
-     * Three rides across 09:00–12:00. `late` only ever reported at 20:00, on
-     * four days — the hour a park stayed open for on a handful of August
-     * evenings, which must not become a column.
+     * Three rides across 09:00–12:00, plus a 20:00 row.
+     *
+     * `hour_days` is per (ride, hour) — the days THAT HOUR was measured — while
+     * `sample_days` is the ride's measured days across the whole window and is
+     * the same for all of its hours. The first version of this fixture set only
+     * `sample_days`, low on the 20:00 row, and the projection filtered on it. It
+     * passed, and production then drew 21:00–23:00 columns for Europa-Park at
+     * 58–68 minutes, because the real query gives every hour of a ride the same
+     * `sample_days` and the filter never fired. A fixture that encodes the
+     * intended semantics rather than the query's actual output cannot catch that,
+     * so these rows now carry both columns exactly as the SQL returns them.
      */
     const hourRows = [
       ...[
@@ -264,6 +272,7 @@ describe("ParkHistoricalStatsService", () => {
         hour_of_day: h,
         p50,
         p90,
+        hour_days: 118,
         sample_days: 120,
       })),
       ...[
@@ -278,16 +287,21 @@ describe("ParkHistoricalStatsService", () => {
         hour_of_day: h,
         p50,
         p90,
+        hour_days: 116,
         sample_days: 118,
       })),
+      // The park stayed open to 20:00 on four evenings. Same `sample_days` as
+      // every other row of a well-measured ride — only `hour_days` says the hour
+      // is rare, which is the whole point.
       {
-        slug: "late-show",
-        name: "Late Show",
-        land: null,
+        slug: "voletarium",
+        name: "Voletarium",
+        land: "Iceland",
         hour_of_day: 20,
         p50: 90,
         p90: 99,
-        sample_days: 4,
+        hour_days: 4,
+        sample_days: 120,
       },
     ];
 
@@ -300,7 +314,7 @@ describe("ParkHistoricalStatsService", () => {
       expect(result.hours).toEqual([9, 10, 11, 12]);
     });
 
-    it("aligns every ride's series with `hours` and gaps the missing cells", async () => {
+    it("aligns every ride's series with `hours`", async () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
       const result = await service.getParkHourlyProfile(park, 1, 8);
       const vol = result.attractions.find(
@@ -308,11 +322,77 @@ describe("ParkHistoricalStatsService", () => {
       )!;
       expect(vol.p50).toEqual([30, 55, 45, 25]);
       expect(vol.p90).toEqual([40, 70, 60, 35]);
-      // Present in the rows, but with no cell inside the surviving hours.
-      const late = result.attractions.find(
-        (a) => a.attractionSlug === "late-show",
+      expect(vol.p50).toHaveLength(result.hours.length);
+    });
+
+    it("drops an hour the park was only open for on a handful of evenings", async () => {
+      aggregateQuery.mockImplementation(routeHourly(hourRows));
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      // 20:00 carries the same window-wide sample_days (120) as every other
+      // Voletarium row and would survive any filter that reads that column.
+      expect(result.hours).not.toContain(20);
+      expect(
+        result.attractions.find((a) => a.attractionSlug === "voletarium")!.p50,
+      ).not.toContain(90);
+    });
+
+    it("gaps a single thin cell rather than printing it beside well-measured ones", async () => {
+      aggregateQuery.mockImplementation(
+        routeHourly([
+          ...hourRows,
+          // Wodan reported 09:00 on six days only — the hour stays a column
+          // because Voletarium measured it 118 times, but Wodan's cell does not.
+          {
+            slug: "latecomer",
+            name: "Latecomer",
+            land: null,
+            hour_of_day: 9,
+            p50: 99,
+            p90: 120,
+            hour_days: 6,
+            sample_days: 90,
+          },
+          {
+            slug: "latecomer",
+            name: "Latecomer",
+            land: null,
+            hour_of_day: 10,
+            p50: 30,
+            p90: 40,
+            hour_days: 88,
+            sample_days: 90,
+          },
+        ]),
       );
-      expect(late).toBeUndefined();
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      const late = result.attractions.find(
+        (a) => a.attractionSlug === "latecomer",
+      )!;
+      expect(result.hours).toContain(9);
+      expect(late.p50[result.hours.indexOf(9)]).toBeNull();
+      expect(late.p50[result.hours.indexOf(10)]).toBe(30);
+    });
+
+    it("measures an hour against the best-observed hour, not a flat threshold", async () => {
+      // A winter-only evening hour: 40 measured days clears the absolute floor
+      // of 10 but is well under 40 % of the 118 days the midday hours carry.
+      aggregateQuery.mockImplementation(
+        routeHourly([
+          ...hourRows,
+          {
+            slug: "voletarium",
+            name: "Voletarium",
+            land: "Iceland",
+            hour_of_day: 19,
+            p50: 40,
+            p90: 50,
+            hour_days: 40,
+            sample_days: 120,
+          },
+        ]),
+      );
+      const result = await service.getParkHourlyProfile(park, 1, 8);
+      expect(result.hours).not.toContain(19);
     });
 
     it("names the hour a ride actually peaks at", async () => {
@@ -350,6 +430,7 @@ describe("ParkHistoricalStatsService", () => {
             hour_of_day: 10,
             p50: 30,
             p90: 40,
+            hour_days: 118,
             sample_days: 120,
           },
         ]),
