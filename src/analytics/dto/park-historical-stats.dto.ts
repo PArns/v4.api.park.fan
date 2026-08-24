@@ -101,6 +101,28 @@ export class TopAttractionStatDto {
     description: "1-based rank within the top-attractions list (by avg P90)",
   })
   rank: number;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: "Iceland",
+    description:
+      "The land the ride stands in, curated value winning over the " +
+      "Queue-Times one. Absent for parks that publish no land at all — " +
+      "render the column only when at least one row carries it.",
+  })
+  land?: string | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: "Roller Coaster",
+    description:
+      "Coarse ride type (curated value winning). This is the free-text " +
+      "`attraction_type` column, NOT the glossary term ids in " +
+      "`attraction_ride_profiles.types` — do not join the two.",
+  })
+  attractionType?: string | null;
 }
 
 export class ParkHistoricalStatsMetaDto {
@@ -141,10 +163,18 @@ export class ParkHistoricalStatsMetaDto {
   generatedAt: string;
 
   @ApiProperty({
-    example: 2,
+    example: 3,
     description: "Response schema version, for smooth frontend migration.",
   })
   schemaVersion: number;
+
+  @ApiProperty({
+    example: 20,
+    description:
+      "Minimum measured days an attraction needed to enter " +
+      "`topAttractions`. Echoes the `minAttractionDays` query parameter.",
+  })
+  minAttractionDays: number;
 }
 
 export class ParkHistoricalStatsDto {

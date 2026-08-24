@@ -14,15 +14,41 @@ import {
   DayOfWeekStatDto,
   TopAttractionStatDto,
 } from "./dto/park-historical-stats.dto";
+import {
+  ParkHourlyProfileDto,
+  HourlyProfileAttractionDto,
+} from "./dto/park-hourly-profile.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
 
 /** Response schema version — bump when the contract changes (see DTO). */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 /** Default minimum sample days before the section is considered displayable. */
 const DEFAULT_MIN_SAMPLE_DAYS = 30;
 /** Drop noisy single-sample hours from the aggregate scan. */
 const MIN_SAMPLES_PER_HOUR = 2;
+
+/**
+ * Measured days an attraction needs before it may appear in `topAttractions`.
+ *
+ * The ranking is by average P90, and an average over one day is not an
+ * average: Walibi Hollands Sky Diver was measured on a single day, came out
+ * at P90 75, and outranked every coaster in the park — a ride the park's own
+ * top-ten table then led with. Twenty days is the same floor the per-ride
+ * `typicalWaits` aggregate uses for its `displayable` gate, so the two
+ * surfaces refuse the same thin evidence.
+ */
+const DEFAULT_MIN_ATTRACTION_DAYS = 20;
+
+/** Hourly-profile schema version (see ParkHourlyProfileDto). */
+const HOURLY_SCHEMA_VERSION = 1;
+
+/**
+ * An hour needs this many measured days across the window to be drawn. An
+ * opening hour that only exists on the four late-summer evenings the park
+ * stayed open until 20:00 is not part of the day's shape.
+ */
+const MIN_DAYS_PER_HOUR = 10;
 
 /** One operating day's headliner-only values (peak + typical wait). */
 interface DayValue {
@@ -54,8 +80,9 @@ export class ParkHistoricalStatsService {
     years: number,
     topN: number,
     minSampleDays: number,
+    minAttractionDays: number,
   ): string {
-    return `park:historical-stats:v2:${parkId}:${years}:${topN}:${minSampleDays}`;
+    return `park:historical-stats:v3:${parkId}:${years}:${topN}:${minSampleDays}:${minAttractionDays}`;
   }
 
   async getParkHistoricalStats(
@@ -63,14 +90,27 @@ export class ParkHistoricalStatsService {
     years: number,
     topN = 10,
     minSampleDays = DEFAULT_MIN_SAMPLE_DAYS,
+    minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHistoricalStatsDto> {
-    const cacheKey = this.statsCacheKey(park.id, years, topN, minSampleDays);
+    const cacheKey = this.statsCacheKey(
+      park.id,
+      years,
+      topN,
+      minSampleDays,
+      minAttractionDays,
+    );
     const cached = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
     );
     if (cached) return cached;
 
-    const result = await this.compute(park, years, topN, minSampleDays);
+    const result = await this.compute(
+      park,
+      years,
+      topN,
+      minSampleDays,
+      minAttractionDays,
+    );
     await this.redis.set(
       cacheKey,
       JSON.stringify(result),
@@ -95,6 +135,7 @@ export class ParkHistoricalStatsService {
       2,
       10,
       DEFAULT_MIN_SAMPLE_DAYS,
+      DEFAULT_MIN_ATTRACTION_DAYS,
     );
     const cached = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
@@ -107,6 +148,7 @@ export class ParkHistoricalStatsService {
     years: number,
     topN: number,
     minSampleDays: number,
+    minAttractionDays: number,
   ): Promise<ParkHistoricalStatsDto> {
     // Use park timezone so "yesterday" and the start boundary are correct
     // for parks in any UTC offset. date-fns subDays operates in wall-clock
@@ -135,7 +177,13 @@ export class ParkHistoricalStatsService {
         endStr,
         headlinerIds,
       ),
-      this.queryTopAttractions(park.id, startStr, endStr, topN),
+      this.queryTopAttractions(
+        park.id,
+        startStr,
+        endStr,
+        topN,
+        minAttractionDays,
+      ),
     ]);
 
     // typical-day-peak = median over operating days of the day_value
@@ -174,6 +222,8 @@ export class ParkHistoricalStatsService {
       avgWaitP90: Math.round(Number(r.avg_p90)),
       sampleDays: Number(r.sample_days),
       rank: i + 1,
+      land: (r.land as string | null) ?? null,
+      attractionType: (r.attraction_type as string | null) ?? null,
     }));
 
     const totalSampleDays = dayValues.length;
@@ -191,8 +241,238 @@ export class ParkHistoricalStatsService {
         displayable: totalSampleDays >= minSampleDays,
         generatedAt: new Date().toISOString(),
         schemaVersion: SCHEMA_VERSION,
+        minAttractionDays,
       },
     };
+  }
+
+  /**
+   * The park's day shape, ride by ride: what each queue typically looks like
+   * at every hour it is open.
+   *
+   * A projection, not a slice of an existing payload. The attraction detail
+   * endpoint carries the same information for one ride in ~53 KB, 45 % of it a
+   * `schedule` nobody renders — eight rides would cost 424 KB for a table that
+   * fits in 2 KB. Reads the same hourly pre-aggregation as everything else
+   * here, so the numbers agree with the top-attraction ranking by construction.
+   */
+  async getParkHourlyProfile(
+    park: Park,
+    years: number,
+    topN: number,
+    minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
+  ): Promise<ParkHourlyProfileDto> {
+    const cacheKey = `park:hourly-profile:v1:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cached = safeJsonParse<ParkHourlyProfileDto>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
+
+    const result = await this.computeHourlyProfile(
+      park,
+      years,
+      topN,
+      minAttractionDays,
+    );
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(result),
+      "EX",
+      this.CACHE_TTL,
+    );
+    return result;
+  }
+
+  private async computeHourlyProfile(
+    park: Park,
+    years: number,
+    topN: number,
+    minAttractionDays: number,
+  ): Promise<ParkHourlyProfileDto> {
+    const now = new Date();
+    const endStr = formatInTimeZone(
+      subDays(now, 1),
+      park.timezone,
+      "yyyy-MM-dd",
+    );
+    const startStr = formatInTimeZone(
+      subYears(subDays(now, 1), years),
+      park.timezone,
+      "yyyy-MM-dd",
+    );
+
+    const rows = await this.queryHourlyProfile(
+      park.id,
+      park.timezone,
+      startStr,
+      endStr,
+      topN,
+      minAttractionDays,
+    );
+
+    // Which hours the table has columns for. Decided across the whole park, not
+    // per ride: a matrix whose rows each start at a different hour is not a
+    // matrix. An hour survives when enough DAYS reported it — a park that
+    // stayed open to 20:00 on four August evenings has a 20:00 bucket, and
+    // drawing it would suggest the park is open then.
+    const daysPerHour = new Map<number, number>();
+    for (const r of rows) {
+      const hour = Number(r.hour_of_day);
+      daysPerHour.set(
+        hour,
+        Math.max(daysPerHour.get(hour) ?? 0, Number(r.sample_days)),
+      );
+    }
+    const hours = [...daysPerHour.entries()]
+      .filter(([, days]) => days >= MIN_DAYS_PER_HOUR)
+      .map(([hour]) => hour)
+      .sort((a, b) => a - b);
+
+    // Rank by the ride's busiest hour rather than its all-day average: this
+    // table exists to show WHEN a queue happens, so a ride with one sharp
+    // morning spike belongs above one that idles at a flat ten minutes.
+    const byAttraction = new Map<
+      string,
+      {
+        slug: string;
+        name: string;
+        land: string | null;
+        p50: Map<number, number>;
+        p90: Map<number, number>;
+        sampleDays: number;
+      }
+    >();
+    for (const r of rows) {
+      const slug = r.slug as string;
+      const entry = byAttraction.get(slug) ?? {
+        slug,
+        name: r.name as string,
+        land: (r.land as string | null) ?? null,
+        p50: new Map<number, number>(),
+        p90: new Map<number, number>(),
+        sampleDays: 0,
+      };
+      const hour = Number(r.hour_of_day);
+      entry.p50.set(hour, Math.round(Number(r.p50)));
+      entry.p90.set(hour, Math.round(Number(r.p90)));
+      entry.sampleDays = Math.max(entry.sampleDays, Number(r.sample_days));
+      byAttraction.set(slug, entry);
+    }
+
+    const attractions: HourlyProfileAttractionDto[] = [...byAttraction.values()]
+      .map((a) => {
+        const p50 = hours.map((h) => a.p50.get(h) ?? null);
+        const p90 = hours.map((h) => a.p90.get(h) ?? null);
+        let peakHour: number | null = null;
+        let peakValue = -1;
+        hours.forEach((h, i) => {
+          const v = p50[i];
+          if (v != null && v > peakValue) {
+            peakValue = v;
+            peakHour = h;
+          }
+        });
+        return {
+          attractionSlug: a.slug,
+          attractionName: a.name,
+          land: a.land,
+          p50,
+          p90,
+          peakHour,
+          sampleDays: a.sampleDays,
+          _peak: peakValue,
+        };
+      })
+      .filter((a) => a._peak >= 0)
+      .sort((a, b) => b._peak - a._peak)
+      .slice(0, topN)
+      .map(({ _peak, ...rest }) => rest);
+
+    const totalSampleDays = attractions.reduce(
+      (max, a) => Math.max(max, a.sampleDays),
+      0,
+    );
+
+    return {
+      hours,
+      attractions,
+      meta: {
+        parkSlug: park.slug,
+        dataFrom: startStr,
+        dataTo: endStr,
+        windowYears: years,
+        totalSampleDays,
+        // Two independent ways to have nothing worth drawing: no ride cleared
+        // the sample floor, or the park's hours are so ragged that no single
+        // hour was measured on enough days to be a column.
+        displayable: hours.length >= 3 && attractions.length > 0,
+        generatedAt: new Date().toISOString(),
+        schemaVersion: HOURLY_SCHEMA_VERSION,
+      },
+    };
+  }
+
+  /**
+   * One row per (attraction, hour-of-day): the median and busy wait that ride
+   * shows at that hour, plus how many days went into it.
+   *
+   * The hour bucket is read in the PARK's timezone, so 10:00 means 10:00 to a
+   * visitor standing there — reading it in UTC shifts Gardaland's morning by
+   * two hours in summer and one in winter, i.e. by a different amount inside
+   * the same window.
+   */
+  private async queryHourlyProfile(
+    parkId: string,
+    timezone: string,
+    startDate: string,
+    endDate: string,
+    topN: number,
+    minAttractionDays: number,
+  ): Promise<Record<string, unknown>[]> {
+    return this.aggregateRepo.manager.query(
+      `WITH eligible AS (
+         SELECT qda."attractionId"                    AS aid,
+                COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
+         FROM queue_data_aggregates qda
+         WHERE qda."parkId" = $1
+           AND qda.hour >= $3::date
+           AND qda.hour <  ($4::date + INTERVAL '1 day')
+           AND qda."sampleCount" >= $5
+         GROUP BY qda."attractionId"
+         HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
+         ORDER BY AVG(qda.p90) DESC
+         LIMIT $7
+       )
+       SELECT
+         a.slug,
+         COALESCE(a.curated_name, a.name)           AS name,
+         COALESCE(a.curated_land_name, a.land_name) AS land,
+         EXTRACT(HOUR FROM (qda.hour AT TIME ZONE $2))::int AS hour_of_day,
+         AVG(qda.p50)                               AS p50,
+         AVG(qda.p90)                               AS p90,
+         e.sample_days
+       FROM queue_data_aggregates qda
+       JOIN eligible e   ON e.aid = qda."attractionId"
+       JOIN attractions a ON a.id::text = qda."attractionId"
+       WHERE qda."parkId" = $1
+         AND qda.hour >= $3::date
+         AND qda.hour <  ($4::date + INTERVAL '1 day')
+         AND qda."sampleCount" >= $5
+       GROUP BY a.id, a.slug, name, land, hour_of_day, e.sample_days
+       ORDER BY a.slug, hour_of_day`,
+      [
+        parkId,
+        timezone,
+        startDate,
+        endDate,
+        MIN_SAMPLES_PER_HOUR,
+        minAttractionDays,
+        // Over-fetch: the SQL ranks by all-day average, the projection re-ranks
+        // by peak hour, and a ride that only spikes at rope drop must not be
+        // cut before that re-rank can see it.
+        Math.min(topN * 3, 60),
+      ],
+    );
   }
 
   /**
@@ -270,13 +550,27 @@ export class ParkHistoricalStatsService {
     startDate: string,
     endDate: string,
     topN: number,
+    minAttractionDays: number,
   ): Promise<Record<string, unknown>[]> {
     // queue_data_aggregates uses camelCase columns: "parkId", "attractionId", p50, p90.
     // p50/p90 are lowercase (single-word) in the entity, so no quoting needed there.
+    //
+    // The HAVING is the whole reason a ride with one measured day no longer
+    // leads the ranking (see DEFAULT_MIN_ATTRACTION_DAYS). It is deliberately
+    // NOT a WHERE on the joined rows: the threshold is about how many days the
+    // ride was watched, which only exists after the GROUP BY.
+    //
+    // Name, land and type all prefer the curated column. `land_name` comes
+    // from Queue-Times, is missing for whole parks and goes stale when a land
+    // is re-themed; the curated one is the correction and wins wherever it is
+    // set. `attractionType` is one of the few unquoted camelCase columns on
+    // this table — every neighbour here is snake_case, so it needs the quotes.
     return this.aggregateRepo.manager.query(
       `SELECT
          a.slug,
-         a.name,
+         COALESCE(a.curated_name, a.name)                        AS name,
+         COALESCE(a.curated_land_name, a.land_name)              AS land,
+         COALESCE(a.curated_attraction_type, a."attractionType") AS attraction_type,
          AVG(qda.p50)                               AS avg_p50,
          AVG(qda.p90)                               AS avg_p90,
          COUNT(DISTINCT DATE(qda.hour))::int         AS sample_days
@@ -285,10 +579,11 @@ export class ParkHistoricalStatsService {
        WHERE qda."parkId" = $1
          AND qda.hour >= $2::date
          AND qda.hour <  ($3::date + INTERVAL '1 day')
-       GROUP BY a.id, a.slug, a.name
+       GROUP BY a.id, a.slug, name, land, attraction_type
+       HAVING COUNT(DISTINCT DATE(qda.hour)) >= $5
        ORDER BY avg_p90 DESC
        LIMIT $4`,
-      [parkId, startDate, endDate, topN],
+      [parkId, startDate, endDate, topN, minAttractionDays],
     );
   }
 
