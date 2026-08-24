@@ -6,6 +6,35 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — das Stundenprofil zeichnete Spalten für Stunden, in denen der Park zu hat
+
+Europa-Park kam mit Spalten für 21, 22 und 23 Uhr heraus, mit Werten zwischen 58
+und 68 Minuten. Genau der Fall, gegen den der Filter geschrieben war – „ein paar
+Spätsommerabende bis 20 Uhr" –, und er hat nie ausgelöst.
+
+Die Projektion las `sample_days`, und das ist die Anzahl der Messtage einer Bahn
+über das **ganze Fenster**: für alle 24 Stunden derselben Bahn dieselbe Zahl,
+hier rund 157. Die Schwelle von zehn Tagen war damit für jede Stunde erfüllt. Das
+SQL liefert jetzt `hour_days`, die Messtage genau dieser Stunde dieser Bahn, und
+die Prüfung liegt darauf.
+
+Dazu eine zweite Bedingung: eine Stunde braucht **40 % der Messtage der
+bestbeobachteten Stunde**. Eine feste Zahl kann das nicht entscheiden, weil „der
+Park hatte offen" keine feste Anzahl Tage ist – der Winterzauber läuft sechs
+Wochen lang bis 20 Uhr, und jede einzelne Schwelle behält entweder diese Stunde
+als Teil eines normalen Tages oder wirft Stunden weg, die ein kleinerer Park nur
+vierzig Mal misst. Gegen die Stunden zu messen, in denen der Park immer offen
+hat, skaliert auf beide.
+
+Einzelne Zellen fallen ebenfalls unter denselben Boden: eine Bahn, die mitten in
+der Saison aufgemacht hat, setzt keine Zahl aus sechs Tagen neben eine aus 118.
+
+Der Test hat den Fehler nicht gefunden, weil die Fixture-Zeilen die _gemeinte_
+Semantik trugen und nicht die des Queries – auf der 20-Uhr-Zeile stand ein
+niedriges `sample_days`, das die echte Abfrage dort nie erzeugt. Die Zeilen
+tragen jetzt beide Spalten so, wie das SQL sie zurückgibt; vier der Tests fallen
+gegen den alten Code um. `schemaVersion` ist 2, der Redis-Key liegt auf `v2`.
+
 ### Added — the park's day shape, as a payload a table can be built from
 
 `GET /v1/parks/.../stats/hourly` answers median and busy wait per hour of the
@@ -20,7 +49,7 @@ derived from the data rather than assumed, and an hour needs ten measured days
 to become a column: parks hold a handful of late-summer evenings open until
 20:00, and those four evenings would otherwise draw a column that reads as "the
 park is open then". And the ranking is by each ride's **busiest hour**, not its
-all-day average — the table answers *when* a queue happens, so a ride with one
+all-day average — the table answers _when_ a queue happens, so a ride with one
 sharp rope-drop spike belongs in it and its flat daily mean would have hidden
 it. The SQL therefore over-fetches (`topN × 3`) before the projection re-ranks.
 

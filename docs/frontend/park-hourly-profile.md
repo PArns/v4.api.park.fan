@@ -28,25 +28,25 @@ agree with the top-attraction ranking by construction rather than by luck.
 
 ```ts
 interface ParkHourlyProfile {
-  hours: number[];                 // park-local, ascending, e.g. [9,10,…,18]
+  hours: number[]; // park-local, ascending, e.g. [9,10,…,18]
   attractions: Array<{
     attractionSlug: string;
-    attractionName: string;        // curated name winning
+    attractionName: string; // curated name winning
     land?: string | null;
-    p50: Array<number | null>;     // one entry per `hours` entry, same order
+    p50: Array<number | null>; // one entry per `hours` entry, same order
     p90: Array<number | null>;
-    peakHour: number | null;       // the hour in `hours` where p50 peaks
+    peakHour: number | null; // the hour in `hours` where p50 peaks
     sampleDays: number;
   }>;
   meta: {
     parkSlug: string;
-    dataFrom: string;              // YYYY-MM-DD, park tz
+    dataFrom: string; // YYYY-MM-DD, park tz
     dataTo: string;
     windowYears: number;
     totalSampleDays: number;
     displayable: boolean;
-    generatedAt: string;           // ISO 8601 UTC
-    schemaVersion: number;         // 1
+    generatedAt: string; // ISO 8601 UTC
+    schemaVersion: number; // 2
   };
 }
 ```
@@ -67,14 +67,32 @@ interface ParkHourlyProfile {
   Wodan climbs all afternoon, which is the whole point of the table. Highlight
   each row's own peak cell.
 - **`windowYears` defaults to 1**, not 2 like `/stats`. The table describes what
-  a day looks like *now*; a park that moved its opening time or rebuilt a queue
+  a day looks like _now_; a park that moved its opening time or rebuilt a queue
   line last spring would otherwise average the old shape into the new one.
 
 ## Which hours become columns
 
-An hour needs **10 measured days** across the window. Parks routinely hold a
-handful of late-summer evenings open until 20:00, and those four evenings would
-otherwise add a 20:00 column that reads as "the park is open then".
+Two tests, and an hour must pass both:
+
+1. **10 measured days** across the window — an absolute floor for small or young
+   parks.
+2. **At least 40 % of the best-observed hour's day count.** A flat threshold
+   cannot decide this alone, because "the park was open" is not a fixed number of
+   days: Europa-Parks Winterzauber runs 11:00–20:00 for about six weeks, so any
+   single number either keeps 20:00 (drawing a winter-only hour as part of a
+   normal day) or drops hours a smaller park only ever measures forty times.
+   Measuring each hour against the hours the park is _always_ open scales to
+   both.
+
+The day count behind this is **per (ride, hour)** — the days that hour was
+measured. It is not the ride's `sample_days`, which counts its measured days
+across the whole window and is identical for all 24 of its hours. Reading the
+wrong one is what shipped 21:00–23:00 columns for Europa-Park at 58–68 minutes:
+every hour inherited ~157 days and the filter never fired.
+
+A single ride's cell is blanked by the same 10-day floor even when the hour
+survives as a column, so a ride that opened mid-season does not put a number
+built on six days next to one built on 118.
 
 ## Which rides make the table
 
@@ -83,7 +101,7 @@ otherwise add a 20:00 column that reads as "the park is open then".
 2. SQL pre-ranks by all-day average P90 and over-fetches (`topN × 3`, capped at
    60), because …
 3. … the projection then **re-ranks by each ride's busiest hour** and cuts to
-   `topN`. A ride with one sharp rope-drop spike belongs in a table about *when*
+   `topN`. A ride with one sharp rope-drop spike belongs in a table about _when_
    a queue happens; its all-day average would have hidden it.
 
 ## Timezone

@@ -41,14 +41,26 @@ const MIN_SAMPLES_PER_HOUR = 2;
 const DEFAULT_MIN_ATTRACTION_DAYS = 20;
 
 /** Hourly-profile schema version (see ParkHourlyProfileDto). */
-const HOURLY_SCHEMA_VERSION = 1;
+const HOURLY_SCHEMA_VERSION = 2;
 
 /**
- * An hour needs this many measured days across the window to be drawn. An
- * opening hour that only exists on the four late-summer evenings the park
- * stayed open until 20:00 is not part of the day's shape.
+ * An hour needs this many measured days across the window to be drawn at all.
+ * An absolute floor for small or young parks; the ratio below does the real work.
  */
 const MIN_DAYS_PER_HOUR = 10;
+
+/**
+ * …and it needs this share of the best-observed hour's day count.
+ *
+ * An absolute floor cannot decide this on its own, because "the park was open"
+ * is not a fixed number of days: Europa-Park's Winterzauber runs 11:00–20:00 for
+ * about six weeks, so a flat threshold either keeps 20:00 (drawing a winter-only
+ * hour as part of a normal day) or drops it together with hours a small park
+ * only ever measures forty times. Measuring each hour against the hours the park
+ * is *always* open scales to both. Same shape as the weekday-sample ratio in the
+ * frontend's quietest-day rule, and for the same reason.
+ */
+const MIN_HOUR_DAY_RATIO = 0.4;
 
 /** One operating day's headliner-only values (peak + typical wait). */
 interface DayValue {
@@ -262,7 +274,7 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
-    const cacheKey = `park:hourly-profile:v1:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cacheKey = `park:hourly-profile:v2:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -315,16 +327,27 @@ export class ParkHistoricalStatsService {
     // matrix. An hour survives when enough DAYS reported it — a park that
     // stayed open to 20:00 on four August evenings has a 20:00 bucket, and
     // drawing it would suggest the park is open then.
+    //
+    // `hour_days` counts the days THAT HOUR was measured, which is the only
+    // number this test can be made of. Reading the ride's window-wide
+    // `sample_days` here instead is what shipped 21:00–23:00 columns for
+    // Europa-Park at 58–68 minutes: every hour inherited ~157 and the filter
+    // never removed anything.
     const daysPerHour = new Map<number, number>();
     for (const r of rows) {
       const hour = Number(r.hour_of_day);
       daysPerHour.set(
         hour,
-        Math.max(daysPerHour.get(hour) ?? 0, Number(r.sample_days)),
+        Math.max(daysPerHour.get(hour) ?? 0, Number(r.hour_days)),
       );
     }
+    const bestHourDays = Math.max(0, ...daysPerHour.values());
     const hours = [...daysPerHour.entries()]
-      .filter(([, days]) => days >= MIN_DAYS_PER_HOUR)
+      .filter(
+        ([, days]) =>
+          days >= MIN_DAYS_PER_HOUR &&
+          days >= bestHourDays * MIN_HOUR_DAY_RATIO,
+      )
       .map(([hour]) => hour)
       .sort((a, b) => a - b);
 
@@ -353,8 +376,14 @@ export class ParkHistoricalStatsService {
         sampleDays: 0,
       };
       const hour = Number(r.hour_of_day);
-      entry.p50.set(hour, Math.round(Number(r.p50)));
-      entry.p90.set(hour, Math.round(Number(r.p90)));
+      // A ride that reported an hour on a handful of days gets a gap in that
+      // cell rather than a number. It happens to rides that opened mid-season
+      // and to the odd hour a single ride stayed open for, and one such cell
+      // next to a column of well-measured ones reads as a comparable value.
+      if (Number(r.hour_days) >= MIN_DAYS_PER_HOUR) {
+        entry.p50.set(hour, Math.round(Number(r.p50)));
+        entry.p90.set(hour, Math.round(Number(r.p90)));
+      }
       entry.sampleDays = Math.max(entry.sampleDays, Number(r.sample_days));
       byAttraction.set(slug, entry);
     }
@@ -450,6 +479,10 @@ export class ParkHistoricalStatsService {
          EXTRACT(HOUR FROM (qda.hour AT TIME ZONE $2))::int AS hour_of_day,
          AVG(qda.p50)                               AS p50,
          AVG(qda.p90)                               AS p90,
+         -- Days THIS HOUR was measured for THIS ride. Distinct from
+         -- e.sample_days, which counts the ride's measured days across the
+         -- whole window and is the same number for all 24 of its hours.
+         COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS hour_days,
          e.sample_days
        FROM queue_data_aggregates qda
        JOIN eligible e   ON e.aid = qda."attractionId"
