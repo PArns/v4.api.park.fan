@@ -57,6 +57,7 @@ import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
+import { ParkHourlyProfileDto } from "../analytics/dto/park-hourly-profile.dto";
 import { Park } from "./entities/park.entity";
 import { ScheduleType } from "./entities/schedule-entry.entity";
 import { PopularityService } from "../popularity/popularity.service";
@@ -1206,6 +1207,15 @@ export class ParksController {
       "Minimum sample days before meta.displayable becomes true (default: 30)",
     example: 30,
   })
+  @ApiQuery({
+    name: "minAttractionDays",
+    required: false,
+    description:
+      "Measured days an attraction needs before it may enter topAttractions " +
+      "(default: 20). Guards the ranking against a ride whose average is an " +
+      "average over one day.",
+    example: 20,
+  })
   @ApiResponse({ status: 200, type: ParkHistoricalStatsDto })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkHistoricalStats(
@@ -1216,6 +1226,7 @@ export class ParksController {
     @Query("years") yearsStr?: string,
     @Query("topN") topNStr?: string,
     @Query("minSampleDays") minSampleDaysStr?: string,
+    @Query("minAttractionDays") minAttractionDaysStr?: string,
   ): Promise<ParkHistoricalStatsDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
@@ -1233,11 +1244,93 @@ export class ParksController {
     const years = Math.min(Math.max(Number(yearsStr) || 2, 1), 5);
     const topN = Math.min(Math.max(Number(topNStr) || 10, 1), 50);
     const minSampleDays = Math.max(Number(minSampleDaysStr) || 30, 0);
+    const minAttractionDays = Math.max(Number(minAttractionDaysStr) || 20, 0);
     return this.parkHistoricalStatsService.getParkHistoricalStats(
       park,
       years,
       topN,
       minSampleDays,
+      minAttractionDays,
+    );
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/stats/hourly
+   *
+   * The park's day shape, ride by ride. Declared before the catch-all park
+   * route further down; `stats` and `stats/hourly` are distinct paths, so
+   * their relative order does not matter.
+   */
+  @Get(":continent/:country/:city/:parkSlug/stats/hourly")
+  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
+  @ApiOperation({
+    summary: "Get the park's hourly wait-time profile",
+    description:
+      "Median and busy wait per hour of the operating day for the park's " +
+      "busiest rides — the matrix behind a 'when is the queue longest' " +
+      "table. Hours are park-local and derived from the data, so a park " +
+      "that opens at 11 starts at 11. Deliberately lean (~2 KB for eight " +
+      "rides) rather than a slice of the attraction detail endpoint, which " +
+      "answers ~53 KB per ride. Cached for 24 hours.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "rust" })
+  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiQuery({
+    name: "years",
+    required: false,
+    description: "Number of years to look back (default: 1, max: 5)",
+    example: 1,
+  })
+  @ApiQuery({
+    name: "topN",
+    required: false,
+    description: "Number of rides to return (default: 8, max: 20)",
+    example: 8,
+  })
+  @ApiQuery({
+    name: "minAttractionDays",
+    required: false,
+    description:
+      "Measured days a ride needs before it may appear (default: 20)",
+    example: 20,
+  })
+  @ApiResponse({ status: 200, type: ParkHourlyProfileDto })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getParkHourlyProfile(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("years") yearsStr?: string,
+    @Query("topN") topNStr?: string,
+    @Query("minAttractionDays") minAttractionDaysStr?: string,
+  ): Promise<ParkHourlyProfileDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    // One year, not two: the table describes what a day looks like NOW, and a
+    // park that moved its opening time or rebuilt a queue line last spring
+    // would otherwise average the old shape into the new one.
+    const years = Math.min(Math.max(Number(yearsStr) || 1, 1), 5);
+    const topN = Math.min(Math.max(Number(topNStr) || 8, 1), 20);
+    const minAttractionDays = Math.max(Number(minAttractionDaysStr) || 20, 0);
+    return this.parkHistoricalStatsService.getParkHourlyProfile(
+      park,
+      years,
+      topN,
+      minAttractionDays,
     );
   }
 

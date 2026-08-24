@@ -6,6 +6,49 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the park's day shape, as a payload a table can be built from
+
+`GET /v1/parks/.../stats/hourly` answers median and busy wait per hour of the
+operating day, ride by ride. It exists because the same information was already
+reachable — off the attraction detail endpoint, at ~53 KB per ride, about 45 %
+of it a `schedule` nobody renders. An eight-ride table cost 424 KB that way; it
+costs ~2 KB this way, off the same `queue_data_aggregates` rollup `/stats`
+reads, so the two surfaces agree by construction.
+
+Two decisions in it are about not overstating what was measured. `hours` is
+derived from the data rather than assumed, and an hour needs ten measured days
+to become a column: parks hold a handful of late-summer evenings open until
+20:00, and those four evenings would otherwise draw a column that reads as "the
+park is open then". And the ranking is by each ride's **busiest hour**, not its
+all-day average — the table answers *when* a queue happens, so a ride with one
+sharp rope-drop spike belongs in it and its flat daily mean would have hidden
+it. The SQL therefore over-fetches (`topN × 3`) before the projection re-ranks.
+
+The hour bucket is read `AT TIME ZONE` the park's own timezone. In UTC,
+Gardaland's morning moves two hours in summer and one in winter — a different
+amount inside one window, which smears a peak rather than shifting it.
+
+Full contract: [park hourly profile](frontend/park-hourly-profile.md).
+
+### Fixed — a ride measured on one day led its park's top-ten table
+
+`topAttractions` ranks by average P90, and an average over a single day is not
+an average. Walibi Hollands Sky Diver was watched on one day, came out at 75,
+and outranked every coaster in the park; Blast, on seven days, sat third. Both
+were the first thing a visitor read under "the park's longest queues".
+
+An attraction now needs twenty measured days to enter the ranking
+(`minAttractionDays`, tunable per request) — the same floor the per-ride
+`typicalWaits` aggregate already used for its `displayable` gate, so the two
+refuse the same thin evidence. It is a `HAVING`, not a `WHERE`: the threshold is
+about how many days a ride was watched, which only exists after the grouping.
+
+`topAttractions` rows also carry `land` and `attractionType` now, and resolve
+the ride's name through `curated_name`. That is a curated-value-wins triple —
+`land_name` comes from Queue-Times, is missing for whole parks and goes stale
+when a land is re-themed — and it saves a caller a second request per park just
+to label a column. `schemaVersion` is 3 and the Redis key moved to `v3`.
+
 ### Added — the admin had no authentication, and now it has one
 
 `/admin/**` was reachable by anyone who found the path. Nothing in the
