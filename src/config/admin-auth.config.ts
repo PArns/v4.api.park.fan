@@ -124,17 +124,17 @@ export function isTotpRequired(): boolean {
 /**
  * The Turnstile secret the login verifies tokens against.
  *
- * `ADMIN_TURNSTILE_SECRET_KEY` first so this can be pointed at its own widget;
- * `TURNSTILE_SECRET_KEY` after it, because the frontend already calls it that
- * and a deployment sharing one widget between the upload form and the login
- * should not have to set the same value twice under two names.
+ * `TURNSTILE_SECRET_KEY`, the same name the frontend uses, and the only one.
+ * It shipped with an `ADMIN_TURNSTILE_SECRET_KEY` ahead of it so the login
+ * could be pointed at a widget of its own — a flexibility nobody asked for,
+ * paid for with two names for one secret in two repositories. Two names is how
+ * a deployment ends up with the value under one of them and the check reading
+ * the other, which fails as a login that refuses everybody.
+ *
+ * One widget serves both surfaces, so one secret verifies for both.
  */
 export function getAdminTurnstileSecret(): string {
-  return (
-    process.env.ADMIN_TURNSTILE_SECRET_KEY?.trim() ||
-    process.env.TURNSTILE_SECRET_KEY?.trim() ||
-    ""
-  );
+  return process.env.TURNSTILE_SECRET_KEY?.trim() || "";
 }
 
 /** How long siteverify gets before the login gives up on it. */

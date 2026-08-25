@@ -253,9 +253,10 @@ eight attempts at will and keep them out. A challenge is what makes an attempt
 cost something.
 
 **It stays off until two variables are set**, and the second is the one that
-matters. Enforcement needs `ADMIN_TURNSTILE_SECRET_KEY` (or the frontend's
-`TURNSTILE_SECRET_KEY`) to check tokens against, and it needs
-`THROTTLE_BYPASS_KEYS` to tell our frontend from a stranger. With no bypass keys
+matters. Enforcement needs `TURNSTILE_SECRET_KEY` to check tokens against —
+the same name the frontend uses, because it is the same widget, and one secret
+verifies for both surfaces — and it needs `THROTTLE_BYPASS_KEYS` to tell our
+frontend from a stranger. With no bypass keys
 every caller looks like a stranger, including the admin proxy — which sends no
 token, having verified on its own side — so enforcing in that state would refuse
 every login there is. Both gates fail **open**, so a deployment that sets
@@ -277,7 +278,7 @@ how long that connection may hold a login open.
 | `ADMIN_LEGACY_PASS_ROLE`                             | What the shared secret may do. Defaults to `owner`, never account management. |
 | `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES`         | Per-account lockout. Defaults 8 / 15.                                         |
 | `ADMIN_REQUIRE_TOTP`                                 | `true` makes two-factor mandatory and un-removable.                           |
-| `ADMIN_TURNSTILE_SECRET_KEY`                         | Turnstile secret for the login. Falls back to `TURNSTILE_SECRET_KEY`.         |
+| `TURNSTILE_SECRET_KEY`                               | Turnstile secret. Same name and value as the frontend's — one widget.         |
 | `ADMIN_TURNSTILE_TIMEOUT_MS`                         | How long siteverify may hold a login open. Default 5000.                      |
 | `ADMIN_LOGIN_TURNSTILE`                              | `false` switches the check off while the secret stays set.                    |
 
