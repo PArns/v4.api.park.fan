@@ -32,6 +32,18 @@ export class AdminLoginDto {
   @IsString()
   @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
   totpCode?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A solved Cloudflare Turnstile token. Required of callers that do not " +
+      "present a valid frontend key, and ignored for those that do — park.fan's " +
+      "admin proxy verifies the challenge on its own side before it forwards " +
+      "anything here, and a token may be redeemed only once.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  turnstileToken?: string;
 }
 
 export class AdminChangePasswordDto {

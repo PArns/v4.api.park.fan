@@ -54,6 +54,32 @@ export const getThrottleBypassKeys = (): string[] =>
     .filter((key) => key.length > 0);
 
 /**
+ * Whether a request carries a valid bypass key — i.e. whether it came from our
+ * own frontend rather than from the open internet.
+ *
+ * Extracted from `CfThrottlerGuard.shouldSkip`, which asked this inline, so
+ * that the admin login can ask the same question and get the same answer. It
+ * has to be the same answer: the login demands a solved Turnstile challenge
+ * from everyone this returns false for, and a second, drifting copy of the
+ * rule would eventually decide our own frontend is a stranger and lock the
+ * admin out.
+ *
+ * False when no keys are configured, because then nothing distinguishes anyone
+ * — see `isAdminLoginTurnstileEnforced` for what that means at the login.
+ */
+export const carriesThrottleBypassKey = (
+  headers: Record<string, unknown> | undefined,
+): boolean => {
+  const keys = getThrottleBypassKeys();
+  if (keys.length === 0) return false;
+  const provided = headers?.[getThrottleBypassHeader()];
+  const values = Array.isArray(provided) ? provided : [provided];
+  return values.some(
+    (value) => typeof value === "string" && keys.includes(value),
+  );
+};
+
+/**
  * Optional origin-verification secret. The throttle key trusts the
  * Cloudflare-set client-IP headers (CF-Connecting-IP / X-Forwarded-For) to
  * identify the real client — but those are forgeable by anyone reaching the

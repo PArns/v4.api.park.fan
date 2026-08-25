@@ -3,6 +3,7 @@ import {
   ADMIN_ROLES,
   type AdminRole,
 } from "../admin/auth/entities/admin-user.entity";
+import { getThrottleBypassKeys } from "../common/throttler/throttler.config";
 
 /**
  * Admin authentication config.
@@ -118,4 +119,47 @@ export function getLoginLockoutMinutes(): number {
 /** Whether new accounts must enrol in TOTP before they can do anything. */
 export function isTotpRequired(): boolean {
   return process.env.ADMIN_REQUIRE_TOTP === "true";
+}
+
+/**
+ * The Turnstile secret the login verifies tokens against.
+ *
+ * `ADMIN_TURNSTILE_SECRET_KEY` first so this can be pointed at its own widget;
+ * `TURNSTILE_SECRET_KEY` after it, because the frontend already calls it that
+ * and a deployment sharing one widget between the upload form and the login
+ * should not have to set the same value twice under two names.
+ */
+export function getAdminTurnstileSecret(): string {
+  return (
+    process.env.ADMIN_TURNSTILE_SECRET_KEY?.trim() ||
+    process.env.TURNSTILE_SECRET_KEY?.trim() ||
+    ""
+  );
+}
+
+/** How long siteverify gets before the login gives up on it. */
+export function getAdminTurnstileTimeoutMs(): number {
+  const raw = Number.parseInt(process.env.ADMIN_TURNSTILE_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5000;
+}
+
+/**
+ * Whether the login demands a solved challenge from callers who are not our
+ * frontend.
+ *
+ * Two conditions, and the second is the one that matters. Enforcement needs a
+ * secret to check tokens against — and it needs a way to tell our own frontend
+ * apart from a stranger, which is `THROTTLE_BYPASS_KEYS`. With no bypass keys
+ * configured every caller looks like a stranger, including park.fan's admin
+ * proxy, which verifies the challenge on its own side and therefore sends no
+ * token here. Enforcing in that state would refuse every login there is.
+ *
+ * So it stays off until both are set, and says so once at boot rather than
+ * failing quietly in either direction. Turning it on is two env vars and no
+ * code change on either side.
+ */
+export function isAdminLoginTurnstileEnforced(): boolean {
+  if (process.env.ADMIN_LOGIN_TURNSTILE === "false") return false;
+  if (!getAdminTurnstileSecret()) return false;
+  return getThrottleBypassKeys().length > 0;
 }

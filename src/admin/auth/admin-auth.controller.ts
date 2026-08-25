@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -17,7 +18,10 @@ import { Throttle } from "@nestjs/throttler";
 import { AdminAuthService, toPublicUser } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
+import { AdminTurnstileService } from "./admin-turnstile.service";
 import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
+import { carriesThrottleBypassKey } from "../../common/throttler/throttler.config";
+import { isAdminLoginTurnstileEnforced } from "../../config/admin-auth.config";
 import {
   AdminAllowPendingPassword,
   AdminLegacyAccess,
@@ -62,6 +66,7 @@ export class AdminAuthController {
     private readonly auth: AdminAuthService,
     private readonly sessions: AdminSessionStore,
     private readonly audit: AdminAuditService,
+    private readonly turnstile: AdminTurnstileService,
   ) {}
 
   @Post("login")
@@ -84,10 +89,40 @@ export class AdminAuthController {
   })
   @ApiResponse({ status: 401, description: "Invalid credentials" })
   @ApiResponse({
+    status: 403,
+    description: "The Turnstile challenge was not solved",
+  })
+  @ApiResponse({
     status: 429,
     description: "Too many attempts, or the account is locked",
   })
   async login(@Body() body: AdminLoginDto, @Req() request: RequestWithAdmin) {
+    // Before the password is looked at, and before either limiter counts
+    // anything. Both of those only start once an attempt has been made, and the
+    // per-account lockout is a weapon pointed the wrong way: anybody who knows
+    // an editor's address can spend their attempts at will and keep them out.
+    // The challenge is what makes an attempt cost something.
+    //
+    // Asked only of callers who are not our own frontend — it verified the same
+    // challenge on its own side before forwarding, and a token is single-use, so
+    // there is nothing left here to redeem.
+    if (
+      isAdminLoginTurnstileEnforced() &&
+      !carriesThrottleBypassKey(request.headers)
+    ) {
+      const verdict = await this.turnstile.verify(
+        body.turnstileToken ?? "",
+        clientIp(request),
+      );
+      if (!verdict.success) {
+        throw new ForbiddenException({
+          error: "turnstile-failed",
+          reason: verdict.reason,
+          message: "A solved Turnstile token is required to sign in.",
+        });
+      }
+    }
+
     const userAgent = request.headers?.["user-agent"];
     const result = await this.auth.login({
       email: body.email,
