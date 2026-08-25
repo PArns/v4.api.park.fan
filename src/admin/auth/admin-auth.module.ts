@@ -6,6 +6,7 @@ import { AdminAuditLog } from "./entities/admin-audit-log.entity";
 import { AdminAuthService } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
+import { AdminTurnstileService } from "./admin-turnstile.service";
 import { AdminLoginRateLimitService } from "./admin-login-rate-limit.service";
 import { AdminAuthGuard } from "./admin-auth.guard";
 import { AdminAuthController } from "./admin-auth.controller";
@@ -27,6 +28,7 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
     AdminAuthService,
     AdminSessionStore,
     AdminAuditService,
+    AdminTurnstileService,
     AdminLoginRateLimitService,
     AdminAuthGuard,
     AdminAuditInterceptor,
@@ -35,6 +37,7 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
     AdminAuthService,
     AdminSessionStore,
     AdminAuditService,
+    AdminTurnstileService,
     AdminLoginRateLimitService,
     AdminAuthGuard,
     AdminAuditInterceptor,

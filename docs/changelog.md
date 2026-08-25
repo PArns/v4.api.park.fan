@@ -6,6 +6,40 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — Turnstile am Admin-Login, für Aufrufer, die nicht wir sind
+
+Das Frontend löst die Cloudflare-Prüfung im Browser und verifiziert sie in der
+eigenen Route, bevor es irgendetwas hierher weiterreicht. Das schützt den Weg,
+den ein Browser geht, und nur den: `POST /v1/admin/auth/login` trägt
+`@AdminPublic()` und ist direkt erreichbar, ein Bot am Frontend vorbei sieht die
+Prüfung nie.
+
+Der Login verlangt jetzt auch einen gelösten Token – von jedem außer Aufrufern
+mit gültigem `THROTTLE_BYPASS_KEYS`-Wert. Dieser Header heißt schon „das ist
+unser eigenes Frontend", und `carriesThrottleBypassKey` ist eine Funktion, die
+`CfThrottlerGuard.shouldSkip` und der Login gemeinsam benutzen: eine zweite
+Kopie der Regel würde irgendwann unser eigenes Frontend für einen Fremden
+halten. Ausgenommen ist es, weil es gar nicht liefern kann – ein Token gilt
+einmal, und es hat ihn eingelöst.
+
+Geprüft wird vor dem Passwort und bevor einer der Zähler etwas mitbekommt.
+Drosselung und Kontosperre zählen erst Versuche, die schon gemacht wurden, und
+die Sperre pro Konto zeigt in die falsche Richtung: wer die Adresse einer
+Redakteurin kennt, kann deren acht Versuche jederzeit verbrauchen.
+
+**Bleibt aus, bis zwei Variablen gesetzt sind**, und die zweite ist der Punkt.
+Es braucht `ADMIN_TURNSTILE_SECRET_KEY` (ersatzweise `TURNSTILE_SECRET_KEY`) und
+`THROTTLE_BYPASS_KEYS`. Ohne Bypass-Keys sieht jeder Aufrufer aus wie ein
+Fremder, auch der Admin-Proxy, der keinen Token schickt – Erzwingen hieße dort,
+jeden Login abzulehnen. Beide Schalter fallen offen aus, eine Installation, die
+nichts setzt, verhält sich exakt wie vorher. Ein fehlendes Secret, ein
+abgelehnter Token und ein nicht erreichbares siteverify lehnen dagegen alle ab:
+Durchwinken bei Netzfehler machte die Prüfung für jeden entfernbar, der diese
+eine Verbindung stören kann. `ADMIN_TURNSTILE_TIMEOUT_MS` (Vorgabe 5000)
+begrenzt, wie lange sie einen Login offen halten darf.
+
+Siehe [Admin Authentication](admin/authentication.md).
+
 ### Fixed — eine Stunde, die eine einzige Bahn meldet, ist keine Spalte
 
 Nach dem vorigen Fix blieben 7 und 8 Uhr als Spalten stehen, in denen sieben

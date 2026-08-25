@@ -224,6 +224,49 @@ the guard authenticates the pass and then refuses it on every endpoint carrying
 `@AdminLegacyAccess(false)`. Verified, rejected, and previously written to the
 log in full.
 
+### Turnstile on the login, for callers who are not us
+
+park.fan's admin solves a Cloudflare Turnstile challenge in the browser and
+verifies it in its own `/api/admin/session` route before it forwards anything
+here. That defends the path a browser takes and only that path: `POST
+/v1/admin/auth/login` is `@AdminPublic()` and reachable directly, so a bot that
+skips the frontend entirely never meets the challenge.
+
+So the login asks for a solved token too — of everyone **except** callers
+presenting a valid `THROTTLE_BYPASS_KEYS` value. That header already means "this
+is our own frontend" (it is what the global throttler skips on), and reusing it
+is deliberate: `carriesThrottleBypassKey` is one function, called by
+`CfThrottlerGuard.shouldSkip` and by the login, because a second copy of the
+rule would eventually decide our own frontend is a stranger.
+
+The frontend is exempt because it cannot comply. A Turnstile token may be
+redeemed **once**, and it already redeemed it. Making the API the only verifier
+would mean the frontend forwarded the token instead of checking it, and both
+repositories would have to be deployed in the same minute for anybody to be able
+to sign in.
+
+The check runs before the password is read and before either limiter counts
+anything — which is the point of having it. The throttle and the lockout only
+start once an attempt has been made, and the per-account lockout is a weapon
+pointed the wrong way: anybody who knows an editor's address can spend their
+eight attempts at will and keep them out. A challenge is what makes an attempt
+cost something.
+
+**It stays off until two variables are set**, and the second is the one that
+matters. Enforcement needs `ADMIN_TURNSTILE_SECRET_KEY` (or the frontend's
+`TURNSTILE_SECRET_KEY`) to check tokens against, and it needs
+`THROTTLE_BYPASS_KEYS` to tell our frontend from a stranger. With no bypass keys
+every caller looks like a stranger, including the admin proxy — which sends no
+token, having verified on its own side — so enforcing in that state would refuse
+every login there is. Both gates fail **open**, so a deployment that sets
+neither behaves exactly as it did before this existed.
+
+A verdict is never waved through: a missing secret, a rejected token and a
+siteverify that cannot be reached all refuse. Letting a request pass when
+Cloudflare is unreachable would make the check removable by anyone able to
+disturb that one connection. `ADMIN_TURNSTILE_TIMEOUT_MS` (default 5000) caps
+how long that connection may hold a login open.
+
 ## Environment
 
 | Variable                                             | Meaning                                                                       |
@@ -234,6 +277,9 @@ log in full.
 | `ADMIN_LEGACY_PASS_ROLE`                             | What the shared secret may do. Defaults to `owner`, never account management. |
 | `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES`         | Per-account lockout. Defaults 8 / 15.                                         |
 | `ADMIN_REQUIRE_TOTP`                                 | `true` makes two-factor mandatory and un-removable.                           |
+| `ADMIN_TURNSTILE_SECRET_KEY`                         | Turnstile secret for the login. Falls back to `TURNSTILE_SECRET_KEY`.         |
+| `ADMIN_TURNSTILE_TIMEOUT_MS`                         | How long siteverify may hold a login open. Default 5000.                      |
+| `ADMIN_LOGIN_TURNSTILE`                              | `false` switches the check off while the secret stays set.                    |
 
 Schema changes land through TypeORM `synchronize` on boot — there are no
 migrations — so `admin_users` and `admin_audit_log` appear on the next deploy.
