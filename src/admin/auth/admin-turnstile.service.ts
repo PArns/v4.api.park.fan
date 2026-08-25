@@ -23,8 +23,9 @@ import {
  * able to sign in.
  *
  * Env:
- *  - `ADMIN_TURNSTILE_SECRET_KEY` (or `TURNSTILE_SECRET_KEY`) — the widget's
- *    secret. Unset ⇒ the check is off, see `isAdminLoginTurnstileEnforced`.
+ *  - `TURNSTILE_SECRET_KEY` — the widget's secret, under the same name the
+ *    frontend uses, because it is the same widget. Unset ⇒ the check is off,
+ *    see `isAdminLoginTurnstileEnforced`.
  */
 
 const SITEVERIFY_URL =

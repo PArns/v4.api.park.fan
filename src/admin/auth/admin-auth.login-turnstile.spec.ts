@@ -67,7 +67,7 @@ describe("AdminAuthController — Turnstile on the login", () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
     delete process.env.ADMIN_LOGIN_TURNSTILE;
-    process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+    process.env.TURNSTILE_SECRET_KEY = "s3cret";
     process.env.THROTTLE_BYPASS_KEYS = FRONTEND_KEY;
   });
 
@@ -134,7 +134,7 @@ describe("AdminAuthController — Turnstile on the login", () => {
   it("asks nobody while no secret is configured", async () => {
     // The state every deployment is in until the env var is set. It must behave
     // exactly as it did before this existed.
-    delete process.env.ADMIN_TURNSTILE_SECRET_KEY;
+    delete process.env.TURNSTILE_SECRET_KEY;
     const { controller, turnstile, auth } = build({ success: false });
 
     await controller.login(credentials(), request({}));

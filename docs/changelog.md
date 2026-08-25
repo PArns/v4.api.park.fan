@@ -6,6 +6,21 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — ein Widget, ein Secret, ein Variablenname
+
+`ADMIN_TURNSTILE_SECRET_KEY` ist weg. Der Login liest nur noch
+`TURNSTILE_SECRET_KEY`, denselben Namen, den das Frontend schon benutzt.
+
+Der zweite Name war dafür da, den Login auf ein eigenes Widget zeigen zu
+können. Danach hat niemand gefragt, und bezahlt war es mit zwei Namen für ein
+Geheimnis über zwei Repositories. So landet der Wert unter dem einen Namen,
+während die Prüfung den anderen liest – und das fällt nicht als Konfigurations-
+fehler auf, sondern als Login, der niemanden mehr durchlässt.
+
+Ein Test hält fest, dass der zurückgezogene Name nichts mehr einschaltet: eine
+Installation, die den Wert nur dort abgelegt hat, hielte den Login sonst für
+geschützt, während die Prüfung auf einen leeren String schaut und ausbleibt.
+
 ### Added — Turnstile am Admin-Login, für Aufrufer, die nicht wir sind
 
 Das Frontend löst die Cloudflare-Prüfung im Browser und verifiziert sie in der
@@ -28,8 +43,7 @@ die Sperre pro Konto zeigt in die falsche Richtung: wer die Adresse einer
 Redakteurin kennt, kann deren acht Versuche jederzeit verbrauchen.
 
 **Bleibt aus, bis zwei Variablen gesetzt sind**, und die zweite ist der Punkt.
-Es braucht `ADMIN_TURNSTILE_SECRET_KEY` (ersatzweise `TURNSTILE_SECRET_KEY`) und
-`THROTTLE_BYPASS_KEYS`. Ohne Bypass-Keys sieht jeder Aufrufer aus wie ein
+Es braucht `TURNSTILE_SECRET_KEY` und `THROTTLE_BYPASS_KEYS`. Ohne Bypass-Keys sieht jeder Aufrufer aus wie ein
 Fremder, auch der Admin-Proxy, der keinen Token schickt – Erzwingen hieße dort,
 jeden Login abzulehnen. Beide Schalter fallen offen aus, eine Installation, die
 nichts setzt, verhält sich exakt wie vorher. Ein fehlendes Secret, ein

@@ -15,8 +15,8 @@ describe("AdminTurnstileService", () => {
 
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
-    delete process.env.ADMIN_TURNSTILE_SECRET_KEY;
     delete process.env.TURNSTILE_SECRET_KEY;
+    delete process.env.ADMIN_TURNSTILE_SECRET_KEY;
     delete process.env.THROTTLE_BYPASS_KEYS;
     delete process.env.ADMIN_LOGIN_TURNSTILE;
 
@@ -36,7 +36,7 @@ describe("AdminTurnstileService", () => {
 
   describe("verify", () => {
     it("accepts a token Cloudflare confirms", async () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       respondWith({ success: true });
 
       await expect(service.verify("tok", "198.51.100.7")).resolves.toEqual({
@@ -45,7 +45,7 @@ describe("AdminTurnstileService", () => {
     });
 
     it("sends the secret, the token and the caller's address", async () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       respondWith({ success: true });
 
       await service.verify("tok", "198.51.100.7");
@@ -59,7 +59,7 @@ describe("AdminTurnstileService", () => {
     });
 
     it("omits remoteip when the address is unknown", async () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       respondWith({ success: true });
 
       await service.verify("tok", null);
@@ -70,7 +70,7 @@ describe("AdminTurnstileService", () => {
     });
 
     it("refuses a token Cloudflare rejects, and keeps the reason", async () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       respondWith({ success: false, "error-codes": ["timeout-or-duplicate"] });
 
       await expect(service.verify("spent", null)).resolves.toEqual({
@@ -80,7 +80,7 @@ describe("AdminTurnstileService", () => {
     });
 
     it("refuses an empty token without asking Cloudflare", async () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
 
       await expect(service.verify("", null)).resolves.toEqual({
         success: false,
@@ -92,7 +92,7 @@ describe("AdminTurnstileService", () => {
     it("refuses rather than passing when siteverify cannot be reached", async () => {
       // The alternative would make the check removable by anyone able to
       // disturb one connection.
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       fetchMock.mockRejectedValue(new Error("ETIMEDOUT"));
 
       await expect(service.verify("tok", null)).resolves.toEqual({
@@ -109,7 +109,10 @@ describe("AdminTurnstileService", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("falls back to the frontend's TURNSTILE_SECRET_KEY name", async () => {
+    it("reads the same variable name the frontend uses", async () => {
+      // One widget serves the upload form and the login, so one secret
+      // verifies for both. An admin-specific second name existed briefly and
+      // was only a way to put the value where nothing reads it.
       process.env.TURNSTILE_SECRET_KEY = "shared";
       respondWith({ success: true });
 
@@ -129,7 +132,7 @@ describe("AdminTurnstileService", () => {
     it("is off with a secret but no way to recognise our own frontend", () => {
       // The lockout case: park.fan's proxy verifies on its own side and sends
       // no token, so with no bypass keys it would be refused like a stranger.
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       expect(isAdminLoginTurnstileEnforced()).toBe(false);
     });
 
@@ -138,14 +141,24 @@ describe("AdminTurnstileService", () => {
       expect(isAdminLoginTurnstileEnforced()).toBe(false);
     });
 
-    it("is on once both halves are set", () => {
+    it("is not switched on by the withdrawn admin-specific name", () => {
+      // It existed for one commit. A deployment that put the value there and
+      // nowhere else would otherwise believe the login was guarded while the
+      // check read an empty string and stayed off — which is the failure mode
+      // that having two names for one secret produces.
       process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
+      expect(isAdminLoginTurnstileEnforced()).toBe(false);
+    });
+
+    it("is on once both halves are set", () => {
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
       expect(isAdminLoginTurnstileEnforced()).toBe(true);
     });
 
     it("can be switched off explicitly while both remain set", () => {
-      process.env.ADMIN_TURNSTILE_SECRET_KEY = "s3cret";
+      process.env.TURNSTILE_SECRET_KEY = "s3cret";
       process.env.THROTTLE_BYPASS_KEYS = "front-end-key";
       process.env.ADMIN_LOGIN_TURNSTILE = "false";
       expect(isAdminLoginTurnstileEnforced()).toBe(false);
