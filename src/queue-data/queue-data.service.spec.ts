@@ -66,6 +66,11 @@ describe("QueueDataService", () => {
     })),
   };
 
+  const mockParksService = {
+    findById: jest.fn().mockResolvedValue(null),
+    getTodaySchedule: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -87,10 +92,7 @@ describe("QueueDataService", () => {
         },
         {
           provide: ParksService,
-          useValue: {
-            findById: jest.fn().mockResolvedValue(null),
-            getTodaySchedule: jest.fn().mockResolvedValue([]),
-          },
+          useValue: mockParksService,
         },
         {
           provide: REDIS_CLIENT,
@@ -112,6 +114,9 @@ describe("QueueDataService", () => {
     service = module.get<QueueDataService>(QueueDataService);
 
     jest.clearAllMocks();
+
+    mockParksService.findById.mockResolvedValue(null);
+    mockParksService.getTodaySchedule.mockResolvedValue([]);
   });
 
   it("should be defined", () => {
@@ -256,6 +261,84 @@ describe("QueueDataService", () => {
         "qd.timestamp >= :cutoff",
         expect.objectContaining({ cutoff: expect.any(Date) }),
       );
+    });
+  });
+
+  /**
+   * The window this query applies decides what "we have no live data" means one
+   * layer up, where an open park with no row turns a ride optimistically
+   * OPERATING. So the window may never be narrower than the feed's own cadence:
+   * queue rows are written on change plus an hourly heartbeat, and a ride whose
+   * value has not moved therefore has its current reading timestamped BEFORE the
+   * park opened. Cutting at the opening time throws that reading away and
+   * invents an answer in its place.
+   */
+  describe("findCurrentStatusByPark cutoff", () => {
+    /** Reads back the cutoff the service handed to the query builder. */
+    async function cutoffFor(openingTime: Date | null): Promise<Date> {
+      mockParksService.getTodaySchedule.mockResolvedValue(
+        openingTime
+          ? [{ scheduleType: "OPERATING", openingTime, closingTime: null }]
+          : [],
+      );
+
+      const qb: Record<string, jest.Mock> = {};
+      for (const m of [
+        "innerJoin",
+        "where",
+        "distinctOn",
+        "orderBy",
+        "addOrderBy",
+        "andWhere",
+      ]) {
+        qb[m] = jest.fn().mockReturnValue(qb);
+      }
+      qb.getMany = jest.fn().mockResolvedValue([]);
+      mockQueueDataRepository.createQueryBuilder.mockReturnValueOnce(
+        qb as never,
+      );
+
+      await service.findCurrentStatusByPark("park-123");
+
+      const call = qb.andWhere.mock.calls.find(
+        ([sql]) => sql === "qd.timestamp >= :cutoff",
+      );
+      expect(call).toBeDefined();
+      return (call as [string, { cutoff: Date }])[1].cutoff;
+    }
+
+    it("keeps the feed's last word when the park opened minutes ago", async () => {
+      // Phantasialand opens at 09:00 and is polled roughly hourly. At 09:05 the
+      // newest row for every ride is the 08:20 one — "CLOSED", which is what the
+      // source says right now. Cutting at 09:00 hid all 40 of them, and the ride
+      // list read "open" for an ice rink in August until the first poll landed.
+      const openedFiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+      const cutoff = await cutoffFor(openedFiveMinutesAgo);
+
+      expect(cutoff.getTime()).toBeLessThanOrEqual(
+        Date.now() - 6 * 60 * 60 * 1000 + 5_000,
+      );
+    });
+
+    it("still keeps the whole day once it is longer than the fallback", async () => {
+      // The opening-time cutoff exists to widen the window on long days — a park
+      // ten hours into its day must not lose its morning. That direction stays.
+      const openedTenHoursAgo = new Date(Date.now() - 10 * 60 * 60 * 1000);
+
+      const cutoff = await cutoffFor(openedTenHoursAgo);
+
+      expect(
+        Math.abs(cutoff.getTime() - openedTenHoursAgo.getTime()),
+      ).toBeLessThan(5_000);
+    });
+
+    it("falls back to the age window when nothing operates today", async () => {
+      const cutoff = await cutoffFor(null);
+
+      expect(
+        Math.abs(cutoff.getTime() - (Date.now() - 6 * 60 * 60 * 1000)),
+      ).toBeLessThan(5_000);
     });
   });
 });

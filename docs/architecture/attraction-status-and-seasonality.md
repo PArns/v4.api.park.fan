@@ -70,6 +70,40 @@ rows were *all* written by `system-reconciliation`, in an operating park, reads
 `UNKNOWN` and its `queues` are emptied. Requiring *all* rows matters: a ride
 still publishing a real STANDBY queue is being observed, whatever sits beside it.
 
+### 2.4 No row inside the window → the optimistic fallback
+The park's ride list has one more branch, and it is the only one that invents
+an answer: an open park whose ride has no current row at all serves that ride as
+`OPERATING` (`common/utils/no-live-data-status.util.ts`). It exists so a feed
+that goes quiet mid-day does not produce the "Park geöffnet, alle Bahnen zu"
+page, and a ride the season has ruled out (`isCurrentlyInSeason === false`)
+never takes it.
+
+**What "no current row" means is a query decision, and it used to be wrong.**
+`findCurrentStatusByPark` fetches the latest row per attraction *since today's
+opening time*. But a `queue_data` row is only written when a value changes, plus
+an hourly heartbeat — so a ride that has been shut for months carries a reading
+timestamped **before** the gates opened, and cutting the window at the opening
+time threw exactly that reading away. Phantasialand opens at 09:00 and its
+source is polled roughly hourly: from 09:00 until the poll landed at 09:23, not
+one of its 40 attractions had a row inside the window, and the whole park was
+served as running. Among them *Berliner Eislaufen* and *Ice skate hire*, in
+August, while ThemeParks.wiki had said `CLOSED` for both since April. A
+statically rendered page that happens to be built inside those 23 minutes keeps
+the invented answer for as long as it is cached.
+
+Today's opening time may therefore only **widen** that window, never narrow it:
+the cutoff is the earlier of the opening time and the `maxAgeMinutes` fallback
+(6 h). The last word the feed said is the answer to serve; the fallback is for
+silence, not for "unchanged".
+
+**Still open:** a ride no source has *ever* reported still reads `OPERATING`
+rather than `UNKNOWN` — Disneyland's *Main Street Pumpkin Festival* has no
+`queue_data` row at all and is served as running in August, and the four
+wait-time-less parks (Six Flags Great Escape, La Ronde, Hurricane Harbor
+Arlington, Water Country USA) report every one of their rides open the same way.
+That is §1's rule broken in the other direction, and it is tracked in
+`todo.md`.
+
 ---
 
 ## 3. Seasonality: two columns, and only one of them can be trusted

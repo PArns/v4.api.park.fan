@@ -792,6 +792,21 @@ export class QueueDataService {
    * If park has an OPERATING schedule for today (even if not yet open), uses today's opening time.
    * This ensures we keep all data from when the park opens, even if > 6 hours.
    *
+   * **Today's opening time may only widen this window, never narrow it.** A queue row is
+   * written when a value changes, plus an hourly heartbeat, so the current reading for a ride
+   * that has not moved carries a timestamp from BEFORE the park opened — and cutting the window
+   * at the opening time throws exactly that reading away. Phantasialand opens at 09:00 and its
+   * source is polled roughly hourly: between 09:00 and the poll that landed at 09:23, not one
+   * of its 40 attractions had a row inside the window. The park payload then took its "no live
+   * data" branch for all of them, and for an open park that branch means an optimistically
+   * OPERATING ride (`statusWithoutLiveData`) — which is how an ice rink read "geöffnet" in
+   * August while the source it comes from had said CLOSED, 40 minutes earlier and every hour
+   * before that. The floor keeps the feed's last word, and its last word is the answer.
+   *
+   * The floor is the same `maxAgeMinutes` window used when there is no schedule, so a reading
+   * still expires: a feed that fell silent yesterday evening stays out, and the ride falls
+   * through to the optimistic branch exactly as before.
+   *
    * Falls back to maxAgeMinutes (default: 6 hours) if:
    * - No schedule available
    * - Park is not scheduled to operate today
@@ -805,6 +820,9 @@ export class QueueDataService {
     parkId: string,
     maxAgeMinutes?: number,
   ): Promise<Date | undefined> {
+    const fallbackMinutes = maxAgeMinutes ?? 6 * 60; // Default: 6 hours
+    const fallbackCutoff = new Date(Date.now() - fallbackMinutes * 60 * 1000);
+
     try {
       // Get today's schedule (uses park timezone internally)
       const todaySchedule = await this.parksService.getTodaySchedule(parkId);
@@ -816,27 +834,23 @@ export class QueueDataService {
       );
 
       if (operatingSchedule?.openingTime) {
-        // Park is scheduled to operate today - use opening time as cutoff
-        // This ensures we keep all data from when the park opens (or will open),
-        // even if the park hasn't opened yet or has been open for > 6 hours
-        // openingTime is already a UTC timestamp, so we can use it directly
-        // If opening time is in the future (park hasn't opened yet today),
-        // still use it as cutoff to ensure we have data once it opens
-        // If opening time is in the past, use it to keep all data from today
-        return new Date(operatingSchedule.openingTime);
+        // Park is scheduled to operate today - keep everything since it opened,
+        // and never less than the age window (see above: the opening time is a
+        // floor under how much history we keep, not a ceiling over it).
+        // openingTime is already a UTC timestamp, so we can use it directly.
+        const opening = new Date(operatingSchedule.openingTime);
+        return opening < fallbackCutoff ? opening : fallbackCutoff;
       }
 
       // No schedule or park closed today - use fallback
-      const fallbackMinutes = maxAgeMinutes ?? 6 * 60; // Default: 6 hours
-      return new Date(Date.now() - fallbackMinutes * 60 * 1000);
+      return fallbackCutoff;
     } catch (error) {
       // If schedule lookup fails, use fallback
       this.logger.warn(
         `Failed to get schedule for park ${parkId}, using fallback:`,
         error,
       );
-      const fallbackMinutes = maxAgeMinutes ?? 6 * 60;
-      return new Date(Date.now() - fallbackMinutes * 60 * 1000);
+      return fallbackCutoff;
     }
   }
 

@@ -318,10 +318,10 @@ export class Park {
    *
    * Almost every park sells one pass for the whole visit rather than one per
    * ride: Heide Park's Express Ticket starts at 25 €, Energylandia's ENERGY
-   * PASS is 239 zł, Walibi's Fast Lane is a day product. Only Phantasialand and
-   * Disney price per attraction, and both do it dynamically — so
-   * `attractions.fast_pass_price` stays empty at almost every park, and this is
-   * the number a visitor actually wants.
+   * PASS is 239 zł, Walibi's Fast Lane is a day product. Phantasialand's QUICK
+   * Pass and Disney's Premier Access are the exceptions that price per
+   * attraction — so `attractions.fast_pass_price` stays empty at almost every
+   * park, and this is the number a visitor actually wants.
    *
    * A floor, not a price: the tiers above it (Gold, Unlimited, Ultimate) cost
    * more and change more often. Rendered as "ab 25 €" and never as "25 €".
