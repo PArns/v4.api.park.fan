@@ -41,6 +41,7 @@ seven-way `Promise.all`. Both assembly paths (the fresh build and
 `assembleFromMonthCaches`) set it, and the cached path takes it as a parameter rather than
 deriving it from the days in hand — a window that was correct only on a cache miss would be worse
 than none, because it would be right in development and wrong in production.
+
 ### Changed — ein Widget, ein Secret, ein Variablenname
 
 `ADMIN_TURNSTILE_SECRET_KEY` ist weg. Der Login liest nur noch

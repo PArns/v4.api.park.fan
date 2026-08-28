@@ -5,16 +5,21 @@ Short guide for the frontend: how to display **opening hours** and **crowd predi
 ## Key Fields
 
 ### 1. `status` (ParkStatus)
+
 Each calendar day has a **status** field:
+
 - **`status`**: `ParkStatus` = `"OPERATING"` | `"CLOSED"` | `"UNKNOWN"`
 
 ### 2. `isEstimated` (boolean) - NEW
+
 - `true`: The day's status and hours were **reconstructed from ride activity** (Smart Gaps).
 - `false` or `undefined`: Data is from an official source or the day is confirmed closed.
 - **Application**: Only used for **historical dates**.
 
 ### 3. `hasOperatingSchedule` (boolean) - NEW
+
 Found in the `meta` object of the calendar response and the park detail response.
+
 - `true`: The park provides official opening hours.
 - `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed (past).
 
@@ -46,6 +51,13 @@ So a client should:
   "opening hours not yet available".
 - Expect `to` to move forward on its own as parks publish. It is derived from the rows, not
   configured, so nothing needs editing when a park releases its next season.
+- **Guard the field itself for one cache generation after the deploy that adds it.** The park
+  payload is cached in Redis for 3 min (open) to 6 h (closed), and those entries survive a deploy,
+  so a payload built before it carries no `scheduleCoverage` at all. Read it as
+  `scheduleCoverage?.to` and treat "absent" the same as `null`: coverage unknown, fall back to
+  whatever the client did before. The cache key was deliberately **not** versioned to force this
+  out — `park:integrated` also backs the nearby and favorites MGET fast paths, and cold-starting
+  those to shorten a one-time six-hour window is the worse trade.
 
 ```jsonc
 "meta": {
@@ -60,11 +72,11 @@ So a client should:
 
 ## Meanings & Display logic
 
-| status      | Meaning | Crowd Prediction | Display recommendation |
-|------------|---------|------------------|--------------------------|
-| **OPERATING** | Park is open. | **YES** | Show times. If `isEstimated: true`, add a "reconstructed" hint. |
-| **CLOSED**    | Park is **definitively closed** (official or seasonal gap). | **NO** | e.g. "Closed" – tag is typically greyed out. |
-| **UNKNOWN**   | No official hours yet, but **might be open** (trip planning). | **YES** | Show crowd level. For hours show "TBA" or "Not yet known". |
+| status        | Meaning                                                       | Crowd Prediction | Display recommendation                                          |
+| ------------- | ------------------------------------------------------------- | ---------------- | --------------------------------------------------------------- |
+| **OPERATING** | Park is open.                                                 | **YES**          | Show times. If `isEstimated: true`, add a "reconstructed" hint. |
+| **CLOSED**    | Park is **definitively closed** (official or seasonal gap).   | **NO**           | e.g. "Closed" – tag is typically greyed out.                    |
+| **UNKNOWN**   | No official hours yet, but **might be open** (trip planning). | **YES**          | Show crowd level. For hours show "TBA" or "Not yet known".      |
 
 ---
 
@@ -76,10 +88,10 @@ So a client should:
   closed — so `/v1/discovery/continents/*`, `/v1/discovery/nearby` and
   `/v1/analytics/geo-live` agree with the park detail response. A `CLOSED` row for
   today still wins over the ride feed. Note that `hasOperatingSchedule` keeps its
-  wider meaning below (*has this park ever published hours*), so it is not a signal
+  wider meaning below (_has this park ever published hours_), so it is not a signal
   about today.
 - **CLOSED = no predictions.** When a park is closed, the API suppresses ML predictions to prevent "ghost" wait times.
-- **Disclaimer**: If `hasOperatingSchedule` is `false`, the park page should show a disclaimer: *"Official hours are not available for this park. Data is estimated based on attraction activity."*
+- **Disclaimer**: If `hasOperatingSchedule` is `false`, the park page should show a disclaimer: _"Official hours are not available for this park. Data is estimated based on attraction activity."_
 
 ---
 
@@ -93,7 +105,7 @@ function getScheduleLabel(day: CalendarDay, parkMeta: CalendarMeta): string {
       : "Open";
     return day.isEstimated ? `${timeStr} (Estimated)` : timeStr;
   }
-  
+
   if (day.status === "CLOSED") {
     return "Closed";
   }

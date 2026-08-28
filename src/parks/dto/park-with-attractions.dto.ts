@@ -519,7 +519,7 @@ export class ParkWithAttractionsDto {
       "history of seasonal closures it reads CLOSED, which is right just after a season ends " +
       "and wrong months later. Read it before publishing, paginating or indexing future " +
       "calendar dates.",
-    type: ScheduleCoverage,
+    type: () => ScheduleCoverage,
   })
   scheduleCoverage: ScheduleCoverage;
 
