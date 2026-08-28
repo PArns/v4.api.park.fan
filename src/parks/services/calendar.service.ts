@@ -123,6 +123,7 @@ export class CalendarService {
         fromStr,
         toStr,
         today,
+        await this.parksService.getOperatingDateRange(park.id, park.timezone),
       );
     }
 
@@ -161,6 +162,7 @@ export class CalendarService {
           fromStr,
           toStr,
           today,
+          await this.parksService.getOperatingDateRange(park.id, park.timezone),
         );
       }
       // Fall through to a full build if a month still failed to cache (e.g. a month
@@ -484,6 +486,10 @@ export class CalendarService {
         slug: park.slug,
         timezone: park.timezone,
         hasOperatingSchedule: parkHasOperatingSchedule,
+        scheduleCoverage: {
+          from: operatingDateRange.minDate,
+          to: operatingDateRange.maxDate,
+        },
       },
       days,
     };
@@ -504,6 +510,10 @@ export class CalendarService {
    * Assemble a calendar response from per-month caches (already parsed, in
    * monthsInRange order), filtered to [fromStr, toStr]. Shared by the all-cached fast
    * path and the partial-hit path (after the missing months were built).
+   *
+   * `operatingDateRange` is passed in rather than read here so this stays synchronous: both
+   * callers are already awaiting Redis and `getOperatingDateRange` is itself a read-through cache,
+   * so fetching it there costs one GET on a path whose whole point is not to touch Postgres.
    */
   private assembleFromMonthCaches(
     monthCached: CalendarDay[][],
@@ -511,6 +521,7 @@ export class CalendarService {
     fromStr: string,
     toStr: string,
     today: string,
+    operatingDateRange: { minDate: string | null; maxDate: string | null },
   ): IntegratedCalendarResponse {
     const allDays: CalendarDay[] = [];
     for (const days of monthCached) {
@@ -538,6 +549,10 @@ export class CalendarService {
         hasOperatingSchedule:
           allDays.length > 0 &&
           allDays.some((d) => d.hours && !d.hours.isInferred),
+        scheduleCoverage: {
+          from: operatingDateRange.minDate,
+          to: operatingDateRange.maxDate,
+        },
       },
       days: daysInRange,
     };

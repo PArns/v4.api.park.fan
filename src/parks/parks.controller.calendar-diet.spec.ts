@@ -79,6 +79,7 @@ describe("ParksController › /calendar payload diet", () => {
             slug: "phantasialand",
             timezone: "Europe/Berlin",
             hasOperatingSchedule: true,
+            scheduleCoverage: { from: "2026-01-01", to: "2026-12-31" },
           },
           // Fresh objects per call so mutation-safety is genuinely exercised.
           days: [

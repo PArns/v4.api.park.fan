@@ -10,6 +10,43 @@ import { InfluencingHoliday } from "./schedule-item.dto";
 export { InfluencingHoliday };
 
 /**
+ * How far the park's published schedule actually reaches.
+ *
+ * MIN/MAX over the park-level `OPERATING` rows in `schedule_entries` — the window inside which a
+ * `status` is a statement about the park, and outside which it is a statement about our sync.
+ *
+ * It exists because the two are indistinguishable in `days[]` and were being read as the same
+ * thing. Past `to`, the seasonal gap-fill in `buildCalendarDay` turns an absent row into
+ * `status: "CLOSED"`, which is right a week after a season ends and wrong eleven months later:
+ * on 2026-08-28 the calendar answered `CLOSED` for **every day of July 2027** at Phantasialand and
+ * Europa-Park — July is mid-season at both — because their 2027 hours simply were not published
+ * yet. Toverland and Disneyland Paris answered the same range with real crowd levels, so a caller
+ * cannot tell the two apart from the days alone, and a client that renders the full year publishes
+ * a confident closure for a park that will be open.
+ *
+ * A consumer should treat dates after `to` as unknown regardless of what `status` says, and stop
+ * paginating, listing or indexing there. Both ends are `null` for a park with no OPERATING rows at
+ * all, which is the same park `hasOperatingSchedule: false` describes.
+ */
+export class ScheduleCoverage {
+  @ApiProperty({
+    description:
+      "First date with a park-level OPERATING schedule entry (YYYY-MM-DD, park timezone), or null when the park has none.",
+    nullable: true,
+    example: "2025-12-26",
+  })
+  from: string | null;
+
+  @ApiProperty({
+    description:
+      "Last date with a park-level OPERATING schedule entry (YYYY-MM-DD, park timezone), or null when the park has none. Dates after this are not covered: `status` there is inferred, not published.",
+    nullable: true,
+    example: "2027-01-06",
+  })
+  to: string | null;
+}
+
+/**
  * Calendar Metadata
  */
 export class CalendarMeta {
@@ -23,6 +60,13 @@ export class CalendarMeta {
     description: "Whether the park provides official operating hours",
   })
   hasOperatingSchedule: boolean;
+
+  @ApiProperty({
+    description:
+      "The date window the park's published schedule covers. Days outside it carry an inferred status, not a published one.",
+    type: () => ScheduleCoverage,
+  })
+  scheduleCoverage: ScheduleCoverage;
 }
 
 /**

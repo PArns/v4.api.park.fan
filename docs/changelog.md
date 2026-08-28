@@ -6,6 +6,32 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the calendar now says how far its own schedule reaches
+
+`meta.scheduleCoverage` on `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar`:
+`{ from, to }`, the MIN/MAX park-level `OPERATING` dates, `null` at both ends for a park with no
+such rows.
+
+It exists because `days[]` cannot distinguish a published closure from a month nobody has synced
+yet, and the seasonal gap-fill in `buildCalendarDay` resolves that ambiguity towards `CLOSED`.
+That is right a week after a season ends and wrong eleven months later: on 2026-08-28 the calendar
+answered `status: "CLOSED"`, `crowdLevel: "closed"` for **every day of July 2027** at
+Phantasialand and Europa-Park — July is mid-season at both — because their 2027 hours were not
+published yet. Toverland, Efteling, Disneyland Paris and Cedar Point answered the same range with
+real crowd levels, so nothing in the payload separated "shut" from "not known", and a client
+rendering the full year publishes a confident closure for a park that will be open. Sampled at ten
+parks, five were affected.
+
+The gap-fill itself is unchanged — it is load-bearing for the seasonal parks it was written for,
+and narrowing it is a separate decision. What changes is that a caller can see the edge: past
+`to`, `status` is inferred rather than published, and a consumer should stop paginating, listing
+or indexing there.
+
+The value comes from `getOperatingDateRange`, already a 1 h read-through cache, so the added cost
+is one Redis GET on the month-cache fast path. Both assembly paths (the fresh build and
+`assembleFromMonthCaches`) set it, and the cached path takes it as a parameter rather than
+deriving it from the days in hand — a window that was correct only on a cache miss would be worse
+than none, because it would be right in development and wrong in production.
 ### Changed — ein Widget, ein Secret, ein Variablenname
 
 `ADMIN_TURNSTILE_SECRET_KEY` ist weg. Der Login liest nur noch

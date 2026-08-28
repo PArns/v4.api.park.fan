@@ -18,6 +18,39 @@ Found in the `meta` object of the calendar response and the park detail response
 - `true`: The park provides official opening hours.
 - `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed (past).
 
+### 4. `meta.scheduleCoverage` (`{ from, to }`) — how far the schedule reaches
+
+`from` and `to` are the first and last dates with a park-level `OPERATING` entry (`YYYY-MM-DD`,
+park timezone), or `null` at both ends when the park has none — the same park
+`hasOperatingSchedule: false` describes.
+
+**Read `to` before you trust a future `status`.** Inside the window a status is a statement about
+the park. Past `to` it is a statement about our sync: no schedule row exists, and for a park with
+a history of seasonal closures the gap-fill resolves that to `CLOSED`. That is right shortly after
+a season ends and wrong far beyond it — on 2026-08-28 this endpoint answered `CLOSED` for every
+day of **July 2027** at Phantasialand and Europa-Park, which are open in July, simply because
+their 2027 hours had not been published. Toverland and Disneyland Paris answered the same range
+with real crowd levels. Nothing in `days[]` tells the two apart; `scheduleCoverage.to` does.
+
+So a client should:
+
+- **Stop at `to`** when paginating months, building a month index, or emitting sitemap URLs. A
+  month entirely past `to` is not a page worth publishing — it renders a full grid of confident
+  closures for a park that will very likely be open.
+- **Not render `CLOSED` as "closed" past `to`.** Treat it as unknown, the way `UNKNOWN` is treated:
+  "opening hours not yet available".
+- Expect `to` to move forward on its own as parks publish. It is derived from the rows, not
+  configured, so nothing needs editing when a park releases its next season.
+
+```jsonc
+"meta": {
+  "slug": "phantasialand",
+  "timezone": "Europe/Berlin",
+  "hasOperatingSchedule": true,
+  "scheduleCoverage": { "from": "2025-12-26", "to": "2027-01-06" }
+}
+```
+
 ---
 
 ## Meanings & Display logic

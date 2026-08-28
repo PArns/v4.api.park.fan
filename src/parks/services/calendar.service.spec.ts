@@ -563,6 +563,8 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
       fromStr,
       toStr,
       today,
+      // These cases are about todayCrowdLevel, not coverage; any window will do.
+      { minDate: null, maxDate: null },
     );
 
   it("keeps todayCrowdLevel on the day that is actually today", () => {
@@ -596,5 +598,97 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
     expect(yesterday.todayCrowdLevelSamples).toBeUndefined();
     // crowdLevel is the same daily statistic, so nothing is lost for that day.
     expect(yesterday.crowdLevel).toBe("moderate");
+  });
+});
+
+/**
+ * `meta.scheduleCoverage` — the window inside which a `status` is a statement about the park.
+ *
+ * It exists because absence of a schedule row and a published closure are indistinguishable in
+ * `days[]`, and the seasonal gap-fill in `buildCalendarDay` resolves the ambiguity towards CLOSED.
+ * That is right a week after a season ends and wrong eleven months later: on 2026-08-28 the
+ * calendar answered `CLOSED` for every day of July 2027 at Phantasialand and Europa-Park — July is
+ * mid-season at both — while Toverland and Disneyland Paris answered the same range with real
+ * crowd levels, because their 2027 hours were published and the other two were not.
+ *
+ * The response is assembled in two places (a fresh build and `assembleFromMonthCaches`), which is
+ * exactly the shape that drifts. These pin the cached path, where the range is not in scope and
+ * has to be handed in: a coverage window that is correct only on a cache miss would be worse than
+ * none, because it would be right in development and wrong in production.
+ */
+describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", () => {
+  let service: CalendarService;
+
+  const noopRedis = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+    mget: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        {
+          provide: ParksService,
+          useValue: { getOperatingDateRange: jest.fn() },
+        },
+        { provide: WeatherService, useValue: {} },
+        { provide: MLService, useValue: {} },
+        { provide: AnalyticsService, useValue: {} },
+        { provide: HolidaysService, useValue: {} },
+        { provide: AttractionsService, useValue: {} },
+        { provide: REDIS_CLIENT, useValue: noopRedis },
+        {
+          provide: getQueueToken("park-metadata"),
+          useValue: { add: jest.fn() },
+        },
+      ],
+    }).compile();
+    service = module.get(CalendarService);
+  });
+
+  const park = { slug: "phantasialand", timezone: "Europe/Berlin" } as any;
+  const day = (date: string) => ({ date, status: "OPERATING" }) as any;
+
+  const assemble = (range: {
+    minDate: string | null;
+    maxDate: string | null;
+  }) =>
+    (service as any).assembleFromMonthCaches(
+      [[day("2026-10-01"), day("2026-10-02")]],
+      park,
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-01",
+      range,
+    );
+
+  it("reports the operating range it was handed", () => {
+    const meta = assemble({
+      minDate: "2025-12-26",
+      maxDate: "2027-01-06",
+    }).meta;
+    expect(meta.scheduleCoverage).toEqual({
+      from: "2025-12-26",
+      to: "2027-01-06",
+    });
+  });
+
+  it("passes null through for a park with no OPERATING rows rather than inventing a window", () => {
+    const meta = assemble({ minDate: null, maxDate: null }).meta;
+    expect(meta.scheduleCoverage).toEqual({ from: null, to: null });
+  });
+
+  it("does not derive the window from the days it happens to be assembling", () => {
+    // The cached months cover October 2026; coverage reaches into 2027 and must say so, or a
+    // caller would conclude the schedule ends wherever it last looked.
+    const meta = assemble({
+      minDate: "2025-12-26",
+      maxDate: "2027-01-06",
+    }).meta;
+    expect(meta.scheduleCoverage.to).toBe("2027-01-06");
+    expect(meta.scheduleCoverage.to).not.toBe("2026-10-02");
   });
 });
