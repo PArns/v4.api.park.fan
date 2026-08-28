@@ -24,6 +24,37 @@ import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
  * - weathercode (WMO code)
  * - windspeed_10m_max
  */
+/**
+ * The daily arrays, as rows — minus the days the model had nothing for.
+ *
+ * `daily.time` lists every date the request asked for, and the value arrays can
+ * be shorter or hold nulls at the far end: the sixteenth day of a 16-day
+ * forecast regularly arrives as a date with no numbers. Mapped by index, that
+ * became a `weather_data` row with every column null, and downstream the
+ * calendar turned those nulls into "0°–0°" on 22 parks' tiles.
+ *
+ * The reader is fixed too (`toWeatherSummary`), and it has to be — Open-Meteo
+ * may null any single field. This is the other half: a day with no temperature
+ * at all is not a forecast, and storing it as one only creates something for a
+ * later reader to misread.
+ */
+export function toDailyWeather(daily: OpenMeteoDaily): DailyWeather[] {
+  return daily.time
+    .map((date, index) => ({
+      date,
+      temperatureMax: daily.temperature_2m_max?.[index] ?? null,
+      temperatureMin: daily.temperature_2m_min?.[index] ?? null,
+      precipitationSum: daily.precipitation_sum?.[index] ?? null,
+      rainSum: daily.rain_sum?.[index] ?? null,
+      snowfallSum: daily.snowfall_sum?.[index] ?? null,
+      weatherCode: daily.weathercode?.[index] ?? null,
+      windSpeedMax: daily.windspeed_10m_max?.[index] ?? null,
+    }))
+    .filter(
+      (day) => day.temperatureMax !== null || day.temperatureMin !== null,
+    );
+}
+
 @Injectable()
 export class OpenMeteoClient {
   private readonly logger = new Logger(OpenMeteoClient.name);
@@ -518,16 +549,7 @@ export class OpenMeteoClient {
       throw new Error("Invalid Open-Meteo response: missing daily data");
     }
 
-    const days: DailyWeather[] = daily.time.map((date, index) => ({
-      date,
-      temperatureMax: daily.temperature_2m_max?.[index] ?? null,
-      temperatureMin: daily.temperature_2m_min?.[index] ?? null,
-      precipitationSum: daily.precipitation_sum?.[index] ?? null,
-      rainSum: daily.rain_sum?.[index] ?? null,
-      snowfallSum: daily.snowfall_sum?.[index] ?? null,
-      weatherCode: daily.weathercode?.[index] ?? null,
-      windSpeedMax: daily.windspeed_10m_max?.[index] ?? null,
-    }));
+    const days = toDailyWeather(daily);
 
     const currentConditions: CurrentConditions | null = current
       ? {
@@ -620,6 +642,18 @@ export class OpenMeteoClient {
 /**
  * Open-Meteo API Response
  */
+/** The daily block of an Open-Meteo response — arrays indexed by `time`. */
+interface OpenMeteoDaily {
+  time: string[];
+  temperature_2m_max?: (number | null)[];
+  temperature_2m_min?: (number | null)[];
+  precipitation_sum?: (number | null)[];
+  rain_sum?: (number | null)[];
+  snowfall_sum?: (number | null)[];
+  weathercode?: (number | null)[];
+  windspeed_10m_max?: (number | null)[];
+}
+
 interface OpenMeteoResponse {
   latitude: number;
   longitude: number;
@@ -646,16 +680,7 @@ interface OpenMeteoResponse {
     wind_gusts_10m?: (number | null)[];
     visibility?: (number | null)[];
   };
-  daily: {
-    time: string[];
-    temperature_2m_max?: (number | null)[];
-    temperature_2m_min?: (number | null)[];
-    precipitation_sum?: (number | null)[];
-    rain_sum?: (number | null)[];
-    snowfall_sum?: (number | null)[];
-    weathercode?: (number | null)[];
-    windspeed_10m_max?: (number | null)[];
-  };
+  daily: OpenMeteoDaily;
   hourly: {
     time: string[];
     temperature_2m?: (number | null)[];

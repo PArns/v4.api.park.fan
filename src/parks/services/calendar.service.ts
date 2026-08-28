@@ -31,7 +31,7 @@ import {
 } from "../../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
-import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
+import { toWeatherSummary } from "../utils/weather-summary.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { Holiday } from "../../holidays/entities/holiday.entity";
@@ -1004,29 +1004,10 @@ export class CalendarService {
       };
     }
 
-    // Build weather summary. `rainChance` keeps its (misleading) legacy name =
-    // precipitation mm; the detail panel reads the explicit fields below.
-    const num = (v: unknown): number | undefined => {
-      if (v === null || v === undefined) return undefined;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : undefined;
-    };
-    const weatherSummary: WeatherSummary | undefined = weather
-      ? {
-          condition: weather.weatherCode
-            ? getWeatherDescription(weather.weatherCode)
-            : "unknown",
-          tempMin: Number(weather.temperatureMin) ?? 0,
-          tempMax: Number(weather.temperatureMax) ?? 0,
-          rainChance: Number(weather.precipitationSum) ?? 0,
-          precipitationMm: num(weather.precipitationSum),
-          snowMm: num(weather.snowfallSum),
-          windMax: num(weather.windSpeedMax),
-          humidity: num(weather.humidity),
-          apparentTemp: num(weather.apparentTemperature),
-          icon: weather.weatherCode ?? 0,
-        }
-      : undefined;
+    // A row exists for every day in the window, including the ones the model
+    // has not reached — see `toWeatherSummary`, which is where "no reading"
+    // stays "no reading" instead of becoming 0 °C.
+    const weatherSummary = toWeatherSummary(weather);
 
     const day: CalendarDay = {
       date: dateStr,
