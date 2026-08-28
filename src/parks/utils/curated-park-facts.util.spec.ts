@@ -181,6 +181,7 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
     expect(CURATED_PARK_DB_COLUMNS).toEqual([
       "curated_name",
       "curated_park_type",
+      "curated_article_de",
       "curated_no_wait_times_reason",
       "curated_website",
       "curated_tickets_url",
@@ -203,5 +204,43 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
 
   it("names one column per curated property", () => {
     expect(CURATED_PARK_DB_COLUMNS).toHaveLength(CURATED_PARK_COLUMNS.length);
+  });
+});
+
+/**
+ * The German article a park's name takes.
+ *
+ * The frontend interpolates the name into sentences, and German demands an
+ * article there — "im Phantasialand" (das), "in der Efteling" (die), but "in
+ * Toverland" (none). With the article hard-coded into the strings, every park
+ * read as masculine or neuter, so the calendar page said "die auf
+ * Phantasialand wirken" and every foreign park got an article it does not take.
+ */
+describe("resolveArticleDe", () => {
+  it("serves a curated article", () => {
+    expect(resolveCuratedPark({ curatedArticleDe: "das" }).articleDe).toBe(
+      "das",
+    );
+  });
+
+  it("says nothing for a name that takes none", () => {
+    // Null and "nobody decided" are the same answer here, and they produce the
+    // same correct output: German says "in Toverland" either way.
+    expect(resolveCuratedPark({}).articleDe).toBeNull();
+  });
+
+  it("normalises case", () => {
+    expect(resolveCuratedPark({ curatedArticleDe: "Der" }).articleDe).toBe(
+      "der",
+    );
+  });
+
+  it("drops anything that is not one of the three articles", () => {
+    // The frontend inflects whatever it is handed; "im ein Phantasialand" is
+    // worse than no article at all.
+    expect(
+      resolveCuratedPark({ curatedArticleDe: "ein" }).articleDe,
+    ).toBeNull();
+    expect(resolveCuratedPark({ curatedArticleDe: "  " }).articleDe).toBeNull();
   });
 });

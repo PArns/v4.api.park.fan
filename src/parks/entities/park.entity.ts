@@ -194,6 +194,37 @@ export class Park {
   @Column({ name: "curated_park_type", type: "text", nullable: true })
   curatedParkType: string | null;
 
+  /**
+   * The German article the park's name takes — `der`, `die` or `das`.
+   *
+   * Null means the name takes none, and that is the common case: German says
+   * "in Toverland", "in Gardaland", "in Cedar Point", but "im Phantasialand"
+   * (das), "im Europa-Park" (der) and "in der Efteling" (die).
+   *
+   * It exists because the frontend interpolates the park name straight into
+   * sentences — "Ferien und Feiertage, die auf {park} wirken" — and German
+   * demands an article there, inflected for the case the preposition governs.
+   * With `im {park}` hard-coded, every park read as masculine or neuter: the
+   * calendar page said "die auf Phantasialand wirken" (missing "das"), and
+   * every foreign park got an article it does not take.
+   *
+   * **German only, and deliberately not a gender field.** The gender is not the
+   * same across languages — die Efteling, but *de* Efteling in Dutch and
+   * *l'*Efteling in French — so one column cannot serve six locales. Another
+   * language that needs one gets its own column beside this.
+   *
+   * The nominative form is stored; the frontend derives the dative and
+   * accusative from it. No sync writes it — no feed has an opinion on German
+   * grammar.
+   */
+  @Column({
+    name: "curated_article_de",
+    type: "varchar",
+    length: 3,
+    nullable: true,
+  })
+  curatedArticleDe: string | null;
+
   // Timezone is deliberately NOT curated here, and the reason is worth writing
   // down so it does not get "fixed" later. `timezone` is read at 206 call
   // sites — every schedule, every park-local date, the whole seasonality month

@@ -488,6 +488,20 @@ export class ParkWithAttractionsDto {
 
   @ApiProperty({ description: "Name of the park" })
   name: string;
+  @ApiProperty({
+    description:
+      "The German article this park's name takes — `der`, `die` or `das` — or " +
+      "absent for the names that take none, which is the majority. German copy " +
+      'has to inflect it for the case a preposition governs ("im Phantasialand", ' +
+      '"in der Efteling", "in Toverland"), and the nominative form given here ' +
+      "is what that derivation starts from. Deliberately not a gender: the gender " +
+      "differs by language (die Efteling, de Efteling, l'Efteling), so this field " +
+      "serves German and nothing else.",
+    example: "das",
+    required: false,
+    nullable: true,
+  })
+  nameArticleDe?: string | null;
 
   @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
@@ -659,6 +673,7 @@ export class ParkWithAttractionsDto {
     return {
       id: park.id,
       name: curatedPark.name,
+      nameArticleDe: curatedPark.articleDe,
       slug: park.slug,
       url: buildParkUrl(park),
       info: resolveParkInfo(park),

@@ -12,6 +12,17 @@ import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
 export interface ParkSummaryDto {
   id: string;
   name: string;
+
+  /**
+   * The German article this park's name takes — `der`, `die` or `das`, or null
+   * for the names that take none, which is the majority.
+   *
+   * German copy inflects it for the case the preposition governs ("im
+   * Phantasialand", "in der Efteling", "in Toverland"); the nominative form
+   * here is what that derivation starts from. Deliberately not a gender — the
+   * gender differs by language (die Efteling, de Efteling, l'Efteling).
+   */
+  nameArticleDe?: string | null;
   slug: string;
   timezone: string;
   continent: string | null;
@@ -50,6 +61,7 @@ export function mapParkSummary(
   return {
     id: park.id,
     name: curated.name,
+    nameArticleDe: curated.articleDe,
     slug: park.slug,
     timezone: park.timezone,
     continent: park.continent || null,

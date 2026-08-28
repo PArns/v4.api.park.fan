@@ -25,6 +25,7 @@ export interface CuratedParkSource {
   curatedName?: string | null;
   parkType?: string | null;
   curatedParkType?: string | null;
+  curatedArticleDe?: string | null;
   citySlug?: string | null;
   slug?: string | null;
   curatedNoWaitTimesReason?: string | null;
@@ -82,6 +83,14 @@ export interface ParkInfo {
 export interface ResolvedCuratedPark {
   name: string;
   parkType: string;
+  /**
+   * The German article the name takes, or null for the names that take none.
+   *
+   * Part of the resolved name rather than of the `info` block: it is a property
+   * of what the park is called, and every payload that carries the name needs
+   * it to put that name in a sentence.
+   */
+  articleDe: string | null;
   /** Null when this park's wait times can be read. */
   noWaitTimesReason: NoLiveWaitTimesReason | null;
 }
@@ -133,6 +142,7 @@ export function resolveNoWaitTimesReason(
 export const CURATED_PARK_COLUMNS = [
   "curatedName",
   "curatedParkType",
+  "curatedArticleDe",
   "curatedNoWaitTimesReason",
   "curatedWebsite",
   "curatedTicketsUrl",
@@ -167,12 +177,31 @@ export const CURATED_PARK_DB_COLUMNS: readonly string[] =
     column.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
   );
 
+/** The three German articles, lower case. Anything else is ignored. */
+export const GERMAN_ARTICLES = ["der", "die", "das"] as const;
+
+/**
+ * The park name's German article, or null.
+ *
+ * Null is "this name takes no article", which is the majority — and it has to
+ * be indistinguishable from "nobody has decided", because the two produce the
+ * same, correct output: German says "in Toverland" either way. An unrecognised
+ * value is dropped rather than served: the frontend inflects whatever it is
+ * handed, and "im ein Phantasialand" is worse than no article at all.
+ */
+export function resolveArticleDe(park: CuratedParkSource): string | null {
+  const value = cleaned(park.curatedArticleDe)?.toLowerCase();
+  if (!value) return null;
+  return (GERMAN_ARTICLES as readonly string[]).includes(value) ? value : null;
+}
+
 export function resolveCuratedPark(
   park: CuratedParkSource,
 ): ResolvedCuratedPark {
   return {
     name: cleaned(park.curatedName) ?? park.name ?? "",
     parkType: cleaned(park.curatedParkType) ?? park.parkType ?? "THEME_PARK",
+    articleDe: resolveArticleDe(park),
     noWaitTimesReason: resolveNoWaitTimesReason(park),
   };
 }

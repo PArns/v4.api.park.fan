@@ -275,6 +275,20 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     hint: "Der Upstream führt Wasserparks innerhalb eines Resorts als Freizeitparks.",
   },
   {
+    key: "curatedArticleDe",
+    label: "Artikel (deutsch)",
+    type: "enum",
+    syncedKey: null,
+    resolvedKey: "articleDe",
+    group: "Identität",
+    options: ["der", "die", "das"],
+    hint:
+      "Der Artikel, den der Name im Deutschen trägt — das Phantasialand, der " +
+      "Europa-Park, die Efteling. Leer lassen für Namen ohne Artikel, und das " +
+      'sind die meisten: „in Toverland", „in Gardaland". Die Texte im Frontend ' +
+      'beugen ihn selbst („im", „auf das", „für den").',
+  },
+  {
     key: "curatedNoWaitTimesReason",
     label: "Wartezeiten nicht lesbar",
     type: "enum",
