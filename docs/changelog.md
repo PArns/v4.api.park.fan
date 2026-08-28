@@ -6,6 +6,51 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — which rides sell a queue-jump pass, and what it costs
+
+`fastPass` on the attraction payload and on every ride in the park payload:
+`{ name, price, currency, termId }`, absent for a ride that does not have one.
+
+Nothing we ingest publishes these products — they live in park apps and on ticket pages — so all
+of it is hand-written, across two rows. The **name** is on the park
+(`curated_fast_pass_name`), because it is a brand: Phantasialand sells QuickPass across the whole
+park, Heide Park an Express Pass. Typing it per ride would mean typing it forty times and watching
+it drift into "Quick Pass" on the eleventh. The **flag and the price** are on the attraction
+(`has_fast_pass`, `fast_pass_price`), because they differ ride by ride. `fast_pass_name` overrides
+the brand for the one resort that sells a differently-named product on a single ride. Empty name
+anywhere resolves to the neutral "Fast Pass".
+
+The price has three states and the third is why it is not a plain number. **Empty is unknown**, and
+stays empty where the operator prices per day — a frozen number for a Lightning Lane would be
+wrong most days. **Zero is free**, a claim and not a missing value: Europa-Park's Virtual Line is
+a queue-jump product included with admission, and "there is one and it costs nothing" is a
+different fact from "nobody has priced it". That is the same reading a curated height of 0 gets,
+for the same reason. **A positive price needs a currency** — `curated_currency` on the park,
+ISO-4217 from a closed list — and is withheld without one, because a bare "12" on a ride page is
+not a price. Free needs none.
+
+`price: 0` is therefore a real value: **never test the field for truthiness.** The API sends the
+parts and the frontend composes them, because "12 €" versus "€12" is a locale decision and the API
+has no business guessing which of six languages the reader is in.
+
+`termId` is a frontend glossary id (`quick-pass`, `lightning-lane`), stored the same way ride
+profiles store theirs and for the same reason: the id is the identity, the name is a label that
+gets renamed. It is checked against the glossary's published id list on write — a wrong one does
+not error anywhere downstream, the chip just links nowhere, so the write is the only moment
+anybody finds out. That check moved out of `AdminRideProfileService` into
+`GlossaryTermIdsService`, which both curation paths now share.
+
+**A curated `false` and an untouched `null` look identical in the payload**, and that is
+deliberate. "We checked, this park sells none" and "nobody has looked" are different facts to an
+editor and the same absence to a visitor; publishing the first as "kein QuickPass" would be our
+own bookkeeping served as the park's statement. The admin keeps all three states.
+
+New in the admin: `PATCH /v1/admin/content/parks/:id/attractions` writes several of a park's rides
+in one request. Which rides sell a pass is one decision taken across a whole list, and forty
+single PATCHes would fire forty revalidation webhooks at the frontend for one edit. Each ride
+still gets its own diff and its own audit row — undo stays per ride — and only the cache eviction
+and the revalidation are hoisted out of the loop.
+
 ### Added — the calendar now says how far its own schedule reaches
 
 `meta.scheduleCoverage` on `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar`:
@@ -42,6 +87,27 @@ seven-way `Promise.all`. Both assembly paths (the fresh build and
 deriving it from the days in hand — a window that was correct only on a cache miss would be worse
 than none, because it would be right in development and wrong in production.
 
+### Fixed — the first half hour of a park's day had its own truth
+
+A queue row is written when a value changes, plus an hourly heartbeat. A ride
+that has been shut for months therefore carries a reading from **before** the
+park opened — and the query that fetches "current status per attraction" started
+counting at today's opening time, which left every such ride with nothing at
+all. An open park with no reading means an optimistically `OPERATING` ride, so
+between 09:00 and the poll that landed at 09:23, Phantasialand served all 40 of
+its attractions as running: *Berliner Eislaufen* and *Ice skate hire* among
+them, in August, while the source they come from had said `CLOSED` since April.
+The rink escaped that only because somebody had hand-written its operating
+months three days earlier; every seasonal ride without curated months — most of
+them, since the detector needs 330 days before it may name a month — did not.
+
+Today's opening time may only **widen** the window, never narrow it. It was
+introduced to keep a long day's whole morning, which is a floor under how much
+history we keep, not a ceiling over it; the cutoff is now the earlier of the
+opening time and the six-hour fallback. The optimism is for a feed that fell
+silent, not for one that has not changed its mind.
+
+Details: `docs/architecture/attraction-status-and-seasonality.md` §2.4.
 ### Changed — ein Widget, ein Secret, ein Variablenname
 
 `ADMIN_TURNSTILE_SECRET_KEY` ist weg. Der Login liest nur noch

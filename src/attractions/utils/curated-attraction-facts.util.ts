@@ -110,7 +110,21 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
   "curated_may_get_wet",
   "curated_is_seasonal",
   "curated_season_months",
+  // Not `curated_`-prefixed because no sync owns them, but written by hand and
+  // by hand only — a ride carrying one has been looked at.
+  "has_fast_pass",
+  "fast_pass_name",
+  "fast_pass_price",
 ];
+
+/*
+ * Three hand-editable columns are deliberately NOT on that list:
+ * `has_single_rider` (seeded from every attraction that ever reported a
+ * SINGLE_RIDER queue), `rcdb_id` (a Wikidata import) and `open_with_park`
+ * (NOT NULL, so every row holds a value). They were filled in bulk rather than
+ * by an editor, and counting them would report thousands of rides as curated
+ * that nobody has ever looked at.
+ */
 
 export function resolveCuratedFacts(
   attraction: CuratedFactsSource,

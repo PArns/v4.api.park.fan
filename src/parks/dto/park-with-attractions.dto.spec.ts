@@ -39,3 +39,84 @@ describe("ParkWithAttractionsDto.fromEntity › scheduleCoverage", () => {
     expect(dto.scheduleCoverage.to).toBeNull();
   });
 });
+
+/**
+ * The fast-pass product on the park's attraction list.
+ *
+ * The name lives on the park row and the flag on the ride, so this mapper is
+ * one of the two places that has to bring the halves together — and the only
+ * one where the park is the object being mapped rather than a relation hanging
+ * off the attraction. It got its own test because that difference is exactly
+ * the kind of thing a copy-paste of the attraction mapper gets wrong.
+ */
+describe("ParkWithAttractionsDto.fromEntity › fastPass", () => {
+  const parkWith = (attractions: unknown[], overrides = {}) =>
+    ({
+      id: "park-1",
+      name: "Phantasialand",
+      slug: "phantasialand",
+      timezone: "Europe/Berlin",
+      curatedFastPassName: "QuickPass",
+      curatedCurrency: "EUR",
+      curatedFastPassTermId: "quick-pass",
+      attractions,
+      shows: [],
+      restaurants: [],
+      ...overrides,
+    }) as unknown as Park;
+
+  const ride = (overrides = {}) => ({
+    id: "ride-1",
+    name: "Taron",
+    slug: "taron",
+    ...overrides,
+  });
+
+  it("gives the ride the park's brand and its own price", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ hasFastPass: true, fastPassPrice: 12 })]),
+    );
+    expect(dto.attractions[0]!.fastPass).toEqual({
+      name: "QuickPass",
+      price: 12,
+      priceFrom: null,
+      currency: "EUR",
+      termId: "quick-pass",
+    });
+  });
+
+  it("says nothing about a ride nobody has checked", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
+    expect(dto.attractions[0]!.fastPass).toBeNull();
+  });
+
+  it("says nothing about a ride checked and found to have none either", () => {
+    // Two different facts to an editor, one absence to a visitor.
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ hasFastPass: false })]),
+    );
+    expect(dto.attractions[0]!.fastPass).toBeNull();
+  });
+
+  it("withholds the price when the park never got a currency", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ hasFastPass: true, fastPassPrice: 12 })], {
+        curatedCurrency: null,
+      }),
+    );
+    expect(dto.attractions[0]!.fastPass).toEqual({
+      name: "QuickPass",
+      price: null,
+      priceFrom: null,
+      currency: null,
+      termId: "quick-pass",
+    });
+  });
+
+  it("carries the park's product name into its info block", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([]));
+    expect(dto.info?.fastPassName).toBe("QuickPass");
+    expect(dto.info?.currency).toBe("EUR");
+    expect(dto.info?.fastPassTermId).toBe("quick-pass");
+  });
+});

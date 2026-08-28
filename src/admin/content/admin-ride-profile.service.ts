@@ -6,13 +6,12 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
-import axios from "axios";
 import {
   AttractionRideProfile,
   type RideMeasurements,
 } from "../../attractions/entities/attraction-ride-profile.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
-import { getGlossaryTermIdsUrl } from "../../config/glossary.config";
+import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 
 export interface RideProfileInput {
   elements?: string[];
@@ -24,9 +23,6 @@ export interface RideProfileInput {
   inversions?: number | null;
   curatedStats?: Partial<RideMeasurements> | null;
 }
-
-/** How long a fetched glossary id list is trusted. */
-const TERM_ID_TTL_MS = 10 * 60 * 1000;
 
 const MEASUREMENT_BOUNDS: Record<keyof RideMeasurements, [number, number]> = {
   topSpeedKmh: [0, 400],
@@ -59,14 +55,12 @@ const MEASUREMENT_BOUNDS: Record<keyof RideMeasurements, [number, number]> = {
 export class AdminRideProfileService {
   private readonly logger = new Logger(AdminRideProfileService.name);
 
-  private termIds: Set<string> | null = null;
-  private termIdsFetchedAt = 0;
-
   constructor(
     @InjectRepository(AttractionRideProfile)
     private readonly profiles: Repository<AttractionRideProfile>,
     @InjectRepository(Attraction)
     private readonly attractions: Repository<Attraction>,
+    private readonly glossary: GlossaryTermIdsService,
   ) {}
 
   async find(attractionId: string): Promise<AttractionRideProfile | null> {
@@ -104,7 +98,7 @@ export class AdminRideProfileService {
     const types = this.cleanTermList(input.types, "types");
     const manufacturerTermId = input.manufacturerTermId?.trim() || null;
 
-    const unknownTermIds = await this.checkTermIds([
+    const unknownTermIds = await this.glossary.unknownIds([
       ...elements,
       ...types,
       ...(manufacturerTermId ? [manufacturerTermId] : []),
@@ -140,49 +134,6 @@ export class AdminRideProfileService {
   async remove(attractionId: string): Promise<boolean> {
     const result = await this.profiles.delete({ attractionId });
     return (result.affected ?? 0) > 0;
-  }
-
-  /**
-   * Term ids the glossary defines, fetched from the frontend and briefly cached.
-   *
-   * Returns an empty list of complaints when the frontend cannot be reached.
-   * That is deliberate: an unreachable frontend is not evidence that the ids
-   * are wrong, and refusing every curation because a deploy is mid-flight would
-   * make this check the thing that breaks curation rather than the thing that
-   * protects it. The nightly audit still catches whatever slips through.
-   */
-  private async checkTermIds(ids: string[]): Promise<string[]> {
-    if (ids.length === 0) return [];
-
-    const known = await this.loadTermIds();
-    if (!known) return [];
-
-    return [...new Set(ids)].filter((id) => !known.has(id));
-  }
-
-  private async loadTermIds(): Promise<Set<string> | null> {
-    if (this.termIds && Date.now() - this.termIdsFetchedAt < TERM_ID_TTL_MS) {
-      return this.termIds;
-    }
-    try {
-      const { data } = await axios.get<{ count: number; ids: string[] }>(
-        getGlossaryTermIdsUrl(),
-        { timeout: 8000 },
-      );
-      // An empty list is a broken source, never "every id is wrong" — the same
-      // rule the nightly audit follows.
-      if (!Array.isArray(data?.ids) || data.ids.length === 0) return null;
-      this.termIds = new Set(data.ids);
-      this.termIdsFetchedAt = Date.now();
-      return this.termIds;
-    } catch (error) {
-      this.logger.warn(
-        `Glossary term ids unavailable, skipping the write-time check: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
-    }
   }
 
   /**

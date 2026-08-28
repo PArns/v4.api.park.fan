@@ -12,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from "class-validator";
 import {
   PARK_SEASON_KINDS,
@@ -44,6 +45,54 @@ export class CurationPatchDto {
   @ApiPropertyOptional({
     description:
       "The page this was established from. A correction without a source is a rumour.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  sourceUrl?: string;
+}
+
+/** One ride's share of a bulk curation. */
+export class BulkCurationEntryDto {
+  @ApiProperty({
+    description: "The attraction to write, which must be in this park.",
+  })
+  @IsString()
+  id: string;
+
+  @ApiProperty({
+    description: "Curated fields for this ride, same shape as a single PATCH.",
+    example: { hasFastPass: true, fastPassPrice: 12 },
+    type: "object",
+    additionalProperties: true,
+  })
+  @IsObject()
+  fields: Record<string, unknown>;
+}
+
+export class BulkCurationDto {
+  @ApiProperty({
+    description:
+      "One entry per ride that changed. Rides whose values are unchanged " +
+      "should be left out — an unchanged entry writes nothing anyway, but " +
+      "sending them all makes the request grow with the park.",
+    type: [BulkCurationEntryDto],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BulkCurationEntryDto)
+  entries: BulkCurationEntryDto[];
+
+  @ApiPropertyOptional({
+    description: "Why. Recorded on every ride's audit row in this edit.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
+
+  @ApiPropertyOptional({
+    description: "The page it was established from — one source for the batch.",
   })
   @IsOptional()
   @IsString()

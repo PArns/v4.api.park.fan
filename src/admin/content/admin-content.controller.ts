@@ -49,6 +49,7 @@ import {
   PARK_CURATED_FIELDS,
 } from "./curated-field.spec-list";
 import {
+  BulkCurationDto,
   CurationPatchDto,
   RideProfileWriteDto,
   SeasonPatchDto,
@@ -489,6 +490,14 @@ export class AdminContentController {
           seasonMonths: resolved.seasonMonths,
           seasonalityCurated: resolved.seasonalityCurated,
           retiredAt: attraction.retiredAt,
+          // Raw, not resolved: the fast-pass table edits these columns, and a
+          // resolved name would show the park's brand in every row and write
+          // it back into forty rides that never needed their own.
+          fastPass: {
+            has: attraction.hasFastPass ?? null,
+            name: attraction.fastPassName ?? null,
+            price: attraction.fastPassPrice ?? null,
+          },
           hasRideProfile: withProfile.has(attraction.id),
           curatedFieldCount: attractionFieldViews(attraction).filter(
             (f) => f.overridden,
@@ -624,6 +633,35 @@ export class AdminContentController {
       auditId: result.auditId,
       fields: attractionFieldViews(result.entity),
     };
+  }
+
+  @Patch("parks/:id/attractions")
+  @AdminMinRole("editor")
+  @SelfAudited()
+  @ApiOperation({
+    summary: "Write curated fields on several of a park's rides at once",
+    description:
+      "For the decisions taken across a whole list rather than ride by ride — " +
+      "which rides sell a fast pass, and what it costs. Each ride still gets " +
+      "its own diff and its own audit row, so undo stays per ride; only the " +
+      "cache eviction and the frontend revalidation happen once for the batch.",
+  })
+  async patchParkAttractions(
+    @Param("id") parkId: string,
+    @Body() body: BulkCurationDto,
+    @CurrentAdmin() admin: AdminPrincipal,
+  ) {
+    const result = await this.curation.curateAttractionsBulk(
+      parkId,
+      body.entries.map((entry) => ({
+        id: entry.id,
+        fields: entry.fields,
+        reason: body.reason,
+        sourceUrl: body.sourceUrl,
+      })),
+      admin,
+    );
+    return result;
   }
 
   // ── ride profiles ─────────────────────────────────────────────────────────

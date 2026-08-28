@@ -1,5 +1,9 @@
 import type { NoLiveWaitTimesReason } from "../data/live-wait-time-sources";
 import { getNoLiveWaitTimesReason } from "../data/live-wait-time-sources";
+// The currency belongs to the fast-pass resolver: it is the column that makes
+// a per-ride price servable, and validating it in two places would let the
+// park page publish a code the ride page rejects.
+import { resolveCurrency } from "../../attractions/utils/fast-pass.util";
 
 /**
  * Merges the hand-curated park facts over the synced ones.
@@ -35,6 +39,10 @@ export interface CuratedParkSource {
   curatedPhone?: string | null;
   curatedOpenedYear?: number | null;
   curatedAreaHectares?: number | null;
+  curatedFastPassName?: string | null;
+  curatedCurrency?: string | null;
+  curatedFastPassTermId?: string | null;
+  curatedFastPassPriceFrom?: number | null;
 }
 
 /**
@@ -56,6 +64,19 @@ export interface ParkInfo {
   phone: string | null;
   openedYear: number | null;
   areaHectares: number | null;
+  /**
+   * What this park calls its paid queue-jump product, e.g. "QuickPass".
+   *
+   * Here as well as on every flagged ride, because the park page wants to name
+   * the product once without walking the attraction list to find it.
+   */
+  fastPassName: string | null;
+  /** ISO-4217 the park's curated prices are quoted in. */
+  currency: string | null;
+  /** Glossary term id explaining the product — the frontend resolves it. */
+  fastPassTermId: string | null;
+  /** What the cheapest version of the product costs, in `currency`. */
+  fastPassPriceFrom: number | null;
 }
 
 export interface ResolvedCuratedPark {
@@ -124,6 +145,10 @@ export const CURATED_PARK_COLUMNS = [
   "curatedPhone",
   "curatedOpenedYear",
   "curatedAreaHectares",
+  "curatedFastPassName",
+  "curatedCurrency",
+  "curatedFastPassTermId",
+  "curatedFastPassPriceFrom",
   "curationNote",
 ] as const;
 
@@ -179,6 +204,10 @@ export function resolveParkInfo(park: CuratedParkSource): ParkInfo | null {
     phone: cleaned(park.curatedPhone),
     openedYear: positive(park.curatedOpenedYear),
     areaHectares: positive(park.curatedAreaHectares),
+    fastPassName: cleaned(park.curatedFastPassName),
+    currency: resolveCurrency(park),
+    fastPassTermId: cleaned(park.curatedFastPassTermId),
+    fastPassPriceFrom: positive(park.curatedFastPassPriceFrom),
   };
 
   return Object.values(info).some((value) => value !== null) ? info : null;

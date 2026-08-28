@@ -255,6 +255,49 @@ export class Attraction {
   @Column({ name: "has_single_rider", type: "boolean", nullable: true })
   hasSingleRider: boolean | null;
 
+  /**
+   * Whether this ride can be skipped with a paid queue-jump product.
+   *
+   * Null is not "no". The overwhelming majority of the ~7000 attractions have
+   * never been looked at, and a page that says "kein QuickPass" about a ride
+   * nobody checked is our own bookkeeping served as the park's statement — the
+   * rule this codebase keeps relearning. So the public payload shows a product
+   * only for `true`, and `false` ("we checked, this park runs none") stays a
+   * fact for the editor, not a claim on the ride page.
+   *
+   * No sync writes it. No feed we ingest publishes queue-jump products at all;
+   * they live in park apps and on ticket pages.
+   */
+  @Column({ name: "has_fast_pass", type: "boolean", nullable: true })
+  hasFastPass: boolean | null;
+
+  /**
+   * The product's name, only when this ride's differs from the park's.
+   *
+   * Normally empty: the name is a park-wide brand — Phantasialand sells
+   * QuickPass, Heide Park an Express Pass — and lives on the park row, so it is
+   * typed once instead of once per ride. This column is for the resort that
+   * sells a differently-named product on a single ride (Disney's Lightning Lane
+   * Single Pass beside the Multi Pass).
+   */
+  @Column({ name: "fast_pass_name", type: "text", nullable: true })
+  fastPassName: string | null;
+
+  /**
+   * What it costs for this one ride, in the park's curated currency.
+   *
+   * `double precision` for the same reason as the park's `curated_area_hectares`
+   * and not out of indifference to money: `numeric` comes back from pg as a
+   * string, which would reach the editor as "12.00", compare unequal to the 12
+   * an editor types, and write an audit row on every save that changed nothing.
+   *
+   * Left empty on purpose where the price is dynamic — Disney and Universal
+   * price per day and per ride, and a number frozen here would be wrong most
+   * days. The haken without a price is the honest answer there.
+   */
+  @Column({ name: "fast_pass_price", type: "double precision", nullable: true })
+  fastPassPrice: number | null;
+
   // RCDB (rcdb.com) database ID for outbound links (https://rcdb.com/{id}.htm).
   // Originally from Wikidata property P2751 (CC0); edited by hand in the
   // database now, with no upstream writer — linking to RCDB is explicitly

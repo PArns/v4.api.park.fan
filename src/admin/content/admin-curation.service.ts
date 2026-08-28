@@ -18,6 +18,7 @@ import { Park } from "../../parks/entities/park.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import { AdminAuditService } from "../auth/admin-audit.service";
 import type { AdminPrincipal } from "../auth/admin-principal";
+import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 import {
   ATTRACTION_CURATED_KEYS,
   CURATED_FIELD_SPEC_BY_KEY,
@@ -84,6 +85,7 @@ export class AdminCurationService {
     private readonly revalidation: RevalidationService,
     private readonly audit: AdminAuditService,
     @InjectQueue("manual-metadata") private readonly curationQueue: Queue,
+    private readonly glossary: GlossaryTermIdsService,
   ) {}
 
   // ── attractions ───────────────────────────────────────────────────────────
@@ -103,8 +105,84 @@ export class AdminCurationService {
     actor: AdminPrincipal,
   ): Promise<CurationResult<Attraction>> {
     const attraction = await this.findAttraction(id);
+    const result = await this.applyAttractionPatch(attraction, patch, actor);
 
-    const changes = this.normalizePatch(
+    if (result.changed.length > 0) {
+      await this.publish(attraction.parkId, [attraction.id]);
+    }
+
+    return result;
+  }
+
+  /**
+   * Curate several rides of one park in a single request.
+   *
+   * The editor that needs this is the fast-pass table: which of a park's rides
+   * sell a queue-jump product is one decision taken across the whole list, and
+   * Phantasialand has forty rides. Sending forty PATCHes would work — every
+   * step below is per-ride except the last — but it would also fire forty
+   * revalidation webhooks at the frontend for one edit.
+   *
+   * So the per-ride work stays per-ride: each attraction gets its own diff and
+   * its own audit row, which is what keeps undo working one ride at a time.
+   * Only `publish` is hoisted, and it is the only part that was ever about the
+   * park rather than the ride.
+   */
+  async curateAttractionsBulk(
+    parkId: string,
+    patches: Array<{ id: string } & CurationPatch>,
+    actor: AdminPrincipal,
+  ): Promise<{
+    changed: Array<{ id: string; changed: string[]; auditId: string | null }>;
+  }> {
+    const changed: Array<{
+      id: string;
+      changed: string[];
+      auditId: string | null;
+    }> = [];
+
+    for (const patch of patches) {
+      const attraction = await this.findAttraction(patch.id);
+      if (attraction.parkId !== parkId) {
+        throw new BadRequestException(
+          `"${attraction.name}" is not in this park — a bulk edit stays inside ` +
+            `the park it was opened from`,
+        );
+      }
+
+      const result = await this.applyAttractionPatch(attraction, patch, actor);
+      if (result.changed.length > 0) {
+        changed.push({
+          id: attraction.id,
+          changed: result.changed,
+          auditId: result.auditId,
+        });
+      }
+    }
+
+    // One eviction, one revalidation, one delayed sweep — for the whole edit.
+    if (changed.length > 0) {
+      await this.publish(
+        parkId,
+        changed.map((entry) => entry.id),
+      );
+    }
+
+    return { changed };
+  }
+
+  /**
+   * Everything a curation does except publishing it.
+   *
+   * Split out so the bulk path can run it per ride and publish once. Publishing
+   * is the only step that is about the park rather than the row.
+   */
+  private async applyAttractionPatch(
+    attraction: Attraction,
+    patch: CurationPatch,
+    actor: AdminPrincipal,
+  ): Promise<CurationResult<Attraction>> {
+    const changes = await this.normalizePatch(
       patch.fields,
       ATTRACTION_CURATED_KEYS,
       CURATED_FIELD_SPEC_BY_KEY.attraction,
@@ -163,8 +241,6 @@ export class AdminCurationService {
       sourceUrl: patch.sourceUrl ?? null,
     });
 
-    await this.publish(attraction.parkId, [attraction.id]);
-
     return { entity: attraction, changed, auditId: auditRow?.id ?? null };
   }
 
@@ -183,7 +259,7 @@ export class AdminCurationService {
   ): Promise<CurationResult<Park>> {
     const park = await this.findPark(id);
 
-    const changes = this.normalizePatch(
+    const changes = await this.normalizePatch(
       patch.fields,
       PARK_CURATED_KEYS,
       CURATED_FIELD_SPEC_BY_KEY.park,
@@ -324,12 +400,13 @@ export class AdminCurationService {
    * "clear the correction, accept upstream again"; it is not the same as
    * omitting the key, which leaves the field alone.
    */
-  private normalizePatch(
+  private async normalizePatch(
     fields: Record<string, unknown>,
     allowed: Set<string>,
     specs: Map<string, CuratedFieldSpec>,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const output: Record<string, unknown> = {};
+    const termIds: string[] = [];
 
     for (const [key, raw] of Object.entries(fields ?? {})) {
       if (!allowed.has(key)) {
@@ -338,7 +415,23 @@ export class AdminCurationService {
         );
       }
       const spec = specs.get(key)!;
-      output[key] = this.coerce(spec, raw);
+      const value = this.coerce(spec, raw);
+      output[key] = value;
+      if (spec.type === "glossaryTerm" && typeof value === "string") {
+        termIds.push(value);
+      }
+    }
+
+    // Checked after coercion rather than inside it, because it is the one
+    // validation that leaves this process: the glossary lives in the frontend.
+    // A wrong id does not error anywhere downstream — the chip just links
+    // nowhere — so this is the only moment anybody finds out.
+    const unknown = await this.glossary.unknownIds(termIds);
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        `The glossary does not define these term ids, so they would link ` +
+          `nowhere: ${unknown.join(", ")}`,
+      );
     }
 
     return output;
@@ -366,7 +459,10 @@ export class AdminCurationService {
 
     switch (spec.type) {
       case "text":
-      case "longtext": {
+      case "longtext":
+      // Same input, same trimming — the id is checked separately, against a
+      // list that lives in another application.
+      case "glossaryTerm": {
         if (typeof raw !== "string") {
           throw new BadRequestException(`${spec.label} must be text`);
         }

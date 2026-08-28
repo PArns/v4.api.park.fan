@@ -19,6 +19,8 @@ import {
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
+import { FastPassDto } from "../../attractions/dto/fast-pass.dto";
+import { resolveFastPass } from "../../attractions/utils/fast-pass.util";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
 import {
   resolveCuratedPark,
@@ -202,6 +204,16 @@ export class ParkAttractionDto {
     nullable: true,
   })
   hasSingleRider?: boolean | null;
+
+  @ApiProperty({
+    description:
+      "The paid queue-jump product this ride sells, or absent. Absent means " +
+      "either nobody has checked or the park sells none.",
+    required: false,
+    nullable: true,
+    type: FastPassDto,
+  })
+  fastPass?: FastPassDto | null;
 
   @ApiProperty({
     description:
@@ -695,6 +707,9 @@ export class ParkWithAttractionsDto {
               maximumHeight: curated.maximumHeight,
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
+              // `park` here, not `attraction.park`: the list is built from the
+              // park being mapped, and the attractions carry no back-reference.
+              fastPass: resolveFastPass(attraction, park),
               rcdbId: attraction.rcdbId ?? null,
               // queue data, forecasts etc will be attached by service
             };

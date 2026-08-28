@@ -20,6 +20,8 @@ import {
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
+import { FastPassDto } from "./fast-pass.dto";
+import { resolveFastPass } from "../utils/fast-pass.util";
 
 /**
  * One weekday/weekend bucket of the typical-waits summary.
@@ -300,6 +302,17 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "The paid queue-jump product this ride sells, or absent. Absent means " +
+      "either nobody has checked or the park sells none — the two are one " +
+      "absence to a visitor, so never render it as 'no fast pass'.",
+    required: false,
+    nullable: true,
+    type: FastPassDto,
+  })
+  fastPass?: FastPassDto | null;
+
+  @ApiProperty({
+    description:
       "RCDB (rcdb.com) database id for outbound links (https://rcdb.com/{id}.htm). Null for non-coasters or unmatched rides.",
     example: 12723,
     required: false,
@@ -492,6 +505,10 @@ export class AttractionResponseDto {
       maximumHeight: curated.maximumHeight,
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
+      // The name lives on the park row, so this is the one resolver that needs
+      // both entities. A projection that did not join the park still resolves —
+      // it just falls back to the neutral name and withholds the price.
+      fastPass: resolveFastPass(attraction, attraction.park),
       rcdbId: attraction.rcdbId ?? null,
       retiredAt: attraction.retiredAt
         ? attraction.retiredAt.toISOString()

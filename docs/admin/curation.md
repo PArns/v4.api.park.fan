@@ -25,8 +25,8 @@ which is not a hypothetical: it is why `curated_may_get_wet` and
 | `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
 
 Human-only, with no sync behind them: `has_single_rider`, `open_with_park`,
-`rcdb_id`, `retired_at` / `retired_reason`, and the whole
-`attraction_ride_profiles` table except its `stats` column.
+`rcdb_id`, `retired_at` / `retired_reason`, the three fast-pass columns below,
+and the whole `attraction_ride_profiles` table except its `stats` column.
 
 ### Parks
 
@@ -34,6 +34,50 @@ Corrections to a synced column: `curated_name`, `curated_park_type`. Plus
 `curated_no_wait_times_reason` and the internal `curation_note`. Before this
 there were none at all — the only park-level curation was a hardcoded list in
 `live-wait-time-sources.ts`.
+
+### Fast passes, across two rows
+
+Nothing we ingest publishes queue-jump products, so every part is hand-written —
+and the parts sit on different rows on purpose.
+
+| Column                                  | Row         | Holds                                    |
+| --------------------------------------- | ----------- | ---------------------------------------- |
+| `parks.curated_fast_pass_name`          | park        | The brand: QuickPass, Express Pass       |
+| `parks.curated_currency`                | park        | ISO-4217, what the prices are quoted in  |
+| `parks.curated_fast_pass_term_id`       | park        | The glossary entry explaining the product |
+| `attractions.has_fast_pass`             | attraction  | Whether this ride sells one              |
+| `attractions.fast_pass_name`            | attraction  | Override, for the one ride named apart   |
+| `attractions.fast_pass_price`           | attraction  | What it costs on this ride               |
+
+The name is on the park because it is a brand. Phantasialand sells QuickPass
+across the whole park; per ride it would be typed forty times and drift into
+"Quick Pass" on the eleventh. The override exists for the resort that really does
+sell a differently-named product on one ride — Disney's Lightning Lane Single
+Pass beside the Multi Pass — and both still point at one glossary term, because
+they are two labels over one idea.
+
+Read through `resolveFastPass(attraction, park)`. It is the only merge that
+reaches across two entities, which is exactly why it is a function.
+
+**The price has three states.** Empty is unknown, and stays empty where the
+operator prices per day: a frozen Lightning Lane price would be wrong most days,
+and the haken without a number is the honest answer there. Zero is **free** — a
+claim, not a missing value, the same reading a curated height of 0 gets.
+Europa-Park's Virtual Line is the worked example: a queue-jump product included
+with admission. A positive price needs a currency and is withheld without one,
+because a bare "12" on a ride page is not a price; free needs none.
+
+**A curated `false` never reaches a visitor.** `has_fast_pass = false` means
+somebody checked and the park sells none, which is worth recording so the next
+editor does not search again — but the payload treats it exactly like `null`.
+Publishing "kein QuickPass" would be our own bookkeeping served as the park's
+statement, which is the rule in CLAUDE.md §4.
+
+**The term id is checked on write.** It is a frontend glossary id and nothing in
+this database can validate one; a wrong id does not error anywhere, the chip just
+links nowhere. `GlossaryTermIdsService` fetches the published list and both
+curation paths — ride profiles and this one — check against it. An unreachable
+frontend skips the check rather than blocking the write.
 
 ### Park facts nothing syncs
 
@@ -138,6 +182,19 @@ announced, and still missing from the ride page the next morning.
 A patch that changes nothing writes nothing — no save, no eviction, no audit
 row. A form that PATCHes every field on every blur would otherwise fill the log
 with empty edits and bury the real ones.
+
+### Editing a whole park's list at once
+
+`PATCH /v1/admin/content/parks/:id/attractions` takes one entry per ride. It
+exists for the fast-pass table: which rides sell a pass is a decision taken
+across the whole list, and Phantasialand has forty rides. Forty single PATCHes
+would each fire a revalidation webhook at the frontend for one edit.
+
+Only step 4's siblings are hoisted. Each ride keeps its own diff and its own
+audit row, so undo still works one ride at a time; the eviction, the
+revalidation and the delayed sweep happen once for the batch. A ride from
+another park in the list is rejected rather than written — a bulk edit stays
+inside the park it was opened from.
 
 ### Ride profiles
 

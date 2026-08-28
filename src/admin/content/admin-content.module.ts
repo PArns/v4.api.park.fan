@@ -9,6 +9,7 @@ import { RevalidationModule } from "../../common/revalidation/revalidation.modul
 import { AdminContentController } from "./admin-content.controller";
 import { AdminCurationService } from "./admin-curation.service";
 import { AdminRideProfileService } from "./admin-ride-profile.service";
+import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 import { ParkSeasonsModule } from "../../parks/park-seasons.module";
 
 /**
@@ -32,7 +33,11 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
     ParkSeasonsModule,
   ],
   controllers: [AdminContentController],
-  providers: [AdminCurationService, AdminRideProfileService],
+  providers: [
+    AdminCurationService,
+    AdminRideProfileService,
+    GlossaryTermIdsService,
+  ],
   exports: [AdminCurationService],
 })
 export class AdminContentModule {}

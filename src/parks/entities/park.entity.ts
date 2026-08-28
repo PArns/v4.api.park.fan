@@ -298,6 +298,72 @@ export class Park {
   curatedAreaHectares: number | null;
 
   /**
+   * What this park calls its paid queue-jump product.
+   *
+   * On the park and not on each ride, because it is a brand: Phantasialand
+   * sells QuickPass across the whole park, Heide Park an Express Pass. Typing
+   * it per attraction would mean typing it forty times and watching it drift
+   * into "Quick Pass" on the eleventh. A ride whose product genuinely differs
+   * overrides it in `attractions.fast_pass_name`.
+   *
+   * Empty means the API falls back to the neutral "Fast Pass" for any ride
+   * flagged as having one — see `resolveFastPass`.
+   */
+  @Column({ name: "curated_fast_pass_name", type: "text", nullable: true })
+  curatedFastPassName: string | null;
+
+  /**
+   * What the cheapest version of the product costs, when it is not priced per
+   * ride.
+   *
+   * Almost every park sells one pass for the whole visit rather than one per
+   * ride: Heide Park's Express Ticket starts at 25 €, Energylandia's ENERGY
+   * PASS is 239 zł, Walibi's Fast Lane is a day product. Only Phantasialand and
+   * Disney price per attraction, and both do it dynamically — so
+   * `attractions.fast_pass_price` stays empty at almost every park, and this is
+   * the number a visitor actually wants.
+   *
+   * A floor, not a price: the tiers above it (Gold, Unlimited, Ultimate) cost
+   * more and change more often. Rendered as "ab 25 €" and never as "25 €".
+   */
+  @Column({
+    name: "curated_fast_pass_price_from",
+    type: "double precision",
+    nullable: true,
+  })
+  curatedFastPassPriceFrom: number | null;
+
+  /**
+   * The glossary term that explains this park's product, e.g. `quick-pass`.
+   *
+   * A frontend glossary id, exactly like the ones on `attraction_ride_profiles`,
+   * and stored for the same reason: the id is the identity, the name is a label
+   * that gets renamed. It is what lets a ride page's "QuickPass" chip link to
+   * the entry that explains what a QuickPass actually buys you.
+   *
+   * Nothing in this database can validate it — the glossary lives in the
+   * frontend — so the admin checks it against the published id list on write,
+   * and a wrong one does not error, it just links nowhere.
+   */
+  @Column({ name: "curated_fast_pass_term_id", type: "text", nullable: true })
+  curatedFastPassTermId: string | null;
+
+  /**
+   * ISO-4217 code the park's prices are quoted in, e.g. `EUR`.
+   *
+   * A property of the park rather than of each price, and it is what makes the
+   * per-ride fast-pass price servable at all: a bare "12" on a ride page is not
+   * a price. Without this column the API withholds the number.
+   */
+  @Column({
+    name: "curated_currency",
+    type: "varchar",
+    length: 3,
+    nullable: true,
+  })
+  curatedCurrency: string | null;
+
+  /**
    * Free-text note for whoever reads this row next.
    *
    * Not shown to visitors. It is where "the park's own site lists opening

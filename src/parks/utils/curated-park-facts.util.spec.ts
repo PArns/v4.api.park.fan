@@ -128,6 +128,10 @@ describe("resolveParkInfo", () => {
       curatedPhone: "+49 7822 776688",
       curatedOpenedYear: 1975,
       curatedAreaHectares: 95,
+      curatedFastPassName: "Fast Lane",
+      curatedCurrency: "EUR",
+      curatedFastPassTermId: "fast-lane",
+      curatedFastPassPriceFrom: 25,
     });
     expect(info).toEqual({
       website: "https://www.europapark.de/",
@@ -141,7 +145,18 @@ describe("resolveParkInfo", () => {
       phone: "+49 7822 776688",
       openedYear: 1975,
       areaHectares: 95,
+      fastPassName: "Fast Lane",
+      currency: "EUR",
+      fastPassTermId: "fast-lane",
+      fastPassPriceFrom: 25,
     });
+  });
+
+  it("drops a currency code that is not one we serve", () => {
+    // The code is handed to Intl.NumberFormat in the browser, which throws on
+    // an invalid one — a typo here would blank a ride page.
+    expect(resolveParkInfo({ curatedCurrency: "XYZ" })).toBeNull();
+    expect(resolveParkInfo({ curatedCurrency: "eur" })?.currency).toBe("EUR");
   });
 
   it("drops a zero year or area rather than serving it", () => {
@@ -178,6 +193,10 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
       "curated_phone",
       "curated_opened_year",
       "curated_area_hectares",
+      "curated_fast_pass_name",
+      "curated_currency",
+      "curated_fast_pass_term_id",
+      "curated_fast_pass_price_from",
       "curation_note",
     ]);
   });

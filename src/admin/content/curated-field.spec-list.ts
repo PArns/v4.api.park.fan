@@ -2,6 +2,7 @@ import type { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
+import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
 
 /**
  * The curated fields, described rather than hard-coded into a form.
@@ -28,7 +29,8 @@ export type CuratedFieldType =
   | "boolean"
   | "enum"
   | "months"
-  | "url";
+  | "url"
+  | "glossaryTerm";
 
 export interface CuratedFieldSpec {
   /** The curated column's TS property name — also the PATCH body key. */
@@ -198,6 +200,45 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "Warteschlange, offen, solange der Park offen ist.",
   },
   {
+    key: "hasFastPass",
+    label: "Fastpass",
+    type: "boolean",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    hint:
+      "Ob die Bahn mit einem kostenpflichtigen Pass übersprungen werden kann. " +
+      '„Nein" heißt: nachgesehen, es gibt keinen — das steht nicht auf der ' +
+      "Bahnseite, es hält nur den nächsten Bearbeiter davon ab, nochmal zu suchen.",
+  },
+  {
+    key: "fastPassName",
+    label: "Abweichender Name",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    maxLength: 60,
+    hint:
+      "Meist leer. Der Name steht am Park (Phantasialand: QuickPass) und gilt " +
+      "für alle Bahnen. Hier nur eintragen, was an dieser einen Bahn anders heißt.",
+  },
+  {
+    key: "fastPassPrice",
+    label: "Preis",
+    type: "decimal",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    min: 0,
+    max: 1000,
+    hint:
+      "In der Währung des Parks — ohne die am Park hinterlegte Währung liefert " +
+      "die API eine Zahl über 0 nicht aus. 0 heißt kostenlos (Europa-Parks " +
+      "Virtual Line), leer heißt unbekannt: so bleibt es dort, wo der Preis " +
+      "tagesabhängig ist (Disney, Universal).",
+  },
+  {
     key: "rcdbId",
     label: "RCDB-Id",
     type: "number",
@@ -358,6 +399,59 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     min: 0,
     max: 100000,
     hint: "Die für Besucher zugängliche Fläche, nicht der Grundbesitz der Firma.",
+  },
+  {
+    key: "curatedFastPassName",
+    label: "Fastpass-Name",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    maxLength: 60,
+    hint:
+      "Wie der Park sein Warteschlangen-Produkt nennt — QuickPass, Express Pass, " +
+      "Lightning Lane. Einmal hier statt an jeder Bahn. Leer heißt: die API nennt " +
+      'es „Fast Pass".',
+  },
+  {
+    key: "curatedCurrency",
+    label: "Währung",
+    type: "enum",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    options: SUPPORTED_CURRENCIES,
+    hint:
+      "ISO-4217. Ohne sie bleibt jeder Bahnpreis dieses Parks unveröffentlicht — " +
+      'eine nackte „12" auf einer Bahnseite ist kein Preis.',
+  },
+  {
+    key: "curatedFastPassPriceFrom",
+    label: "Ab-Preis",
+    type: "decimal",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    min: 0,
+    max: 5000,
+    hint:
+      "Was die günstigste Variante kostet, wenn das Produkt nicht pro Bahn " +
+      "bepreist ist — was fast überall so ist (Heide Park ab 25 €, Walibi als " +
+      'Tagesprodukt). Wird als „ab 25 €" angezeigt und tritt zurück, sobald ' +
+      "eine Bahn einen eigenen Preis hat.",
+  },
+  {
+    key: "curatedFastPassTermId",
+    label: "Glossarbegriff",
+    type: "glossaryTerm",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Fastpass",
+    maxLength: 80,
+    hint:
+      "Die Id des Glossareintrags, der das Produkt erklärt — quick-pass, " +
+      "express-pass, lightning-lane. Damit verlinkt der Chip auf der Bahnseite " +
+      "ins Glossar. Eine unbekannte Id wird beim Speichern abgelehnt.",
   },
   {
     key: "curationNote",

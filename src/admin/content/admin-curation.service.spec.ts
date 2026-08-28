@@ -27,8 +27,10 @@ const ACTOR: AdminPrincipal = {
 function build(
   attraction: Record<string, unknown> | null,
   park: Record<string, unknown> | null = null,
+  unknownTermIds: string[] = [],
 ) {
   const calls: string[] = [];
+  const glossaryChecked: string[] = [];
 
   const attractions = {
     findOne: jest.fn(async (): Promise<unknown> => attraction),
@@ -67,6 +69,16 @@ function build(
     calls.push("evict");
   });
 
+  // The glossary lives in the frontend; the real service fetches its id list
+  // over HTTP. Here it answers "nothing to complain about", which is also what
+  // it answers in production when the frontend is unreachable.
+  const glossary = {
+    unknownIds: jest.fn(async (ids: string[]) => {
+      glossaryChecked.push(...ids);
+      return unknownTermIds;
+    }),
+  };
+
   const service = new AdminCurationService(
     attractions as never,
     parks as never,
@@ -74,9 +86,20 @@ function build(
     revalidation as never,
     audit as never,
     queue as never,
+    glossary as never,
   );
 
-  return { service, attractions, parks, revalidation, audit, queue, calls };
+  return {
+    service,
+    attractions,
+    parks,
+    revalidation,
+    audit,
+    queue,
+    calls,
+    glossary,
+    glossaryChecked,
+  };
 }
 
 function anAttraction(overrides: Record<string, unknown> = {}) {
@@ -421,6 +444,53 @@ describe("AdminCurationService", () => {
           ACTOR,
         ),
       ).rejects.toThrow(/must be one of/);
+    });
+  });
+
+  describe("the glossary term id", () => {
+    const aPark = () => ({
+      id: "park-1",
+      name: "Phantasialand",
+      curatedFastPassTermId: null,
+    });
+
+    it("refuses an id the glossary does not define", async () => {
+      // Nothing downstream errors on a wrong id — the chip just links
+      // nowhere — so the write is the only moment anybody finds out.
+      const { service } = build(null, aPark(), ["quickpass"]);
+      await expect(
+        service.curatePark(
+          "park-1",
+          { fields: { curatedFastPassTermId: "quickpass" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/does not define these term ids/);
+    });
+
+    it("stores an id the glossary knows", async () => {
+      const { service, glossaryChecked } = build(null, aPark());
+      const result = await service.curatePark(
+        "park-1",
+        { fields: { curatedFastPassTermId: " quick-pass " } },
+        ACTOR,
+      );
+      expect(result.entity.curatedFastPassTermId).toBe("quick-pass");
+      // Trimmed before it is checked, or a pasted id with a trailing space
+      // would be rejected for being unknown.
+      expect(glossaryChecked).toEqual(["quick-pass"]);
+    });
+
+    it("does not consult the glossary when the field is being cleared", async () => {
+      const { service, glossaryChecked } = build(null, {
+        ...aPark(),
+        curatedFastPassTermId: "quick-pass",
+      });
+      await service.curatePark(
+        "park-1",
+        { fields: { curatedFastPassTermId: null } },
+        ACTOR,
+      );
+      expect(glossaryChecked).toEqual([]);
     });
   });
 

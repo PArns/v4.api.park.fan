@@ -486,6 +486,9 @@ export class AttractionMergeService {
     "retiredAt",
     "retiredReason",
     "hasSingleRider",
+    "hasFastPass",
+    "fastPassName",
+    "fastPassPrice",
     "rcdbId",
     "seasonMonths",
   ] as const;
