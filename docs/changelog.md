@@ -27,8 +27,17 @@ and narrowing it is a separate decision. What changes is that a caller can see t
 `to`, `status` is inferred rather than published, and a consumer should stop paginating, listing
 or indexing there.
 
+It ships on the **park detail payload** too (`ParkWithAttractions.scheduleCoverage`), because the
+consumer that needs it most decides which calendar months to publish for the whole catalogue and
+would otherwise have to fetch 212 calendars to learn it. The park **listing** does not get it: a
+per-park fact does not belong on every row of every list. `fromEntity` defaults to
+`{ from: null, to: null }` — the same answer a park with no OPERATING rows gets — so a payload that
+never reached the enrichment service degrades to "no published schedule" rather than to a window
+nothing supports.
+
 The value comes from `getOperatingDateRange`, already a 1 h read-through cache, so the added cost
-is one Redis GET on the month-cache fast path. Both assembly paths (the fresh build and
+is one Redis GET on the month-cache fast path and one that overlaps the park payload's existing
+seven-way `Promise.all`. Both assembly paths (the fresh build and
 `assembleFromMonthCaches`) set it, and the cached path takes it as a parameter rather than
 deriving it from the days in hand — a window that was correct only on a cache miss would be worse
 than none, because it would be right in development and wrong in production.

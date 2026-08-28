@@ -3,6 +3,7 @@ import { Park } from "../entities/park.entity";
 import { WeatherItemDto } from "./weather-item.dto";
 import { WeatherWarningDto } from "./weather-warning.dto";
 import { ScheduleItemDto } from "./schedule-item.dto";
+import { ScheduleCoverage } from "./integrated-calendar.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { buildParkUrl, buildAttractionUrl } from "../../common/utils/url.util";
 import {
@@ -512,6 +513,18 @@ export class ParkWithAttractionsDto {
 
   @ApiProperty({
     description:
+      "How far the park's published schedule reaches: first and last date with a park-level " +
+      "OPERATING entry (YYYY-MM-DD, park timezone), null at both ends when the park has none. " +
+      "Past `to`, a calendar `status` is inferred rather than published — for a park with a " +
+      "history of seasonal closures it reads CLOSED, which is right just after a season ends " +
+      "and wrong months later. Read it before publishing, paginating or indexing future " +
+      "calendar dates.",
+    type: ScheduleCoverage,
+  })
+  scheduleCoverage: ScheduleCoverage;
+
+  @ApiProperty({
+    description:
       "Whether this park's wait times are readable at all. Check it before " +
       "rendering wait times, operating counts or a crowd level — for a park " +
       "with no source those all collapse to zero.",
@@ -645,6 +658,10 @@ export class ParkWithAttractionsDto {
       continent: park.continent || null,
       timezone: park.timezone,
       hasOperatingSchedule: false, // Default, overwritten by service
+      // Same deal: null/null is the honest default, and it is also the real answer for a park
+      // with no OPERATING rows — a caller reading it before the service fills it in concludes
+      // "no published schedule", never a window that does not exist.
+      scheduleCoverage: { from: null, to: null },
       // Derived from the entity, not from live data: whether a source exists is
       // a property of the park, and it must be right even on the paths that
       // never reach ParkIntegrationService.

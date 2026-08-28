@@ -18,11 +18,16 @@ Found in the `meta` object of the calendar response and the park detail response
 - `true`: The park provides official opening hours.
 - `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed (past).
 
-### 4. `meta.scheduleCoverage` (`{ from, to }`) — how far the schedule reaches
+### 4. `scheduleCoverage` (`{ from, to }`) — how far the schedule reaches
+
+On **`meta`** of the calendar response and on the **park detail payload**, so a client can read it
+without asking for a calendar. That matters at scale: deciding which calendar months to publish
+for 212 parks is one field on a payload you already fetch, not 212 calendar calls.
 
 `from` and `to` are the first and last dates with a park-level `OPERATING` entry (`YYYY-MM-DD`,
 park timezone), or `null` at both ends when the park has none — the same park
-`hasOperatingSchedule: false` describes.
+`hasOperatingSchedule: false` describes. The park **listing** deliberately does not carry it: it
+is a per-park fact that would be paid for on every row of every list.
 
 **Read `to` before you trust a future `status`.** Inside the window a status is a statement about
 the park. Past `to` it is a statement about our sync: no schedule row exists, and for a park with

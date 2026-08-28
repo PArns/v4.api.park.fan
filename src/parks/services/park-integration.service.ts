@@ -201,6 +201,7 @@ export class ParkIntegrationService {
       nextSchedule,
       parkHasOperatingSchedule,
       weatherWarnings,
+      operatingDateRange,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 16),
@@ -209,10 +210,20 @@ export class ParkIntegrationService {
       this.parksService.getNextSchedule(park.id).catch(() => null),
       this.parksService.hasOperatingSchedule(park.id),
       this.weatherWarningsService.getActiveWarnings(park.id).catch(() => []),
+      // Joins the batch rather than sitting after it: it is a 1 h read-through cache, so on the
+      // warm path it costs one Redis GET that overlaps the other six.
+      this.parksService.getOperatingDateRange(park.id, park.timezone),
     ]);
     const hourlyRes = mlPredictionsResult;
 
     dto.hasOperatingSchedule = parkHasOperatingSchedule;
+    // How far the published schedule reaches. A consumer needs it to tell a park that is shut
+    // from one whose next season is simply not out yet: past `to` the calendar infers a status
+    // instead of reporting one, and for a seasonal park that inference reads CLOSED.
+    dto.scheduleCoverage = {
+      from: operatingDateRange.minDate,
+      to: operatingDateRange.maxDate,
+    };
 
     // Whether this park publishes wait times anywhere we can read (curated, see
     // parks/data/live-wait-time-sources.ts). `fromEntity` has already put the
