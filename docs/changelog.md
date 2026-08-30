@@ -6,6 +6,30 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — how far a queue swings at an hour, not just where it sits
+
+`p25` on every ride of `/parks/:continent/:country/:city/:parkSlug/stats/hourly`,
+aligned with `hours` exactly like `p50` and `p90`. `schemaVersion` goes to **4**
+and the Redis key with it, so a cached v3 payload is not served to a client that
+now expects the row.
+
+The endpoint answered `p50` and `p90`, which is a band from the median **upward**:
+it says how bad an hour gets and nothing about how good it gets. A frontend
+drawing a ride's day as a curve with the spread around it can only fill
+median-to-busy from that, and has to caption it as such — a P50–P90 fill labelled
+"P25–P90" would be a claim about the quiet quarter of days that nothing measured.
+
+No migration. `queue_data_aggregates` has stored `p25` since the percentile
+processor was written, so this is one more `AVG()` in the same `GROUP BY`,
+carried through the same accumulator, gated by the same `hour_days >=
+MIN_DAYS_PER_HOUR` test — a thin hour stays a gap rather than becoming a number —
+and rounded to five on the way out with the other two, never before the ranking
+and peak-hour decisions that read raw values.
+
+Additive: an existing consumer ignores the field, and the frontend types it
+optional and falls back to the median-to-busy band, so the two sides deploy in
+either order.
+
 ### Added — which rides sell a queue-jump pass, and what it costs
 
 `fastPass` on the attraction payload and on every ride in the park payload:

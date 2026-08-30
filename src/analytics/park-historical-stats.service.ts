@@ -42,7 +42,7 @@ const MIN_SAMPLES_PER_HOUR = 2;
 const DEFAULT_MIN_ATTRACTION_DAYS = 20;
 
 /** Hourly-profile schema version (see ParkHourlyProfileDto). */
-const HOURLY_SCHEMA_VERSION = 3;
+const HOURLY_SCHEMA_VERSION = 4;
 
 /**
  * An hour needs this many measured days across the window to be drawn at all.
@@ -296,7 +296,7 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
-    const cacheKey = `park:hourly-profile:v3:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cacheKey = `park:hourly-profile:v4:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -382,6 +382,7 @@ export class ParkHistoricalStatsService {
         slug: string;
         name: string;
         land: string | null;
+        p25: Map<number, number>;
         p50: Map<number, number>;
         p90: Map<number, number>;
         sampleDays: number;
@@ -393,6 +394,7 @@ export class ParkHistoricalStatsService {
         slug,
         name: r.name as string,
         land: (r.land as string | null) ?? null,
+        p25: new Map<number, number>(),
         p50: new Map<number, number>(),
         p90: new Map<number, number>(),
         sampleDays: 0,
@@ -408,6 +410,7 @@ export class ParkHistoricalStatsService {
         // these, and five-minute buckets create ties that a raw comparison does
         // not have: a ride reading 51 at 11:00 and 53 at 12:00 peaks at noon,
         // but rounded both are 50 and the first hour wins by accident.
+        entry.p25.set(hour, Number(r.p25));
         entry.p50.set(hour, Number(r.p50));
         entry.p90.set(hour, Number(r.p90));
       }
@@ -452,6 +455,7 @@ export class ParkHistoricalStatsService {
         attractionSlug: a.slug,
         attractionName: a.name,
         land: a.land,
+        p25: visibleHours.map((h) => round(a.p25.get(h))),
         p50: visibleHours.map((h) => round(a.p50.get(h))),
         p90: visibleHours.map((h) => round(a.p90.get(h))),
         peakHour,
@@ -519,6 +523,7 @@ export class ParkHistoricalStatsService {
          COALESCE(a.curated_name, a.name)           AS name,
          COALESCE(a.curated_land_name, a.land_name) AS land,
          EXTRACT(HOUR FROM (qda.hour AT TIME ZONE $2))::int AS hour_of_day,
+         AVG(qda.p25)                               AS p25,
          AVG(qda.p50)                               AS p50,
          AVG(qda.p90)                               AS p90,
          -- Days THIS HOUR was measured for THIS ride. Distinct from
