@@ -33,6 +33,7 @@ interface ParkHourlyProfile {
     attractionSlug: string;
     attractionName: string; // curated name winning
     land?: string | null;
+    p25: Array<number | null>; // schema v4 and up; absent from older responses
     p50: Array<number | null>; // one entry per `hours` entry, same order
     p90: Array<number | null>;
     peakHour: number | null; // the hour in `hours` where p50 peaks
@@ -46,7 +47,7 @@ interface ParkHourlyProfile {
     totalSampleDays: number;
     displayable: boolean;
     generatedAt: string; // ISO 8601 UTC
-    schemaVersion: number; // 2
+    schemaVersion: number; // 4
   };
 }
 ```
@@ -56,10 +57,17 @@ interface ParkHourlyProfile {
 - **`hours` is derived from the data, never assumed.** A park that opens at 11
   starts at 11. Both axes come from the payload; hardcoding 9–18 would put
   Phantasialands winter season an hour to the left of where it happened.
-- **The two arrays are positional, not keyed.** `p50[i]` belongs to `hours[i]`.
+- **The three arrays are positional, not keyed.** `p25[i]`, `p50[i]` and
+  `p90[i]` all belong to `hours[i]`.
   A `null` is a gap — the ride reported nothing in that hour — and must render
   as a dash, never as a zero. A zero says "no queue", which is a different
   claim from "we were not watching".
+- **`p25` is optional, and the fallback is part of the contract.** It arrives
+  with schema v4; a deployment still answering v3 sends none. A spread band is
+  then drawn median-to-busy and labelled as such — a P50–P90 fill captioned
+  "P25–P90" is a claim about the quiet quarter of days that nothing measured.
+  Together `p25` and `p90` say how far a day reasonably falls either side of the
+  median, which `p50` alone cannot.
 - **Gate on `meta.displayable`.** It is false when fewer than three hours
   survived or no ride cleared the sample floor. There is nothing to draw from a
   two-column matrix.
