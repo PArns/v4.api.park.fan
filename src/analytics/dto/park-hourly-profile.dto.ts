@@ -17,6 +17,18 @@ export class HourlyProfileAttractionDto {
 
   @ApiProperty({
     type: [Number],
+    example: [20, 38, 32, 20, 25, 21, 20, 18, 14, 10],
+    description:
+      "Quiet-hour wait (P25) per hour, aligned with `hours`. Together with " +
+      "`p90` it is the spread a queue moves in at that hour: P50 alone says " +
+      "what a typical day looks like, this pair says how far a day can " +
+      "reasonably fall either side of it. Drawn as the lower edge of the " +
+      "band under the median curve.",
+  })
+  p25: Array<number | null>;
+
+  @ApiProperty({
+    type: [Number],
     example: [33, 57, 48, 30, 38, 31, 30, 28, 21, 16],
     description:
       "Median wait per hour, one entry per `hours` entry and in the same " +
