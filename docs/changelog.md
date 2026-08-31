@@ -6,6 +6,25 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `/stats/day` antwortete 500, seit es ausgeliefert wurde
+
+`operator does not exist: text = uuid`. Der Endpunkt hat nie funktioniert, und
+das Frontend konnte es nicht melden, weil es jede nicht-OK-Antwort als „dieser
+Park hat keine lesbare Kurve" gelesen hat.
+
+`attractions` wird in dieser Datei an drei Tabellen gejoint, die sich über den
+Spaltentyp nicht einig sind: `queue_data.attractionId` und
+`wait_time_predictions.attractionId` sind **uuid**, `queue_data_aggregates.attractionId`
+ist **text**. Die Aggregat-Tabelle ist der Sonderfall und zugleich die, die jede
+ältere Abfrage hier liest, also sieht `a.id::text = …` nach Hausstil aus und ist
+falsch, sobald man es auf einen Roh-Queue- oder Prognose-Join kopiert. Genau das
+war passiert.
+
+Gegen die Produktionsdatenbank nachgestellt und nachgemessen: alle drei Abfragen
+laufen, 274 Zeilen über 33 Bahnen für Phantasialand heute, 36 Prognosestunden,
+MAE 9.
+
+
 ### Fixed — eine gelöschte Attraktion kostete dem ganzen Park seinen Bulk-Insert
 
 Der Live-Feed meldet eine Bahn noch eine Weile weiter, nachdem sie hier
