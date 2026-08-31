@@ -200,6 +200,21 @@ _recent_wait_times_cache = {}
 _recent_wait_times_cache_ttl = 900  # 15 minutes
 
 
+def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
+    """Drop cache buckets older than `ttl`, tolerating concurrent removal.
+
+    Gunicorn serves /predict from several workers over this one module-level
+    dict, so a key collected as expired can already be gone by the time we act
+    on it. `del` raised KeyError for the worker that lost that race, and the
+    exception escaped `fetch_recent_wait_times` to kill the entire prediction
+    request — the API logged it as "Failed to get predictions from ML service".
+    `pop(..., None)` makes losing the race a no-op, which is the correct
+    outcome: the entry we wanted gone is gone.
+    """
+    for key in [k for k, (_, ts) in cache.items() if now_ts - ts >= ttl]:
+        cache.pop(key, None)
+
+
 def fetch_recent_wait_times(
     attraction_ids: List[str],
     lookback_days: int = 730,
@@ -355,13 +370,9 @@ def fetch_recent_wait_times(
         import time
 
         now_ts = time.time()
-        expired = [
-            k
-            for k, (_, ts) in _recent_wait_times_cache.items()
-            if now_ts - ts >= _recent_wait_times_cache_ttl
-        ]
-        for k in expired:
-            del _recent_wait_times_cache[k]
+        _evict_expired_entries(
+            _recent_wait_times_cache, now_ts, _recent_wait_times_cache_ttl
+        )
         _recent_wait_times_cache[cache_key] = (df.copy(), now_ts)
 
         return df
