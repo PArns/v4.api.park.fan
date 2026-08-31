@@ -19,6 +19,7 @@ import {
   ParkHourlyProfileDto,
   HourlyProfileAttractionDto,
 } from "./dto/park-hourly-profile.dto";
+import { RideDayCurveDto } from "./dto/ride-day-curve.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
 
@@ -40,6 +41,14 @@ const MIN_SAMPLES_PER_HOUR = 2;
  * surfaces refuse the same thin evidence.
  */
 const DEFAULT_MIN_ATTRACTION_DAYS = 20;
+
+/**
+ * How many ranked rides the day curve may choose between.
+ *
+ * Enough that a closed headliner is not the end of the search, small enough that
+ * the underlying profile stays the lean thing it was built to be.
+ */
+const DAY_CURVE_CANDIDATES = 8;
 
 /** Hourly-profile schema version (see ParkHourlyProfileDto). */
 const HOURLY_SCHEMA_VERSION = 4;
@@ -485,6 +494,186 @@ export class ParkHistoricalStatsService {
         schemaVersion: HOURLY_SCHEMA_VERSION,
       },
     };
+  }
+
+  /** Day-curve schema version (see RideDayCurveDto). */
+  private readonly DAY_CURVE_SCHEMA_VERSION = 1;
+
+  /**
+   * One ride's day: the historical shape, today's readings, and the forecast for
+   * the hours still to come.
+   *
+   * Three sources, because they genuinely are three. The percentiles come from
+   * the nightly rollup; TODAY cannot, because that rollup is computed for
+   * yesterday and back, so today is bucketed live out of raw queue data; and the
+   * forecast comes from the hourly prediction table, most recent prediction per
+   * hour.
+   *
+   * The ride is picked here rather than by the caller, and picked to be
+   * SHOWABLE: the profile's own ranking, but preferring a ride that actually
+   * reported something today. That is what stops a chart headed "today" from
+   * landing on a ride that is closed, under refurbishment, or out of season,
+   * without anybody maintaining a second list of which rides those are.
+   */
+  async getRideDayCurve(
+    park: Park,
+    attractionSlug?: string,
+  ): Promise<RideDayCurveDto | null> {
+    const profile = await this.getParkHourlyProfile(
+      park,
+      1,
+      DAY_CURVE_CANDIDATES,
+      DEFAULT_MIN_ATTRACTION_DAYS,
+    );
+    if (!profile.meta.displayable || profile.attractions.length === 0) {
+      return null;
+    }
+
+    const todayStr = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    const todayRows = await this.queryTodayByHour(park.id, park.timezone, todayStr);
+
+    // slug -> hour -> measured wait
+    const todayBySlug = new Map<string, Map<number, number>>();
+    for (const r of todayRows) {
+      const slug = r.slug as string;
+      const byHour = todayBySlug.get(slug) ?? new Map<number, number>();
+      byHour.set(Number(r.hour_of_day), roundToNearest5Minutes(Number(r.wait)));
+      todayBySlug.set(slug, byHour);
+    }
+
+    const ride = attractionSlug
+      ? profile.attractions.find((a) => a.attractionSlug === attractionSlug)
+      : // The ranking is by busiest hour; the first one that reported today wins,
+        // and the plain ranking is the fallback when the whole park is quiet or
+        // shut (at 03:00 nothing has reported, and that is not an error).
+        (profile.attractions.find((a) => todayBySlug.has(a.attractionSlug)) ??
+          profile.attractions[0]);
+    if (!ride) return null;
+
+    const todayByHour = todayBySlug.get(ride.attractionSlug) ?? new Map<number, number>();
+    const today = profile.hours.map((h) => todayByHour.get(h) ?? null);
+
+    const [forecastRows, mae] = await Promise.all([
+      this.queryHourlyForecast(ride.attractionSlug, park.id, park.timezone, todayStr),
+      this.queryAttractionMae(ride.attractionSlug, park.id),
+    ]);
+    const forecastByHour = new Map<number, number>();
+    for (const r of forecastRows) {
+      forecastByHour.set(
+        Number(r.hour_of_day),
+        roundToNearest5Minutes(Number(r.predicted)),
+      );
+    }
+    // An hour that has already been measured is not a forecast any more. Leaving
+    // both in would draw the model's guess on top of the fact.
+    const forecast = profile.hours.map((h, i) =>
+      today[i] != null ? null : (forecastByHour.get(h) ?? null),
+    );
+
+    return {
+      hours: profile.hours,
+      attractionSlug: ride.attractionSlug,
+      attractionName: ride.attractionName,
+      p25: ride.p25,
+      p50: ride.p50,
+      p90: ride.p90,
+      today,
+      forecast,
+      forecastError: mae,
+      measuredToday: today.some((v) => v != null),
+      sampleDays: ride.sampleDays,
+      timezone: park.timezone,
+      generatedAt: new Date().toISOString(),
+      schemaVersion: this.DAY_CURVE_SCHEMA_VERSION,
+    };
+  }
+
+  /**
+   * Today's measured wait per hour for every ride in the park.
+   *
+   * Raw `queue_data`, not `queue_data_aggregates`: the rollup runs nightly for
+   * the completed day, so it has no row for today at all. One park-day of
+   * five-minute readings is small, and taking the whole park in one query is
+   * what lets the caller CHOOSE a ride that has data instead of discovering the
+   * one it picked is shut.
+   *
+   * Averaged per hour and rounded to five on the way out, matching how every
+   * other wait time on this API is presented. STANDBY only — a single-rider or
+   * Lightning Lane line is a different queue and would drag the average away
+   * from the number a visitor sees on the sign.
+   */
+  private async queryTodayByHour(
+    parkId: string,
+    timezone: string,
+    todayStr: string,
+  ): Promise<Record<string, unknown>[]> {
+    return this.aggregateRepo.manager.query(
+      `SELECT a.slug,
+              EXTRACT(HOUR FROM (qd.timestamp AT TIME ZONE $2))::int AS hour_of_day,
+              AVG(qd."waitTime") AS wait
+       FROM queue_data qd
+       JOIN attractions a ON a.id::text = qd."attractionId"
+       WHERE a."parkId" = $1::uuid
+         AND qd.timestamp >= ($3::date::timestamp AT TIME ZONE $2)
+         AND qd.timestamp <  (($3::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
+         AND qd."queueType" = 'STANDBY'
+         AND qd.status = 'OPERATING'
+         AND qd."waitTime" IS NOT NULL
+       GROUP BY a.slug, hour_of_day
+       ORDER BY a.slug, hour_of_day`,
+      [parkId, timezone, todayStr],
+    );
+  }
+
+  /**
+   * The hourly forecast for one ride, for today.
+   *
+   * `DISTINCT ON (predictedTime)` ordered by `createdAt DESC` — the model
+   * re-predicts through the day, so an hour has several rows and only the most
+   * recent one is the current answer.
+   */
+  private async queryHourlyForecast(
+    attractionSlug: string,
+    parkId: string,
+    timezone: string,
+    todayStr: string,
+  ): Promise<Record<string, unknown>[]> {
+    return this.aggregateRepo.manager.query(
+      `SELECT DISTINCT ON (p."predictedTime")
+              EXTRACT(HOUR FROM (p."predictedTime" AT TIME ZONE $3))::int AS hour_of_day,
+              p."predictedWaitTime" AS predicted
+       FROM wait_time_predictions p
+       JOIN attractions a ON a.id::text = p."attractionId"
+       WHERE a.slug = $1
+         AND a."parkId" = $2::uuid
+         AND p."predictionType" = 'hourly'
+         AND p."predictedTime" >= ($4::date::timestamp AT TIME ZONE $3)
+         AND p."predictedTime" <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $3)
+       ORDER BY p."predictedTime", p."createdAt" DESC`,
+      [attractionSlug, parkId, timezone, todayStr],
+    );
+  }
+
+  /**
+   * The ride's own mean absolute error, for a caller drawing the forecast as a
+   * band. Per ride rather than the model-wide figure: the band belongs to this
+   * curve, and a headliner and a carousel are not predicted equally well.
+   */
+  private async queryAttractionMae(
+    attractionSlug: string,
+    parkId: string,
+  ): Promise<number | null> {
+    const rows: Array<{ mae: number | null }> =
+      await this.aggregateRepo.manager.query(
+        `SELECT s.mae
+         FROM attraction_accuracy_stats s
+         JOIN attractions a ON a.id::text = s.attraction_id::text
+         WHERE a.slug = $1 AND a."parkId" = $2::uuid
+         LIMIT 1`,
+        [attractionSlug, parkId],
+      );
+    const mae = rows[0]?.mae;
+    return mae == null ? null : Number(mae);
   }
 
   /**
