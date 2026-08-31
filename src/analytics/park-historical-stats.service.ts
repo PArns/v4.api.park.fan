@@ -602,6 +602,21 @@ export class ParkHistoricalStatsService {
    * Lightning Lane line is a different queue and would drag the average away
    * from the number a visitor sees on the sign.
    */
+  /**
+   * A NOTE ON THE JOIN, because this file joins `attractions` to three tables and
+   * they do NOT agree on the column type:
+   *
+   *   queue_data.attractionId              uuid  → join `a.id` directly
+   *   wait_time_predictions.attractionId   uuid  → join `a.id` directly
+   *   queue_data_aggregates.attractionId   TEXT  → join `a.id::text`
+   *
+   * The aggregates table is the odd one out, and it is also the one every older
+   * query in this file reads — so `a.id::text = …` looks like the house style
+   * and is wrong the moment it is copied onto a raw-queue or prediction join.
+   * Postgres answers that with `operator does not exist: text = uuid`, a 500 at
+   * request time that neither the build nor any unit test sees, because the SQL
+   * is only parsed when it runs. It shipped exactly that way.
+   */
   private async queryTodayByHour(
     parkId: string,
     timezone: string,
@@ -612,7 +627,7 @@ export class ParkHistoricalStatsService {
               EXTRACT(HOUR FROM (qd.timestamp AT TIME ZONE $2))::int AS hour_of_day,
               AVG(qd."waitTime") AS wait
        FROM queue_data qd
-       JOIN attractions a ON a.id::text = qd."attractionId"
+       JOIN attractions a ON a.id = qd."attractionId"
        WHERE a."parkId" = $1::uuid
          AND qd.timestamp >= ($3::date::timestamp AT TIME ZONE $2)
          AND qd.timestamp <  (($3::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
@@ -643,7 +658,7 @@ export class ParkHistoricalStatsService {
               EXTRACT(HOUR FROM (p."predictedTime" AT TIME ZONE $3))::int AS hour_of_day,
               p."predictedWaitTime" AS predicted
        FROM wait_time_predictions p
-       JOIN attractions a ON a.id::text = p."attractionId"
+       JOIN attractions a ON a.id = p."attractionId"
        WHERE a.slug = $1
          AND a."parkId" = $2::uuid
          AND p."predictionType" = 'hourly'
