@@ -348,6 +348,66 @@ describe("QueueDataService — batched live-data writes", () => {
       expect(saved.get("c")).toBe(1);
     });
 
+    it("stops retrying an attraction the database says does not exist", async () => {
+      const fkError = Object.assign(new Error("fk"), { code: "23503" });
+      redis.mget.mockResolvedValue([null, null]);
+      queueRepo.insert
+        .mockRejectedValueOnce(new Error("bulk boom")) // the batch
+        .mockRejectedValueOnce(fkError) // row a — attraction is gone
+        .mockResolvedValueOnce({}); // row b
+
+      const first = await service.saveLiveDataBatch([
+        { attractionId: "a", liveData: liveResponse() },
+        { attractionId: "b", liveData: liveResponse() },
+      ]);
+      expect(first.get("a")).toBeUndefined();
+      expect(first.get("b")).toBe(1);
+
+      // Second poll: "a" is not offered to the database at all, so the bulk
+      // insert succeeds and "b" keeps its bulk write instead of falling back to
+      // a row at a time for as long as upstream lists the dead ride.
+      queueRepo.insert.mockClear();
+      queueRepo.insert.mockResolvedValue({});
+      const second = await service.saveLiveDataBatch([
+        {
+          attractionId: "a",
+          liveData: liveResponse({ status: LiveStatus.DOWN }),
+        },
+        {
+          attractionId: "b",
+          liveData: liveResponse({ status: LiveStatus.DOWN }),
+        },
+      ]);
+
+      expect(queueRepo.insert).toHaveBeenCalledTimes(1);
+      expect(queueRepo.insert.mock.calls[0][0]).toHaveLength(1);
+      expect(second.get("a")).toBeUndefined();
+      expect(second.get("b")).toBe(1);
+    });
+
+    it("still writes nothing but does not throw when every row is orphaned", async () => {
+      const fkError = Object.assign(new Error("fk"), { code: "23503" });
+      redis.mget.mockResolvedValue([null]);
+      queueRepo.insert
+        .mockRejectedValueOnce(new Error("bulk boom"))
+        .mockRejectedValueOnce(fkError);
+
+      await service.saveLiveDataBatch([
+        { attractionId: "gone", liveData: liveResponse() },
+      ]);
+
+      queueRepo.insert.mockClear();
+      const second = await service.saveLiveDataBatch([
+        {
+          attractionId: "gone",
+          liveData: liveResponse({ status: LiveStatus.DOWN }),
+        },
+      ]);
+
+      expect(queueRepo.insert).not.toHaveBeenCalled();
+      expect(second.size).toBe(0);
+    });
+
     it("treats a failed latest-row lookup as 'no previous data' instead of dropping the poll", async () => {
       redis.mget.mockResolvedValue([null]);
       latestQueryBuilder.getMany.mockRejectedValue(new Error("db down"));
