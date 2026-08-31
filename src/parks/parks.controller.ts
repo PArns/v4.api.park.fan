@@ -1288,7 +1288,10 @@ export class ParksController {
     example: "voltron-nevera-powered-by-rimac",
   })
   @ApiResponse({ status: 200, type: RideDayCurveDto })
-  @ApiResponse({ status: 404, description: "Park not found, or no readable curve" })
+  @ApiResponse({
+    status: 404,
+    description: "Park not found, or no readable curve",
+  })
   async getRideDayCurve(
     @Param("continent") continent: string,
     @Param("country") country: string,

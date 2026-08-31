@@ -3,6 +3,7 @@ import { of, firstValueFrom } from "rxjs";
 import { CacheControlInterceptor } from "./cache-control.interceptor";
 
 interface MockResponse {
+  headersSent: boolean;
   setHeader: jest.Mock;
   getHeader: jest.Mock;
   status: jest.Mock;
@@ -13,11 +14,17 @@ function buildMockContext(
   method = "GET",
   reqHeaders: Record<string, string> = {},
   presetHeaders: Record<string, string> = {},
+  { headersSent = false }: { headersSent?: boolean } = {},
 ) {
   const headers: Record<string, string> = { ...presetHeaders };
   let status: number | null = null;
   const response: MockResponse = {
+    headersSent,
     setHeader: jest.fn((name: string, value: string) => {
+      // Node throws exactly this once the response is on the wire.
+      if (headersSent) {
+        throw new Error("Cannot set headers after they are sent to the client");
+      }
       headers[name] = value;
     }),
     getHeader: jest.fn((name: string) => headers[name]),
@@ -118,6 +125,29 @@ describe("CacheControlInterceptor", () => {
         interceptor.intercept(without.ctx, handlerOf({ a: 1 })),
       );
       expect(without.headers["Last-Modified"]).toBeUndefined();
+    });
+  });
+
+  describe("a response that is already on the wire", () => {
+    it("sets no header once the response has been sent", async () => {
+      // This interceptor is registered globally (main.ts), so it runs on every
+      // route — including the slow park-detail ones whose clients give up
+      // mid-flight. Once Express has flushed the headers, setting another
+      // throws ERR_HTTP_HEADERS_SENT and the abandoned request is logged as a
+      // 500.
+      const { ctx, response } = buildMockContext(
+        "/v1/parks/europe/germany/bruehl/phantasialand",
+        "GET",
+        {},
+        {},
+        { headersSent: true },
+      );
+
+      await expect(
+        firstValueFrom(interceptor.intercept(ctx, handlerOf({ foo: "bar" }))),
+      ).resolves.toEqual({ foo: "bar" });
+
+      expect(response.setHeader).not.toHaveBeenCalled();
     });
   });
 });

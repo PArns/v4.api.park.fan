@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { ParksService } from "../../parks/parks.service";
+import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 
 /**
  * Typical-Waits Processor
@@ -38,29 +39,27 @@ export class TypicalWaitsProcessor {
       const BATCH_SIZE = 5;
       for (let i = 0; i < parks.length; i += BATCH_SIZE) {
         const batch = parks.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (park) => {
-            try {
-              const computed =
-                await this.analyticsService.computeTypicalWaitsForPark(
-                  park.id,
-                  park.timezone || "UTC",
-                  park.countryCode || "",
-                );
-              const stored = await this.analyticsService.saveTypicalWaitsBatch(
+        const results = await mapWithDbBudget(batch, async (park) => {
+          try {
+            const computed =
+              await this.analyticsService.computeTypicalWaitsForPark(
                 park.id,
-                computed,
+                park.timezone || "UTC",
+                park.countryCode || "",
               );
-              return { stored };
-            } catch (error) {
-              this.logger.error(
-                `Failed to compute typical-waits for park ${park.name} (${park.id})`,
-                error instanceof Error ? error.stack : String(error),
-              );
-              return null;
-            }
-          }),
-        );
+            const stored = await this.analyticsService.saveTypicalWaitsBatch(
+              park.id,
+              computed,
+            );
+            return { stored };
+          } catch (error) {
+            this.logger.error(
+              `Failed to compute typical-waits for park ${park.name} (${park.id})`,
+              error instanceof Error ? error.stack : String(error),
+            );
+            return null;
+          }
+        });
 
         for (const r of results) {
           if (r === null) {

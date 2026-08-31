@@ -4,6 +4,7 @@ import { Job } from "bull";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { ParksService } from "../../parks/parks.service";
 import { AttractionsService } from "../../attractions/attractions.service";
+import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 
 /**
  * P50 + P90 Baseline Processor
@@ -68,63 +69,61 @@ export class P50BaselineProcessor {
       const BATCH_SIZE = 5;
       for (let i = 0; i < parks.length; i += BATCH_SIZE) {
         const batch = parks.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (park) => {
-            try {
-              const hasData =
-                await this.analyticsService.parkHasQueueDataInWindow(
-                  park.id,
-                  WINDOW_DAYS,
-                );
-              if (!hasData) {
-                this.logger.debug(
-                  `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
-                );
-                return "skipped" as const;
-              }
-
-              const headliners = await this.analyticsService.identifyHeadliners(
+        const results = await mapWithDbBudget(batch, async (park) => {
+          try {
+            const hasData =
+              await this.analyticsService.parkHasQueueDataInWindow(
                 park.id,
+                WINDOW_DAYS,
               );
-
-              if (headliners.length === 0) {
-                this.logger.warn(
-                  `No headliners identified for park ${park.name} (${park.id})`,
-                );
-                return "failed" as const;
-              }
-
-              const baseline = await this.analyticsService.calculateP50Baseline(
-                park.id,
-                headliners,
+            if (!hasData) {
+              this.logger.debug(
+                `Skipping ${park.name}: no queue_data (STANDBY, OPERATING) in last ${WINDOW_DAYS} days`,
               );
+              return "skipped" as const;
+            }
 
-              if (baseline.p50 === 0) {
-                this.logger.warn(
-                  `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
-                );
-                return "failed" as const;
-              }
+            const headliners = await this.analyticsService.identifyHeadliners(
+              park.id,
+            );
 
-              await this.analyticsService.saveP50Baselines(
-                park.id,
-                baseline,
-                headliners,
-              );
-
-              this.logger.log(
-                `✅ ${park.name}: P50=${baseline.p50}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
-              );
-              return "success" as const;
-            } catch (error) {
-              this.logger.error(
-                `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
-                error instanceof Error ? error.stack : String(error),
+            if (headliners.length === 0) {
+              this.logger.warn(
+                `No headliners identified for park ${park.name} (${park.id})`,
               );
               return "failed" as const;
             }
-          }),
-        );
+
+            const baseline = await this.analyticsService.calculateP50Baseline(
+              park.id,
+              headliners,
+            );
+
+            if (baseline.p50 === 0) {
+              this.logger.warn(
+                `P50 baseline is 0 for park ${park.name} (${park.id}) - insufficient data`,
+              );
+              return "failed" as const;
+            }
+
+            await this.analyticsService.saveP50Baselines(
+              park.id,
+              baseline,
+              headliners,
+            );
+
+            this.logger.log(
+              `✅ ${park.name}: P50=${baseline.p50}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier}, confidence: ${baseline.confidence})`,
+            );
+            return "success" as const;
+          } catch (error) {
+            this.logger.error(
+              `Failed to calculate P50 baseline for park ${park.name} (${park.id})`,
+              error instanceof Error ? error.stack : String(error),
+            );
+            return "failed" as const;
+          }
+        });
 
         for (const outcome of results) {
           if (outcome === "success") successCount++;
