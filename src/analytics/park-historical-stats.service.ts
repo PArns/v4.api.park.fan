@@ -540,7 +540,11 @@ export class ParkHistoricalStatsService {
     }
 
     const todayStr = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
-    const todayRows = await this.queryTodayByHour(park.id, park.timezone, todayStr);
+    const todayRows = await this.queryTodayByHour(
+      park.id,
+      park.timezone,
+      todayStr,
+    );
 
     // slug -> hour -> measured wait
     const todayBySlug = new Map<string, Map<number, number>>();
@@ -557,14 +561,20 @@ export class ParkHistoricalStatsService {
         // and the plain ranking is the fallback when the whole park is quiet or
         // shut (at 03:00 nothing has reported, and that is not an error).
         (profile.attractions.find((a) => todayBySlug.has(a.attractionSlug)) ??
-          profile.attractions[0]);
+        profile.attractions[0]);
     if (!ride) return null;
 
-    const todayByHour = todayBySlug.get(ride.attractionSlug) ?? new Map<number, number>();
+    const todayByHour =
+      todayBySlug.get(ride.attractionSlug) ?? new Map<number, number>();
     const today = profile.hours.map((h) => todayByHour.get(h) ?? null);
 
     const [forecastRows, mae] = await Promise.all([
-      this.queryHourlyForecast(ride.attractionSlug, park.id, park.timezone, todayStr),
+      this.queryHourlyForecast(
+        ride.attractionSlug,
+        park.id,
+        park.timezone,
+        todayStr,
+      ),
       this.queryAttractionMae(ride.attractionSlug, park.id),
     ]);
     const latestByHour = new Map<number, number>();
@@ -572,10 +582,16 @@ export class ParkHistoricalStatsService {
     for (const r of forecastRows) {
       const hour = Number(r.hour_of_day);
       if (r.last_predicted != null) {
-        latestByHour.set(hour, roundToNearest5Minutes(Number(r.last_predicted)));
+        latestByHour.set(
+          hour,
+          roundToNearest5Minutes(Number(r.last_predicted)),
+        );
       }
       if (r.first_predicted != null) {
-        firstByHour.set(hour, roundToNearest5Minutes(Number(r.first_predicted)));
+        firstByHour.set(
+          hour,
+          roundToNearest5Minutes(Number(r.first_predicted)),
+        );
       }
     }
 
