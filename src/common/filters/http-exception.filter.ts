@@ -156,6 +156,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
       errorResponse.stack = exception.stack;
     }
 
+    // The failure is recorded above either way. But a response that is
+    // already on the wire cannot be answered a second time: `status().json()`
+    // would throw ERR_HTTP_HEADERS_SENT from inside the filter itself, where
+    // nothing catches it. That is the second half of the abandoned-request
+    // 500s — an interceptor throws on the flushed response, and the filter
+    // meant to report it throws again.
+    if (response.headersSent) return;
+
     response.status(status).json(errorResponse);
   }
 }

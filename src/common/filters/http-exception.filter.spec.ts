@@ -16,12 +16,16 @@ jest.mock("../utils/file-logger.util", () => ({ logToFile: jest.fn() }));
  * `?confirm=true`, and every endpoint the pass authenticates and is then
  * refused on).
  */
-function hostFor(url: string, method = "POST") {
+function hostFor(
+  url: string,
+  method = "POST",
+  { headersSent = false }: { headersSent?: boolean } = {},
+) {
   const json = jest.fn();
   const status = jest.fn(() => ({ json }));
   const host = {
     switchToHttp: () => ({
-      getResponse: () => ({ status }),
+      getResponse: () => ({ status, headersSent }),
       getRequest: () => ({ method, url }),
     }),
   } as unknown as ArgumentsHost;
@@ -149,5 +153,37 @@ describe("HttpExceptionFilter — server errors", () => {
 
     expect(json.mock.calls[0][0]).not.toHaveProperty("reference");
     expect(logToFile).not.toHaveBeenCalled();
+  });
+
+  it("does not write a second response over one already on the wire", () => {
+    // The filter is where ERR_HTTP_HEADERS_SENT lands after an interceptor
+    // tried to set a header on an abandoned request. Answering it with
+    // `response.status().json()` throws the very same error a second time —
+    // this time inside the filter, where nothing catches it.
+    const { host, status, json } = hostFor("/v1/parks/x", "GET", {
+      headersSent: true,
+    });
+
+    expect(() =>
+      new HttpExceptionFilter().catch(
+        new Error("Cannot set headers after they are sent to the client"),
+        host,
+      ),
+    ).not.toThrow();
+
+    expect(status).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it("still records the failure so an abandoned request is not silent", () => {
+    // Skipping the write must not skip the bookkeeping: the request still
+    // failed, and the error log is the only place that says so.
+    const { host } = hostFor("/v1/parks/x", "GET", { headersSent: true });
+
+    new HttpExceptionFilter().catch(new Error("boom"), host);
+
+    expect(logToFile).toHaveBeenCalledTimes(1);
+    const [file] = (logToFile as jest.Mock).mock.calls[0] as [string];
+    expect(file).toBe("api-errors");
   });
 });

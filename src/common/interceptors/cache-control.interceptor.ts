@@ -35,6 +35,13 @@ export class CacheControlInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
+        // This interceptor is global, so it runs on every route — including
+        // the slow ones whose clients give up mid-flight. Express has already
+        // flushed the headers by then, and setting another throws
+        // ERR_HTTP_HEADERS_SENT, which NestJS turns into a logged 500 for a
+        // request nobody is listening to any more.
+        if (response.headersSent) return;
+
         // 1. Last-Modified only when the payload exposes a real timestamp
         //    (Express does not set this for JSON; ETag/304 is native).
         const lastModified = this.extractLastModified(data);
