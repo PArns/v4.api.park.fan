@@ -35,6 +35,28 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Postgres `foreign_key_violation`. */
+const FK_VIOLATION = "23503";
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === FK_VIOLATION
+  );
+}
+
+/**
+ * How long an attraction stays on the skip list after its row was rejected for
+ * not existing.
+ *
+ * Long enough that a dead id costs one failed insert an hour rather than one
+ * every poll cycle, short enough that a re-created attraction starts recording
+ * again on its own. Nothing clears this list deliberately: the point is that it
+ * heals without anybody watching it.
+ */
+const ORPHAN_TTL_MS = 60 * 60 * 1000;
+
 /**
  * Revives a cached "latest" entry. A corrupt entry counts as a cache MISS
  * (→ DB lookup) rather than throwing.
@@ -68,6 +90,24 @@ function parseCachedLatest(raw: string | null): Partial<QueueData> | null {
 @Injectable()
 export class QueueDataService {
   private readonly logger = new Logger(QueueDataService.name);
+
+  /**
+   * Attractions whose queue rows the database rejects because the attraction is
+   * gone, and when each was last rejected.
+   *
+   * The live feed keeps reporting a ride for a while after it is deleted or
+   * merged away here, and every one of those rows fails the `queue_data` foreign
+   * key. That failure is not free: the whole poll's bulk INSERT aborts on the
+   * first bad row, so a sixty-ride park falls back to sixty single-row inserts
+   * every five minutes, and TimescaleDB logs the constraint violation each time.
+   * One dead id was costing a park its bulk write for as long as upstream kept
+   * listing it.
+   *
+   * In-process rather than Redis on purpose: it is a hint, not a fact. Losing it
+   * on a restart costs exactly one more failed insert, which is the price of the
+   * first cycle anyway, and it keeps the hot path free of another round-trip.
+   */
+  private readonly orphanedAttractions = new Map<string, number>();
   private readonly LATEST_CACHE_TTL = 10 * 60; // 10 min — covers 2 sync cycles
 
   constructor(
@@ -265,7 +305,9 @@ export class QueueDataService {
     if (toInsert.length === 0) return savedByAttraction;
 
     // ── 5. One bulk INSERT (was: one save() per row) ──
-    const written = await this.insertQueueRows(toInsert);
+    const writable = this.withoutOrphans(toInsert);
+    if (writable.length === 0) return savedByAttraction;
+    const written = await this.insertQueueRows(writable);
     if (written.length === 0) return savedByAttraction;
 
     for (const entry of written) {
@@ -303,6 +345,21 @@ export class QueueDataService {
    * whole park's poll (the per-attraction path failed in isolation, and this
    * keeps that property).
    */
+  /**
+   * Drops rows for attractions the database has already rejected as missing,
+   * and forgets an id once its entry has aged out so a re-created attraction
+   * records again without a deploy.
+   */
+  private withoutOrphans(rows: QueueData[]): QueueData[] {
+    if (this.orphanedAttractions.size === 0) return rows;
+    const cutoff = Date.now() - ORPHAN_TTL_MS;
+    for (const [id, at] of this.orphanedAttractions) {
+      if (at < cutoff) this.orphanedAttractions.delete(id);
+    }
+    if (this.orphanedAttractions.size === 0) return rows;
+    return rows.filter((r) => !this.orphanedAttractions.has(r.attractionId));
+  }
+
   private async insertQueueRows(rows: QueueData[]): Promise<QueueData[]> {
     try {
       await this.queueDataRepository.insert(rows);
@@ -319,6 +376,21 @@ export class QueueDataService {
           await this.queueDataRepository.insert(row);
           written.push(row);
         } catch (rowError) {
+          // An attraction that no longer exists is a different kind of failure
+          // from a transient one, and the only one worth remembering: it will
+          // fail again in five minutes, and again after that.
+          if (isForeignKeyViolation(rowError)) {
+            const first = !this.orphanedAttractions.has(row.attractionId);
+            this.orphanedAttractions.set(row.attractionId, Date.now());
+            if (first) {
+              this.logger.warn(
+                `Attraction ${row.attractionId} is not in the attractions table — ` +
+                  `skipping its queue rows for the next hour. Upstream is still ` +
+                  `reporting a ride that was deleted or merged away here.`,
+              );
+            }
+            continue;
+          }
           this.logger.error(
             `❌ Failed to save ${row.queueType} queue data for ${row.attractionId}: ${errorMessage(rowError)}`,
           );

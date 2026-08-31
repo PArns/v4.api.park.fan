@@ -6,6 +6,23 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — eine gelöschte Attraktion kostete dem ganzen Park seinen Bulk-Insert
+
+Der Live-Feed meldet eine Bahn noch eine Weile weiter, nachdem sie hier
+gelöscht oder zusammengeführt wurde. Jede dieser Zeilen verletzt den
+Fremdschlüssel von `queue_data`, und das war nicht umsonst: der Bulk-INSERT
+des ganzen Polls bricht bei der ersten schlechten Zeile ab, also fiel ein
+Park mit sechzig Bahnen alle fünf Minuten auf sechzig Einzel-Inserts zurück
+und TimescaleDB protokollierte den Constraint-Verstoß jedes Mal.
+
+Der Einzelzeilen-Fallback merkt sich die abgelehnte `attractionId` jetzt
+(nur bei Fehlercode `23503`, nicht bei einem vorübergehenden Fehler) und
+lässt sie eine Stunde lang aus. Danach darf sie wieder mit, eine neu
+angelegte Attraktion zeichnet also ohne Deploy wieder auf. Die Liste liegt
+im Prozess und nicht in Redis: sie ist ein Hinweis, kein Fakt, und beim
+Neustart kostet ihr Verlust genau einen fehlgeschlagenen Insert.
+
+
 ### Added — a ride's day as three series, in one lean call
 
 `GET /parks/:continent/:country/:city/:parkSlug/stats/day` answers one ride's
