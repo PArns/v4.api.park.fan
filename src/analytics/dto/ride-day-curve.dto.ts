@@ -78,6 +78,19 @@ export class RideDayCurveDto {
   forecast: Array<number | null>;
 
   @ApiProperty({
+    type: [Number],
+    example: [30, 40, 45, 50, 45],
+    description:
+      "What the model said for each hour BEFORE that hour happened — the " +
+      "oldest prediction it holds per hour, over the whole day rather than " +
+      "only the part still ahead. Set next to `today` it shows how the model " +
+      "actually did; `forecast` cannot do that, because it drops every hour " +
+      "that has since been measured. `null` for an hour the model never " +
+      "predicted.",
+  })
+  predicted: Array<number | null>;
+
+  @ApiProperty({
     example: 6.8,
     nullable: true,
     description:
