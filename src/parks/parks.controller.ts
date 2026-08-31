@@ -58,6 +58,7 @@ import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { ParkHourlyProfileDto } from "../analytics/dto/park-hourly-profile.dto";
+import { RideDayCurveDto } from "../analytics/dto/ride-day-curve.dto";
 import { Park } from "./entities/park.entity";
 import { ScheduleType } from "./entities/schedule-entry.entity";
 import { PopularityService } from "../popularity/popularity.service";
@@ -1252,6 +1253,69 @@ export class ParksController {
       minSampleDays,
       minAttractionDays,
     );
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/stats/day
+   *
+   * One ride's day curve. Declared beside `stats/hourly`; the three `stats`
+   * paths are distinct, so their relative order does not matter.
+   *
+   * Cached for FIVE minutes, not the profile's 24 hours: two thirds of what it
+   * answers is today — the measured hours so far and the forecast for the rest —
+   * and a day-old copy of "today" is the one thing this route must never serve.
+   */
+  @Get(":continent/:country/:city/:parkSlug/stats/day")
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
+  @ApiOperation({
+    summary: "Get one ride's day curve",
+    description:
+      "What a ride normally does per hour (P25/P50/P90), what it has shown " +
+      "so far today, and the hourly forecast for the rest of the day — the " +
+      "series behind the day-curve chart. Without `attraction` the park's " +
+      "busiest ride is used, preferring one that actually reported today, so " +
+      "the answer is not a closed or out-of-season ride. ~1 KB.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "rust" })
+  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiQuery({
+    name: "attraction",
+    required: false,
+    description:
+      "Ride slug to pin. Omit to let the endpoint pick a showable one.",
+    example: "voltron-nevera-powered-by-rimac",
+  })
+  @ApiResponse({ status: 200, type: RideDayCurveDto })
+  @ApiResponse({ status: 404, description: "Park not found, or no readable curve" })
+  async getRideDayCurve(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("attraction") attraction?: string,
+  ): Promise<RideDayCurveDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const curve = await this.parkHistoricalStatsService.getRideDayCurve(
+      park,
+      attraction,
+    );
+    // A park with too few measured days has no curve, and that is an answer
+    // rather than a fault — the caller renders nothing.
+    if (!curve) throw new NotFoundException("No readable day curve");
+    return curve;
   }
 
   /**

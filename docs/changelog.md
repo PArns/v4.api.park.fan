@@ -6,6 +6,30 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — a ride's day as three series, in one lean call
+
+`GET /parks/:continent/:country/:city/:parkSlug/stats/day` answers one ride's
+`hours` plus `p25/p50/p90` (what it normally does), `today` (what it has shown so
+far) and `forecast` (what the model expects for the rest), all positional against
+`hours`. Plus `forecastError`, the ride's own MAE, for a caller drawing the
+forecast as a band. ~1 KB, cached 5 minutes. See
+[docs/frontend/ride-day-curve.md](frontend/ride-day-curve.md).
+
+It exists because the two halves of that chart could not be assembled from what
+was already public. `/stats/hourly` carries no forecast at all, and — the part
+that is easy to get wrong — it cannot carry today either: `queue_data_aggregates`
+is built by the nightly `calculate-percentiles` job for the *completed* day, so
+there is no row for today in it. `today` is therefore bucketed live out of raw
+`queue_data` (STANDBY, OPERATING, averaged per park-local hour, rounded to five).
+The alternative was the attraction detail endpoint at ~53 KB per ride, which a
+homepage cannot mount.
+
+Without `?attraction=` the endpoint picks the park's busiest ride **that reported
+today**, falling back to the plain ranking when nothing has. That is deliberate:
+it stops a chart headed "today" from landing on a ride that is closed, under
+refurbishment or out of season, and it does so without anyone maintaining a
+second list of which rides those are.
+
 ### Added — how far a queue swings at an hour, not just where it sits
 
 `p25` on every ride of `/parks/:continent/:country/:city/:parkSlug/stats/hourly`,
