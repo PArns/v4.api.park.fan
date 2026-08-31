@@ -119,6 +119,6 @@ export class RideDayCurveDto {
   @ApiProperty({ example: "2026-08-31T03:14:00.000Z" })
   generatedAt: string;
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({ example: 2, description: "2 since `predicted` was added." })
   schemaVersion: number;
 }

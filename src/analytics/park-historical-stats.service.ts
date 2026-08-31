@@ -497,7 +497,17 @@ export class ParkHistoricalStatsService {
   }
 
   /** Day-curve schema version (see RideDayCurveDto). */
-  private readonly DAY_CURVE_SCHEMA_VERSION = 1;
+  /**
+   * Bumped to 2 when `predicted` was added.
+   *
+   * Unlike the hourly profile's version this one is NOT part of a Redis key —
+   * the day curve is not stored, `HttpCacheInterceptor` only sets headers, so a
+   * response without the new field ages out of Cloudflare within its five
+   * minutes on its own. The number is here for the caller: it is the one field
+   * that says "the shape changed", and leaving it at 1 while the shape changed
+   * makes it worthless for exactly the case it exists for.
+   */
+  private readonly DAY_CURVE_SCHEMA_VERSION = 2;
 
   /**
    * One ride's day: the historical shape, today's readings, and the forecast for
