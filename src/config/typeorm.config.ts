@@ -24,10 +24,16 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log
       timezone: "UTC", // Always use UTC
       extra: {
-        // Connection pool size. Default raised to 30 (from 20) to absorb
-        // cache-miss bursts (e.g. a mobile-app launch spike) running
-        // alongside the background cache-warmup jobs. Tunable via env.
-        max: parseInt(process.env.DB_POOL_SIZE ?? "30", 10),
+        // Connection pool size. Raised 30 -> 50 after measuring that a third
+        // of all logged "slow query" time was queueing for a connection, not
+        // executing: bursts of exactly 30 queries finishing within a few ms of
+        // each other, a primary-key lookup among them at 4.2 s that postgres
+        // itself ran in 0.05 ms. Throttling the background jobs
+        // (DB_JOB_CONCURRENCY) removed 71 % of that; the rest is read-side
+        // work that cannot be deferred, so it needs slots. Safe because
+        // work_mem is now 16 MB (worst case ~4.8 GB) and max_connections is
+        // 150 — count the python services' own pools before raising further.
+        max: parseInt(process.env.DB_POOL_SIZE ?? "50", 10),
         // Reap idle clients so an off-peak pool doesn't pin connections.
         idleTimeoutMillis: 30000,
         // During build, use very short timeout to fail fast

@@ -376,17 +376,23 @@ export class QueueDataService {
           await this.queueDataRepository.insert(row);
           written.push(row);
         } catch (rowError) {
-          // An attraction that no longer exists is a different kind of failure
-          // from a transient one, and the only one worth remembering: it will
-          // fail again in five minutes, and again after that.
+          // An id `attractions` does not contain is a different kind of
+          // failure from a transient one, and the only one worth remembering:
+          // it will fail again in five minutes, and again after that.
+          // It does NOT necessarily mean the ride was deleted — the observed
+          // case was a show that themeparks.wiki labels an ATTRACTION, whose
+          // show id then failed this foreign key once an hour indefinitely.
+          // The resolver now filters those out; this stays as the net.
           if (isForeignKeyViolation(rowError)) {
             const first = !this.orphanedAttractions.has(row.attractionId);
             this.orphanedAttractions.set(row.attractionId, Date.now());
             if (first) {
               this.logger.warn(
-                `Attraction ${row.attractionId} is not in the attractions table — ` +
-                  `skipping its queue rows for the next hour. Upstream is still ` +
-                  `reporting a ride that was deleted or merged away here.`,
+                `${row.attractionId} is not in the attractions table — ` +
+                  `skipping its queue rows for the next hour. Either upstream ` +
+                  `reports a ride deleted or merged away here, or the id ` +
+                  `belongs to a show/restaurant the source labelled an ` +
+                  `attraction.`,
               );
             }
             continue;
