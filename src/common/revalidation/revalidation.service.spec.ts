@@ -87,6 +87,29 @@ describe("RevalidationService", () => {
     expect(mockedPost.mock.calls[0][1]).toEqual({ tags: ["a", "b"] });
   });
 
+  it("sends no expire by default — stale-while-revalidate is the frontend's default profile", async () => {
+    process.env.REVALIDATE_SECRET = "s3cret";
+    mockedPost.mockResolvedValue({ status: 200 });
+
+    await service.revalidateTags(["parks"]);
+
+    expect(mockedPost.mock.calls[0][1]).not.toHaveProperty("expire");
+  });
+
+  it("sends expire:0 when the caller cannot live with one more stale answer", async () => {
+    process.env.REVALIDATE_SECRET = "s3cret";
+    mockedPost.mockResolvedValue({ status: 200 });
+
+    await service.revalidateTags(["park:europe/germany/bruehl/phantasialand"], {
+      immediate: true,
+    });
+
+    expect(mockedPost.mock.calls[0][1]).toEqual({
+      tags: ["park:europe/germany/bruehl/phantasialand"],
+      expire: 0,
+    });
+  });
+
   it("swallows a failed POST (best-effort) and returns false", async () => {
     process.env.REVALIDATE_SECRET = "s3cret";
     mockedPost.mockRejectedValue(new Error("frontend down"));
