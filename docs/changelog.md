@@ -6,6 +6,31 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — das Frontend erfährt jetzt, wann ein Park öffnet
+
+Auf park.fan standen den ganzen 1. September gestrige Showtimes unter „Keine
+Vorstellungen heute", alle Shows geschlossen und im Phantasialand 0 von 46
+Restaurants offen, während diese API für alle vier Shows OPERATING mit den
+Zeiten von heute lieferte. Europa-Park und Efteling genauso.
+
+Das Frontend hält den Park-Snapshot einen Tag lang, und zwei Blöcke darin
+gelten nur für einen Tag: Showtimes sind auf heute datiert, und diese API
+meldet jede Show und jedes Restaurant als CLOSED, solange der Park zu ist.
+Welche Uhrzeit der Cache-Eintrag erwischt hatte, entschied also über den
+ganzen Tag — nachts geschrieben, was der Regelfall ist, hieß das: gestrige
+Zeiten, nichts geöffnet.
+
+`warmupOperatingParks()` rechnet ohnehin alle fünf Minuten den Status jedes
+Parks aus, der Übergang ist hier also gratis zu beobachten.
+`ParkStatusRevalidationService` vergleicht ihn mit dem vorigen Lauf (Snapshot
+in Redis, ein leerer zählt als Erstlauf und meldet nichts) und schickt **einen**
+Webhook mit den Parks, die tatsächlich umgesprungen sind — als Geo-Pfad-Tag,
+weil Slugs nicht global eindeutig sind. Zweimal pro Übergang: einmal sofort und
+einmal nach dem CDN-Fenster, weil die Edge-Kopie von hier aus nicht purgebar
+ist und der Refetch sonst die Fassung von kurz vor der Öffnung für einen Tag
+festschreiben kann. `revalidateTags` kennt dafür jetzt `immediate`, das dem
+Frontend `expire: 0` mitgibt.
+
 ### Fixed — `/stats/day` antwortete 500, seit es ausgeliefert wurde
 
 `operator does not exist: text = uuid`. Der Endpunkt hat nie funktioniert, und

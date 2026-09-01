@@ -17,6 +17,7 @@ import { AttractionIntegrationService } from "../../attractions/services/attract
 import { CalendarService } from "../../parks/services/calendar.service";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import { ParkStatusRevalidationService } from "../../common/revalidation/park-status-revalidation.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
@@ -69,6 +70,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     private readonly calendarService: CalendarService,
     private readonly bestDaysService: BestDaysService,
     private readonly revalidationService: RevalidationService,
+    private readonly parkStatusRevalidationService: ParkStatusRevalidationService,
     private readonly discoveryService: DiscoveryService,
     private readonly searchService: SearchService,
     private readonly popularityService: PopularityService,
@@ -500,7 +502,18 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     try {
       // 1. Get all parks and their current status + popularity
       const [parks, popularParkIds] = await Promise.all([
-        this.parkRepository.find({ select: ["id", "name"] }),
+        // The four geo slugs ride along for the frontend cache tag — see
+        // ParkStatusRevalidationService. They are on the row this query already reads.
+        this.parkRepository.find({
+          select: [
+            "id",
+            "name",
+            "slug",
+            "citySlug",
+            "countrySlug",
+            "continentSlug",
+          ],
+        }),
         this.popularityService.getTopParks(50),
       ]);
 
@@ -559,6 +572,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
         `✅ Cache warmup complete: ${warmedCount}/${parks.length} parks refreshed/verified in ${duration}s`,
+      );
+
+      // A park that just opened or closed answers differently for its shows and restaurants, and
+      // the frontend caches that answer for a day — so it has to be told. AFTER the warmup, not
+      // before: the loop above is what refreshed this park's own integrated cache, and dropping
+      // the frontend's entry first would have it re-fetch straight into the stale one.
+      await this.parkStatusRevalidationService.revalidateChangedParks(
+        parks,
+        statusMap,
       );
 
       // PERFORMANCE: Execute secondary warmups sequentially to avoid DB connection contention
