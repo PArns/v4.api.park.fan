@@ -551,10 +551,23 @@ export class ParksController {
     // daily forecast only refreshes ~every 13h, so the old 5 min was just CDN churn.
     const cacheTTL = includesHistoricalData ? 15 * 60 : 30 * 60;
 
+    // The one endpoint in this controller that had no `stale-while-revalidate`, and it is
+    // the one that rebuilds slowest: on a month-cache gap `buildCalendarResponse` falls
+    // through to a live PERCENTILE_CONT aggregation, one query per day. Measured from
+    // outside on 2026-09-01, an uncached range cost 0.2-2.75s against 0.14s served warm.
+    // Without SWR every expiry hands that wait to whoever asks first; with it they get the
+    // 15-minute-old copy immediately and the rebuild happens behind them.
+    //
+    // An hour, not the 86400 its /best-days sibling carries: best-days is a materialized
+    // snapshot of a 90-day window, while this range can include TODAY, and a day-old
+    // calendar would outlive the schedule corrections it is meant to show. An hour covers
+    // a rebuild many times over and still expires within the forecast's own ~13h cycle.
+    const staleWhileRevalidate = 60 * 60;
+
     if (res) {
       res.setHeader(
         "Cache-Control",
-        `public, max-age=${cacheTTL}, s-maxage=${cacheTTL}`,
+        `public, max-age=${cacheTTL}, s-maxage=${cacheTTL}, stale-while-revalidate=${staleWhileRevalidate}`,
       );
     }
 
