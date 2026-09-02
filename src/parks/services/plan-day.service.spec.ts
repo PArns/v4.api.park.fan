@@ -253,6 +253,73 @@ describe("PlanDayService", () => {
     expect(plan.rides.length).toBeGreaterThan(0);
   });
 
+  it("ships coordinates as numbers, not as the strings Postgres returns", async () => {
+    // A `decimal` column comes back from TypeORM as a string whatever the
+    // entity declares, which is why the park payload has always carried
+    // `"50.7992616"` with quotes. A planner measures distances with these, so
+    // the conversion happens here rather than in every consumer that forgets.
+    attractions = [
+      {
+        id: "a-taron",
+        slug: "taron",
+        name: "Taron",
+        landName: "Mystery",
+        latitude: "50.7992616" as unknown as number,
+        longitude: "6.8839089" as unknown as number,
+      },
+    ];
+
+    const date = farDate();
+    calendarDay = { ...calendarDay!, date };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${date}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, date);
+    const ride = plan.rides.find((r) => r.attractionSlug === "taron");
+
+    expect(typeof ride?.latitude).toBe("number");
+    expect(ride?.latitude).toBeCloseTo(50.7992616, 6);
+    expect(ride?.longitude).toBeCloseTo(6.8839089, 6);
+  });
+
+  it("reports an unreadable coordinate as null rather than NaN", async () => {
+    // Not every attraction has been placed on a map, and a column can hold
+    // something that is not a number at all. NaN in a distance is worse than an
+    // absent one: it propagates silently through every sum and comparison after
+    // it, and `NaN < 5` is false, so a broken leg reads as a comfortable one.
+    attractions = [
+      {
+        id: "a-taron",
+        slug: "taron",
+        name: "Taron",
+        landName: "Mystery",
+        latitude: "" as unknown as number,
+        longitude: "n/a" as unknown as number,
+      },
+    ];
+    const date = farDate();
+    calendarDay = { ...calendarDay!, date };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${date}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, date);
+    const ride = plan.rides.find((r) => r.attractionSlug === "taron");
+
+    expect(ride).toBeDefined();
+    // "" coerces to 0 through Number(), which would put every unplaced ride off
+    // the coast of Africa; "n/a" coerces to NaN.
+    expect(ride?.latitude).toBeNull();
+    expect(ride?.longitude).toBeNull();
+  });
+
   it("survives every upstream going missing at once", async () => {
     calendarDay = null;
     profile = null;

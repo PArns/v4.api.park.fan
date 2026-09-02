@@ -61,6 +61,22 @@ export class PlanDayRideDto {
     description: "Measured days behind the historical shape.",
   })
   sampleDays: number;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 50.7987204,
+    description:
+      "Where the ride is. Carried so a planner can say how far apart two " +
+      "consecutive entries are WITHOUT fetching 40 attraction payloads. A " +
+      "geodesic distance is a LOWER BOUND on the walk and nothing more: park " +
+      "paths bend around water, queues and one-way routes, so a caller may " +
+      "state a floor and must not present the straight line as a walking time.",
+  })
+  latitude?: number | null;
+
+  @ApiProperty({ required: false, nullable: true, example: 6.8807868 })
+  longitude?: number | null;
 }
 
 export class PlanDayContextDto {

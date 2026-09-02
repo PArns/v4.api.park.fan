@@ -135,7 +135,7 @@ export class PlanDayService {
   ): Promise<PlanDayRideDto[]> {
     const attractions = await this.attractionRepository.find({
       where: { parkId: park.id, retiredAt: IsNull() },
-      select: ["id", "slug", "name", "landName"],
+      select: ["id", "slug", "name", "landName", "latitude", "longitude"],
     });
     if (attractions.length === 0) return [];
 
@@ -200,6 +200,8 @@ export class PlanDayService {
         dayPeak: level.predictedWaitTime,
         uncertaintyMinutes: level.uncertaintyMinutes ?? null,
         sampleDays: shape.sampleDays,
+        latitude: PlanDayService.coord(attraction.latitude),
+        longitude: PlanDayService.coord(attraction.longitude),
       });
     }
 
@@ -286,10 +288,38 @@ export class PlanDayService {
         dayPeak: Math.max(...hours.map((h) => h.wait)),
         uncertaintyMinutes: bandByRide.get(attractionId) ?? null,
         sampleDays: sampleDaysBySlug.get(attraction.slug) ?? 0,
+        latitude: PlanDayService.coord(attraction.latitude),
+        longitude: PlanDayService.coord(attraction.longitude),
       });
     }
 
     return rides;
+  }
+
+  /**
+   * A coordinate as a NUMBER.
+   *
+   * TypeORM hands back a `decimal` column as a string, and the entity's
+   * `latitude: number` does not change that — which is why the park payload has
+   * always shipped `"50.7992616"` with quotes around it. A planner measures
+   * distances with these, so this endpoint sends numbers and the conversion
+   * happens once, here, rather than in every consumer that forgets.
+   *
+   * `null` for anything that is not a finite number: an unplaced ride has no
+   * coordinate, and NaN in a distance is worse than an absent one — it
+   * propagates silently through every sum after it, and `NaN < 5` is false, so
+   * a broken leg would read as a comfortable one.
+   *
+   * The blank check is not defensive noise. `Number("")` is **0**, not NaN, so
+   * an empty column would arrive as a perfectly finite 0.0 — a coordinate in
+   * the Gulf of Guinea, which is a plausible-looking answer and therefore worse
+   * than no answer. Same for a whitespace-only value.
+   */
+  private static coord(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string" && value.trim() === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
   }
 
   /** Day-level prediction per attraction for one date. */
