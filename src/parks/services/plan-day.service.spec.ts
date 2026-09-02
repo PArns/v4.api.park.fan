@@ -1,4 +1,5 @@
 import { Test } from "@nestjs/testing";
+import { formatInTimeZone } from "date-fns-tz";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
@@ -29,6 +30,8 @@ describe("PlanDayService", () => {
   let hourlyPredictions: unknown[];
   let profile: unknown;
   let attractions: Array<Partial<Attraction>>;
+  let downRows: Array<{ attractionId: string }>;
+  let queryCalls: unknown[][];
 
   const build = async () => {
     const moduleRef = await Test.createTestingModule({
@@ -38,6 +41,14 @@ describe("PlanDayService", () => {
           provide: getRepositoryToken(Attraction),
           useValue: {
             find: jest.fn().mockImplementation(async () => attractions),
+            manager: {
+              query: jest
+                .fn()
+                .mockImplementation(async (...args: unknown[]) => {
+                  queryCalls.push(args);
+                  return downRows;
+                }),
+            },
           },
         },
         {
@@ -78,6 +89,8 @@ describe("PlanDayService", () => {
     attractions = [
       { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
     ];
+    downRows = [];
+    queryCalls = [];
     calendarDay = {
       date: "2026-10-17",
       status: "OPERATING",
@@ -318,6 +331,49 @@ describe("PlanDayService", () => {
     // the coast of Africa; "n/a" coerces to NaN.
     expect(ride?.latitude).toBeNull();
     expect(ride?.longitude).toBeNull();
+  });
+
+  it("reports a ride that was observed all day yesterday and never operating", async () => {
+    // "Down" and "unobserved" are different answers. The query only returns a
+    // ride that WAS seen and was never OPERATING; a ride with no rows at all is
+    // silence, and warning about silence would assert something nobody observed.
+    downRows = [{ attractionId: "a-taron" }];
+    // The PARK's today, not UTC's. Late in the evening Berlin has already rolled
+    // over while `toISOString()` has not, and the service asks in park time — so
+    // a UTC date here would make this test about yesterday.
+    const today = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    calendarDay = { ...calendarDay!, date: today };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${today}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, today);
+    const ride = plan.rides.find((r) => r.attractionSlug === "taron");
+
+    expect(ride?.downYesterday).toBe(true);
+  });
+
+  it("does not ask about yesterday for a date weeks out", async () => {
+    // Whether a ride broke yesterday says nothing a visitor can act on for a
+    // Tuesday in November, and the query is not worth its cost there.
+    downRows = [{ attractionId: "a-taron" }];
+    const date = farDate();
+    calendarDay = { ...calendarDay!, date };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${date}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, date);
+    const ride = plan.rides.find((r) => r.attractionSlug === "taron");
+
+    expect(queryCalls).toHaveLength(0);
+    expect(ride?.downYesterday).toBeUndefined();
   });
 
   it("survives every upstream going missing at once", async () => {

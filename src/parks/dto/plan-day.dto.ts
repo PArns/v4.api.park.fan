@@ -77,6 +77,18 @@ export class PlanDayRideDto {
 
   @ApiProperty({ required: false, nullable: true, example: 6.8807868 })
   longitude?: number | null;
+
+  @ApiProperty({
+    required: false,
+    example: false,
+    description:
+      "The ride was observed all through the previous operating day and was " +
+      "never OPERATING in any of it — i.e. down for the whole day rather than " +
+      "unobserved. Absent past tomorrow: yesterday's downtime says nothing " +
+      "actionable about a Tuesday in November, and the query is not worth its " +
+      "cost there.",
+  })
+  downYesterday?: boolean;
 }
 
 export class PlanDayContextDto {

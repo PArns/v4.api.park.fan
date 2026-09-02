@@ -141,6 +141,7 @@ export class PlanDayService {
 
     const bySlug = new Map(attractions.map((a) => [a.slug, a]));
     const byId = new Map(attractions.map((a) => [a.id, a]));
+    const downIds = await this.downYesterday(park, dateStr);
 
     // The historical shape. topN is the endpoint's own cap rather than the
     // caller's: a planner wants every ride it can get, and this payload is a
@@ -162,6 +163,7 @@ export class PlanDayService {
         closeHour,
         byId,
         profile,
+        downIds,
       );
       if (measured.length > 0) return measured;
       // Fall through: the hourly rows can be missing for a park the generator
@@ -202,6 +204,7 @@ export class PlanDayService {
         sampleDays: shape.sampleDays,
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
+        ...(downIds.has(attraction.id) ? { downYesterday: true } : {}),
       });
     }
 
@@ -224,6 +227,7 @@ export class PlanDayService {
     profile: Awaited<
       ReturnType<ParkHistoricalStatsService["getParkHourlyProfile"]>
     > | null,
+    downIds: ReadonlySet<string>,
   ): Promise<PlanDayRideDto[]> {
     const stored = await this.mlService
       .getParkPredictions(park.id, "hourly")
@@ -290,6 +294,7 @@ export class PlanDayService {
         sampleDays: sampleDaysBySlug.get(attraction.slug) ?? 0,
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
+        ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
       });
     }
 
@@ -320,6 +325,60 @@ export class PlanDayService {
     if (typeof value === "string" && value.trim() === "") return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * Rides that were down for all of the previous operating day.
+   *
+   * "Down" and "unobserved" are different answers and this only reports the
+   * first: a ride qualifies when it was seen at least once yesterday and was
+   * NEVER `OPERATING` in any of those readings. A ride with no rows at all is
+   * silence — a feed that stopped, a park that was shut — and warning about it
+   * would be this service asserting something it did not observe.
+   *
+   * Yesterday is the PARK's yesterday, not UTC's. `queue_data` carries a partial
+   * index on `status = 'DOWN'` written for exactly this question, so the scan is
+   * bounded to one park's rows for one day.
+   *
+   * Only asked for today and tomorrow: past that, whether a ride broke yesterday
+   * says nothing a visitor can act on, and the query is not worth its cost.
+   */
+  private async downYesterday(
+    park: Park,
+    dateStr: string,
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+
+    const today = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    const tomorrow = formatInTimeZone(
+      new Date(Date.now() + 86_400_000),
+      park.timezone,
+      "yyyy-MM-dd",
+    );
+    if (dateStr !== today && dateStr !== tomorrow) return out;
+
+    try {
+      const rows: Array<{ attractionId: string }> =
+        await this.attractionRepository.manager.query(
+          `SELECT qd."attractionId" AS "attractionId"
+             FROM queue_data qd
+             JOIN attractions a ON a.id::text = qd."attractionId"
+            WHERE a."parkId" = $1
+              AND (qd.timestamp AT TIME ZONE $2)::date = ($3::date - INTERVAL '1 day')
+            GROUP BY qd."attractionId"
+           HAVING COUNT(*) FILTER (WHERE qd.status = 'OPERATING') = 0`,
+          [park.id, park.timezone, dateStr],
+        );
+      for (const row of rows) out.add(row.attractionId);
+    } catch (error) {
+      // A warning is a nicety; the plan is not. A failure here must not take the
+      // day's forecast with it.
+      this.logger.warn(
+        `Plan day: downYesterday unavailable for ${park.slug}: ${(error as Error).message}`,
+      );
+    }
+
+    return out;
   }
 
   /** Day-level prediction per attraction for one date. */
