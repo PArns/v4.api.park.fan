@@ -15,6 +15,7 @@ import { PredictionAccuracyService } from "../ml/services/prediction-accuracy.se
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { PlanDayService } from "./services/plan-day.service";
 import { BestDaysService } from "./services/best-days.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { ParkRenameService } from "./services/park-rename.service";
@@ -106,6 +107,7 @@ describe("ParksController › /calendar Cache-Control", () => {
           useValue: { findByGeographicPath: jest.fn().mockResolvedValue(park) },
         },
         { provide: CalendarService, useValue: calendarService },
+        { provide: PlanDayService, useValue: calendarService },
         { provide: BestDaysService, useValue: noop },
         { provide: WeatherService, useValue: noop },
         { provide: WeatherWarningsService, useValue: noop },

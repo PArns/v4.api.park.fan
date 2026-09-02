@@ -9,6 +9,7 @@ import {
   Res,
   DefaultValuePipe,
   ParseIntPipe,
+  BadRequestException,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -28,6 +29,7 @@ import { WeatherWarningDto } from "./dto/weather-warning.dto";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { PlanDayService } from "./services/plan-day.service";
 import { BestDaysService } from "./services/best-days.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
@@ -58,6 +60,7 @@ import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { ParkHourlyProfileDto } from "../analytics/dto/park-hourly-profile.dto";
+import { PlanDayDto } from "./dto/plan-day.dto";
 import { RideDayCurveDto } from "../analytics/dto/ride-day-curve.dto";
 import { Park } from "./entities/park.entity";
 import { ScheduleType } from "./entities/schedule-entry.entity";
@@ -83,6 +86,7 @@ import {
 @Controller("parks")
 export class ParksController {
   constructor(
+    private readonly planDayService: PlanDayService,
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
     private readonly weatherWarningsService: WeatherWarningsService,
@@ -1351,6 +1355,72 @@ export class ParksController {
     // rather than a fault — the caller renders nothing.
     if (!curve) throw new NotFoundException("No readable day curve");
     return curve;
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/plan/day?date=YYYY-MM-DD
+   *
+   * The series a trip planner draws: one day, ride by ride, hour by hour, with
+   * the day's own context beside it. Declared before the catch-all park route
+   * further down.
+   */
+  @Get(":continent/:country/:city/:parkSlug/plan/day")
+  @UseInterceptors(new HttpCacheInterceptor(15 * 60)) // 15 minutes
+  @ApiOperation({
+    summary: "Get one day's per-ride hourly plan",
+    description:
+      "Per-ride hourly wait curves for a single date, plus that day's " +
+      "opening hours, crowd level, weather and holiday context. `tier` says " +
+      "how the numbers were produced and is not decoration: `measured` is " +
+      "the model's own hourly prediction, which only exists for today and " +
+      "tomorrow; `composed` scales a day-level prediction by the ride's " +
+      "historical hour shape; `long_range` is the same past the stored " +
+      "60-day daily horizon. A caller must render the three differently — a " +
+      "composed number is not a measured one. Rides with no measured hourly " +
+      "shape are omitted rather than drawn flat.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "bruehl" })
+  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiQuery({
+    name: "date",
+    required: false,
+    description: "Park-local date (YYYY-MM-DD). Defaults to today.",
+    example: "2026-10-17",
+  })
+  @ApiResponse({ status: 200, type: PlanDayDto })
+  @ApiResponse({ status: 400, description: "Malformed date" })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getPlanDay(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("date") dateStr?: string,
+  ): Promise<PlanDayDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const date = dateStr ?? getCurrentDateInTimezone(park.timezone);
+    // Validated rather than coerced: `new Date("tomorrow")` is Invalid Date and
+    // would otherwise become a day of nulls that reads like a closed park.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
+      throw new BadRequestException(
+        `Invalid date "${date}" — expected YYYY-MM-DD`,
+      );
+    }
+
+    return this.planDayService.buildPlanDay(park, date);
   }
 
   /**
