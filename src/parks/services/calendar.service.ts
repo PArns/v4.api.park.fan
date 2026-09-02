@@ -401,35 +401,22 @@ export class CalendarService {
       }
     }
 
-    // For today: override crowdLevel with real-time occupancy (current spot wait) so the calendar
-    // matches the park overview. calculateCrowdLevelForDate uses P50 of the whole day so far
-    // (morning + afternoon averaged), while the park overview uses the current spot wait —
-    // causing "moderate" on the calendar vs "high" in the overview on busy afternoons.
-    const occupancyRaw = await this.redis.get(CacheKeys.parkOccupancy(park.id));
-    if (occupancyRaw) {
-      try {
-        const occ = JSON.parse(occupancyRaw) as {
-          current: number;
-          crowdLevel?: CrowdLevel;
-        };
-        if (typeof occ.current === "number" && occ.current > 0) {
-          // crowdLevel is gated at the source (calculateParkOccupancy): a thin
-          // park (not ratable) carries "unknown" here. Fall back to deriving
-          // from current only for legacy cache entries written before the
-          // field existed.
-          const liveCrowdLevel: CrowdLevel =
-            occ.crowdLevel ??
-            this.analyticsService.determineCrowdLevel(occ.current);
-          const existing = prefetchedCrowdLevels.get(today);
-          prefetchedCrowdLevels.set(today, {
-            crowdLevel: liveCrowdLevel,
-            peakLoad: existing?.peakLoad, // keep daily peak from historical cache
-          });
-        }
-      } catch {
-        // ignore — fall back to calculateCrowdLevelForDate path
-      }
-    }
+    // Today used to be overwritten here with the live occupancy spot reading, so the calendar
+    // tile would match the park overview's badge. It cost more than it bought: a value that
+    // moves every five minutes is a value no layer above may cache, and it travelled the whole
+    // chain — into the month cache, into `/best-days` (a pure projection of this response,
+    // `best-days.service.ts:158`), and from there into server-rendered prose that named today an
+    // upcoming quiet day off a reading taken at whatever minute the warmup happened to run.
+    //
+    // So today reads the FORECAST, like every other day the calendar draws. That is what a
+    // calendar is: a statement about days, made in advance, comparable across the grid. The live
+    // reading is still on the page — the park header and the today panel carry it, refreshed
+    // client-side every five minutes — and `todayCrowdLevel` below still carries today's own
+    // measured day-so-far rating for the "heute bisher vs. Prognose" pair in the day dialog.
+    //
+    // The consequence is deliberate and is the point: every day in a month's grid is now a
+    // forecast or a measurement, none of them a spot reading, so the whole response is
+    // day-stable and may be cached for a day.
 
     // Collect all dates in the range
     const datesToBuild: Date[] = [];
@@ -534,10 +521,23 @@ export class CalendarService {
         ...d,
         status: d.status ?? "UNKNOWN",
         recommendation: d.date < today ? undefined : d.recommendation,
-        // `todayCrowdLevel` is a today-only field, but the current month's cache
-        // outlives midnight (15 min TTL), so a cached entry can still carry it on
-        // what is now yesterday — where `crowdLevel` is already the same daily
-        // statistic. Strip it rather than serve a "today" reading for a past day.
+        // Every field below is re-derived against a FRESH `today`, because a cached day
+        // outlives the day it was written on. The cache is keyed by month, not by date, so
+        // the current month's entry is read again tomorrow and every day-relative statement
+        // inside it is then one day out of date. Each of these was, or would have been, a
+        // visible defect:
+        //
+        // `isToday` drives the HEUTE badge and decides which day the month summary excludes
+        // from its median. Written once at build time, it marks yesterday.
+        isToday: d.date === today,
+        // A day that was future when it was cached keeps the forecast it was given. Once it
+        // is past and was never OPERATING, the honest answer is "closed" — the same rule
+        // buildCalendarDay applies at write time.
+        crowdLevel:
+          d.date < today && d.status !== "OPERATING" ? "closed" : d.crowdLevel,
+        // `todayCrowdLevel` is a today-only field: a cached entry can carry it on what is now
+        // yesterday, where `crowdLevel` is already the same daily statistic. Strip it rather
+        // than serve a "today" reading for a past day.
         todayCrowdLevel: d.date === today ? d.todayCrowdLevel : undefined,
         todayCrowdLevelSamples:
           d.date === today ? d.todayCrowdLevelSamples : undefined,
@@ -932,15 +932,19 @@ export class CalendarService {
     let inferredCrowdLevel: CrowdLevel | "closed";
     let peakLoad: CrowdLevel | "closed" | undefined;
 
-    if (isHistorical) {
+    // Strictly past, NOT `isHistorical`: today takes the forecast branch below, like tomorrow.
+    // `isHistorical` still includes today for the two things that legitimately need it — status
+    // recovery from ride activity (:891) and the reconstructed opening hours (:997), both of
+    // which are statements about a day that has already partly happened.
+    if (isStrictlyPast) {
       const prefetched = prefetchedCrowdLevels.get(dateStr);
       if (prefetched !== undefined) {
         inferredCrowdLevel = prefetched.crowdLevel;
         peakLoad = prefetched.peakLoad;
       } else {
-        // Always query real usage data for today/past days (calculateCrowdLevelForDate
-        // has its own Redis cache: 30 min for today, 24h for historical).
-        // ML prediction is only the last resort when genuinely no data exists.
+        // Always query real usage data for a past day (calculateCrowdLevelForDate has its
+        // own Redis cache: 24h for historical). ML prediction is only the last resort when
+        // genuinely no data exists.
         const crowdData =
           await this.analyticsService.calculateCrowdLevelForDate(
             park.id,

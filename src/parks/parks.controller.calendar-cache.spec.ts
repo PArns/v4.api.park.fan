@@ -142,25 +142,40 @@ describe("ParksController › /calendar Cache-Control", () => {
       res,
     );
 
-  it("sends 15 min + SWR for a range that reaches today or earlier", async () => {
-    await mountWithDays([dayOn(parkDate(-2)), dayOn(parkDate(0))]);
-    const res = makeRes();
-
-    await call(res);
-
-    expect(res.headers["Cache-Control"]).toBe(
-      "public, max-age=900, s-maxage=900, stale-while-revalidate=3600",
-    );
-  });
-
-  it("sends 30 min + SWR for a pure-future range", async () => {
+  it("sends a day + a day of SWR for a pure-future range", async () => {
     await mountWithDays([dayOn(parkDate(20)), dayOn(parkDate(21))]);
     const res = makeRes();
 
     await call(res);
 
     expect(res.headers["Cache-Control"]).toBe(
-      "public, max-age=1800, s-maxage=1800, stale-while-revalidate=3600",
+      "public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400",
+    );
+  });
+
+  it("sends a day, but only an hour of SWR, for a range containing today", async () => {
+    await mountWithDays([dayOn(parkDate(-2)), dayOn(parkDate(0))]);
+    const res = makeRes();
+
+    await call(res);
+
+    // Today is the one day whose status can flip while it is being read, so it does not get
+    // a day of stale grace on top of its day of freshness.
+    expect(res.headers["Cache-Control"]).toBe(
+      "public, max-age=86400, s-maxage=86400, stale-while-revalidate=3600",
+    );
+  });
+
+  it("sends a week for a range that ended before today", async () => {
+    await mountWithDays([dayOn(parkDate(-5)), dayOn(parkDate(-2))]);
+    const res = makeRes();
+
+    await call(res);
+
+    // Past days are measurements; a measurement of last Tuesday does not get a second
+    // opinion, and a late backfill reaches the frontend through the per-park tag.
+    expect(res.headers["Cache-Control"]).toBe(
+      "public, max-age=604800, s-maxage=604800, stale-while-revalidate=604800",
     );
   });
 
@@ -173,8 +188,8 @@ describe("ParksController › /calendar Cache-Control", () => {
       await mountWithDays(days);
       const res = makeRes();
       await call(res);
-      expect(res.headers["Cache-Control"]).toContain(
-        "stale-while-revalidate=3600",
+      expect(res.headers["Cache-Control"]).toMatch(
+        /stale-while-revalidate=(3600|86400|604800)/,
       );
     }
   });
