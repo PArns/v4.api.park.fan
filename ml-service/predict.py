@@ -2102,6 +2102,20 @@ def predict_wait_times(
         else:
             crowd_level = "extreme"
 
+        # The uncertainty band, in minutes. `uncertainties[i]` is (top quantile −
+        # median) for a MultiQuantile model, i.e. the width alpha=0.95 is trained
+        # for and which config.py:104 calls "the displayed uncertainty width" —
+        # until now it was folded into `confidence` above and then dropped, so no
+        # consumer could draw it. It is the RAW spread against the unrounded
+        # median, deliberately not rounded to 5: a band is a difference, not a
+        # posted wait time, and parks post waits in fives while spreads are not.
+        # None (not 0) when the model has no real uncertainty — a zero-width band
+        # and "no band at all" are different statements, and a 0 would draw as a
+        # confident hairline.
+        uncertainty_minutes = (
+            int(round(float(uncertainties[i]))) if use_uncertainty else None
+        )
+
         results.append(
             {
                 "attractionId": row["attractionId"],
@@ -2110,6 +2124,7 @@ def predict_wait_times(
                 "predictedWaitTime": pred_wait,
                 "predictionType": prediction_type,
                 "confidence": round(confidence, 1),
+                "uncertaintyMinutes": uncertainty_minutes,
                 "crowdLevel": crowd_level,
                 "baseline": round(baseline, 1),
                 "modelVersion": model.version,
