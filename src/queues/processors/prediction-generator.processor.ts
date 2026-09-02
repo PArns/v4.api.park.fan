@@ -4,6 +4,7 @@ import { Logger, OnModuleInit, Inject } from "@nestjs/common";
 import { Job } from "bull";
 import { Redis } from "ioredis";
 import { MLService } from "../../ml/ml.service";
+import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -20,6 +21,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
 
   constructor(
     private mlService: MLService,
+    private leadSnapshotService: PredictionLeadSnapshotService,
     private parksService: ParksService,
     private cacheWarmupService: CacheWarmupService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -192,6 +194,11 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       "📅 Generating daily predictions for all parks (BATCHED)...",
     );
 
+    // One instant for the whole run. Read per park, a batch crossing midnight
+    // would label the same night's predictions with two different lead
+    // distances — and lead distance is the only thing these rows are for.
+    const runStartedAt = new Date();
+
     try {
       const allParks = await this.parksService.findAll();
 
@@ -268,6 +275,26 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 await this.mlService.storePredictions(response.predictions);
                 totalPredictions += response.predictions.length;
                 successParks++;
+
+                // Record what we said at the fixed lead distances, before the
+                // next run's deduplicatePredictions overwrites these rows. This
+                // is the only moment the information exists: see
+                // PredictionLeadSnapshot for why it cannot be recovered later.
+                //
+                // The catch is for DIAGNOSIS, not isolation: the per-park catch
+                // below already keeps one park's failure off the others. Without
+                // this one a broken snapshot would be reported as "failed to
+                // generate daily predictions" and counted against that park,
+                // sending the next person to look at the model rather than at
+                // this table — while the predictions themselves were stored fine.
+                await this.leadSnapshotService
+                  .snapshotPark(park, response.predictions, runStartedAt)
+                  .catch((error: Error) => {
+                    this.logger.warn(
+                      `Lead snapshot failed for park ${park.name}: ${error.message}`,
+                    );
+                    return 0;
+                  });
               } else {
                 this.logger.debug(
                   `No daily predictions returned for park: ${park.name}`,

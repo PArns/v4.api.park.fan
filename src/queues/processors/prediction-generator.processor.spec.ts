@@ -2,6 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { Job } from "bull";
 import { PredictionGeneratorProcessor } from "./prediction-generator.processor";
 import { MLService } from "../../ml/ml.service";
+import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -33,6 +34,14 @@ describe("PredictionGeneratorProcessor", () => {
       .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
   };
 
+  // Rides along with the daily run to record what was predicted at each lead
+  // distance. Its failures are caught at the call site so the log names the
+  // snapshot rather than the prediction run — the per-park try/catch below is
+  // what actually keeps one park from taking down the others.
+  const leadSnapshotService = {
+    snapshotPark: jest.fn().mockResolvedValue(0),
+  };
+
   const parksService = {
     findAll: jest.fn(),
     getBatchParkStatus: jest.fn(),
@@ -53,6 +62,10 @@ describe("PredictionGeneratorProcessor", () => {
       providers: [
         PredictionGeneratorProcessor,
         { provide: MLService, useValue: mlService },
+        {
+          provide: PredictionLeadSnapshotService,
+          useValue: leadSnapshotService,
+        },
         { provide: ParksService, useValue: parksService },
         { provide: CacheWarmupService, useValue: cacheWarmupService },
         { provide: REDIS_CLIENT, useValue: redis },
@@ -193,6 +206,78 @@ describe("PredictionGeneratorProcessor", () => {
       // ML called for every operating park — batching shape is internal,
       // we just assert the total count matches.
       expect(mlService.getParkPredictions).toHaveBeenCalledTimes(12);
+    });
+  });
+
+  describe("generate-daily (nightly)", () => {
+    const openPark = { id: "p1", name: "Open", timezone: "Europe/Berlin" };
+
+    beforeEach(() => {
+      parksService.findAll.mockResolvedValue([openPark]);
+      parksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+    });
+
+    it("snapshots the lead buckets after storing, with one instant for the run", async () => {
+      const predictions = [{ attractionId: "a1", predictionType: "daily" }];
+      mlService.getParkPredictions.mockResolvedValue({ predictions });
+
+      await processor.handleGenerateDaily({} as Job);
+
+      expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(1);
+      const [park, passed, now] =
+        leadSnapshotService.snapshotPark.mock.calls[0];
+      expect(park).toBe(openPark);
+      expect(passed).toBe(predictions);
+      // A Date, not undefined: the lead distance is computed against it, and
+      // reading the clock per park would label a batch crossing midnight with
+      // two different distances for the same night's work.
+      expect(now).toBeInstanceOf(Date);
+    });
+
+    it("keeps going for other parks when one park's snapshot throws", async () => {
+      // Note what this does and does not prove. The per-park try/catch around
+      // the whole body already stops one park from taking down the run, so the
+      // catch on the snapshot call is NOT what makes this pass — removing it
+      // leaves this test green. What that catch buys is diagnosis: the park
+      // still counts as a success and the log names the snapshot rather than
+      // reporting "failed to generate daily predictions", which would send the
+      // next person looking at the model instead of at this table.
+      parksService.findAll.mockResolvedValue([
+        openPark,
+        { id: "p2", name: "Second", timezone: "Europe/Berlin" },
+      ]);
+      parksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["p1", "OPERATING"],
+          ["p2", "OPERATING"],
+        ]),
+      );
+      mlService.getParkPredictions.mockResolvedValue({
+        predictions: [{ attractionId: "a1", predictionType: "daily" }],
+      });
+      leadSnapshotService.snapshotPark.mockRejectedValueOnce(
+        new Error("snapshot table missing"),
+      );
+
+      await expect(
+        processor.handleGenerateDaily({} as Job),
+      ).resolves.toBeUndefined();
+
+      // Both parks got their predictions stored — the failure did not take the
+      // second one with it, and did not roll back the first one's rows.
+      expect(mlService.storePredictions).toHaveBeenCalledTimes(2);
+      expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not snapshot when there is nothing to store", async () => {
+      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+
+      await processor.handleGenerateDaily({} as Job);
+
+      expect(mlService.storePredictions).not.toHaveBeenCalled();
+      expect(leadSnapshotService.snapshotPark).not.toHaveBeenCalled();
     });
   });
 
