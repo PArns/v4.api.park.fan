@@ -599,6 +599,47 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
     // crowdLevel is the same daily statistic, so nothing is lost for that day.
     expect(yesterday.crowdLevel).toBe("moderate");
   });
+
+  /**
+   * Every day-relative field has to be re-derived here, because the cache is keyed by MONTH and
+   * the current month's entry is read again tomorrow. These three pin the fields that a longer
+   * cache window would otherwise leave a day behind — the whole point of raising that window.
+   */
+  it("re-derives isToday against a fresh today rather than trusting the cached flag", () => {
+    // Written yesterday: 08-17 carried the flag and 08-18 did not.
+    const days = [
+      day("2026-08-17", { isToday: true }),
+      day("2026-08-18", { isToday: false }),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-18", "2026-08-18");
+
+    expect(out.days.find((d: any) => d.date === "2026-08-17").isToday).toBe(
+      false,
+    );
+    expect(out.days.find((d: any) => d.date === "2026-08-18").isToday).toBe(
+      true,
+    );
+  });
+
+  it("demotes a now-past non-OPERATING day to closed instead of serving its old forecast", () => {
+    // Cached while it was still in the future, so it carries an ML prediction.
+    const days = [day("2026-08-17", { status: "UNKNOWN", crowdLevel: "high" })];
+
+    const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+    expect(out.days[0].crowdLevel).toBe("closed");
+  });
+
+  it("leaves a past OPERATING day's measured level alone", () => {
+    const days = [
+      day("2026-08-17", { status: "OPERATING", crowdLevel: "low" }),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+    expect(out.days[0].crowdLevel).toBe("low");
+  });
 });
 
 /**

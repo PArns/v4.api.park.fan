@@ -545,24 +545,43 @@ export class ParksController {
     const { getCurrentDateInTimezone } =
       await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
-    const includesHistoricalData = response.days.some((d) => d.date <= today);
-    // 15 min for ranges including past/today, 30 min for pure-future ranges. Today's
-    // live crowd level is patched client-side (separate today-only fetch) and the
-    // daily forecast only refreshes ~every 13h, so the old 5 min was just CDN churn.
-    const cacheTTL = includesHistoricalData ? 15 * 60 : 30 * 60;
+    const endsInThePast = response.days.every((d) => d.date < today);
+    const includesToday = response.days.some((d) => d.date === today);
 
-    // The one endpoint in this controller that had no `stale-while-revalidate`, and it is
-    // the one that rebuilds slowest: on a month-cache gap `buildCalendarResponse` falls
-    // through to a live PERCENTILE_CONT aggregation, one query per day. Measured from
-    // outside on 2026-09-01, an uncached range cost 0.2-2.75s against 0.14s served warm.
-    // Without SWR every expiry hands that wait to whoever asks first; with it they get the
-    // 15-minute-old copy immediately and the rebuild happens behind them.
+    // A day, and the reason is that there is nothing left in this response that moves faster.
     //
-    // An hour, not the 86400 its /best-days sibling carries: best-days is a materialized
-    // snapshot of a 90-day window, while this range can include TODAY, and a day-old
-    // calendar would outlive the schedule corrections it is meant to show. An hour covers
-    // a rebuild many times over and still expires within the forecast's own ~13h cycle.
-    const staleWhileRevalidate = 60 * 60;
+    // The window used to be 15 minutes because today's cell carried a live occupancy spot
+    // reading, overwritten every five minutes. That override is gone (see the comment in
+    // `calendar.service.ts` where it used to sit): today now reads the same ML forecast every
+    // other day reads, so a calendar month is a set of statements about days, and none of
+    // them can change between two visitors on the same morning.
+    //
+    // What CAN still change inside a day, and what bounds this number:
+    //   - the daily forecast batch, published into the calendar by the warmup at 08:00 and
+    //     20:00 UTC (`queue-scheduler.service.ts`), which force-evicts the month caches;
+    //   - a schedule correction, once daily at 15:00 UTC (`sync-schedules-only`), which
+    //     busts the per-park month cache in `park-metadata.processor.ts`.
+    // Both edit the ORIGIN. This header only decides how long a copy downstream may live
+    // without asking, and both of those jobs now push a per-park revalidation to the
+    // frontend, so a correction reaches a reader through the tag rather than through expiry.
+    //
+    // A PAST-ONLY range gets a week: those days are measurements, and a measurement of last
+    // Tuesday does not get a second opinion. The only thing that rewrites one is a late
+    // backfill, which is what the tag push is for.
+    const cacheTTL = endsInThePast ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+
+    // SWR still matters at a day's window, and for the same reason it did at fifteen minutes:
+    // on a month-cache gap `buildCalendarResponse` falls through to a live PERCENTILE_CONT
+    // aggregation, one query per day. Measured from outside on 2026-09-01, an uncached range
+    // cost 0.2-2.75 s against 0.14 s served warm. Without SWR every expiry hands that wait to
+    // whoever asks first. The window is the TTL again, so an expired copy is served while the
+    // rebuild happens behind it and the reader never waits for the aggregation.
+    //
+    // The one range that does not get a day of stale grace is the one containing TODAY: it is
+    // the only day whose status can flip while it is being read (a storm closure, an hour
+    // correction), so it keeps the old hour. Everything else in the response is a forecast or
+    // a measurement.
+    const staleWhileRevalidate = includesToday ? 60 * 60 : cacheTTL;
 
     if (res) {
       res.setHeader(
