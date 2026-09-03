@@ -329,6 +329,7 @@ export class AttractionIntegrationService {
       predictedTime: p.predictedTime,
       predictedWaitTime: p.predictedWaitTime,
       confidence: p.confidence,
+      uncertaintyMinutes: p.uncertaintyMinutes ?? null,
       crowdLevel: p.crowdLevel,
       baseline: p.baseline,
       trend: p.trend || "stable",
@@ -344,6 +345,7 @@ export class AttractionIntegrationService {
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
             confidence: p.confidence,
+            uncertaintyMinutes: p.uncertaintyMinutes ?? null,
             trend: p.trend,
           }))
         : [];

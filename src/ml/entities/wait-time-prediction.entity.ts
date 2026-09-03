@@ -64,6 +64,20 @@ export class WaitTimePrediction {
   @Column({ type: "float", nullable: true })
   confidence: number; // 0-100 confidence score
 
+  // Width of the model's uncertainty band, in whole minutes: the top trained
+  // quantile (alpha=0.95) minus the served median. `confidence` above folds this
+  // into a single percentage and loses it; this keeps the width so a consumer can
+  // draw the band. NULL means the model reported no real spread — a different
+  // statement from a zero-wide band, which would draw as a confident hairline.
+  //
+  // smallint, not float: a spread of 9.7 against 10 minutes is not a distinction
+  // anybody acts on, and this is the heaviest-written table in the system. Two
+  // bytes, and nothing at all while NULL — the row already carries a null bitmap
+  // for confidence, crowdLevel, status and baseline. No index: nothing filters or
+  // sorts on it, and the header above records what indexes cost here.
+  @Column({ type: "smallint", nullable: true })
+  uncertaintyMinutes: number | null;
+
   @Column({
     type: "enum",
     enum: [

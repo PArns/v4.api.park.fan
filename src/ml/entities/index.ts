@@ -2,6 +2,7 @@ export * from "./wait-time-prediction.entity";
 export * from "./ml-model.entity";
 export * from "./park-occupancy.entity";
 export * from "./prediction-accuracy.entity";
+export * from "./prediction-lead-snapshot.entity";
 export * from "./attraction-accuracy-stats.entity";
 export * from "./ml-accuracy-comparison.entity";
 export * from "./ml-feature-stats.entity";

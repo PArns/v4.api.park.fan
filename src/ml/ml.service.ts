@@ -1244,6 +1244,7 @@ export class MLService {
       entity.predictedWaitTime = pred.predictedWaitTime;
       entity.predictionType = pred.predictionType;
       entity.confidence = pred.confidence;
+      entity.uncertaintyMinutes = pred.uncertaintyMinutes ?? null;
       entity.crowdLevel = pred.crowdLevel;
       entity.baseline = pred.baseline;
       entity.modelVersion = pred.modelVersion;
@@ -1252,7 +1253,7 @@ export class MLService {
     });
 
     // Chunked: a single multi-row INSERT for a big park (e.g. 60 attractions ×
-    // 365 daily rows × 11 columns) exceeds the Postgres wire-protocol limit of
+    // 365 daily rows × 12 columns) exceeds the Postgres wire-protocol limit of
     // 65535 bind parameters — the driver then fails with "bind message has N
     // parameter formats but 0 parameters" and the whole park gets no predictions.
     //
@@ -1394,6 +1395,7 @@ export class MLService {
         predictedWaitTime: p.predictedWaitTime,
         predictionType: p.predictionType,
         confidence: p.confidence,
+        uncertaintyMinutes: p.uncertaintyMinutes,
         crowdLevel: p.crowdLevel,
         baseline: p.baseline,
         modelVersion: p.modelVersion,
@@ -1607,6 +1609,7 @@ export class MLService {
         predictedWaitTime: p.predictedWaitTime,
         predictionType: p.predictionType,
         confidence: p.confidence,
+        uncertaintyMinutes: p.uncertaintyMinutes,
         crowdLevel: p.crowdLevel,
         baseline: p.baseline,
         modelVersion: p.modelVersion,

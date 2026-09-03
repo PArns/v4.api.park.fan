@@ -9,6 +9,7 @@ import {
   Res,
   DefaultValuePipe,
   ParseIntPipe,
+  BadRequestException,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -28,6 +29,7 @@ import { WeatherWarningDto } from "./dto/weather-warning.dto";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { PlanDayService } from "./services/plan-day.service";
 import { BestDaysService } from "./services/best-days.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
@@ -58,6 +60,7 @@ import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
 import { ParkHourlyProfileDto } from "../analytics/dto/park-hourly-profile.dto";
+import { PlanDayDto } from "./dto/plan-day.dto";
 import { RideDayCurveDto } from "../analytics/dto/ride-day-curve.dto";
 import { Park } from "./entities/park.entity";
 import { ScheduleType } from "./entities/schedule-entry.entity";
@@ -83,6 +86,7 @@ import {
 @Controller("parks")
 export class ParksController {
   constructor(
+    private readonly planDayService: PlanDayService,
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
     private readonly weatherWarningsService: WeatherWarningsService,
@@ -542,7 +546,7 @@ export class ParksController {
     }
 
     // Set dynamic cache headers based on date range
-    const { getCurrentDateInTimezone } =
+    const { getCurrentDateInTimezone, secondsUntilEndOfDayInTimezone } =
       await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
     const endsInThePast = response.days.every((d) => d.date < today);
@@ -568,7 +572,22 @@ export class ParksController {
     // A PAST-ONLY range gets a week: those days are measurements, and a measurement of last
     // Tuesday does not get a second opinion. The only thing that rewrites one is a late
     // backfill, which is what the tag push is for.
-    const cacheTTL = endsInThePast ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+    //
+    // A range containing TODAY is capped at the park's own midnight, and that cap is the whole
+    // point of this line. Several fields in this response are statements about which day today
+    // is — `isToday` drives the HEUTE badge and the month summary's median, `todayCrowdLevel` is
+    // a today-only reading, and a past day that never opened must read "closed" — and the origin
+    // re-derives every one of them against a fresh `today` when it serves the month cache
+    // (`calendar.service.ts`). A CDN copy cannot re-derive anything, and a browser copy cannot
+    // even be purged: measured from outside on 2026-09-03, a copy taken at 17:30 was still being
+    // served (`cf-cache-status: HIT`) with `isToday` on 2026-09-03 — which after midnight is
+    // yesterday. So the copy may live exactly as long as the day it describes.
+    const secondsLeftToday = secondsUntilEndOfDayInTimezone(park.timezone);
+    const cacheTTL = endsInThePast
+      ? 7 * 24 * 60 * 60
+      : includesToday
+        ? Math.min(24 * 60 * 60, secondsLeftToday)
+        : 24 * 60 * 60;
 
     // SWR still matters at a day's window, and for the same reason it did at fifteen minutes:
     // on a month-cache gap `buildCalendarResponse` falls through to a live PERCENTILE_CONT
@@ -579,9 +598,12 @@ export class ParksController {
     //
     // The one range that does not get a day of stale grace is the one containing TODAY: it is
     // the only day whose status can flip while it is being read (a storm closure, an hour
-    // correction), so it keeps the old hour. Everything else in the response is a forecast or
+    // correction), so it keeps the old hour — and never more than the time left in the day, for
+    // the same reason the TTL above is capped. Everything else in the response is a forecast or
     // a measurement.
-    const staleWhileRevalidate = includesToday ? 60 * 60 : cacheTTL;
+    const staleWhileRevalidate = includesToday
+      ? Math.min(60 * 60, secondsLeftToday)
+      : cacheTTL;
 
     if (res) {
       res.setHeader(
@@ -1351,6 +1373,72 @@ export class ParksController {
     // rather than a fault — the caller renders nothing.
     if (!curve) throw new NotFoundException("No readable day curve");
     return curve;
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/plan/day?date=YYYY-MM-DD
+   *
+   * The series a trip planner draws: one day, ride by ride, hour by hour, with
+   * the day's own context beside it. Declared before the catch-all park route
+   * further down.
+   */
+  @Get(":continent/:country/:city/:parkSlug/plan/day")
+  @UseInterceptors(new HttpCacheInterceptor(15 * 60)) // 15 minutes
+  @ApiOperation({
+    summary: "Get one day's per-ride hourly plan",
+    description:
+      "Per-ride hourly wait curves for a single date, plus that day's " +
+      "opening hours, crowd level, weather and holiday context. `tier` says " +
+      "how the numbers were produced and is not decoration: `measured` is " +
+      "the model's own hourly prediction, which only exists for today and " +
+      "tomorrow; `composed` scales a day-level prediction by the ride's " +
+      "historical hour shape; `long_range` is the same past the stored " +
+      "60-day daily horizon. A caller must render the three differently — a " +
+      "composed number is not a measured one. Rides with no measured hourly " +
+      "shape are omitted rather than drawn flat.",
+  })
+  @ApiParam({ name: "continent", example: "europe" })
+  @ApiParam({ name: "country", example: "germany" })
+  @ApiParam({ name: "city", example: "bruehl" })
+  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiQuery({
+    name: "date",
+    required: false,
+    description: "Park-local date (YYYY-MM-DD). Defaults to today.",
+    example: "2026-10-17",
+  })
+  @ApiResponse({ status: 200, type: PlanDayDto })
+  @ApiResponse({ status: 400, description: "Malformed date" })
+  @ApiResponse({ status: 404, description: "Park not found" })
+  async getPlanDay(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Query("date") dateStr?: string,
+  ): Promise<PlanDayDto> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+    if (!park) {
+      throw new NotFoundException(
+        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
+      );
+    }
+
+    const date = dateStr ?? getCurrentDateInTimezone(park.timezone);
+    // Validated rather than coerced: `new Date("tomorrow")` is Invalid Date and
+    // would otherwise become a day of nulls that reads like a closed park.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
+      throw new BadRequestException(
+        `Invalid date "${date}" — expected YYYY-MM-DD`,
+      );
+    }
+
+    return this.planDayService.buildPlanDay(park, date);
   }
 
   /**

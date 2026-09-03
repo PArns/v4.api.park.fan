@@ -197,6 +197,13 @@ export class AttractionResponseDto {
     predictedTime: string;
     predictedWaitTime: number;
     confidence: number;
+    /**
+     * Width of the model's uncertainty band in minutes (top trained quantile
+     * minus the served median), so a chart can draw the band rather than infer
+     * one from `confidence`. Absent where the model reports no real spread —
+     * which is not a zero-wide band, and must not be drawn as one.
+     */
+    uncertaintyMinutes?: number | null;
     trend: string;
   }[];
 

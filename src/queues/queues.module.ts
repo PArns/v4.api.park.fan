@@ -27,6 +27,8 @@ import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
+import { PushNotificationProcessor } from "./processors/push-notification.processor";
+import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
 import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
@@ -69,6 +71,8 @@ import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { AttractionP50Baseline } from "../analytics/entities/attraction-p50-baseline.entity";
 import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-baseline.entity";
 import { ModelComparison } from "../ml/entities/model-comparison.entity";
+import { PushModule } from "../push/push.module";
+import { TripsModule } from "../trips/trips.module";
 
 @Module({
   imports: [
@@ -180,6 +184,15 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
           lockRenewTime: 300000,
         },
       },
+      // Push notifications: a five-minute tick over the trips somebody
+      // subscribed to. No lock headroom needed — it reads one small table and
+      // one row per trip, and the work it does is bounded by opted-in browsers
+      // rather than by traffic.
+      { name: "push-notifications" },
+      // Stored plans: one daily sweep of the expired ones. Its own queue rather
+      // than a second job on the push tick, because it is maintenance on a
+      // table and has nothing to do with notifying anybody.
+      { name: "trips" },
     ),
 
     // Feature modules for processors
@@ -203,6 +216,8 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     StatsModule,
     SearchModule,
     PopularityModule,
+    PushModule, // Web-push subscriptions and sending
+    TripsModule, // The stored plans the notification job walks
     RedisModule, // For cache warmup service
     RevalidationModule, // Frontend on-demand revalidation (best-days webhook)
     GeoipModule,
@@ -233,6 +248,8 @@ import { ModelComparison } from "../ml/entities/model-comparison.entity";
     StatsProcessor,
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
+    PushNotificationProcessor, // The five-minute tick that sends "next up"
+    TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     RopeDropProcessor, // Rope-drop recommendations (daily)
     TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)
     GeoipUpdateProcessor,
