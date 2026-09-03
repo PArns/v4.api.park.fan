@@ -7,6 +7,7 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
+import { AttractionHourlyHistory } from "../../analytics/entities/attraction-hourly-history.entity";
 import { CalendarService } from "./calendar.service";
 import { composeDayCurve } from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
@@ -159,6 +160,21 @@ export class PlanDayService {
           return new Set<string>();
         }),
     ]);
+
+    // Before the historical shape is fetched, because an observed day does not
+    // want one: it is answered from what happened, and `getParkHourlyProfile`
+    // is a year of aggregates over every ride in the park. Composing a shape
+    // onto a past date would draw a forecast for a day the visitor walked.
+    if (tier === "observed") {
+      return this.observedRides(
+        park,
+        dateStr,
+        openHour,
+        closeHour,
+        byId,
+        headlinerIds,
+      );
+    }
 
     // The historical shape. topN is the endpoint's own cap rather than the
     // caller's: a planner wants every ride it can get, and this payload is a
@@ -323,6 +339,107 @@ export class PlanDayService {
   }
 
   /**
+   * A day in the past, from what the queues actually did.
+   *
+   * `attraction_hourly_history` already holds it: one row per (attraction,
+   * park-local date) with the day's 15-minute slots, written by the 04:30 cron
+   * out of raw `queue_data`. So this endpoint needed no new storage and no new
+   * aggregation — one indexed read per request, against a primary key.
+   *
+   * The hour is the SAMPLE-WEIGHTED MEAN of its slots' `avgWait`, and both
+   * halves of that are deliberate. `avgWait` rather than `p90`, because the
+   * forward tiers are point estimates from the median quantile and a reader
+   * comparing yesterday against tomorrow must be comparing the same kind of
+   * number — `p90` is the bad case, and swapping it in for the past would make
+   * every finished day look worse than the day that follows it. Weighted,
+   * because a slot the feed only answered twice must not count as much as one
+   * it answered twelve times; a plain mean of four slots hands a two-minute
+   * outage the same weight as a full quarter of an hour.
+   *
+   * What is NOT here is as deliberate. There is no `uncertaintyMinutes`: an
+   * observation has no band, and sending a width of zero would be a claim about
+   * precision rather than the absence of a claim. `downYesterday` is not asked
+   * either — it answers a question about tomorrow's plan. And a ride the day has
+   * no row for is omitted rather than drawn at zero: the table is written per
+   * ride per day, so absence means the rollup has not reached that day (today is
+   * never in it, nor is anything before the job first ran), which is not the
+   * same statement as an empty queue.
+   */
+  private async observedRides(
+    park: Park,
+    dateStr: string,
+    openHour: number,
+    closeHour: number,
+    byId: Map<string, Attraction>,
+    headlinerIds: ReadonlySet<string>,
+  ): Promise<PlanDayRideDto[]> {
+    const history = await this.analyticsService
+      .getParkHourlyHistory(park.id, dateStr)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: hourly history unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
+        );
+        return new Map<string, AttractionHourlyHistory>();
+      });
+
+    const rides: PlanDayRideDto[] = [];
+    for (const [attractionId, row] of history) {
+      const attraction = byId.get(attractionId);
+      if (!attraction) continue;
+
+      // hour → [weightedSum, weight]
+      const byHour = new Map<number, [number, number]>();
+      for (const slot of row.slots ?? []) {
+        const hour = Number(String(slot.time_slot).slice(0, 2));
+        if (!Number.isInteger(hour) || hour < openHour || hour > closeHour) {
+          continue;
+        }
+        const wait = Number(slot.avgWait);
+        if (!Number.isFinite(wait)) continue;
+        // A slot with no count still happened; treat it as one reading rather
+        // than dropping it, or a gap in the writer's bookkeeping deletes an
+        // hour of a day somebody actually stood in.
+        const weight =
+          Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
+        const [sum, total] = byHour.get(hour) ?? [0, 0];
+        byHour.set(hour, [sum + wait * weight, total + weight]);
+      }
+
+      const hours = [];
+      for (let h = openHour; h <= closeHour; h++) {
+        const bucket = byHour.get(h);
+        if (!bucket || bucket[1] === 0) continue;
+        hours.push({
+          hour: h,
+          wait: roundToNearest5Minutes(bucket[0] / bucket[1]),
+        });
+      }
+      if (hours.length === 0) continue;
+
+      rides.push({
+        attractionSlug: attraction.slug,
+        attractionName: attraction.name,
+        land: attraction.landName ?? null,
+        hours,
+        dayPeak: Math.max(...hours.map((h) => h.wait)),
+        // No band around a measurement.
+        uncertaintyMinutes: null,
+        // Exactly one measured day stands behind this curve, and it is this one.
+        // The field means what it says; a caller reading it as "how much history
+        // is behind this shape" gets the honest answer for an observed day.
+        sampleDays: 1,
+        latitude: PlanDayService.coord(attraction.latitude),
+        longitude: PlanDayService.coord(attraction.longitude),
+        ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+      });
+    }
+
+    return rides.sort((a, b) =>
+      a.attractionName.localeCompare(b.attractionName),
+    );
+  }
+
+  /**
    * A coordinate as a NUMBER.
    *
    * TypeORM hands back a `decimal` column as a string, and the entity's
@@ -361,6 +478,18 @@ export class PlanDayService {
    * index on `status = 'DOWN'` written for exactly this question, so the scan is
    * bounded to one park's rows for one day.
    *
+   * The join is `a.id`, NOT `a.id::text`. `queue_data.attractionId` is a uuid —
+   * the `@JoinColumn` on the entity's `attraction` relation is what creates the
+   * column, and the `@Column({ type: "text" })` written beside it on the same
+   * property does not change that. Only `queue_data_aggregates.attractionId` is
+   * text, and it is the table every older analytics query reads, so `::text`
+   * looks like the house style and is wrong here. The note at the top of
+   * `park-historical-stats.service.ts` says exactly this and this method was
+   * written against it anyway: Postgres answers `operator does not exist:
+   * text = uuid`, the catch below swallows it, and the set came back empty
+   * every single time, on every park, silently. No test saw it, because SQL is
+   * only parsed when it runs.
+   *
    * Only asked for today and tomorrow: past that, whether a ride broke yesterday
    * says nothing a visitor can act on, and the query is not worth its cost.
    */
@@ -383,8 +512,8 @@ export class PlanDayService {
         await this.attractionRepository.manager.query(
           `SELECT qd."attractionId" AS "attractionId"
              FROM queue_data qd
-             JOIN attractions a ON a.id::text = qd."attractionId"
-            WHERE a."parkId" = $1
+             JOIN attractions a ON a.id = qd."attractionId"
+            WHERE a."parkId" = $1::uuid
               AND (qd.timestamp AT TIME ZONE $2)::date = ($3::date - INTERVAL '1 day')
             GROUP BY qd."attractionId"
            HAVING COUNT(*) FILTER (WHERE qd.status = 'OPERATING') = 0`,
@@ -439,6 +568,12 @@ export class PlanDayService {
   }
 
   private tierFor(leadDays: number): PlanDayTier {
+    // A date in the past is not a forecast horizon, and the ordering here is
+    // the whole reason to check it first: `-38 <= 1` is true, so a day five
+    // weeks gone came back labelled `measured` — the most trustworthy tier, on
+    // the emptiest possible answer, because the model generates forwards and
+    // nothing matched.
+    if (leadDays < 0) return "observed";
     if (leadDays <= PlanDayService.HOURLY_HORIZON_DAYS) return "measured";
     if (leadDays <= PlanDayService.DAILY_HORIZON_DAYS) return "composed";
     return "long_range";

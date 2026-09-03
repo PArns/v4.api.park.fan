@@ -9,8 +9,15 @@ import { ApiProperty } from "@nestjs/swagger";
  * so going blank past the model's reach makes it useless, while a fabricated
  * number is worse than a blank. The tier is what lets a caller draw the
  * difference instead of choosing between those two.
+ *
+ * `observed` is the one that points BACKWARDS, and it is not a forecast at all:
+ * a date in the past is answered from what the queues actually did, so a plan
+ * somebody already walked stops predicting at itself. Before it, a past date
+ * came back labelled `measured` with a negative `leadDays` and an empty ride
+ * list — the model generates forwards, so nothing matched, and the response
+ * claimed the most trustworthy tier for the emptiest possible answer.
  */
-export type PlanDayTier = "measured" | "composed" | "long_range";
+export type PlanDayTier = "observed" | "measured" | "composed" | "long_range";
 
 export class PlanDayHourDto {
   @ApiProperty({ example: 14, description: "Park-local hour, 0–23." })
@@ -171,13 +178,15 @@ export class PlanDayDto {
   context: PlanDayContextDto;
 
   @ApiProperty({
-    enum: ["measured", "composed", "long_range"],
+    enum: ["observed", "measured", "composed", "long_range"],
     description:
-      "How the ride curves were produced. `measured` is the model's own " +
-      "hourly prediction (today and tomorrow only — it generates 24 hours " +
-      "ahead). `composed` scales a day-level prediction by the ride's " +
-      "historical hour shape. `long_range` is the same composition past the " +
-      "stored 60-day daily horizon, where the day level itself is thinner.",
+      "How the ride curves were produced. `observed` is not a forecast: for a " +
+      "date in the past the hours are what the queues actually did, from the " +
+      "nightly 15-minute rollup. `measured` is the model's own hourly " +
+      "prediction (today and tomorrow only — it generates 24 hours ahead). " +
+      "`composed` scales a day-level prediction by the ride's historical hour " +
+      "shape. `long_range` is the same composition past the stored 60-day " +
+      "daily horizon, where the day level itself is thinner.",
   })
   tier: PlanDayTier;
 

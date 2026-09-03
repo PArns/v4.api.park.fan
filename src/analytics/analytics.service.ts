@@ -5592,6 +5592,36 @@ export class AnalyticsService {
    * treat absence as "no data for that day yet" rather than "zero
    * activity".
    */
+  /**
+   * Every ride's measured day, for ONE park on ONE date.
+   *
+   * The per-attraction twin below answers a date RANGE for a single ride, which
+   * is what the attraction page asks. A trip planner asks the transpose — one
+   * day, every ride — and running that through the other method would be one
+   * query per attraction, fifty for a large park, to read fifty rows that share
+   * an index.
+   *
+   * `date` is the PARK-local day and the slot times are the park's wall clock
+   * (see the writer in `buildParkHourlyRollup`), so nothing here converts a
+   * timezone. Absence is "not rolled up yet", never "nothing happened": today is
+   * deliberately not in this table, and a day before the nightly job first ran
+   * is not in it either.
+   */
+  async getParkHourlyHistory(
+    parkId: string,
+    date: string,
+  ): Promise<Map<string, AttractionHourlyHistory>> {
+    const rows = await this.attractionHourlyHistoryRepository
+      .createQueryBuilder("h")
+      .where("h.parkId = :parkId", { parkId })
+      .andWhere("h.date = :date", { date })
+      .getMany();
+
+    const map = new Map<string, AttractionHourlyHistory>();
+    for (const row of rows) map.set(row.attractionId, row);
+    return map;
+  }
+
   async getAttractionHourlyHistory(
     attractionId: string,
     fromDate: string,

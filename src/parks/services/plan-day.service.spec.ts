@@ -35,6 +35,8 @@ describe("PlanDayService", () => {
   let headlinerIds: Set<string>;
   let headlinerFails: boolean;
   let queryCalls: unknown[][];
+  let hourlyHistory: Map<string, { slots: unknown[] }>;
+  let historyFails: boolean;
 
   const build = async () => {
     const moduleRef = await Test.createTestingModule({
@@ -63,6 +65,10 @@ describe("PlanDayService", () => {
                 if (headlinerFails) throw new Error("analytics down");
                 return headlinerIds;
               }),
+            getParkHourlyHistory: jest.fn().mockImplementation(async () => {
+              if (historyFails) throw new Error("history down");
+              return hourlyHistory;
+            }),
           },
         },
         {
@@ -107,6 +113,8 @@ describe("PlanDayService", () => {
     headlinerIds = new Set<string>();
     headlinerFails = false;
     queryCalls = [];
+    hourlyHistory = new Map();
+    historyFails = false;
     calendarDay = {
       date: "2026-10-17",
       status: "OPERATING",
@@ -442,5 +450,180 @@ describe("PlanDayService", () => {
     expect(plan.context.status).toBe("UNKNOWN");
     expect(plan.rides).toEqual([]);
     expect(plan.shows).toEqual([]);
+  });
+
+  // ── A day that already happened ────────────────────────────────────────────
+  // Before this the model was asked about the past. It generates forwards, so
+  // nothing matched and the response came back with an empty ride list under
+  // `tier: "measured"` and a negative `leadDays` — the most trustworthy label on
+  // the emptiest answer.
+  describe("a date in the past", () => {
+    const pastDate = () => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - 7);
+      return d.toISOString().slice(0, 10);
+    };
+
+    const slots = (
+      entries: Array<[string, number, number]>,
+    ): { slots: Array<Record<string, unknown>> } => ({
+      slots: entries.map(([time_slot, avgWait, sampleCount]) => ({
+        time_slot,
+        avgWait,
+        p90: avgWait + 20,
+        sampleCount,
+      })),
+    });
+
+    it("is answered from what the queues actually did", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      hourlyHistory = new Map([
+        [
+          "a-taron",
+          slots([
+            ["10:00", 30, 4],
+            ["10:15", 30, 4],
+            ["10:30", 30, 4],
+            ["10:45", 30, 4],
+            ["14:00", 70, 4],
+          ]),
+        ],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("observed");
+      expect(plan.leadDays).toBe(-7);
+      expect(plan.rides).toHaveLength(1);
+      const taron = plan.rides[0];
+      expect(taron.hours).toEqual([
+        { hour: 10, wait: 30 },
+        { hour: 14, wait: 70 },
+      ]);
+      expect(taron.dayPeak).toBe(70);
+      // An observation has no band. A width of zero would be a claim about
+      // precision rather than the absence of one.
+      expect(taron.uncertaintyMinutes).toBeNull();
+      // Exactly one measured day stands behind this curve: this one.
+      expect(taron.sampleDays).toBe(1);
+    });
+
+    it("weights each slot by how often the feed answered", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      // Three quarters of the hour at 20 minutes with twelve readings each, and
+      // one quarter at 80 with a single reading — a two-minute outage. A plain
+      // mean of the four slots is 35; the weighted one is 21.6 → 20.
+      hourlyHistory = new Map([
+        [
+          "a-taron",
+          slots([
+            ["11:00", 20, 12],
+            ["11:15", 20, 12],
+            ["11:30", 20, 12],
+            ["11:45", 80, 1],
+          ]),
+        ],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours).toEqual([{ hour: 11, wait: 20 }]);
+    });
+
+    it("keeps a slot the writer left no count on", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      hourlyHistory = new Map([
+        ["a-taron", slots([["12:00", 45, 0]])],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // A gap in the writer's bookkeeping must not delete an hour somebody
+      // actually stood in.
+      expect(plan.rides[0].hours).toEqual([{ hour: 12, wait: 45 }]);
+    });
+
+    it("omits a ride the rollup has no row for rather than drawing it at zero", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      attractions = [
+        { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
+        { id: "a-fly", slug: "f-l-y", name: "F.L.Y.", landName: "Rookburgh" },
+      ];
+      service = await build();
+      hourlyHistory = new Map([
+        ["a-taron", slots([["10:00", 25, 4]])],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // Absence in that table means "not rolled up", never "empty queue".
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("drops slots outside the park's own hours", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      hourlyHistory = new Map([
+        [
+          "a-taron",
+          slots([
+            ["07:00", 15, 4],
+            ["10:00", 40, 4],
+            ["22:00", 15, 4],
+          ]),
+        ],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours).toEqual([{ hour: 10, wait: 40 }]);
+    });
+
+    it("asks for no forecast at all", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      hourlyHistory = new Map([
+        ["a-taron", slots([["10:00", 25, 4]])],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+      expect(plan.rides).toHaveLength(1);
+
+      // Composing a shape onto a past date would draw a forecast for a day the
+      // visitor already walked — and `getParkHourlyProfile` is a year of
+      // aggregates over every ride in the park, paid for nothing.
+      const stats = (
+        service as unknown as {
+          historicalStatsService: { getParkHourlyProfile: jest.Mock };
+        }
+      ).historicalStatsService;
+      expect(stats.getParkHourlyProfile).not.toHaveBeenCalled();
+      const ml = (
+        service as unknown as {
+          mlService: {
+            getParkPredictions: jest.Mock;
+            getServingDailyPredictions: jest.Mock;
+          };
+        }
+      ).mlService;
+      expect(ml.getParkPredictions).not.toHaveBeenCalled();
+      expect(ml.getServingDailyPredictions).not.toHaveBeenCalled();
+    });
+
+    it("survives the rollup being unavailable", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      historyFails = true;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("observed");
+      expect(plan.rides).toEqual([]);
+      expect(plan.context.status).toBe("OPERATING");
+    });
   });
 });
