@@ -79,9 +79,13 @@ export class PlanDayRideDto {
   @ApiProperty({
     type: [PlanDayHourDto],
     description:
-      "One entry per open hour. Absent rides are those with no measured " +
-      "hourly shape to scale — the endpoint omits them rather than drawing a " +
-      "flat line, which would assert the queue is the same all day.",
+      "One entry per hour the RIDE is open, which starts at `opensAt` rather " +
+      "than at the park's opening: drawing a queue for a ride that is not " +
+      "running yet is the same invention as drawing a flat line, and at " +
+      "Phantasialand it was two hours of it on the park's best coasters. " +
+      "Absent rides are those with no measured hourly shape to scale — the " +
+      "endpoint omits them rather than drawing a flat line, which would assert " +
+      "the queue is the same all day.",
   })
   hours: PlanDayHourDto[];
 
@@ -109,6 +113,27 @@ export class PlanDayRideDto {
       "spread — which is NOT a band of width zero and must not be drawn as one.",
   })
   uncertaintyMinutes?: number | null;
+
+  @ApiProperty({
+    required: false,
+    example: "10:00",
+    description:
+      "When this ride opens, park-local `HH:mm` — which is NOT the park's " +
+      "opening hour. Phantasialand opens at 09:00 and Taron, F.L.Y., Crazy Bats, " +
+      "Raik and Colorado Adventure all start at 10:00; measured over 30 days the " +
+      "rides split into two clean groups an hour apart. `hours` already begins at " +
+      "this time, so a caller does not have to clamp anything — the field is here " +
+      'to be SHOWN ("opens at 10:00"), because a visitor arriving at rope drop ' +
+      "needs to know which queue does not exist yet.\n\n" +
+      "Absent when we cannot tell: fewer than five observed openings, or a ride " +
+      "whose feed never reports a CLOSED→OPERATING transition. Absent means " +
+      'unknown, never "opens with the park".\n\n' +
+      "There is deliberately no closing counterpart. The feeds do not reliably " +
+      "flip a ride to CLOSED at the end of the day — rides read OPERATING for " +
+      "hours after a park shuts — so a `closesAt` would be a guess wearing a " +
+      "timestamp.",
+  })
+  opensAt?: string;
 
   @ApiProperty({
     example: 141,

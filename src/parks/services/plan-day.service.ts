@@ -361,17 +361,19 @@ export class PlanDayService {
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [dayLevels, downIds, headlinerIds, measured] = await Promise.all([
-      this.dayLevels(park, dateStr),
-      this.downYesterday(park, dateStr),
-      this.headlinerIds(park),
-      withinHourly
-        ? this.measuredHours(park, dateStr, openHour, closeHour)
-        : Promise.resolve({
-            hours: new Map<string, Map<number, number>>(),
-            bands: new Map<string, number>(),
-          }),
-    ]);
+    const [dayLevels, downIds, headlinerIds, openings, measured] =
+      await Promise.all([
+        this.dayLevels(park, dateStr),
+        this.downYesterday(park, dateStr),
+        this.headlinerIds(park),
+        this.rideOpenings(park),
+        withinHourly
+          ? this.measuredHours(park, dateStr, openHour, closeHour)
+          : Promise.resolve({
+              hours: new Map<string, Map<number, number>>(),
+              bands: new Map<string, number>(),
+            }),
+      ]);
 
     // The composed curve per ride, the sample count behind its shape, and the
     // land the profile names it in — that one prefers the curated column, which
@@ -419,8 +421,18 @@ export class PlanDayService {
       const measuredHours = measured.hours.get(attractionId);
       const composedHours = composed.get(attractionId);
 
+      // The ride's own first hour, never earlier than the park's. Half the rides
+      // report OPERATING before the gates open — the feed carries the operator's
+      // system state — so the park's hour is the floor and the ride's is the
+      // correction on top of it.
+      const opensAt = openings.get(attractionId);
+      const rideOpenHour = Math.max(
+        openHour,
+        opensAt ? Number(opensAt.slice(0, 2)) : openHour,
+      );
+
       const hours: PlanDayHourDto[] = [];
-      for (let h = openHour; h <= closeHour; h++) {
+      for (let h = rideOpenHour; h <= closeHour; h++) {
         const fromModel = measuredHours?.get(h);
         if (fromModel !== undefined) {
           hours.push({
@@ -457,6 +469,7 @@ export class PlanDayService {
         uncertaintyMinutes:
           level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
         sampleDays: sampleDays.get(attractionId) ?? 0,
+        ...(opensAt && rideOpenHour > openHour ? { opensAt } : {}),
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
@@ -864,6 +877,23 @@ export class PlanDayService {
       where: { parkId: park.id, retiredAt: IsNull() },
       select: ["id", "slug", "name", "landName", "latitude", "longitude"],
     });
+  }
+
+  /**
+   * When each ride opens, park-local `HH:mm`, or an empty map.
+   *
+   * A failure here costs the clamp, not the day: without it every curve starts
+   * at the park's opening, which is the behaviour this replaced.
+   */
+  private async rideOpenings(park: Park): Promise<Map<string, string>> {
+    return this.analyticsService
+      .getRideOpeningTimes(park.id, park.timezone)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: ride openings unavailable for ${park.slug}: ${err.message}`,
+        );
+        return new Map<string, string>();
+      });
   }
 
   private async headlinerIds(park: Park): Promise<ReadonlySet<string>> {

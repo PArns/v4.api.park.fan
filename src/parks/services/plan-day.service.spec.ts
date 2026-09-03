@@ -40,6 +40,7 @@ describe("PlanDayService", () => {
   let hourlyHistory: Map<string, { slots: unknown[] }>;
   let historyFails: boolean;
   let leadMae: number | null;
+  let rideOpenings: Map<string, string>;
   let profileMock: jest.Mock;
   let leadMaeMock: jest.Mock;
   let parkShows: Array<{ id: string; slug: string; name: string }>;
@@ -77,6 +78,9 @@ describe("PlanDayService", () => {
               if (historyFails) throw new Error("history down");
               return hourlyHistory;
             }),
+            getRideOpeningTimes: jest
+              .fn()
+              .mockImplementation(async () => rideOpenings),
           },
         },
         {
@@ -167,6 +171,7 @@ describe("PlanDayService", () => {
     ];
     hourlyPredictions = [];
     leadMae = null;
+    rideOpenings = new Map();
     parkShows = [];
     scheduledTimes = new Map();
     patterns = new Map();
@@ -600,6 +605,70 @@ describe("PlanDayService", () => {
       expect(plan.tier).toBe("measured");
       expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([9, 10, 11]);
       expect(plan.rides[0].sampleDays).toBe(0);
+    });
+  });
+
+  // ── When the RIDE opens, which is not when the park opens ──────────────────
+  describe("a ride that opens later than its park", () => {
+    it("starts the curve at the ride's own opening and says when that is", async () => {
+      // Phantasialand opens at 09:00 and Taron runs from 10:00 — measured over
+      // 30 days, its rides split into two groups an hour apart. Starting every
+      // curve at the park's hour invented two hours of queue on the coasters
+      // people plan their morning around.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      rideOpenings = new Map([["a-taron", "10:00"]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      const taron = plan.rides[0];
+      expect(taron.opensAt).toBe("10:00");
+      expect(taron.hours[0].hour).toBe(10);
+      // And the day still runs to the park's close.
+      expect(taron.hours[taron.hours.length - 1].hour).toBe(18);
+    });
+
+    it("ignores an opening earlier than the park's own", async () => {
+      // Half the rides report OPERATING before the gates open — the feed carries
+      // the operator's system state, not whether a visitor can walk up. The
+      // park's hour is the floor.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      rideOpenings = new Map([["a-taron", "08:04"]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours[0].hour).toBe(9);
+      // Nothing to tell the reader: it opens with the park.
+      expect(plan.rides[0].opensAt).toBeUndefined();
+    });
+
+    it("draws the park's day when the opening is unknown", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours[0].hour).toBe(9);
+      expect(plan.rides[0].opensAt).toBeUndefined();
     });
   });
 
