@@ -5,6 +5,7 @@ import { Job } from "bull";
 import { Redis } from "ioredis";
 import { MLService } from "../../ml/ml.service";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
+import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -22,6 +23,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
   constructor(
     private mlService: MLService,
     private leadSnapshotService: PredictionLeadSnapshotService,
+    private forecastAccuracyService: ForecastAccuracyService,
     private parksService: ParksService,
     private cacheWarmupService: CacheWarmupService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -364,6 +366,26 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(`Lead-time snapshot scoring failed: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Recompute how wrong the daily forecast typically is.
+   *
+   * Retrospective, so it needs no waiting: `tft_forecasts` keeps every origin, so
+   * the error at 1, 7, 30 and 60 days out can be measured from history. Nightly
+   * because the answer follows the model, and a figure a planner shows as "give
+   * or take" must not be a constant somebody wrote once.
+   */
+  @Process("rebuild-accuracy-profile")
+  async handleRebuildAccuracyProfile(_job: Job): Promise<void> {
+    try {
+      const cells = await this.forecastAccuracyService.rebuild();
+      this.logger.log(`✅ Forecast accuracy profile: ${cells} cell(s)`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Accuracy profile rebuild failed: ${message}`);
       throw error;
     }
   }

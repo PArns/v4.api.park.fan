@@ -8,6 +8,7 @@ import { ParkHistoricalStatsService } from "../../analytics/park-historical-stat
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ShowsService } from "../../shows/shows.service";
+import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
@@ -41,6 +42,10 @@ describe("PlanDayService", () => {
   let historyFails: boolean;
   let leadMae: number | null;
   let rideOpenings: Map<string, string>;
+  let accuracyProfile: Map<
+    string,
+    { mae: number; leadBucket: string; sampleSize: number }
+  >;
   let profileMock: jest.Mock;
   let leadMaeMock: jest.Mock;
   let parkShows: Array<{ id: string; slug: string; name: string }>;
@@ -113,6 +118,14 @@ describe("PlanDayService", () => {
           useValue: { getLeadTimeMae: leadMaeMock },
         },
         {
+          provide: ForecastAccuracyService,
+          useValue: {
+            getProfile: jest
+              .fn()
+              .mockImplementation(async () => accuracyProfile),
+          },
+        },
+        {
           provide: ShowsService,
           useValue: {
             findByParkId: jest.fn().mockImplementation(async () => parkShows),
@@ -172,6 +185,7 @@ describe("PlanDayService", () => {
     hourlyPredictions = [];
     leadMae = null;
     rideOpenings = new Map();
+    accuracyProfile = new Map();
     parkShows = [];
     scheduledTimes = new Map();
     patterns = new Map();
@@ -605,6 +619,68 @@ describe("PlanDayService", () => {
       expect(plan.tier).toBe("measured");
       expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([9, 10, 11]);
       expect(plan.rides[0].sampleDays).toBe(0);
+    });
+  });
+
+  // ── How wrong the day is, said out loud ────────────────────────────────────
+  describe("accuracy", () => {
+    const withProfile = () => {
+      accuracyProfile = new Map([
+        ["quiet|d30", { mae: 10.9, leadBucket: "d30", sampleSize: 645350 }],
+        ["mid|d30", { mae: 15.4, leadBucket: "d30", sampleSize: 377140 }],
+        ["busy|d30", { mae: 23.9, leadBucket: "d30", sampleSize: 117519 }],
+      ]);
+    };
+
+    const dayAt = (offset: number) => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + offset);
+      const date = d.toISOString().slice(0, 10);
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      return date;
+    };
+
+    it("puts the measured error on the ride, chosen by its own level", async () => {
+      // The fixture predicts 60 minutes for Taron, so it takes the busy cell —
+      // a single per-day figure would have handed it the quiet ride's 10.9.
+      withProfile();
+      const date = dayAt(20);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].dayPeak).toBe(60);
+      expect(plan.rides[0].expectedError).toBe(23.9);
+      expect(plan.accuracy.basis).toBe("measured");
+      expect(plan.accuracy.typicalError).toBe(23.9);
+    });
+
+    it("says unmeasured past the horizon rather than guessing", async () => {
+      // Beyond 60 days the only model left is CatBoost, and nothing has ever
+      // scored it at that distance. A planner must not present such a day as
+      // precise — this flag is how it knows.
+      withProfile();
+      const date = dayAt(120);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.accuracy.basis).toBe("unmeasured");
+      expect(plan.accuracy.typicalError).toBeUndefined();
+      expect(plan.rides.every((r) => r.expectedError === undefined)).toBe(true);
+    });
+
+    it("says unmeasured when the profile has not been built yet", async () => {
+      const date = dayAt(20);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.accuracy.basis).toBe("unmeasured");
+      expect(plan.rides[0].expectedError).toBeUndefined();
     });
   });
 
