@@ -32,6 +32,18 @@ export type PlanDayHourSource = "observed" | "measured" | "composed";
 /** Where `openHour`/`closeHour` came from. */
 export type PlanDayHoursSource = "schedule" | "observed";
 
+/**
+ * Where a show's times came from.
+ *
+ * `scheduled` is the operator's own answer for that day. `projected` is this
+ * API's, built from the most recent day the show ran on the same weekday —
+ * because **no feed publishes showtimes ahead of the current day**. Checked at
+ * the source: ThemeParks.wiki answers for today and then a tail of entries it
+ * never cleared, some from 2022; across every park we track, not one carries a
+ * park-local showtime for a future day.
+ */
+export type PlanDayShowSource = "scheduled" | "projected";
+
 export class PlanDayHourDto {
   @ApiProperty({ example: 14, description: "Park-local hour, 0–23." })
   hour: number;
@@ -144,6 +156,53 @@ export class PlanDayRideDto {
       "out the ones a visitor has not planned.",
   })
   isHeadliner?: boolean;
+}
+
+export class PlanDayShowDto {
+  @ApiProperty({ example: "big-moments-the-celebration-show" })
+  showSlug: string;
+
+  @ApiProperty({ example: "Big Moments – The Celebration-Show" })
+  showName: string;
+
+  @ApiProperty({
+    type: [String],
+    example: ["12:30", "14:30", "17:45"],
+    description: "Park-local start times, ascending.",
+  })
+  times: string[];
+
+  @ApiProperty({
+    enum: ["scheduled", "projected"],
+    description:
+      "`scheduled` is the operator's own answer for this day and exists for " +
+      "today only — no feed publishes showtimes further ahead. `projected` is " +
+      "ours, and a caller MUST render it differently: it is what the show did " +
+      "on the most recent matching weekday, not a promise that it runs.",
+  })
+  source: PlanDayShowSource;
+
+  @ApiProperty({
+    required: false,
+    example: "2026-08-29",
+    description:
+      "Projections only: the day these times were actually observed on. A " +
+      "projection that cannot say what it was projected FROM is " +
+      "indistinguishable from a schedule.",
+  })
+  observedOn?: string;
+
+  @ApiProperty({
+    required: false,
+    example: 7,
+    description:
+      "Projections only: how many days in the last eight weeks had this show " +
+      "on this weekday. One sighting is an event, not a schedule — a single " +
+      "summer concert must not become every Thursday of the autumn — so a " +
+      "projection needs more than one, and the count travels so a reader can " +
+      "weigh it.",
+  })
+  sampleDays?: number;
 }
 
 export class PlanDayContextDto {
@@ -272,10 +331,13 @@ export class PlanDayDto {
   rides: PlanDayRideDto[];
 
   @ApiProperty({
-    type: [Object],
+    type: [PlanDayShowDto],
     description:
-      "Showtimes for the day, when known. Shows are fixed points a plan is " +
-      "arranged around rather than fitted between.",
+      "Shows for the day — fixed points a plan is arranged around rather than " +
+      "fitted between. `source` says whether the times are the operator's " +
+      "(today only) or this API's projection from the same weekday, and the " +
+      "two must not be drawn alike. Empty for a park whose shows we have never " +
+      "watched, which is a different statement from a park with no shows.",
   })
-  shows: Array<Record<string, unknown>>;
+  shows: PlanDayShowDto[];
 }

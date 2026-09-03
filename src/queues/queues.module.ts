@@ -29,6 +29,7 @@ import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
+import { ShowPatternProcessor } from "./processors/show-pattern.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
 import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
@@ -193,6 +194,9 @@ import { TripsModule } from "../trips/trips.module";
       // than a second job on the push tick, because it is maintenance on a
       // table and has nothing to do with notifying anybody.
       { name: "trips" },
+      // Showtime patterns: the nightly rebuild that lets a planned day show a
+      // projected programme, since no feed publishes showtimes ahead of today.
+      { name: "show-patterns" },
     ),
 
     // Feature modules for processors
@@ -250,6 +254,7 @@ import { TripsModule } from "../trips/trips.module";
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
+    ShowPatternProcessor, // Nightly per-weekday showtime patterns
     RopeDropProcessor, // Rope-drop recommendations (daily)
     TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)
     GeoipUpdateProcessor,

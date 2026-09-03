@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
@@ -11,6 +11,8 @@ import { AnalyticsService } from "../../analytics/analytics.service";
 import { AttractionHourlyHistory } from "../../analytics/entities/attraction-hourly-history.entity";
 import { ParkHourlyProfileDto } from "../../analytics/dto/park-hourly-profile.dto";
 import { CalendarService } from "./calendar.service";
+import { ShowsService } from "../../shows/shows.service";
+import { ShowSchedulePattern } from "../../shows/entities/show-schedule-pattern.entity";
 import { composeDayCurve } from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { formatInParkTimezone } from "../../common/utils/date.util";
@@ -20,6 +22,7 @@ import {
   PlanDayHourDto,
   PlanDayHoursSource,
   PlanDayRideDto,
+  PlanDayShowDto,
   PlanDayTier,
 } from "../dto/plan-day.dto";
 
@@ -83,6 +86,24 @@ export class PlanDayService {
    */
   private static readonly SHAPE_RIDES = 60;
 
+  /**
+   * Days a show must have been seen on a weekday before its times are projected.
+   *
+   * One sighting is an event. "Crazy Summer with Ross Antony & Paul Reeves" was
+   * seen at Europa-Park exactly once, on 23 July; projecting it forward would
+   * have put a concert on every remaining Thursday of the year.
+   */
+  private static readonly MIN_PATTERN_DAYS = 2;
+
+  /**
+   * How stale a pattern may be before it stops being projected.
+   *
+   * A programme nobody has seen for a month is last month's programme. The
+   * window the pattern itself is built from is eight weeks, so this is the
+   * tighter of the two and the one that decides.
+   */
+  private static readonly MAX_PATTERN_AGE_DAYS = 28;
+
   constructor(
     @InjectRepository(Attraction)
     private readonly attractionRepository: Repository<Attraction>,
@@ -91,6 +112,8 @@ export class PlanDayService {
     private readonly historicalStatsService: ParkHistoricalStatsService,
     private readonly analyticsService: AnalyticsService,
     private readonly leadSnapshotService: PredictionLeadSnapshotService,
+    @Inject(forwardRef(() => ShowsService))
+    private readonly showsService: ShowsService,
   ) {}
 
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
@@ -167,14 +190,7 @@ export class PlanDayService {
       leadDays,
       leadTimeMae: await this.leadTimeMae(leadDays),
       rides: [],
-      // Empty, and deliberately so for now. The calendar DTO has no showtimes
-      // field at all — `IntegratedCalendarDayDto` never declared one, which is
-      // why every calendar response looks like a park with no shows rather
-      // than like a field that was not asked for. Wiring ShowsService in here
-      // is its own change: showtimes are only known for a narrow window, so
-      // this has to return "not known this far out" rather than "no shows",
-      // and those are different answers.
-      shows: [],
+      shows: await this.buildShows(park, dateStr),
     };
 
     // A closed day, or one whose hours nobody knows, has no curves to draw, and
@@ -208,6 +224,110 @@ export class PlanDayService {
     base.tier = built.tier;
     base.rides = built.rides;
     return base;
+  }
+
+  /**
+   * The day's shows — the operator's answer where one exists, ours where it does
+   * not, and never the two looking alike.
+   *
+   * **No feed publishes showtimes beyond the current day.** Checked at the
+   * source rather than assumed: ThemeParks.wiki's live response for Europa-Park
+   * carries 186 start times for today and, past that, only entries it never
+   * cleared — some from 2022. Across every park in the database, not one holds a
+   * park-local showtime for a future day. So a planner asking about October gets
+   * nothing from the feed, and `shows` was an empty array for every date.
+   *
+   * The projection is the show's own recent behaviour: the times it ran at on
+   * the most recent day with the SAME WEEKDAY. That distinction is not decorative
+   * — measured at Europa-Park, "Big Moments – The Celebration-Show" runs twice on
+   * a Thursday and three times on a Saturday, and "Carnival in Venice" runs an
+   * hour later on Saturdays. A weekday-blind projection would either drop the
+   * extra performance or promise it on a Tuesday.
+   *
+   * Two guards keep a projection from becoming a claim: a show has to have been
+   * seen on that weekday more than once ({@link MIN_PATTERN_DAYS}), and recently
+   * ({@link MAX_PATTERN_AGE_DAYS}). Both come from a real case in the data — a
+   * one-off summer concert that would otherwise have been promised every
+   * Thursday until Christmas.
+   *
+   * A park whose shows we have never watched gets `[]`, which is a different
+   * statement from "this park has no shows" and is why the DTO says so.
+   */
+  private async buildShows(
+    park: Park,
+    dateStr: string,
+  ): Promise<PlanDayShowDto[]> {
+    const shows = await this.showsService
+      .findByParkId(park.id)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: shows unavailable for ${park.slug}: ${err.message}`,
+        );
+        return [];
+      });
+    if (shows.length === 0) return [];
+
+    // Postgres' EXTRACT(DOW) and JavaScript's getUTCDay() agree (0 = Sunday);
+    // the pattern column is written by the former and read here by the latter.
+    const weekday = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+
+    const [scheduled, patterns] = await Promise.all([
+      this.showsService
+        .getShowtimesOnDate(park.id, park.timezone, dateStr)
+        .catch(() => new Map<string, string[]>()),
+      this.showsService
+        .getSchedulePatterns(park.id, weekday)
+        .catch(() => new Map<string, ShowSchedulePattern>()),
+    ]);
+
+    const out: PlanDayShowDto[] = [];
+    for (const show of shows) {
+      const known = scheduled.get(show.id);
+      if (known && known.length > 0) {
+        out.push({
+          showSlug: show.slug,
+          showName: show.name,
+          times: known,
+          source: "scheduled",
+        });
+        continue;
+      }
+
+      const pattern = patterns.get(show.id);
+      if (!pattern || pattern.times.length === 0) continue;
+      if (pattern.observedDays < PlanDayService.MIN_PATTERN_DAYS) continue;
+      // Measured against TODAY, never against the target date: a pattern is
+      // stale because nobody has seen it lately, not because the day asked
+      // about is far away. Measuring against the target would reject every
+      // date more than four weeks out — which is most of what a planner asks.
+      if (
+        this.daysBetween(pattern.lastObservedOn, this.today(park)) >
+        PlanDayService.MAX_PATTERN_AGE_DAYS
+      ) {
+        continue;
+      }
+
+      out.push({
+        showSlug: show.slug,
+        showName: show.name,
+        times: pattern.times,
+        source: "projected",
+        observedOn: pattern.lastObservedOn,
+        sampleDays: pattern.observedDays,
+      });
+    }
+
+    // Earliest first: a plan is read down the day.
+    return out.sort(
+      (a, b) =>
+        (a.times[0] ?? "").localeCompare(b.times[0] ?? "") ||
+        a.showName.localeCompare(b.showName),
+    );
+  }
+
+  /** Today, in the park's timezone. */
+  private today(park: Park): string {
+    return formatInParkTimezone(new Date(), park.timezone);
   }
 
   /**
