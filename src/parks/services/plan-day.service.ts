@@ -5,47 +5,83 @@ import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { MLService } from "../../ml/ml.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { AttractionHourlyHistory } from "../../analytics/entities/attraction-hourly-history.entity";
+import { ParkHourlyProfileDto } from "../../analytics/dto/park-hourly-profile.dto";
 import { CalendarService } from "./calendar.service";
 import { composeDayCurve } from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
-import { PlanDayDto, PlanDayRideDto, PlanDayTier } from "../dto/plan-day.dto";
+import {
+  PlanDayDto,
+  PlanDayHourDto,
+  PlanDayHoursSource,
+  PlanDayRideDto,
+  PlanDayTier,
+} from "../dto/plan-day.dto";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
  *
  * Nothing upstream answers "what will Taron's queue be at 14:00 on 17 October".
- * The model generates hourly predictions 24 hours ahead
- * (`HOURLY_PREDICTIONS = 24` in the python service) and day-level predictions
- * out to 60 days. So there are two regimes, and which one produced a number
- * travels with it as `tier`:
+ * What exists is an hourly forecast for the next 24 hours (`HOURLY_PREDICTIONS`
+ * in the python service) and a day-level forecast for as far ahead as the park
+ * has published a schedule — about six months. So there are two regimes, and
+ * which one produced a number travels with it:
  *
- * - **measured** — today and tomorrow, straight from the stored hourly
- *   predictions. The model's own answer at its own resolution.
- * - **composed** — beyond that, a day-level prediction scaled by the ride's
- *   historical hour shape (see `composeDayCurve`). The level is predicted, the
- *   shape is historical.
- * - **long_range** — the same composition past the stored 60-day daily horizon,
- *   where the day level is thinner and says so.
+ * - **measured** — the model's own hourly answer, at its own resolution. It
+ *   exists for the next 24 hours and not one minute further, so a day inside
+ *   that window is part measured and part composed and every hour says which
+ *   it is (`PlanDayHourDto.source`).
+ * - **composed** — a day-level prediction scaled by the ride's historical hour
+ *   shape (see `composeDayCurve`). The level is predicted, the shape is
+ *   historical.
+ * - **observed** — a date in the past, answered from what the queues actually
+ *   did. Not a forecast at all.
+ * - **long_range** — the model has said nothing about this date, so there are
+ *   no curves. Reported rather than guessed.
  *
  * The alternative to composing was returning nothing past tomorrow, and a
  * planner that goes blank in March for a July trip is not a planner. The
  * alternative to labelling it was letting a composed number look exactly like a
- * measured one, which is the failure this whole design is arranged against.
+ * measured one, which is the failure this whole design is arranged against —
+ * and which the code had anyway, twice: the tier was decided by DISTANCE, so a
+ * day whose hourly rows never arrived was served composed under the `measured`
+ * label, and the hours the 24-hour window did not reach were simply missing,
+ * which cut the evening off a park that closes at 22:00.
  */
 @Injectable()
 export class PlanDayService {
   private readonly logger = new Logger(PlanDayService.name);
 
-  /** Where the stored daily predictions stop (`MLService.deduplicatePredictions`). */
-  private static readonly DAILY_HORIZON_DAYS = 60;
-
-  /** Where the python service's hourly generation stops. */
+  /**
+   * Where the python service's hourly generation stops
+   * (`HOURLY_PREDICTIONS = 24` hours, as 96 quarter-hour slots).
+   *
+   * There is deliberately no matching DAILY constant. The daily horizon is not
+   * a fixed number of days — `predict.py` walks the park's schedule, so it ends
+   * where the operator's published calendar does, which measured across the
+   * live parks is 181 to 362 days and averages 193. A hard-coded 60 was wrong
+   * for every park, and labelled two thirds of the days it could actually
+   * answer as out of range. Whether a date has a day level is a question with
+   * an answer, so this asks it (see `dayLevels`).
+   */
   private static readonly HOURLY_HORIZON_DAYS = 1;
+
+  /**
+   * Rides the historical shape may cover.
+   *
+   * 60 rather than the 20 this asked for at first, and it costs nothing: the
+   * profile's own SQL already fetches `min(topN * 3, 60)` rides so its
+   * peak-hour re-ranking has something to re-rank, and then throws away
+   * everything past `topN`. Asking for 20 therefore ran the same query and
+   * discarded two thirds of it — Phantasialand's ride list went from 34 to 16
+   * between tomorrow and the day after, which reads as rides closing.
+   */
+  private static readonly SHAPE_RIDES = 60;
 
   constructor(
     @InjectRepository(Attraction)
@@ -54,27 +90,59 @@ export class PlanDayService {
     private readonly calendarService: CalendarService,
     private readonly historicalStatsService: ParkHistoricalStatsService,
     private readonly analyticsService: AnalyticsService,
+    private readonly leadSnapshotService: PredictionLeadSnapshotService,
   ) {}
 
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
     const today = formatInParkTimezone(new Date(), park.timezone);
     const leadDays = this.daysBetween(today, dateStr);
+    const isFuture = leadDays >= 0;
 
     // The day's own facts: opening hours, crowd level, weather, holiday flags.
     // One day rather than a month — the caller asked about one day, and the
     // calendar's month cache would answer with 92 KB to serve 1 KB of it.
     const day = await this.loadDay(park, dateStr);
+    const status = day?.status ?? "UNKNOWN";
 
-    const openHour = this.hourIn(day?.hours?.openingTime, park.timezone);
-    const closeHour = this.hourIn(day?.hours?.closingTime, park.timezone);
+    // The historical shape, needed both to compose curves and to fall back on
+    // for opening hours. An observed day wants neither: it is answered from
+    // what happened, and `getParkHourlyProfile` is a year of aggregates over
+    // every ride in the park. Composing a shape onto a past date would draw a
+    // forecast for a day the visitor walked.
+    const profile = isFuture ? await this.loadProfile(park) : null;
 
-    const tier = this.tierFor(leadDays);
+    let openHour = this.hourIn(day?.hours?.openingTime, park.timezone);
+    let closeHour = this.hourIn(day?.hours?.closingTime, park.timezone);
+    let hoursSource: PlanDayHoursSource | undefined =
+      openHour !== null && closeHour !== null ? "schedule" : undefined;
+
+    // No published hours, and the day is not a stated closure: fall back to the
+    // hours this park's queues have actually been measured in. Without this the
+    // whole response was an empty shell past the operator's publishing horizon
+    // — 91 of 177 parks with hours reach 60 days, 38 reach 120 — which is
+    // exactly the distance the planner exists for. The window is narrower than
+    // the real day (it is where we have readings, not where the gates are), so
+    // it is labelled `observed` rather than passed off as the schedule.
+    if (
+      hoursSource === undefined &&
+      isFuture &&
+      status !== "CLOSED" &&
+      profile
+    ) {
+      const derived = PlanDayService.observedHours(profile);
+      if (derived) {
+        openHour = derived.openHour;
+        closeHour = derived.closeHour;
+        hoursSource = "observed";
+      }
+    }
 
     const context = {
       date: dateStr,
-      status: day?.status ?? "UNKNOWN",
+      status,
       openHour,
       closeHour,
+      ...(hoursSource ? { hoursSource } : {}),
       crowdLevel: day?.crowdLevel ?? null,
       // No climate normal substituted past the forecast's reach. A made-up rain
       // probability would silently move every bar on the day, and the caller
@@ -95,9 +163,9 @@ export class PlanDayService {
       parkSlug: park.slug,
       timezone: park.timezone,
       context,
-      tier,
+      tier: PlanDayService.nominalTier(leadDays),
       leadDays,
-      leadTimeMae: null,
+      leadTimeMae: await this.leadTimeMae(leadDays),
       rides: [],
       // Empty, and deliberately so for now. The calendar DTO has no showtimes
       // field at all — `IntegratedCalendarDayDto` never declared one, which is
@@ -109,162 +177,207 @@ export class PlanDayService {
       shows: [],
     };
 
-    // A closed day has no curves to draw, and saying so is the answer.
+    // A closed day, or one whose hours nobody knows, has no curves to draw, and
+    // saying so is the answer. The tier stays the nominal one for the distance:
+    // with no curves there is no method to characterise.
     if (openHour === null || closeHour === null || closeHour < openHour) {
       return base;
     }
 
-    base.rides = await this.buildRides(
+    if (!isFuture) {
+      base.tier = "observed";
+      base.rides = await this.observedRides(
+        park,
+        dateStr,
+        openHour,
+        closeHour,
+        new Map((await this.attractions(park)).map((a) => [a.id, a])),
+        await this.headlinerIds(park),
+      );
+      return base;
+    }
+
+    const built = await this.forecastRides(
       park,
       dateStr,
-      tier,
+      leadDays,
       openHour,
       closeHour,
+      profile,
     );
+    base.tier = built.tier;
+    base.rides = built.rides;
     return base;
   }
 
   /**
-   * Rides for the day. `measured` reads the stored hourly predictions and
-   * collapses each hour's 15-minute slots; the other tiers compose a curve from
-   * the day level and the historical shape.
+   * The forecast tiers, in one pass.
+   *
+   * Measured hours and composed hours are built for the same ride list and then
+   * merged per hour, which is the fix for two failures that were one mistake:
+   * the tier used to be decided by distance rather than by what came back, and
+   * the hours the model's 24-hour window did not reach were dropped instead of
+   * filled. Measured live at 17:15, today's plan for Disneyland Paris covered
+   * 17:00–21:00 of a 09:00–22:00 day, tomorrow's covered 09:00–17:00, and
+   * `dayPeak` was the maximum of whatever was left.
    */
-  private async buildRides(
+  private async forecastRides(
     park: Park,
     dateStr: string,
-    tier: PlanDayTier,
+    leadDays: number,
     openHour: number,
     closeHour: number,
-  ): Promise<PlanDayRideDto[]> {
-    const attractions = await this.attractionRepository.find({
-      where: { parkId: park.id, retiredAt: IsNull() },
-      select: ["id", "slug", "name", "landName", "latitude", "longitude"],
-    });
-    if (attractions.length === 0) return [];
+    profile: ParkHourlyProfileDto | null,
+  ): Promise<{ tier: PlanDayTier; rides: PlanDayRideDto[] }> {
+    const withinHourly = leadDays <= PlanDayService.HOURLY_HORIZON_DAYS;
 
-    const bySlug = new Map(attractions.map((a) => [a.slug, a]));
+    const attractions = await this.attractions(park);
+    if (attractions.length === 0) return { tier: "composed", rides: [] };
     const byId = new Map(attractions.map((a) => [a.id, a]));
+    const bySlug = new Map(attractions.map((a) => [a.slug, a]));
+
     // Both are per-park sets keyed by attraction id, and neither is worth
     // serialising behind the other. The headliner set is the park's CURATED
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [downIds, headlinerIds] = await Promise.all([
+    const [dayLevels, downIds, headlinerIds, measured] = await Promise.all([
+      this.dayLevels(park, dateStr),
       this.downYesterday(park, dateStr),
-      this.analyticsService
-        .getHeadlinerAttractionIds(park.id)
-        .catch((err: Error) => {
-          this.logger.warn(
-            `Plan day: headliners unavailable for ${park.slug}: ${err.message}`,
-          );
-          return new Set<string>();
-        }),
+      this.headlinerIds(park),
+      withinHourly
+        ? this.measuredHours(park, dateStr, openHour, closeHour)
+        : Promise.resolve({
+            hours: new Map<string, Map<number, number>>(),
+            bands: new Map<string, number>(),
+          }),
     ]);
 
-    // Before the historical shape is fetched, because an observed day does not
-    // want one: it is answered from what happened, and `getParkHourlyProfile`
-    // is a year of aggregates over every ride in the park. Composing a shape
-    // onto a past date would draw a forecast for a day the visitor walked.
-    if (tier === "observed") {
-      return this.observedRides(
-        park,
-        dateStr,
-        openHour,
-        closeHour,
-        byId,
-        headlinerIds,
-      );
-    }
-
-    // The historical shape. topN is the endpoint's own cap rather than the
-    // caller's: a planner wants every ride it can get, and this payload is a
-    // few hundred bytes per ride.
-    const profile = await this.historicalStatsService
-      .getParkHourlyProfile(park, 1, 20, 20)
-      .catch((err: Error) => {
-        this.logger.warn(
-          `Plan day: hourly profile unavailable for ${park.slug}: ${err.message}`,
-        );
-        return null;
-      });
-
-    if (tier === "measured") {
-      const measured = await this.measuredRides(
-        park,
-        dateStr,
-        openHour,
-        closeHour,
-        byId,
-        profile,
-        downIds,
-        headlinerIds,
-      );
-      if (measured.length > 0) return measured;
-      // Fall through: the hourly rows can be missing for a park the generator
-      // skipped tonight, and a composed curve beats an empty day.
-    }
-
-    if (!profile || profile.attractions.length === 0) return [];
-
-    const dayLevels = await this.dayLevels(park, dateStr);
-    if (dayLevels.size === 0) return [];
-
-    const rides: PlanDayRideDto[] = [];
-    for (const shape of profile.attractions) {
+    // The composed curve per ride, the sample count behind its shape, and the
+    // land the profile names it in — that one prefers the curated column, which
+    // the raw `landName` on the attraction does not.
+    const composed = new Map<string, Map<number, number>>();
+    const sampleDays = new Map<string, number>();
+    const land = new Map<string, string | null>();
+    for (const shape of profile?.attractions ?? []) {
       const attraction = bySlug.get(shape.attractionSlug);
       if (!attraction) continue;
+      sampleDays.set(attraction.id, shape.sampleDays);
+      if (shape.land) land.set(attraction.id, shape.land);
 
       const level = dayLevels.get(attraction.id);
       if (!level) continue;
-
       const curve = composeDayCurve({
-        shapeHours: profile.hours,
+        shapeHours: profile!.hours,
         shapeP50: shape.p50,
         dayPeak: level.predictedWaitTime,
         openHour,
         closeHour,
       });
-      // No measured shape — omitted rather than drawn flat, which would assert
-      // the queue is the same all day.
+      // No measured shape — nothing to scale, so this ride is carried only if
+      // the model answered for it hour by hour. Drawing it flat at the day's
+      // level would assert the queue is the same all day.
       if (!curve) continue;
+      composed.set(attraction.id, new Map(curve.map((p) => [p.hour, p.wait])));
+    }
 
+    const tier: PlanDayTier =
+      measured.hours.size > 0
+        ? "measured"
+        : dayLevels.size > 0
+          ? "composed"
+          : "long_range";
+
+    const rides: PlanDayRideDto[] = [];
+    for (const attractionId of new Set([
+      ...measured.hours.keys(),
+      ...composed.keys(),
+    ])) {
+      const attraction = byId.get(attractionId);
+      if (!attraction) continue;
+
+      const measuredHours = measured.hours.get(attractionId);
+      const composedHours = composed.get(attractionId);
+
+      const hours: PlanDayHourDto[] = [];
+      for (let h = openHour; h <= closeHour; h++) {
+        const fromModel = measuredHours?.get(h);
+        if (fromModel !== undefined) {
+          hours.push({
+            hour: h,
+            wait: fromModel,
+            ...(tier === "measured" ? {} : { source: "measured" as const }),
+          });
+          continue;
+        }
+        const fromShape = composedHours?.get(h);
+        if (fromShape !== undefined) {
+          hours.push({
+            hour: h,
+            wait: fromShape,
+            ...(tier === "composed" ? {} : { source: "composed" as const }),
+          });
+        }
+      }
+      if (hours.length === 0) continue;
+
+      const level = dayLevels.get(attractionId);
       rides.push({
-        attractionSlug: shape.attractionSlug,
-        attractionName: shape.attractionName,
-        land: shape.land ?? attraction.landName ?? null,
-        hours: curve,
-        dayPeak: level.predictedWaitTime,
-        uncertaintyMinutes: level.uncertaintyMinutes ?? null,
-        sampleDays: shape.sampleDays,
+        attractionSlug: attraction.slug,
+        attractionName: attraction.name,
+        land: land.get(attractionId) ?? attraction.landName ?? null,
+        hours,
+        // The day's peak, from the day-level forecast — the same statistic on
+        // every tier. The maximum of `hours` is a fallback for a ride the daily
+        // run has no row for, and nothing better exists there.
+        dayPeak:
+          level?.predictedWaitTime ?? Math.max(...hours.map((p) => p.wait)),
+        // The band belongs to the number it surrounds, so it comes from the
+        // same row as `dayPeak`; the widest hourly band is the fallback.
+        uncertaintyMinutes:
+          level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
+        sampleDays: sampleDays.get(attractionId) ?? 0,
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
-        ...(downIds.has(attraction.id) ? { downYesterday: true } : {}),
-        ...(headlinerIds.has(attraction.id) ? { isHeadliner: true } : {}),
+        ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
+        ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
       });
     }
 
-    return rides;
+    // Busiest first: a planner reads the top of this list to decide what to
+    // book time for. Name as the tie-break so the order is stable between two
+    // requests for the same day.
+    rides.sort(
+      (a, b) =>
+        b.dayPeak - a.dayPeak ||
+        a.attractionName.localeCompare(b.attractionName),
+    );
+
+    return { tier, rides };
   }
 
   /**
-   * Today and tomorrow, from the model's own hourly predictions.
+   * The model's own hourly answer for one day, collapsed to whole hours.
    *
-   * The stored rows are 15-minute slots, so each hour is the MEAN of its slots:
-   * they are already point estimates from the median quantile, and taking the
-   * maximum instead would quietly turn an honest hour into a pessimistic one.
+   * This is a LIVE prediction, not a read of the stored rows:
+   * `MLService.getParkPredictions` posts to the python service and caches the
+   * answer per park and day, and the park page asks for the same thing on the
+   * same cache. The stored `wait_time_predictions` rows are the writer's copy
+   * and are not what any read path serves.
+   *
+   * Each hour is the MEAN of its 15-minute slots: they are already point
+   * estimates from the median quantile, and taking the maximum instead would
+   * quietly turn an honest hour into a pessimistic one.
    */
-  private async measuredRides(
+  private async measuredHours(
     park: Park,
     dateStr: string,
     openHour: number,
     closeHour: number,
-    byId: Map<string, Attraction>,
-    profile: Awaited<
-      ReturnType<ParkHistoricalStatsService["getParkHourlyProfile"]>
-    > | null,
-    downIds: ReadonlySet<string>,
-    headlinerIds: ReadonlySet<string>,
-  ): Promise<PlanDayRideDto[]> {
+  ): Promise<{
+    hours: Map<string, Map<number, number>>;
+    bands: Map<string, number>;
+  }> {
     const stored = await this.mlService
       .getParkPredictions(park.id, "hourly")
       .catch((err: Error) => {
@@ -274,13 +387,9 @@ export class PlanDayService {
         return { predictions: [] as PredictionDto[] };
       });
 
-    const sampleDaysBySlug = new Map(
-      (profile?.attractions ?? []).map((a) => [a.attractionSlug, a.sampleDays]),
-    );
-
     // attraction → hour → slot values
-    const byRide = new Map<string, Map<number, number[]>>();
-    const bandByRide = new Map<string, number>();
+    const slots = new Map<string, Map<number, number[]>>();
+    const bands = new Map<string, number>();
 
     for (const p of stored.predictions) {
       if (p.predictionType !== "hourly") continue;
@@ -290,52 +399,34 @@ export class PlanDayService {
       const hour = Number(formatInTimeZone(when, park.timezone, "HH"));
       if (hour < openHour || hour > closeHour) continue;
 
-      const hours = byRide.get(p.attractionId) ?? new Map<number, number[]>();
-      const slots = hours.get(hour) ?? [];
-      slots.push(p.predictedWaitTime);
-      hours.set(hour, slots);
-      byRide.set(p.attractionId, hours);
+      const hours = slots.get(p.attractionId) ?? new Map<number, number[]>();
+      const values = hours.get(hour) ?? [];
+      values.push(p.predictedWaitTime);
+      hours.set(hour, values);
+      slots.set(p.attractionId, hours);
 
       if (p.uncertaintyMinutes != null) {
         // The widest band the day carries for this ride: the planner draws one
         // channel per ride, and understating it is the failure that matters.
-        bandByRide.set(
+        bands.set(
           p.attractionId,
-          Math.max(bandByRide.get(p.attractionId) ?? 0, p.uncertaintyMinutes),
+          Math.max(bands.get(p.attractionId) ?? 0, p.uncertaintyMinutes),
         );
       }
     }
 
-    const rides: PlanDayRideDto[] = [];
-    for (const [attractionId, hourMap] of byRide) {
-      const attraction = byId.get(attractionId);
-      if (!attraction) continue;
-
-      const hours = [];
-      for (let h = openHour; h <= closeHour; h++) {
-        const slots = hourMap.get(h);
-        if (!slots || slots.length === 0) continue;
-        const mean = slots.reduce((a, b) => a + b, 0) / slots.length;
-        hours.push({ hour: h, wait: roundToNearest5Minutes(mean) });
+    const hours = new Map<string, Map<number, number>>();
+    for (const [attractionId, byHour] of slots) {
+      const means = new Map<number, number>();
+      for (const [hour, values] of byHour) {
+        if (values.length === 0) continue;
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        means.set(hour, roundToNearest5Minutes(mean));
       }
-      if (hours.length === 0) continue;
-
-      rides.push({
-        attractionSlug: attraction.slug,
-        attractionName: attraction.name,
-        land: attraction.landName ?? null,
-        hours,
-        dayPeak: Math.max(...hours.map((h) => h.wait)),
-        uncertaintyMinutes: bandByRide.get(attractionId) ?? null,
-        sampleDays: sampleDaysBySlug.get(attraction.slug) ?? 0,
-        latitude: PlanDayService.coord(attraction.latitude),
-        longitude: PlanDayService.coord(attraction.longitude),
-        ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
-        ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
-      });
+      if (means.size > 0) hours.set(attractionId, means);
     }
 
-    return rides;
+    return { hours, bands };
   }
 
   /**
@@ -350,11 +441,17 @@ export class PlanDayService {
    * halves of that are deliberate. `avgWait` rather than `p90`, because the
    * forward tiers are point estimates from the median quantile and a reader
    * comparing yesterday against tomorrow must be comparing the same kind of
-   * number — `p90` is the bad case, and swapping it in for the past would make
-   * every finished day look worse than the day that follows it. Weighted,
-   * because a slot the feed only answered twice must not count as much as one
-   * it answered twelve times; a plain mean of four slots hands a two-minute
-   * outage the same weight as a full quarter of an hour.
+   * number. Weighted, because a slot the feed only answered twice must not
+   * count as much as one it answered twelve times; a plain mean of four slots
+   * hands a two-minute outage the same weight as a full quarter of an hour.
+   *
+   * `dayPeak` is the day's P90 rather than the maximum of those hours, because
+   * that is the statistic the forecast side of the same field carries — a
+   * day-peak proxy, since predict.py collapses the peak-window hours to a
+   * per-day MAX, and the same number `getHeadlinerDailyPeaks` gives the
+   * calendar for its past days. A mean on one side of today and a peak on the
+   * other reads as the park getting busier next week when only the statistic
+   * changed.
    *
    * What is NOT here is as deliberate. There is no `uncertaintyMinutes`: an
    * observation has no band, and sending a width of zero would be a claim about
@@ -389,6 +486,7 @@ export class PlanDayService {
 
       // hour → [weightedSum, weight]
       const byHour = new Map<number, [number, number]>();
+      let peak = 0;
       for (const slot of row.slots ?? []) {
         const hour = Number(String(slot.time_slot).slice(0, 2));
         if (!Number.isInteger(hour) || hour < openHour || hour > closeHour) {
@@ -403,9 +501,12 @@ export class PlanDayService {
           Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
         const [sum, total] = byHour.get(hour) ?? [0, 0];
         byHour.set(hour, [sum + wait * weight, total + weight]);
+
+        const slotPeak = Number(slot.p90);
+        if (Number.isFinite(slotPeak)) peak = Math.max(peak, slotPeak);
       }
 
-      const hours = [];
+      const hours: PlanDayHourDto[] = [];
       for (let h = openHour; h <= closeHour; h++) {
         const bucket = byHour.get(h);
         if (!bucket || bucket[1] === 0) continue;
@@ -421,7 +522,7 @@ export class PlanDayService {
         attractionName: attraction.name,
         land: attraction.landName ?? null,
         hours,
-        dayPeak: Math.max(...hours.map((h) => h.wait)),
+        dayPeak: roundToNearest5Minutes(peak),
         // No band around a measurement.
         uncertaintyMinutes: null,
         // Exactly one measured day stands behind this curve, and it is this one.
@@ -466,17 +567,26 @@ export class PlanDayService {
   }
 
   /**
-   * Rides that were down for all of the previous operating day.
+   * Rides that broke and stayed broken through the previous operating day.
    *
-   * "Down" and "unobserved" are different answers and this only reports the
-   * first: a ride qualifies when it was seen at least once yesterday and was
-   * NEVER `OPERATING` in any of those readings. A ride with no rows at all is
-   * silence — a feed that stopped, a park that was shut — and warning about it
-   * would be this service asserting something it did not observe.
+   * Three states have to stay apart here, and the first version kept only one
+   * of them apart: a ride qualifies when it was reported **DOWN** at least once
+   * yesterday and was **never OPERATING** in any reading. A ride with no rows
+   * at all is silence — a feed that stopped, a park that was shut — and warning
+   * about it would be this service asserting something it did not observe. A
+   * ride the feed called CLOSED all day is a season or a refurbishment, not a
+   * fault: without the DOWN requirement this reported nine of Phantasialand's
+   * winter-only and water attractions as down every day of the summer, which is
+   * the same conflation `docs/architecture/attraction-status-and-seasonality.md`
+   * is written about.
    *
-   * Yesterday is the PARK's yesterday, not UTC's. `queue_data` carries a partial
-   * index on `status = 'DOWN'` written for exactly this question, so the scan is
-   * bounded to one park's rows for one day.
+   * Yesterday is the PARK's yesterday, and it is expressed as a timestamp RANGE
+   * rather than as a cast on the column. `(qd.timestamp AT TIME ZONE $2)::date
+   * = …` cannot be answered from an index and, worse, hides the column from
+   * TimescaleDB's chunk exclusion: measured on the live database it read all 254
+   * chunks ("Chunks excluded during startup: 0", 35 967 buffers, 1.1 s cold) to
+   * find nine rows in one of them. A half-open range on the raw column prunes to
+   * the one or two chunks the day touches.
    *
    * The join is `a.id`, NOT `a.id::text`. `queue_data.attractionId` is a uuid —
    * the `@JoinColumn` on the entity's `attraction` relation is what creates the
@@ -514,9 +624,11 @@ export class PlanDayService {
              FROM queue_data qd
              JOIN attractions a ON a.id = qd."attractionId"
             WHERE a."parkId" = $1::uuid
-              AND (qd.timestamp AT TIME ZONE $2)::date = ($3::date - INTERVAL '1 day')
+              AND qd.timestamp >= (($3::date - INTERVAL '1 day')::timestamp AT TIME ZONE $2)
+              AND qd.timestamp <  ($3::date::timestamp AT TIME ZONE $2)
             GROUP BY qd."attractionId"
-           HAVING COUNT(*) FILTER (WHERE qd.status = 'OPERATING') = 0`,
+           HAVING COUNT(*) FILTER (WHERE qd.status = 'OPERATING') = 0
+              AND COUNT(*) FILTER (WHERE qd.status = 'DOWN') > 0`,
           [park.id, park.timezone, dateStr],
         );
       for (const row of rows) out.add(row.attractionId);
@@ -554,6 +666,25 @@ export class PlanDayService {
     return out;
   }
 
+  /**
+   * The measured error at this distance, or null.
+   *
+   * Read from the lead-time archive rather than computed here — see
+   * `PredictionLeadSnapshot` for why the question cannot be answered from
+   * `wait_time_predictions` at all. Null while the archive has too few scored
+   * rows at that distance, which is the honest answer and the normal one for
+   * the far buckets in the weeks after this ships.
+   */
+  private async leadTimeMae(leadDays: number): Promise<number | null> {
+    if (leadDays <= 0) return null;
+    return this.leadSnapshotService
+      .getLeadTimeMae(leadDays)
+      .catch((err: Error) => {
+        this.logger.warn(`Plan day: lead-time MAE unavailable: ${err.message}`);
+        return null;
+      });
+  }
+
   private async loadDay(park: Park, dateStr: string) {
     const at = new Date(`${dateStr}T12:00:00Z`);
     const response = await this.calendarService
@@ -567,16 +698,78 @@ export class PlanDayService {
     return response?.days?.find((d) => d.date === dateStr) ?? null;
   }
 
-  private tierFor(leadDays: number): PlanDayTier {
-    // A date in the past is not a forecast horizon, and the ordering here is
-    // the whole reason to check it first: `-38 <= 1` is true, so a day five
-    // weeks gone came back labelled `measured` — the most trustworthy tier, on
-    // the emptiest possible answer, because the model generates forwards and
-    // nothing matched.
+  /**
+   * The park's measured hour shape.
+   *
+   * `topN` is this endpoint's own cap rather than the caller's: a planner wants
+   * every ride it can get, and this payload is a few hundred bytes per ride.
+   */
+  private async loadProfile(park: Park): Promise<ParkHourlyProfileDto | null> {
+    return this.historicalStatsService
+      .getParkHourlyProfile(park, 1, PlanDayService.SHAPE_RIDES, 20)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: hourly profile unavailable for ${park.slug}: ${err.message}`,
+        );
+        return null;
+      });
+  }
+
+  /**
+   * The open window as the DATA has it, for a date the operator has not
+   * published hours for.
+   *
+   * The profile's `hours` are the hours that cleared the measurement threshold
+   * across the park over the last year, so their span is where this park has
+   * queues — narrower than the gates' hours, never wider, and honest about
+   * being a recording window rather than a schedule. Null when the park has no
+   * measured hours at all, because inventing a 10-to-18 day for a park nobody
+   * has watched is exactly the made-up fact this codebase keeps banning.
+   */
+  private static observedHours(
+    profile: ParkHourlyProfileDto,
+  ): { openHour: number; closeHour: number } | null {
+    const hours = (profile.hours ?? []).filter(
+      (h) => Number.isInteger(h) && h >= 0 && h <= 23,
+    );
+    if (hours.length === 0) return null;
+    return {
+      openHour: Math.min(...hours),
+      closeHour: Math.max(...hours),
+    };
+  }
+
+  private async attractions(park: Park): Promise<Attraction[]> {
+    return this.attractionRepository.find({
+      where: { parkId: park.id, retiredAt: IsNull() },
+      select: ["id", "slug", "name", "landName", "latitude", "longitude"],
+    });
+  }
+
+  private async headlinerIds(park: Park): Promise<ReadonlySet<string>> {
+    return this.analyticsService
+      .getHeadlinerAttractionIds(park.id)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: headliners unavailable for ${park.slug}: ${err.message}`,
+        );
+        return new Set<string>();
+      });
+  }
+
+  /**
+   * The label a day with no curves carries.
+   *
+   * A date in the past is not a forecast horizon, and the ordering here is the
+   * whole reason it is checked first: `-38 <= 1` is true, so a day five weeks
+   * gone came back labelled `measured` — the most trustworthy tier, on the
+   * emptiest possible answer. Every day that DOES produce curves gets its tier
+   * from those curves instead (`forecastRides`).
+   */
+  private static nominalTier(leadDays: number): PlanDayTier {
     if (leadDays < 0) return "observed";
     if (leadDays <= PlanDayService.HOURLY_HORIZON_DAYS) return "measured";
-    if (leadDays <= PlanDayService.DAILY_HORIZON_DAYS) return "composed";
-    return "long_range";
+    return "composed";
   }
 
   /** Park-local hour of an instant, or null when there is no instant. */

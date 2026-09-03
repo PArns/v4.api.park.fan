@@ -6,6 +6,7 @@ import { CalendarService } from "./calendar.service";
 import { MLService } from "../../ml/ml.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
+import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
@@ -37,6 +38,9 @@ describe("PlanDayService", () => {
   let queryCalls: unknown[][];
   let hourlyHistory: Map<string, { slots: unknown[] }>;
   let historyFails: boolean;
+  let leadMae: number | null;
+  let profileMock: jest.Mock;
+  let leadMaeMock: jest.Mock;
 
   const build = async () => {
     const moduleRef = await Test.createTestingModule({
@@ -94,11 +98,11 @@ describe("PlanDayService", () => {
         },
         {
           provide: ParkHistoricalStatsService,
-          useValue: {
-            getParkHourlyProfile: jest
-              .fn()
-              .mockImplementation(async () => profile),
-          },
+          useValue: { getParkHourlyProfile: profileMock },
+        },
+        {
+          provide: PredictionLeadSnapshotService,
+          useValue: { getLeadTimeMae: leadMaeMock },
         },
       ],
     }).compile();
@@ -146,6 +150,9 @@ describe("PlanDayService", () => {
       },
     ];
     hourlyPredictions = [];
+    leadMae = null;
+    profileMock = jest.fn().mockImplementation(async () => profile);
+    leadMaeMock = jest.fn().mockImplementation(async () => leadMae);
     service = await build();
   });
 
@@ -269,10 +276,13 @@ describe("PlanDayService", () => {
     expect(monday.context.isWeekend).toBe(false);
   });
 
-  it("falls back to composing when today's hourly rows are missing", async () => {
-    // `measured` is claimed only when the hourly rows actually exist. A park the
-    // generator skipped tonight would otherwise get an empty day labelled as the
-    // model's own answer, which is the worst of both.
+  it("says composed when today's hourly rows are missing, not measured", async () => {
+    // The tier comes from the curves that were built, never from the distance.
+    // A park the generator skipped tonight, or an ML service having a bad
+    // minute, still gets a usable day — but under the label that describes what
+    // it actually got. Deciding by distance meant composed data went out as the
+    // model's own hourly answer, which is the one failure this design exists to
+    // prevent, and the assertion here used to pin it.
     const today = new Date().toISOString().slice(0, 10);
     calendarDay = { ...calendarDay!, date: today };
     dailyPredictions = [
@@ -285,9 +295,11 @@ describe("PlanDayService", () => {
 
     const plan = await service.buildPlanDay(park, today);
 
-    expect(plan.tier).toBe("measured");
+    expect(plan.tier).toBe("composed");
     // Composed rides rather than nothing.
     expect(plan.rides.length).toBeGreaterThan(0);
+    // And every hour is the response's own tier, so none of them needs a source.
+    expect(plan.rides[0].hours.every((h) => h.source === undefined)).toBe(true);
   });
 
   it("ships coordinates as numbers, not as the strings Postgres returns", async () => {
@@ -357,10 +369,11 @@ describe("PlanDayService", () => {
     expect(ride?.longitude).toBeNull();
   });
 
-  it("reports a ride that was observed all day yesterday and never operating", async () => {
-    // "Down" and "unobserved" are different answers. The query only returns a
-    // ride that WAS seen and was never OPERATING; a ride with no rows at all is
-    // silence, and warning about silence would assert something nobody observed.
+  it("reports a ride that broke and stayed broken through yesterday", async () => {
+    // Three states, all of which have to stay apart: a ride that was DOWN all
+    // day, a ride the feed never mentioned (silence — warning about it would
+    // assert something nobody observed), and a ride the feed called CLOSED all
+    // day (a season or a refurbishment, not a fault).
     downRows = [{ attractionId: "a-taron" }];
     // The PARK's today, not UTC's. Late in the evening Berlin has already rolled
     // over while `toISOString()` has not, and the service asks in park time — so
@@ -378,6 +391,22 @@ describe("PlanDayService", () => {
     const ride = plan.rides.find((r) => r.attractionSlug === "taron");
 
     expect(ride?.downYesterday).toBe(true);
+
+    // The SQL is only parsed when it runs, so the two things that were wrong
+    // with it are asserted on its text.
+    const sql = String(queryCalls[0][0]);
+    // A ride the feed called CLOSED all day is not a fault. Without this
+    // clause the endpoint reported nine of Phantasialand's winter-only and
+    // water attractions as down, every day of the summer — all nine of them
+    // CLOSED-only, verified against the live database.
+    expect(sql).toContain("qd.status = 'DOWN'");
+    // And the day is a half-open RANGE on the raw column, never a cast on it:
+    // `(qd.timestamp AT TIME ZONE $2)::date = …` hides the column from
+    // TimescaleDB's chunk exclusion, which on the live database meant reading
+    // all 254 chunks (35,967 buffers, 1.1 s cold) to find nine rows in one.
+    expect(sql).not.toMatch(/AT TIME ZONE \$2\)::date/);
+    expect(sql).toContain("qd.timestamp >=");
+    expect(sql).toContain("qd.timestamp <");
   });
 
   it("marks the park's curated headliners and nothing else", async () => {
@@ -452,6 +481,209 @@ describe("PlanDayService", () => {
     expect(plan.shows).toEqual([]);
   });
 
+  // ── The model's 24-hour window ─────────────────────────────────────────────
+  // Hourly predictions exist for the next 24 hours and not one minute further,
+  // so a day inside that window is part measured and part composed. Measured
+  // against the live service at 17:15, today's plan for a park open 09:00-22:00
+  // carried 17:00-21:00 and tomorrow's carried 09:00-17:00 — the evening simply
+  // absent, and `dayPeak` the maximum of what was left.
+  describe("inside the hourly window", () => {
+    /** The UTC instant of a park-local hour on a park-local date. */
+    const atParkHour = (date: string, hour: number): string => {
+      for (let step = 0; step <= 48; step++) {
+        const at = new Date(`${date}T00:00:00.000Z`);
+        at.setUTCHours(at.getUTCHours() - 12 + step);
+        if (
+          formatInTimeZone(at, park.timezone, "yyyy-MM-dd") === date &&
+          Number(formatInTimeZone(at, park.timezone, "HH")) === hour
+        ) {
+          return at.toISOString();
+        }
+      }
+      throw new Error(`no instant for ${date} ${hour}:00`);
+    };
+
+    const today = () =>
+      formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+
+    /** Hourly rows for a park-local hour range, one slot each. */
+    const hourlyFor = (date: string, from: number, to: number) => {
+      const rows = [];
+      for (let h = from; h <= to; h++) {
+        rows.push({
+          attractionId: "a-taron",
+          predictedTime: atParkHour(date, h),
+          predictedWaitTime: 20,
+          predictionType: "hourly",
+          uncertaintyMinutes: 7,
+        });
+      }
+      return rows;
+    };
+
+    beforeEach(() => {
+      const date = today();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+    });
+
+    it("fills the hours the window does not reach, and marks them", async () => {
+      const date = today();
+      hourlyPredictions = hourlyFor(date, 9, 11);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("measured");
+      const taron = plan.rides[0];
+      // The park is open 09:00-18:00 and every hour of it is answered.
+      expect(taron.hours.map((h) => h.hour)).toEqual([
+        9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      ]);
+      // The three the model answered carry no `source`: they ARE the tier.
+      expect(
+        taron.hours.filter((h) => h.hour <= 11).every((h) => !h.source),
+      ).toBe(true);
+      // The rest say where they came from, rather than being missing.
+      expect(
+        taron.hours
+          .filter((h) => h.hour >= 12)
+          .every((h) => h.source === "composed"),
+      ).toBe(true);
+    });
+
+    it("keeps the day's own peak, not the peak of the hours that survived", async () => {
+      const date = today();
+      // The model answers 20 minutes for the three hours it reaches; the day
+      // level says the day peaks at 60. Reading the maximum of `hours` made
+      // today read 20 where the same ride read 42 five days out, and the whole
+      // difference was which statistic the field carried.
+      hourlyPredictions = hourlyFor(date, 9, 11);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].dayPeak).toBe(60);
+      // And the band comes from the same row as the number it surrounds.
+      expect(plan.rides[0].uncertaintyMinutes).toBe(12);
+    });
+
+    it("still answers measured hours for a ride with no shape at all", async () => {
+      const date = today();
+      profile = { hours: [], attractions: [] };
+      hourlyPredictions = hourlyFor(date, 9, 11);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("measured");
+      expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([9, 10, 11]);
+      expect(plan.rides[0].sampleDays).toBe(0);
+    });
+  });
+
+  it("asks the shape for every ride it can cover, not the top twenty", async () => {
+    // The profile's SQL fetches `min(topN * 3, 60)` rides so its peak-hour
+    // re-ranking has something to re-rank and then discards everything past
+    // topN, so asking for 20 ran the identical query and threw two thirds away.
+    // Phantasialand's list went 34 -> 16 between tomorrow and the day after,
+    // which reads as rides closing.
+    await service.buildPlanDay(park, farDate());
+
+    expect(profileMock).toHaveBeenCalledWith(park, 1, 60, 20);
+  });
+
+  it("says long_range when the model has said nothing about the date", async () => {
+    const date = farDate();
+    calendarDay = { ...calendarDay!, date };
+    dailyPredictions = [];
+
+    const plan = await service.buildPlanDay(park, date);
+
+    // Not `composed` with an empty list: there is no day level to compose from,
+    // and the distance that happens to be is not the reason.
+    expect(plan.tier).toBe("long_range");
+    expect(plan.rides).toEqual([]);
+  });
+
+  it("publishes the measured lead-time error, and asks for the right distance", async () => {
+    leadMae = 8.4;
+    const date = farDate();
+    calendarDay = { ...calendarDay!, date };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${date}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, date);
+
+    expect(plan.leadTimeMae).toBe(8.4);
+    expect(leadMaeMock).toHaveBeenCalledWith(plan.leadDays);
+  });
+
+  // ── Opening hours the operator has not published ───────────────────────────
+  describe("past the operator's publishing horizon", () => {
+    it("derives the window from the hours we have actually measured", async () => {
+      // Of 177 live parks with published hours, 91 reach 60 days and 38 reach
+      // 120 — so a summer date asked in January has none, and the response was
+      // an empty shell for exactly the distance the planner exists for.
+      const date = farDate();
+      calendarDay = { date, status: "UNKNOWN", isHoliday: false };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // The profile's measured hours are 10, 14 and 18.
+      expect(plan.context.openHour).toBe(10);
+      expect(plan.context.closeHour).toBe(18);
+      // Labelled, because it is a recording window and not a schedule: narrower
+      // than the gates' hours, never wider.
+      expect(plan.context.hoursSource).toBe("observed");
+      expect(plan.rides.length).toBeGreaterThan(0);
+    });
+
+    it("does not invent hours for a day the operator says is closed", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "CLOSED", isHoliday: false };
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.context.hoursSource).toBeUndefined();
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("invents nothing for a park nobody has watched", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "UNKNOWN", isHoliday: false };
+      profile = { hours: [], attractions: [] };
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.context.hoursSource).toBeUndefined();
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("marks hours that came from the schedule as such", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.hoursSource).toBe("schedule");
+    });
+  });
+
   // ── A day that already happened ────────────────────────────────────────────
   // Before this the model was asked about the past. It generates forwards, so
   // nothing matched and the response came back with an empty ride list under
@@ -501,7 +733,11 @@ describe("PlanDayService", () => {
         { hour: 10, wait: 30 },
         { hour: 14, wait: 70 },
       ]);
-      expect(taron.dayPeak).toBe(70);
+      // The day's PEAK, which for a measured day is its P90 — the statistic the
+      // forecast side of this field carries, and the one the calendar scores
+      // past days with. The maximum of `hours` is 70, and using that made
+      // `dayPeak` mean something different on each side of today.
+      expect(taron.dayPeak).toBe(90);
       // An observation has no band. A width of zero would be a claim about
       // precision rather than the absence of one.
       expect(taron.uncertaintyMinutes).toBeNull();

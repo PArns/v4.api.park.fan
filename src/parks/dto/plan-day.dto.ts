@@ -16,8 +16,21 @@ import { ApiProperty } from "@nestjs/swagger";
  * came back labelled `measured` with a negative `leadDays` and an empty ride
  * list — the model generates forwards, so nothing matched, and the response
  * claimed the most trustworthy tier for the emptiest possible answer.
+ *
+ * The tier is derived from the curves that were actually built, never from the
+ * distance alone. `measured` used to be claimed for today and tomorrow whatever
+ * came back, so a day the model had no hourly answer for — the ML service
+ * having a bad minute, a park it skipped — was served as composed data under
+ * the most trustworthy label. Which is the one failure this whole design is
+ * arranged against.
  */
 export type PlanDayTier = "observed" | "measured" | "composed" | "long_range";
+
+/** Where a single hour's number came from, when it is not the response's tier. */
+export type PlanDayHourSource = "observed" | "measured" | "composed";
+
+/** Where `openHour`/`closeHour` came from. */
+export type PlanDayHoursSource = "schedule" | "observed";
 
 export class PlanDayHourDto {
   @ApiProperty({ example: 14, description: "Park-local hour, 0–23." })
@@ -25,6 +38,20 @@ export class PlanDayHourDto {
 
   @ApiProperty({ example: 45, description: "Expected wait in minutes." })
   wait: number;
+
+  @ApiProperty({
+    required: false,
+    enum: ["observed", "measured", "composed"],
+    description:
+      "Present only where this hour did NOT come from the response's `tier`. " +
+      "The model generates hourly predictions for the next 24 hours and no " +
+      "further, so a day inside that window is part measured and part " +
+      "composed: today has no measured hours before the current one, and " +
+      "tomorrow has none after it. Those hours used to be omitted, which cut " +
+      "the evening off a park that closes at 22:00 and pulled `dayPeak` down " +
+      "with it — a silent understatement of the busiest part of the day.",
+  })
+  source?: PlanDayHourSource;
 }
 
 export class PlanDayRideDto {
@@ -48,7 +75,15 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     example: 50,
-    description: "The day-level prediction this ride's curve was scaled to.",
+    description:
+      "The day's PEAK wait for this ride, and the same statistic on every " +
+      "tier: the day-level prediction on a forecast day, the realised day-P90 " +
+      "on an observed one — the pair the calendar already scores against each " +
+      "other. It is deliberately NOT the maximum of `hours`: those are " +
+      "typical-hour numbers (a median forecast, a measured mean), and taking " +
+      "their maximum made the field mean something different on each tier. " +
+      "Today read 20 where the same ride read 42 five days out, and the whole " +
+      "difference was the statistic.",
   })
   dayPeak: number;
 
@@ -89,11 +124,13 @@ export class PlanDayRideDto {
     required: false,
     example: false,
     description:
-      "The ride was observed all through the previous operating day and was " +
-      "never OPERATING in any of it — i.e. down for the whole day rather than " +
-      "unobserved. Absent past tomorrow: yesterday's downtime says nothing " +
-      "actionable about a Tuesday in November, and the query is not worth its " +
-      "cost there.",
+      "The ride was reported DOWN at some point in the previous operating day " +
+      "and was never OPERATING in any of it — a breakdown that lasted the " +
+      "whole day. A ride the feed called CLOSED all day is NOT flagged: that " +
+      "is a season or a refurbishment, not a fault, and flagging it put a " +
+      "warning on nine winter-only attractions at Phantasialand every day of " +
+      "the summer. Absent past tomorrow: yesterday's downtime says nothing " +
+      "actionable about a Tuesday in November.",
   })
   downYesterday?: boolean;
 
@@ -126,6 +163,22 @@ export class PlanDayContextDto {
 
   @ApiProperty({ required: false, nullable: true, example: 20 })
   closeHour: number | null;
+
+  @ApiProperty({
+    required: false,
+    enum: ["schedule", "observed"],
+    description:
+      "Where the two hours above came from. `schedule` is the operator's own " +
+      "published day. `observed` means they were derived from the hours this " +
+      "ride's queues have actually been measured in over the last year, " +
+      "because the operator has not published that far out — of 177 parks " +
+      "with published hours, 91 reach 60 days and 38 reach 120, so a summer " +
+      "date asked in January has none. Without the fallback the whole " +
+      "response was an empty shell past ~2 months; with it, a caller must " +
+      "present the window as approximate and must not read `status` as a " +
+      "promise that the park is open.",
+  })
+  hoursSource?: PlanDayHoursSource;
 
   @ApiProperty({ required: false, nullable: true, example: "high" })
   crowdLevel?: string | null;
@@ -180,13 +233,17 @@ export class PlanDayDto {
   @ApiProperty({
     enum: ["observed", "measured", "composed", "long_range"],
     description:
-      "How the ride curves were produced. `observed` is not a forecast: for a " +
-      "date in the past the hours are what the queues actually did, from the " +
-      "nightly 15-minute rollup. `measured` is the model's own hourly " +
-      "prediction (today and tomorrow only — it generates 24 hours ahead). " +
+      "How the ride curves were produced, derived from the curves that were " +
+      "actually built rather than from the distance. `observed` is not a " +
+      "forecast: for a date in the past the hours are what the queues actually " +
+      "did, from the nightly 15-minute rollup. `measured` means the day " +
+      "carries the model's own hourly predictions, which exist for the next 24 " +
+      'hours only — the hours outside that window carry `source: "composed"`. ' +
       "`composed` scales a day-level prediction by the ride's historical hour " +
-      "shape. `long_range` is the same composition past the stored 60-day " +
-      "daily horizon, where the day level itself is thinner.",
+      "shape. `long_range` means the model has produced no day level for this " +
+      "date at all, so there are no ride curves to give: the daily horizon is " +
+      "the park's own schedule coverage (about 6 months) rather than a fixed " +
+      "number of days.",
   })
   tier: PlanDayTier;
 
@@ -201,10 +258,13 @@ export class PlanDayDto {
     nullable: true,
     description:
       "Measured mean absolute error for predictions made this far ahead, in " +
-      "minutes. Absent until the lead-time archive has been running that " +
-      "long — and absent is the honest answer, because nothing measures how " +
-      "wrong the model is at this distance yet. A caller should widen the " +
-      "band with distance WITHOUT attaching a figure rather than invent one.",
+      "minutes, from the lead-time archive (`prediction_lead_snapshots`): the " +
+      "nearest sampled lead distance at or below `leadDays`, over scored " +
+      "headliner days. Absent until that distance has enough scored rows — " +
+      "the 60-day bucket says nothing until the archive has been running 60 " +
+      "days — and absent is the honest answer, because nothing measures how " +
+      "wrong the model is at this distance yet. A caller should widen the band " +
+      "with distance WITHOUT attaching a figure rather than invent one.",
   })
   leadTimeMae?: number | null;
 
