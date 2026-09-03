@@ -41,6 +41,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { ParkStatus } from "../../common/types/status.type";
+import { DbJobBudget, mapWithDbBudget } from "../../common/utils/db-job-budget";
 
 const SCHEDULE_REFRESH_GAP_DAYS = 5; // Trigger refresh if schedule ends < 5 days from requested date
 
@@ -63,6 +64,21 @@ const round5 = (min: number): number => Math.round(min / 5) * 5;
  *
  * Combines Schedule, Weather, ML Predictions, Holidays, and Events into a unified API.
  */
+/**
+ * How many calendar days may be built at once.
+ *
+ * Each uncached past day costs one `calculateCrowdLevelForDate`, and that is a
+ * PERCENTILE_CONT scan over queue_data. A 90-day request with a cold crowd-level
+ * cache therefore fired up to 90 of them from a single `Promise.all` — measured
+ * on 2026-09-02 as 43 queries finishing within 7 ms of each other in one second,
+ * i.e. one request holding the entire connection pool while everything else
+ * queued behind it. Well below DB_POOL_SIZE so a calendar request can never be
+ * the reason another request waits.
+ */
+const CALENDAR_DAY_BUDGET = new DbJobBudget(
+  parseInt(process.env.CALENDAR_DAY_CONCURRENCY ?? "6", 10),
+);
+
 @Injectable()
 export class CalendarService {
   private readonly logger = new Logger(CalendarService.name);
@@ -426,34 +442,33 @@ export class CalendarService {
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Build all calendar days in parallel
-    const days = await Promise.all(
-      datesToBuild.map((date) => {
-        const dateStr = formatInParkTimezone(date, park.timezone);
-        return this.buildCalendarDay(
-          park,
-          date,
-          schedules,
-          weatherData,
-          mlPredictions.predictions,
-          holidays,
-          includeHourly,
-          today,
-          hourlyPredictionsList,
-          prefetchedCrowdLevels,
-          parkHasOperatingSchedule,
-          operatingDateRange,
-          predictedCrowdLevels,
-          isSeasonal,
-          derivedHistoricalHours.get(dateStr) || null,
-          predictedBaseline > 0,
-          // Past days: actual recorded averages; today/future: ML forecast.
-          dateStr < today
-            ? historicalForecastByDate.get(dateStr)
-            : headlinerForecastByDate.get(dateStr),
-        );
-      }),
-    );
+    // Build the calendar days in parallel, but bounded — see
+    // CALENDAR_DAY_BUDGET.
+    const days = await this.buildDaysBounded(datesToBuild, (date) => {
+      const dateStr = formatInParkTimezone(date, park.timezone);
+      return this.buildCalendarDay(
+        park,
+        date,
+        schedules,
+        weatherData,
+        mlPredictions.predictions,
+        holidays,
+        includeHourly,
+        today,
+        hourlyPredictionsList,
+        prefetchedCrowdLevels,
+        parkHasOperatingSchedule,
+        operatingDateRange,
+        predictedCrowdLevels,
+        isSeasonal,
+        derivedHistoricalHours.get(dateStr) || null,
+        predictedBaseline > 0,
+        // Past days: actual recorded averages; today/future: ML forecast.
+        dateStr < today
+          ? historicalForecastByDate.get(dateStr)
+          : headlinerForecastByDate.get(dateStr),
+      );
+    });
 
     // Attach today's own daily rating (captured above, before the live override).
     // Set here rather than threaded through buildCalendarDay's already 17-argument
@@ -690,6 +705,21 @@ export class CalendarService {
     this.logger.debug(
       `Triggered on-demand schedule refresh for ${park.slug} (range needs data until ${toStr})`,
     );
+  }
+
+  /**
+   * Build one entry per date, with a ceiling on how many run at once.
+   *
+   * Kept as a named method rather than an inline `mapWithDbBudget` call so the
+   * ceiling is a thing that can be tested directly — the previous attempt at
+   * bounding database work was wired into a helper with no caller, which no
+   * test noticed.
+   */
+  private buildDaysBounded<T>(
+    dates: Date[],
+    build: (date: Date) => Promise<T>,
+  ): Promise<T[]> {
+    return mapWithDbBudget(dates, build, CALENDAR_DAY_BUDGET);
   }
 
   /**
