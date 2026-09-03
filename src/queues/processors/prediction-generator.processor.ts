@@ -332,6 +332,42 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     }
   }
 
+  /**
+   * Fill in what the day actually did, for the lead-time archive.
+   *
+   * Separate from `generate-daily` on purpose: the snapshot half runs beside the
+   * generation because that is the only moment the "what did we say, how far
+   * ahead" pair exists, while the scoring half needs the target day to be OVER
+   * everywhere on earth and is therefore a different job at a different hour.
+   *
+   * Without this the archive filled up and was never read — 6,000 rows a night
+   * with `scoredAt IS NULL` forever, and `leadTimeMae` on `/plan/day` hard-coded
+   * to null. Nothing complains about a table nobody queries.
+   */
+  @Process("score-lead-snapshots")
+  async handleScoreLeadSnapshots(_job: Job): Promise<void> {
+    this.logger.log("📏 Scoring due lead-time snapshots...");
+
+    try {
+      const parks = await this.parksService.findAll();
+      const { scored, withActual } =
+        await this.leadSnapshotService.scoreDueSnapshots(parks, new Date());
+
+      // `scored` counts rows that will not be looked at again; `withActual` the
+      // subset that found a realised peak to compare against. A large gap is
+      // normal (closed days, out-of-season rides, feed gaps) and a total of zero
+      // is normal too until the first bucket's target dates have passed.
+      this.logger.log(
+        `✅ Lead-time scoring: ${scored} row(s) settled, ${withActual} with a measured day`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Lead-time snapshot scoring failed: ${errorMessage}`);
+      throw error;
+    }
+  }
+
   @Process("cleanup-old")
   async handleCleanupOld(_job: Job): Promise<void> {
     this.logger.log("🧹 Cleaning up old predictions...");

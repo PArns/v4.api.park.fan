@@ -5,6 +5,7 @@ import { PredictionLeadSnapshot } from "../entities/prediction-lead-snapshot.ent
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { PredictionDto } from "../dto/prediction-response.dto";
 import { Park } from "../../parks/entities/park.entity";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
  * The snapshot exists because the information is destroyed a day later: the
@@ -24,6 +25,9 @@ describe("PredictionLeadSnapshotService", () => {
   let service: PredictionLeadSnapshotService;
   let inserted: PredictionLeadSnapshot[];
   let headliners: { attractionId: string }[];
+  /** The aggregate the read path runs, so a test can hand back a row. */
+  let aggregate: { mae: string | null; scored: string };
+  let redis: { store: Map<string, string> };
 
   const makeService = async () => {
     inserted = [];
@@ -38,6 +42,21 @@ describe("PredictionLeadSnapshotService", () => {
       execute: async () => ({ raw: [] }),
     };
 
+    aggregate = { mae: null, scored: "0" };
+    redis = { store: new Map<string, string>() };
+
+    // The read path chains select/addSelect/where/andWhere and ends in
+    // getRawOne; the write path chains insert/into/values/orIgnore/execute.
+    // One object answering both keeps the fake to a dozen lines.
+    const readBuilder = {
+      select: () => readBuilder,
+      addSelect: () => readBuilder,
+      where: () => readBuilder,
+      andWhere: () => readBuilder,
+      getRawOne: async () => aggregate,
+    };
+    Object.assign(insertBuilder, readBuilder);
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         PredictionLeadSnapshotService,
@@ -47,6 +66,16 @@ describe("PredictionLeadSnapshotService", () => {
             createQueryBuilder: () => insertBuilder,
             find: jest.fn().mockResolvedValue([]),
             save: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: async (k: string) => redis.store.get(k) ?? null,
+            set: async (k: string, v: string) => {
+              redis.store.set(k, v);
+              return "OK";
+            },
           },
         },
         {
@@ -186,10 +215,62 @@ describe("PredictionLeadSnapshotService", () => {
     expect(inserted).toHaveLength(0);
   });
 
-  it("stops at the stored daily horizon", () => {
-    // A bucket past 60 days would never be written, because
-    // deduplicatePredictions only keeps daily rows out to 60 — and an empty
-    // bucket reads as a gap in the curve rather than as out of range.
+  it("samples out to sixty days", () => {
+    // A sampling choice, not a limit: the daily run answers as far ahead as the
+    // park has published a schedule (181-362 days across the live parks), so a
+    // longer bucket would be written fine — it would simply say nothing for its
+    // first 120 days.
     expect(Math.max(...PredictionLeadSnapshotService.LEAD_BUCKETS)).toBe(60);
+  });
+
+  // ── Reading the curve back ─────────────────────────────────────────────────
+  // The archive was written from the first day and read by nobody: `leadTimeMae`
+  // on /plan/day was hard-coded null, so 6,000 rows a night accumulated to
+  // answer a question nothing asked.
+  describe("getLeadTimeMae", () => {
+    const enough = String(200);
+
+    it("answers with the nearest sampled distance AT OR BELOW the one asked", async () => {
+      aggregate = { mae: "7.25", scored: enough };
+
+      // 20 days is answered by the 14-day bucket, never by the 30-day one:
+      // overstating the distance understates the error.
+      await expect(service.getLeadTimeMae(20)).resolves.toBe(7.3);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:14"]);
+    });
+
+    it("answers past the last bucket with the last bucket", async () => {
+      aggregate = { mae: "11.0", scored: enough };
+
+      // The furthest thing anybody has measured. "At least this wrong" is
+      // honest where interpolating into unmeasured distance is not.
+      await expect(service.getLeadTimeMae(300)).resolves.toBe(11);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:60"]);
+    });
+
+    it("says nothing about today, which no bucket covers", async () => {
+      await expect(service.getLeadTimeMae(0)).resolves.toBeNull();
+      expect(redis.store.size).toBe(0);
+    });
+
+    it("withholds a figure until the bucket has enough scored rows", async () => {
+      // The normal state of the far buckets for the first weeks after this
+      // ships. A number that moves with one park's bad week is worse than none.
+      aggregate = { mae: "9.9", scored: String(3) };
+
+      await expect(service.getLeadTimeMae(30)).resolves.toBeNull();
+    });
+
+    it("remembers that a bucket had too little data, rather than re-asking", async () => {
+      aggregate = { mae: null, scored: "0" };
+      await service.getLeadTimeMae(7);
+
+      // "none" and not an absent key: /plan/day is a per-request read path, and
+      // an unrecorded miss is an aggregate query on every call.
+      expect(redis.store.get("ml:lead-mae:7")).toBe("none");
+
+      aggregate = { mae: "5.0", scored: enough };
+      await expect(service.getLeadTimeMae(7)).resolves.toBeNull();
+    });
   });
 });

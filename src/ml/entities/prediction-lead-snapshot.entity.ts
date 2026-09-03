@@ -55,8 +55,21 @@ import {
 // The scoring job's query: rows for a target date that has passed and has no
 // actual yet. `targetDate` leads because it is the selective half.
 @Index("idx_pls_target_scored", ["targetDate", "scoredAt"])
+// The read path's query: the mean error at one lead distance, over scored rows.
+// `leadDays` leads because it is what the question filters on, and there are six
+// values of it.
+@Index("idx_pls_lead_scored", ["leadDays", "scoredAt"])
 export class PredictionLeadSnapshot {
-  @PrimaryColumn({ name: "attraction_id" })
+  /**
+   * `uuid`, matching every other attraction reference in the schema.
+   *
+   * TypeORM infers `varchar` from the TypeScript type, which is how this became
+   * the one table whose attraction id would need a cast to join — the exact trap
+   * `PlanDayService.downYesterday` documents from the other side, where
+   * `queue_data_aggregates.attractionId` being text made `::text` look like the
+   * house style and produced `operator does not exist: text = uuid`.
+   */
+  @PrimaryColumn({ name: "attraction_id", type: "uuid" })
   attractionId: string;
 
   /** Park-local calendar day the prediction is about (YYYY-MM-DD). */

@@ -1,6 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, IsNull, LessThan } from "typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PredictionLeadSnapshot } from "../entities/prediction-lead-snapshot.entity";
 import { PredictionDto } from "../dto/prediction-response.dto";
 import { AnalyticsService } from "../../analytics/analytics.service";
@@ -38,17 +40,101 @@ export class PredictionLeadSnapshotService {
    * materially worse than tomorrow, not whether day 58 differs from day 59. Six
    * buckets also keep the table at roughly 1,000 headliners × 6 rows a night.
    *
-   * 60 is the last one because that is where the stored daily horizon ends
-   * (`MLService.deduplicatePredictions`); a bucket beyond it would never be
-   * written and would read as a gap in the curve rather than as out of range.
+   * 60 is the last one, and it is a sampling choice rather than a limit: the
+   * daily run answers as far ahead as the park has published a schedule (181 to
+   * 362 days across the live parks), so a 120-day bucket would be written
+   * fine — it would simply say nothing for its first 120 days. Sixty is where
+   * the curve is still worth watching against a cost of ~1,000 rows a night.
    */
   static readonly LEAD_BUCKETS = [1, 3, 7, 14, 30, 60] as const;
+
+  /**
+   * Scored rows a bucket needs before its mean is worth publishing.
+   *
+   * Roughly a fortnight of one bucket's nightly rows across the headliner set.
+   * Below it the figure moves with a single park's bad week, and a number that
+   * jumps is worse than no number: a caller widens the band by distance anyway,
+   * and `plan-day.dto.ts` says so.
+   */
+  private static readonly MIN_SCORED = 100;
+
+  /** How long a published bucket mean is reused. It moves once a night. */
+  private static readonly MAE_TTL_SECONDS = 6 * 60 * 60;
 
   constructor(
     @InjectRepository(PredictionLeadSnapshot)
     private readonly snapshotRepository: Repository<PredictionLeadSnapshot>,
     private readonly analyticsService: AnalyticsService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * The measured mean absolute error for predictions made `leadDays` ahead.
+   *
+   * The buckets are sampled, not continuous, so this answers with the nearest
+   * one AT OR BELOW the distance asked about: a 20-day question is answered by
+   * the 14-day bucket, never by the 30-day one, because overstating the
+   * distance understates the error. Past the last bucket the last bucket is the
+   * answer — it is the furthest thing anybody has measured, and saying "at
+   * least this wrong" is honest where interpolating into unmeasured distance is
+   * not.
+   *
+   * Null when that bucket has fewer than {@link MIN_SCORED} scored rows, which
+   * is the normal state for the far buckets until the archive has been running
+   * that many days. Null is the answer the DTO promises there.
+   */
+  async getLeadTimeMae(leadDays: number): Promise<number | null> {
+    const bucket = PredictionLeadSnapshotService.bucketFor(leadDays);
+    if (bucket === null) return null;
+
+    const cacheKey = `ml:lead-mae:${bucket}`;
+    const cached = await this.redis.get(cacheKey).catch(() => null);
+    if (cached !== null) {
+      // "none" rather than an absent key: a bucket with too little data is a
+      // finding, and re-asking the database for it on every request is how a
+      // planner endpoint acquires an aggregate query per call.
+      if (cached === "none") return null;
+      const parsed = Number(cached);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    const row = await this.snapshotRepository
+      .createQueryBuilder("s")
+      .select("AVG(s.absoluteError)", "mae")
+      .addSelect("COUNT(*)", "scored")
+      .where("s.leadDays = :bucket", { bucket })
+      .andWhere("s.absoluteError IS NOT NULL")
+      .getRawOne<{ mae: string | null; scored: string }>();
+
+    const scored = Number(row?.scored ?? 0);
+    const mae = row?.mae === null ? null : Number(row?.mae);
+    const answer =
+      scored >= PredictionLeadSnapshotService.MIN_SCORED &&
+      mae !== null &&
+      Number.isFinite(mae)
+        ? Math.round(mae * 10) / 10
+        : null;
+
+    await this.redis
+      .set(
+        cacheKey,
+        answer === null ? "none" : String(answer),
+        "EX",
+        PredictionLeadSnapshotService.MAE_TTL_SECONDS,
+      )
+      .catch(() => undefined);
+
+    return answer;
+  }
+
+  /** The largest sampled lead distance at or below `leadDays`. */
+  private static bucketFor(leadDays: number): number | null {
+    const eligible = PredictionLeadSnapshotService.LEAD_BUCKETS.filter(
+      (b) => b <= leadDays,
+    );
+    if (eligible.length === 0) return null;
+    return Math.max(...eligible);
+  }
 
   /**
    * Record this run's predictions for the bucket distances.

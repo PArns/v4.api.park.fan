@@ -50,6 +50,7 @@ export class QueueSchedulerService implements OnModuleInit {
     private attractionHourlyHistoryQueue: Queue,
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
+    @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
@@ -626,6 +627,32 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Lead-time snapshot scoring: daily at 3am.
+    //
+    // After the 1am daily run has written the night's snapshots and before the
+    // 3:30 cleanup. The scoring itself only looks at target dates that are over
+    // in every timezone on earth, so the hour is not load-bearing — what matters
+    // is that it runs at all: the writing half has run since the archive was
+    // added, the reading half had no caller, and a table that is only ever
+    // inserted into fills up silently and answers nothing.
+    const hasLeadScoringCron = await this.hasRepeatableJob(
+      this.predictionsQueue,
+      "lead-snapshot-scoring-cron",
+    );
+
+    if (!hasLeadScoringCron) {
+      await this.predictionsQueue.add(
+        "score-lead-snapshots",
+        {},
+        {
+          repeat: {
+            cron: "0 3 * * *", // Daily at 3am
+          },
+          jobId: "lead-snapshot-scoring-cron",
+        },
+      );
+    }
+
     // Prediction Cleanup: Daily at 3:30am.
     //
     // This was missing entirely: PredictionGeneratorProcessor has handled
@@ -894,6 +921,27 @@ export class QueueSchedulerService implements OnModuleInit {
         {
           repeat: { cron: "*/5 * * * *" },
           jobId: "push-notifications-cron",
+        },
+      );
+    }
+
+    // Stored plans: sweep the expired ones daily at 4:45 AM.
+    //
+    // `Trip.expiresAt` and `sweepExpired()` existed from the start with nothing
+    // calling the sweep, which made the expiry a comment: a read already treats
+    // an expired row as absent, so the only symptom was a table that never gave
+    // anything back.
+    const hasTripSweepCron = await this.hasRepeatableJob(
+      this.tripsQueue,
+      "trip-sweep-cron",
+    );
+    if (!hasTripSweepCron) {
+      await this.tripsQueue.add(
+        "sweep-expired",
+        {},
+        {
+          repeat: { cron: "45 4 * * *" },
+          jobId: "trip-sweep-cron",
         },
       );
     }

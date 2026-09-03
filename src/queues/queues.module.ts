@@ -28,6 +28,7 @@ import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
+import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
 import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
@@ -188,6 +189,10 @@ import { TripsModule } from "../trips/trips.module";
       // one row per trip, and the work it does is bounded by opted-in browsers
       // rather than by traffic.
       { name: "push-notifications" },
+      // Stored plans: one daily sweep of the expired ones. Its own queue rather
+      // than a second job on the push tick, because it is maintenance on a
+      // table and has nothing to do with notifying anybody.
+      { name: "trips" },
     ),
 
     // Feature modules for processors
@@ -244,6 +249,7 @@ import { TripsModule } from "../trips/trips.module";
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     PushNotificationProcessor, // The five-minute tick that sends "next up"
+    TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     RopeDropProcessor, // Rope-drop recommendations (daily)
     TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)
     GeoipUpdateProcessor,
