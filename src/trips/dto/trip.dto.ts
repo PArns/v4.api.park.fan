@@ -1,5 +1,19 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { IsObject } from "class-validator";
 
+/**
+ * The write body — and the `@IsObject()` on it is load-bearing, not decoration.
+ *
+ * `main.ts` mounts one global `ValidationPipe({ whitelist: true,
+ * forbidNonWhitelisted: true })`. `whitelist` keeps only properties that carry a
+ * class-validator decorator and `forbidNonWhitelisted` turns the rest into a
+ * 400 — so a DTO with none at all rejects EVERY field it declares. Without this
+ * decorator both write endpoints answered
+ * `["property payload should not exist"]` to every request, and no test saw it:
+ * the controller specs call the methods directly, which is the one path the
+ * global pipe does not sit on. `trip-payload.util.spec.ts` covers the plan's
+ * own shape; `trips.validation.spec.ts` covers this gate.
+ */
 export class TripWriteDto {
   @ApiProperty({
     description:
@@ -11,6 +25,7 @@ export class TripWriteDto {
     type: "object",
     additionalProperties: true,
   })
+  @IsObject()
   payload: Record<string, unknown>;
 }
 
