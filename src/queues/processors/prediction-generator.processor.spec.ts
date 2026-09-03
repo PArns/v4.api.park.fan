@@ -3,6 +3,7 @@ import { Job } from "bull";
 import { PredictionGeneratorProcessor } from "./prediction-generator.processor";
 import { MLService } from "../../ml/ml.service";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
+import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -62,6 +63,10 @@ describe("PredictionGeneratorProcessor", () => {
       providers: [
         PredictionGeneratorProcessor,
         { provide: MLService, useValue: mlService },
+        {
+          provide: ForecastAccuracyService,
+          useValue: { rebuild: jest.fn().mockResolvedValue(0) },
+        },
         {
           provide: PredictionLeadSnapshotService,
           useValue: leadSnapshotService,
