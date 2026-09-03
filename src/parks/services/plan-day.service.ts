@@ -135,6 +135,10 @@ export class PlanDayService {
     const profile = isFuture ? await this.loadProfile(park) : null;
 
     let openHour = this.hourIn(day?.hours?.openingTime, park.timezone);
+    // The park's opening to the minute, not just the hour: a ride opening at
+    // 09:45 in a park that opens at 09:00 shares its hour and is still 45
+    // minutes later, which is exactly what a visitor needs told.
+    const parkOpensAt = this.hhmmIn(day?.hours?.openingTime, park.timezone);
     let closeHour = this.hourIn(day?.hours?.closingTime, park.timezone);
     let hoursSource: PlanDayHoursSource | undefined =
       openHour !== null && closeHour !== null ? "schedule" : undefined;
@@ -220,6 +224,7 @@ export class PlanDayService {
       openHour,
       closeHour,
       profile,
+      hoursSource === "schedule" ? parkOpensAt : null,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -348,6 +353,8 @@ export class PlanDayService {
     openHour: number,
     closeHour: number,
     profile: ParkHourlyProfileDto | null,
+    /** The park's own opening as `HH:mm`, when it published one. */
+    parkOpensAt: string | null,
   ): Promise<{ tier: PlanDayTier; rides: PlanDayRideDto[] }> {
     const withinHourly = leadDays <= PlanDayService.HOURLY_HORIZON_DAYS;
 
@@ -425,11 +432,31 @@ export class PlanDayService {
       // report OPERATING before the gates open — the feed carries the operator's
       // system state — so the park's hour is the floor and the ride's is the
       // correction on top of it.
-      const opensAt = openings.get(attractionId);
+      //
+      // Rounded, not floored: an hour in this grid stands for the whole hour, so
+      // a ride opening at 09:45 belongs to hour 10 rather than putting a queue
+      // against three quarters of an hour it was shut for. 10:10 rounds to 10
+      // either way.
+      // Keyed by THIS day's park opening: the gap is seasonal, not a property of
+      // the ride. Phantasialand's coasters run an hour after a 09:00 gate and
+      // with an 11:00 one, so a summer median applied to a winter morning — or
+      // the reverse — would be a confident wrong answer. A park opening we have
+      // never watched simply has no entry, and the ride draws the park's day.
+      const opensAt = parkOpensAt
+        ? openings.get(`${attractionId}|${parkOpensAt}`)
+        : undefined;
       const rideOpenHour = Math.max(
         openHour,
-        opensAt ? Number(opensAt.slice(0, 2)) : openHour,
+        opensAt ? Math.round(PlanDayService.minutesOf(opensAt) / 60) : openHour,
       );
+      // Reported whenever the ride opens later than the PARK, even inside the
+      // same hour — comparing hours hid Phantasialand's 09:45 ride behind a
+      // 09:00 park and left the reader without the one number they wanted.
+      const opensLater =
+        opensAt !== undefined &&
+        parkOpensAt !== null &&
+        PlanDayService.minutesOf(opensAt) >
+          PlanDayService.minutesOf(parkOpensAt);
 
       const hours: PlanDayHourDto[] = [];
       for (let h = rideOpenHour; h <= closeHour; h++) {
@@ -469,7 +496,7 @@ export class PlanDayService {
         uncertaintyMinutes:
           level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
         sampleDays: sampleDays.get(attractionId) ?? 0,
-        ...(opensAt && rideOpenHour > openHour ? { opensAt } : {}),
+        ...(opensLater ? { opensAt } : {}),
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
@@ -920,6 +947,23 @@ export class PlanDayService {
     if (leadDays < 0) return "observed";
     if (leadDays <= PlanDayService.HOURLY_HORIZON_DAYS) return "measured";
     return "composed";
+  }
+
+  /** Park-local `HH:mm` of an instant, or null when there is no instant. */
+  private hhmmIn(
+    value: Date | string | undefined,
+    timezone: string,
+  ): string | null {
+    if (!value) return null;
+    const at = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(at.getTime())) return null;
+    return formatInTimeZone(at, timezone, "HH:mm");
+  }
+
+  /** Minutes since midnight for an `HH:mm`. */
+  private static minutesOf(hhmm: string): number {
+    const [h, m] = hhmm.split(":").map(Number);
+    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
   }
 
   /** Park-local hour of an instant, or null when there is no instant. */
