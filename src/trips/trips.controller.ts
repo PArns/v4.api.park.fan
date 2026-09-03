@@ -88,7 +88,7 @@ export class TripsController {
   @ApiResponse({ status: 200, type: TripResponseDto })
   @ApiResponse({ status: 404, description: "No such trip." })
   async read(@Param("id") id: string): Promise<TripResponseDto> {
-    const trip = await this.tripsService.find(id);
+    const trip = await this.tripsService.find(TripsController.tripId(id));
     if (!trip) throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
     return TripsController.present(trip);
   }
@@ -120,7 +120,10 @@ export class TripsController {
   ): Promise<TripResponseDto> {
     await this.guard(request, "update");
     const payload = this.validated(body);
-    const trip = await this.tripsService.update(id, payload);
+    const trip = await this.tripsService.update(
+      TripsController.tripId(id),
+      payload,
+    );
     if (!trip) throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
     return TripsController.present(trip);
   }
@@ -149,6 +152,24 @@ export class TripsController {
       throw new BadRequestException(`Not a trip payload: ${verdict.reason}`);
     }
     return body.payload;
+  }
+
+  /**
+   * The id as this API will look one up.
+   *
+   * An id that cannot exist is answered as 404 rather than passed to the
+   * database: the column is a 32-character varchar and every id this service
+   * mints is 16 base64url characters, so anything else is a probe. 404 and not
+   * 400 because the caller learns the same thing either way — there is no trip
+   * there — and this route's whole authorisation model is that an id is a
+   * secret, so it should say as little as possible about which ids are shaped
+   * like real ones.
+   */
+  private static tripId(id: string): string {
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id ?? "")) {
+      throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
+    }
+    return id;
   }
 
   private static present(trip: Trip): TripResponseDto {

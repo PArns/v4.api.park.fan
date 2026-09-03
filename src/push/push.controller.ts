@@ -17,6 +17,7 @@ import { TripsService } from "../trips/trips.service";
 import {
   PUSH_TOPICS,
   getVapidConfig,
+  isAllowedPushEndpoint,
   isPushConfigured,
   isPushTopic,
   type PushTopic,
@@ -156,12 +157,16 @@ function requireString(value: unknown, field: string): string {
 }
 
 /**
- * An endpoint has to be an https URL.
+ * An endpoint has to be an https URL at a push service we know.
  *
- * This string is handed to `web-push`, which makes a request to it. Accepting
- * anything else would turn the subscribe endpoint into a request forwarder
- * pointed wherever the caller likes — the classic shape of an SSRF, and the
- * only thing standing between it and this API's own network is this check.
+ * This string is handed to `web-push`, which makes a request to it — from
+ * inside this network, on a five-minute schedule, with nobody watching.
+ * Accepting anything else would turn the subscribe endpoint into a request
+ * forwarder pointed wherever the caller likes: the classic shape of an SSRF,
+ * and a way to aim this origin's traffic at a third party. `https` alone does
+ * not close that, which is why the host is checked too — see
+ * `isAllowedPushEndpoint`, and `PUSH_ENDPOINT_HOSTS` for adding a service
+ * without a code change.
  */
 function requireUrl(value: unknown, field: string): string {
   const raw = requireString(value, field);
@@ -173,6 +178,11 @@ function requireUrl(value: unknown, field: string): string {
   }
   if (parsed.protocol !== "https:") {
     throw new BadRequestException(`${field} must be https`);
+  }
+  if (!isAllowedPushEndpoint(parsed)) {
+    throw new BadRequestException(
+      `${field} is not a known push service endpoint`,
+    );
   }
   return raw;
 }

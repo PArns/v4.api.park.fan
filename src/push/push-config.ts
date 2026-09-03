@@ -82,3 +82,56 @@ export function isPushTopic(value: unknown): value is PushTopic {
     (PUSH_TOPICS as readonly string[]).includes(value)
   );
 }
+
+/**
+ * The hosts a subscription endpoint may point at.
+ *
+ * `web-push` makes an HTTP request to whatever string is stored here, from
+ * inside this network, on a schedule, with no human watching. An `https`-only
+ * check bounds that but does not close it: any URL the caller likes still gets
+ * a POST from our origin, which is the shape of an SSRF and also a way to make
+ * this API a traffic amplifier pointed at somebody else.
+ *
+ * The real endpoint always belongs to a browser's push service, and there are
+ * four of them. Matching on the host closes the hole while accepting every
+ * subscription a real browser can produce.
+ *
+ * `PUSH_ENDPOINT_HOSTS` exists because that list is not ours: a new browser or
+ * a renamed service would otherwise be a silent refusal for those users until a
+ * deploy. Comma-separated suffixes, added to the defaults rather than replacing
+ * them, so a deploy cannot lose the known ones by setting it.
+ */
+const DEFAULT_PUSH_ENDPOINT_HOSTS = [
+  // Chrome, Edge, Opera, and every Chromium derivative.
+  "fcm.googleapis.com",
+  "android.googleapis.com",
+  // Firefox.
+  "push.services.mozilla.com",
+  // Windows / Edge legacy WNS.
+  "notify.windows.com",
+  // Safari, macOS and iOS.
+  "web.push.apple.com",
+] as const;
+
+function allowedPushHosts(): string[] {
+  const extra = (process.env.PUSH_ENDPOINT_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  return [...DEFAULT_PUSH_ENDPOINT_HOSTS, ...extra];
+}
+
+/**
+ * Whether this is an endpoint a push service issued.
+ *
+ * Suffix match on a dot boundary, never `includes`: `endsWith("apple.com")`
+ * alone would accept `web.push.apple.com.evil.test`, and a bare `includes`
+ * would accept anything with the string in its path. The exact host counts as a
+ * match so a service that stops using a subdomain keeps working.
+ */
+export function isAllowedPushEndpoint(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return allowedPushHosts().some(
+    (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+  );
+}
