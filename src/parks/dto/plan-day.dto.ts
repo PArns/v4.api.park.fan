@@ -89,6 +89,17 @@ export class PlanDayRideDto {
       "cost there.",
   })
   downYesterday?: boolean;
+
+  @ApiProperty({
+    required: false,
+    example: true,
+    description:
+      "Whether the park counts this ride among its headliners. The CURATED answer " +
+      "(AnalyticsService.getHeadlinerAttractionIds), never re-derived from dayPeak — a " +
+      "headliner having a quiet day is still a headliner. The planner uses it to point " +
+      "out the ones a visitor has not planned.",
+  })
+  isHeadliner?: boolean;
 }
 
 export class PlanDayContextDto {

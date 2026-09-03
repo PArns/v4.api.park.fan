@@ -5,6 +5,7 @@ import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
 import { MLService } from "../../ml/ml.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
+import { AnalyticsService } from "../../analytics/analytics.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
@@ -31,6 +32,8 @@ describe("PlanDayService", () => {
   let profile: unknown;
   let attractions: Array<Partial<Attraction>>;
   let downRows: Array<{ attractionId: string }>;
+  let headlinerIds: Set<string>;
+  let headlinerFails: boolean;
   let queryCalls: unknown[][];
 
   const build = async () => {
@@ -49,6 +52,17 @@ describe("PlanDayService", () => {
                   return downRows;
                 }),
             },
+          },
+        },
+        {
+          provide: AnalyticsService,
+          useValue: {
+            getHeadlinerAttractionIds: jest
+              .fn()
+              .mockImplementation(async () => {
+                if (headlinerFails) throw new Error("analytics down");
+                return headlinerIds;
+              }),
           },
         },
         {
@@ -90,6 +104,8 @@ describe("PlanDayService", () => {
       { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
     ];
     downRows = [];
+    headlinerIds = new Set<string>();
+    headlinerFails = false;
     queryCalls = [];
     calendarDay = {
       date: "2026-10-17",
@@ -354,6 +370,45 @@ describe("PlanDayService", () => {
     const ride = plan.rides.find((r) => r.attractionSlug === "taron");
 
     expect(ride?.downYesterday).toBe(true);
+  });
+
+  it("marks the park's curated headliners and nothing else", async () => {
+    // The CURATED set, threaded through — never re-derived from `dayPeak`. A
+    // planner that guessed headliners from the day's tallest bars would point at
+    // whatever happens to be busy, which is the opposite of the question the
+    // visitor is asking: "did I miss the big one".
+    headlinerIds = new Set(["a-taron"]);
+    const today = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    calendarDay = { ...calendarDay!, date: today };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${today}T12:00:00.000Z`,
+      },
+    ];
+
+    const plan = await service.buildPlanDay(park, today);
+    const taron = plan.rides.find((r) => r.attractionSlug === "taron");
+
+    expect(taron?.isHeadliner).toBe(true);
+    // Absent, not false: the field is omitted for an ordinary ride, so the
+    // payload does not carry a boolean per ride for every park in the catalogue.
+    expect(
+      plan.rides
+        .filter((r) => r.attractionSlug !== "taron")
+        .every((r) => r.isHeadliner === undefined),
+    ).toBe(true);
+  });
+
+  it("serves the day anyway when the headliner lookup fails", async () => {
+    // One analytics query must not cost the visitor their plan. The mock has to
+    // actually REJECT — asserting this against a working lookup would pass
+    // whatever the service does with the error.
+    headlinerFails = true;
+    const plan = await service.buildPlanDay(park, "2026-10-17");
+
+    expect(plan.rides.length).toBeGreaterThan(0);
+    expect(plan.rides.every((r) => r.isHeadliner === undefined)).toBe(true);
   });
 
   it("does not ask about yesterday for a date weeks out", async () => {

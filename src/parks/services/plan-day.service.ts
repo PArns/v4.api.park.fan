@@ -6,6 +6,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { MLService } from "../../ml/ml.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
+import { AnalyticsService } from "../../analytics/analytics.service";
 import { CalendarService } from "./calendar.service";
 import { composeDayCurve } from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
@@ -51,6 +52,7 @@ export class PlanDayService {
     private readonly mlService: MLService,
     private readonly calendarService: CalendarService,
     private readonly historicalStatsService: ParkHistoricalStatsService,
+    private readonly analyticsService: AnalyticsService,
   ) {}
 
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
@@ -141,7 +143,22 @@ export class PlanDayService {
 
     const bySlug = new Map(attractions.map((a) => [a.slug, a]));
     const byId = new Map(attractions.map((a) => [a.id, a]));
-    const downIds = await this.downYesterday(park, dateStr);
+    // Both are per-park sets keyed by attraction id, and neither is worth
+    // serialising behind the other. The headliner set is the park's CURATED
+    // answer — never re-derived from `dayPeak`, because a headliner having a
+    // quiet Tuesday is still a headliner, and a planner that pointed at the
+    // day's tallest bars instead would recommend whatever happens to be busy.
+    const [downIds, headlinerIds] = await Promise.all([
+      this.downYesterday(park, dateStr),
+      this.analyticsService
+        .getHeadlinerAttractionIds(park.id)
+        .catch((err: Error) => {
+          this.logger.warn(
+            `Plan day: headliners unavailable for ${park.slug}: ${err.message}`,
+          );
+          return new Set<string>();
+        }),
+    ]);
 
     // The historical shape. topN is the endpoint's own cap rather than the
     // caller's: a planner wants every ride it can get, and this payload is a
@@ -164,6 +181,7 @@ export class PlanDayService {
         byId,
         profile,
         downIds,
+        headlinerIds,
       );
       if (measured.length > 0) return measured;
       // Fall through: the hourly rows can be missing for a park the generator
@@ -205,6 +223,7 @@ export class PlanDayService {
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attraction.id) ? { downYesterday: true } : {}),
+        ...(headlinerIds.has(attraction.id) ? { isHeadliner: true } : {}),
       });
     }
 
@@ -228,6 +247,7 @@ export class PlanDayService {
       ReturnType<ParkHistoricalStatsService["getParkHourlyProfile"]>
     > | null,
     downIds: ReadonlySet<string>,
+    headlinerIds: ReadonlySet<string>,
   ): Promise<PlanDayRideDto[]> {
     const stored = await this.mlService
       .getParkPredictions(park.id, "hourly")
@@ -295,6 +315,7 @@ export class PlanDayService {
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
+        ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
       });
     }
 
