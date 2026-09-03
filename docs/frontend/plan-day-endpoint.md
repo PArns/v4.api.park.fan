@@ -104,6 +104,8 @@ park nobody has watched: those still answer `openHour: null` and `rides: []`.
 | field | notes |
 | --- | --- |
 | `uncertaintyMinutes` | half-width of the model's band, from the same row as `dayPeak`. Absent where the model reports no spread — **not** a band of width zero, and it must not be drawn as one |
+| `opensAt` | when the RIDE opens, park-local `HH:mm` — see §8 |
+| `expectedError` | how wrong `dayPeak` typically is, in minutes — see §9 |
 | `sampleDays` | measured days behind the historical shape. `1` on an observed day, `0` for a ride the shape does not cover |
 | `latitude` / `longitude` | **numbers**, not the strings TypeORM returns for a decimal column. A geodesic distance between two of them is a *lower bound* on the walk and nothing more |
 | `downYesterday` | the ride was reported **DOWN** at some point in the previous operating day and was **never OPERATING** in any of it. A ride the feed called CLOSED all day is a season or a refurbishment, not a fault, and is not flagged — without the DOWN requirement this put a warning on nine of Phantasialand's winter-only and water attractions every day of the summer. Only asked for today and tomorrow |
@@ -168,6 +170,100 @@ A caller must render `projected` differently from `scheduled`. It is what the
 show did, not a promise that it runs; `observedOn` is there so the reader can see
 how fresh that evidence is. An empty `shows` means we have never watched this
 park's shows — a different statement from "this park has no shows".
+
+## 8. A ride opens later than its park
+
+`context.openHour` is the gate. It is not when the rides start, and at some parks
+the gap is most of the morning: Phantasialand opens at 09:00 and Taron, F.L.Y.,
+Winja's Fear, Winja's Force, Talocan, Crazy Bats, Mystery Castle, River Quest,
+Colorado Adventure and seven more run from 10:00 — sixteen rides, an hour behind
+the gates.
+
+Each ride carries `opensAt` (park-local `HH:mm`) and **its `hours` already begin
+there**, so a caller clamps nothing. The field is there to be shown: somebody
+arriving at rope drop needs to know which queue does not exist yet.
+
+Absent means either "opens with the park" or "we cannot tell" — fewer than five
+observed openings, or a feed that never reports the transition. Both render the
+same way, and `hours` is correct in either case.
+
+**The gap is seasonal, so the lookup is too.** Measured over a year:
+
+| | park opens | Taron | F.L.Y. | Black Mamba |
+| --- | --- | --- | --- | --- |
+| Apr–Aug | 09:00 | 10:10 | 10:10 | 08:10 |
+| January | 11:00 | 11:00 | 11:00 | 11:05 |
+
+In winter, when the park opens at 11:00, **everything opens with the park** —
+the delay is not a property of the ride. So neither the absolute time nor the
+offset survives the season, and openings are stored keyed by the park's own
+opening time that day. A summer median can never cap a winter morning at 10:00,
+and a winter one can never cap July at 11:00. A park opening we have never
+watched yields no answer rather than the nearest one.
+
+Three things make the detection clean, and each was a wrong answer first:
+
+- **The transition, not the first `OPERATING` row.** `queue_data` is written on
+  change plus an hourly heartbeat, so a ride left open overnight would report its
+  06:15 heartbeat as an opening. A day counts only when the ride was seen CLOSED
+  earlier that day.
+- **The park's hour is the floor.** Half the rides report OPERATING *before* the
+  gates (08:10 for Black Mamba against a 09:00 opening): the feed carries the
+  operator's system state, not whether a visitor can walk up.
+- **Floored to the quarter hour.** The raw median is a detection time — a
+  five-minute poller plus the feed's own lag puts a 10:00 ride at 10:10.
+
+**There is no `closesAt` and there will not be one.** The feeds do not reliably
+flip a ride to CLOSED at the end of the day — rides read OPERATING for hours after
+a park shuts — so it would be a guess wearing a timestamp.
+
+## 9. How wrong the day is
+
+Two fields, both measured rather than asserted: `rides[].expectedError` and the
+`accuracy` block on the response.
+
+```jsonc
+"accuracy": { "basis": "measured", "typicalError": 15.4, "sampleSize": 1140009 },
+"rides": [
+  { "attractionSlug": "taron", "dayPeak": 60, "expectedError": 23.9 },
+  { "attractionSlug": "raik",  "dayPeak": 20, "expectedError": 10.9 }
+]
+```
+
+**`accuracy.basis` is the planability signal.** `measured` means the forecast at
+this distance has been scored against realised days. `unmeasured` means **past 60
+days**, where the only model left is CatBoost and nobody has ever scored it there:
+`deduplicatePredictions` rewrites a day's prediction until only the last survives,
+so of its rows for days that have passed, 72,795 sit at one day out and 179 at
+8–30. A day like that should be shown as indicative — never as something to plan a
+morning around. `prediction_lead_snapshots` began recording forward on 2026-09-03;
+its 60-day bucket reports sixty days after that.
+
+**`expectedError` is per ride because the error has two axes**, and by a lot —
+45 days of forecasts scored against the realised day-P90:
+
+| predicted | 1 day | 7 days | 30 days | 60 days |
+| --- | --- | --- | --- | --- |
+| ≥ 60 min | 21.4 | 22.0 | 23.9 | 25.0 |
+| 30–59 min | 12.7 | 13.5 | 15.3 | 16.6 |
+| < 30 min | 8.4 | 9.1 | 10.9 | 13.0 |
+
+One figure per day would understate a headliner by ten minutes and overstate a
+small ride by four.
+
+**It is a typical miss, not a bound.** Roughly half of days land further out, so
+it reads as "give or take" and must not be drawn as a range that contains the
+answer.
+
+The band is the **predicted** level, never the realised one. Grouping by the
+outcome reproduces regression to the mean and makes a well-calibrated model look
+badly biased — the trap that
+[long-range-forecasting.md](../ml/long-range-forecasting.md) documents, and the
+reason `shape_comparisons`' bias column cannot be read at face value.
+
+The profile is rebuilt nightly at 03:10 rather than configured: these numbers
+follow the model, the season and the park set, and a constant would be right on
+the day it was written and quietly wrong afterwards.
 
 ## Related
 
