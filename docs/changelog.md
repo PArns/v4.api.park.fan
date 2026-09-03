@@ -6,6 +6,118 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the day planner: `/plan/day`, stored plans, web push
+
+`GET …/plan/day?date=` returns an hourly wait curve per ride for one date, plus
+that day's own context. Alongside it `/v1/trips` (a plan that outlives one
+browser) and `/v1/push` (a notification before the next block). Details:
+[plan-day-endpoint.md](frontend/plan-day-endpoint.md) ·
+[trips-and-push.md](frontend/trips-and-push.md).
+
+The model's uncertainty now travels the whole way. CatBoost trains
+`MultiQuantile:alpha=0.5,0.8,0.95`, and `config.py` calls alpha=0.95 "the
+displayed uncertainty width" in as many words — `predict.py` computed it, folded
+it into a confidence percentage and dropped it. It is `uncertaintyMinutes` now,
+through the result dict, the entity, both read paths and `hourlyForecast`.
+
+### Fixed — `/v1/trips` and `/v1/push/subscriptions` answered 400 to every request
+
+Both DTO classes carried nothing but `@ApiProperty`. The global
+`ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` keeps only
+properties with a class-validator decorator and 400s the rest, so a class with
+none rejects **its own** fields (`["property payload should not exist"]`). Both
+features were dead on arrival, and nothing saw it: controller specs call the
+handler methods directly, which is the one path the global pipe does not sit on.
+`src/common/global-validation-pipe.spec.ts` now pushes a valid body through the
+real pipe for every request DTO.
+
+### Fixed — `tier: "measured"` was printed over composed data
+
+The tier came from the **distance**, not from what came back. A day with no
+hourly rows — an ML service having a bad minute, a park the run skipped — went
+out as a composed curve under the most trustworthy label. The tier is now derived
+from the curves that were actually built, and the test that had pinned the old
+behaviour argued for the new one in its own comment.
+
+### Fixed — the hourly curve stopped at the 24-hour horizon
+
+The hourly forecast reaches 24 hours from now and not one minute further.
+Measured against the live service at 17:15: Disneyland Paris (09:00–22:00) got
+17:00–21:00 for today and 09:00–17:00 for tomorrow — the evening, where a
+headliner's curve peaks, silently absent, and `dayPeak` the maximum of what was
+left. The unreached hours are now filled from the composed curve and carry
+`source: "composed"`.
+
+### Fixed — `dayPeak` meant something different on every tier
+
+It was the maximum of the hourly values, so depending on the tier a median
+forecast, a measured mean, or a day peak. Taron read 20 today and 42 five days
+out, and the whole difference was the statistic. `dayPeak` is now the **day's
+peak** everywhere: the day-level prediction on the forecast side, the realised
+day-P90 on the measured side — the same rule as `claude.md` §3.
+
+### Fixed — `/plan/day` was an empty shell past ~60 days
+
+Opening hours come from the schedule, and that is where the operator's published
+times end: of 177 parks with hours, **91 reach 60 days and 38 reach 120**
+(Disneyland Paris: 2026-10-31). With no hours there were no curves — nothing at
+exactly the distance a planner exists for. The window now falls back to the hours
+this park has actually been measured with queues in, and says so through
+`context.hoursSource: "observed"`. Nothing is invented for a day stated as
+closed, or for a park nobody has watched.
+
+### Fixed — `downYesterday` reported seasonal and refurbishment closures as faults
+
+The query asked only for "never OPERATING". On the live database that caught nine
+Phantasialand attractions — Berliner Eislaufen, Ice skate hire, Wözl's
+Wassertreter, NEW: Winni Splash … every one of them `CLOSED`-only, i.e. winter and
+water attractions out of season, flagged again every day of the summer. It now
+also requires at least one `DOWN` reading. Over 30 days the new definition fires
+10 times across 16,249 ride-days in the Berlin-timezone parks.
+
+The same query was also unsargable: `(qd.timestamp AT TIME ZONE $2)::date = …`
+hides the column from chunk exclusion. Measured: **"Chunks excluded during
+startup: 0"**, all 254 chunks, 35,967 buffers, 1.1 s cold. As a half-open range on
+the raw column: 252 chunks excluded, 431 buffers, **0.94 ms**.
+
+### Fixed — the lead-time archive was written and read by nobody
+
+`scoreDueSnapshots()` had no caller and `leadTimeMae` was hard-coded null: ~6,000
+rows a night for a question nothing asked. There is now a 03:00 cron and a read
+path (`getLeadTimeMae`) that takes the nearest sampled bucket **at or below** the
+distance and stays null until enough rows are scored.
+`TripsService.sweepExpired()` had no caller either — now daily at 04:45 on its own
+`trips` queue.
+
+### Fixed — the calendar cache outlived midnight
+
+`max-age`/`s-maxage` were a day for a range containing today. But `isToday`,
+`todayCrowdLevel` and a past day's "closed" are statements about which day today
+is: the origin re-derives them when it serves the month cache, a CDN copy cannot,
+and a browser copy cannot even be purged. Verified live (`cf-cache-status: HIT`,
+`age`). The TTL is now capped at the time left until park-local midnight.
+
+### Fixed — small things with teeth
+
+- **Push endpoints must belong to a known push service.** The stored string is a
+  URL this server POSTs to every five minutes; `https` alone leaves
+  `/v1/push/subscriptions` a request forwarder aimed wherever the caller likes
+  (SSRF). Four services are allowed, `PUSH_ENDPOINT_HOSTS` extends the list.
+- **`composed` was capped at 20 rides.** The profile's SQL already fetches
+  `min(topN * 3, 60)` and threw the rest away — at 60, Europa-Park now yields
+  **29 rides instead of 20** and Disneyland Paris 21 instead of 20, from the
+  identical query.
+- **No more `DAILY_HORIZON_DAYS = 60`.** The daily horizon follows the park's
+  schedule (live: 181–362 days, averaging 193); the constant labelled two thirds
+  of the answerable days out of range. `long_range` now means "no day level exists
+  for this date".
+- `prediction_lead_snapshots.attraction_id` is `uuid` rather than `varchar` — the
+  same cast trap `downYesterday` documents from the other side.
+- The push DTO's `topics` example listed `ride-down`, a topic `isPushTopic`
+  rejects.
+- A trip id that cannot exist is answered 404 instead of being handed to the
+  database.
+
 ### Added — das Frontend erfährt jetzt, wann ein Park öffnet
 
 Auf park.fan standen den ganzen 1. September gestrige Showtimes unter „Keine
