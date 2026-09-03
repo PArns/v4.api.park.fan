@@ -192,9 +192,21 @@ describe("checkTripPayload", () => {
   it("never echoes the payload back in the reason", () => {
     // The reason reaches the caller in a 400. Reflecting the body would make
     // this endpoint useful for something other than storing plans.
-    const verdict = checkTripPayload({ version: 2, parks: { p: "<script>" } });
+    //
+    // Asserted with `toContain` and NOT with a regex. `/<script>/` is what this
+    // line used to say, and CodeQL reads any regex mentioning a tag as an
+    // attempt to FILTER html — it raised a high-severity "does not match upper
+    // case <SCRIPT>" on it, which is the right warning about the wrong line:
+    // nothing here filters anything, it checks that a value came back
+    // unmentioned. A substring check says exactly that and cannot be mistaken
+    // for a sanitiser.
+    const hostile = "<script>alert(1)</script>";
+    const verdict = checkTripPayload({ version: 2, parks: { p: hostile } });
     expect(verdict.ok).toBe(false);
-    expect(verdict.reason).not.toMatch(/<script>/);
+    expect(verdict.reason).not.toContain(hostile);
+    // Not even a fragment of it: a reason that echoed half the value would be
+    // just as usable and would pass a whole-string check.
+    expect(verdict.reason).not.toContain("script");
   });
 
   it("measures bytes of UTF-8, not characters", () => {
