@@ -733,3 +733,66 @@ describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", 
     expect(meta.scheduleCoverage.to).not.toBe("2026-10-02");
   });
 });
+
+describe("CalendarService › buildDaysBounded (private)", () => {
+  let service: CalendarService;
+
+  const noopRedis = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+    mget: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        { provide: ParksService, useValue: {} },
+        { provide: WeatherService, useValue: {} },
+        { provide: MLService, useValue: {} },
+        { provide: AnalyticsService, useValue: {} },
+        { provide: HolidaysService, useValue: {} },
+        { provide: AttractionsService, useValue: {} },
+        { provide: REDIS_CLIENT, useValue: noopRedis },
+        {
+          provide: getQueueToken("park-metadata"),
+          useValue: { add: jest.fn() },
+        },
+      ],
+    }).compile();
+    service = module.get<CalendarService>(CalendarService);
+  });
+
+  /**
+   * A 90-day calendar request used to fan out one `calculateCrowdLevelForDate`
+   * per uncached past day, all at once. Measured 2026-09-02: 43 of those
+   * finishing within 7 ms of each other in a single second — the whole
+   * connection pool held by one request, with every other query queued behind
+   * it. The days still build in parallel, just not unboundedly.
+   */
+  it("keeps the number of days built at once below the pool size", async () => {
+    const dates = Array.from(
+      { length: 40 },
+      (_, i) => new Date(2026, 0, i + 1),
+    );
+    let running = 0;
+    let peak = 0;
+
+    const built = await (service as any).buildDaysBounded(
+      dates,
+      async (date: Date) => {
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setImmediate(r));
+        running--;
+        return { date: date.toISOString() };
+      },
+    );
+
+    expect(built).toHaveLength(40);
+    expect(peak).toBeLessThanOrEqual(8);
+    // Still concurrent — this is a ceiling, not a sequential rewrite.
+    expect(peak).toBeGreaterThan(1);
+  });
+});
