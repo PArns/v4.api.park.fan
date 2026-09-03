@@ -7,6 +7,7 @@ import { MLService } from "../../ml/ml.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
+import { ShowsService } from "../../shows/shows.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
@@ -41,6 +42,9 @@ describe("PlanDayService", () => {
   let leadMae: number | null;
   let profileMock: jest.Mock;
   let leadMaeMock: jest.Mock;
+  let parkShows: Array<{ id: string; slug: string; name: string }>;
+  let scheduledTimes: Map<string, string[]>;
+  let patterns: Map<string, unknown>;
 
   const build = async () => {
     const moduleRef = await Test.createTestingModule({
@@ -104,6 +108,18 @@ describe("PlanDayService", () => {
           provide: PredictionLeadSnapshotService,
           useValue: { getLeadTimeMae: leadMaeMock },
         },
+        {
+          provide: ShowsService,
+          useValue: {
+            findByParkId: jest.fn().mockImplementation(async () => parkShows),
+            getShowtimesOnDate: jest
+              .fn()
+              .mockImplementation(async () => scheduledTimes),
+            getSchedulePatterns: jest
+              .fn()
+              .mockImplementation(async () => patterns),
+          },
+        },
       ],
     }).compile();
     return moduleRef.get(PlanDayService);
@@ -151,6 +167,9 @@ describe("PlanDayService", () => {
     ];
     hourlyPredictions = [];
     leadMae = null;
+    parkShows = [];
+    scheduledTimes = new Map();
+    patterns = new Map();
     profileMock = jest.fn().mockImplementation(async () => profile);
     leadMaeMock = jest.fn().mockImplementation(async () => leadMae);
     service = await build();
@@ -681,6 +700,146 @@ describe("PlanDayService", () => {
       const plan = await service.buildPlanDay(park, date);
 
       expect(plan.context.hoursSource).toBe("schedule");
+    });
+  });
+
+  // ── Shows ──────────────────────────────────────────────────────────────────
+  // No feed publishes showtimes beyond the current day — checked at
+  // ThemeParks.wiki, which answers for today and then serves entries it never
+  // cleared, some from 2022. So a planned date can only be answered by
+  // projecting, and the whole risk is that a projection reads as a promise.
+  describe("shows", () => {
+    const pattern = (over: Record<string, unknown> = {}) => ({
+      showId: "s-1",
+      weekday: 0,
+      times: ["12:30", "14:30"],
+      observedDays: 7,
+      lastObservedOn: todayMinus(7),
+      ...over,
+    });
+
+    function todayMinus(days: number): string {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - days);
+      return d.toISOString().slice(0, 10);
+    }
+
+    beforeEach(() => {
+      parkShows = [{ id: "s-1", slug: "big-moments", name: "Big Moments" }];
+    });
+
+    it("serves the operator's own times as scheduled", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      scheduledTimes = new Map([["s-1", ["12:30", "14:30", "17:45"]]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows).toEqual([
+        {
+          showSlug: "big-moments",
+          showName: "Big Moments",
+          times: ["12:30", "14:30", "17:45"],
+          source: "scheduled",
+        },
+      ]);
+    });
+
+    it("projects the last matching weekday, and says so", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      patterns = new Map([["s-1", pattern({ lastObservedOn: todayMinus(7) })]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows).toHaveLength(1);
+      const show = plan.shows[0];
+      expect(show.source).toBe("projected");
+      expect(show.times).toEqual(["12:30", "14:30"]);
+      // A projection that cannot say what it came from is a schedule.
+      expect(show.observedOn).toBe(todayMinus(7));
+      expect(show.sampleDays).toBe(7);
+    });
+
+    it("refuses to turn a one-off event into a weekly show", async () => {
+      // Europa-Park ran "Crazy Summer with Ross Antony & Paul Reeves" on exactly
+      // one Thursday in July. Projecting it forward would have put a concert on
+      // every remaining Thursday of the year.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      patterns = new Map([["s-1", pattern({ observedDays: 1 })]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows).toEqual([]);
+    });
+
+    it("stops projecting a programme nobody has seen for a month", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      patterns = new Map([
+        ["s-1", pattern({ lastObservedOn: todayMinus(40) })],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows).toEqual([]);
+    });
+
+    it("measures staleness against today, not against the date asked about", async () => {
+      // Measuring against the target would reject every date more than four
+      // weeks out — which is most of what a planner asks.
+      const far = new Date();
+      far.setUTCDate(far.getUTCDate() + 200);
+      const date = far.toISOString().slice(0, 10);
+      calendarDay = { ...calendarDay!, date };
+      patterns = new Map([["s-1", pattern({ lastObservedOn: todayMinus(3) })]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows).toHaveLength(1);
+      expect(plan.shows[0].source).toBe("projected");
+    });
+
+    it("prefers the operator's answer over its own projection", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      scheduledTimes = new Map([["s-1", ["20:00"]]]);
+      patterns = new Map([["s-1", pattern()]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows[0].source).toBe("scheduled");
+      expect(plan.shows[0].times).toEqual(["20:00"]);
+      expect(plan.shows[0].observedOn).toBeUndefined();
+    });
+
+    it("says nothing about a park whose shows it has never watched", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // Not "this park has no shows" — a different statement, and the DTO
+      // says which one this is.
+      expect(plan.shows).toEqual([]);
+    });
+
+    it("keeps the day readable top to bottom", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      parkShows = [
+        { id: "s-1", slug: "late", name: "Late Show" },
+        { id: "s-2", slug: "early", name: "Early Show" },
+      ];
+      scheduledTimes = new Map([
+        ["s-1", ["21:45"]],
+        ["s-2", ["10:00", "12:00"]],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows.map((s) => s.showSlug)).toEqual(["early", "late"]);
     });
   });
 

@@ -6,6 +6,39 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the planner's shows, projected honestly
+
+`/plan/day` returned `shows: []` for every date. The reason it could not simply
+be filled in: **no feed publishes showtimes ahead of the current day.** Checked
+at the source — ThemeParks.wiki answers for Europa-Park with 186 start times for
+today and then a tail of entries it never cleared, some from 2022 — and confirmed
+across our own data, where not one park holds a park-local showtime for a future
+day. (An earlier reading of ours that suggested otherwise was an artefact of
+grouping by UTC date, which puts a US evening show on the next day.)
+
+So a planned date is answered by projection, from `show_schedule_patterns`: per
+show and per weekday, the times of the most recent day it actually ran. Weekday,
+because the difference is real — "Big Moments – The Celebration-Show" runs twice
+on a Thursday and three times on a Saturday. Most recent matching day rather than
+a union over the window, because a union merges a summer programme with an autumn
+one into a day that never happened.
+
+Every projected entry says so: `source: "projected"` with `observedOn` and
+`sampleDays` beside it, against `source: "scheduled"` for the operator's own
+answer. Two guards keep a projection from becoming a claim — more than one
+sighting on that weekday, and a sighting in the last 28 days measured against
+today. Both come from real rows: "Crazy Summer with Ross Antony & Paul Reeves"
+ran on exactly one Thursday in July, and would otherwise have been promised every
+Thursday until Christmas.
+
+The patterns are rebuilt nightly at 04:15 because they cannot be built per
+request: one park's eight-week window is 47,000 snapshots and 350,000 showtime
+entries, and the global aggregation takes 5.7 s. The window is applied to the
+**showtime**, not only to the snapshot — a snapshot written this morning can
+carry a start time from 2022, and filtering on the snapshot alone would fold a
+2022 Christmas show into a September pattern.
+
+
 ### Added — the day planner: `/plan/day`, stored plans, web push
 
 `GET …/plan/day?date=` returns an hourly wait curve per ride for one date, plus

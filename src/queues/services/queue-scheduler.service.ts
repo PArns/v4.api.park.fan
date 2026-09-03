@@ -51,6 +51,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
+    @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
@@ -942,6 +943,28 @@ export class QueueSchedulerService implements OnModuleInit {
         {
           repeat: { cron: "45 4 * * *" },
           jobId: "trip-sweep-cron",
+        },
+      );
+    }
+
+    // Showtime patterns: daily at 4:15 AM.
+    //
+    // No feed publishes showtimes beyond the current day, so a planned date in
+    // October can only be answered by projecting from what we have watched. This
+    // job is what makes that affordable — the aggregation reads an eight-week
+    // window of `show_live_data` and takes ~6 s, which is nothing nightly and
+    // impossible per request.
+    const hasShowPatternCron = await this.hasRepeatableJob(
+      this.showPatternsQueue,
+      "show-pattern-cron",
+    );
+    if (!hasShowPatternCron) {
+      await this.showPatternsQueue.add(
+        "rebuild-patterns",
+        {},
+        {
+          repeat: { cron: "15 4 * * *" },
+          jobId: "show-pattern-cron",
         },
       );
     }

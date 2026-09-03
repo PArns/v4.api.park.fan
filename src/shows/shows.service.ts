@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
 import { Show } from "./entities/show.entity";
 import { ShowLiveData } from "./entities/show-live-data.entity";
+import { ShowSchedulePattern } from "./entities/show-schedule-pattern.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
@@ -38,6 +39,8 @@ export class ShowsService {
     private showRepository: Repository<Show>,
     @InjectRepository(ShowLiveData)
     private showLiveDataRepository: Repository<ShowLiveData>,
+    @InjectRepository(ShowSchedulePattern)
+    private showSchedulePatternRepository: Repository<ShowSchedulePattern>,
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
@@ -705,5 +708,171 @@ export class ShowsService {
       .getMany();
 
     return latestTodayPerEntity(showData, (data) => data.showId, timezone);
+  }
+
+  // ── Showtime patterns ───────────────────────────────────────────────────────
+
+  /** How far back a pattern may look. Eight weeks covers a season change. */
+  private static readonly PATTERN_WINDOW_DAYS = 56;
+
+  /**
+   * Rebuild the per-weekday showtime patterns for every show.
+   *
+   * Runs nightly, because the question it answers cannot be answered per
+   * request: one park's window is 47,000 snapshots and 350,000 showtime entries,
+   * and the aggregation below takes 5.7 s across all parks. It is written as one
+   * statement rather than a loop for the same reason — 213 parks of round trips
+   * would cost more than the scan does.
+   *
+   * Two filters carry the whole correctness of this, and neither is obvious:
+   *
+   * The window is applied to the **showtime**, not only to the snapshot.
+   * ThemeParks.wiki keeps returning showtimes it never cleared — Europa-Park's
+   * live response today still carries entries from 2022 and 2023 — so a snapshot
+   * written this morning can contain a start time from four years ago. Filtering
+   * on `timestamp` alone would fold "Surpr'Ice with the Celtic Shadows" from
+   * November 2022 into a September pattern.
+   *
+   * And the times come from the **most recent matching day**, not from a union
+   * over the window. A union merges a summer programme with an autumn one into a
+   * day that never happened; the latest matching day is a day that did.
+   */
+  async rebuildSchedulePatterns(): Promise<{
+    patterns: number;
+    shows: number;
+  }> {
+    const windowDays = ShowsService.PATTERN_WINDOW_DAYS;
+
+    const rows: Array<{
+      show_id: string;
+      weekday: number;
+      times: string[];
+      observed_days: number;
+      last_observed_on: string;
+    }> = await this.showLiveDataRepository.manager.query(
+      `WITH times AS (
+         SELECT l."showId"        AS show_id,
+                p.timezone        AS tz,
+                (e->>'startTime')::timestamptz AS st
+           FROM show_live_data l
+           JOIN shows s ON s.id = l."showId"
+           JOIN parks p ON p.id = s."parkId"
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
+          WHERE l.timestamp > now() - ($1 || ' days')::interval
+            AND l.status = 'OPERATING'
+       ), local AS (
+         SELECT show_id,
+                (st AT TIME ZONE tz)::date                       AS day,
+                EXTRACT(DOW FROM st AT TIME ZONE tz)::int        AS weekday,
+                to_char(st AT TIME ZONE tz, 'HH24:MI')           AS hhmm
+           FROM times
+          -- The showtime itself has to be recent: the feed serves years-old ones.
+          WHERE st > now() - ($1 || ' days')::interval
+            AND st < now() + INTERVAL '2 days'
+       ), per_day AS (
+         SELECT show_id, weekday, day,
+                array_agg(DISTINCT hhmm ORDER BY hhmm) AS times
+           FROM local
+          GROUP BY 1, 2, 3
+       ), ranked AS (
+         SELECT *,
+                row_number() OVER (PARTITION BY show_id, weekday ORDER BY day DESC) AS rn,
+                count(*)     OVER (PARTITION BY show_id, weekday)                   AS observed_days
+           FROM per_day
+       )
+       SELECT show_id, weekday, times, observed_days, day AS last_observed_on
+         FROM ranked
+        WHERE rn = 1`,
+      [windowDays],
+    );
+
+    const computedAt = new Date();
+    const entities = rows.map((r) => ({
+      showId: r.show_id,
+      weekday: r.weekday,
+      times: r.times,
+      observedDays: Number(r.observed_days),
+      lastObservedOn: r.last_observed_on,
+      computedAt,
+    }));
+
+    // Replace wholesale: a pattern that stopped being observed has to disappear,
+    // and an upsert would leave last season's Saturday sitting there forever.
+    await this.showSchedulePatternRepository.manager.transaction(async (tx) => {
+      await tx.clear(ShowSchedulePattern);
+      for (let i = 0; i < entities.length; i += 500) {
+        await tx.insert(ShowSchedulePattern, entities.slice(i, i + 500));
+      }
+    });
+
+    const shows = new Set(rows.map((r) => r.show_id)).size;
+    this.logger.log(
+      `🎭 Show patterns rebuilt: ${entities.length} pattern(s) across ${shows} show(s)`,
+    );
+    return { patterns: entities.length, shows };
+  }
+
+  /**
+   * The showtimes a park's shows actually have on one park-local date.
+   *
+   * Reads the freshest snapshot per show and keeps only the times that fall on
+   * that date, so "we know this day" and "we are guessing" never mix. In
+   * practice this answers for today and nothing else — no source publishes
+   * further ahead — but it is written against the date rather than against
+   * "today" so it keeps working the day one does.
+   */
+  async getShowtimesOnDate(
+    parkId: string,
+    timezone: string,
+    date: string,
+  ): Promise<Map<string, string[]>> {
+    const rows: Array<{ show_id: string; times: string[] }> =
+      await this.showLiveDataRepository.manager.query(
+        `WITH latest AS (
+           SELECT DISTINCT ON (l."showId") l."showId" AS show_id, l.showtimes, l.status
+             FROM show_live_data l
+             JOIN shows s ON s.id = l."showId"
+            WHERE s."parkId" = $1::uuid
+              -- The snapshot window is anchored on the DATE asked about, not on
+              -- "now": that makes this answer a past day from the snapshots taken
+              -- on it, today from the freshest one, and a future day not at all —
+              -- which is the honest answer there, and what the projection is for.
+              AND l.timestamp >= ($3::date - INTERVAL '1 day')
+              AND l.timestamp <  ($3::date + INTERVAL '2 days')
+            ORDER BY l."showId", l.timestamp DESC
+         )
+         SELECT show_id,
+                array_agg(DISTINCT to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')
+                          ORDER BY to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')) AS times
+           FROM latest
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(showtimes, '[]'::jsonb)) e
+          WHERE status = 'OPERATING'
+            AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date = $3::date
+          GROUP BY show_id`,
+        [parkId, timezone, date],
+      );
+
+    return new Map(rows.map((r) => [r.show_id, r.times]));
+  }
+
+  /**
+   * The per-weekday patterns for one park's shows, keyed by show id.
+   *
+   * `weekday` is the Postgres convention (0 = Sunday), which is also
+   * JavaScript's `getUTCDay()` — see the column's own note on why that is worth
+   * stating out loud in this codebase.
+   */
+  async getSchedulePatterns(
+    parkId: string,
+    weekday: number,
+  ): Promise<Map<string, ShowSchedulePattern>> {
+    const rows = await this.showSchedulePatternRepository
+      .createQueryBuilder("p")
+      .innerJoin(Show, "s", "s.id = p.showId")
+      .where("s.parkId = :parkId", { parkId })
+      .andWhere("p.weekday = :weekday", { weekday })
+      .getMany();
+
+    return new Map(rows.map((r) => [r.showId, r]));
   }
 }

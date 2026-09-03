@@ -131,13 +131,43 @@ archive has been running 60 days. **Absent is the honest answer** — a caller
 should widen the band with distance without attaching a figure rather than invent
 one.
 
-## 7. What is not here yet
+## 7. Shows
 
-`shows` is always `[]`. The calendar DTO has no showtimes field at all, which is
-why every calendar response looks like a park with no shows rather than like a
-field nobody asked for. Wiring it in is its own change: showtimes are known only
-for a narrow window, so it has to answer "not known this far out" rather than "no
-shows", and those are different answers.
+`shows` carries the day's programme, and `source` says who it came from.
+
+**No feed publishes showtimes ahead of the current day.** That was checked at the
+source, not assumed: ThemeParks.wiki's live response for Europa-Park carries 186
+start times for today and, beyond that, only entries it never cleared — some
+dated 2022. Across every park in the database, not one holds a park-local
+showtime for a future day. So for any planned date the choice is to project or to
+say nothing, and saying nothing made `shows` an empty array on every request.
+
+| source | what it is |
+| --- | --- |
+| `scheduled` | the operator's own times for that day. Today only |
+| `projected` | what the show ran at on the most recent day with the **same weekday**, with `observedOn` and `sampleDays` beside it |
+
+**Why the weekday matters.** Measured at Europa-Park: "Big Moments – The
+Celebration-Show" runs 12:30 and 14:30 on a Thursday and 12:30, 14:30 and 17:45
+on a Saturday; "Carnival in Venice" runs hourly to 18:00 midweek and to 19:00 on
+Saturdays. A weekday-blind projection would either drop the extra performance or
+promise it on a Tuesday.
+
+**Why the most recent matching day, not an average over weeks.** A union across
+the window merges a summer programme with an autumn one into a day that never
+happened. The latest matching day is a day that did.
+
+**Two guards stop a projection becoming a claim.** A show must have been seen on
+that weekday more than once — "Crazy Summer with Ross Antony & Paul Reeves" ran
+at Europa-Park on exactly one Thursday in July, and projecting it forward would
+have put a concert on every remaining Thursday of the year — and it must have
+been seen in the last 28 days, measured against **today** rather than against the
+date asked about, or every date more than four weeks out would reject itself.
+
+A caller must render `projected` differently from `scheduled`. It is what the
+show did, not a promise that it runs; `observedOn` is there so the reader can see
+how fresh that evidence is. An empty `shows` means we have never watched this
+park's shows — a different statement from "this park has no shows".
 
 ## Related
 
