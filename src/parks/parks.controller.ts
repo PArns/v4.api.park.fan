@@ -546,7 +546,7 @@ export class ParksController {
     }
 
     // Set dynamic cache headers based on date range
-    const { getCurrentDateInTimezone } =
+    const { getCurrentDateInTimezone, secondsUntilEndOfDayInTimezone } =
       await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
     const endsInThePast = response.days.every((d) => d.date < today);
@@ -572,7 +572,22 @@ export class ParksController {
     // A PAST-ONLY range gets a week: those days are measurements, and a measurement of last
     // Tuesday does not get a second opinion. The only thing that rewrites one is a late
     // backfill, which is what the tag push is for.
-    const cacheTTL = endsInThePast ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+    //
+    // A range containing TODAY is capped at the park's own midnight, and that cap is the whole
+    // point of this line. Several fields in this response are statements about which day today
+    // is — `isToday` drives the HEUTE badge and the month summary's median, `todayCrowdLevel` is
+    // a today-only reading, and a past day that never opened must read "closed" — and the origin
+    // re-derives every one of them against a fresh `today` when it serves the month cache
+    // (`calendar.service.ts`). A CDN copy cannot re-derive anything, and a browser copy cannot
+    // even be purged: measured from outside on 2026-09-03, a copy taken at 17:30 was still being
+    // served (`cf-cache-status: HIT`) with `isToday` on 2026-09-03 — which after midnight is
+    // yesterday. So the copy may live exactly as long as the day it describes.
+    const secondsLeftToday = secondsUntilEndOfDayInTimezone(park.timezone);
+    const cacheTTL = endsInThePast
+      ? 7 * 24 * 60 * 60
+      : includesToday
+        ? Math.min(24 * 60 * 60, secondsLeftToday)
+        : 24 * 60 * 60;
 
     // SWR still matters at a day's window, and for the same reason it did at fifteen minutes:
     // on a month-cache gap `buildCalendarResponse` falls through to a live PERCENTILE_CONT
@@ -583,9 +598,12 @@ export class ParksController {
     //
     // The one range that does not get a day of stale grace is the one containing TODAY: it is
     // the only day whose status can flip while it is being read (a storm closure, an hour
-    // correction), so it keeps the old hour. Everything else in the response is a forecast or
+    // correction), so it keeps the old hour — and never more than the time left in the day, for
+    // the same reason the TTL above is capped. Everything else in the response is a forecast or
     // a measurement.
-    const staleWhileRevalidate = includesToday ? 60 * 60 : cacheTTL;
+    const staleWhileRevalidate = includesToday
+      ? Math.min(60 * 60, secondsLeftToday)
+      : cacheTTL;
 
     if (res) {
       res.setHeader(

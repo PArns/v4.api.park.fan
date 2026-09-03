@@ -20,6 +20,7 @@ import { BestDaysService } from "./services/best-days.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { ParkRenameService } from "./services/park-rename.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { secondsUntilEndOfDayInTimezone } from "../common/utils/date.util";
 import { Park } from "./entities/park.entity";
 import {
   IntegratedCalendarResponse,
@@ -155,17 +156,30 @@ describe("ParksController › /calendar Cache-Control", () => {
     );
   });
 
-  it("sends a day, but only an hour of SWR, for a range containing today", async () => {
+  it("never lets a range containing today outlive the day", async () => {
     await mountWithDays([dayOn(parkDate(-2)), dayOn(parkDate(0))]);
     const res = makeRes();
 
     await call(res);
 
-    // Today is the one day whose status can flip while it is being read, so it does not get
-    // a day of stale grace on top of its day of freshness.
-    expect(res.headers["Cache-Control"]).toBe(
-      "public, max-age=86400, s-maxage=86400, stale-while-revalidate=3600",
-    );
+    const left = secondsUntilEndOfDayInTimezone(park.timezone);
+    const header = res.headers["Cache-Control"];
+    const maxAge = Number(/max-age=(\d+)/.exec(header)![1]);
+    const sMaxAge = Number(/s-maxage=(\d+)/.exec(header)![1]);
+    const swr = Number(/stale-while-revalidate=(\d+)/.exec(header)![1]);
+
+    // The cap, and the reason for it: `isToday`, `todayCrowdLevel` and a past day's
+    // "closed" are statements about which day today is. The origin re-derives them when it
+    // serves the month cache; a CDN copy cannot, and a browser copy cannot even be purged.
+    // A second of slack because the header is computed a moment before this assertion.
+    expect(maxAge).toBeLessThanOrEqual(left + 1);
+    expect(sMaxAge).toBe(maxAge);
+    expect(maxAge).toBe(Math.min(24 * 60 * 60, maxAge));
+
+    // Today is also the one day whose status can flip while it is being read, so it does not
+    // get a day of stale grace on top of its freshness — and never more than the day has left.
+    expect(swr).toBeLessThanOrEqual(60 * 60);
+    expect(swr).toBeLessThanOrEqual(left + 1);
   });
 
   it("sends a week for a range that ended before today", async () => {
@@ -191,7 +205,7 @@ describe("ParksController › /calendar Cache-Control", () => {
       const res = makeRes();
       await call(res);
       expect(res.headers["Cache-Control"]).toMatch(
-        /stale-while-revalidate=(3600|86400|604800)/,
+        /stale-while-revalidate=[1-9]\d*/,
       );
     }
   });

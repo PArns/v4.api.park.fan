@@ -161,3 +161,33 @@ export function getCurrentTimeInTimezone(timezone: string): Date {
   // This creates a new Date with the local time components matching the timezone
   return new Date(formatted);
 }
+
+/**
+ * Seconds from now until midnight in a timezone — i.e. how long a statement
+ * about "today" may be cached before it is a statement about yesterday.
+ *
+ * A cache TTL is otherwise blind to the day boundary, and every day-relative
+ * field in a response (`isToday`, a today-only crowd reading, "the current
+ * day's cell") is wrong the moment the copy outlives the day it was built on.
+ * The origin can re-derive those on a cache read; a CDN copy cannot, and a
+ * browser copy cannot even be purged.
+ *
+ * @param timezone - IANA timezone of the day in question (the PARK's)
+ * @param now - overridable for tests
+ * @returns whole seconds, at least 1 (never 0, which would defeat caching
+ *          entirely for the last second of a day)
+ */
+export function secondsUntilEndOfDayInTimezone(
+  timezone: string,
+  now: Date = new Date(),
+): number {
+  const today = formatInParkTimezone(now, timezone);
+  const nextMidnight = fromZonedTime(
+    `${formatInParkTimezone(addDays(fromZonedTime(`${today}T12:00:00`, timezone), 1), timezone)}T00:00:00`,
+    timezone,
+  );
+  return Math.max(
+    1,
+    Math.ceil((nextMidnight.getTime() - now.getTime()) / 1000),
+  );
+}
