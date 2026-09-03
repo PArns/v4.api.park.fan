@@ -623,7 +623,7 @@ describe("PlanDayService", () => {
           predictedTime: `${date}T12:00:00.000Z`,
         },
       ];
-      rideOpenings = new Map([["a-taron", "10:00"]]);
+      rideOpenings = new Map([["a-taron|09:00", "10:00"]]);
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -646,13 +646,35 @@ describe("PlanDayService", () => {
           predictedTime: `${date}T12:00:00.000Z`,
         },
       ];
-      rideOpenings = new Map([["a-taron", "08:04"]]);
+      rideOpenings = new Map([["a-taron|09:00", "08:00"]]);
 
       const plan = await service.buildPlanDay(park, date);
 
       expect(plan.rides[0].hours[0].hour).toBe(9);
       // Nothing to tell the reader: it opens with the park.
       expect(plan.rides[0].opensAt).toBeUndefined();
+    });
+
+    it("does not carry a summer opening into a winter morning", async () => {
+      // Measured at Phantasialand over a year: the coasters run an hour after a
+      // 09:00 gate and WITH an 11:00 one. Keying the lookup on the day's own
+      // park opening is what stops a July median claiming 10:00 for a Christmas
+      // morning — and a January one capping July at 11:00.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      // Only a winter observation exists; this day opens at 09:00.
+      rideOpenings = new Map([["a-taron|11:00", "11:00"]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].opensAt).toBeUndefined();
+      expect(plan.rides[0].hours[0].hour).toBe(9);
     });
 
     it("draws the park's day when the opening is unknown", async () => {

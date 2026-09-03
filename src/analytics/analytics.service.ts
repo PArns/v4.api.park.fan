@@ -5593,82 +5593,112 @@ export class AnalyticsService {
    * activity".
    */
   /**
-   * When each ride actually opens, as a park-local `HH:mm`.
+   * When each ride opens, keyed by the park's own opening time that day.
    *
-   * A park's opening hour is not its rides' opening hour. Phantasialand opens at
-   * 09:00 and most of its coasters run from 10:00 — measured over 30 days, the
-   * rides split into two clean groups: Black Mamba, Maus au Chocolat and the
-   * family rides report from before the gates open, while Taron, F.L.Y., Crazy
-   * Bats, Raik, Talocan and Colorado Adventure sit at a median of 10:10. A
-   * planner that starts every curve at the park's opening invents two hours of
-   * queue for exactly the rides people plan their morning around.
+   * A park's opening hour is not its rides' opening hour — but the gap is not a
+   * property of the ride either. Measured over a year at Phantasialand:
+   *
+   * ```
+   *              park opens   Taron    F.L.Y.   Black Mamba
+   *   Apr-Aug       09:00     10:10    10:10       08:10
+   *   January       11:00     11:00    11:00       11:05
+   * ```
+   *
+   * In summer the coasters run an hour after the gates; in winter, when the park
+   * opens at 11:00, **everything opens with the park**. So neither the absolute
+   * time nor the offset carries across seasons: a median taken in December would
+   * put Taron at 11:00 on a July day, and one taken in July would claim 10:00 for
+   * a Christmas morning the park opens at 11:00.
+   *
+   * What does carry is the pair. This returns a map keyed
+   * `attractionId|parkOpensAt`, so a caller looks up the answer for THAT day's
+   * published opening and gets a combination we have actually watched. A park
+   * opening we have never seen returns nothing, which is the honest answer rather
+   * than the nearest one.
    *
    * THE SIGNAL IS THE TRANSITION, not the first OPERATING row. `queue_data` is
    * written on change plus an hourly heartbeat, so a ride left OPERATING
-   * overnight — which happens, see `docs/troubleshooting/…` on frozen feeds —
-   * would otherwise report a 06:15 "opening" from its first heartbeat. A day only
-   * counts when the ride was seen CLOSED earlier that same day and turned
+   * overnight would otherwise report its 06:15 heartbeat as an opening. A day
+   * only counts when the ride was seen CLOSED earlier that same day and turned
    * OPERATING after it.
    *
    * THE ANSWER IS NOT CLAMPED HERE. Half the rides report OPERATING *before* the
-   * park opens (08:04 is the earliest at Phantasialand): the feed carries the
+   * park opens (08:10 for Black Mamba against a 09:00 gate): the feed carries the
    * operator's system state, not whether a visitor can walk up. Clamping belongs
-   * to whoever knows that day's opening hour — `PlanDayService` does
-   * `max(parkOpen, ridesOpen)` — because the park's hours move and this median
-   * does not.
+   * to whoever draws the day — `PlanDayService` does `max(parkOpen, rideOpen)`.
    *
-   * The median over 30 days rather than the latest day: a single late morning is
-   * a breakdown, not a schedule.
+   * A full year, because winter is the case that breaks it. The median rather
+   * than the earliest: one late morning is a breakdown, not a schedule.
    */
   async getRideOpeningTimes(
     parkId: string,
     timezone: string,
   ): Promise<Map<string, string>> {
-    const cacheKey = `park:ride-openings:v1:${parkId}`;
+    const cacheKey = `park:ride-openings:v2:${parkId}`;
     const cached = safeJsonParse<Array<[string, string]>>(
       await this.redis.get(cacheKey).catch(() => null),
     );
     if (cached) return new Map(cached);
 
-    const rows: Array<{ attractionId: string; opens_at: string }> =
-      await this.queueDataRepository.manager.query(
-        `WITH d AS (
-           SELECT qd."attractionId" AS aid,
-                  (qd.timestamp AT TIME ZONE $2)::date AS day,
-                  (qd.timestamp AT TIME ZONE $2)::time AS t,
-                  qd.status
-             FROM queue_data qd
-             JOIN attractions a ON a.id = qd."attractionId"
-            WHERE a."parkId" = $1::uuid
-              AND a.retired_at IS NULL
-              AND qd.timestamp >= (current_date - 30)::timestamp AT TIME ZONE $2
-              AND qd.timestamp <  current_date::timestamp AT TIME ZONE $2
-         ), per_day AS (
-           SELECT aid, day,
-                  min(t) FILTER (WHERE status = 'OPERATING') AS first_operating,
-                  min(t) FILTER (WHERE status = 'CLOSED')    AS first_closed
-             FROM d GROUP BY 1, 2
-         )
-         SELECT aid AS "attractionId",
-                to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY first_operating), 'HH24:MI') AS opens_at
-           FROM per_day
-          WHERE first_operating IS NOT NULL
-            AND first_closed IS NOT NULL
-            AND first_closed < first_operating
-          GROUP BY aid
-         HAVING count(*) >= 5`,
-        [parkId, timezone],
-      );
+    const rows: Array<{
+      attractionId: string;
+      park_opens_at: string;
+      opens_at: string;
+    }> = await this.queueDataRepository.manager.query(
+      `WITH sched AS (
+         SELECT se.date,
+                to_char(se."openingTime" AT TIME ZONE $2, 'HH24:MI') AS park_opens_at
+           FROM schedule_entries se
+          WHERE se."parkId" = $1::uuid
+            AND se."attractionId" IS NULL
+            AND se."scheduleType" = 'OPERATING'
+            AND se."openingTime" IS NOT NULL
+            AND se.date >= current_date - 365 AND se.date < current_date
+       ), d AS (
+         SELECT qd."attractionId" AS aid,
+                (qd.timestamp AT TIME ZONE $2)::date AS day,
+                (qd.timestamp AT TIME ZONE $2)::time AS t,
+                qd.status
+           FROM queue_data qd
+           JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND a.retired_at IS NULL
+            AND qd.timestamp >= (current_date - 365)::timestamp AT TIME ZONE $2
+            AND qd.timestamp <  current_date::timestamp AT TIME ZONE $2
+       ), per_day AS (
+         SELECT aid, day,
+                min(t) FILTER (WHERE status = 'OPERATING') AS first_operating,
+                min(t) FILTER (WHERE status = 'CLOSED')    AS first_closed
+           FROM d GROUP BY 1, 2
+       )
+       SELECT pd.aid AS "attractionId",
+              s.park_opens_at,
+              to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY pd.first_operating), 'HH24:MI') AS opens_at
+         FROM per_day pd
+         JOIN sched s ON s.date = pd.day
+        WHERE pd.first_operating IS NOT NULL
+          AND pd.first_closed IS NOT NULL
+          AND pd.first_closed < pd.first_operating
+        GROUP BY 1, 2
+       HAVING count(*) >= 5`,
+      [parkId, timezone],
+    );
 
     // Floored to the quarter hour, because the raw median is a DETECTION time,
     // not an opening: the poller runs every five minutes and the feed lags behind
     // the gate on top of that, so Phantasialand's 10:00 rides measure 10:10.
     // Parks open on quarter hours; reporting 10:10 would be precision we do not
-    // have, and a frontend would show it verbatim.
+    // have, and a frontend would show it.
     const out = new Map(
       rows
-        .filter((r) => r.opens_at)
-        .map((r) => [r.attractionId, floorToQuarter(r.opens_at)] as const),
+        .filter((r) => r.opens_at && r.park_opens_at)
+        .map(
+          (r) =>
+            [
+              `${r.attractionId}|${r.park_opens_at}`,
+              floorToQuarter(r.opens_at),
+            ] as const,
+        ),
     );
     await this.redis
       .set(cacheKey, JSON.stringify([...out]), "EX", 24 * 60 * 60)
