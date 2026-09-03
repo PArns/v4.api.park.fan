@@ -140,6 +140,15 @@ Until then, past 60 days the planner has exactly one model and no measurement of
 it — which is why `/plan/day` labels that range and `leadTimeMae` answers `null`
 rather than a number.
 
+## 7. What the planner now says out loud
+
+The error curve above is not only a finding, it is served. `forecast_accuracy_profile`
+holds the (predicted band × lead bucket) grid, rebuilt nightly from this same
+measurement, and `/plan/day` attaches `expectedError` per ride and an `accuracy`
+block per day — with `basis: "unmeasured"` past 60 days, which is the flag that
+stops a planner presenting an unchecked number as a plan. See
+[the endpoint doc](../frontend/plan-day-endpoint.md).
+
 ## Related
 
 - [`/plan/day`](../frontend/plan-day-endpoint.md) — what the planner does with all this
