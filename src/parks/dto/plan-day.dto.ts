@@ -136,6 +136,25 @@ export class PlanDayRideDto {
   opensAt?: string;
 
   @ApiProperty({
+    required: false,
+    example: 16,
+    description:
+      "How wrong `dayPeak` typically is, in minutes — measured, not assumed. " +
+      "It is the mean absolute error of the daily forecast for a day predicted " +
+      "at THIS level and asked THIS far ahead, over the last 45 days of " +
+      "forecasts scored against what the queues did.\n\n" +
+      "Both axes matter and by a lot: a ride predicted at 60+ minutes carries " +
+      "roughly 22 minutes of error a week out and 25 at two months, while one " +
+      "under 30 minutes carries 9 and 13. A single figure per day would " +
+      "understate the headliners by ten minutes and overstate the small rides " +
+      "by four.\n\n" +
+      "A TYPICAL MISS, NOT A BOUND. Half of days land further out than this, so " +
+      'it reads as "give or take" and must not be drawn as a range that ' +
+      "contains the answer. Absent past 60 days — see `accuracy.basis`.",
+  })
+  expectedError?: number;
+
+  @ApiProperty({
     example: 141,
     description: "Measured days behind the historical shape.",
   })
@@ -304,6 +323,42 @@ export class PlanDayContextDto {
   neighborHolidays?: Array<Record<string, unknown>>;
 }
 
+export class PlanDayAccuracyDto {
+  @ApiProperty({
+    enum: ["measured", "unmeasured"],
+    description:
+      "Whether anything is known about how wrong this day's numbers are.\n\n" +
+      "`measured` — the forecast at this distance has been scored against " +
+      "realised days, and every ride carries an `expectedError`.\n\n" +
+      "`unmeasured` — **past 60 days**, where the only model left is CatBoost " +
+      "and its accuracy at that distance has never been measurable: the nightly " +
+      "run rewrites a day's prediction until only the last survives, so of its " +
+      "rows for days that have passed, 72,795 sit at one day out and 179 at " +
+      "8–30. A forward-recording archive started on 2026-09-03 and will close " +
+      "that gap; its 60-day bucket reports sixty days after that. Until then a " +
+      "caller should present such a day as indicative and not let anyone plan a " +
+      "morning around a specific number.",
+  })
+  basis: "measured" | "unmeasured";
+
+  @ApiProperty({
+    required: false,
+    example: 15.1,
+    description:
+      "The typical error across this day's rides, in minutes. Absent when " +
+      "`basis` is `unmeasured`.",
+  })
+  typicalError?: number;
+
+  @ApiProperty({
+    required: false,
+    example: 1016092,
+    description:
+      "Scored comparisons behind the figures for this lead distance.",
+  })
+  sampleSize?: number;
+}
+
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
@@ -351,6 +406,15 @@ export class PlanDayDto {
       "with distance WITHOUT attaching a figure rather than invent one.",
   })
   leadTimeMae?: number | null;
+
+  @ApiProperty({
+    type: PlanDayAccuracyDto,
+    description:
+      "How much this day's numbers can be trusted. Read `basis` before " +
+      "rendering anything precise: past the measured horizon the forecast still " +
+      "exists, but nobody has checked how wrong it is.",
+  })
+  accuracy: PlanDayAccuracyDto;
 
   @ApiProperty({ type: [PlanDayRideDto] })
   rides: PlanDayRideDto[];

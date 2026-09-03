@@ -6,6 +6,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { MLService } from "../../ml/ml.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
+import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { AttractionHourlyHistory } from "../../analytics/entities/attraction-hourly-history.entity";
@@ -25,6 +26,7 @@ import {
   PlanDayShowDto,
   PlanDayTier,
 } from "../dto/plan-day.dto";
+import type { PlanDayAccuracyDto } from "../dto/plan-day.dto";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -114,6 +116,7 @@ export class PlanDayService {
     private readonly leadSnapshotService: PredictionLeadSnapshotService,
     @Inject(forwardRef(() => ShowsService))
     private readonly showsService: ShowsService,
+    private readonly accuracyService: ForecastAccuracyService,
   ) {}
 
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
@@ -193,6 +196,7 @@ export class PlanDayService {
       tier: PlanDayService.nominalTier(leadDays),
       leadDays,
       leadTimeMae: await this.leadTimeMae(leadDays),
+      accuracy: { basis: "unmeasured" },
       rides: [],
       shows: await this.buildShows(park, dateStr),
     };
@@ -228,6 +232,7 @@ export class PlanDayService {
     );
     base.tier = built.tier;
     base.rides = built.rides;
+    base.accuracy = built.accuracy;
     return base;
   }
 
@@ -355,11 +360,29 @@ export class PlanDayService {
     profile: ParkHourlyProfileDto | null,
     /** The park's own opening as `HH:mm`, when it published one. */
     parkOpensAt: string | null,
-  ): Promise<{ tier: PlanDayTier; rides: PlanDayRideDto[] }> {
+  ): Promise<{
+    tier: PlanDayTier;
+    rides: PlanDayRideDto[];
+    accuracy: PlanDayAccuracyDto;
+  }> {
     const withinHourly = leadDays <= PlanDayService.HOURLY_HORIZON_DAYS;
 
     const attractions = await this.attractions(park);
-    if (attractions.length === 0) return { tier: "composed", rides: [] };
+    if (attractions.length === 0)
+      return { tier: "composed", rides: [], accuracy: { basis: "unmeasured" } };
+
+    // How wrong a forecast at this distance usually is. Nine measured cells, so
+    // it is read whole and looked up per ride; `null` past the last bucket, which
+    // is the honest answer rather than the nearest one.
+    const leadBucket = ForecastAccuracyService.bucketFor(leadDays);
+    const accuracy = leadBucket
+      ? await this.accuracyService.getProfile().catch((err: Error) => {
+          this.logger.warn(
+            `Plan day: accuracy profile unavailable: ${err.message}`,
+          );
+          return null;
+        })
+      : null;
     const byId = new Map(attractions.map((a) => [a.id, a]));
     const bySlug = new Map(attractions.map((a) => [a.slug, a]));
 
@@ -481,6 +504,11 @@ export class PlanDayService {
       if (hours.length === 0) continue;
 
       const level = dayLevels.get(attractionId);
+      const dayPeak =
+        level?.predictedWaitTime ?? Math.max(...hours.map((p) => p.wait));
+      const cell = accuracy?.get(
+        `${ForecastAccuracyService.bandFor(dayPeak)}|${leadBucket}`,
+      );
       rides.push({
         attractionSlug: attraction.slug,
         attractionName: attraction.name,
@@ -489,13 +517,13 @@ export class PlanDayService {
         // The day's peak, from the day-level forecast — the same statistic on
         // every tier. The maximum of `hours` is a fallback for a ride the daily
         // run has no row for, and nothing better exists there.
-        dayPeak:
-          level?.predictedWaitTime ?? Math.max(...hours.map((p) => p.wait)),
+        dayPeak,
         // The band belongs to the number it surrounds, so it comes from the
         // same row as `dayPeak`; the widest hourly band is the fallback.
         uncertaintyMinutes:
           level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
         sampleDays: sampleDays.get(attractionId) ?? 0,
+        ...(cell ? { expectedError: cell.mae } : {}),
         ...(opensLater ? { opensAt } : {}),
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
@@ -513,7 +541,26 @@ export class PlanDayService {
         a.attractionName.localeCompare(b.attractionName),
     );
 
-    return { tier, rides };
+    const scored = rides.filter((r) => r.expectedError != null);
+    const summary: PlanDayAccuracyDto =
+      scored.length > 0
+        ? {
+            basis: "measured",
+            typicalError:
+              Math.round(
+                (scored.reduce((a, r) => a + (r.expectedError ?? 0), 0) /
+                  scored.length) *
+                  10,
+              ) / 10,
+            sampleSize: leadBucket
+              ? [...(accuracy?.values() ?? [])]
+                  .filter((c) => c.leadBucket === leadBucket)
+                  .reduce((a, c) => a + c.sampleSize, 0)
+              : undefined,
+          }
+        : { basis: "unmeasured" };
+
+    return { tier, rides, accuracy: summary };
   }
 
   /**

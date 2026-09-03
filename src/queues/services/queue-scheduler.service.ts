@@ -654,6 +654,25 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Forecast accuracy profile: daily at 3:10am, right after the lead-snapshot
+    // scoring and before the cleanup. It reads 45 days of tft_forecasts against
+    // realised peaks — a few seconds — and produces the nine numbers a planner
+    // shows as "give or take".
+    const hasAccuracyProfileCron = await this.hasRepeatableJob(
+      this.predictionsQueue,
+      "accuracy-profile-cron",
+    );
+    if (!hasAccuracyProfileCron) {
+      await this.predictionsQueue.add(
+        "rebuild-accuracy-profile",
+        {},
+        {
+          repeat: { cron: "10 3 * * *" },
+          jobId: "accuracy-profile-cron",
+        },
+      );
+    }
+
     // Prediction Cleanup: Daily at 3:30am.
     //
     // This was missing entirely: PredictionGeneratorProcessor has handled
