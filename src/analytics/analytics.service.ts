@@ -5593,6 +5593,90 @@ export class AnalyticsService {
    * activity".
    */
   /**
+   * When each ride actually opens, as a park-local `HH:mm`.
+   *
+   * A park's opening hour is not its rides' opening hour. Phantasialand opens at
+   * 09:00 and most of its coasters run from 10:00 — measured over 30 days, the
+   * rides split into two clean groups: Black Mamba, Maus au Chocolat and the
+   * family rides report from before the gates open, while Taron, F.L.Y., Crazy
+   * Bats, Raik, Talocan and Colorado Adventure sit at a median of 10:10. A
+   * planner that starts every curve at the park's opening invents two hours of
+   * queue for exactly the rides people plan their morning around.
+   *
+   * THE SIGNAL IS THE TRANSITION, not the first OPERATING row. `queue_data` is
+   * written on change plus an hourly heartbeat, so a ride left OPERATING
+   * overnight — which happens, see `docs/troubleshooting/…` on frozen feeds —
+   * would otherwise report a 06:15 "opening" from its first heartbeat. A day only
+   * counts when the ride was seen CLOSED earlier that same day and turned
+   * OPERATING after it.
+   *
+   * THE ANSWER IS NOT CLAMPED HERE. Half the rides report OPERATING *before* the
+   * park opens (08:04 is the earliest at Phantasialand): the feed carries the
+   * operator's system state, not whether a visitor can walk up. Clamping belongs
+   * to whoever knows that day's opening hour — `PlanDayService` does
+   * `max(parkOpen, ridesOpen)` — because the park's hours move and this median
+   * does not.
+   *
+   * The median over 30 days rather than the latest day: a single late morning is
+   * a breakdown, not a schedule.
+   */
+  async getRideOpeningTimes(
+    parkId: string,
+    timezone: string,
+  ): Promise<Map<string, string>> {
+    const cacheKey = `park:ride-openings:v1:${parkId}`;
+    const cached = safeJsonParse<Array<[string, string]>>(
+      await this.redis.get(cacheKey).catch(() => null),
+    );
+    if (cached) return new Map(cached);
+
+    const rows: Array<{ attractionId: string; opens_at: string }> =
+      await this.queueDataRepository.manager.query(
+        `WITH d AS (
+           SELECT qd."attractionId" AS aid,
+                  (qd.timestamp AT TIME ZONE $2)::date AS day,
+                  (qd.timestamp AT TIME ZONE $2)::time AS t,
+                  qd.status
+             FROM queue_data qd
+             JOIN attractions a ON a.id = qd."attractionId"
+            WHERE a."parkId" = $1::uuid
+              AND a.retired_at IS NULL
+              AND qd.timestamp >= (current_date - 30)::timestamp AT TIME ZONE $2
+              AND qd.timestamp <  current_date::timestamp AT TIME ZONE $2
+         ), per_day AS (
+           SELECT aid, day,
+                  min(t) FILTER (WHERE status = 'OPERATING') AS first_operating,
+                  min(t) FILTER (WHERE status = 'CLOSED')    AS first_closed
+             FROM d GROUP BY 1, 2
+         )
+         SELECT aid AS "attractionId",
+                to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY first_operating), 'HH24:MI') AS opens_at
+           FROM per_day
+          WHERE first_operating IS NOT NULL
+            AND first_closed IS NOT NULL
+            AND first_closed < first_operating
+          GROUP BY aid
+         HAVING count(*) >= 5`,
+        [parkId, timezone],
+      );
+
+    // Floored to the quarter hour, because the raw median is a DETECTION time,
+    // not an opening: the poller runs every five minutes and the feed lags behind
+    // the gate on top of that, so Phantasialand's 10:00 rides measure 10:10.
+    // Parks open on quarter hours; reporting 10:10 would be precision we do not
+    // have, and a frontend would show it verbatim.
+    const out = new Map(
+      rows
+        .filter((r) => r.opens_at)
+        .map((r) => [r.attractionId, floorToQuarter(r.opens_at)] as const),
+    );
+    await this.redis
+      .set(cacheKey, JSON.stringify([...out]), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+    return out;
+  }
+
+  /**
    * Every ride's measured day, for ONE park on ONE date.
    *
    * The per-attraction twin below answers a date RANGE for a single ride, which
@@ -6124,4 +6208,12 @@ export class AnalyticsService {
   async countTypicalWaitsRows(): Promise<number> {
     return this.attractionTypicalWaitsRepository.count();
   }
+}
+
+/** `HH:mm` floored to the quarter hour. See `getRideOpeningTimes` for why. */
+function floorToQuarter(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  const floored = Math.floor(m / 15) * 15;
+  return `${String(h).padStart(2, "0")}:${String(floored).padStart(2, "0")}`;
 }
