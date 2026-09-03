@@ -827,8 +827,22 @@ export class MLService {
   }
 
   /**
-   * Near-term daily forecast from the TFT (nf-service), HEADLINERS ONLY — the
-   * scope the TFT backtest validated (~2x better than CatBoost on busy days).
+   * Near-term daily forecast from the TFT (nf-service), for every ride it covers.
+   *
+   * It was headliners only, "the scope the TFT backtest validated", and that
+   * scope was too small. Measured against the realised day-P90 on 2026-09-03,
+   * at 1-2 days' lead: TFT 15.47 MAE against CatBoost's 23.84 on headliners
+   * (n=5,986) and **8.67 against 12.06 on everything else** (n=4,696) — 28%
+   * better on the rides the restriction was excluding. The advantage holds
+   * across the horizon: non-headliner MAE runs 8.65 / 9.55 / 10.48 at leads of
+   * <=7, 8-30 and 31-60 days, the same gentle slope the headliners show.
+   * `tft_forecasts` covers 3,581 rides against 1,237 headliners, so this hands
+   * roughly 2,350 more rides the better model. See
+   * docs/ml/long-range-forecasting.md.
+   *
+   * This does NOT move the calendar's crowd levels: `buildPredictedCrowdLevels`
+   * filters the serving set to headliners itself before averaging, which is why
+   * the restriction could live here rather than there.
    * Reads the freshest forward forecast per (attraction, day) from tft_forecasts,
    * for the next `days` park-local days, with a 3-day staleness guard so a stalled
    * nf-service falls back to CatBoost instead of serving old forecasts. Returned as
@@ -865,8 +879,8 @@ export class MLService {
           f.target_date::text      AS "targetDate",
           f.predicted_peak::float  AS peak
         FROM tft_forecasts f
-        JOIN headliner_attractions h
-          ON h."attractionId" = f.attraction_id AND h."parkId"::text = $1
+        JOIN attractions a
+          ON a.id = f.attraction_id AND a."parkId"::text = $1 AND a.retired_at IS NULL
         WHERE f.target_date >= $2::date
           AND f.target_date <  ($2::date + $3::int)
           AND f.forecast_date >= ($2::date - 3)
