@@ -815,9 +815,14 @@ export class ShowsService {
   /**
    * The showtimes a park's shows actually have on one park-local date.
    *
-   * Reads the freshest snapshot per show and keeps only the times that fall on
-   * that date, so "we know this day" and "we are guessing" never mix. In
-   * practice this answers for today and nothing else — no source publishes
+   * Unions EVERY snapshot taken around that date, rather than reading the
+   * freshest one. Showtimes are delta-written and the feed drops performances
+   * as they pass, so by the evening the newest snapshot holds what is left of
+   * the day — measured live at 19:20 in Rust, that was 10 of Europa-Park's 35
+   * shows, and the other 25 fell through to the projection on a day we had 186
+   * real times for. The day's programme is the union of what the day reported.
+   *
+   * In practice this answers for today and nothing else — no source publishes
    * further ahead — but it is written against the date rather than against
    * "today" so it keeps working the day one does.
    */
@@ -828,27 +833,25 @@ export class ShowsService {
   ): Promise<Map<string, string[]>> {
     const rows: Array<{ show_id: string; times: string[] }> =
       await this.showLiveDataRepository.manager.query(
-        `WITH latest AS (
-           SELECT DISTINCT ON (l."showId") l."showId" AS show_id, l.showtimes, l.status
-             FROM show_live_data l
-             JOIN shows s ON s.id = l."showId"
-            WHERE s."parkId" = $1::uuid
-              -- The snapshot window is anchored on the DATE asked about, not on
-              -- "now": that makes this answer a past day from the snapshots taken
-              -- on it, today from the freshest one, and a future day not at all —
-              -- which is the honest answer there, and what the projection is for.
-              AND l.timestamp >= ($3::date - INTERVAL '1 day')
-              AND l.timestamp <  ($3::date + INTERVAL '2 days')
-            ORDER BY l."showId", l.timestamp DESC
-         )
-         SELECT show_id,
+        `SELECT l."showId" AS show_id,
                 array_agg(DISTINCT to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')
                           ORDER BY to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')) AS times
-           FROM latest
-          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(showtimes, '[]'::jsonb)) e
-          WHERE status = 'OPERATING'
+           FROM show_live_data l
+           JOIN shows s ON s.id = l."showId"
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
+          WHERE s."parkId" = $1::uuid
+            AND l.status = 'OPERATING'
+            -- The snapshot window is anchored on the DATE asked about, not on
+            -- "now": that answers a past day from the snapshots taken on it,
+            -- today from the day's own, and a future day not at all — which is
+            -- the honest answer there, and what the projection is for.
+            AND l.timestamp >= ($3::date - INTERVAL '1 day')
+            AND l.timestamp <  ($3::date + INTERVAL '2 days')
+            -- Only the times that land on the day itself. This is also what
+            -- keeps the feed's uncleared junk out: ThemeParks.wiki still serves
+            -- showtimes from 2022, and they simply fall on another date.
             AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date = $3::date
-          GROUP BY show_id`,
+          GROUP BY l."showId"`,
         [parkId, timezone, date],
       );
 
