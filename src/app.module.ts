@@ -24,6 +24,7 @@ import { SitemapModule } from "./sitemap/sitemap.module";
 import { GeoipModule } from "./geoip/geoip.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { TripsModule } from "./trips/trips.module";
+import { PushModule } from "./push/push.module";
 import { AdminModule } from "./admin/admin.module";
 import { StatsModule } from "./stats/stats.module";
 import { PopularityModule } from "./popularity/popularity.module";
@@ -95,6 +96,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     // Favorites
     FavoritesModule,
     TripsModule,
+    PushModule,
 
     // Admin utilities
     AdminModule,
