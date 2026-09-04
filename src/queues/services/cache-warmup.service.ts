@@ -22,6 +22,10 @@ import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 import { PopularityService } from "../../popularity/popularity.service";
+import {
+  CALENDAR_WARMUP_CURRENT_MONTH_TTL,
+  CALENDAR_WARMUP_MONTH_TTL,
+} from "../../common/cache/cache-ttl";
 
 /**
  * Cache Warmup Service
@@ -39,16 +43,11 @@ import { PopularityService } from "../../popularity/popularity.service";
 export class CacheWarmupService implements OnApplicationBootstrap {
   private readonly logger = new Logger(CacheWarmupService.name);
   private readonly CACHE_FRESHNESS_THRESHOLD = 2 * 60; // 2 minutes in seconds
-  // Keep warmup-built calendar month caches alive until the next 12h warmup.
-  // buildCalendarResponse caches them at CALENDAR_CACHE_TTL (15–30 min), which
-  // expires ~11.5h before the next warmup — so the best-days widget then hits a
-  // cold rebuild. 13h spans the 12h cadence with a buffer.
-  private readonly WARMUP_MONTH_TTL = 13 * 60 * 60;
-  // The CURRENT month (park timezone) is the only one whose data still shifts
-  // intraday (today's live level, current-day forecast) — and the one users
-  // check right after a deploy. Cap it at 2h so it never freezes on stale data
-  // for the full 13h cycle, while the stable past/future months keep the long TTL.
-  private readonly WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
+  // Both figures live in one place now, because the best-days snapshot is a
+  // projection of these month caches and has to be bounded by them — see
+  // `common/cache/cache-ttl.ts` for why that stopped being a comment.
+  private readonly WARMUP_MONTH_TTL = CALENDAR_WARMUP_MONTH_TTL;
+  private readonly WARMUP_CURRENT_MONTH_TTL = CALENDAR_WARMUP_CURRENT_MONTH_TTL;
   // Startup warmup pacing — gentle on the cold, just-restarted postgres so the
   // top-parks warmup doesn't saturate the connection pool on boot (each park's
   // calendar build fans out into many parallel queries).
