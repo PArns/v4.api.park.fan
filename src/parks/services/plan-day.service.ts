@@ -14,6 +14,7 @@ import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
 import { PlanDayDto, PlanDayRideDto, PlanDayTier } from "../dto/plan-day.dto";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -138,7 +139,22 @@ export class PlanDayService {
   ): Promise<PlanDayRideDto[]> {
     const attractions = await this.attractionRepository.find({
       where: { parkId: park.id, retiredAt: IsNull() },
-      select: ["id", "slug", "name", "landName", "latitude", "longitude"],
+      // The four height/wet columns are here because the two the payload
+      // states are RESOLVED from them (`riderFacts`): leave them out of the
+      // select and the resolver reads `undefined` on every row, so both fields
+      // are silently absent everywhere and nothing fails.
+      select: [
+        "id",
+        "slug",
+        "name",
+        "landName",
+        "latitude",
+        "longitude",
+        "minimumHeight",
+        "curatedMinimumHeight",
+        "mayGetWet",
+        "curatedMayGetWet",
+      ],
     });
     if (attractions.length === 0) return [];
 
@@ -240,6 +256,7 @@ export class PlanDayService {
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attraction.id) ? { downYesterday: true } : {}),
         ...(headlinerIds.has(attraction.id) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
       });
     }
 
@@ -332,6 +349,7 @@ export class PlanDayService {
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
         ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
       });
     }
 
@@ -431,6 +449,7 @@ export class PlanDayService {
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
       });
     }
 
@@ -458,6 +477,34 @@ export class PlanDayService {
    * the Gulf of Guinea, which is a plausible-looking answer and therefore worse
    * than no answer. Same for a whitespace-only value.
    */
+  /**
+   * Who may ride, as far as this payload can say it.
+   *
+   * Through `resolveCuratedFacts` rather than reading the two columns here: the
+   * curated cell wins over the synced one, and a curated `0` is a real answer
+   * meaning "no minimum at all" — so the rule is `??`, never `||`, and it lives
+   * in one place because it was already copied into two DTO mappers once.
+   *
+   * Both fields are OMITTED where nothing is known. Absent has to stay
+   * distinguishable from a value: "no minimum height recorded" is not the same
+   * statement as "any height may ride", and a planner asked whether a child can
+   * ride must be able to answer "we do not know".
+   */
+  private static riderFacts(attraction: Attraction): {
+    minimumHeight?: number | null;
+    mayGetWet?: boolean | null;
+  } {
+    const facts = resolveCuratedFacts(attraction);
+    return {
+      ...(facts.minimumHeight !== null && facts.minimumHeight !== undefined
+        ? { minimumHeight: facts.minimumHeight }
+        : {}),
+      ...(facts.mayGetWet !== null && facts.mayGetWet !== undefined
+        ? { mayGetWet: facts.mayGetWet }
+        : {}),
+    };
+  }
+
   private static coord(value: unknown): number | null {
     if (value === null || value === undefined) return null;
     if (typeof value === "string" && value.trim() === "") return null;

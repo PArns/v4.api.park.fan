@@ -408,6 +408,66 @@ describe("PlanDayService", () => {
     ).toBe(true);
   });
 
+  describe("who may ride", () => {
+    // The two facts a planner needs to answer "can the six-year-old ride this"
+    // without fetching forty attraction payloads. Both are resolved from a
+    // curated column over a synced one, and both are OMITTED where nothing is
+    // known — absent has to stay distinguishable from a value, or "no height
+    // recorded" turns into "anyone may ride".
+    const planFor = async (attraction: Partial<Attraction>) => {
+      attractions = [
+        { id: "a-taron", slug: "taron", name: "Taron", ...attraction },
+      ];
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      const plan = await service.buildPlanDay(park, date);
+      return plan.rides.find((r) => r.attractionSlug === "taron");
+    };
+
+    it("states the synced height when nothing is curated", async () => {
+      const taron = await planFor({ minimumHeight: 120 });
+      expect(taron?.minimumHeight).toBe(120);
+    });
+
+    it("lets a curated height win over the synced one", async () => {
+      const taron = await planFor({
+        minimumHeight: 120,
+        curatedMinimumHeight: 100,
+      });
+      expect(taron?.minimumHeight).toBe(100);
+    });
+
+    it("says nothing where a curator has said there is no minimum", async () => {
+      // A curated 0 means "no minimum at all" and resolves to null, so the
+      // field is absent — which is right for a planner: there is no height to
+      // flag anybody against.
+      const taron = await planFor({
+        minimumHeight: 120,
+        curatedMinimumHeight: 0,
+      });
+      expect(taron?.minimumHeight).toBeUndefined();
+    });
+
+    it("carries the wet flag, curated over synced", async () => {
+      expect((await planFor({ mayGetWet: true }))?.mayGetWet).toBe(true);
+      expect(
+        (await planFor({ mayGetWet: true, curatedMayGetWet: false }))?.mayGetWet,
+      ).toBe(false);
+    });
+
+    it("omits both where the row knows neither", async () => {
+      const taron = await planFor({});
+      expect(taron?.minimumHeight).toBeUndefined();
+      expect(taron?.mayGetWet).toBeUndefined();
+    });
+  });
+
   it("serves the day anyway when the headliner lookup fails", async () => {
     // One analytics query must not cost the visitor their plan. The mock has to
     // actually REJECT — asserting this against a working lookup would pass

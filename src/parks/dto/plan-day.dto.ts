@@ -107,6 +107,33 @@ export class PlanDayRideDto {
       "out the ones a visitor has not planned.",
   })
   isHeadliner?: boolean;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 120,
+    description:
+      "Minimum rider height in centimetres, curated answer over synced " +
+      "(resolveCuratedFacts). Carried so a planner that knows who is coming " +
+      "can say which rides the shortest of them cannot ride — a question " +
+      "asked once for a whole day, against a list the caller would otherwise " +
+      "have to fetch one attraction payload at a time. Absent where there is " +
+      "no minimum to state — nothing recorded upstream, or a curator saying " +
+      "there is none (a curated 0) — which a caller must not turn into a " +
+      "promise that anyone may ride.",
+  })
+  minimumHeight?: number | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: true,
+    description:
+      "Whether the ride may soak you, curated answer over synced. Absent is " +
+      "unknown rather than dry — upstream populates this for a few dozen of " +
+      "~7000 attractions.",
+  })
+  mayGetWet?: boolean | null;
 }
 
 export class PlanDayContextDto {
