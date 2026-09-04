@@ -475,6 +475,34 @@ Rough order by ROI; each its own PR. Full rationale in
       early-stop, log per-park final loss so degenerate park models are visible before
       they serve.
 
+## Days past midnight: verify after deploy, then let the frontend drop its hedge (2026-09-05)
+
+The `/plan/day` wrap fix is in this repo (`unfoldedCloseHour`, changelog
+"a park that closes after midnight had no plan at all"). Two things can only be
+checked once it is live:
+
+- [ ] **Confirm against the parks that wrap.** Six Flags Qiddiya City is the
+      sharpest case — its rollup for the night of 2026-09-02 holds 16:00 through
+      midnight with 13 rides still measured at hour 24, and the endpoint answered
+      `rides: []` for it:
+
+      ```
+      curl -s 'https://api.park.fan/v1/parks/asia/saudi-arabia/al-moqbel-palaces/six-flags-qiddiya-city/plan/day?date=2026-09-02' \
+        | jq '{ctx: .context | {openHour, closeHour}, rides: (.rides|length), lastHour: (.rides[0].hours|last)}'
+      ```
+
+      Expect `openHour: 16`, `closeHour: 0` and hours running past 23. Check a
+      forecast day too (Parque Warner Madrid or Cedar Point on 31 October), and
+      La Ronde, whose rollup is thin enough that it may still answer with few
+      rides for reasons that have nothing to do with midnight.
+
+- [ ] **Tell the frontend the contract is settled.** `estimateFor`
+      (`lib/planner/estimate.ts` in the park.fan repo) looks a ride's curve up
+      twice — once at the axis hour, once at the wall-clock hour — because
+      nothing established which one `hours[].hour` carried on a wrap day. It
+      carries the **unfolded** one (24 = midnight), so the second lookup can go,
+      and `docs/…/parks-past-midnight.md` there wants the note it asks for.
+
 ## ML hourly_agg cache — post-deploy verification & follow-up
 
 **Context:** `fetch_recent_wait_times` (`ml-service/predict.py`, the `WITH hourly_agg ...` query)

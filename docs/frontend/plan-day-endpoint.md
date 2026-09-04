@@ -99,7 +99,83 @@ and must not read `status` as a promise that the park is open.
 Nothing is invented for a day the operator has **stated** as closed, or for a
 park nobody has watched: those still answer `openHour: null` and `rides: []`.
 
-## 5. The rest of the ride object
+## 5. A day that runs past midnight
+
+A park whose day crosses midnight publishes `closeHour < openHour`. La Ronde is
+`10 → 0`, Six Flags Magic Mountain on Halloween `10 → 1`. `context.openHour` and
+`context.closeHour` keep the operator's own wall-clock numbers, because that
+pair is what renders as "16:00 – 01:00".
+
+**`hours[].hour` does not wrap.** It continues past 23, so one operating day is
+always one ascending series and `hours[0]` is always its first hour:
+
+```jsonc
+"context": { "openHour": 16, "closeHour": 1 },
+"hours": [
+  { "hour": 22, "wait": 40 },
+  { "hour": 23, "wait": 35 },
+  { "hour": 24, "wait": 30 },   // 00:00, the night after `date`
+  { "hour": 25, "wait": 20 }    // 01:00, when the park closes
+]
+```
+
+A caller that walks the window itself must unfold it the same way —
+`closeHour < openHour ? closeHour + 24 : closeHour` — and must never test
+`hour > closeHour`, which for `openHour: 16, closeHour: 1` is true of **every**
+hour of the clock.
+
+### What it used to answer
+
+Nothing. Swept across all 212 parks on three dates, every wrap day came back
+`status: OPERATING`, `hoursSource: schedule` and `rides: []`:
+
+| date | wrap days | …with `rides: []` |
+| --- | --- | --- |
+| 2026-09-05 | 4 | 4 |
+| 2026-10-31 | 13 | 13 |
+| 2026-12-31 | 5 | 5 |
+
+The control is what made it a defect rather than a property of those parks — the
+**same parks** answered normally on a neighbouring day:
+
+| park | 13 Sep | 31 Oct |
+| --- | --- | --- |
+| Parque Warner Madrid | `12 → 21`, 31 rides | `12 → 0`, **0 rides** |
+| Cedar Point | `11 → 20`, 14 rides | `11 → 0`, **0 rides** |
+| Kings Dominion | `11 → 20`, 23 rides | `11 → 0`, **0 rides** |
+
+Three parks are wrap **every day** — La Ronde (`10 → 0`), Six Flags Mexico
+(`10 → 0`) and Six Flags Qiddiya City (`16 → 0`) — so they had never carried a
+single hourly curve.
+
+### Four places had to agree about it
+
+The visible cause was one guard (`closeHour < openHour` → return the day's
+context and an empty ride list), but every loop under it would have run zero
+times anyway, and two stores key the night by the wrong date:
+
+- the **hourly predictions** are timestamps, so 00:30 of a `16 → 1` day carries
+  *tomorrow's* park-local date. Matching on the day's own date dropped precisely
+  the hours that make such a day unusual;
+- `attraction_hourly_history` is keyed by park-local **date**, so an observed
+  night is stored across two rows and is now read back from both — otherwise the
+  curve ends at 23:00 and `dayPeak` belongs to whichever half was busier;
+- the **historical shape** buckets by wall-clock hour, so its `0` bucket is moved
+  to 24 before it is read against the day. Left where it sat, midnight sorted in
+  front of the morning and dragged the whole evening down towards it;
+- the **observed-hours fallback** (§4) now takes the window as the widest silence
+  on the 24-hour clock rather than min-to-max. For an ordinary park those are the
+  same answer; for a park measured `[0, 16 … 23]` min-to-max says `0 → 23` and
+  draws a queue at 03:00.
+
+The unfolding rule itself lives in exactly one function, `unfoldedCloseHour`
+(`common/utils/day-shape.util.ts`). It was written inline twice on the frontend
+and the two copies disagreed — the grid drew an axis to 01:00 while the estimator
+called every hour of that day out-of-hours, so every ride returned `wait: null`
+and the optimiser ordered the day by walking distance while believing it was
+minimising queues.
+
+## 6. The rest of the ride object
 
 | field | notes |
 | --- | --- |
@@ -117,7 +193,7 @@ shape, and a ride the past-day rollup has no row for is omitted rather than draw
 at zero — absence there means the rollup has not reached that day, which is not
 the same statement as an empty queue.
 
-## 6. `leadTimeMae`
+## 7. `leadTimeMae`
 
 The measured mean absolute error for predictions made this far ahead, in minutes,
 from the lead-time archive (`prediction_lead_snapshots`): the nearest sampled
@@ -131,7 +207,7 @@ archive has been running 60 days. **Absent is the honest answer** — a caller
 should widen the band with distance without attaching a figure rather than invent
 one.
 
-## 7. Shows
+## 8. Shows
 
 `shows` carries the day's programme, and `source` says who it came from.
 

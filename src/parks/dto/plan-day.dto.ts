@@ -46,7 +46,17 @@ export type PlanDayHoursSource = "schedule" | "observed";
 export type PlanDayShowSource = "scheduled" | "projected";
 
 export class PlanDayHourDto {
-  @ApiProperty({ example: 14, description: "Park-local hour, 0–23." })
+  @ApiProperty({
+    example: 14,
+    description:
+      "Park-local hour. 0–23 on an ordinary day; on a day that runs past " +
+      "midnight it CONTINUES past 23 rather than wrapping — 24 is that day's " +
+      "midnight, 25 its 01:00 — so one operating day is always one ascending " +
+      "series and `hours[0]` is always its first hour. Read it against " +
+      "`context.openHour` and `context.closeHour`, which stay the operator's " +
+      "own wall-clock numbers and therefore read `10 → 0` for a day that ends " +
+      "at midnight; the hour that ends it is sent here as 24.",
+  })
   hour: number;
 
   @ApiProperty({ example: 45, description: "Expected wait in minutes." })
@@ -265,7 +275,21 @@ export class PlanDayContextDto {
   })
   openHour: number | null;
 
-  @ApiProperty({ required: false, nullable: true, example: 20 })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 20,
+    description:
+      "Last park-local hour the park is open, inclusive, as the operator " +
+      "publishes it — so it is LOWER than `openHour` on a day that runs past " +
+      "midnight (La Ronde is `10 → 0`, Six Flags Magic Mountain on Halloween " +
+      "`10 → 1`). Twenty-two such days across three sweep dates came back with " +
+      "no rides at all before this was handled, and three parks close at " +
+      "midnight every day of the year. A consumer that walks the hours itself " +
+      "must unfold the wrap (`closeHour < openHour ? closeHour + 24 : " +
+      "closeHour`) rather than test `hour > closeHour`, which is true for " +
+      "every hour of such a day. `hours[].hour` arrives already unfolded.",
+  })
   closeHour: number | null;
 
   @ApiProperty({

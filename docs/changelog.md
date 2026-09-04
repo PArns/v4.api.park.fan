@@ -6,6 +6,40 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a park that closes after midnight had no plan at all
+
+`/plan/day` answered `rides: []` for every day whose hours cross midnight. Swept
+across all 212 parks on three dates: 4 wrap days on 2026-09-05, 13 on 2026-10-31,
+5 on 2026-12-31 — twenty-two for twenty-two, all `status: OPERATING` and
+`hoursSource: schedule`. The same parks answered normally on a neighbouring day
+(Parque Warner Madrid 31 rides on `12 → 21`, 0 on `12 → 0`; Cedar Point 14 and 0;
+Kings Dominion 23 and 0), which is what made it a defect rather than a property
+of those parks. La Ronde, Six Flags Mexico and Six Flags Qiddiya City close at
+midnight all year and had therefore never carried a single hourly curve.
+
+A day that ends after midnight publishes `closeHour < openHour`, and
+`for (h = openHour; h <= closeHour; h++)` runs zero times for one. The day is now
+unfolded once — `10 → 0` becomes `10 → 24`, `16 → 1` becomes `16 → 25` — by a
+single exported `unfoldedCloseHour`, and four readers were taught the same night:
+the hourly predictions (00:30 carries *tomorrow's* park-local date), the past-day
+rollup (`attraction_hourly_history` is keyed by date, so one night is two rows),
+the historical shape (its `0` bucket moves to 24, or midnight sorts in front of
+the morning and drags the evening down towards it), and the observed-hours
+fallback, which now takes the window as the widest silence on the clock instead
+of min-to-max — the same answer for an ordinary park, `16 → 0` instead of
+`0 → 23` for a park measured `[0, 16 … 23]`.
+
+`context.openHour` / `closeHour` keep the operator's own wall-clock numbers, so
+`10 → 0` still reads as published; `hours[].hour` continues past 23 instead of
+wrapping, so one operating day is one ascending series and 24 is its midnight.
+Contract and the sweep tables: [plan-day-endpoint.md §5](frontend/plan-day-endpoint.md).
+
+Also in the same pass: the `/plan/day` spec measured its "today", "seven days
+ago" and lead-distance fixtures on the **UTC** clock while the service reads the
+park's, so two assertions were wrong for two hours of every Berlin evening and
+right all day. They are park-local now (CLAUDE.md §1 applies to fixtures too).
+
+
 ### Added — the planner's shows, projected honestly
 
 `/plan/day` returned `shows: []` for every date. The reason it could not simply

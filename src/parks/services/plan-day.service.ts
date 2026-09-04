@@ -14,7 +14,10 @@ import { ParkHourlyProfileDto } from "../../analytics/dto/park-hourly-profile.dt
 import { CalendarService } from "./calendar.service";
 import { ShowsService } from "../../shows/shows.service";
 import { ShowSchedulePattern } from "../../shows/entities/show-schedule-pattern.entity";
-import { composeDayCurve } from "../../common/utils/day-shape.util";
+import {
+  composeDayCurve,
+  unfoldedCloseHour,
+} from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
@@ -215,9 +218,18 @@ export class PlanDayService {
     // A closed day, or one whose hours nobody knows, has no curves to draw, and
     // saying so is the answer. The tier stays the nominal one for the distance:
     // with no curves there is no method to characterise.
-    if (openHour === null || closeHour === null || closeHour < openHour) {
+    if (openHour === null || closeHour === null) {
       return base;
     }
+
+    // Past this point the day is ONE ascending run of hours, midnight or no
+    // midnight. `closeHour < openHour` used to land in the guard above, so La
+    // Ronde (`10 → 0`), Six Flags Mexico and Six Flags Qiddiya City — wrap parks
+    // every day of the year — have never carried a single hourly curve, and on
+    // Halloween 2026 thirteen parks wrapped and all thirteen came back empty.
+    // The context above keeps the operator's own `closeHour`; everything below
+    // counts past it (see `unfoldedCloseHour`).
+    const lastHour = unfoldedCloseHour(openHour, closeHour);
 
     if (!isFuture) {
       base.tier = "observed";
@@ -225,7 +237,7 @@ export class PlanDayService {
         park,
         dateStr,
         openHour,
-        closeHour,
+        lastHour,
         new Map((await this.attractions(park)).map((a) => [a.id, a])),
         await this.headlinerIds(park),
       );
@@ -237,7 +249,7 @@ export class PlanDayService {
       dateStr,
       leadDays,
       openHour,
-      closeHour,
+      lastHour,
       profile,
       hoursSource === "schedule" ? parkOpensAt : null,
     );
@@ -586,6 +598,11 @@ export class PlanDayService {
    * Each hour is the MEAN of its 15-minute slots: they are already point
    * estimates from the median quantile, and taking the maximum instead would
    * quietly turn an honest hour into a pessimistic one.
+   *
+   * `closeHour` is the UNFOLDED one, and the rows are matched against two dates
+   * because of it: the 00:30 slot of a `10 → 1` day carries tomorrow's
+   * park-local date, so the date test alone dropped precisely the hours that
+   * make such a day unusual. They come back as hour 24 and 25.
    */
   private async measuredHours(
     park: Park,
@@ -609,12 +626,21 @@ export class PlanDayService {
     const slots = new Map<string, Map<number, number[]>>();
     const bands = new Map<string, number>();
 
+    const nextDate = PlanDayService.plusDays(dateStr, 1);
+
     for (const p of stored.predictions) {
       if (p.predictionType !== "hourly") continue;
       const when = new Date(p.predictedTime);
-      if (formatInParkTimezone(when, park.timezone) !== dateStr) continue;
+      const localDate = formatInParkTimezone(when, park.timezone);
+      if (localDate !== dateStr && localDate !== nextDate) continue;
 
-      const hour = Number(formatInTimeZone(when, park.timezone, "HH"));
+      // Tomorrow's small hours belong to today's day when today runs past
+      // midnight, and to tomorrow otherwise — which the range test below
+      // settles on its own: on an ordinary day `closeHour` is at most 23, so
+      // every hour that arrives here as 24 or later falls out.
+      const hour =
+        Number(formatInTimeZone(when, park.timezone, "HH")) +
+        (localDate === dateStr ? 0 : 24);
       if (hour < openHour || hour > closeHour) continue;
 
       const hours = slots.get(p.attractionId) ?? new Map<number, number[]>();
@@ -688,41 +714,64 @@ export class PlanDayService {
     byId: Map<string, Attraction>,
     headlinerIds: ReadonlySet<string>,
   ): Promise<PlanDayRideDto[]> {
-    const history = await this.analyticsService
-      .getParkHourlyHistory(park.id, dateStr)
-      .catch((err: Error) => {
-        this.logger.warn(
-          `Plan day: hourly history unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
-        );
-        return new Map<string, AttractionHourlyHistory>();
-      });
+    // The day's own row, and — only where the day runs past midnight — the next
+    // date's, whose small hours belong to it. Asked together: two indexed reads
+    // against a primary key, and the second is not asked for at all on an
+    // ordinary day.
+    const [own, afterMidnight] = await Promise.all([
+      this.hourlyHistory(park, dateStr),
+      closeHour > 23
+        ? this.hourlyHistory(park, PlanDayService.plusDays(dateStr, 1))
+        : Promise.resolve(new Map<string, AttractionHourlyHistory>()),
+    ]);
+
+    // attraction → { hour → [weightedSum, weight], the day's peak }
+    const measured = new Map<
+      string,
+      { byHour: Map<number, [number, number]>; peak: number }
+    >();
+
+    const collect = (
+      history: Map<string, AttractionHourlyHistory>,
+      offset: number,
+    ) => {
+      for (const [attractionId, row] of history) {
+        if (!byId.has(attractionId)) continue;
+        for (const slot of row.slots ?? []) {
+          const wallHour = Number(String(slot.time_slot).slice(0, 2));
+          if (!Number.isInteger(wallHour)) continue;
+          const hour = wallHour + offset;
+          if (hour < openHour || hour > closeHour) continue;
+          const wait = Number(slot.avgWait);
+          if (!Number.isFinite(wait)) continue;
+          // A slot with no count still happened; treat it as one reading rather
+          // than dropping it, or a gap in the writer's bookkeeping deletes an
+          // hour of a day somebody actually stood in.
+          const weight =
+            Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
+          const ride = measured.get(attractionId) ?? {
+            byHour: new Map<number, [number, number]>(),
+            peak: 0,
+          };
+          const [sum, total] = ride.byHour.get(hour) ?? [0, 0];
+          ride.byHour.set(hour, [sum + wait * weight, total + weight]);
+
+          const slotPeak = Number(slot.p90);
+          if (Number.isFinite(slotPeak)) {
+            ride.peak = Math.max(ride.peak, slotPeak);
+          }
+          measured.set(attractionId, ride);
+        }
+      }
+    };
+
+    collect(own, 0);
+    collect(afterMidnight, 24);
 
     const rides: PlanDayRideDto[] = [];
-    for (const [attractionId, row] of history) {
+    for (const [attractionId, { byHour, peak }] of measured) {
       const attraction = byId.get(attractionId);
       if (!attraction) continue;
-
-      // hour → [weightedSum, weight]
-      const byHour = new Map<number, [number, number]>();
-      let peak = 0;
-      for (const slot of row.slots ?? []) {
-        const hour = Number(String(slot.time_slot).slice(0, 2));
-        if (!Number.isInteger(hour) || hour < openHour || hour > closeHour) {
-          continue;
-        }
-        const wait = Number(slot.avgWait);
-        if (!Number.isFinite(wait)) continue;
-        // A slot with no count still happened; treat it as one reading rather
-        // than dropping it, or a gap in the writer's bookkeeping deletes an
-        // hour of a day somebody actually stood in.
-        const weight =
-          Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
-        const [sum, total] = byHour.get(hour) ?? [0, 0];
-        byHour.set(hour, [sum + wait * weight, total + weight]);
-
-        const slotPeak = Number(slot.p90);
-        if (Number.isFinite(slotPeak)) peak = Math.max(peak, slotPeak);
-      }
 
       const hours: PlanDayHourDto[] = [];
       for (let h = openHour; h <= closeHour; h++) {
@@ -943,18 +992,49 @@ export class PlanDayService {
    * being a recording window rather than a schedule. Null when the park has no
    * measured hours at all, because inventing a 10-to-18 day for a park nobody
    * has watched is exactly the made-up fact this codebase keeps banning.
+   *
+   * The window is found as the LARGEST GAP on the 24-hour clock rather than as
+   * min-to-max, and the two differ on exactly one kind of park. For a park
+   * measured 10:00–19:00 the widest gap is the night (19 → 10), so the day it
+   * hands back is 10 → 19 — min and max, the same answer as before. For a park
+   * whose day crosses midnight the widest gap is the AFTERNOON it is shut: a
+   * measured [0, 16 … 23] gives 16 → 24 instead of min-to-max's 0 → 23, which
+   * drew a queue for 03:00 and called it the park's day. La Ronde, Six Flags
+   * Mexico and Six Flags Qiddiya City close at midnight all year, and this
+   * fallback is the only window they have past the operator's horizon.
    */
   private static observedHours(
     profile: ParkHourlyProfileDto,
   ): { openHour: number; closeHour: number } | null {
-    const hours = (profile.hours ?? []).filter(
-      (h) => Number.isInteger(h) && h >= 0 && h <= 23,
-    );
+    const hours = [
+      ...new Set(
+        (profile.hours ?? []).filter(
+          (h) => Number.isInteger(h) && h >= 0 && h <= 23,
+        ),
+      ),
+    ].sort((a, b) => a - b);
     if (hours.length === 0) return null;
-    return {
-      openHour: Math.min(...hours),
-      closeHour: Math.max(...hours),
-    };
+    if (hours.length === 1) {
+      return { openHour: hours[0], closeHour: hours[0] };
+    }
+
+    // The hour after the widest silence is where the day starts. The night — the
+    // step from the last measured hour back round to the first — is the opening
+    // bid, so a tie leaves the window exactly where min-to-max had it and only
+    // a strictly wider daytime gap moves it.
+    let openIndex = 0;
+    let widest = (hours[0] - hours[hours.length - 1] + 24) % 24;
+    for (let i = 0; i < hours.length - 1; i++) {
+      const gap = hours[i + 1] - hours[i];
+      if (gap > widest) {
+        widest = gap;
+        openIndex = i + 1;
+      }
+    }
+
+    const openHour = hours[openIndex];
+    const closeHour = hours[(openIndex + hours.length - 1) % hours.length];
+    return { openHour, closeHour };
   }
 
   private async attractions(park: Park): Promise<Attraction[]> {
@@ -978,6 +1058,26 @@ export class PlanDayService {
           `Plan day: ride openings unavailable for ${park.slug}: ${err.message}`,
         );
         return new Map<string, string>();
+      });
+  }
+
+  /**
+   * One day's hourly rollup for the whole park, or an empty map.
+   *
+   * A failure here costs the day's curves, not the response: the context, the
+   * shows and the day's facts are worth serving on their own.
+   */
+  private async hourlyHistory(
+    park: Park,
+    dateStr: string,
+  ): Promise<Map<string, AttractionHourlyHistory>> {
+    return this.analyticsService
+      .getParkHourlyHistory(park.id, dateStr)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: hourly history unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
+        );
+        return new Map<string, AttractionHourlyHistory>();
       });
   }
 
@@ -1033,6 +1133,21 @@ export class PlanDayService {
     const at = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(at.getTime())) return null;
     return Number(formatInTimeZone(at, timezone, "HH"));
+  }
+
+  /**
+   * A `YYYY-MM-DD` shifted by whole days.
+   *
+   * UTC arithmetic on a date-only string, which is right precisely because it
+   * is not a timestamp: the park-local calendar day after 2026-10-31 is
+   * 2026-11-01 whatever the offset does that night, and converting through the
+   * park's timezone to find that out is how a DST boundary turns into an
+   * off-by-one.
+   */
+  private static plusDays(dateStr: string, days: number): string {
+    return new Date(Date.parse(`${dateStr}T00:00:00Z`) + days * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   /** Whole days between two YYYY-MM-DD strings. */

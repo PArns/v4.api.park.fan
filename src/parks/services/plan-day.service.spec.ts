@@ -39,6 +39,8 @@ describe("PlanDayService", () => {
   let headlinerFails: boolean;
   let queryCalls: unknown[][];
   let hourlyHistory: Map<string, { slots: unknown[] }>;
+  /** The next park-local date's rollup — only a wrap day reads it. */
+  let afterMidnightHistory: Map<string, { slots: unknown[] }>;
   let historyFails: boolean;
   let leadMae: number | null;
   let rideOpenings: Map<string, string>;
@@ -79,10 +81,17 @@ describe("PlanDayService", () => {
                 if (headlinerFails) throw new Error("analytics down");
                 return headlinerIds;
               }),
-            getParkHourlyHistory: jest.fn().mockImplementation(async () => {
-              if (historyFails) throw new Error("history down");
-              return hourlyHistory;
-            }),
+            getParkHourlyHistory: jest
+              .fn()
+              .mockImplementation(async (_parkId: string, date: string) => {
+                if (historyFails) throw new Error("history down");
+                // The rollup is keyed by park-local DATE, so a day that runs
+                // past midnight is stored across two rows and read back from
+                // both. The fixture's own date is the day asked about;
+                // anything else is the night after it.
+                const asked = (calendarDay as { date?: string } | null)?.date;
+                return date === asked ? hourlyHistory : afterMidnightHistory;
+              }),
             getRideOpeningTimes: jest
               .fn()
               .mockImplementation(async () => rideOpenings),
@@ -151,6 +160,7 @@ describe("PlanDayService", () => {
     headlinerFails = false;
     queryCalls = [];
     hourlyHistory = new Map();
+    afterMidnightHistory = new Map();
     historyFails = false;
     calendarDay = {
       date: "2026-10-17",
@@ -197,11 +207,62 @@ describe("PlanDayService", () => {
   // A date far enough out that the tier is unambiguous whatever "today" is when
   // the suite runs. The service reads the clock, so the tests that care about a
   // specific tier fake it rather than depending on the calendar.
-  const farDate = () => {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() + 30);
-    return d.toISOString().slice(0, 10);
+  const farDate = () => dayFromToday(30);
+
+  const today = () => formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+
+  const pastDate = () => dayFromToday(-7);
+
+  /**
+   * A date at a whole-day distance from the PARK's today, never from UTC's.
+   *
+   * `new Date().toISOString()` is a different day from the park's for two hours
+   * of every Berlin evening, so a suite built on it called a date seven days
+   * back eight days back, and today tomorrow — two tests that failed between
+   * 22:00 and midnight UTC and passed all day. The service reads the park's
+   * clock (CLAUDE.md §1); its fixtures have to as well.
+   */
+  function dayFromToday(days: number): string {
+    return dayShift(
+      formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd"),
+      days,
+    );
+  }
+
+  const dayShift = (date: string, days: number) =>
+    new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+
+  /** The day after a `YYYY-MM-DD`. */
+  const dayAfter = (date: string) => dayShift(date, 1);
+
+  /** The UTC instant of a park-local hour on a park-local date. */
+  const atParkHour = (date: string, hour: number): string => {
+    for (let step = 0; step <= 48; step++) {
+      const at = new Date(`${date}T00:00:00.000Z`);
+      at.setUTCHours(at.getUTCHours() - 12 + step);
+      if (
+        formatInTimeZone(at, park.timezone, "yyyy-MM-dd") === date &&
+        Number(formatInTimeZone(at, park.timezone, "HH")) === hour
+      ) {
+        return at.toISOString();
+      }
+    }
+    throw new Error(`no instant for ${date} ${hour}:00`);
   };
+
+  /** A rollup row: `[HH:MM, avgWait, sampleCount]` per 15-minute slot. */
+  const slots = (
+    entries: Array<[string, number, number]>,
+  ): { slots: Array<Record<string, unknown>> } => ({
+    slots: entries.map(([time_slot, avgWait, sampleCount]) => ({
+      time_slot,
+      avgWait,
+      p90: avgWait + 20,
+      sampleCount,
+    })),
+  });
 
   it("composes a curve from the day level and the historical shape", async () => {
     const date = farDate();
@@ -363,17 +424,17 @@ describe("PlanDayService", () => {
     // it actually got. Deciding by distance meant composed data went out as the
     // model's own hourly answer, which is the one failure this design exists to
     // prevent, and the assertion here used to pin it.
-    const today = new Date().toISOString().slice(0, 10);
-    calendarDay = { ...calendarDay!, date: today };
+    const date = today();
+    calendarDay = { ...calendarDay!, date };
     dailyPredictions = [
       {
         ...(dailyPredictions[0] as object),
-        predictedTime: `${today}T12:00:00.000Z`,
+        predictedTime: `${date}T12:00:00.000Z`,
       },
     ];
     hourlyPredictions = [];
 
-    const plan = await service.buildPlanDay(park, today);
+    const plan = await service.buildPlanDay(park, date);
 
     expect(plan.tier).toBe("composed");
     // Composed rides rather than nothing.
@@ -568,24 +629,6 @@ describe("PlanDayService", () => {
   // carried 17:00-21:00 and tomorrow's carried 09:00-17:00 — the evening simply
   // absent, and `dayPeak` the maximum of what was left.
   describe("inside the hourly window", () => {
-    /** The UTC instant of a park-local hour on a park-local date. */
-    const atParkHour = (date: string, hour: number): string => {
-      for (let step = 0; step <= 48; step++) {
-        const at = new Date(`${date}T00:00:00.000Z`);
-        at.setUTCHours(at.getUTCHours() - 12 + step);
-        if (
-          formatInTimeZone(at, park.timezone, "yyyy-MM-dd") === date &&
-          Number(formatInTimeZone(at, park.timezone, "HH")) === hour
-        ) {
-          return at.toISOString();
-        }
-      }
-      throw new Error(`no instant for ${date} ${hour}:00`);
-    };
-
-    const today = () =>
-      formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
-
     /** Hourly rows for a park-local hour range, one slot each. */
     const hourlyFor = (date: string, from: number, to: number) => {
       const rows = [];
@@ -675,9 +718,7 @@ describe("PlanDayService", () => {
     };
 
     const dayAt = (offset: number) => {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() + offset);
-      const date = d.toISOString().slice(0, 10);
+      const date = dayFromToday(offset);
       calendarDay = { ...calendarDay!, date };
       dailyPredictions = [
         {
@@ -853,6 +894,207 @@ describe("PlanDayService", () => {
     expect(leadMaeMock).toHaveBeenCalledWith(plan.leadDays);
   });
 
+  // ── A day that runs past midnight ──────────────────────────────────────────
+  // `closeHour < openHour` is how a park says its day crosses midnight: La Ronde
+  // is `10 → 0` every day of the year, Six Flags Magic Mountain `10 → 1` on
+  // Halloween. Swept across 212 parks on three dates, all 22 such days answered
+  // with `rides: []` while the SAME parks answered normally on a neighbouring
+  // day — Parque Warner 31 rides on 13 September and 0 on the 31 October night,
+  // Cedar Point 14 and 0, Kings Dominion 23 and 0. One guard read
+  // `closeHour < openHour` and returned the empty shell; every loop under it
+  // would have run zero times anyway.
+  describe("a day that runs past midnight", () => {
+    // Fixed instants like the fixtures above — only the park-local HH is read
+    // off them: 16:00, and 01:00 the following morning.
+    const OPEN_LATE = "2026-10-17T14:00:00.000Z";
+    const CLOSE_LATE = "2026-10-17T23:00:00.000Z";
+
+    /** A `16 → 1` day, with a shape measured across the evening. */
+    const wrapDay = (date: string) => {
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: { openingTime: OPEN_LATE, closingTime: CLOSE_LATE },
+      };
+      profile = {
+        hours: [16, 20, 23],
+        attractions: [
+          {
+            attractionSlug: "taron",
+            attractionName: "Taron",
+            land: "Mystery",
+            p50: [20, 60, 30],
+            sampleDays: 141,
+          },
+        ],
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      return date;
+    };
+
+    it("draws the night, and keeps the operator's own closing hour", async () => {
+      const date = wrapDay(farDate());
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBe(16);
+      // Unchanged, because it is what the operator published and a caller
+      // rendering "16:00 – 01:00" needs exactly that.
+      expect(plan.context.closeHour).toBe(1);
+      expect(plan.rides).toHaveLength(1);
+      // The hours CONTINUE past 23 rather than wrapping round to 0, so one
+      // operating day stays one ascending series: 24 is this day's midnight and
+      // 25 the 01:00 it closes at.
+      expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([
+        16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      ]);
+      // And it is a shaped curve, not a flat line: the shape peaks at 20:00 and
+      // the day level is 60, so that is where the maximum lands.
+      expect(plan.rides[0].hours.find((h) => h.hour === 20)!.wait).toBe(60);
+    });
+
+    it("takes the small hours from the next park-local date", async () => {
+      // The model's hourly rows are timestamps, so 00:30 of a `16 → 1` day
+      // carries TOMORROW's park-local date. Matching on the day's own date
+      // alone dropped precisely the hours that make such a day unusual.
+      const date = wrapDay(today());
+      const hourly = (at: string) => ({
+        attractionId: "a-taron",
+        predictedTime: at,
+        predictedWaitTime: 35,
+        predictionType: "hourly",
+        uncertaintyMinutes: 7,
+      });
+      hourlyPredictions = [
+        hourly(atParkHour(date, 22)),
+        hourly(atParkHour(date, 23)),
+        hourly(atParkHour(dayAfter(date), 0)),
+        hourly(atParkHour(dayAfter(date), 1)),
+      ];
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("measured");
+      const fromModel = plan.rides[0].hours.filter((h) => !h.source);
+      expect(fromModel.map((h) => h.hour)).toEqual([22, 23, 24, 25]);
+      expect(fromModel.every((h) => h.wait === 35)).toBe(true);
+      // The evening before them is composed, and says so.
+      expect(
+        plan.rides[0].hours
+          .filter((h) => h.hour < 22)
+          .every((h) => h.source === "composed"),
+      ).toBe(true);
+    });
+
+    it("does not read tomorrow's rows into an ordinary day", async () => {
+      // The same lookup, on a `09:00 – 18:00` day: tomorrow's 10:00 is
+      // tomorrow's, and must not be added to today at hour 34.
+      const date = today();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      hourlyPredictions = [10, 11].map((h) => ({
+        attractionId: "a-taron",
+        predictedTime: atParkHour(dayAfter(date), h),
+        predictedWaitTime: 35,
+        predictionType: "hourly",
+        uncertaintyMinutes: 7,
+      }));
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("composed");
+      expect(
+        plan.rides[0].hours.every((h) => h.hour >= 9 && h.hour <= 18),
+      ).toBe(true);
+    });
+
+    it("reads a past night out of the two rollup rows it is stored in", async () => {
+      // `attraction_hourly_history` is keyed by park-local DATE, so 23:45 and
+      // 00:15 of one night are a day apart in the table. Reading only the day's
+      // own row ends the curve at 23:00 and hands `dayPeak` to whichever half
+      // happened to be busier.
+      const date = wrapDay(pastDate());
+      hourlyHistory = new Map([
+        ["a-taron", slots([["22:00", 40, 4]])],
+      ]) as never;
+      afterMidnightHistory = new Map([
+        ["a-taron", slots([["00:00", 20, 4]])],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("observed");
+      expect(plan.rides).toHaveLength(1);
+      expect(plan.rides[0].hours).toEqual([
+        { hour: 22, wait: 40 },
+        { hour: 24, wait: 20 },
+      ]);
+      // The day's P90 across BOTH rows: the fixture writes p90 = avgWait + 20.
+      expect(plan.rides[0].dayPeak).toBe(60);
+    });
+
+    it("does not read the next day's rollup into an ordinary day", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      hourlyHistory = new Map([
+        ["a-taron", slots([["10:00", 30, 4]])],
+      ]) as never;
+      afterMidnightHistory = new Map([
+        ["a-taron", slots([["10:00", 90, 4]])],
+      ]) as never;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours).toEqual([{ hour: 10, wait: 30 }]);
+    });
+
+    it("finds the window in the measured hours of a park that never publishes", async () => {
+      // The three parks that wrap every day of the year are also the ones this
+      // fallback has to answer for past the operator's horizon. Min-to-max over
+      // [0, 16 … 23] gives 0 → 23 — a queue drawn at 03:00 and called the
+      // park's day — where the widest silence gives the day it actually is.
+      const date = farDate();
+      calendarDay = { date, status: "UNKNOWN", isHoliday: false };
+      profile = {
+        hours: [0, 16, 20, 23],
+        attractions: [
+          {
+            attractionSlug: "taron",
+            attractionName: "Taron",
+            land: "Mystery",
+            p50: [10, 20, 60, 30],
+            sampleDays: 141,
+          },
+        ],
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBe(16);
+      expect(plan.context.closeHour).toBe(0);
+      expect(plan.context.hoursSource).toBe("observed");
+      expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([
+        16, 17, 18, 19, 20, 21, 22, 23, 24,
+      ]);
+    });
+  });
+
   // ── Opening hours the operator has not published ───────────────────────────
   describe("past the operator's publishing horizon", () => {
     it("derives the window from the hours we have actually measured", async () => {
@@ -927,11 +1169,8 @@ describe("PlanDayService", () => {
       ...over,
     });
 
-    function todayMinus(days: number): string {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() - days);
-      return d.toISOString().slice(0, 10);
-    }
+    /** Park-local, because staleness is measured against the park's today. */
+    const todayMinus = (days: number) => dayFromToday(-days);
 
     beforeEach(() => {
       parkShows = [{ id: "s-1", slug: "big-moments", name: "Big Moments" }];
@@ -1058,23 +1297,6 @@ describe("PlanDayService", () => {
   // `tier: "measured"` and a negative `leadDays` — the most trustworthy label on
   // the emptiest answer.
   describe("a date in the past", () => {
-    const pastDate = () => {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() - 7);
-      return d.toISOString().slice(0, 10);
-    };
-
-    const slots = (
-      entries: Array<[string, number, number]>,
-    ): { slots: Array<Record<string, unknown>> } => ({
-      slots: entries.map(([time_slot, avgWait, sampleCount]) => ({
-        time_slot,
-        avgWait,
-        p90: avgWait + 20,
-        sampleCount,
-      })),
-    });
-
     it("is answered from what the queues actually did", async () => {
       const date = pastDate();
       calendarDay = { ...calendarDay!, date };

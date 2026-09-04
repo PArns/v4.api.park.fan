@@ -35,7 +35,11 @@ import { roundToNearest5Minutes } from "./wait-time.utils";
  */
 
 export interface DayCurvePoint {
-  /** Park-local hour, 0–23. */
+  /**
+   * Park-local hour. 0–23 on an ordinary day; on a day that runs past midnight
+   * it continues past 23 rather than wrapping — 24 is that day's midnight — so
+   * the curve stays one ascending series. See {@link unfoldedCloseHour}.
+   */
   hour: number;
   /** Expected wait in minutes, rounded to 5. */
   wait: number;
@@ -53,9 +57,39 @@ export interface ComposeDayCurveOptions {
   shapeP50: readonly (number | null)[];
   /** The day-level prediction for this ride, as a day-peak proxy. */
   dayPeak: number;
-  /** First and last park-local hour the park is open, inclusive. */
+  /**
+   * First and last park-local hour the park is open, inclusive, and `closeHour`
+   * **unfolded** — 24, not 0, for a day that ends at midnight. Pass it through
+   * {@link unfoldedCloseHour}; a still-wrapped pair returns null below, because
+   * the alternative is a curve of zero points served as if it were an answer.
+   */
   openHour: number;
   closeHour: number;
+}
+
+/**
+ * The day's last hour, counted from its own opening rather than from midnight.
+ *
+ * A park whose day runs past midnight publishes `closeHour < openHour` — La
+ * Ronde is `10 → 0`, Six Flags Magic Mountain on Halloween is `10 → 1` — and
+ * every loop of the form `for (h = openHour; h <= closeHour; h++)` runs **zero
+ * times** for one. Unfolding turns those into `10 → 24` and `10 → 25`, so an
+ * operating day is one ascending run of hours and everything that walks it
+ * needs to know nothing about midnight.
+ *
+ * The rule lives here and nowhere else on purpose. It was written inline in two
+ * places on the frontend that then disagreed — the grid unfolded the axis to
+ * 01:00 while the estimator tested `hour > closeHour` and so called every hour
+ * of that day out-of-hours — and this endpoint had the third copy of it, in the
+ * guard that returned an empty ride list for the whole day.
+ *
+ * Hours past 23 are real hours of that day and are sent as such: 24 is the
+ * midnight that ends a `10 → 0` day, 25 the 01:00 that ends a `10 → 1` one.
+ * `context.closeHour` stays the operator's wall-clock number, because that is
+ * what the operator published.
+ */
+export function unfoldedCloseHour(openHour: number, closeHour: number): number {
+  return closeHour < openHour ? closeHour + 24 : closeHour;
 }
 
 /**
@@ -69,6 +103,13 @@ export function composeDayCurve(
 
   if (closeHour < openHour) return null;
 
+  // The day may be unfolded past midnight; the SHAPE never is, because the
+  // profile buckets by wall-clock hour and a 00:00 bucket is written as 0. So
+  // the small hours are moved to the end of the day before the two are read
+  // against each other — without it, `interpolate` sorts midnight in FRONT of
+  // the evening and then holds the last measured value flat across the night.
+  const wraps = closeHour > 23;
+
   // Measured hours only. A null in shapeP50 means "no reading", and treating it
   // as a zero would drag the whole curve down through the scaling step.
   const measured: Array<{ hour: number; value: number }> = [];
@@ -77,7 +118,8 @@ export function composeDayCurve(
     if (value === null || value === undefined || !Number.isFinite(value)) {
       continue;
     }
-    measured.push({ hour: shapeHours[i], value });
+    const hour = shapeHours[i];
+    measured.push({ hour: wraps && hour < openHour ? hour + 24 : hour, value });
   }
   if (measured.length === 0) return null;
   measured.sort((a, b) => a.hour - b.hour);

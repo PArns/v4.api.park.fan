@@ -1,4 +1,4 @@
-import { composeDayCurve } from "./day-shape.util";
+import { composeDayCurve, unfoldedCloseHour } from "./day-shape.util";
 
 /**
  * The composition is the only place a per-ride, per-hour number for a future day
@@ -188,6 +188,58 @@ describe("composeDayCurve", () => {
 
     expect(curve.find((p) => p.hour === 10)!.wait).toBe(25);
     expect(curve.find((p) => p.hour === 11)!.wait).toBe(40);
+  });
+
+  // ── A day that runs past midnight ─────────────────────────────────────────
+  describe("past midnight", () => {
+    it("draws every hour of a day that ends after midnight", () => {
+      // La Ronde's day is 10 → 0, which arrives here unfolded as 10 → 24. The
+      // folded pair returns null (the test above), and that null was the whole
+      // of what /plan/day answered for such a day.
+      const curve = composeDayCurve({
+        shapeHours: [10, 14, 22],
+        shapeP50: [20, 40, 30],
+        dayPeak: 40,
+        openHour: 10,
+        closeHour: unfoldedCloseHour(10, 0),
+      })!;
+
+      expect(curve[0].hour).toBe(10);
+      expect(curve[curve.length - 1].hour).toBe(24);
+      expect(curve.map((p) => p.hour)).toEqual([
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+      ]);
+    });
+
+    it("reads a midnight bucket in the shape as the end of the day", () => {
+      // The profile buckets by WALL-CLOCK hour, so a 00:00 reading is written
+      // as 0. Left where it sits it sorts in front of the morning, and every
+      // hour of the evening is then interpolated towards it: the 22:00 value
+      // below would be dragged down to the 5-minute midnight reading instead of
+      // holding its own until the last hour.
+      const curve = composeDayCurve({
+        shapeHours: [0, 10, 22],
+        shapeP50: [5, 20, 40],
+        dayPeak: 40, // factor 1: the shape's own peak is already 40
+        openHour: 10,
+        closeHour: unfoldedCloseHour(10, 0),
+      })!;
+
+      expect(curve.find((p) => p.hour === 22)!.wait).toBe(40);
+      // Midnight is the shape's own 00:00 reading, at the end where it belongs.
+      expect(curve.find((p) => p.hour === 24)!.wait).toBe(5);
+      // And the hour between the two is interpolated across the pair, not held
+      // flat: halfway from 40 to 5 is 22.5, rounded up to 25.
+      expect(curve.find((p) => p.hour === 23)!.wait).toBe(25);
+    });
+
+    it("unfolds a close hour only when the day actually wraps", () => {
+      expect(unfoldedCloseHour(10, 18)).toBe(18);
+      expect(unfoldedCloseHour(10, 0)).toBe(24);
+      expect(unfoldedCloseHour(16, 1)).toBe(25);
+      // Not a wrap: a park open for a single hour.
+      expect(unfoldedCloseHour(10, 10)).toBe(10);
+    });
   });
 
   it("lands the peak on the prediction only as closely as fives allow", () => {
