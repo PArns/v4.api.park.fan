@@ -13,6 +13,7 @@ import { CalendarService } from "./calendar.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { Park } from "../entities/park.entity";
 import { CalendarDay } from "../dto/integrated-calendar.dto";
+import { CALENDAR_WARMUP_MONTH_TTL } from "../../common/cache/cache-ttl";
 import {
   BestDaysResponse,
   BestDayEntry,
@@ -23,12 +24,42 @@ import {
 const BEST_DAYS_WINDOW = 90;
 
 /**
- * Snapshot TTL. Must outlive the refresh cadence (calendar warmup runs every
- * 12h) so a single skipped run never leaves the endpoint cold — 26h spans a
- * full missed daily cycle. Redis persists across deploys, so this also keeps
- * best-days warm through a redeploy.
+ * Snapshot TTL, and the invariant is that a PROJECTION may not outlive its
+ * SOURCE.
+ *
+ * This snapshot is `calendar.days.map(projectDay)` and nothing else. The
+ * calendar month caches it is built from are given 13h by the warmup — sized as
+ * "the 12h cadence plus an hour of buffer" — and this was given 26h, i.e. two
+ * whole cadences, on the reasoning that a single skipped run should never leave
+ * the endpoint cold. That trade is the wrong way round: the endpoint already
+ * self-heals on a miss (`getBestDays` rebuilds, single-flighted, see below), so
+ * a longer TTL buys one avoided rebuild and pays for it by serving a forecast
+ * every other surface has already moved past.
+ *
+ * Which is not hypothetical. Measured on 2026-09-04 for Phantasialand, snapshot
+ * age 24.8h, against the live calendar and `/plan/day` for the same dates:
+ *
+ *   2026-10-10  snapshot low        calendar high       plan/day high
+ *   2026-10-17  snapshot low        calendar very_high  plan/day very_high
+ *   2026-10-24  snapshot low        calendar very_high  plan/day very_high
+ *   2026-10-03  snapshot high       calendar high       plan/day high   (agrees)
+ *
+ * The frontend paints its month calendar from this snapshot and its day panel
+ * from `/plan/day`, so the two sat side by side on one screen saying "wenig
+ * Auslastung" and "SEHR HOCH" about the same Saturday. It was reported as a
+ * frontend bug and is this constant.
+ *
+ * 13h, the month caches' own figure: in normal operation the 12h warmup
+ * rewrites both before either expires, and a run that is missed or throws now
+ * expires instead of persisting for another half day.
+ *
+ * One residue, named rather than fixed: the CURRENT month gets 2h from the
+ * warmup because its data still moves intraday, so for up to 11h the snapshot
+ * can hold a current-month day the calendar has since rebuilt. Closing that
+ * would mean rebuilding a 90-day projection every two hours, which is a real
+ * cost against a much smaller window — the reported case was a future month.
  */
-const SNAPSHOT_TTL = 26 * 60 * 60;
+const SNAPSHOT_TTL = CALENDAR_WARMUP_MONTH_TTL;
 
 /**
  * Best-Days Service
@@ -187,9 +218,12 @@ export class BestDaysService {
       return park.slug;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.debug(
-        `Best-days precompute skipped for ${park.slug}: ${msg}`,
-      );
+      // `warn`, not `debug`. A precompute that throws leaves the previous
+      // snapshot in place for the rest of its TTL, so the endpoint keeps
+      // answering — with the last cycle's forecast, and with nothing anywhere
+      // saying so. That is how a stale crowd level reached a screenshot before
+      // it reached a log line.
+      this.logger.warn(`Best-days precompute failed for ${park.slug}: ${msg}`);
       return null;
     }
   }
