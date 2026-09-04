@@ -314,6 +314,48 @@ describe("PlanDayService", () => {
     expect(monday.context.isWeekend).toBe(false);
   });
 
+  it("carries whether the park's wait times are readable at all", async () => {
+    // A planner holds this payload and nothing else — it never fetches the park
+    // — and an empty `rides` on a drawn axis is exactly what a park with no
+    // source and a park whose rides have no history both look like. Without the
+    // flag a caller fills that gap with an assumed wait and prints a number for
+    // a park nobody measures. Verified against production before this existed:
+    // /plan/day for hansa-park answered 200 with rides: [] and an 11–21 axis.
+    const plan = await service.buildPlanDay(park, farDate());
+    expect(plan.context.liveWaitTimes).toEqual({
+      available: true,
+      reason: null,
+    });
+
+    // Off the ENTITY, so it is the same on every date the park has — and by
+    // the SAME resolver every other payload uses, curated column first and the
+    // static source list behind it. Hansa-Park is the real entry: it publishes
+    // wait times only in its own app on the park WLAN, so no number will ever
+    // arrive for it.
+    const hansa = {
+      ...park,
+      slug: "hansa-park",
+      citySlug: "sierksdorf",
+    } as unknown as Park;
+    const refused = await service.buildPlanDay(hansa, farDate());
+    expect(refused.context.liveWaitTimes).toEqual({
+      available: false,
+      reason: "in_park_app_only",
+    });
+
+    // A curated column overrides the list, which is how a park that stops
+    // publishing gets an answer without a deploy.
+    const curated = {
+      ...park,
+      curatedNoWaitTimesReason: "not_published",
+    } as unknown as Park;
+    const byCuration = await service.buildPlanDay(curated, farDate());
+    expect(byCuration.context.liveWaitTimes).toEqual({
+      available: false,
+      reason: "not_published",
+    });
+  });
+
   it("says composed when today's hourly rows are missing, not measured", async () => {
     // The tier comes from the curves that were built, never from the distance.
     // A park the generator skipped tonight, or an ML service having a bad

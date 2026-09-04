@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { LiveWaitTimesDto } from "./live-wait-times.dto";
 
 /**
  * How a number in this response was arrived at. It travels with every curve
@@ -321,6 +322,20 @@ export class PlanDayContextDto {
       "Holidays in neighbouring regions whose day-trippers raise local crowds.",
   })
   neighborHolidays?: Array<Record<string, unknown>>;
+
+  @ApiProperty({
+    type: LiveWaitTimesDto,
+    description:
+      "Whether this park's wait times are readable at all — the same curated " +
+      "flag the park payload carries, repeated here because a planner never " +
+      "fetches that payload. Without it this endpoint is indistinguishable " +
+      "from a park whose rides simply have no history: `rides` is empty and " +
+      "the axis is drawn either way, so a client fills the gap with an " +
+      "assumed wait and prints a number for a park nobody measures. " +
+      "LiveWaitTimesDto's own contract says a client must check this before " +
+      "showing wait times; until now a client of THIS endpoint could not.",
+  })
+  liveWaitTimes: LiveWaitTimesDto;
 }
 
 export class PlanDayAccuracyDto {

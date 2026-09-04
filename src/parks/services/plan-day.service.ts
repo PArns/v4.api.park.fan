@@ -27,6 +27,8 @@ import {
   PlanDayTier,
 } from "../dto/plan-day.dto";
 import type { PlanDayAccuracyDto } from "../dto/plan-day.dto";
+import { buildLiveWaitTimes } from "../dto/live-wait-times.dto";
+import { resolveCuratedPark } from "../utils/curated-park-facts.util";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -187,6 +189,15 @@ export class PlanDayService {
       neighborHolidays: (day?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,
+      // Off the ENTITY, not off the day: whether a source exists is a property
+      // of the park and is true of every date it has. Repeated here because a
+      // planner holds this payload and nothing else — and an empty `rides` on
+      // a drawn axis is exactly what a park with no source and a park whose
+      // rides have no history both look like, so without this a caller cannot
+      // tell "we don't know" from "nothing much is queueing".
+      liveWaitTimes: buildLiveWaitTimes(
+        resolveCuratedPark(park).noWaitTimesReason,
+      ),
     };
 
     const base: PlanDayDto = {
