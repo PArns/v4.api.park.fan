@@ -31,9 +31,19 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
         // itself ran in 0.05 ms. Throttling the background jobs
         // (DB_JOB_CONCURRENCY) removed 71 % of that; the rest is read-side
         // work that cannot be deferred, so it needs slots. Safe because
-        // work_mem is now 16 MB (worst case ~4.8 GB) and max_connections is
-        // 150 — count the python services' own pools before raising further.
-        max: parseInt(process.env.DB_POOL_SIZE ?? "50", 10),
+        // work_mem is now 16 MB and max_connections is 200 — count the python
+        // services' own pools before raising further.
+        //
+        // Raised again 50 -> 80 on 2026-09-05. Bounding the calendar fan-out
+        // removed the single largest stall (43 identical queries in one
+        // second, gone), but the pool still ran at 50/50: what fills it now is
+        // many small unbounded fan-outs at once — park statistics, schedule
+        // and attraction reads, a per-attraction downtime query — rather than
+        // one culprit worth chasing. Postgres never logs these as slow, so the
+        // time is queueing, and the machine is idle while it happens (load
+        // 0.61 on 24 cores, 12 GB RAM free). Worst case at 80: 80 + 31
+        // (ml-service) + 24 (pcn peak) + 10 = 145 of 197 usable connections.
+        max: parseInt(process.env.DB_POOL_SIZE ?? "80", 10),
         // Reap idle clients so an off-peak pool doesn't pin connections.
         idleTimeoutMillis: 30000,
         // During build, use very short timeout to fail fast
