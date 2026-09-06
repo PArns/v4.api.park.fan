@@ -81,8 +81,10 @@ export class DowntimeMeasurementService {
           .map((r) => minutesBetween(r.startedAt, r.endedAt as Date));
         return {
           attractionId,
+          parkId: rows[0].parkId,
           parkSlug: rows[0].parkSlug,
           parkName: rows[0].parkName,
+          parkCity: rows[0].parkCity,
           attractionName: rows[0].attractionName,
           outages: rows.length,
           ongoing: rows.filter((r) => r.endedAt === null).length,
@@ -97,7 +99,7 @@ export class DowntimeMeasurementService {
       })
       .sort((a, b) => b.outages - a.outages);
 
-    const parks = this.perPark(rides);
+    const parks = this.perPark(rides, outages);
 
     return {
       measuredAt: new Date().toISOString(),
@@ -273,7 +275,7 @@ export class DowntimeMeasurementService {
       `
       WITH tracked AS (
         SELECT a.id AS aid, a.name AS aname, p.id AS pid, p.slug AS pslug,
-               p.name AS pname
+               p.name AS pname, p.city AS pcity
           FROM attractions a
           JOIN parks p ON p.id = a."parkId"
          WHERE a.retired_at IS NULL
@@ -281,7 +283,7 @@ export class DowntimeMeasurementService {
            AND ($1::boolean = false OR p.slug = ANY($2::text[]))
       ),
       marked AS (
-        SELECT t.aid, t.aname, t.pslug, t.pname,
+        SELECT t.aid, t.aname, t.pid, t.pslug, t.pname, t.pcity,
                qd.timestamp AS ts,
                ${outageRunBreaks("qd")} AS breaks
           FROM tracked t
@@ -309,7 +311,7 @@ export class DowntimeMeasurementService {
           FROM marked
       ),
       runs AS (
-        SELECT aid, aname, pslug, pname, grp,
+        SELECT aid, aname, pid, pslug, pname, pcity, grp,
                MIN(ts) FILTER (WHERE NOT breaks) AS started_at,
                -- The breaking row IS the end: it is the first reading that says
                -- the ride is no longer down. NULL when the run is still open at
@@ -317,65 +319,143 @@ export class DowntimeMeasurementService {
                MAX(ts) FILTER (WHERE breaks)     AS ended_at,
                COUNT(*) FILTER (WHERE NOT breaks)::int AS rows_in_run
           FROM seq
-         GROUP BY aid, aname, pslug, pname, grp
+         GROUP BY aid, aname, pid, pslug, pname, pcity, grp
         HAVING COUNT(*) FILTER (WHERE NOT breaks) > 0
       )
       SELECT aid        AS "attractionId",
              aname      AS "attractionName",
+             pid        AS "parkId",
              pslug      AS "parkSlug",
              pname      AS "parkName",
+             pcity      AS "parkCity",
              started_at AS "startedAt",
              ended_at   AS "endedAt",
              rows_in_run AS "rowsInRun"
         FROM runs
-       ORDER BY pslug, aname, started_at
+       ORDER BY pslug, pcity, aname, started_at
       `,
       [filtered, parkSlugs, since],
     );
   }
 
   /**
-   * The artefact signature, per park.
+   * The per-park report, and the regime test that actually holds.
    *
-   * A park where nearly every run is a single reading is not a park with brief
-   * outages. It is a park whose DOWN readings are being erased between polls —
-   * `ConflictResolverService` rewrites DOWN to OPERATING as soon as a second
-   * source reports a wait of five minutes or more, and a queue takes fifteen to
-   * thirty minutes to drain, so what survives is the first reading and nothing
-   * after it. A duration read off that measures how fast the queue emptied.
+   * ## What this used to test, and why it was wrong
+   *
+   * The first version called a park an artefact when 70 % of its runs rested on
+   * a single reading, reasoning that `ConflictResolverService` erases DOWN
+   * between polls. Measured against production over 90 days that test does not
+   * do what it says:
+   *
+   * - `corr(singleReadingShare, share of outages under 60 min) = 0.996`.
+   * - 99.9 % of single-row runs are under 65 minutes; 4.5 % of multi-row runs
+   *   are. That is the hourly heartbeat's edge, not a source's.
+   * - 99.8 % of single-row runs have an OBSERVED end — the breaking row that
+   *   says the ride is running again. Their duration is measured, not guessed.
+   * - EPCOT has one queue-times row in thirty days, so the resolver cannot fire
+   *   there at all, and it still scored 0.715.
+   *
+   * `queue_data` is a change log: an outage that ends before the hourly
+   * heartbeat fires writes exactly one row. One reading is what a SHORT outage
+   * looks like. The old test threw out 47 of 78 parks — every well-covered one —
+   * and kept the parks whose feed leaves rides sitting on DOWN for hours.
+   *
+   * ## What it tests now
+   *
+   * The refusal it feeds says „Störungsmeldungen liegen nur stundengenau vor.
+   * Eine Dauer lässt sich daraus nicht ablesen." So it measures exactly that:
+   * the temporal resolution of the timestamps a duration is read from.
+   *
+   * A feed publishing hourly puts every reading on the same minute of the hour.
+   * The test is therefore the share held by the single most common minute
+   * value, which is timezone-independent — a park at a :30 offset publishing
+   * hourly piles up on :30, not on :00, and a test hard-coded to zero would
+   * miss it.
+   *
+   * Highest value in production is 0.236 (Lotte World Adventure); the threshold
+   * is 0.5, so the regime is currently empty. An empty refusal is the honest
+   * outcome when no feed behaves that way, and it is a very different statement
+   * from the old one.
    */
-  private perPark(rides: RideMeasurement[]): ParkMeasurement[] {
+  private perPark(
+    rides: RideMeasurement[],
+    outages: OutageRow[],
+  ): ParkMeasurement[] {
     const byPark = new Map<string, RideMeasurement[]>();
     for (const ride of rides) {
-      const list = byPark.get(ride.parkSlug) ?? [];
+      const list = byPark.get(ride.parkId) ?? [];
       list.push(ride);
-      byPark.set(ride.parkSlug, list);
+      byPark.set(ride.parkId, list);
     }
+
+    // Minute-of-hour histogram per park, over both edges of every run: those
+    // are the instants a duration is subtracted from.
+    const minutes = new Map<string, Map<number, number>>();
+    for (const row of outages) {
+      const hist = minutes.get(row.parkId) ?? new Map<number, number>();
+      for (const edge of [row.startedAt, row.endedAt]) {
+        if (!edge) continue;
+        const m = new Date(edge).getUTCMinutes();
+        hist.set(m, (hist.get(m) ?? 0) + 1);
+      }
+      minutes.set(row.parkId, hist);
+    }
+
     return [...byPark.entries()]
-      .map(([parkSlug, list]) => {
-        const outages = list.reduce((sum, r) => sum + r.outages, 0);
+      .map(([parkId, list]) => {
+        const outageCount = list.reduce((sum, r) => sum + r.outages, 0);
         const single = list.reduce((sum, r) => sum + r.singleReadingRuns, 0);
-        const share = outages > 0 ? single / outages : 0;
+        const share = outageCount > 0 ? single / outageCount : 0;
+
+        const hist = minutes.get(parkId);
+        const edges = hist ? [...hist.values()].reduce((a, b) => a + b, 0) : 0;
+        const topMinute = hist ? Math.max(0, ...hist.values()) : 0;
+        // Too few edges to say anything about resolution. Claiming a park is
+        // fine-grained on four readings is the same error in the other
+        // direction, so it reads as unknown and the regime stays `reports`.
+        const onTheHourShare =
+          edges >= MIN_EDGES_FOR_RESOLUTION ? topMinute / edges : 0;
+
         return {
-          parkSlug,
+          parkId,
+          parkSlug: list[0].parkSlug,
           parkName: list[0].parkName,
+          parkCity: list[0].parkCity,
           ridesWithOutages: list.length,
-          outages,
+          outages: outageCount,
           singleReadingShare: Math.round(share * 1000) / 1000,
-          regime: share >= 0.7 ? ("artefact" as const) : ("reports" as const),
+          onTheHourShare: Math.round(onTheHourShare * 1000) / 1000,
+          regime:
+            onTheHourShare >= ARTEFACT_ON_THE_HOUR_SHARE
+              ? ("artefact" as const)
+              : ("reports" as const),
         };
       })
       .sort((a, b) => b.outages - a.outages);
   }
 }
 
+/**
+ * Share of one minute-of-hour value above which a feed is hourly, not observed.
+ *
+ * Mirrors `DOWNTIME_GATES.artefactOnTheHourShare`; kept here too because this
+ * service is the read-only measurement and must not import the writer.
+ */
+const ARTEFACT_ON_THE_HOUR_SHARE = 0.5;
+
+/** Run edges a park needs before its resolution is called either way. */
+const MIN_EDGES_FOR_RESOLUTION = 20;
+
 // ── shapes ───────────────────────────────────────────────────────────────────
 
 interface OutageRow {
   attractionId: string;
   attractionName: string;
+  parkId: string;
   parkSlug: string;
   parkName: string;
+  parkCity: string | null;
   startedAt: Date;
   endedAt: Date | null;
   rowsInRun: number;
@@ -389,8 +469,17 @@ export interface CapabilityCensus {
 
 export interface RideMeasurement {
   attractionId: string;
+  /**
+   * The park's id, and the only safe grouping key.
+   *
+   * `parkSlug` is NOT unique: `disneyland-park` is Anaheim *and* Paris, and
+   * grouping the per-park report on it merged the two into one row with 71
+   * rides and 4979 outages.
+   */
+  parkId: string;
   parkSlug: string;
   parkName: string;
+  parkCity: string | null;
   attractionName: string;
   outages: number;
   ongoing: number;
@@ -401,11 +490,34 @@ export interface RideMeasurement {
 }
 
 export interface ParkMeasurement {
+  parkId: string;
+  /** Not unique — see {@link RideMeasurement.parkId}. Carried for readability. */
   parkSlug: string;
   parkName: string;
+  /** What tells two same-slug parks apart in a report a human reads. */
+  parkCity: string | null;
   ridesWithOutages: number;
   outages: number;
+  /**
+   * Share of runs resting on a single reading.
+   *
+   * Kept as a descriptive figure and NO LONGER a regime test. Measured over 90
+   * days it correlates with "share of outages shorter than an hour" at r =
+   * 0.996: `queue_data` is a change log, so an outage that ends before the
+   * hourly heartbeat fires writes exactly one row. It is the signature of a
+   * short outage, not of an eroded one. See {@link DowntimeMeasurement.regime}.
+   */
   singleReadingShare: number;
+  /**
+   * Share of DOWN readings whose timestamp lands exactly on the hour.
+   *
+   * This is what the artefact regime was always meant to catch: a feed that
+   * only publishes hourly cannot yield a duration. Measured over every
+   * down-capable park, the highest observed value is 0.236 (Lotte World), so
+   * the regime is currently empty — which is the honest answer, and a very
+   * different one from "every big park is an artefact".
+   */
+  onTheHourShare: number;
   regime: "artefact" | "reports";
 }
 

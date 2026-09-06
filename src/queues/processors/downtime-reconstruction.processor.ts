@@ -8,6 +8,7 @@ import {
   OUTAGE_INTERVALS_SQL,
   OUTAGE_SCAN_START_SQL,
 } from "../../analytics/utils/outage-reconstruction.sql";
+import { DowntimeRecoveryService } from "../../analytics/downtime-recovery.service";
 import { DowntimeProfileService } from "../../analytics/downtime-profile.service";
 import { AttractionOutage } from "../../analytics/entities/attraction-outage.entity";
 import { AttractionExposureDay } from "../../analytics/entities/attraction-exposure-day.entity";
@@ -46,6 +47,7 @@ export class DowntimeReconstructionProcessor {
   constructor(
     private readonly dataSource: DataSource,
     private readonly profiles: DowntimeProfileService,
+    private readonly recovery: DowntimeRecoveryService,
   ) {}
 
   @Process("reconstruct-downtime")
@@ -213,6 +215,12 @@ export class DowntimeReconstructionProcessor {
     );
 
     await this.profiles.rebuild(parkIds);
+
+    // The curves last, and always over every park regardless of `parkIds`: the
+    // pooled row is the fallback every park's serving path reads, so rebuilding
+    // it from a single park's intervals would quietly narrow the population
+    // behind ~40 000 ride pages.
+    await this.recovery.rebuild();
   }
 }
 

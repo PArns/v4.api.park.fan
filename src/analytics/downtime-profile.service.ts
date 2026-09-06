@@ -30,6 +30,17 @@ export const DOWNTIME_GATES = {
    * derived from a two-sample power calculation — that would want about 33 per
    * arm — because the comparison such a calculation licenses is not rendered
    * anywhere. Precision of the single figure is the whole justification.
+   *
+   * **Confirmed against production, 2026-09-06** (90 days, all 197 down-capable
+   * parks): 150 132 reconstructed events over 2228 rides in 78 parks, median 31
+   * events per ride. Rides clearing each candidate floor:
+   *
+   * | ≥8 | ≥12 | ≥16 | ≥20 | **≥24** | ≥30 | ≥40 |
+   * | 1771 | 1630 | 1513 | 1416 | **1324** | 1162 | 950 |
+   *
+   * The fear that drove the original guess — that events would be too rare to
+   * clear any floor — came from reading a live snapshot, where DOWN is 0.3-0.7 %
+   * of rows at any instant. Over 90 days it accumulates. The floor stays at 24.
    */
   minOutages: 24,
 
@@ -46,10 +57,30 @@ export const DOWNTIME_GATES = {
   maxCensoredShare: 0.25,
 
   /**
-   * A park where this share of intervals rests on a single reading is in the
-   * artefact regime: the readings are being erased between polls.
+   * Share held by ONE minute-of-hour value above which a feed is hourly.
+   *
+   * The artefact regime means „this park publishes on the hour, so a duration
+   * cannot be read out of it". This is the test for that, and it replaces one
+   * that measured something else entirely.
+   *
+   * The old test — 70 % of intervals resting on a single reading — was measured
+   * against production over 90 days and correlates with „share of outages
+   * shorter than 60 minutes" at **r = 0.996**. `queue_data` is a change log, so
+   * an outage ending before the hourly heartbeat fires writes exactly one row;
+   * 99.9 % of single-row runs are under 65 minutes and 99.8 % of them have an
+   * observed end. It marked 47 of 78 parks artefact — including EPCOT, which
+   * has one second-source row in thirty days and so cannot be eroded at all —
+   * and it selected inversely to data quality, keeping the feeds that leave
+   * rides on DOWN for hours.
+   *
+   * Measuring the most common minute rather than minute zero keeps it
+   * timezone-independent: an hourly feed at a :30 offset piles up on :30.
+   * Highest value in production is 0.236, so this regime is currently empty.
    */
-  artefactSingleReadingShare: 0.7,
+  artefactOnTheHourShare: 0.5,
+
+  /** Run edges a park needs before its resolution is judged either way. */
+  minEdgesForResolution: 20,
 
   /**
    * A ride's first operating days are excluded.
@@ -142,6 +173,33 @@ export class DowntimeProfileService {
              COUNT(o.*)::int                             AS "outages",
              COUNT(o.*) FILTER (WHERE o.rows_in_spell <= 1)::int
                                                          AS "singleReadingSpells",
+             -- Temporal resolution: the share held by the single most common
+             -- minute-of-hour across both edges of every interval. An hourly
+             -- feed puts all of them on one minute. Measuring the most common
+             -- value rather than minute zero keeps it timezone-independent,
+             -- because an hourly feed at a :30 offset piles up on :30.
+             COALESCE((
+               SELECT MAX(m.cnt)::numeric / NULLIF(SUM(m.cnt), 0)
+                 FROM (
+                   SELECT COUNT(*) AS cnt
+                     FROM attraction_outages o2
+                     JOIN attractions a2 ON a2.id = o2."attractionId"
+                    CROSS JOIN LATERAL (VALUES (o2.started_at), (o2.ended_at)) AS e(ts)
+                    WHERE a2."parkId" = p.id
+                      AND NOT o2.likely_works_period
+                      AND e.ts IS NOT NULL
+                    GROUP BY EXTRACT(MINUTE FROM e.ts)
+                 ) m
+             ), 0)                                       AS "onTheHourShare",
+             (
+               SELECT COUNT(*)
+                 FROM attraction_outages o3
+                 JOIN attractions a3 ON a3.id = o3."attractionId"
+                CROSS JOIN LATERAL (VALUES (o3.started_at), (o3.ended_at)) AS e3(ts)
+                WHERE a3."parkId" = p.id
+                  AND NOT o3.likely_works_period
+                  AND e3.ts IS NOT NULL
+             )::int                                      AS "resolutionEdges",
              PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.operating_minutes)
                FILTER (WHERE o.duration_usable)          AS "medianSpellMinutes"
         FROM parks p
@@ -163,12 +221,21 @@ export class DowntimeProfileService {
       const singleShare =
         outages > 0 ? Number(row.singleReadingSpells) / outages : 0;
 
+      // Resolution is only judged once there are enough edges to judge it on;
+      // calling a park fine-grained on four readings is the same error in the
+      // other direction, so too few reads as `reports` and the ride-level gates
+      // do the withholding.
+      const edges = Number(row.resolutionEdges) || 0;
+      const onTheHourShare =
+        edges >= DOWNTIME_GATES.minEdgesForResolution
+          ? Number(row.onTheHourShare) || 0
+          : 0;
+
       const regime: DowntimeRegime = !row.downCapable
         ? "not_capable"
         : !row.hasSchedule
           ? "no_schedule"
-          : outages > 0 &&
-              singleShare >= DOWNTIME_GATES.artefactSingleReadingShare
+          : onTheHourShare >= DOWNTIME_GATES.artefactOnTheHourShare
             ? "artefact"
             : "reports";
 
@@ -181,6 +248,7 @@ export class DowntimeProfileService {
         ridesWithOutages: clampSmallint(Number(row.ridesWithOutages) || 0),
         outages,
         oneIntervalSpellShare: singleShare.toFixed(3),
+        onTheHourShare: onTheHourShare.toFixed(3),
         medianSpellMinutes:
           row.medianSpellMinutes == null
             ? null
@@ -379,7 +447,10 @@ export function decideProfile(
     return withhold("thin_exposure");
   }
   if (censoredShare > DOWNTIME_GATES.maxCensoredShare) {
-    return withhold("thin_events");
+    // Its own reason: "too few outages" and "many outages whose end we did not
+    // see" are opposite statements about a ride, and only the second describes
+    // one that breaks often.
+    return withhold("heavily_censored");
   }
 
   // Split-half: a ride whose two halves disagree by more than the ratio is not
@@ -417,6 +488,10 @@ interface CoverageRow {
   ridesWithOutages: number | string;
   outages: number | string;
   singleReadingSpells: number | string;
+  /** Share held by the most common minute-of-hour across interval edges. */
+  onTheHourShare: number | string;
+  /** Interval edges the share is computed over. Below the floor it says nothing. */
+  resolutionEdges: number | string;
   medianSpellMinutes: number | string | null;
 }
 

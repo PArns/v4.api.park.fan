@@ -207,6 +207,12 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   { table: "attraction_exposure_days", column: "parkId", strategy: "move" },
   { table: "attraction_downtime_profiles", column: "parkId", strategy: "move" },
   { table: "park_downtime_coverage", column: "parkId", strategy: "discard" },
+  // `park_id`, not `parkId`: this table is written by raw SQL and its column is
+  // snake_case. Discard rather than move — a curve is an aggregate over the
+  // loser's intervals, and those move to the winner and are recomputed the same
+  // night. Moving the curve would keep a row derived from a population that no
+  // longer exists.
+  { table: "downtime_recovery_curves", column: "park_id", strategy: "discard" },
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
   { table: "ml_accuracy_comparisons", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },

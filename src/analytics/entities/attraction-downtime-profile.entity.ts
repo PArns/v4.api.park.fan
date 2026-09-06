@@ -11,7 +11,13 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
 export const DOWNTIME_WITHHELD_REASONS = [
   /** No source in this park can emit DOWN. Configuration, not outcome. */
   "not_down_capable",
-  /** Nearly every interval rests on a single reading: the DOWN is being erased. */
+  /**
+   * The feed publishes on the hour, so no duration can be read out of it.
+   *
+   * Measured as the share held by one minute-of-hour value, NOT as the share of
+   * single-reading runs — that earlier test turned out to measure "outages
+   * shorter than an hour" (r = 0.996) and threw out every well-covered park.
+   */
   "artefact_regime",
   /** The park publishes no opening hours, so the denominator would be circular. */
   "no_schedule",
@@ -25,6 +31,18 @@ export const DOWNTIME_WITHHELD_REASONS = [
   "recently_merged",
   /** Too new — the first weeks of a ride are not its steady state. */
   "new_ride",
+  /**
+   * Plenty of outages, but too few of them were seen to END.
+   *
+   * Its own reason rather than `thin_events`, because the two are opposite
+   * statements: „too few outages" and „many outages whose end we did not see"
+   * send a reader looking in different places, and only the second is about a
+   * ride that breaks often. Censoring here is strongly seasonal — a run ending
+   * because the park shut for the winter measured 89.8 % in March against
+   * 20.5 % in September — so this reason appears and disappears with the
+   * season, by design.
+   */
+  "heavily_censored",
 ] as const;
 
 export type DowntimeWithheldReason = (typeof DOWNTIME_WITHHELD_REASONS)[number];

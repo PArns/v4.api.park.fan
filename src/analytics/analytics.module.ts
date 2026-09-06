@@ -29,6 +29,8 @@ import { AttractionExposureDay } from "./entities/attraction-exposure-day.entity
 import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
 import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
 import { DowntimeProfileService } from "./downtime-profile.service";
+import { DowntimeRecoveryCurve } from "./entities/downtime-recovery-curve.entity";
+import { DowntimeRecoveryService } from "./downtime-recovery.service";
 import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
 import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.entity";
 
@@ -59,6 +61,7 @@ import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.enti
       AttractionExposureDay,
       AttractionDowntimeProfile,
       ParkDowntimeCoverage,
+      DowntimeRecoveryCurve,
       AttractionRopeDrop,
       AttractionTypicalWaits,
     ]),
@@ -73,6 +76,7 @@ import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.enti
     AnalyticsService,
     ParkHistoricalStatsService,
     DowntimeProfileService,
+    DowntimeRecoveryService,
   ],
 })
 export class AnalyticsModule {}

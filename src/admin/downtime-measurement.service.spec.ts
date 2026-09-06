@@ -67,8 +67,10 @@ describe("DowntimeMeasurementService", () => {
   const ride = (startedAt: string, endedAt: string | null, rowsInRun = 3) => ({
     attractionId: "a1",
     attractionName: "Taron",
+    parkId: "park-1",
     parkSlug: "phantasialand",
     parkName: "Phantasialand",
+    parkCity: "Brühl",
     startedAt: new Date(startedAt),
     endedAt: endedAt ? new Date(endedAt) : null,
     rowsInRun,
@@ -104,25 +106,103 @@ describe("DowntimeMeasurementService", () => {
     });
   });
 
-  it("counts single-reading runs separately from the rest", () => {
-    // A run of one row proves nothing about how long it lasted: the reading
-    // that would have ended it never came. Folding it into the median would
-    // make an erased DOWN look like a two-minute outage.
+  it("counts single-reading runs but no longer calls them an artefact", () => {
+    // This test used to assert the opposite, and the assertion was wrong.
+    //
+    // Measured over production (90 days, 78 parks, 150 132 events), the share
+    // of single-reading runs correlates with "share of outages shorter than an
+    // hour" at r = 0.996. `queue_data` is a change log, so an outage that ends
+    // before the hourly heartbeat fires writes exactly one row — 99.9 % of
+    // single-row runs are under 65 minutes, and 99.8 % of them have an OBSERVED
+    // end, the reading that says the ride is running again. One reading is what
+    // a short outage looks like, not an erased one.
+    //
+    // The old threshold marked 47 of 78 parks artefact, including EPCOT, which
+    // has a single second-source row in thirty days and so cannot be eroded by
+    // the ConflictResolver at all.
     const { service } = serviceWith([
       ride("2026-08-01T10:00:00Z", "2026-08-01T10:05:00Z", 1),
-      ride("2026-08-02T10:00:00Z", "2026-08-02T10:05:00Z", 1),
-      ride("2026-08-03T10:00:00Z", "2026-08-03T10:05:00Z", 1),
-      ride("2026-08-04T10:00:00Z", "2026-08-04T11:00:00Z", 8),
+      ride("2026-08-02T10:12:00Z", "2026-08-02T10:37:00Z", 1),
+      ride("2026-08-03T10:24:00Z", "2026-08-03T10:49:00Z", 1),
+      ride("2026-08-04T10:36:00Z", "2026-08-04T11:36:00Z", 8),
     ]);
 
     return service.measure({}).then((result) => {
       expect(result.totals.singleReadingRuns).toBe(3);
-      // Three of four runs are one reading long. Past 70 % the park is in the
-      // artefact regime: what is being measured there is how fast a queue
-      // drains after the ConflictResolver rewrites the DOWN away, not how long
-      // the ride stood still.
       expect(result.parks[0].singleReadingShare).toBeCloseTo(0.75, 2);
+      // Timestamps spread across the hour: a feed we can read a duration from.
+      expect(result.parks[0].regime).toBe("reports");
+    });
+  });
+
+  it("calls a park an artefact when its feed publishes on the hour", () => {
+    // What the regime always meant: „Störungsmeldungen liegen nur stundengenau
+    // vor. Eine Dauer lässt sich daraus nicht ablesen." Every edge on the same
+    // minute of the hour is that feed, and nothing else is.
+    const onTheHour = Array.from({ length: 12 }, (_, i) =>
+      ride(
+        `2026-08-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
+        `2026-08-${String(i + 1).padStart(2, "0")}T12:00:00Z`,
+        3,
+      ),
+    );
+    const { service } = serviceWith(onTheHour);
+
+    return service.measure({}).then((result) => {
+      expect(result.parks[0].onTheHourShare).toBe(1);
       expect(result.parks[0].regime).toBe("artefact");
+    });
+  });
+
+  it("measures resolution on the most common minute, not on minute zero", () => {
+    // A park at a :30 offset publishing hourly piles up on :30. Hard-coding
+    // minute zero would read it as fine-grained and let a duration through.
+    const halfPast = Array.from({ length: 12 }, (_, i) =>
+      ride(
+        `2026-08-${String(i + 1).padStart(2, "0")}T10:30:00Z`,
+        `2026-08-${String(i + 1).padStart(2, "0")}T12:30:00Z`,
+        3,
+      ),
+    );
+    const { service } = serviceWith(halfPast);
+
+    return service.measure({}).then((result) => {
+      expect(result.parks[0].regime).toBe("artefact");
+    });
+  });
+
+  it("does not judge resolution on too few edges", () => {
+    // Two runs on the hour is not an hourly feed, it is two runs. Calling a
+    // park unreadable on four readings is the same error in the other
+    // direction.
+    const { service } = serviceWith([
+      ride("2026-08-01T10:00:00Z", "2026-08-01T12:00:00Z", 3),
+      ride("2026-08-02T10:00:00Z", "2026-08-02T12:00:00Z", 3),
+    ]);
+
+    return service.measure({}).then((result) => {
+      expect(result.parks[0].regime).toBe("reports");
+    });
+  });
+
+  it("groups per park id, because a slug is not unique", () => {
+    // `disneyland-park` is Anaheim AND Paris. Grouping the per-park report on
+    // the slug merged the two into one row with both parks' rides in it.
+    const anaheim = { ...ride("2026-08-01T10:07:00Z", "2026-08-01T10:37:00Z") };
+    const paris = {
+      ...ride("2026-08-01T11:13:00Z", "2026-08-01T11:43:00Z"),
+      attractionId: "a2",
+      parkId: "park-2",
+      parkCity: "Paris",
+    };
+    const { service } = serviceWith([anaheim, paris]);
+
+    return service.measure({}).then((result) => {
+      expect(result.parks).toHaveLength(2);
+      expect(result.parks.map((p) => p.parkCity).sort()).toEqual([
+        "Brühl",
+        "Paris",
+      ]);
     });
   });
 

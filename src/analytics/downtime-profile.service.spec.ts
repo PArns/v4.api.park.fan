@@ -185,4 +185,20 @@ describe("isDurationUsable", () => {
       true,
     );
   });
+
+  it("gives censoring its own reason, not thin_events", () => {
+    // "Too few outages" and "many outages whose end we did not see" send a
+    // reader looking in different places, and only the second describes a ride
+    // that breaks often. Censoring here is strongly seasonal — a spell ending
+    // because the park shut for the winter ran 89.8 % in March against 20.5 %
+    // in September — so this reason comes and goes with the season by design.
+    const censored = {
+      ...HEALTHY,
+      outages: 40,
+      censored: 20, // half, well past maxCensoredShare
+    };
+    const decision = decideProfile(censored, "reports");
+    expect(decision.figures).toBe(false);
+    expect(decision.reason).toBe("heavily_censored");
+  });
 });

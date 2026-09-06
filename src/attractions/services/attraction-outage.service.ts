@@ -4,8 +4,13 @@ import { Repository } from "typeorm";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import {
   TRAILING_OUTAGE_LOOKBACK_DAYS,
-  TRAILING_OUTAGE_START_SQL,
+  trailingOutageWithElapsedSql,
 } from "../../common/utils/outage-rows.sql";
+import { DowntimeRecoveryCurve } from "../../analytics/entities/downtime-recovery-curve.entity";
+import {
+  estimateOutage,
+  type OutageEstimate,
+} from "../../analytics/utils/downtime-estimate.util";
 import {
   CuratedOutOfServiceSource,
   isCuratedOutOfService,
@@ -27,6 +32,14 @@ export interface CurrentOutage {
   startObserved: boolean;
   /** `DOWN` rows behind this run. Diagnostic; never rendered. */
   rowsInRun: number;
+  /**
+   * How long this outage still has to go, read off the measured curve.
+   *
+   * Absent whenever the curve cannot answer: too short to have a bucket, too
+   * thin a sample, or a park that publishes no hours so the elapsed figure has
+   * no operating clock to be counted on. Absence is never "it is about to end".
+   */
+  estimate?: OutageEstimate;
 }
 
 /** What the service needs to know about a candidate ride. */
@@ -81,7 +94,53 @@ export class AttractionOutageService {
   constructor(
     @InjectRepository(QueueData)
     private readonly queueDataRepository: Repository<QueueData>,
+    @InjectRepository(DowntimeRecoveryCurve)
+    private readonly curves: Repository<DowntimeRecoveryCurve>,
   ) {}
+
+  /**
+   * The recovery curves, cached in process.
+   *
+   * They are rewritten once a night by the reconstruction job and are ~400 rows
+   * in total, so re-reading them per park page would be a query per request for
+   * a table that changes once a day. The TTL is what makes a fresh rebuild
+   * visible without a deploy; it is not a correctness boundary, because a
+   * curve one hour out of date describes the same 180 days.
+   */
+  private curveCache: {
+    at: number;
+    byPark: Map<string, DowntimeRecoveryCurve[]>;
+    pooled: DowntimeRecoveryCurve[];
+  } | null = null;
+
+  private static readonly CURVE_TTL_MS = 30 * 60 * 1000;
+
+  private async loadCurves(): Promise<{
+    byPark: Map<string, DowntimeRecoveryCurve[]>;
+    pooled: DowntimeRecoveryCurve[];
+  }> {
+    const now = Date.now();
+    if (
+      this.curveCache &&
+      now - this.curveCache.at < AttractionOutageService.CURVE_TTL_MS
+    ) {
+      return this.curveCache;
+    }
+    const rows = await this.curves.find({ order: { elapsedMinutes: "ASC" } });
+    const byPark = new Map<string, DowntimeRecoveryCurve[]>();
+    const pooled: DowntimeRecoveryCurve[] = [];
+    for (const row of rows) {
+      if (row.parkId === null) {
+        pooled.push(row);
+        continue;
+      }
+      const list = byPark.get(row.parkId) ?? [];
+      list.push(row);
+      byPark.set(row.parkId, list);
+    }
+    this.curveCache = { at: now, byPark, pooled };
+    return this.curveCache;
+  }
 
   /**
    * @param park - The park the candidates belong to.
@@ -119,16 +178,36 @@ export class AttractionOutageService {
         startedAt: Date;
         startObserved: boolean;
         rowsInRun: number;
+        elapsedOperatingMinutes: number | string;
+        hasWindows: boolean;
       }> = await this.queueDataRepository.manager.query(
-        TRAILING_OUTAGE_START_SQL,
-        [ids, since, until],
+        trailingOutageWithElapsedSql(),
+        [[park.id], since, until, ids],
       );
+      if (rows.length === 0) return out;
+
+      const curves = await this.loadCurves();
 
       for (const row of rows) {
+        const elapsed = Number(row.elapsedOperatingMinutes);
         out.set(row.attractionId, {
           startedAt: new Date(row.startedAt),
           startObserved: row.startObserved === true,
           rowsInRun: Number(row.rowsInRun) || 0,
+          // A park that publishes no hours has no operating clock, so its
+          // elapsed figure is zero for a reason that has nothing to do with the
+          // ride. Reading a curve at that zero would answer every outage there
+          // with "just started".
+          estimate:
+            row.hasWindows && Number.isFinite(elapsed)
+              ? estimateOutage(
+                  {
+                    park: curves.byPark.get(park.id) ?? [],
+                    pooled: curves.pooled,
+                  },
+                  elapsed,
+                )
+              : undefined,
         });
       }
     } catch (error) {

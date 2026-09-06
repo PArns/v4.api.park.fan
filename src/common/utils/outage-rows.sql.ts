@@ -1,4 +1,5 @@
 import { RECONCILIATION_SOURCE } from "./source-absent-status.util";
+import { parkOpenWindowCtes } from "./park-open-window.sql";
 
 /**
  * Which `queue_data` rows an outage is allowed to be built from, in SQL and in
@@ -150,3 +151,92 @@ export const TRAILING_OUTAGE_START_SQL = `
      AND (b.last_break IS NULL OR m.ts > b.last_break)
    GROUP BY m.aid, b.last_break
 `;
+
+/**
+ * The trailing run's start **and** how much of it the park was actually open
+ * for.
+ *
+ * A superset of {@link TRAILING_OUTAGE_START_SQL}, kept separate rather than
+ * folded into it: that one is the shipped live line and answers "since when" for
+ * every park including the 21 with no published hours, and it must keep working
+ * when this returns nothing.
+ *
+ * ## Why elapsed is counted in operating minutes
+ *
+ * The recovery curve this feeds (`downtime_recovery_curves`) is built from
+ * `attraction_outages.operating_minutes`, and a curve has to be read with the
+ * clock it was built with. It is not a formality: measured over 180 days,
+ * counting wall-clock minutes puts censoring at 68 % because every spell that
+ * runs into closing time looks like it ended there, while counting operating
+ * minutes puts it at 15.6 % because a closed park is a pause. A spell starting
+ * at 18:00 in a park that shuts at 20:00 and reopens at 10:00 has two operating
+ * hours behind it the next morning, not sixteen.
+ *
+ * ## Parameter order is dictated by the shared CTEs
+ *
+ * `parkOpenWindowCtes()` hard-codes `$1` park filter, `$2` window start, `$3`
+ * window end, so this query takes them in that order and puts its own attraction
+ * filter last. Renumbering the shared helper to suit one caller is how two
+ * copies of a window definition start.
+ *
+ * Parameters: `$1` uuid[] park filter, `$2` window start, `$3` window end,
+ * `$4` uuid[] attraction ids.
+ */
+export function trailingOutageWithElapsedSql(): string {
+  return `
+  WITH ${parkOpenWindowCtes({ wikiOnly: true })},
+  marked AS (
+    SELECT qd."attractionId" AS aid,
+           qd.timestamp      AS ts,
+           ${outageRunBreaks("qd")} AS breaks
+      FROM queue_data qd
+     WHERE qd."attractionId" = ANY($4::uuid[])
+       AND qd."queueType" = '${OUTAGE_QUEUE_TYPE}'
+       AND qd.timestamp >= $2::timestamptz
+       AND qd.timestamp <  $3::timestamptz
+  ),
+  bounds AS (
+    SELECT aid, MAX(ts) FILTER (WHERE breaks) AS last_break
+      FROM marked GROUP BY aid
+  ),
+  run AS (
+    SELECT m.aid,
+           MIN(m.ts)                  AS started_at,
+           (b.last_break IS NOT NULL) AS start_observed,
+           COUNT(*)::int              AS rows_in_run
+      FROM marked m
+      JOIN bounds b ON b.aid = m.aid
+     WHERE NOT m.breaks
+       AND (b.last_break IS NULL OR m.ts > b.last_break)
+     GROUP BY m.aid, b.last_break
+  )
+  SELECT r.aid            AS "attractionId",
+         r.started_at     AS "startedAt",
+         r.start_observed AS "startObserved",
+         r.rows_in_run    AS "rowsInRun",
+         -- Operating minutes between the run's start and now: the overlap of
+         -- [started_at, $3) with the disjoint union of the park's OPERATING
+         -- windows. Summed over WINDOWS, never over the outer bounds — an
+         -- outage spanning a night must not be credited with the night.
+         COALESCE((
+           SELECT ROUND(SUM(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(w.closes_at, $3::timestamptz)
+                      - GREATEST(w.opens_at, r.started_at)
+                    )) / 60.0
+                  ))
+             FROM win w
+             JOIN attractions a ON a.id = r.aid AND a."parkId" = w.park_id
+            WHERE w.closes_at > r.started_at
+              AND w.opens_at  < $3::timestamptz
+         ), 0)::int       AS "elapsedOperatingMinutes",
+         -- Whether the park publishes hours at all. Without them the figure
+         -- above is zero for a reason that has nothing to do with the ride, and
+         -- the caller must not read it as "just started".
+         EXISTS (
+           SELECT 1 FROM win w
+             JOIN attractions a ON a.id = r.aid AND a."parkId" = w.park_id
+         )                AS "hasWindows"
+    FROM run r
+`;
+}

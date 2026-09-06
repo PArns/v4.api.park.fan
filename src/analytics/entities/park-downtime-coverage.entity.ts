@@ -62,7 +62,15 @@ export class ParkDowntimeCoverage {
   @Column({ type: "int", default: 0 })
   outages: number;
 
-  /** Share of intervals resting on exactly one reading. The artefact signature. */
+  /**
+   * Share of intervals resting on exactly one reading.
+   *
+   * Descriptive only, and NO LONGER the artefact test: measured over production
+   * it correlates with "share of outages shorter than an hour" at r = 0.996,
+   * because `queue_data` is a change log and an outage ending before the hourly
+   * heartbeat writes exactly one row. Kept because it is a useful read on how
+   * long a park's outages run.
+   */
   @Column({
     type: "numeric",
     precision: 4,
@@ -71,6 +79,22 @@ export class ParkDowntimeCoverage {
     default: 0,
   })
   oneIntervalSpellShare: string;
+
+  /**
+   * Share held by the single most common minute-of-hour across interval edges.
+   *
+   * The artefact test. An hourly feed puts every reading on one minute; taking
+   * the most common value rather than minute zero keeps it timezone-independent.
+   * Highest observed in production is 0.236, so no park is in that regime.
+   */
+  @Column({
+    type: "numeric",
+    precision: 4,
+    scale: 3,
+    name: "on_the_hour_share",
+    default: 0,
+  })
+  onTheHourShare: string;
 
   @Column({ type: "smallint", name: "median_spell_minutes", nullable: true })
   medianSpellMinutes: number | null;

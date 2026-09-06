@@ -1,0 +1,123 @@
+import type { DowntimeRecoveryCurve } from "../entities/downtime-recovery-curve.entity";
+
+/**
+ * What a running outage's remaining time looks like, or nothing.
+ *
+ * The decision is a pure function of the curve and the elapsed figure so it can
+ * be tested against the measured numbers without a database, and so the one
+ * place that decides to stay silent is one place.
+ */
+export interface OutageEstimate {
+  /** Operating minutes already elapsed, the value the curve was read at. */
+  elapsedMinutes: number;
+  /** Bucket edge actually used. Never interpolated — see {@link estimateOutage}. */
+  bucketMinutes: number;
+  /** P(reported running again within 30 more operating minutes), 0-1. */
+  recoveryWithin30: number;
+  /** P(reported running again within 60 more operating minutes), 0-1. */
+  recoveryWithin60: number;
+  /**
+   * Remaining operating minutes at the 25th/50th/75th percentile.
+   *
+   * Absent as a whole once the curve stops resolving the upper quartile, which
+   * it does past roughly two hours. A median without its spread would be read
+   * as a promise exactly where the spread is widest.
+   */
+  remaining?: { p25: number; median: number; p75: number };
+  /** Whether this park carried its own curve or fell back to the pooled one. */
+  basis: "park" | "pooled";
+  /** Intervals behind the bucket. Diagnostic; never rendered. */
+  sampleSize: number;
+}
+
+/**
+ * Below this the estimate is withheld: too few spells behind the bucket.
+ *
+ * The pooled curve clears it everywhere by an order of magnitude; it exists so a
+ * thin park-level bucket cannot slip through the `basis` selection.
+ */
+export const MIN_ESTIMATE_SAMPLE = 200;
+
+/**
+ * How long a running outage has left, read off the measured curve.
+ *
+ * ## Why the bucket is floored and never interpolated
+ *
+ * The curve is a step function of a hazard that falls steeply and unevenly;
+ * interpolating between 120 and 180 minutes would invent a shape the data does
+ * not have. Flooring to the bucket at or below the elapsed figure is also the
+ * conservative direction: it reads the curve at a point the outage has provably
+ * passed, so the recovery share it reports is if anything too optimistic by less
+ * than one bucket's worth.
+ *
+ * ## Why an elapsed figure below the first bucket returns nothing
+ *
+ * `MIN_OUTAGE_OPERATING_MINUTES` is 5, so no reconstructed interval is shorter
+ * and there is no measurement to read at two minutes. It also happens to be the
+ * regime where a `queue_data` write is most likely to be a blip that resolves on
+ * the next poll, and saying anything at all there would be the confident number
+ * on the thinnest evidence.
+ *
+ * @param curves - The park's own rows and the pooled rows, both ascending.
+ * @param elapsedMinutes - Operating minutes since the run started.
+ * @returns The estimate, or undefined when the curve cannot answer.
+ */
+export function estimateOutage(
+  curves: { park: DowntimeRecoveryCurve[]; pooled: DowntimeRecoveryCurve[] },
+  elapsedMinutes: number,
+): OutageEstimate | undefined {
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 0) return undefined;
+
+  const pick = (rows: DowntimeRecoveryCurve[]) => {
+    let best: DowntimeRecoveryCurve | undefined;
+    for (const row of rows) {
+      if (row.elapsedMinutes <= elapsedMinutes) best = row;
+      else break;
+    }
+    return best;
+  };
+
+  // The bucket comes from the POOLED curve, which is the only one guaranteed to
+  // span the whole range, and the park may then answer for that same bucket.
+  //
+  // Flooring within the park's own rows instead is a trap that costs a visitor
+  // real time: a park whose curve stops at 30 minutes would answer a
+  // four-hour outage with its 30-minute row, reporting a 52 % chance of
+  // recovery where the measured figure is 8.5 %. The fallback is therefore per
+  // bucket, not per park.
+  const pooledRow = pick(curves.pooled);
+  if (!pooledRow || pooledRow.atRisk < MIN_ESTIMATE_SAMPLE) return undefined;
+
+  const parkRow = curves.park.find(
+    (r) => r.elapsedMinutes === pooledRow.elapsedMinutes,
+  );
+  const row =
+    parkRow && parkRow.atRisk >= MIN_ESTIMATE_SAMPLE ? parkRow : pooledRow;
+
+  const p30 = numberOrNull(row.recoveryWithin30);
+  const p60 = numberOrNull(row.recoveryWithin60);
+  if (p30 === null || p60 === null) return undefined;
+
+  const p25 = row.remainingP25;
+  const median = row.remainingMedian;
+  const p75 = row.remainingP75;
+
+  return {
+    elapsedMinutes: Math.round(elapsedMinutes),
+    bucketMinutes: row.elapsedMinutes,
+    recoveryWithin30: p30,
+    recoveryWithin60: p60,
+    remaining:
+      p25 !== null && median !== null && p75 !== null
+        ? { p25, median, p75 }
+        : undefined,
+    basis: row === parkRow ? "park" : "pooled",
+    sampleSize: row.atRisk,
+  };
+}
+
+function numberOrNull(value: string | null): number | null {
+  if (value === null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
