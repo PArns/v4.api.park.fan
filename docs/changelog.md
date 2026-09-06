@@ -6,6 +6,21 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a module that exported a service it never provided
+
+`DowntimeRecoveryService` landed in `AnalyticsModule.exports` without being in
+`providers`. Nest throws `UnknownExportException` in the dependency scanner, so
+every boot crashed and the container sat in a restart loop until it was pushed
+again — about four minutes of downtime on deploy.
+
+Three green gates said nothing: `npm run build` type-checks files rather than
+the module graph, eslint has no view of it, and the unit suite constructs
+services directly instead of booting Nest. The runtime was the first reader.
+`src/common/module-graph.spec.ts` now reads the decorators — no database, no
+boot — and asserts every exported provider is declared or imported. Verified by
+reintroducing the bug.
+
+
 ### Added — how much longer a stopped ride will be stopped
 
 A ride reported `DOWN` now says what happened to outages that got this far:
