@@ -1,7 +1,21 @@
 # Ride downtime: what we can measure, and what we may publish
 
-> Status: **plan, nothing built**. Every threshold below is provisional until Phase 0 has counted
-> events rather than DOWN-hours. Written 2026-09-06.
+> Status, 2026-09-06: **phases 0 and 2 shipped, plus the curated works period. Nothing historical
+> is published.** Every threshold below is still provisional — phase 0 exists now but has not been
+> run against production, so the event floor of 24 has not yet been re-derived from counted events.
+>
+> | Phase | State |
+> | --- | --- |
+> | 0. Count events, publish nothing | **built** — `GET /v1/admin/downtime-measurement`, read-only. Not yet run. |
+> | 1. Write-path columns (`is_heartbeat`, `raw_status`, `last_merged_at`) | not started. Blocks every duration figure and the erasure measurement. |
+> | 2. The live line | **shipped** — `outage` on the attraction payload, one line under the status badge in the frontend. |
+> | 3. Reconstruct, publish nothing | not started. |
+> | 4. Publish the four measured numbers | not started. |
+> | 5. Measure the erasure | not started, needs phase 1's 30-day clock. |
+>
+> Two open decisions from §10 are settled: the live line shipped on its own rather than waiting for
+> a joint release, and the curated "out of service from/to" field was built (§4). The other two
+> stand.
 
 The question this answers: *how often and for how long are rides down, and can we say when the next
 outage is coming and how long it will last?*
@@ -292,9 +306,11 @@ Kept here so none of it gets re-proposed.
 1. **Ship phase 2 alone?** The live line repeats in the present what the park's own feed says right now
    and needs none of the historical machinery. The historical numbers are a claim about a company and
    need the methodology page, the event floor and the capability check first.
-2. **A curated "out of service from/to" field** under `/admin/attractions/<id>`? Today the only guard
-   against a rebuild being reported as `DOWN` is the seven-day bound. One field, one descriptor, two SQL
-   halves.
+2. ~~**A curated "out of service from/to" field** under `/admin/attractions/<id>`?~~ **Done.**
+   `curated_out_of_service_from` / `_to`, read through `isCuratedOutOfService()` and its SQL twin
+   `attractionIsCuratedOutOfService()`. Inside the window neither the live line nor a future
+   reconstruction reports anything. Unlike `attractionIsOutOfSeason()` the SQL half takes the day as
+   a parameter instead of reading `NOW()`, which is what makes it safe to apply to history.
 3. **Does the event floor stay at 24** after phase 0 has counted, even if that leaves a few hundred of
    ~7000 rides with figures and everything else with a refusal sentence?
 4. **Who answers a press office** that disputes a number, in what time, and is the park's figure switched
