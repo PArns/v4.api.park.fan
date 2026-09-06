@@ -27,6 +27,7 @@ import { WartezeitenScheduleProcessor } from "./processors/wartezeiten-schedule.
 import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
+import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { ShowPatternProcessor } from "./processors/show-pattern.processor";
@@ -161,6 +162,17 @@ import { TripsModule } from "../trips/trips.module";
           lockRenewTime: 300000,
         },
       },
+      {
+        // The whole catalogue in two statements over a compressed hypertable,
+        // then the profiles. Slower than the hourly-history rollup and for the
+        // same reason — it reads history rather than a rollup — so it gets the
+        // same headroom rather than being flagged stalled halfway through.
+        name: "downtime",
+        settings: {
+          lockDuration: 900000, // 15 min
+          lockRenewTime: 300000,
+        },
+      },
       { name: "geoip-update" }, // GeoLite2-City every 48h
       { name: "nf-training" }, // TFT train+forecast + TFT-vs-CatBoost scoreboard
       { name: "pcn-shadow" }, // PCN intraday shadow: train + forecast + score
@@ -252,6 +264,7 @@ import { TripsModule } from "../trips/trips.module";
     StatsProcessor,
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
+    DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     ShowPatternProcessor, // Nightly per-weekday showtime patterns

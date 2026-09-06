@@ -48,6 +48,7 @@ export class QueueSchedulerService implements OnModuleInit {
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 + P90 baseline
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
+    @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
@@ -917,6 +918,32 @@ export class QueueSchedulerService implements OnModuleInit {
             cron: "30 4 * * *", // Daily at 4:30am
           },
           jobId: "attraction-hourly-history-cron",
+        },
+      );
+    }
+
+    // Downtime reconstruction: daily at 5:00 AM, after the hourly-history
+    // rollup at 4:30.
+    //
+    // It runs AFTER that one deliberately: both read the same `queue_data`
+    // chunks, and overlapping them means decompressing each chunk twice at
+    // once. Its own window is 120 days rather than one, because an outage is an
+    // interval that can grow — a run that was open yesterday has to be re-read
+    // from its own beginning, and the scan start comes from the data for the
+    // same reason.
+    const hasDowntimeCron = await this.hasRepeatableJob(
+      this.downtimeQueue,
+      "downtime-reconstruction-cron",
+    );
+    if (!hasDowntimeCron) {
+      await this.downtimeQueue.add(
+        "reconstruct-downtime",
+        {},
+        {
+          repeat: {
+            cron: "0 5 * * *", // Daily at 5:00am
+          },
+          jobId: "downtime-reconstruction-cron",
         },
       );
     }

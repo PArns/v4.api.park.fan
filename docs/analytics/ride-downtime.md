@@ -1,21 +1,25 @@
 # Ride downtime: what we can measure, and what we may publish
 
-> Status, 2026-09-06: **phases 0 and 2 shipped, plus the curated works period. Nothing historical
-> is published.** Every threshold below is still provisional — phase 0 exists now but has not been
-> run against production, so the event floor of 24 has not yet been re-derived from counted events.
+> Status, 2026-09-06: **every phase is built. Nothing historical is published,
+> and nothing should be until the measurements in [todo.md](../../todo.md) have
+> been run against a real database.**
 >
 > | Phase | State |
 > | --- | --- |
-> | 0. Count events, publish nothing | **built** — `GET /v1/admin/downtime-measurement`, read-only. Not yet run. |
-> | 1. Write-path columns (`is_heartbeat`, `raw_status`, `last_merged_at`) | not started. Blocks every duration figure and the erasure measurement. |
-> | 2. The live line | **shipped** — `outage` on the attraction payload, one line under the status badge in the frontend. |
-> | 3. Reconstruct, publish nothing | not started. |
-> | 4. Publish the four measured numbers | not started. |
-> | 5. Measure the erasure | not started, needs phase 1's 30-day clock. |
+> | 0. Count events, publish nothing | built — `GET /v1/admin/downtime-measurement`. **Not yet run.** |
+> | 1. Write-path columns | built — `is_heartbeat`, `raw_status`, `last_merged_at`. The two on `queue_data` need a hand-run `ALTER`, timed against a restore. |
+> | 2. The live line | **shipped** — `outage` on the payload, one line under the status badge. |
+> | 3. Reconstruct, publish nothing | built — four tables, two statements, the 5:00 AM job, the park-window SQL/TS twin. |
+> | 4. Publish the four measured numbers | built — profiles, gates, the `figures`/`withheld` union. Publishes for nobody until the gates are re-derived. |
+> | 5. Measure the erasure | built — `GET /v1/admin/downtime-erasure`. Says nothing useful until 30 days after phase 1 lands. |
 >
-> Two open decisions from §10 are settled: the live line shipped on its own rather than waiting for
-> a joint release, and the curated "out of service from/to" field was built (§4). The other two
-> stand.
+> **Every threshold in `DOWNTIME_GATES` is provisional.** They were chosen to
+> withhold more than they should rather than less, and the point of phase 0 is
+> to replace them with counted numbers. The event floor of 24 in §5 is the main
+> one.
+>
+> Of the four open decisions in §10, two are settled: the live line shipped on
+> its own, and the curated works period was built.
 
 The question this answers: *how often and for how long are rides down, and can we say when the next
 outage is coming and how long it will last?*

@@ -88,6 +88,7 @@ export class AdminController {
     @InjectQueue("park-enrichment") private parkEnrichmentQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
+    @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
     @InjectQueue("ride-stats") private rideStatsQueue: Queue,
@@ -246,6 +247,69 @@ export class AdminController {
       days: Number(days) || undefined,
     });
     return measurement as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * Phase 5: how much of the DOWN signal our own merge deletes before storage.
+   *
+   * The one number that decides whether the probability question can ever be
+   * reopened. It answers nothing until `raw_status` has existed for the whole
+   * window, and the response says so rather than reporting a small figure that
+   * reads as good news.
+   */
+  @Get("downtime-erasure")
+  @ApiOperation({
+    summary: "Count the DOWN readings the conflict resolver rewrote",
+    description:
+      "Reads queue_data.raw_status and reports, per park, how many DOWN and " +
+      "CLOSED readings were overwritten with OPERATING — in rows AND in the " +
+      "minutes they carried, because an overridden state is stable afterwards " +
+      "and writes no further row. Read-only.",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: "Lookback in days. Default 30, clamped to 1-365.",
+    example: 30,
+  })
+  async getDowntimeErasure(
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    const measurement = await this.downtimeMeasurement.measureErasure(
+      Number(days) || undefined,
+    );
+    return measurement as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * Rebuild the outage intervals, the exposure days and the profiles.
+   *
+   * Normally the 5:00 AM cron. Exposed for a targeted repair and for the first
+   * run, which has no history to be incremental about.
+   */
+  @Post("rebuild-downtime")
+  @ApiOperation({
+    summary: "Run the downtime reconstruction now",
+    description:
+      "Rebuilds attraction_outages, attraction_exposure_days and the profiles. " +
+      "Publishes nothing on its own: whether a ride shows a figure is decided " +
+      "by the gates in DowntimeProfileService.",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: "Window in days. Default 120, clamped to 1-400.",
+    example: 120,
+  })
+  async rebuildDowntime(
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    await this.downtimeQueue.add(
+      "reconstruct-downtime",
+      { windowDays: Number(days) || undefined },
+      { priority: 60 },
+    );
+    return { message: "Downtime reconstruction queued", queue: "downtime" };
   }
 
   @Get("system-health")

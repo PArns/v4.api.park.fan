@@ -127,6 +127,40 @@ export class QueueData {
   @Column({ type: "timestamptz", nullable: true })
   lastUpdated: Date | null;
 
+  /**
+   * Whether this row is an hourly heartbeat rather than an observation.
+   *
+   * The heartbeat copies the previous row's status AND its `data_source`
+   * forward, so a carried DOWN is byte-identical to an observed one except that
+   * `lastUpdated` equals `timestamp` to the millisecond. Left alone, a DOWN that
+   * vanishes from every feed writes itself forward for up to 24 hours and every
+   * duration statistic is wrong upward, and wrong exactly on the long outages
+   * that carry a median.
+   *
+   * NULLABLE on purpose. `NULL` means "written before this column existed" and
+   * the reader falls back to the old `lastUpdated = timestamp` heuristic;
+   * a `DEFAULT false` would have promoted a year of carried-forward rows to
+   * observations in one ALTER.
+   */
+  @Column({ type: "boolean", name: "is_heartbeat", nullable: true })
+  isHeartbeat: boolean | null;
+
+  /**
+   * The status before the conflict resolver overrode it, when it did.
+   *
+   * `ConflictResolverService` rewrites DOWN or CLOSED to OPERATING whenever a
+   * second source reports a wait of five minutes or more. That is a defensible
+   * serving decision and an unmeasurable one: the rows that would have said DOWN
+   * simply are not there. Since a queue drains over fifteen to thirty minutes
+   * rather than instantly, what it erases is the SHORT outages of the POPULAR
+   * rides on the dual-sourced parks.
+   *
+   * Null on the overwhelming majority of rows. Nothing serves it; it exists so
+   * the erasure can be counted, in rows and in the minutes they carried.
+   */
+  @Column({ type: "text", name: "raw_status", nullable: true })
+  rawStatus: string | null;
+
   // Multi-source tracking
   @Column({ type: "text", name: "data_source", default: "themeparks-wiki" })
   dataSource: string; // 'themeparks-wiki', 'queue-times'

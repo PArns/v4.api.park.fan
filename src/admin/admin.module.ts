@@ -26,6 +26,7 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "park-enrichment" }),
     BullModule.registerQueue({ name: "ml-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
+    BullModule.registerQueue({ name: "downtime" }),
     BullModule.registerQueue({ name: "children-metadata" }),
     BullModule.registerQueue({ name: "six-flags-heights" }),
     BullModule.registerQueue({ name: "ride-stats" }),

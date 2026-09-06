@@ -24,6 +24,11 @@ import { AttractionP50Baseline } from "./entities/attraction-p50-baseline.entity
 import { ParkP90Baseline } from "./entities/park-p90-baseline.entity";
 import { AttractionP90Baseline } from "./entities/attraction-p90-baseline.entity";
 import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.entity";
+import { AttractionOutage } from "./entities/attraction-outage.entity";
+import { AttractionExposureDay } from "./entities/attraction-exposure-day.entity";
+import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
+import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
+import { DowntimeProfileService } from "./downtime-profile.service";
 import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
 import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.entity";
 
@@ -50,12 +55,24 @@ import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.enti
       ParkP90Baseline,
       AttractionP90Baseline,
       AttractionHourlyHistory,
+      AttractionOutage,
+      AttractionExposureDay,
+      AttractionDowntimeProfile,
+      ParkDowntimeCoverage,
       AttractionRopeDrop,
       AttractionTypicalWaits,
     ]),
   ],
-  providers: [AnalyticsService, ParkHistoricalStatsService],
+  providers: [
+    AnalyticsService,
+    ParkHistoricalStatsService,
+    DowntimeProfileService,
+  ],
   controllers: [AnalyticsController],
-  exports: [AnalyticsService, ParkHistoricalStatsService],
+  exports: [
+    AnalyticsService,
+    ParkHistoricalStatsService,
+    DowntimeProfileService,
+  ],
 })
 export class AnalyticsModule {}

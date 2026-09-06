@@ -120,6 +120,106 @@ export class DowntimeMeasurementService {
   }
 
   /**
+   * How much of the DOWN signal the merge deletes before it is stored.
+   *
+   * `ConflictResolverService` rewrites DOWN and CLOSED to OPERATING whenever a
+   * second source reports a wait of five minutes or more. `queue_data.raw_status`
+   * records the pre-override value so this can be counted; before it existed,
+   * the erased readings simply were not there and the size of the effect was an
+   * argument rather than a number.
+   *
+   * Counted in ROWS **and** in the minutes they carried, because rows alone
+   * understate it badly: an overridden state reads OPERATING afterwards, which is
+   * stable, so it writes no further row — one erased row can stand for hours
+   * while an outage that survived writes a heartbeat every sixty minutes.
+   *
+   * It answers nothing until thirty days after the column shipped, and says so.
+   *
+   * @param days - Lookback. The useful figure needs the column to have existed
+   *   for the whole window.
+   */
+  async measureErasure(days = 30): Promise<ErasureMeasurement> {
+    const window = Math.min(Math.max(days, 1), 365);
+    const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000);
+
+    const rows: ErasureRow[] = await this.queueDataRepository.manager.query(
+      `
+      WITH marked AS (
+        SELECT qd."attractionId" AS aid,
+               a."parkId"        AS pid,
+               p.slug            AS pslug,
+               p.name            AS pname,
+               a.name            AS aname,
+               qd.timestamp      AS ts,
+               qd.raw_status     AS raw,
+               -- How long this reading stood for, capped the same way the
+               -- reconstruction caps a segment.
+               LEAST(
+                 COALESCE(
+                   LEAD(qd.timestamp) OVER (
+                     PARTITION BY qd."attractionId" ORDER BY qd.timestamp
+                   ),
+                   NOW()
+                 ),
+                 qd.timestamp + INTERVAL '70 minutes'
+               ) - qd.timestamp AS held
+          FROM queue_data qd
+          JOIN attractions a ON a.id = qd."attractionId"
+          JOIN parks p       ON p.id = a."parkId"
+         WHERE qd."queueType" = '${OUTAGE_QUEUE_TYPE}'
+           AND qd.timestamp >= $1
+      )
+      SELECT pslug                                              AS "parkSlug",
+             pname                                              AS "parkName",
+             COUNT(*) FILTER (WHERE raw = 'DOWN')::int          AS "erasedDownRows",
+             COUNT(*) FILTER (WHERE raw = 'CLOSED')::int        AS "erasedClosedRows",
+             COUNT(DISTINCT aid) FILTER (WHERE raw = 'DOWN')::int
+                                                                AS "ridesAffected",
+             COALESCE(ROUND(EXTRACT(EPOCH FROM SUM(held) FILTER (WHERE raw = 'DOWN')) / 60.0), 0)::int
+                                                                AS "erasedDownMinutes",
+             COUNT(*) FILTER (WHERE raw IS NULL AND ts IS NOT NULL)::int
+                                                                AS "rowsSeen"
+        FROM marked
+       GROUP BY pslug, pname
+      HAVING COUNT(*) FILTER (WHERE raw IS NOT NULL) > 0
+       ORDER BY COUNT(*) FILTER (WHERE raw = 'DOWN') DESC
+      `,
+      [since],
+    );
+
+    const totals = rows.reduce(
+      (acc, row) => ({
+        erasedDownRows: acc.erasedDownRows + Number(row.erasedDownRows),
+        erasedClosedRows: acc.erasedClosedRows + Number(row.erasedClosedRows),
+        erasedDownMinutes:
+          acc.erasedDownMinutes + Number(row.erasedDownMinutes),
+        ridesAffected: acc.ridesAffected + Number(row.ridesAffected),
+      }),
+      {
+        erasedDownRows: 0,
+        erasedClosedRows: 0,
+        erasedDownMinutes: 0,
+        ridesAffected: 0,
+      },
+    );
+
+    return {
+      measuredAt: new Date().toISOString(),
+      windowDays: window,
+      // The column is only written from the deploy that introduced it, so a
+      // window reaching back further than that is measuring a period in which
+      // nothing could have been recorded. Saying so beats reporting a small
+      // number that looks like good news.
+      caveat:
+        "raw_status is written only from the deploy that introduced it. A " +
+        "window reaching before that deploy under-reports, and reads as though " +
+        "the override rarely fires.",
+      totals,
+      parks: rows,
+    };
+  }
+
+  /**
    * How many parks can emit DOWN at all, and how many cannot.
    *
    * From configuration. A park with no `wiki_entity_id` has no source that
@@ -307,6 +407,29 @@ export interface ParkMeasurement {
   outages: number;
   singleReadingShare: number;
   regime: "artefact" | "reports";
+}
+
+export interface ErasureRow {
+  parkSlug: string;
+  parkName: string;
+  erasedDownRows: number | string;
+  erasedClosedRows: number | string;
+  ridesAffected: number | string;
+  erasedDownMinutes: number | string;
+  rowsSeen: number | string;
+}
+
+export interface ErasureMeasurement {
+  measuredAt: string;
+  windowDays: number;
+  caveat: string;
+  totals: {
+    erasedDownRows: number;
+    erasedClosedRows: number;
+    erasedDownMinutes: number;
+    ridesAffected: number;
+  };
+  parks: ErasureRow[];
 }
 
 export interface DowntimeMeasurement {

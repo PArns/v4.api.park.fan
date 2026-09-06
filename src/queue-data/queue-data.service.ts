@@ -480,6 +480,8 @@ export class QueueDataService {
             attractionId,
             queueType: QueueType.STANDBY,
             status: liveData.status,
+            rawStatus: liveData.rawStatus ?? null,
+            isHeartbeat: false,
             dataSource: source || "themeparks-wiki",
             lastUpdated: liveData.lastUpdated
               ? new Date(liveData.lastUpdated)
@@ -505,6 +507,10 @@ export class QueueDataService {
         attractionId,
         queueType,
         status: liveData.status,
+        // Written on every observed row, so `is_heartbeat = false` is a positive
+        // statement and only rows from before the column existed are NULL.
+        rawStatus: liveData.rawStatus ?? null,
+        isHeartbeat: false,
         dataSource: source || "themeparks-wiki",
         lastUpdated: liveData.lastUpdated
           ? new Date(liveData.lastUpdated)

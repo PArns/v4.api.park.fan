@@ -1,5 +1,79 @@
 # TODO
 
+## Ride downtime: measure locally before anything is published (2026-09-06)
+
+The code is built (see [ride-downtime](docs/analytics/ride-downtime.md) and
+PR #228). **Nothing historical reaches a reader yet, and nothing should until
+these have been run against a real database.** Every threshold in
+`DOWNTIME_GATES` is a placeholder chosen to withhold too much rather than too
+little; the point of the first three items is to replace them with counted
+numbers.
+
+The two `queue_data` columns are the one thing that cannot wait, because they
+only describe rows written after they exist.
+
+- [ ] **Apply the two `queue_data` columns by hand, timed against a restore
+      first.** There is no `src/migrations` and no `migrations` entry in
+      `typeorm.config.ts` — the schema comes from `synchronize` — and
+      `queue_data` is a compressed hypertable with 254+ chunks, so an
+      unmeasured `ALTER` there is not a thing to try in production.
+
+      ```sql
+      ALTER TABLE queue_data ADD COLUMN is_heartbeat boolean NULL;
+      ALTER TABLE queue_data ADD COLUMN raw_status   text    NULL;
+      ```
+
+      **Nullable, never `DEFAULT false`.** `NULL` means "written before the
+      column existed" and the reader falls back to the old
+      `lastUpdated = timestamp` heuristic; a default would promote a year of
+      carried-forward heartbeat rows to observations in one statement, and
+      every duration figure would be wrong upward on exactly the long outages
+      that carry a median.
+
+      The four new tables (`attraction_outages`, `attraction_exposure_days`,
+      `attraction_downtime_profiles`, `park_downtime_coverage`) come from
+      entity sync and need nothing by hand.
+
+- [ ] **Run phase 0 and re-derive the event floor.**
+      `GET /v1/admin/downtime-measurement?days=90` over ~30 rides across Magic
+      Kingdom, Epcot, Anaheim, Disneyland Paris, Universal Studios Florida,
+      Efteling and Europa-Park. Read the EVENT count and the duration
+      histogram, not DOWN-hours — that unit is what made every earlier estimate
+      wrong (`downCount` scored 16 for Revenge of the Mummy on a ten-hour park
+      day). Then set `DOWNTIME_GATES.minOutages` from what is actually there
+      and write the table into the doc.
+
+      Watch `singleReadingShare` per park in the same response: a park over
+      0.7 is in the artefact regime and no duration may be read out of it.
+
+- [ ] **`EXPLAIN (ANALYZE, BUFFERS)` the reconstruction over a 45-day-old
+      chunk.** Both statements in `outage-reconstruction.sql.ts`, and record
+      chunks decompressed and buffers the way the `downYesterday` and
+      `detect-seasonal` docstrings do. The nightly job runs one statement per
+      time chunk across every park precisely to avoid decompressing the same
+      chunk two hundred times, and that claim is unverified until this is run.
+
+- [ ] **Run the reconstruction once and check the invariant.**
+      `POST /v1/admin/rebuild-downtime?days=120`. The processor logs a warning
+      naming how many exposure days failed
+      `operating + down + closed + refurbishment + absent + unobserved =
+      parkOpenMinutes`. Anything above a handful is a segment-arithmetic bug,
+      not a rounding one.
+
+- [ ] **Hand-check twenty rides before anything publishes.** Take the rides
+      that would clear the gates and verify their reconstructed outages against
+      the parks' own channels for those dates. **More than two of twenty
+      disagree and nothing proceeds.** This is the only check that tests the
+      whole chain against reality rather than against itself.
+
+- [ ] **Thirty days after the columns ship: `GET /v1/admin/downtime-erasure`.**
+      How much of the DOWN signal `ConflictResolverService` deletes, in rows
+      and in the minutes they carried. It decides whether the probability
+      question can be reopened at all — and the arithmetic in
+      [ride-downtime §6](docs/analytics/ride-downtime.md#6-why-there-is-no-probability)
+      still says no even if the answer is small.
+
+
 ## Retire the attractions that no longer exist (2026-08-15)
 
 The mechanism exists (`retired_at`, admin endpoints, job exclusions). What is

@@ -398,6 +398,22 @@ export class Attraction {
   retiredAt: Date | null;
 
   /**
+   * When this ride last absorbed another one.
+   *
+   * A merge reparents the loser's history with
+   * `UPDATE queue_data SET attractionId = winner` and no dedupe
+   * (`merge-dependencies.ts`), so afterwards two interleaved series sit on top
+   * of each other and can disagree at the same instant. Read consecutively, they
+   * flap between OPERATING and DOWN and manufacture outages that never happened.
+   *
+   * Nothing else records it: there is no merge row in `admin_audit_log`. The
+   * downtime reconstruction skips a ride whose merge falls inside its window,
+   * which is the only way to keep the phantom flapping out of the statistics.
+   */
+  @Column({ name: "last_merged_at", type: "timestamptz", nullable: true })
+  lastMergedAt: Date | null;
+
+  /**
    * Why, and on whose authority — the source URL belongs in here. A retirement
    * is a claim about the world, so it travels with its evidence.
    */

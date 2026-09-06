@@ -149,6 +149,11 @@ describe("merge dependency tables", () => {
     expect(discarded.sort()).toEqual(
       [
         "attraction_accuracy_stats",
+        // An aggregate over a window the merge has just invalidated. Carrying
+        // the loser's numbers across would publish a figure about a ride that
+        // no longer exists in that shape; the reconstruction rewrites the
+        // survivor's row once `last_merged_at` falls out of range.
+        "attraction_downtime_profiles",
         "attraction_p50_baselines",
         "attraction_p90_baselines",
         "attraction_rope_drop",
