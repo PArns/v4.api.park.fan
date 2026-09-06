@@ -70,6 +70,7 @@ import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.enti
     AnalyticsService,
     ParkHistoricalStatsService,
     DowntimeProfileService,
+    DowntimeRecoveryService,
   ],
   controllers: [AnalyticsController],
   exports: [
