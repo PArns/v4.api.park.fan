@@ -22,6 +22,7 @@ import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 import { FastPassDto } from "../../attractions/dto/fast-pass.dto";
 import { resolveFastPass } from "../../attractions/utils/fast-pass.util";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
+import { AttractionOutageDto } from "../../attractions/dto/attraction-outage.dto";
 import {
   resolveCuratedPark,
   resolveParkInfo,
@@ -66,6 +67,16 @@ export class ParkAttractionDto {
     required: false,
   })
   effectiveStatus?: string;
+
+  @ApiProperty({
+    description:
+      "The running outage, present only while the ride reads DOWN, only in a " +
+      "park whose sources can report one, and only outside a curated works " +
+      "period. Its absence is not a statement that the ride is running.",
+    required: false,
+    type: AttractionOutageDto,
+  })
+  outage?: AttractionOutageDto;
 
   @ApiProperty({
     description:

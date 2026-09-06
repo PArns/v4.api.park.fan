@@ -239,6 +239,36 @@ export class Attraction {
   curatedSeasonMonths: number[] | null;
 
   /**
+   * First and last park-local day of a hand-written works period.
+   *
+   * The feed cannot tell a breakdown from a rebuild. ThemeParks.wiki passes
+   * `REFURBISHMENT` through with no start, no end and no announcement, and does
+   * not use it for every closure that really is planned — a long rebuild seen
+   * from outside looks exactly like a ride that keeps failing. Inside this
+   * window nothing is reported: no live "Störung gemeldet seit", and no
+   * reconstructed outage.
+   *
+   * A statement about the ride rather than a correction of a synced column, so
+   * there is no upstream half and no two-writers problem. Both bounds are
+   * inclusive, either may stand alone (`from` with no `to` is the usual case
+   * while work is running), and both empty is the normal state.
+   *
+   * Read through `isCuratedOutOfService()` / `attractionIsCuratedOutOfService()`,
+   * never by comparing the columns at a call site: the comparison is park-local
+   * and the SQL half exists so a catalogue-wide query can ask the same question
+   * without loading a row.
+   */
+  @Column({
+    name: "curated_out_of_service_from",
+    type: "date",
+    nullable: true,
+  })
+  curatedOutOfServiceFrom: string | null;
+
+  @Column({ name: "curated_out_of_service_to", type: "date", nullable: true })
+  curatedOutOfServiceTo: string | null;
+
+  /**
    * Whether the ride has a single-rider line at all — a static fact about the
    * queue layout, not a live reading.
    *

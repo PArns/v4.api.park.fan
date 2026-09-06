@@ -11,6 +11,7 @@ import {
   CrowdLevel,
 } from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
+import { AttractionOutageDto } from "./attraction-outage.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
 import {
@@ -172,6 +173,16 @@ export class AttractionResponseDto {
     required: false,
   })
   effectiveStatus?: string;
+
+  @ApiProperty({
+    description:
+      "The running outage, present only while the ride reads DOWN, only in a " +
+      "park whose sources can report one, and only outside a curated works " +
+      "period. Its absence is not a statement that the ride is running.",
+    required: false,
+    type: AttractionOutageDto,
+  })
+  outage?: AttractionOutageDto;
 
   @ApiProperty({
     description:

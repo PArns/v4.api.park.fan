@@ -48,6 +48,8 @@ import { RideProfileService } from "./ride-profile.service";
 import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { AttractionOutageService } from "./attraction-outage.service";
+import { toOutageDto } from "../dto/attraction-outage.dto";
 
 /**
  * Attraction Integration Service
@@ -81,6 +83,7 @@ export class AttractionIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
     private readonly rideProfileService: RideProfileService,
+    private readonly outageService: AttractionOutageService,
   ) {}
 
   /**
@@ -313,6 +316,33 @@ export class AttractionIntegrationService {
             // default, not an observation. Matches the park page, which puts
             // every ride of such a park on UNKNOWN rather than guessing.
             "UNKNOWN";
+
+    // --- The running outage, if the ride is reported down ---
+    //
+    // Asked from AttractionOutageService and never resolved here, because the
+    // park page's ride list runs a DIFFERENT precedence chain in a different
+    // order, and two chains each deriving their own "since when" would put two
+    // sentences about the same ride on two pages. `effectiveStatus` is the gate
+    // rather than `dto.status`: a park that is shut reports CLOSED for every
+    // ride, and a line saying the ride has been down since Tuesday under a badge
+    // saying the park is closed answers a question nobody asked.
+    if (dto.effectiveStatus === "DOWN" && attraction.park) {
+      const outages = await this.outageService.getCurrentOutages(
+        {
+          id: attraction.parkId,
+          timezone: attraction.park.timezone,
+          wikiEntityId: attraction.park.wikiEntityId ?? null,
+        },
+        [
+          {
+            id: attraction.id,
+            curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
+            curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
+          },
+        ],
+      );
+      dto.outage = toOutageDto(outages.get(attraction.id));
+    }
 
     // --- Forecasts ---
     if (forecasts.length > 0) {
