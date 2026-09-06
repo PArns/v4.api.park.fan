@@ -1,36 +1,182 @@
 # Ride downtime: what we can measure, and what we may publish
 
-> Status, 2026-09-06: **every phase is built. Nothing historical is published,
-> and nothing should be until the measurements in [todo.md](../../todo.md) have
-> been run against a real database.**
+> Status, 2026-09-06 (evening): **phase 0 has been run against production.**
+> The measurements are in [§0](#0-what-the-measurement-found) and they changed
+> three things: one gate was measuring the wrong quantity in the wrong
+> direction, the event floor is confirmed rather than lowered, and the
+> refusal in §6 turns out to have been answering a different question from the
+> one a visitor asks.
 >
-> | Phase | State |
-> | --- | --- |
-> | 0. Count events, publish nothing | built — `GET /v1/admin/downtime-measurement`. **Not yet run.** |
-> | 1. Write-path columns | built — `is_heartbeat`, `raw_status`, `last_merged_at`. The two on `queue_data` need a hand-run `ALTER`, timed against a restore. |
-> | 2. The live line | **shipped** — `outage` on the payload, one line under the status badge. |
-> | 3. Reconstruct, publish nothing | built — four tables, two statements, the 5:00 AM job, the park-window SQL/TS twin. |
-> | 4. Publish the four measured numbers | built — profiles, gates, the `figures`/`withheld` union. Publishes for nobody until the gates are re-derived. |
-> | 5. Measure the erasure | built — `GET /v1/admin/downtime-erasure`. Says nothing useful until 30 days after phase 1 lands. |
+> | Phase                                | State                                                                                                                             |
+> | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+> | 0. Count events, publish nothing     | **run** — see [§0](#0-what-the-measurement-found). 150 132 events / 90 d.                                                         |
+> | 1. Write-path columns                | built, `ALTER` **timed** (139 ms + 62 ms over 258 compressed chunks) but **not applied**. Needs a go-ahead.                       |
+> | 2. The live line                     | **shipped** — `outage` on the payload, one line under the status badge.                                                           |
+> | 3. Reconstruct, publish nothing      | built, both statements `EXPLAIN`ed and the exposure invariant verified read-only (88 814 days, 0 violations).                     |
+> | 4. Publish the four measured numbers | built, gates re-derived from §0. Still publishes nothing until the twenty-ride hand check passes.                                 |
+> | 5. Measure the erasure               | built — `GET /v1/admin/downtime-erasure`. Says nothing useful until 30 days after phase 1 lands.                                  |
+> | **6. How much longer** _(new)_       | built — `downtime_recovery_curves`, on the ride card and the ride page. See [§6a](#6a-how-long-a-running-outage-still-has-to-go). |
 >
-> **Every threshold in `DOWNTIME_GATES` is provisional.** They were chosen to
-> withhold more than they should rather than less, and the point of phase 0 is
-> to replace them with counted numbers. The event floor of 24 in §5 is the main
-> one.
->
-> Of the four open decisions in §10, two are settled: the live line shipped on
-> its own, and the curated works period was built.
+> Two of the four open decisions in §10 were already settled (the live line
+> shipped on its own, the curated works period was built). What remains before
+> anything historical publishes is the twenty-ride hand check.
 
-The question this answers: *how often and for how long are rides down, and can we say when the next
-outage is coming and how long it will last?*
+---
+
+## 0. What the measurement found
+
+Run 2026-09-06 against production over the live database. 90 days for the
+counts, 180 for the duration work, every one of the 197 down-capable parks.
+
+### The scale was wrong by two orders of magnitude, and it made the plan timid
+
+§2 below argued that coverage, not statistics, is the binding constraint, on the
+strength of two live snapshots showing **6 DOWN rows across 65 open parks**. That
+reading is correct and the conclusion drawn from it was not: `DOWN` is a state
+with a median duration of 25 operating minutes, so a snapshot of an instant sees
+almost none of it. Reconstructed over 90 days the same feed yields:
+
+|                         |       Value |
+| ----------------------- | ----------: |
+| Reported outages        | **150 132** |
+| Rides with at least one |   **2 228** |
+| Parks with at least one |      **78** |
+| Median events per ride  |      **31** |
+
+### The event floor of 24 is confirmed, not lowered
+
+Rides clearing each candidate floor over 90 days:
+
+|   ≥8 |  ≥12 |  ≥16 |  ≥20 |  **≥24** |  ≥30 | ≥40 |
+| ---: | ---: | ---: | ---: | -------: | ---: | --: |
+| 1771 | 1630 | 1513 | 1416 | **1324** | 1162 | 950 |
+
+1324 rides clear it. `DOWNTIME_GATES.minOutages` stays at 24.
+
+### The artefact gate measured the wrong quantity, in the wrong direction
+
+`artefactSingleReadingShare >= 0.7` marked **47 of 78 parks** unreadable —
+including every well-covered one, and all seven of the reference parks this plan
+was written around. It does not measure erosion:
+
+- `corr(singleReadingShare, share of outages under 60 min)` = **0.996**.
+- **99.9 %** of single-row runs are under 65 minutes. **4.5 %** of multi-row runs
+  are. That is the hourly heartbeat's edge, not a source's.
+- **99.8 %** of single-row runs have an _observed_ end — the reading that says
+  the ride is running again. Their duration is measured, not guessed.
+- **EPCOT** has one queue-times row in thirty days, so `ConflictResolverService`
+  cannot erase anything there. It scored 0.715.
+
+`queue_data` is a change log. An outage that ends before the hourly heartbeat
+fires writes exactly one row: **one reading is what a short outage looks like.**
+The gate selected inversely to data quality, keeping the feeds that leave rides
+sitting on `DOWN` for hours (Parque de Atracciones de Madrid: share 0.045, median
+outage 158 min) and discarding the ones that report promptly.
+
+By share band, the thing it actually measured:
+
+| single-reading share | parks | mean median outage |
+| -------------------- | ----: | -----------------: |
+| ≥ 0.90               |    10 |             12 min |
+| 0.80-0.90            |    17 |             14 min |
+| 0.70-0.80            |    18 |             28 min |
+| 0.50-0.70            |    15 |             45 min |
+| < 0.50               |     9 |            158 min |
+
+**Replaced by the test the refusal sentence already claimed.** „Störungsmeldungen
+liegen nur stundengenau vor" is a statement about temporal resolution, so the
+gate now measures that: the share held by the single most common minute-of-hour
+across interval edges. Taking the most common minute rather than minute zero
+keeps it timezone-independent — an hourly feed at a :30 offset piles up on :30.
+
+Highest value in production is **0.236** (Lotte World Adventure), against a
+threshold of 0.5. **No park is in the artefact regime.** An empty refusal is the
+honest outcome when no feed behaves that way.
+
+### Censoring is seasonal, and it needed its own refusal
+
+A run ending because the park shut for the winter is not a ride that recovered.
+Measured on raw `queue_data` runs, the share of runs ending in something other
+than `OPERATING`:
+
+| Month    |     03 |     04 |     05 |     06 |     07 |     08 |     09 |
+| -------- | -----: | -----: | -----: | -----: | -----: | -----: | -----: |
+| censored | 89.8 % | 88.2 % | 68.9 % | 62.2 % | 41.0 % | 20.8 % | 20.5 % |
+
+This was reported to a reader as `thin_events` — "too few outages", the opposite
+of what happened. It now has its own reason, `heavily_censored`.
+
+**The reconstruction dissolves most of it.** Counted the way
+`attraction_outages` counts — stitched across the night, in _operating_ minutes —
+censoring over the same 180 days is **15.6 %**, because a closed park is a pause
+and not an ending. Same events, honest denominator. That single choice is what
+makes [§6a](#6a-how-long-a-running-outage-still-has-to-go) possible at all.
+
+### Performance, and one claim that was not true
+
+Both statements `EXPLAIN (ANALYZE, BUFFERS)`-ed against a 45-day-old compressed
+chunk and up:
+
+| Window   | `OUTAGE_INTERVALS_SQL` | `OUTAGE_EXPOSURE_SQL` | chunks touched |
+| -------- | ---------------------: | --------------------: | -------------: |
+| 1 day    |                 0.43 s |                     — |              1 |
+| 7 days   |                 3.58 s |                2.21 s |              8 |
+| 30 days  |                21.96 s |               14.07 s |             31 |
+| 180 days |                 ~7 min |                     — |            181 |
+
+Chunk pruning is exact. Two findings:
+
+- **It is not linear.** 6× the window costs ~19× the time, and temp spill grows
+  with it (30 days already writes ~700 MB for statement 1). The two statements
+  run under one `Promise.all`, so a 120-day first fill spills ~3.5 GB
+  concurrently. **Fill in stages.**
+- **The docstring's "one statement per time chunk" does not describe the code.**
+  There is no time loop; there is one statement per _statement_, across all
+  parks, which is what the sentence was reaching for. The plan is fine, the
+  claim was not. Also: the compressed chunk is scanned once **per attraction**
+  (`ColumnarScan … loops=6761`), which is cheap because `segmentby` prunes it,
+  but it is not "decompressed once".
+
+### The exposure invariant holds
+
+Verified read-only over 14 days without writing a row: **88 814 exposure days,
+0 violations**, worst deviation ±1 minute (rounding). The segment arithmetic is
+correct.
+
+### `ALTER TABLE` is a catalogue operation, and it is cheap
+
+Timed against a purpose-built 258-chunk compressed hypertable rather than
+against `queue_data` itself:
+
+| Statement                              |       Time |
+| -------------------------------------- | ---------: |
+| `ADD COLUMN is_heartbeat boolean NULL` | **139 ms** |
+| `ADD COLUMN raw_status text NULL`      |  **62 ms** |
+
+All 258 chunks stayed compressed; old rows read `NULL`. The cost is the
+catalogue, so it scales with chunk count (258 in the probe vs 257 in production),
+not with the 4.9 GB of data. **The risk is not the runtime, it is the
+`AccessExclusiveLock`** — the statement queues behind every running query on
+`queue_data` and blocks everything behind it. Run it with a `lock_timeout` and
+retry, rather than letting it sit in the queue.
+
+### One bug, found by running it
+
+`perPark()` grouped on `parkSlug`. **`disneyland-park` is Anaheim _and_ Paris**,
+so the two merged into a single row carrying 71 rides and 4979 outages. Grouping
+is on `parkId` now, and the rows carry `parkCity` so a human can tell them
+apart.
+
+The question this answers: _how often and for how long are rides down, and can we say when the next
+outage is coming and how long it will last?_
 
 Three questions, three different answers.
 
-| Question | Answer | Why |
-| --- | --- | --- |
-| How often | **Yes**, as a counted number of *reported* outages with its window. Not as a rate. | The count needs no estimator and no interval. A rate needs a stationary numerator, and ours is not. |
-| How long | **Yes**, gated, as the empirical median and the longest of the observed outages. | Reconstructible from the transition pair, once our own heartbeat is prevented from inventing duration. |
-| When next, for how long | **No.** Not as a number, not as a sentence, not as a softer rewording. | Four independent reasons, each sufficient. See [§6](#6-why-there-is-no-probability). |
+| Question                | Answer                                                                             | Why                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| How often               | **Yes**, as a counted number of _reported_ outages with its window. Not as a rate. | The count needs no estimator and no interval. A rate needs a stationary numerator, and ours is not.    |
+| How long                | **Yes**, gated, as the empirical median and the longest of the observed outages.   | Reconstructible from the transition pair, once our own heartbeat is prevented from inventing duration. |
+| When next, for how long | **No.** Not as a number, not as a sentence, not as a softer rewording.             | Four independent reasons, each sufficient. See [§6](#6-why-there-is-no-probability).                   |
 
 ---
 
@@ -39,28 +185,37 @@ Three questions, three different answers.
 **An outage is a maximal interval in which a ride's reconstructed STANDBY state is `DOWN`, which
 intersects at least one park `OPERATING` window, and whose in-window share is at least five minutes.**
 
-Nothing else. In particular an outage is an *interval*, never a day: a ride that stands still from
+Nothing else. In particular an outage is an _interval_, never a day: a ride that stands still from
 Monday 16:00 to Wednesday 12:00 is **one** row with `operatingDays = 3`, not three rows.
 
 ### What does not count, and how each case is detected
 
-| Excluded | Detection |
-| --- | --- |
-| `CLOSED` while the park is open | The enum value. This is the class that killed ML's `unexpected_closure` (534 of 602 anomalies were genuine closures). Neither numerator nor denominator. |
-| `REFURBISHMENT` | The enum value. Planned work. A `DOWN` run ending in `REFURBISHMENT` is an *observed* end (`endReason = 'reclassified'`), not a lost sight. |
-| A recurring weekly closure (Wakobato at Phantasialand, closed Sundays) | **No rule at all.** On a Sunday the ride reports `CLOSED`, never `DOWN`, and the denominator is the ride's *own* operating minutes, so the Sunday contributes 0 to both sides. |
-| A ride out of season | No predicate. `attractionIsOutOfSeason()` computes against `EXTRACT(MONTH FROM NOW())` (`season-window.sql.ts:43`) and would retroactively delete July from a ride that leaves season in September. An out-of-season ride contributes no operating minutes anyway. |
-| `data_source = 'system-reconciliation'` rows | Mapped to a pseudo-status `ABSENT` that **terminates** the run. Filtering them out instead would turn a ride that vanishes from every feed for twelve days into a twelve-day outage. |
-| Heartbeat rows past the fourth in a row | `is_heartbeat` (new column). A heartbeat confirms a state, it does not prove it indefinitely. From the fifth carried row the run ends with `endReason = 'unconfirmed'` and is right-censored. |
-| Anything outside a park `OPERATING` window | `EXTRA_HOURS`, `TICKETED_EVENT`, `PRIVATE_EVENT` excluded on both sides. |
-| A run under five minutes in-window | `queue_data.timestamp` is our write decision, shared per park per poll, so each edge carries ~U(0,5) minutes of error. |
-| A run over seven wall-clock days | `likelyWorksPeriod`. Evidence: Tokyo Disneyland's Dumbo carries one unchanged `CLOSED` row since 16 April, five months from a single row. |
-| Retired rides, free-flow rides (`open_with_park`), rides whose `last_merged_at` falls in the window | The merge reparents `queue_data` with `UPDATE ... SET attractionId = winner` and **no** `conflictColumns` (`merge-dependencies.ts`), so two interleaved series sit on top of each other and flap. |
-| Every park without `parks.wiki_entity_id` | No source there can emit `DOWN`. The absence of a report is not a statement about the ride. |
+| Excluded                                                                                            | Detection                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CLOSED` while the park is open                                                                     | The enum value. This is the class that killed ML's `unexpected_closure` (534 of 602 anomalies were genuine closures). Neither numerator nor denominator.                                                                                                           |
+| `REFURBISHMENT`                                                                                     | The enum value. Planned work. A `DOWN` run ending in `REFURBISHMENT` is an _observed_ end (`endReason = 'reclassified'`), not a lost sight.                                                                                                                        |
+| A recurring weekly closure (Wakobato at Phantasialand, closed Sundays)                              | **No rule at all.** On a Sunday the ride reports `CLOSED`, never `DOWN`, and the denominator is the ride's _own_ operating minutes, so the Sunday contributes 0 to both sides.                                                                                     |
+| A ride out of season                                                                                | No predicate. `attractionIsOutOfSeason()` computes against `EXTRACT(MONTH FROM NOW())` (`season-window.sql.ts:43`) and would retroactively delete July from a ride that leaves season in September. An out-of-season ride contributes no operating minutes anyway. |
+| `data_source = 'system-reconciliation'` rows                                                        | Mapped to a pseudo-status `ABSENT` that **terminates** the run. Filtering them out instead would turn a ride that vanishes from every feed for twelve days into a twelve-day outage.                                                                               |
+| Heartbeat rows past the fourth in a row                                                             | `is_heartbeat` (new column). A heartbeat confirms a state, it does not prove it indefinitely. From the fifth carried row the run ends with `endReason = 'unconfirmed'` and is right-censored.                                                                      |
+| Anything outside a park `OPERATING` window                                                          | `EXTRA_HOURS`, `TICKETED_EVENT`, `PRIVATE_EVENT` excluded on both sides.                                                                                                                                                                                           |
+| A run under five minutes in-window                                                                  | `queue_data.timestamp` is our write decision, shared per park per poll, so each edge carries ~U(0,5) minutes of error.                                                                                                                                             |
+| A run over seven wall-clock days                                                                    | `likelyWorksPeriod`. Evidence: Tokyo Disneyland's Dumbo carries one unchanged `CLOSED` row since 16 April, five months from a single row.                                                                                                                          |
+| Retired rides, free-flow rides (`open_with_park`), rides whose `last_merged_at` falls in the window | The merge reparents `queue_data` with `UPDATE ... SET attractionId = winner` and **no** `conflictColumns` (`merge-dependencies.ts`), so two interleaved series sit on top of each other and flap.                                                                  |
+| Every park without `parks.wiki_entity_id`                                                           | No source there can emit `DOWN`. The absence of a report is not a statement about the ride.                                                                                                                                                                        |
 
 ---
 
 ## 2. Why coverage, not statistics, is the binding constraint
+
+> **Superseded in part by [§0](#0-what-the-measurement-found), 2026-09-06.** The
+> two snapshots below are accurate and the conclusion drawn from them was not.
+> `DOWN` is a state with a median duration of 25 operating minutes, so an
+> instant sees almost none of it; reconstructed over 90 days the same feed
+> yields 150 132 events over 2228 rides. Coverage is still the reason 119 parks
+> can say nothing at all — that part stands, and it is configuration. What does
+> not stand is the inference that the _statistics_ would be thin inside the
+> parks that can.
 
 `DOWN` is produced by exactly one mapper: `themeparks-data-source.ts:161-176`. Queue-Times is
 `is_open ? OPERATING : CLOSED`. Wartezeiten maps `maintenance` to `REFURBISHMENT` and
@@ -74,10 +229,10 @@ in the five minutes after a ride stops.
 
 Two independent live measurements, 2026-09-06:
 
-| Sample | Rows | OPERATING | CLOSED | REFURB | **DOWN** |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| All 65 currently-open parks | 2064 | 1667 | 360 | 31 | **6** (4 parks) |
-| 15 currently-open parks, 603 attractions | 603 | 358 | 135 | 9 | **4** (3 parks) |
+| Sample                                   | Rows | OPERATING | CLOSED | REFURB |        **DOWN** |
+| ---------------------------------------- | ---: | --------: | -----: | -----: | --------------: |
+| All 65 currently-open parks              | 2064 |      1667 |    360 |     31 | **6** (4 parks) |
+| 15 currently-open parks, 603 attractions |  603 |       358 |    135 |      9 | **4** (3 parks) |
 
 `DOWN` is 0.3-0.7 % of live rows and appears in a minority of parks. `CLOSED` while the park is open
 is roughly thirty times more common.
@@ -104,16 +259,16 @@ nothing else.** It is a risk set, not a schedule: a ride cannot break while it i
 a ride that is shut is not at risk.
 
 Per (attraction, park-local operating day): `operatingMinutes` = the sum over reconstructed segments
-of the overlap of `[seg_start, seg_end)` with the *disjoint union* of that day's `OPERATING` windows,
+of the overlap of `[seg_start, seg_end)` with the _disjoint union_ of that day's `OPERATING` windows,
 each segment capped at 70 minutes from its own row.
 
 - **The 70-minute cap** is what keeps an ingestion gap from becoming downtime. `writeHourlyHeartbeats`
   writes when the newest STANDBY row is over 60 minutes old and the sync runs every 5, so an observed
   ride's rows sit at most ~65 minutes apart. A longer gap has four indistinguishable causes and none of
   them is evidence. The time becomes `unobservedMinutes` and leaves the denominator. The error is always
-  *less* exposure, never invented exposure.
+  _less_ exposure, never invented exposure.
 - **The four-heartbeat cap** is what keeps our own writer from inventing duration. A heartbeat copies
-  the previous status *and* the previous `data_source`, so a `DOWN` that vanishes from every feed carries
+  the previous status _and_ the previous `data_source`, so a `DOWN` that vanishes from every feed carries
   itself forward hourly for up to 24 hours while looking exactly like a themeparks-wiki observation.
 - **The 21 schedule-less parks** get the live line and nothing else. Their window is itself inferred
   from ride activity, so normalising ride downtime by it is circular.
@@ -121,7 +276,7 @@ each segment capped at 70 minutes from its own row.
 ### Censoring, stated exactly
 
 `ongoing` (still down at `as_of`), `window_edge` (administrative), `closed` (went `CLOSED` without a
-recovery), `gap` / `unconfirmed` / `source_absent` (we lost sight). `reclassified` is an *observed* end
+recovery), `gap` / `unconfirmed` / `source_absent` (we lost sight). `reclassified` is an _observed_ end
 and is excluded from the censored share. A profile withholds duration when censored spells exceed one
 quarter. Left truncation: the scan window extends back to `MIN(startedAt) - 1 day` over every
 open-ended or in-window outage, so a running spell is not born at the edge.
@@ -139,11 +294,11 @@ poll-attempt row is the only real fix. Until it exists, the methodology page say
 
 ### Write-path columns (Phase 1, prerequisites for everything else)
 
-| Column | Written where | Why |
-| --- | --- | --- |
-| `queue_data.is_heartbeat boolean NULL` | `true` at `writeHourlyHeartbeats`, `false` at both `saveLiveDataBatch` paths | Without it a measured duration cannot be told from a carried-forward one. **Nullable on purpose**: `NULL` means "written before the column existed" and the reader falls back to `"lastUpdated" = timestamp`, rather than a `DEFAULT false` promoting a year of carried rows to observations. |
-| `queue_data.raw_status text NULL` | Only when the ConflictResolver override fires, carrying the pre-override status | Converts the erasure from unmeasurable to countable. Changes nothing that is served. |
-| `attractions.last_merged_at timestamptz NULL` | `AttractionMergeService.merge`, on the winner | There is no merge row in `admin_audit_log`, so this is the only way to know a ride's history is two interleaved series. |
+| Column                                        | Written where                                                                   | Why                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue_data.is_heartbeat boolean NULL`        | `true` at `writeHourlyHeartbeats`, `false` at both `saveLiveDataBatch` paths    | Without it a measured duration cannot be told from a carried-forward one. **Nullable on purpose**: `NULL` means "written before the column existed" and the reader falls back to `"lastUpdated" = timestamp`, rather than a `DEFAULT false` promoting a year of carried rows to observations. |
+| `queue_data.raw_status text NULL`             | Only when the ConflictResolver override fires, carrying the pre-override status | Converts the erasure from unmeasurable to countable. Changes nothing that is served.                                                                                                                                                                                                          |
+| `attractions.last_merged_at timestamptz NULL` | `AttractionMergeService.merge`, on the winner                                   | There is no merge row in `admin_audit_log`, so this is the only way to know a ride's history is two interleaved series.                                                                                                                                                                       |
 
 ### Tables (Phase 3)
 
@@ -158,7 +313,7 @@ poll-attempt row is the only real fix. Until it exists, the methodology page say
   A violation raises a monitored alert and marks the row suspect; it never silently NULLs the day.
 - **`attraction_downtime_profiles`** - the published aggregate, one row per attraction, rewritten
   nightly, with `publishable` and `withheldReason`.
-- **`park_downtime_coverage`** - the honesty label, one row per park, published for *every* park:
+- **`park_downtime_coverage`** - the honesty label, one row per park, published for _every_ park:
   `regime` in `not_capable | reports | artefact | no_schedule`, with `downCapable` read from
   `parks.wiki_entity_id`, that is from configuration and never from the outcome.
 
@@ -175,24 +330,24 @@ compressed hypertable with 254+ chunks. The four new tables come from entity syn
 
 ## 5. What may be published, and what it says
 
-| Metric | Publish | Gate | German wording |
-| --- | --- | --- | --- |
-| `outage.since` (live) | **yes** | Only while the ride reads `DOWN`, only in a `wiki_entity_id` park | „Störung gemeldet seit 14:20 Uhr." A clock time in one of three forms, never an elapsed counter. |
-| `outage.minutesToday` (live) | gated | Park publishes hours, total ≥ 20 min, both edges bracketed, carried share < ½ | „Heute rund 40 Minuten Störung gemeldet." |
-| `park.ridesDownNow` | gated | Only when ≥ 1. **There is no zero form.** | „Für zwei Bahnen ist gerade eine Störung gemeldet." Never „alles läuft". |
-| `outageCount` (90 d) | gated | regime `reports`, ≥ 40 observed operating days, split-half homogeneity not rejected | „In den letzten 90 Tagen hat die Datenquelle für diese Bahn 34 Störungen gemeldet, an 61 von 88 beobachteten Betriebstagen." |
-| `medianOutageMinutes` | gated | Event floor: ≥ 24 outages, ≥ 12 usable, censored share ≤ 25 %, carried share ≤ 50 % | „Die Hälfte der 28 beobachteten Störungen war nach 25 Minuten vorbei." |
-| `longestOutageMinutes` + date | gated | Same event floor. A maximum is the most sampling-sensitive statistic there is. | „Die längste dauerte 3 Stunden 20 Minuten am 14. Juli." |
-| `downShare` | gated | Same floor plus ≥ 150 operating hours. **One denominator on the card, and it is this one.** | „Das sind rund 2 Prozent der Zeit, in der die Bahn lief." |
-| `parkDowntimeCoverage.regime` | **yes, always** | none | Four refusal sentences, one per reason. |
-| Rate per 100 operating hours | **no** | Fitted internally (hierarchical gamma-Poisson) to answer whether a rate could ever be published | - |
-| Outage starts by hour of day | **no** | An hour-of-day shape built from a flag the ConflictResolver preferentially erases on popular rides shows queue drainage, not failures | - |
-| Probability / expected duration / MTBF / MTTR | **no** | Refused, see §6 | - |
+| Metric                                        | Publish         | Gate                                                                                                                                  | German wording                                                                                                               |
+| --------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `outage.since` (live)                         | **yes**         | Only while the ride reads `DOWN`, only in a `wiki_entity_id` park                                                                     | „Störung gemeldet seit 14:20 Uhr." A clock time in one of three forms, never an elapsed counter.                             |
+| `outage.minutesToday` (live)                  | gated           | Park publishes hours, total ≥ 20 min, both edges bracketed, carried share < ½                                                         | „Heute rund 40 Minuten Störung gemeldet."                                                                                    |
+| `park.ridesDownNow`                           | gated           | Only when ≥ 1. **There is no zero form.**                                                                                             | „Für zwei Bahnen ist gerade eine Störung gemeldet." Never „alles läuft".                                                     |
+| `outageCount` (90 d)                          | gated           | regime `reports`, ≥ 40 observed operating days, split-half homogeneity not rejected                                                   | „In den letzten 90 Tagen hat die Datenquelle für diese Bahn 34 Störungen gemeldet, an 61 von 88 beobachteten Betriebstagen." |
+| `medianOutageMinutes`                         | gated           | Event floor: ≥ 24 outages, ≥ 12 usable, censored share ≤ 25 %, carried share ≤ 50 %                                                   | „Die Hälfte der 28 beobachteten Störungen war nach 25 Minuten vorbei."                                                       |
+| `longestOutageMinutes` + date                 | gated           | Same event floor. A maximum is the most sampling-sensitive statistic there is.                                                        | „Die längste dauerte 3 Stunden 20 Minuten am 14. Juli."                                                                      |
+| `downShare`                                   | gated           | Same floor plus ≥ 150 operating hours. **One denominator on the card, and it is this one.**                                           | „Das sind rund 2 Prozent der Zeit, in der die Bahn lief."                                                                    |
+| `parkDowntimeCoverage.regime`                 | **yes, always** | none                                                                                                                                  | Four refusal sentences, one per reason.                                                                                      |
+| Rate per 100 operating hours                  | **no**          | Fitted internally (hierarchical gamma-Poisson) to answer whether a rate could ever be published                                       | -                                                                                                                            |
+| Outage starts by hour of day                  | **no**          | An hour-of-day shape built from a flag the ConflictResolver preferentially erases on popular rides shows queue drainage, not failures | -                                                                                                                            |
+| Probability / expected duration / MTBF / MTTR | **no**          | Refused, see §6                                                                                                                       | -                                                                                                                            |
 
 ### The four refusals
 
 - `not_capable`: „Für diesen Park meldet keine Datenquelle Störungen. Ausfälle sehen wir hier nicht."
-- `artefact`: „Für diesen Park liegen uns Störungsmeldungen nur stundengenau vor. Eine Dauer lässt sich daraus nicht ablesen."
+- `artefact`: „Für diesen Park liegen uns Störungsmeldungen nur stundengenau vor. Eine Dauer lässt sich daraus nicht ablesen." **Currently reached by no park** — see [§0](#0-what-the-measurement-found); the test that used to fire it was measuring outage length, not resolution.
 - `no_schedule`: „Für diesen Park sind keine Öffnungszeiten veröffentlicht, deshalb zeigen wir keine Minuten."
 - `reports` but nothing found: „Für diese Bahn wurde in den letzten 90 Tagen keine Störung gemeldet."
 
@@ -206,32 +361,39 @@ Every published figure attributes the source (`gemeldet` / `reported` / `signal�
 2. None of these numbers appears in structured data. No `aggregateRating`, no review, no derived
    JSON-LD property. A grep in the check suite holds that.
 3. The event floor applies to **every** derived quantity, not only to a rate.
-4. Nothing ships before the methodology page exists in six languages, linked from every figure *and*
+4. Nothing ships before the methodology page exists in six languages, linked from every figure _and_
    every refusal, and added to `pnpm check:agent-ready`.
 
 ---
 
 ## 6. Why there is no probability
 
+**Scope:** this section is about _"when will this ride break next, and for how
+long"_. It is not about a ride that is already stopped — that question is
+answered, with its own measurements, in
+[§6a](#6a-how-long-a-running-outage-still-has-to-go), and the table there works
+through these four reasons one at a time. Do not read this section as forbidding
+that one; the difference is whether the event is forecast or observed.
+
 Four reasons, each sufficient on its own.
 
-1. **The arithmetic is already decided.** At the observed magnitudes, *p* for the next three operating
+1. **The arithmetic is already decided.** At the observed magnitudes, _p_ for the next three operating
    hours is about 0.005 to 0.01. Separating a calibrated 0.006 from a 0.012 at 80 % power needs roughly
    `(2.8)²/p` ≈ 1300 events per bin, which is several hundred ride-years.
 2. **The numerator is not stationary, for a reason no model reaches.** It is not "the ride broke", it is
-   "themeparks-wiki reported DOWN *and* our ConflictResolver did not overwrite it". The second half
+   "themeparks-wiki reported DOWN _and_ our ConflictResolver did not overwrite it". The second half
    changes when a source mapping is added or a name match starts working, with no deploy and no trace in
    the data.
 3. **Censoring depends on the outcome.** The override fires as soon as a second source reports
    `waitTime >= 5`. A queue does not empty the moment a ride stops, it drains over fifteen to thirty
-   minutes, so what disappears preferentially is the *short* outages of the *popular* rides. Missingness
+   minutes, so what disappears preferentially is the _short_ outages of the _popular_ rides. Missingness
    that depends on both the outcome and the covariate of interest cannot be weighted or imputed.
 4. **The duration distribution is left-truncated at an unknown point.** Writes are delta-only, so an
    outage that starts and ends between two polls writes no row at all. Nobody knows what share that is,
    so the truncation point cannot be estimated.
 
 **What is built anyway, though none of it appears:** `queue_data.raw_status` measures the erasure for
-thirty days, counted in rows *and* in the minutes they carried (rows alone understate it, because a
+thirty days, counted in rows _and_ in the minutes they carried (rows alone understate it, because a
 state rewritten to `OPERATING` is then stable and writes no further row). That one number decides
 whether the question can ever be asked again. If it comes out small, the answer is still no, because of
 reasons 1 and 4.
@@ -242,16 +404,112 @@ an hour or a day.
 
 ---
 
+## 6a. How long a running outage still has to go
+
+**This is a different question from §6, and it survives the four objections that
+sank that one.** §6 refuses _"when will this ride break next, and for how long"_.
+This answers _"it is broken right now — what happened to the outages that got
+this far"_. The conditioning event is observed rather than forecast, and that
+changes every one of the four arguments.
+
+| §6's objection                                                                                                     | Why it does not apply here                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1. The arithmetic is decided.** Separating a calibrated 0.006 from 0.012 needs ~1300 events per bin.             | The quantity here is a conditional recovery share of 0.15-0.54, measured on **5 900 to 128 000 intervals per bucket**. At p = 0.15 and n = 5 924 the standard error is **0.46 percentage points**.                                                                                                                                                                             |
+| **2. The numerator is not stationary.**                                                                            | Still true, and still why every sentence says _gemeldet_. But it is no longer load-bearing: we are not claiming a ride will break, we are describing outages that already started.                                                                                                                                                                                             |
+| **3. Censoring depends on the outcome.**                                                                           | **This was the real objection, and measuring dissolved it.** Read off raw `queue_data` runs, 68 % end without a recovery and the naive and Kaplan-Meier medians differ by a factor of five at one hour. Read off the reconstruction — stitched across the night, counted in _operating_ minutes — censoring is **15.6 %**, because a closed park is a pause and not an ending. |
+| **4. The duration distribution is left-truncated at an unknown point.** An outage between two polls writes no row. | Conditioning removes it. A spell that survived to T operating minutes is _by construction_ not one that vanished between two polls. This is why the curve is only ever read at T ≥ 5 and never as a plain average.                                                                                                                                                             |
+
+### Measured, never fitted
+
+No distribution is assumed. The hazard falls steeply, which is the whole reason
+a naive answer would be harmful:
+
+| Elapsed (operating min) |       5 |     15 |     30 |     60 |    120 |    240 |
+| ----------------------- | ------: | -----: | -----: | -----: | -----: | -----: |
+| at risk                 | 128 412 | 97 054 | 62 109 | 34 190 | 14 957 |  5 924 |
+| P(back within 30 min)   |  54.2 % | 47.0 % | 37.0 % | 29.8 % | 18.3 % |  8.5 % |
+| P(back within 60 min)   |  70.5 % | 63.8 % | 55.8 % | 46.8 % | 29.1 % | 14.8 % |
+| remaining, p25          |      10 |     15 |     20 |     25 |     50 |    121 |
+| remaining, **median**   |      25 |     35 |     50 |     70 |    165 |   1168 |
+| remaining, p75          |      75 |     97 |    140 |    255 |      — |      — |
+
+An exponential would be wrong in the one direction that costs a visitor real
+time: it would tell somebody at hour four that it is nearly over. **This is also
+why the unconditional median (25 minutes) may never be shown** — it is right for
+the population and wrong for the ride in front of the reader exactly when it
+matters.
+
+Past about two hours the upper quartile stops resolving. That is stored as
+`p75: null` and rendered as an open range, not dropped: _"at least fifty minutes
+more, no upper bound we can measure"_ is the most useful thing there is to say
+about a long outage.
+
+### Calibration
+
+Fit on the first 120 days, scored on the following 60:
+
+| elapsed | horizon | predicted | actual |      n |
+| ------: | ------: | --------: | -----: | -----: |
+|       5 |      30 |    51.7 % | 48.3 % | 42 762 |
+|      15 |      30 |    42.2 % | 37.6 % | 32 596 |
+|      30 |      60 |    49.7 % | 47.2 % | 21 499 |
+|      60 |      30 |    27.3 % | 27.9 % | 12 510 |
+|     120 |      60 |    27.7 % | 27.0 % |  5 385 |
+
+**Mean absolute calibration error 2.55 percentage points**, and under 2 points
+everywhere from T = 60 on. Percentages are rendered in steps of five because of
+this number: "47 %" claims a precision the estimate does not have.
+
+### Per park, never per ride
+
+Parks differ enough to matter. P(recover within 30 min | down 30 min) has a
+median of 31.8 % across 48 parks and runs from **8.6 % to 52.4 %**, with 12 of
+them more than 10 points off the pooled value. Rides do not carry it: only **95
+of 2 285** have 200 intervals behind them.
+
+So the curve is per park where the park has enough — 54 parks hold 98 % of all
+events — and pooled otherwise. **The fallback is per bucket, not per park.** A
+park whose curve stops at 30 minutes must not answer a four-hour outage with its
+30-minute row: that would report a 52 % chance of recovery where the measured
+figure is 8.5 %. A spec pins this, and it caught the bug during development.
+
+### What is rendered
+
+Both places a `DOWN` ride appears, from the same numbers — compact on the park
+page's ride card (the range alone, because the full sentence would wrap on a
+phone and cards share row heights through a subgrid), and as a full sentence on
+the ride's own page.
+
+- „Störungen wie diese dauerten meist noch 25 Min. bis 4:15 Std."
+- „Von Störungen, die schon so lange dauern, waren rund 30 % binnen einer Stunde
+  wieder in Betrieb."
+
+The copy names the condition — _„die schon so lange dauern"_ — because a reader
+has to be able to see that the estimate is about this outage's history rather
+than about outages in general.
+
+### The one caveat that remains
+
+`elapsedMinutes` grows even if the outage has secretly ended: without
+`is_heartbeat` (phase 1, not yet applied), a carried `DOWN` cannot be told from
+an observed one, so a ride whose recovery never reached us keeps accumulating
+elapsed minutes. The error is in the safe direction — a larger elapsed reads a
+_lower_ recovery probability, so the estimate becomes more pessimistic rather
+than falsely reassuring — but it is a reason to apply phase 1 before this is
+trusted at the long end.
+
+---
+
 ## 7. Plan
 
-| Phase | Repo | Work | Ships |
-| --- | --- | --- | --- |
-| **0. Count events, publish nothing** (2-3 d) | api | Run statement 1 read-only over 90 days for ~30 rides across Magic Kingdom, Epcot, Anaheim, Disneyland Paris, Universal Studios Florida, Efteling, Europa-Park. Report the **event** count and a duration histogram, not DOWN-hours. Capability census (`COUNT(*) FROM parks WHERE wiki_entity_id IS NOT NULL`). `EXPLAIN (ANALYZE, BUFFERS)` over a 45-day-old chunk. | Nothing user-facing. Every threshold in phases 3-4 is written from this table, and the event floor of 24 is re-derived or replaced. |
-| **1. Write-path columns** (1 d + restore timing) | api | `is_heartbeat`, `raw_status`, `last_merged_at`. Hand-run `ALTER`, timed against a restore. | No behaviour change. Starts the 30-day clock on the erasure measurement. |
-| **2. The live line** (2-3 d) | api + fe | `outage-rows.sql.ts` as the shared row filter, `AttractionOutageService.getCurrentOutages`, attached from one service in **both** integration paths so the two precedence chains cannot disagree. Frontend: one line under the existing `ParkStatusBadge`, in the status row so no panel is created, `data-nosnippet`, six locales. | „Störung gemeldet seit 14:20 Uhr" wherever a `DOWN` already renders, including the 21 schedule-less parks. No new table, no denominator. |
-| **3. Reconstruct, still publish nothing** (1.5 wk) | api | The four tables, the two statements, the park-open-window SQL/TS twin with a shared spec. `downtime-reconstruction.processor.ts`: one statement per time chunk across all parks, delete-then-insert per (park, window). Then a **hand check**: the twenty rides that would clear the gates, verified against the parks' own channels. More than two of twenty disagree and nothing proceeds. | The tables plus the corrected per-day entry on `attraction_hourly_history`. Nothing on the API. |
-| **4. Publish the four measured numbers** (1.5-2 wk) | api + fe | Profile table, event floor on every derived quantity, discriminated-union DTO (`{kind:'figures'}` / `{kind:'withheld', reason}`) so no decision input rides along. Frontend: a chapter only where figures publish, one inline line where they do not. Own message namespace, server-read. Methodology page in the same release. Withdrawal path: a regime flip clears the profile and POSTs `parkCacheTag` to `/api/revalidate` with `expire: 0` the same night. | Count, median, longest, `downShare`, four refusal states, one methodology page. |
-| **5. Measure the erasure** (3-4 d) | api | Thirty days after phase 1: how many `DOWN` readings the override rewrote, per park and per ride, in rows and in minutes. Falsification kit (Fano factor, time-rescaling KS, shuffled control). | A written verdict, most likely a documented refusal with a number attached. |
+| Phase                                               | Repo     | Work                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Ships                                                                                                                                    |
+| --------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **0. Count events, publish nothing** (2-3 d)        | api      | Run statement 1 read-only over 90 days for ~30 rides across Magic Kingdom, Epcot, Anaheim, Disneyland Paris, Universal Studios Florida, Efteling, Europa-Park. Report the **event** count and a duration histogram, not DOWN-hours. Capability census (`COUNT(*) FROM parks WHERE wiki_entity_id IS NOT NULL`). `EXPLAIN (ANALYZE, BUFFERS)` over a 45-day-old chunk.                                                                                            | Nothing user-facing. Every threshold in phases 3-4 is written from this table, and the event floor of 24 is re-derived or replaced.      |
+| **1. Write-path columns** (1 d + restore timing)    | api      | `is_heartbeat`, `raw_status`, `last_merged_at`. Hand-run `ALTER`, timed against a restore.                                                                                                                                                                                                                                                                                                                                                                       | No behaviour change. Starts the 30-day clock on the erasure measurement.                                                                 |
+| **2. The live line** (2-3 d)                        | api + fe | `outage-rows.sql.ts` as the shared row filter, `AttractionOutageService.getCurrentOutages`, attached from one service in **both** integration paths so the two precedence chains cannot disagree. Frontend: one line under the existing `ParkStatusBadge`, in the status row so no panel is created, `data-nosnippet`, six locales.                                                                                                                              | „Störung gemeldet seit 14:20 Uhr" wherever a `DOWN` already renders, including the 21 schedule-less parks. No new table, no denominator. |
+| **3. Reconstruct, still publish nothing** (1.5 wk)  | api      | The four tables, the two statements, the park-open-window SQL/TS twin with a shared spec. `downtime-reconstruction.processor.ts`: one statement per time chunk across all parks, delete-then-insert per (park, window). Then a **hand check**: the twenty rides that would clear the gates, verified against the parks' own channels. More than two of twenty disagree and nothing proceeds.                                                                     | The tables plus the corrected per-day entry on `attraction_hourly_history`. Nothing on the API.                                          |
+| **4. Publish the four measured numbers** (1.5-2 wk) | api + fe | Profile table, event floor on every derived quantity, discriminated-union DTO (`{kind:'figures'}` / `{kind:'withheld', reason}`) so no decision input rides along. Frontend: a chapter only where figures publish, one inline line where they do not. Own message namespace, server-read. Methodology page in the same release. Withdrawal path: a regime flip clears the profile and POSTs `parkCacheTag` to `/api/revalidate` with `expire: 0` the same night. | Count, median, longest, `downShare`, four refusal states, one methodology page.                                                          |
+| **5. Measure the erasure** (3-4 d)                  | api      | Thirty days after phase 1: how many `DOWN` readings the override rewrote, per park and per ride, in rows and in minutes. Falsification kit (Fano factor, time-rescaling KS, shuffled control).                                                                                                                                                                                                                                                                   | A written verdict, most likely a documented refusal with a number attached.                                                              |
 
 ---
 
@@ -259,7 +517,13 @@ an hour or a day.
 
 Kept here so none of it gets re-proposed.
 
-1. **Any probability, expected duration, MTBF, MTTR.** See §6.
+1. **Any probability of a FUTURE outage, expected time between failures, MTBF,
+   MTTR.** See §6. Still rejected, and the softer rewordings with it.
+   [§6a](#6a-how-long-a-running-outage-still-has-to-go) is not an exception to
+   this: it describes an outage that has already started, conditioned on how
+   long it has already run, and it exists because measuring showed that three of
+   §6's four objections do not reach it and the fourth (censoring) was an
+   artefact of counting wall-clock minutes.
 2. **Kaplan-Meier median as the published duration.** Under censoring the KM median is not "half of the
    observed outages", so the sentence beside it would be checkable against the counts beside it and
    false. The empirical median of outages with an observed end is published instead, with its counting
@@ -296,12 +560,12 @@ Kept here so none of it gets re-proposed.
 
 ## 9. Prior art this replaces or feeds
 
-| Existing | What happens to it |
-| --- | --- |
-| `trackDowntime()` (`wait-times.processor.ts:820-906`) | Redis only, 25 h TTL, read by the ML feature builder alone. Conflates `DOWN`/`CLOSED`/`REFURBISHMENT`, credits a spell only on **recovery** (a ride that goes down and never reopens records zero minutes), skips anything starting within 60 min of closing. Left alone until phase 3, then its feature is fed from `attraction_exposure_days`. |
-| `downCount` (`analytics.service.ts:5846`, `HistoryDayDto`) | Keeps its value and its column. Description corrected and marked deprecated. `outageCount` / `outageMinutes` derived from intervals are written beside it. |
-| `downYesterday()` (`plan-day.service.ts:873-910`) | Unchanged. It is a same-day warning, not a statistic. |
-| `getRideOpeningTimes()` (`analytics.service.ts:5633`) | The template for the exposure model's per-ride derivation, including its `HAVING count(*) >= 5` floor and its "a median is a detection time, not an opening" rounding rule. |
+| Existing                                                   | What happens to it                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trackDowntime()` (`wait-times.processor.ts:820-906`)      | Redis only, 25 h TTL, read by the ML feature builder alone. Conflates `DOWN`/`CLOSED`/`REFURBISHMENT`, credits a spell only on **recovery** (a ride that goes down and never reopens records zero minutes), skips anything starting within 60 min of closing. Left alone until phase 3, then its feature is fed from `attraction_exposure_days`. |
+| `downCount` (`analytics.service.ts:5846`, `HistoryDayDto`) | Keeps its value and its column. Description corrected and marked deprecated. `outageCount` / `outageMinutes` derived from intervals are written beside it.                                                                                                                                                                                       |
+| `downYesterday()` (`plan-day.service.ts:873-910`)          | Unchanged. It is a same-day warning, not a statistic.                                                                                                                                                                                                                                                                                            |
+| `getRideOpeningTimes()` (`analytics.service.ts:5633`)      | The template for the exposure model's per-ride derivation, including its `HAVING count(*) >= 5` floor and its "a median is a detection time, not an opening" rounding rule.                                                                                                                                                                      |
 
 ---
 

@@ -19,11 +19,16 @@ export interface OutageEstimate {
   /**
    * Remaining operating minutes at the 25th/50th/75th percentile.
    *
-   * Absent as a whole once the curve stops resolving the upper quartile, which
-   * it does past roughly two hours. A median without its spread would be read
-   * as a promise exactly where the spread is widest.
+   * `p75` is null once the curve stops resolving the upper quartile, which it
+   * does past roughly two hours. It stays a null INSIDE the range rather than
+   * collapsing the whole object, because "at least this long, no upper bound we
+   * can measure" is the most useful thing anybody can say about a long outage —
+   * and it renders as an open range, which carries the uncertainty visually.
+   *
+   * A median must never be rendered without this spread around it. At one hour
+   * elapsed the quartiles are 25 and 255 minutes around a median of 70.
    */
-  remaining?: { p25: number; median: number; p75: number };
+  remaining?: { p25: number; median: number; p75: number | null };
   /** Whether this park carried its own curve or fell back to the pooled one. */
   basis: "park" | "pooled";
   /** Intervals behind the bucket. Diagnostic; never rendered. */
@@ -108,9 +113,7 @@ export function estimateOutage(
     recoveryWithin30: p30,
     recoveryWithin60: p60,
     remaining:
-      p25 !== null && median !== null && p75 !== null
-        ? { p25, median, p75 }
-        : undefined,
+      p25 !== null && median !== null ? { p25, median, p75 } : undefined,
     basis: row === parkRow ? "park" : "pooled",
     sampleSize: row.atRisk,
   };

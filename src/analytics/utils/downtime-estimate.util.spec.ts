@@ -63,12 +63,14 @@ describe("estimateOutage", () => {
     expect(estimateOutage({ park: [], pooled }, 2)).toBeUndefined();
   });
 
-  it("drops the range once the curve stops resolving the upper quartile", () => {
+  it("leaves the range open rather than dropping it past two hours", () => {
     const late = estimateOutage({ park: [], pooled }, 130);
     expect(late).toBeDefined();
-    // The probabilities still hold; the spread does not, so no median is shown
-    // rather than a median that would read as a promise.
-    expect(late?.remaining).toBeUndefined();
+    // "At least fifty minutes more, no upper bound we can measure" is the most
+    // useful thing there is to say about a long outage, and it renders as an
+    // open range. Collapsing it would show nothing on exactly the outages a
+    // visitor most wants to understand.
+    expect(late?.remaining).toEqual({ p25: 50, median: 165, p75: null });
     expect(late?.recoveryWithin60).toBeCloseTo(0.291);
   });
 

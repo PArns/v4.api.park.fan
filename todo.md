@@ -1,78 +1,89 @@
 # TODO
 
-## Ride downtime: measure locally before anything is published (2026-09-06)
+## Ride downtime: what is left after the phase 0 run (2026-09-06)
 
-The code is built (see [ride-downtime](docs/analytics/ride-downtime.md) and
-PR #228). **Nothing historical reaches a reader yet, and nothing should until
-these have been run against a real database.** Every threshold in
-`DOWNTIME_GATES` is a placeholder chosen to withhold too much rather than too
-little; the point of the first three items is to replace them with counted
-numbers.
+Phase 0 **has been run** against production. The results, the gate that had to be
+replaced and the new recovery estimate are in
+[ride-downtime §0 and §6a](docs/analytics/ride-downtime.md#0-what-the-measurement-found).
+Four of the six original items are done; what follows is what actually remains.
 
-The two `queue_data` columns are the one thing that cannot wait, because they
-only describe rows written after they exist.
+**Nothing historical reaches a reader yet**, and what stands in the way is now
+the hand check rather than the thresholds.
 
-- [ ] **Apply the two `queue_data` columns by hand, timed against a restore
-      first.** There is no `src/migrations` and no `migrations` entry in
-      `typeorm.config.ts` — the schema comes from `synchronize` — and
-      `queue_data` is a compressed hypertable with 254+ chunks, so an
-      unmeasured `ALTER` there is not a thing to try in production.
+### 1. Apply the two `queue_data` columns — needs a go-ahead
 
-      ```sql
-      ALTER TABLE queue_data ADD COLUMN is_heartbeat boolean NULL;
-      ALTER TABLE queue_data ADD COLUMN raw_status   text    NULL;
-      ```
+This is the one remaining step that writes to production.
 
-      **Nullable, never `DEFAULT false`.** `NULL` means "written before the
-      column existed" and the reader falls back to the old
-      `lastUpdated = timestamp` heuristic; a default would promote a year of
-      carried-forward heartbeat rows to observations in one statement, and
-      every duration figure would be wrong upward on exactly the long outages
-      that carry a median.
+```sql
+SET lock_timeout = '5s';
+ALTER TABLE queue_data ADD COLUMN is_heartbeat boolean NULL;
+ALTER TABLE queue_data ADD COLUMN raw_status   text    NULL;
+```
 
-      The four new tables (`attraction_outages`, `attraction_exposure_days`,
-      `attraction_downtime_profiles`, `park_downtime_coverage`) come from
-      entity sync and need nothing by hand.
+**Timed, 2026-09-06:** 139 ms and 62 ms over a purpose-built 258-chunk
+compressed hypertable. All chunks stayed compressed and old rows read NULL. The
+cost is the catalogue, so it scales with chunk count (257 in production) and not
+with the 4.9 GB of data.
 
-- [ ] **Run phase 0 and re-derive the event floor.**
-      `GET /v1/admin/downtime-measurement?days=90` over ~30 rides across Magic
-      Kingdom, Epcot, Anaheim, Disneyland Paris, Universal Studios Florida,
-      Efteling and Europa-Park. Read the EVENT count and the duration
-      histogram, not DOWN-hours — that unit is what made every earlier estimate
-      wrong (`downCount` scored 16 for Revenge of the Mummy on a ten-hour park
-      day). Then set `DOWNTIME_GATES.minOutages` from what is actually there
-      and write the table into the doc.
+**The risk is the `AccessExclusiveLock`, not the runtime.** The statement queues
+behind every running query on `queue_data` and blocks everything behind it while
+it waits — hence `lock_timeout` and a retry rather than letting it sit. Off-peak,
+and not during a Coolify deploy.
 
-      Watch `singleReadingShare` per park in the same response: a park over
-      0.7 is in the artefact regime and no duration may be read out of it.
+**Nullable, never `DEFAULT false`.** `NULL` means "written before the column
+existed" and the reader falls back to `lastUpdated = timestamp`; a default would
+promote a year of carried heartbeat rows to observations in one statement.
 
-- [ ] **`EXPLAIN (ANALYZE, BUFFERS)` the reconstruction over a 45-day-old
-      chunk.** Both statements in `outage-reconstruction.sql.ts`, and record
-      chunks decompressed and buffers the way the `downYesterday` and
-      `detect-seasonal` docstrings do. The nightly job runs one statement per
-      time chunk across every park precisely to avoid decompressing the same
-      chunk two hundred times, and that claim is unverified until this is run.
+Note that TypeORM `synchronize` will apply these two columns on the first deploy
+that carries the entity, so this is a matter of _when_ rather than _whether_ —
+which is the reason it was worth timing.
 
-- [ ] **Run the reconstruction once and check the invariant.**
-      `POST /v1/admin/rebuild-downtime?days=120`. The processor logs a warning
-      naming how many exposure days failed
-      `operating + down + closed + refurbishment + absent + unobserved =
-      parkOpenMinutes`. Anything above a handful is a segment-arithmetic bug,
-      not a rounding one.
+The five new tables (`attraction_outages`, `attraction_exposure_days`,
+`attraction_downtime_profiles`, `park_downtime_coverage`,
+`downtime_recovery_curves`) come from entity sync and need nothing by hand.
 
-- [ ] **Hand-check twenty rides before anything publishes.** Take the rides
-      that would clear the gates and verify their reconstructed outages against
-      the parks' own channels for those dates. **More than two of twenty
-      disagree and nothing proceeds.** This is the only check that tests the
-      whole chain against reality rather than against itself.
+### 2. Remaining checklist
 
+- [ ] **Hand-check twenty rides before anything publishes.** The one item that
+      tests the whole chain against reality rather than against itself, and now
+      the only thing between the profiles and a reader. Take the rides that clear
+      the re-derived gates and verify their reconstructed outages against the
+      parks' own channels for those dates. **More than two of twenty disagree and
+      nothing proceeds.** Candidates are easy now: 1324 rides clear the event
+      floor, and the densest histories are Parque Warner Madrid, Cedar Point,
+      Movie Park Germany and Canada's Wonderland.
+- [ ] **First reconstruction fill, in stages.** `POST /v1/admin/rebuild-downtime`
+      with a window of **30 days at a time**, not 120 in one call. Measured: 6x
+      the window costs ~19x the time, 30 days already spills ~700 MB of temp for
+      statement 1, and the two statements run under one `Promise.all`. The
+      processor logs any exposure day failing the minute invariant — that check
+      already passed read-only over 88 814 days with 0 violations, so a warning
+      here means the write path, not the arithmetic.
 - [ ] **Thirty days after the columns ship: `GET /v1/admin/downtime-erasure`.**
-      How much of the DOWN signal `ConflictResolverService` deletes, in rows
-      and in the minutes they carried. It decides whether the probability
-      question can be reopened at all — and the arithmetic in
-      [ride-downtime §6](docs/analytics/ride-downtime.md#6-why-there-is-no-probability)
-      still says no even if the answer is small.
+      How much of the DOWN signal `ConflictResolverService` deletes, in rows and
+      in the minutes they carried. Still the number that decides whether §6's
+      refusal can ever be revisited.
+- [ ] **Re-run the recovery curve calibration after a full quarter.** The
+      out-of-sample error is 2.55 pp today, on a 120/60 split of 180 days. Worth
+      re-running once a year of reconstruction exists, because the curve is
+      currently built from a mostly-summer window and the hazard may be seasonal.
+- [ ] **`pnpm measure:cls --late`** on a park page with a DOWN ride (frontend).
+      The card gained a second `w-full` line and cards share row heights through
+      a subgrid.
 
+### 3. Done, 2026-09-06
+
+- Phase 0 run: 150 132 events / 90 d over 2228 rides in 78 parks; capability
+  census 197 of 213 parks down-capable, 192 with a schedule.
+- Event floor re-derived: **24 confirmed** (1324 rides clear it, median 31).
+- Artefact gate replaced — it correlated with "outage shorter than an hour" at
+  r = 0.996 and marked 47 of 78 parks unreadable. It now measures temporal
+  resolution, and catches nobody.
+- `EXPLAIN (ANALYZE, BUFFERS)` on both statements over 1/7/30/180-day windows.
+- Exposure invariant verified read-only: 88 814 days, 0 violations.
+- `ALTER` timed against a compressed 258-chunk probe.
+- `perPark()` slug-collision fixed (`disneyland-park` is Anaheim _and_ Paris).
+- New: the how-much-longer estimate, on the ride card and the ride page.
 
 ## Retire the attractions that no longer exist (2026-08-15)
 

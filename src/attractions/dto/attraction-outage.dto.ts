@@ -58,11 +58,12 @@ export class OutageEstimateDto {
   @ApiProperty({
     description:
       "Remaining operating minutes at the 25th, 50th and 75th percentile. " +
-      "Absent once the curve stops resolving the upper quartile (past roughly " +
-      "two hours) — render the median only together with the spread.",
+      "`p75` is null past roughly two hours, where the curve stops resolving " +
+      'the upper quartile — render that as an open range ("ab 2:45 h"), and ' +
+      "never render the median without the spread around it.",
     required: false,
   })
-  remaining?: { p25: number; median: number; p75: number };
+  remaining?: { p25: number; median: number; p75: number | null };
 
   @ApiProperty({
     description:
