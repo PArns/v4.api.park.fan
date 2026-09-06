@@ -214,6 +214,25 @@ export class AdminCurationService {
     // hands both rows the same height, speed and length. Two rides already did
     // this once, from a name-based match across parks holding a ride of the
     // same name.
+    // A works period whose end precedes its start is a window that never
+    // applies, and it fails silently: the ride keeps reporting outages and the
+    // editor sees two dates sitting in the form. Checked on the MERGED row
+    // rather than on the patch, because a PATCH carrying only the end date is
+    // the ordinary way to close an open-ended window.
+    if (
+      changed.includes("curatedOutOfServiceFrom") ||
+      changed.includes("curatedOutOfServiceTo")
+    ) {
+      const from = attraction.curatedOutOfServiceFrom;
+      const to = attraction.curatedOutOfServiceTo;
+      if (from && to && to < from) {
+        throw new BadRequestException(
+          `The works period ends ${to} and starts ${from}. A window that ` +
+            `ends before it begins never applies.`,
+        );
+      }
+    }
+
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {
       const clash = await this.attractions.findOne({
         where: { rcdbId: attraction.rcdbId, id: Not(attraction.id) },
@@ -452,7 +471,8 @@ export class AdminCurationService {
       raw === "" &&
       (spec.type === "number" ||
         spec.type === "decimal" ||
-        spec.type === "months")
+        spec.type === "months" ||
+        spec.type === "date")
     ) {
       return unset;
     }
@@ -551,6 +571,34 @@ export class AdminCurationService {
         }
         // Two decimals is more than any park's area is known to.
         return Math.round(value * 100) / 100;
+      }
+
+      case "date": {
+        if (typeof raw !== "string") {
+          throw new BadRequestException(`${spec.label} must be a date`);
+        }
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) return unset;
+        // Stored and compared as a plain `YYYY-MM-DD` string, never parsed into
+        // a Date. A works period is a statement in the park's calendar, and
+        // constructing a Date here would drag the server's offset into it and
+        // move the boundary by a day for every park west of Greenwich.
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          throw new BadRequestException(
+            `${spec.label} must be a date in YYYY-MM-DD form`,
+          );
+        }
+        // Rejects 2026-02-30 and 2026-13-01, which the pattern lets through.
+        const [year, month, day] = trimmed.split("-").map(Number);
+        const probe = new Date(Date.UTC(year, month - 1, day));
+        if (
+          probe.getUTCFullYear() !== year ||
+          probe.getUTCMonth() !== month - 1 ||
+          probe.getUTCDate() !== day
+        ) {
+          throw new BadRequestException(`${spec.label} is not a real date`);
+        }
+        return trimmed;
       }
 
       case "months": {

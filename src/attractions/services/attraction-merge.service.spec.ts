@@ -122,7 +122,14 @@ describe("AttractionMergeService", () => {
 
     await service.mergeAttractions("row-base", "row-suffix");
 
-    expect(manager.update).not.toHaveBeenCalled();
+    // The update always fires now, because `lastMergedAt` has to be stamped
+    // whether or not anything else changed: the downtime reconstruction reads it
+    // to skip a ride whose history has just become two interleaved series. What
+    // this test is about is that the update carries NOTHING ELSE.
+    expect(manager.update).toHaveBeenCalledTimes(1);
+    const payload = (manager.update as jest.Mock).mock.calls[0][2];
+    expect(Object.keys(payload)).toEqual(["lastMergedAt"]);
+    expect(payload.lastMergedAt).toBeInstanceOf(Date);
   });
 
   it("renames only after the loser is gone, so the unique slug index allows it", async () => {
@@ -180,7 +187,9 @@ describe("AttractionMergeService", () => {
 
     await service.mergeAttractions("row-base", "row-suffix");
 
-    expect(manager.update).not.toHaveBeenCalled();
+    // Same as above: the merge stamp always travels, and nothing else may.
+    const payload = (manager.update as jest.Mock).mock.calls[0][2];
+    expect(Object.keys(payload)).toEqual(["lastMergedAt"]);
   });
 
   it("tells the frontend to drop its cached attraction pages", async () => {

@@ -1,8 +1,10 @@
+import { DowntimeRecoveryCurve } from "../analytics/entities/downtime-recovery-curve.entity";
 import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { AttractionsService } from "./attractions.service";
 import { AttractionIntegrationService } from "./services/attraction-integration.service";
+import { AttractionOutageService } from "./services/attraction-outage.service";
 import { ThemeParksModule } from "../external-apis/themeparks/themeparks.module";
 import { ParksModule } from "../parks/parks.module";
 import { QueueDataModule } from "../queue-data/queue-data.module";
@@ -35,6 +37,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
       QueueData,
       ScheduleEntry,
       AttractionReviewMark,
+      DowntimeRecoveryCurve,
     ]),
     ThemeParksModule,
     forwardRef(() => ParksModule),
@@ -52,6 +55,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
   providers: [
     AttractionsService,
     AttractionIntegrationService,
+    AttractionOutageService,
     AttractionMergeService,
     AttractionRetirementService,
     AttractionReviewService,
@@ -63,6 +67,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
   exports: [
     AttractionsService,
     AttractionIntegrationService,
+    AttractionOutageService,
     AttractionMergeService,
     AttractionRetirementService,
     AttractionReviewService,

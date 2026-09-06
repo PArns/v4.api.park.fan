@@ -294,6 +294,14 @@ export class ConflictResolverService {
             `Status override for "${entity.name}": ${entity.status} → OPERATING ` +
               `(source with wait time >= 5 min: qt=${entity.qtWaitTime ?? "-"}, wz=${entity.wzWaitTime ?? "-"})`,
           );
+          // Kept, not just logged. A debug line is not a measurement, and this
+          // override is the single largest unknown in any downtime figure built
+          // on the surviving column: it fires on the dual-sourced parks and,
+          // within them, on the popular rides whose queues take fifteen to
+          // thirty minutes to drain, so what it erases is the short outages of
+          // exactly the rides anybody would ask about. `queue_data.raw_status`
+          // turns that from an argument into a number.
+          entity.rawStatus = entity.status;
           entity.status = LiveStatus.OPERATING;
         }
       }

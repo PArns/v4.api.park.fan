@@ -14,6 +14,7 @@ import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
 import { ParkEnrichmentService } from "../../parks/services/park-enrichment.service";
 import { PopularityService } from "../../popularity/popularity.service";
 import { RideProfileService } from "./ride-profile.service";
+import { AttractionOutageService } from "./attraction-outage.service";
 import { createTestAttraction } from "../../../test/fixtures/attraction.fixtures";
 
 describe("AttractionIntegrationService", () => {
@@ -158,6 +159,14 @@ describe("AttractionIntegrationService", () => {
           provide: RideProfileService,
           useValue: {
             findByAttraction: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          // The outage line is only asked for when a ride reads DOWN, so the
+          // default here is the empty answer every other case gets.
+          provide: AttractionOutageService,
+          useValue: {
+            getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
           },
         },
       ],

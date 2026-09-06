@@ -775,6 +775,10 @@ export class WaitTimesProcessor {
       name: entityData.name,
       entityType: entityData.entityType,
       status: entityData.status,
+      // Set only where ConflictResolverService overrode the status. It is the
+      // one piece of the merge that leaves no trace in what we serve, and
+      // therefore the only one a later measurement cannot reconstruct.
+      rawStatus: entityData.rawStatus,
       queue,
       showtimes: entityData.showtimes,
       diningAvailability: entityData.diningAvailability,
@@ -996,6 +1000,12 @@ export class WaitTimesProcessor {
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
                 waitTime: last ? last.waitTime : 0,
+                // The carried row copies the previous `data_source` too, which
+                // is what made it indistinguishable from a reading. This flag is
+                // the distinction: without it a DOWN that vanishes from every
+                // feed writes itself forward for up to 24 hours and every
+                // duration statistic is wrong upward on the long outages.
+                isHeartbeat: true,
                 dataSource: last ? last.dataSource : "system-heartbeat",
                 lastUpdated: now,
               });

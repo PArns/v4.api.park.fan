@@ -1,4 +1,4 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiExtraModels, ApiProperty } from "@nestjs/swagger";
 import {
   ParkSummaryDto,
   mapParkSummary,
@@ -11,6 +11,12 @@ import {
   CrowdLevel,
 } from "../../common/types/crowd-level.type";
 import { HistoryDayDto } from "./history-day.dto";
+import { AttractionOutageDto } from "./attraction-outage.dto";
+import {
+  DowntimeFiguresDto,
+  DowntimeWithheldDto,
+  type DowntimeBlockDto,
+} from "./downtime-reliability.dto";
 import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
 import {
@@ -154,6 +160,10 @@ export class TypicalWaitsDto {
  * Used for API responses when returning attraction data.
  * Now includes integrated live data: current queues, status, forecasts, ML predictions, statistics.
  */
+// The two downtime branches are reachable only through a $ref in the union
+// below, so Swagger never walks to them on its own and the generated schema
+// would point at nothing.
+@ApiExtraModels(DowntimeFiguresDto, DowntimeWithheldDto)
 export class AttractionResponseDto {
   @ApiProperty({ description: "Unique identifier of the attraction" })
   id: string;
@@ -172,6 +182,30 @@ export class AttractionResponseDto {
     required: false,
   })
   effectiveStatus?: string;
+
+  @ApiProperty({
+    description:
+      "The running outage, present only while the ride reads DOWN, only in a " +
+      "park whose sources can report one, and only outside a curated works " +
+      "period. Its absence is not a statement that the ride is running.",
+    required: false,
+    type: AttractionOutageDto,
+  })
+  outage?: AttractionOutageDto;
+
+  @ApiProperty({
+    description:
+      "How often this ride has been REPORTED down, or the reason we say " +
+      "nothing. A discriminated union on `kind`: `figures` carries the four " +
+      "measured numbers, `withheld` carries only a reason. Never both, and " +
+      "never the counts that produced the verdict.",
+    required: false,
+    oneOf: [
+      { $ref: "#/components/schemas/DowntimeFiguresDto" },
+      { $ref: "#/components/schemas/DowntimeWithheldDto" },
+    ],
+  })
+  downtime?: DowntimeBlockDto;
 
   @ApiProperty({
     description:
