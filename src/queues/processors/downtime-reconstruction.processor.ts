@@ -41,8 +41,26 @@ import { AttractionExposureDay } from "../../analytics/entities/attraction-expos
 export class DowntimeReconstructionProcessor {
   private readonly logger = new Logger(DowntimeReconstructionProcessor.name);
 
-  /** Default lookback for the nightly run. */
-  private readonly DEFAULT_WINDOW_DAYS = 120;
+  /**
+   * Default lookback for the nightly run.
+   *
+   * **30, not 120, and the reason is measured.** The two statements cost 0.43 s
+   * over one day, 3.6 s over seven and 22 s over thirty — but ~7 minutes over
+   * 180, so the cost is strongly super-linear, and the temp spill grows with it
+   * (30 days already writes ~700 MB for statement 1). They run under one
+   * `Promise.all`, so a 120-day nightly run spills several GB concurrently every
+   * night to recompute intervals that have not changed since yesterday.
+   *
+   * A rolling 30 days is enough for the nightly job because the table
+   * accumulates: an interval written last month stays written, and the profile
+   * window (90 days) reads `attraction_outages` rather than the reconstruction.
+   * `OUTAGE_SCAN_START_SQL` still walks back past the window edge for any spell
+   * that is open or started earlier, so a long outage is not truncated.
+   *
+   * The FIRST fill is a different job and is not this one: it needs the whole
+   * history and belongs in 30-day stages, run by hand. See `todo.md`.
+   */
+  private readonly DEFAULT_WINDOW_DAYS = 30;
 
   constructor(
     private readonly dataSource: DataSource,
