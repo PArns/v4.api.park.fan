@@ -201,4 +201,28 @@ describe("isDurationUsable", () => {
     expect(decision.figures).toBe(false);
     expect(decision.reason).toBe("heavily_censored");
   });
+
+  it("withholds for a park whose feed has never said DOWN", () => {
+    // `wiki_entity_id IS NOT NULL` makes a DOWN possible; it does not make the
+    // feed carry one. 102 of 182 scheduled parks had produced no DOWN row in
+    // 180 days — Phantasialand, Energylandia, Alton Towers, Parc Asterix — with
+    // MORE observed operating time between them than the reporting parks have.
+    // Read as `reports`, every one of those rides would have said "no outage
+    // reported in 90 days", which is our blindness printed as an operator's
+    // clean record.
+    const decision = decideProfile(HEALTHY, "never_reports");
+    expect(decision.figures).toBe(false);
+    expect(decision.reason).toBe("park_never_reports");
+  });
+
+  it("keeps that separate from a park with no capable source at all", () => {
+    // Same outcome for the ride, different sentence to the reader, and only one
+    // of them is a statement about configuration.
+    expect(decideProfile(HEALTHY, "not_capable").reason).toBe(
+      "not_down_capable",
+    );
+    expect(decideProfile(HEALTHY, "never_reports").reason).toBe(
+      "park_never_reports",
+    );
+  });
 });

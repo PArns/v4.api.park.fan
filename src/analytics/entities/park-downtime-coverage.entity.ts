@@ -16,6 +16,35 @@ export const DOWNTIME_REGIMES = [
    * not running onto CLOSED or REFURBISHMENT.
    */
   "not_capable",
+  /**
+   * The park is listed at themeparks.wiki, and its feed has still never said
+   * DOWN.
+   *
+   * `wiki_entity_id IS NOT NULL` is necessary for a DOWN to be possible and it
+   * is **not sufficient**: being known to the source says nothing about whether
+   * that park's feed carries the status. Measured 2026-09-07, **102 of 182**
+   * parks with a schedule had not produced one DOWN row in 180 days, among them
+   * Phantasialand, Energylandia (19 026 observed operating hours), Hersheypark,
+   * Alton Towers and Parc Asterix.
+   *
+   * They are not quiet. Taken together the never-DOWN parks have MORE observed
+   * operating time than the reporting ones (736 738 h against 583 782 h) with
+   * zero events. At the 10th-percentile rate of the parks that do report
+   * (3.46 outages per 1000 operating hours), Energylandia alone would expect
+   * ~66.
+   *
+   * This is read from the outcome, which the rest of this file refuses to do,
+   * and the difference is the evidence threshold: `MIN_BLIND_EVIDENCE_HOURS` is
+   * the point past which "we saw nothing" stops being compatible with "there
+   * was nothing to see". A quiet quarter does not have 1500 observed operating
+   * hours and no event; a feed that does not carry the status does.
+   *
+   * Without this regime those parks read `reports`, and a ride page would have
+   * said „In den letzten 90 Tagen wurde keine Störung gemeldet" — our own
+   * blindness rendered as an operator's clean record, which is the single worst
+   * thing this feature could do.
+   */
+  "never_reports",
   /** Readings arrive and hold long enough to measure. */
   "reports",
   /**
@@ -102,3 +131,15 @@ export class ParkDowntimeCoverage {
   @Column({ type: "timestamptz", name: "generated_at" })
   generatedAt: Date;
 }
+
+/**
+ * Observed operating hours before "no DOWN ever" is read as blindness.
+ *
+ * Calibrated against production: among parks that do report, the 10th-percentile
+ * rate is 3.46 outages per 1000 observed operating hours. At 1500 hours that
+ * predicts 5.2 events, so seeing none has probability e^-5.2 = **0.0056** if the
+ * park really were reporting. It catches 91 of the 102 blind parks; the other 11
+ * have too little observation to say, stay `reports`, and are withheld by the
+ * ride-level event floor anyway.
+ */
+export const MIN_BLIND_EVIDENCE_HOURS = 1500;

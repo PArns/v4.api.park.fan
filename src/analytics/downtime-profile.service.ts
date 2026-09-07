@@ -3,7 +3,10 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
 import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
 import type { DowntimeWithheldReason } from "./entities/attraction-downtime-profile.entity";
-import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
+import {
+  MIN_BLIND_EVIDENCE_HOURS,
+  ParkDowntimeCoverage,
+} from "./entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "./entities/park-downtime-coverage.entity";
 
 /**
@@ -191,6 +194,24 @@ export class DowntimeProfileService {
                     GROUP BY EXTRACT(MINUTE FROM e.ts)
                  ) m
              ), 0)                                       AS "onTheHourShare",
+             -- Observed operating hours behind this park, and whether ANY
+             -- DOWN reading has ever arrived. Together they are the blindness
+             -- test: silence only means something once there has been enough
+             -- observation for silence to be impossible.
+             COALESCE((
+               SELECT SUM(ed.operating_minutes) / 60.0
+                 FROM attraction_exposure_days ed
+                 JOIN attractions a4 ON a4.id = ed."attractionId"
+                WHERE a4."parkId" = p.id
+             ), 0)                                       AS "observedOperatingHours",
+             EXISTS (
+               SELECT 1
+                 FROM queue_data qd
+                 JOIN attractions a5 ON a5.id = qd."attractionId"
+                WHERE a5."parkId" = p.id
+                  AND qd."queueType" = 'STANDBY'
+                  AND qd.status = 'DOWN'
+             )                                           AS "hasEverReportedDown",
              (
                SELECT COUNT(*)
                  FROM attraction_outages o3
@@ -231,13 +252,24 @@ export class DowntimeProfileService {
           ? Number(row.onTheHourShare) || 0
           : 0;
 
+      // Blindness, and the evidence that licenses calling it that. Checked
+      // after capability and schedule (both cheaper and more certain) and
+      // before the artefact test, which cannot fire on a park with no
+      // intervals to measure resolution on anyway.
+      const observedHours = Number(row.observedOperatingHours) || 0;
+      const blind =
+        row.hasEverReportedDown === false &&
+        observedHours >= MIN_BLIND_EVIDENCE_HOURS;
+
       const regime: DowntimeRegime = !row.downCapable
         ? "not_capable"
         : !row.hasSchedule
           ? "no_schedule"
-          : onTheHourShare >= DOWNTIME_GATES.artefactOnTheHourShare
-            ? "artefact"
-            : "reports";
+          : blind
+            ? "never_reports"
+            : onTheHourShare >= DOWNTIME_GATES.artefactOnTheHourShare
+              ? "artefact"
+              : "reports";
 
       regimes.set(row.parkId, regime);
       toSave.push({
@@ -429,6 +461,7 @@ export function decideProfile(
   });
 
   if (!regime || regime === "not_capable") return withhold("not_down_capable");
+  if (regime === "never_reports") return withhold("park_never_reports");
   if (regime === "no_schedule") return withhold("no_schedule");
   if (regime === "artefact") return withhold("artefact_regime");
 
@@ -492,6 +525,10 @@ interface CoverageRow {
   onTheHourShare: number | string;
   /** Interval edges the share is computed over. Below the floor it says nothing. */
   resolutionEdges: number | string;
+  /** Observed operating hours behind the park — the evidence for blindness. */
+  observedOperatingHours: number | string;
+  /** Whether any DOWN reading has ever arrived for this park. */
+  hasEverReportedDown: boolean;
   medianSpellMinutes: number | string | null;
 }
 

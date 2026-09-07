@@ -6,6 +6,35 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — a park whose feed never reports outages now says so
+
+`wiki_entity_id IS NOT NULL` makes a DOWN possible; it does not make the feed
+carry one. **102 of 182 scheduled parks had produced no DOWN row in 180 days** —
+Phantasialand, Energylandia, Alton Towers, Parc Asterix. They are not quiet: the
+never-reporting parks have MORE observed operating time between them than the
+reporting ones (736 738 h against 583 782 h) with zero events, and Energylandia
+alone has 19 026 observed hours where the conservative rate predicts ~66.
+
+Read as `reports`, those rides would eventually have said "no outage reported in
+90 days" — our blindness printed as an operator's clean record. New regime
+`never_reports` with its own refusal sentence in six languages. It is the one
+place capability is read from the outcome, and what licenses it is an evidence
+threshold: 1500 observed operating hours, where silence has probability 0.0056
+if the park really were reporting.
+
+### Fixed — the recovery curves were never built
+
+`repository.delete({})` throws in TypeORM (empty criteria are rejected). It
+threw on every nightly run, BullMQ retried three times, and the error never
+reached the log — so the reconstruction reported success while
+`downtime_recovery_curves` stayed empty, and three full reconstructions ran each
+night to produce nothing.
+
+The delete is a query builder now, and the curve rebuild has its own try/catch:
+it is an addition to a reconstruction that already succeeded and was written, so
+its failure is logged rather than retried.
+
+
 ### Fixed — a module that exported a service it never provided
 
 `DowntimeRecoveryService` landed in `AnalyticsModule.exports` without being in

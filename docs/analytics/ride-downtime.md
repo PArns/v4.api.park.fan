@@ -160,6 +160,58 @@ not with the 4.9 GB of data. **The risk is not the runtime, it is the
 `queue_data` and blocks everything behind it. Run it with a `lock_timeout` and
 retry, rather than letting it sit in the queue.
 
+### The capability test was necessary but not sufficient
+
+Added 2026-09-07, after the first nightly run.
+
+`wiki_entity_id IS NOT NULL` says a DOWN is *possible*. It does not say the
+park's feed carries the status, and measurement says most of them do not:
+**102 of 182 scheduled parks had produced no DOWN row in 180 days.** Among them
+Phantasialand, Energylandia, Hersheypark, Alton Towers, Parc Asterix and
+PortAventura.
+
+They are not quiet quarters:
+
+| | parks | observed operating hours |
+| --- | ---: | ---: |
+| emits DOWN | 80 | 583 782 |
+| never DOWN | 102 | **736 738** |
+
+The blind group has *more* observed operating time than the reporting one, with
+zero events. Median hours per park are near-identical (6616 against 7250), so
+the two groups do not differ in how much we watched them. At the 10th-percentile
+rate of the parks that do report — 3.46 outages per 1000 operating hours —
+Energylandia's 19 026 hours predict ~66 events.
+
+Read as `reports`, every ride in those parks would eventually have said „In den
+letzten 90 Tagen wurde keine Störung gemeldet", which is our blindness printed
+as an operator's clean record — the §4 failure this whole document exists to
+avoid, one level up from the ride.
+
+**New regime `never_reports`**, and it is the one place capability is read from
+the outcome. What licenses that is an evidence threshold rather than the
+observation alone: `MIN_BLIND_EVIDENCE_HOURS = 1500` predicts 5.2 events at the
+conservative rate, so silence has probability **0.0056** if the park really were
+reporting. It catches 91 of the 102; the remaining 11 have too little
+observation to say, stay `reports`, and are withheld by the ride-level event
+floor anyway.
+
+Regimes in production after the change: 100 `reports`, 91 `never_reports`, 16
+`not_capable`, 6 `no_schedule`.
+
+### Two bugs the first nightly run exposed
+
+**The recovery curves never got built.** `repository.delete({})` throws in
+TypeORM — empty criteria are rejected for exactly the reason they look like a
+filter and are not. It threw on every run, BullMQ retried three times, and
+because the error was never logged the reconstruction looked healthy while
+`downtime_recovery_curves` stayed empty. Three full reconstructions ran each
+night (3 x 35 s, ~200 000 exposure rows each) to produce nothing.
+
+The delete is now a query builder, and the curve rebuild is wrapped in its own
+try/catch: it is an addition to a reconstruction that has already succeeded and
+been written, so its failure must be logged, not retried.
+
 ### One bug, found by running it
 
 `perPark()` grouped on `parkSlug`. **`disneyland-park` is Anaheim _and_ Paris**,

@@ -238,7 +238,22 @@ export class DowntimeReconstructionProcessor {
     // pooled row is the fallback every park's serving path reads, so rebuilding
     // it from a single park's intervals would quietly narrow the population
     // behind ~40 000 ride pages.
-    await this.recovery.rebuild();
+    //
+    // Logged and swallowed rather than thrown. The curves are an addition to a
+    // reconstruction that has already succeeded and been written; letting them
+    // fail the job made BullMQ retry the whole thing, so a `delete({})` that
+    // TypeORM rejects cost three full reconstructions (3 x 35 s, 200 000
+    // exposure rows each) every night — and the error still never reached the
+    // log, so the run looked healthy while the table stayed empty.
+    try {
+      await this.recovery.rebuild();
+    } catch (error) {
+      this.logger.error(
+        `Recovery curves failed, reconstruction kept: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }
 

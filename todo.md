@@ -71,6 +71,23 @@ The five new tables (`attraction_outages`, `attraction_exposure_days`,
       The card gained a second `w-full` line and cards share row heights through
       a subgrid.
 
+### 2b. Found by the first nightly run (2026-09-07)
+
+Both fixed in the same push; both are in
+[ride-downtime §0](docs/analytics/ride-downtime.md#0-what-the-measurement-found).
+
+- The recovery curves never built: `delete({})` throws in TypeORM, BullMQ
+  retried three times, and nothing was logged — so the run reported success
+  while the table stayed empty and three full reconstructions ran per night.
+- 102 of 182 scheduled parks have never emitted a DOWN row, and read as
+  `reports` they would have said "no outage reported". New `never_reports`
+  regime with an evidence threshold of 1500 observed operating hours.
+
+- [ ] **Verify after the next nightly run (05:00):** `downtime_recovery_curves`
+      is non-empty (expect ~174 rows, 11 pooled), and `park_downtime_coverage`
+      shows roughly 100 `reports` / 91 `never_reports` / 16 `not_capable` /
+      6 `no_schedule`.
+
 ### 3. Done, 2026-09-06
 
 - Phase 0 run: 150 132 events / 90 d over 2228 rides in 78 parks; capability

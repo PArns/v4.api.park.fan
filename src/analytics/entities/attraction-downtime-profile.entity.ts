@@ -12,6 +12,15 @@ export const DOWNTIME_WITHHELD_REASONS = [
   /** No source in this park can emit DOWN. Configuration, not outcome. */
   "not_down_capable",
   /**
+   * The park's feed is listed but has never once said DOWN.
+   *
+   * Separate from `not_down_capable` because the cause differs — configuration
+   * against an observed silence past the point where silence is possible — and
+   * a reader is owed the accurate one. Both mean the same thing for the ride:
+   * we cannot see its outages, and its clean record is ours, not the operator's.
+   */
+  "park_never_reports",
+  /**
    * The feed publishes on the hour, so no duration can be read out of it.
    *
    * Measured as the share held by one minute-of-hour value, NOT as the share of

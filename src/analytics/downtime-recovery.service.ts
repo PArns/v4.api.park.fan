@@ -68,7 +68,17 @@ export class DowntimeRecoveryService {
     }));
 
     await this.dataSource.transaction(async (manager) => {
-      await manager.getRepository(DowntimeRecoveryCurve).delete({});
+      // `delete({})` throws "Empty criteria(s) are not allowed for the delete
+      // method" — TypeORM refuses it precisely because it looks like a
+      // filtered delete and is not. The whole-table form has to say so.
+      // This threw on every nightly run, BullMQ retried three times, and the
+      // error never reached the log, so the reconstruction looked healthy while
+      // the curves stayed empty.
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from(DowntimeRecoveryCurve)
+        .execute();
       for (let i = 0; i < toSave.length; i += 500) {
         await manager
           .getRepository(DowntimeRecoveryCurve)
