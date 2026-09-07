@@ -182,14 +182,31 @@ const RECOVERY_CURVE_SQL = `
      WHERE o.started_at >= $1::timestamptz
        AND NOT o.likely_works_period
        AND o.operating_minutes IS NOT NULL
-       -- The same flag the profile honours, and for a stronger reason here.
-       -- isDurationUsable rejects a start-censored interval and one whose
-       -- minutes are mostly carried heartbeat rather than observation. Both
-       -- enter Kaplan-Meier as EXACT durations if admitted: a spell with 200 of
-       -- its 300 minutes carried is not a 300-minute outage, and it lands in
-       -- the right tail — which is remainingMedian and remainingP75, the
-       -- numbers a visitor reads standing at a stopped ride.
-       AND o.duration_usable
+       -- The quality half of duration_usable, WITHOUT its end-reason half.
+       --
+       -- This is the correction to a fix that overshot. duration_usable
+       -- requires end_reason IN ('recovered','reclassified') — the very
+       -- predicate observed uses one line above — so filtering on it made
+       -- observed true for every surviving row and removed censoring from the
+       -- estimator entirely. Verified against production: 23 748 rows with
+       -- duration_usable, all observed; the 4964 censored ones vanished
+       -- instead of being held at risk.
+       --
+       -- That biases exactly the wrong way. An outage still running at
+       -- measurement time is disproportionately a LONG one, so dropping it
+       -- makes recovery look faster than it is — the failure §6a exists to
+       -- avoid.
+       --
+       -- What is still excluded is the part about measurement quality rather
+       -- than outcome: a works period is not an outage, a start-censored spell
+       -- has a duration that begins before we were looking, and a spell whose
+       -- minutes are mostly carried heartbeat is not a measurement. Those
+       -- cannot be rescued by censoring, because their TIME is wrong, not just
+       -- their ending.
+       AND NOT o.likely_works_period
+       AND NOT o.start_censored
+       AND o.operating_minutes > 0
+       AND o.observed_operating_minutes::numeric / o.operating_minutes >= 0.5
   ),
   -- The pooled curve is the SAME events with the park key dropped, never a
   -- second query with a different WHERE: a serving path that falls back must
@@ -278,3 +295,12 @@ const RECOVERY_CURVE_SQL = `
    WHERE park_id IS NULL OR at_risk >= $3::int
    ORDER BY park_id NULLS FIRST, signal, t
 `;
+
+/**
+ * The statement, exported for the spec beside it.
+ *
+ * Not exported for any other use: the service is the only thing that should run
+ * it. A spec asserting on the SQL text is worth the export, because the two
+ * predicates it pins were once made accidentally identical and nothing noticed.
+ */
+export const RECOVERY_CURVE_SQL_FOR_TEST = RECOVERY_CURVE_SQL;

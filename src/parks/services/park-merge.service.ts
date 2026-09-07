@@ -423,6 +423,20 @@ export class ParkMergeService {
         loserId,
       );
 
+      // Stamp the survivor, exactly as `AttractionMergeService.merge` does.
+      //
+      // This is the path the column was written for. A park merge is where
+      // colliding rides actually happen — the USH consolidation had 29 of them
+      // — and `applyMergeDependencies` reparents `queue_data` with no
+      // `conflictColumns`, so the survivor now carries two interleaved series
+      // that flap between OPERATING and DOWN at the same instant. Without the
+      // stamp the next nightly reconstruction reads that seam as genuine
+      // outages, and `recently_merged` never fires.
+      await manager.query(
+        `UPDATE attractions SET last_merged_at = NOW() WHERE id = $1`,
+        [winnerId],
+      );
+
       await manager.query(
         "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
       );
