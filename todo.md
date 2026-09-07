@@ -88,6 +88,25 @@ Both fixed in the same push; both are in
       shows roughly 100 `reports` / 91 `never_reports` / 16 `not_capable` /
       6 `no_schedule`.
 
+### 2c. The closure signal (2026-09-07)
+
+Outages are now also read from closures, for the 102 parks whose feed never
+emits DOWN. Details in
+[ride-downtime §0](docs/analytics/ride-downtime.md#0-what-the-measurement-found).
+
+- [ ] **Hand-check the closure signal separately.** It is weaker evidence than a
+      reported DOWN and needs its own sample: take twenty from Phantasialand
+      (85 in 21 days across 27 rides) and check them against the park's own
+      channels. The wording already refuses to say „gemeldet", but a wrong
+      interval is still a wrong interval.
+- [ ] **Watch the first nightly run with both statements.** The log line now
+      reads `N interval(s), M closure gap(s)`. Expect roughly 2600 gaps over a
+      21-day window; a much larger number means a filter stopped working.
+- [ ] **Check the closure-gap recovery curve once it exists.** Its population
+      has no censoring by construction, so if its quartiles come out far from
+      the measured 15/20/35 something is wrong with the interval definition
+      rather than with the estimator.
+
 ### 3. Done, 2026-09-06
 
 - Phase 0 run: 150 132 events / 90 d over 2228 rides in 78 parks; capability
