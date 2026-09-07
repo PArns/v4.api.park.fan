@@ -100,6 +100,24 @@ export function parseDateRange(
   const fromDate = fromZonedTime(`${fromDateStr}T00:00:00`, timezone);
   const toDate = fromZonedTime(`${toDateStr}T23:59:59`, timezone);
 
+  // The format checks above use `new Date(...)`, which is a DIFFERENT parser
+  // from the one that produces the value we return: `new Date("2026-11-31")`
+  // rolls over to 1 December and looks valid, while `fromZonedTime` rejects
+  // the same string as Invalid Date. A day the month does not have therefore
+  // passed validation and travelled on, only to surface much later inside
+  // `formatInParkTimezone` as `RangeError: Invalid time value` — a 500 for
+  // what is plainly a bad request. Validate what we actually hand back.
+  if (isNaN(fromDate.getTime())) {
+    throw new BadRequestException(
+      'Invalid "from" date. Use YYYY-MM-DD with a day the month has.',
+    );
+  }
+  if (isNaN(toDate.getTime())) {
+    throw new BadRequestException(
+      'Invalid "to" date. Use YYYY-MM-DD with a day the month has.',
+    );
+  }
+
   return { fromDate, toDate };
 }
 

@@ -215,6 +215,17 @@ class PredictionResponse(BaseModel):
     predictedWaitTime: int
     predictionType: str
     confidence: float
+    # The model's own spread in minutes: (top trained quantile − median), which
+    # config.py:104 trains alpha=0.95 for and calls "the displayed uncertainty
+    # width". `confidence` folds this into one percentage; this field is the width
+    # itself, so a consumer can draw the band. None when the model has no real
+    # uncertainty (a single-quantile model, or a collapsed VirtEnsembles) — which
+    # is a different statement from a zero-wide band.
+    #
+    # A field absent HERE is dropped from the response: pydantic v2 defaults to
+    # extra='ignore', and `PredictionResponse(**p)` at :545 silently discards
+    # anything predict.py sets that this class does not declare.
+    uncertaintyMinutes: Optional[int] = None
     trend: str = "stable"  # "increasing", "decreasing", "stable"
     crowdLevel: str
     baseline: float

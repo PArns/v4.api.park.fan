@@ -53,6 +53,14 @@ export class HttpCacheInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
+        // A slow route whose client gave up mid-flight has already had its
+        // headers flushed by Express. Setting one now throws
+        // ERR_HTTP_HEADERS_SENT, and NestJS hands that to the exception
+        // filter — which is how an abandoned request became a logged 500
+        // (48-178 a day, all on the heaviest park-detail routes). Nothing is
+        // left to cache once the response is on the wire, so we skip it.
+        if (response.headersSent) return;
+
         const cdnMaxAge = this.sMaxAge ?? this.maxAge;
         // stale-while-revalidate doubles the TTL for forecast-like
         // endpoints (>2 min) so Cloudflare can serve stale-but-known

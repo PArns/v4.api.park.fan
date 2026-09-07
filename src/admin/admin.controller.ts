@@ -20,6 +20,7 @@ import {
   ApiResponse,
   ApiSecurity,
   ApiBody,
+  ApiQuery,
 } from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
@@ -40,6 +41,7 @@ import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
+import { DowntimeMeasurementService } from "./downtime-measurement.service";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
@@ -86,6 +88,7 @@ export class AdminController {
     @InjectQueue("park-enrichment") private parkEnrichmentQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
+    @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("six-flags-heights") private sixFlagsHeightsQueue: Queue,
     @InjectQueue("ride-stats") private rideStatsQueue: Queue,
@@ -99,6 +102,7 @@ export class AdminController {
     private readonly parkRepairService: ParkRepairService,
     private readonly parkMergeService: ParkMergeService,
     private readonly systemHealth: SystemHealthService,
+    private readonly downtimeMeasurement: DowntimeMeasurementService,
     private readonly attractionMergeService: AttractionMergeService,
     private readonly parkRenameService: ParkRenameService,
     private readonly rideProfileAudit: RideProfileAuditService,
@@ -197,6 +201,115 @@ export class AdminController {
       this.dataQualityMonitor.findFailingJobs(),
     ]);
     return { windowDays: days, silencedClusters, failingJobs };
+  }
+
+  /**
+   * Phase 0 of the downtime work. Reads, counts, writes nothing.
+   *
+   * Answers in EVENTS, which is the unit nobody had: `downCount` on the history
+   * endpoint counts distinct clock hours carrying a DOWN reading, across the
+   * whole park-local calendar day and with no opening-hours bound, so it reads
+   * 16 on a ten-hour park day. Every threshold in
+   * `docs/analytics/ride-downtime.md` is provisional until this has run.
+   */
+  @Get("downtime-measurement")
+  @ApiOperation({
+    summary: "Count ride outages as events (phase 0, read-only)",
+    description:
+      "Reconstructs outage intervals from queue_data over a window and reports " +
+      "event counts, duration histograms, the capability census and the " +
+      "per-park artefact signature. Publishes nothing and writes nothing.",
+  })
+  @ApiQuery({
+    name: "parks",
+    required: false,
+    description:
+      "Comma-separated park slugs. Omit for every park that could report an " +
+      "outage at all.",
+    example: "phantasialand,europa-park",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: "Lookback in days. Default 90, clamped to 1-365.",
+    example: 90,
+  })
+  async getDowntimeMeasurement(
+    @Query("parks") parks?: string,
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    const parkSlugs = (parks ?? "")
+      .split(",")
+      .map((slug) => slug.trim())
+      .filter(Boolean);
+    const measurement = await this.downtimeMeasurement.measure({
+      parkSlugs,
+      days: Number(days) || undefined,
+    });
+    return measurement as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * Phase 5: how much of the DOWN signal our own merge deletes before storage.
+   *
+   * The one number that decides whether the probability question can ever be
+   * reopened. It answers nothing until `raw_status` has existed for the whole
+   * window, and the response says so rather than reporting a small figure that
+   * reads as good news.
+   */
+  @Get("downtime-erasure")
+  @ApiOperation({
+    summary: "Count the DOWN readings the conflict resolver rewrote",
+    description:
+      "Reads queue_data.raw_status and reports, per park, how many DOWN and " +
+      "CLOSED readings were overwritten with OPERATING — in rows AND in the " +
+      "minutes they carried, because an overridden state is stable afterwards " +
+      "and writes no further row. Read-only.",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: "Lookback in days. Default 30, clamped to 1-365.",
+    example: 30,
+  })
+  async getDowntimeErasure(
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    const measurement = await this.downtimeMeasurement.measureErasure(
+      Number(days) || undefined,
+    );
+    return measurement as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * Rebuild the outage intervals, the exposure days and the profiles.
+   *
+   * Normally the 5:00 AM cron. Exposed for a targeted repair and for the first
+   * run, which has no history to be incremental about.
+   */
+  @Post("rebuild-downtime")
+  @ApiOperation({
+    summary: "Run the downtime reconstruction now",
+    description:
+      "Rebuilds attraction_outages, attraction_exposure_days and the profiles. " +
+      "Publishes nothing on its own: whether a ride shows a figure is decided " +
+      "by the gates in DowntimeProfileService.",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: "Window in days. Default 120, clamped to 1-400.",
+    example: 120,
+  })
+  async rebuildDowntime(
+    @Query("days") days?: string,
+  ): Promise<Record<string, unknown>> {
+    await this.downtimeQueue.add(
+      "reconstruct-downtime",
+      { windowDays: Number(days) || undefined },
+      { priority: 60 },
+    );
+    return { message: "Downtime reconstruction queued", queue: "downtime" };
   }
 
   @Get("system-health")

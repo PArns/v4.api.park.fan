@@ -599,6 +599,47 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
     // crowdLevel is the same daily statistic, so nothing is lost for that day.
     expect(yesterday.crowdLevel).toBe("moderate");
   });
+
+  /**
+   * Every day-relative field has to be re-derived here, because the cache is keyed by MONTH and
+   * the current month's entry is read again tomorrow. These three pin the fields that a longer
+   * cache window would otherwise leave a day behind — the whole point of raising that window.
+   */
+  it("re-derives isToday against a fresh today rather than trusting the cached flag", () => {
+    // Written yesterday: 08-17 carried the flag and 08-18 did not.
+    const days = [
+      day("2026-08-17", { isToday: true }),
+      day("2026-08-18", { isToday: false }),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-18", "2026-08-18");
+
+    expect(out.days.find((d: any) => d.date === "2026-08-17").isToday).toBe(
+      false,
+    );
+    expect(out.days.find((d: any) => d.date === "2026-08-18").isToday).toBe(
+      true,
+    );
+  });
+
+  it("demotes a now-past non-OPERATING day to closed instead of serving its old forecast", () => {
+    // Cached while it was still in the future, so it carries an ML prediction.
+    const days = [day("2026-08-17", { status: "UNKNOWN", crowdLevel: "high" })];
+
+    const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+    expect(out.days[0].crowdLevel).toBe("closed");
+  });
+
+  it("leaves a past OPERATING day's measured level alone", () => {
+    const days = [
+      day("2026-08-17", { status: "OPERATING", crowdLevel: "low" }),
+    ];
+
+    const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+    expect(out.days[0].crowdLevel).toBe("low");
+  });
 });
 
 /**
@@ -690,5 +731,68 @@ describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", 
     }).meta;
     expect(meta.scheduleCoverage.to).toBe("2027-01-06");
     expect(meta.scheduleCoverage.to).not.toBe("2026-10-02");
+  });
+});
+
+describe("CalendarService › buildDaysBounded (private)", () => {
+  let service: CalendarService;
+
+  const noopRedis = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+    mget: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        { provide: ParksService, useValue: {} },
+        { provide: WeatherService, useValue: {} },
+        { provide: MLService, useValue: {} },
+        { provide: AnalyticsService, useValue: {} },
+        { provide: HolidaysService, useValue: {} },
+        { provide: AttractionsService, useValue: {} },
+        { provide: REDIS_CLIENT, useValue: noopRedis },
+        {
+          provide: getQueueToken("park-metadata"),
+          useValue: { add: jest.fn() },
+        },
+      ],
+    }).compile();
+    service = module.get<CalendarService>(CalendarService);
+  });
+
+  /**
+   * A 90-day calendar request used to fan out one `calculateCrowdLevelForDate`
+   * per uncached past day, all at once. Measured 2026-09-02: 43 of those
+   * finishing within 7 ms of each other in a single second — the whole
+   * connection pool held by one request, with every other query queued behind
+   * it. The days still build in parallel, just not unboundedly.
+   */
+  it("keeps the number of days built at once below the pool size", async () => {
+    const dates = Array.from(
+      { length: 40 },
+      (_, i) => new Date(2026, 0, i + 1),
+    );
+    let running = 0;
+    let peak = 0;
+
+    const built = await (service as any).buildDaysBounded(
+      dates,
+      async (date: Date) => {
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setImmediate(r));
+        running--;
+        return { date: date.toISOString() };
+      },
+    );
+
+    expect(built).toHaveLength(40);
+    expect(peak).toBeLessThanOrEqual(8);
+    // Still concurrent — this is a ceiling, not a sequential rewrite.
+    expect(peak).toBeGreaterThan(1);
   });
 });

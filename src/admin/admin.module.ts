@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { TypeOrmModule } from "@nestjs/typeorm";
 import { BullModule } from "@nestjs/bull";
 import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
@@ -7,10 +8,13 @@ import { AdminController } from "./admin.controller";
 import { AdminAuthModule } from "./auth/admin-auth.module";
 import { AdminContentModule } from "./content/admin-content.module";
 import { SystemHealthService } from "./system-health.service";
+import { DowntimeMeasurementService } from "./downtime-measurement.service";
+import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { MonitoringModule } from "../monitoring/monitoring.module";
 
 @Module({
   imports: [
+    TypeOrmModule.forFeature([QueueData]),
     AdminAuthModule,
     AdminContentModule,
     MonitoringModule,
@@ -22,6 +26,7 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "park-enrichment" }),
     BullModule.registerQueue({ name: "ml-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
+    BullModule.registerQueue({ name: "downtime" }),
     BullModule.registerQueue({ name: "children-metadata" }),
     BullModule.registerQueue({ name: "six-flags-heights" }),
     BullModule.registerQueue({ name: "ride-stats" }),
@@ -32,6 +37,6 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "shape-shadow" }),
   ],
   controllers: [AdminController],
-  providers: [SystemHealthService],
+  providers: [SystemHealthService, DowntimeMeasurementService],
 })
 export class AdminModule {}

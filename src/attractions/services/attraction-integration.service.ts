@@ -48,6 +48,10 @@ import { RideProfileService } from "./ride-profile.service";
 import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { AttractionOutageService } from "./attraction-outage.service";
+import { toOutageDto } from "../dto/attraction-outage.dto";
+import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
+import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
 
 /**
  * Attraction Integration Service
@@ -81,6 +85,7 @@ export class AttractionIntegrationService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly dataSource: DataSource,
     private readonly rideProfileService: RideProfileService,
+    private readonly outageService: AttractionOutageService,
   ) {}
 
   /**
@@ -314,6 +319,59 @@ export class AttractionIntegrationService {
             // every ride of such a park on UNKNOWN rather than guessing.
             "UNKNOWN";
 
+    // --- The running outage, if the ride is reported down ---
+    //
+    // Asked from AttractionOutageService and never resolved here, because the
+    // park page's ride list runs a DIFFERENT precedence chain in a different
+    // order, and two chains each deriving their own "since when" would put two
+    // sentences about the same ride on two pages. `effectiveStatus` is the gate
+    // rather than `dto.status`: a park that is shut reports CLOSED for every
+    // ride, and a line saying the ride has been down since Tuesday under a badge
+    // saying the park is closed answers a question nobody asked.
+    if (dto.effectiveStatus === "DOWN" && attraction.park) {
+      const outages = await this.outageService.getCurrentOutages(
+        {
+          id: attraction.parkId,
+          timezone: attraction.park.timezone,
+          wikiEntityId: attraction.park.wikiEntityId ?? null,
+        },
+        [
+          {
+            id: attraction.id,
+            curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
+            curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
+          },
+        ],
+      );
+      dto.outage = toOutageDto(outages.get(attraction.id));
+    }
+
+    // --- How often it has been reported down, or why we say nothing ---
+    //
+    // Read from the stored profile and never recomputed here. The gates that
+    // decide whether a figure may be shown at all live in
+    // DowntimeProfileService; a surface computing its own aggregate would be a
+    // second place they could be forgotten, and the difference between a figure
+    // and a claim about a named operator is exactly those comparisons.
+    //
+    // A missing row is `not_down_capable`, not an empty block: the nightly job
+    // writes a row for every tracked ride, so its absence is the same statement.
+    try {
+      const profile = await this.dataSource
+        .getRepository(AttractionDowntimeProfile)
+        .findOne({ where: { attractionId: attraction.id } });
+      dto.downtime = toDowntimeBlock(profile);
+    } catch (error) {
+      // The table may not exist on an instance that has never run the
+      // reconstruction. Omitting the block is honest; failing the ride page
+      // over it is not.
+      this.logger.debug(
+        `Downtime profile unavailable for ${attraction.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
     // --- Forecasts ---
     if (forecasts.length > 0) {
       dto.forecasts = forecasts.map((f) => ({
@@ -329,6 +387,7 @@ export class AttractionIntegrationService {
       predictedTime: p.predictedTime,
       predictedWaitTime: p.predictedWaitTime,
       confidence: p.confidence,
+      uncertaintyMinutes: p.uncertaintyMinutes ?? null,
       crowdLevel: p.crowdLevel,
       baseline: p.baseline,
       trend: p.trend || "stable",
@@ -344,6 +403,7 @@ export class AttractionIntegrationService {
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
             confidence: p.confidence,
+            uncertaintyMinutes: p.uncertaintyMinutes ?? null,
             trend: p.trend,
           }))
         : [];
@@ -796,6 +856,54 @@ export class AttractionIntegrationService {
         }>
       >();
       const downCountMap = new Map<string, number>();
+      /**
+       * The reconstructed per-day figures, which is what `downCount` was always
+       * taken for and never was.
+       *
+       * Read from `attraction_exposure_days` rather than recomputed: an outage
+       * is an interval, and anything that derives events from a per-day table
+       * turns a three-day outage back into three. `outageStarts` is written from
+       * the interval table in the same transaction, so a multi-day outage
+       * increments exactly the day it began on.
+       *
+       * Empty until the nightly reconstruction has run, and the fields are
+       * optional for that reason: absent means "not computed", never "none".
+       */
+      const outageByDate = new Map<
+        string,
+        { outageCount: number; outageMinutes: number }
+      >();
+      try {
+        const outageRows: Array<{
+          opDay: string;
+          outageStarts: number | string;
+          downMinutes: number | string;
+        }> = await this.dataSource.query(
+          `SELECT e.op_day       AS "opDay",
+                  e.outage_starts AS "outageStarts",
+                  e.down_minutes  AS "downMinutes"
+             FROM attraction_exposure_days e
+            WHERE e."attractionId" = $1::uuid
+              AND e.op_day >= $2::date
+              AND e.op_day <= $3::date`,
+          [attractionId, fromDateStr, toDateStr],
+        );
+        for (const row of outageRows) {
+          outageByDate.set(String(row.opDay), {
+            outageCount: Number(row.outageStarts) || 0,
+            outageMinutes: Number(row.downMinutes) || 0,
+          });
+        }
+      } catch (error) {
+        // The table may not exist yet on an instance that has not run the
+        // reconstruction. The history endpoint is not worth failing over an
+        // optional field.
+        this.logger.debug(
+          `Outage rollup unavailable for ${attractionId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
 
       const cachedHistory =
         await this.analyticsService.getAttractionHourlyHistory(
@@ -1135,6 +1243,12 @@ export class AttractionIntegrationService {
               value: roundToNearest5Minutes(h.value), // Ensure all values are rounded
             })),
             downCount,
+            ...(outageByDate.has(dateStr)
+              ? {
+                  outageCount: outageByDate.get(dateStr)!.outageCount,
+                  outageMinutes: outageByDate.get(dateStr)!.outageMinutes,
+                }
+              : {}),
           });
         }
 

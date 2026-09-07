@@ -29,6 +29,7 @@ export type CuratedFieldType =
   | "boolean"
   | "enum"
   | "months"
+  | "date"
   | "url"
   | "glossaryTerm";
 
@@ -174,6 +175,31 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     hint:
       "Unter 330 Tagen Beobachtung schreibt der Detektor absichtlich keine " +
       "Monate — abgeleitete wären nur unser Aufzeichnungsfenster.",
+  },
+  {
+    key: "curatedOutOfServiceFrom",
+    label: "Außer Betrieb ab",
+    type: "date",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Umbaupause",
+    hint:
+      "Erster Tag der Umbaupause, in der Zeitzone des Parks. Solange sie " +
+      "läuft, meldet die Seite für diese Bahn keine Störung — weder live noch " +
+      "in der Auswertung. Der Feed unterscheidet Umbau und Defekt nicht: " +
+      "ThemeParks.wiki reicht REFURBISHMENT ohne Anfang und Ende durch und " +
+      "verwendet es nicht für jede geplante Schließung.",
+  },
+  {
+    key: "curatedOutOfServiceTo",
+    label: "Außer Betrieb bis",
+    type: "date",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Umbaupause",
+    hint:
+      "Letzter Tag, einschließlich. Leer lassen, solange das Ende nicht " +
+      "feststeht — das ist der Normalfall, während gearbeitet wird.",
   },
   {
     key: "hasSingleRider",

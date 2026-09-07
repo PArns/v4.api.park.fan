@@ -111,6 +111,21 @@ export interface EntityLiveData {
   entityType: EntityType;
   name: string;
   status: LiveStatus;
+  /**
+   * The status before {@link ConflictResolverService} overrode it, when it did.
+   *
+   * The resolver rewrites DOWN or CLOSED to OPERATING whenever a second source
+   * reports a wait of five minutes or more, and it does so silently. That is
+   * defensible as a serving decision — a ride with a real queue is not down —
+   * and it is fatal to a downtime statistic built on the surviving column: what
+   * disappears preferentially is the SHORT outages of the POPULAR rides, because
+   * a queue takes fifteen to thirty minutes to drain after a ride stops.
+   *
+   * Absent when nothing was overridden, which is the overwhelming majority. It
+   * is carried to `queue_data.raw_status` so the erasure can be counted instead
+   * of argued about.
+   */
+  rawStatus?: LiveStatus;
   waitTime?: number;
   landExternalId?: string; // For Queue-Times
   lastUpdated?: string;

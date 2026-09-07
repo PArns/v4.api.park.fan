@@ -162,6 +162,11 @@ export interface EntityLiveResponse {
   parkId?: string;
   externalId?: string;
   status: LiveStatus;
+  /**
+   * The status before ConflictResolverService overrode it. See
+   * `EntityLiveData.rawStatus` — carried here so the poll can persist it.
+   */
+  rawStatus?: LiveStatus;
   lastUpdated: string;
   queue?: QueueData;
   forecast?: ForecastData[];

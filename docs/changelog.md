@@ -6,6 +6,296 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a module that exported a service it never provided
+
+`DowntimeRecoveryService` landed in `AnalyticsModule.exports` without being in
+`providers`. Nest throws `UnknownExportException` in the dependency scanner, so
+every boot crashed and the container sat in a restart loop until it was pushed
+again — about four minutes of downtime on deploy.
+
+Three green gates said nothing: `npm run build` type-checks files rather than
+the module graph, eslint has no view of it, and the unit suite constructs
+services directly instead of booting Nest. The runtime was the first reader.
+`src/common/module-graph.spec.ts` now reads the decorators — no database, no
+boot — and asserts every exported provider is declared or imported. Verified by
+reintroducing the bug.
+
+
+### Added — how much longer a stopped ride will be stopped
+
+A ride reported `DOWN` now says what happened to outages that got this far:
+„Störungen wie diese dauerten meist noch 25 Min. bis 4:15 Std." — on the park
+page's ride card and on the ride's own page, from the same numbers.
+
+This is not the forecast [ride-downtime §6](analytics/ride-downtime.md#6-why-there-is-no-probability)
+refuses. That one is "when will this break next" at p ≈ 0.006, needing ~1300
+events per bin. This is conditioned on an outage that has already started:
+5900-128 000 intervals per bucket, out-of-sample calibration error **2.55
+percentage points**.
+
+The objection that had sunk it was censoring, and measuring dissolved it. Off raw
+`queue_data` runs, 68 % of runs end without a recovery and the naive and
+Kaplan-Meier medians differ fivefold at one hour. Off the reconstruction —
+stitched across the night, counted in **operating** minutes — censoring is
+15.6 %, because a closed park is a pause and not an ending.
+
+Measured, never fitted: the hazard falls from 54.2 % to 8.5 %, so an exponential
+would be wrong in the one direction that costs a visitor time. Per park where a
+park carries it (54 parks hold 98 % of events), pooled otherwise, and the
+fallback is per **bucket** — a park whose curve stops at 30 minutes must not
+answer a four-hour outage with its 30-minute row (52 % against a measured 8.5 %).
+
+### Changed — the artefact gate was measuring outage length, not feed quality
+
+Phase 0 was run against production (150 132 events over 90 days, 2228 rides, 78
+parks). `artefactSingleReadingShare >= 0.7` marked **47 of 78 parks** unreadable,
+including every well-covered one. It correlates with "share of outages shorter
+than an hour" at **r = 0.996**: `queue_data` is a change log, so an outage ending
+before the hourly heartbeat writes exactly one row. 99.9 % of single-row runs are
+under 65 minutes and 99.8 % have an observed end. EPCOT has one second-source row
+in thirty days — the resolver cannot erase anything there — and it scored 0.715.
+
+The gate now measures what its own refusal sentence claims: temporal resolution,
+as the share held by the most common minute-of-hour (timezone-independent, so an
+hourly feed at a :30 offset is caught too). Highest in production is 0.236, so
+**no park is in that regime**.
+
+The event floor of 24 is **confirmed**, not lowered: 1324 rides clear it.
+
+### Fixed — the per-park downtime report merged two different parks
+
+`perPark()` grouped on `parkSlug`, and `disneyland-park` is Anaheim _and_ Paris.
+The two collapsed into one row carrying 71 rides and 4979 outages. Grouped on
+`parkId` now, with `parkCity` carried so a human can tell them apart.
+
+### Fixed — censoring was reported as its opposite
+
+A profile withheld for too many censored spells said `thin_events` — "too few
+outages" — when the truth was "many outages whose end we did not see". Its own
+reason, `heavily_censored`, and it is strongly seasonal by nature: a spell ending
+because the park shut for the winter ran 89.8 % in March against 20.5 % in
+September.
+
+### Fixed — a park that closes after midnight had no plan at all
+
+`/plan/day` answered `rides: []` for every day whose hours cross midnight. Swept
+across all 212 parks on three dates: 4 wrap days on 2026-09-05, 13 on 2026-10-31,
+5 on 2026-12-31 — twenty-two for twenty-two, all `status: OPERATING` and
+`hoursSource: schedule`. The same parks answered normally on a neighbouring day
+(Parque Warner Madrid 31 rides on `12 → 21`, 0 on `12 → 0`; Cedar Point 14 and 0;
+Kings Dominion 23 and 0), which is what made it a defect rather than a property
+of those parks. La Ronde, Six Flags Mexico and Six Flags Qiddiya City close at
+midnight all year and had therefore never carried a single hourly curve.
+
+A day that ends after midnight publishes `closeHour < openHour`, and
+`for (h = openHour; h <= closeHour; h++)` runs zero times for one. The day is now
+unfolded once — `10 → 0` becomes `10 → 24`, `16 → 1` becomes `16 → 25` — by a
+single exported `unfoldedCloseHour`, and four readers were taught the same night:
+the hourly predictions (00:30 carries _tomorrow's_ park-local date), the past-day
+rollup (`attraction_hourly_history` is keyed by date, so one night is two rows),
+the historical shape (its `0` bucket moves to 24, or midnight sorts in front of
+the morning and drags the evening down towards it), and the observed-hours
+fallback, which now takes the window as the widest silence on the clock instead
+of min-to-max — the same answer for an ordinary park, `16 → 0` instead of
+`0 → 23` for a park measured `[0, 16 … 23]`.
+
+`context.openHour` / `closeHour` keep the operator's own wall-clock numbers, so
+`10 → 0` still reads as published; `hours[].hour` continues past 23 instead of
+wrapping, so one operating day is one ascending series and 24 is its midnight.
+Contract and the sweep tables: [plan-day-endpoint.md §5](frontend/plan-day-endpoint.md).
+
+Also in the same pass: the `/plan/day` spec measured its "today", "seven days
+ago" and lead-distance fixtures on the **UTC** clock while the service reads the
+park's, so two assertions were wrong for two hours of every Berlin evening and
+right all day. They are park-local now (CLAUDE.md §1 applies to fixtures too).
+
+### Added — the planner's shows, projected honestly
+
+`/plan/day` returned `shows: []` for every date. The reason it could not simply
+be filled in: **no feed publishes showtimes ahead of the current day.** Checked
+at the source — ThemeParks.wiki answers for Europa-Park with 186 start times for
+today and then a tail of entries it never cleared, some from 2022 — and confirmed
+across our own data, where not one park holds a park-local showtime for a future
+day. (An earlier reading of ours that suggested otherwise was an artefact of
+grouping by UTC date, which puts a US evening show on the next day.)
+
+So a planned date is answered by projection, from `show_schedule_patterns`: per
+show and per weekday, the times of the most recent day it actually ran. Weekday,
+because the difference is real — "Big Moments – The Celebration-Show" runs twice
+on a Thursday and three times on a Saturday. Most recent matching day rather than
+a union over the window, because a union merges a summer programme with an autumn
+one into a day that never happened.
+
+Every projected entry says so: `source: "projected"` with `observedOn` and
+`sampleDays` beside it, against `source: "scheduled"` for the operator's own
+answer. Two guards keep a projection from becoming a claim — more than one
+sighting on that weekday, and a sighting in the last 28 days measured against
+today. Both come from real rows: "Crazy Summer with Ross Antony & Paul Reeves"
+ran on exactly one Thursday in July, and would otherwise have been promised every
+Thursday until Christmas.
+
+The patterns are rebuilt nightly at 04:15 because they cannot be built per
+request: one park's eight-week window is 47,000 snapshots and 350,000 showtime
+entries, and the global aggregation takes 5.7 s. The window is applied to the
+**showtime**, not only to the snapshot — a snapshot written this morning can
+carry a start time from 2022, and filtering on the snapshot alone would fold a
+2022 Christmas show into a September pattern.
+
+### Added — the day planner: `/plan/day`, stored plans, web push
+
+`GET …/plan/day?date=` returns an hourly wait curve per ride for one date, plus
+that day's own context. Alongside it `/v1/trips` (a plan that outlives one
+browser) and `/v1/push` (a notification before the next block). Details:
+[plan-day-endpoint.md](frontend/plan-day-endpoint.md) ·
+[trips-and-push.md](frontend/trips-and-push.md).
+
+The model's uncertainty now travels the whole way. CatBoost trains
+`MultiQuantile:alpha=0.5,0.8,0.95`, and `config.py` calls alpha=0.95 "the
+displayed uncertainty width" in as many words — `predict.py` computed it, folded
+it into a confidence percentage and dropped it. It is `uncertaintyMinutes` now,
+through the result dict, the entity, both read paths and `hourlyForecast`.
+
+### Fixed — `/v1/trips` and `/v1/push/subscriptions` answered 400 to every request
+
+Both DTO classes carried nothing but `@ApiProperty`. The global
+`ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` keeps only
+properties with a class-validator decorator and 400s the rest, so a class with
+none rejects **its own** fields (`["property payload should not exist"]`). Both
+features were dead on arrival, and nothing saw it: controller specs call the
+handler methods directly, which is the one path the global pipe does not sit on.
+`src/common/global-validation-pipe.spec.ts` now pushes a valid body through the
+real pipe for every request DTO.
+
+### Fixed — `tier: "measured"` was printed over composed data
+
+The tier came from the **distance**, not from what came back. A day with no
+hourly rows — an ML service having a bad minute, a park the run skipped — went
+out as a composed curve under the most trustworthy label. The tier is now derived
+from the curves that were actually built, and the test that had pinned the old
+behaviour argued for the new one in its own comment.
+
+### Fixed — the hourly curve stopped at the 24-hour horizon
+
+The hourly forecast reaches 24 hours from now and not one minute further.
+Measured against the live service at 17:15: Disneyland Paris (09:00–22:00) got
+17:00–21:00 for today and 09:00–17:00 for tomorrow — the evening, where a
+headliner's curve peaks, silently absent, and `dayPeak` the maximum of what was
+left. The unreached hours are now filled from the composed curve and carry
+`source: "composed"`.
+
+### Fixed — `dayPeak` meant something different on every tier
+
+It was the maximum of the hourly values, so depending on the tier a median
+forecast, a measured mean, or a day peak. Taron read 20 today and 42 five days
+out, and the whole difference was the statistic. `dayPeak` is now the **day's
+peak** everywhere: the day-level prediction on the forecast side, the realised
+day-P90 on the measured side — the same rule as `claude.md` §3.
+
+### Fixed — `/plan/day` was an empty shell past ~60 days
+
+Opening hours come from the schedule, and that is where the operator's published
+times end: of 177 parks with hours, **91 reach 60 days and 38 reach 120**
+(Disneyland Paris: 2026-10-31). With no hours there were no curves — nothing at
+exactly the distance a planner exists for. The window now falls back to the hours
+this park has actually been measured with queues in, and says so through
+`context.hoursSource: "observed"`. Nothing is invented for a day stated as
+closed, or for a park nobody has watched.
+
+### Fixed — `downYesterday` reported seasonal and refurbishment closures as faults
+
+The query asked only for "never OPERATING". On the live database that caught nine
+Phantasialand attractions — Berliner Eislaufen, Ice skate hire, Wözl's
+Wassertreter, NEW: Winni Splash … every one of them `CLOSED`-only, i.e. winter and
+water attractions out of season, flagged again every day of the summer. It now
+also requires at least one `DOWN` reading. Over 30 days the new definition fires
+10 times across 16,249 ride-days in the Berlin-timezone parks.
+
+The same query was also unsargable: `(qd.timestamp AT TIME ZONE $2)::date = …`
+hides the column from chunk exclusion. Measured: **"Chunks excluded during
+startup: 0"**, all 254 chunks, 35,967 buffers, 1.1 s cold. As a half-open range on
+the raw column: 252 chunks excluded, 431 buffers, **0.94 ms**.
+
+### Fixed — the lead-time archive was written and read by nobody
+
+`scoreDueSnapshots()` had no caller and `leadTimeMae` was hard-coded null: ~6,000
+rows a night for a question nothing asked. There is now a 03:00 cron and a read
+path (`getLeadTimeMae`) that takes the nearest sampled bucket **at or below** the
+distance and stays null until enough rows are scored.
+`TripsService.sweepExpired()` had no caller either — now daily at 04:45 on its own
+`trips` queue.
+
+### Fixed — the calendar cache outlived midnight
+
+`max-age`/`s-maxage` were a day for a range containing today. But `isToday`,
+`todayCrowdLevel` and a past day's "closed" are statements about which day today
+is: the origin re-derives them when it serves the month cache, a CDN copy cannot,
+and a browser copy cannot even be purged. Verified live (`cf-cache-status: HIT`,
+`age`). The TTL is now capped at the time left until park-local midnight.
+
+### Fixed — small things with teeth
+
+- **Push endpoints must belong to a known push service.** The stored string is a
+  URL this server POSTs to every five minutes; `https` alone leaves
+  `/v1/push/subscriptions` a request forwarder aimed wherever the caller likes
+  (SSRF). Four services are allowed, `PUSH_ENDPOINT_HOSTS` extends the list.
+- **`composed` was capped at 20 rides.** The profile's SQL already fetches
+  `min(topN * 3, 60)` and threw the rest away — at 60, Europa-Park now yields
+  **29 rides instead of 20** and Disneyland Paris 21 instead of 20, from the
+  identical query.
+- **No more `DAILY_HORIZON_DAYS = 60`.** The daily horizon follows the park's
+  schedule (live: 181–362 days, averaging 193); the constant labelled two thirds
+  of the answerable days out of range. `long_range` now means "no day level exists
+  for this date".
+- `prediction_lead_snapshots.attraction_id` is `uuid` rather than `varchar` — the
+  same cast trap `downYesterday` documents from the other side.
+- The push DTO's `topics` example listed `ride-down`, a topic `isPushTopic`
+  rejects.
+- A trip id that cannot exist is answered 404 instead of being handed to the
+  database.
+
+### Added — das Frontend erfährt jetzt, wann ein Park öffnet
+
+Auf park.fan standen den ganzen 1. September gestrige Showtimes unter „Keine
+Vorstellungen heute", alle Shows geschlossen und im Phantasialand 0 von 46
+Restaurants offen, während diese API für alle vier Shows OPERATING mit den
+Zeiten von heute lieferte. Europa-Park und Efteling genauso.
+
+Das Frontend hält den Park-Snapshot einen Tag lang, und zwei Blöcke darin
+gelten nur für einen Tag: Showtimes sind auf heute datiert, und diese API
+meldet jede Show und jedes Restaurant als CLOSED, solange der Park zu ist.
+Welche Uhrzeit der Cache-Eintrag erwischt hatte, entschied also über den
+ganzen Tag — nachts geschrieben, was der Regelfall ist, hieß das: gestrige
+Zeiten, nichts geöffnet.
+
+`warmupOperatingParks()` rechnet ohnehin alle fünf Minuten den Status jedes
+Parks aus, der Übergang ist hier also gratis zu beobachten.
+`ParkStatusRevalidationService` vergleicht ihn mit dem vorigen Lauf (Snapshot
+in Redis, ein leerer zählt als Erstlauf und meldet nichts) und schickt **einen**
+Webhook mit den Parks, die tatsächlich umgesprungen sind — als Geo-Pfad-Tag,
+weil Slugs nicht global eindeutig sind. Zweimal pro Übergang: einmal sofort und
+einmal nach dem CDN-Fenster, weil die Edge-Kopie von hier aus nicht purgebar
+ist und der Refetch sonst die Fassung von kurz vor der Öffnung für einen Tag
+festschreiben kann. `revalidateTags` kennt dafür jetzt `immediate`, das dem
+Frontend `expire: 0` mitgibt.
+
+### Fixed — `/stats/day` antwortete 500, seit es ausgeliefert wurde
+
+`operator does not exist: text = uuid`. Der Endpunkt hat nie funktioniert, und
+das Frontend konnte es nicht melden, weil es jede nicht-OK-Antwort als „dieser
+Park hat keine lesbare Kurve" gelesen hat.
+
+`attractions` wird in dieser Datei an drei Tabellen gejoint, die sich über den
+Spaltentyp nicht einig sind: `queue_data.attractionId` und
+`wait_time_predictions.attractionId` sind **uuid**, `queue_data_aggregates.attractionId`
+ist **text**. Die Aggregat-Tabelle ist der Sonderfall und zugleich die, die jede
+ältere Abfrage hier liest, also sieht `a.id::text = …` nach Hausstil aus und ist
+falsch, sobald man es auf einen Roh-Queue- oder Prognose-Join kopiert. Genau das
+war passiert.
+
+Gegen die Produktionsdatenbank nachgestellt und nachgemessen: alle drei Abfragen
+laufen, 274 Zeilen über 33 Bahnen für Phantasialand heute, 36 Prognosestunden,
+MAE 9.
+
 ### Fixed — eine gelöschte Attraktion kostete dem ganzen Park seinen Bulk-Insert
 
 Der Live-Feed meldet eine Bahn noch eine Weile weiter, nachdem sie hier
@@ -22,7 +312,6 @@ angelegte Attraktion zeichnet also ohne Deploy wieder auf. Die Liste liegt
 im Prozess und nicht in Redis: sie ist ein Hinweis, kein Fakt, und beim
 Neustart kostet ihr Verlust genau einen fehlgeschlagenen Insert.
 
-
 ### Added — a ride's day as three series, in one lean call
 
 `GET /parks/:continent/:country/:city/:parkSlug/stats/day` answers one ride's
@@ -35,7 +324,7 @@ forecast as a band. ~1 KB, cached 5 minutes. See
 It exists because the two halves of that chart could not be assembled from what
 was already public. `/stats/hourly` carries no forecast at all, and — the part
 that is easy to get wrong — it cannot carry today either: `queue_data_aggregates`
-is built by the nightly `calculate-percentiles` job for the *completed* day, so
+is built by the nightly `calculate-percentiles` job for the _completed_ day, so
 there is no row for today in it. `today` is therefore bucketed live out of raw
 `queue_data` (STANDBY, OPERATING, averaged per park-local hour, rounded to five).
 The alternative was the attraction detail endpoint at ~53 KB per ride, which a
@@ -160,7 +449,7 @@ park opened — and the query that fetches "current status per attraction" start
 counting at today's opening time, which left every such ride with nothing at
 all. An open park with no reading means an optimistically `OPERATING` ride, so
 between 09:00 and the poll that landed at 09:23, Phantasialand served all 40 of
-its attractions as running: *Berliner Eislaufen* and *Ice skate hire* among
+its attractions as running: _Berliner Eislaufen_ and _Ice skate hire_ among
 them, in August, while the source they come from had said `CLOSED` since April.
 The rink escaped that only because somebody had hand-written its operating
 months three days earlier; every seasonal ride without curated months — most of
@@ -173,6 +462,7 @@ opening time and the six-hour fallback. The optimism is for a feed that fell
 silent, not for one that has not changed its mind.
 
 Details: `docs/architecture/attraction-status-and-seasonality.md` §2.4.
+
 ### Changed — ein Widget, ein Secret, ein Variablenname
 
 `ADMIN_TURNSTILE_SECRET_KEY` ist weg. Der Login liest nur noch

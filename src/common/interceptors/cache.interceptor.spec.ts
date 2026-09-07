@@ -9,15 +9,24 @@ import { HttpCacheInterceptor } from "./cache.interceptor";
  * exactly which headers were set.
  */
 interface MockResponse {
+  headersSent: boolean;
   setHeader: jest.Mock;
   status: jest.Mock;
 }
 
-function buildMockContext(reqHeaders: Record<string, string> = {}) {
+function buildMockContext(
+  reqHeaders: Record<string, string> = {},
+  { headersSent = false }: { headersSent?: boolean } = {},
+) {
   const headers: Record<string, string> = {};
   let status: number | null = null;
   const response: MockResponse = {
+    headersSent,
     setHeader: jest.fn((name: string, value: string) => {
+      // Node throws exactly this once the response is on the wire.
+      if (headersSent) {
+        throw new Error("Cannot set headers after they are sent to the client");
+      }
       headers[name] = value;
     }),
     status: jest.fn((code: number) => {
@@ -125,6 +134,24 @@ describe("HttpCacheInterceptor", () => {
       expect(getStatus()).toBeNull();
       // TTL header is still applied normally.
       expect(headers["Cache-Control"]).toContain("max-age=60");
+    });
+  });
+
+  describe("a response that is already on the wire", () => {
+    it("sets no header once the response has been sent", async () => {
+      // A slow park-detail route whose client gave up mid-flight: Express has
+      // already flushed the headers by the time `tap()` runs. Setting one then
+      // throws ERR_HTTP_HEADERS_SENT, which NestJS hands to the exception
+      // filter — turning an abandoned request into a logged 500. There is
+      // nothing left to cache at that point, so the header is simply skipped.
+      const interceptor = new HttpCacheInterceptor(60, 900);
+      const { ctx, response } = buildMockContext({}, { headersSent: true });
+
+      await expect(
+        firstValueFrom(interceptor.intercept(ctx, handlerOf({ foo: "bar" }))),
+      ).resolves.toEqual({ foo: "bar" });
+
+      expect(response.setHeader).not.toHaveBeenCalled();
     });
   });
 

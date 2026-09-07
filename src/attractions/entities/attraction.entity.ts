@@ -239,6 +239,36 @@ export class Attraction {
   curatedSeasonMonths: number[] | null;
 
   /**
+   * First and last park-local day of a hand-written works period.
+   *
+   * The feed cannot tell a breakdown from a rebuild. ThemeParks.wiki passes
+   * `REFURBISHMENT` through with no start, no end and no announcement, and does
+   * not use it for every closure that really is planned — a long rebuild seen
+   * from outside looks exactly like a ride that keeps failing. Inside this
+   * window nothing is reported: no live "Störung gemeldet seit", and no
+   * reconstructed outage.
+   *
+   * A statement about the ride rather than a correction of a synced column, so
+   * there is no upstream half and no two-writers problem. Both bounds are
+   * inclusive, either may stand alone (`from` with no `to` is the usual case
+   * while work is running), and both empty is the normal state.
+   *
+   * Read through `isCuratedOutOfService()` / `attractionIsCuratedOutOfService()`,
+   * never by comparing the columns at a call site: the comparison is park-local
+   * and the SQL half exists so a catalogue-wide query can ask the same question
+   * without loading a row.
+   */
+  @Column({
+    name: "curated_out_of_service_from",
+    type: "date",
+    nullable: true,
+  })
+  curatedOutOfServiceFrom: string | null;
+
+  @Column({ name: "curated_out_of_service_to", type: "date", nullable: true })
+  curatedOutOfServiceTo: string | null;
+
+  /**
    * Whether the ride has a single-rider line at all — a static fact about the
    * queue layout, not a live reading.
    *
@@ -366,6 +396,22 @@ export class Attraction {
   @Column({ name: "retired_at", type: "timestamptz", nullable: true })
   @Index("idx_attraction_retired_at", { where: "retired_at IS NULL" })
   retiredAt: Date | null;
+
+  /**
+   * When this ride last absorbed another one.
+   *
+   * A merge reparents the loser's history with
+   * `UPDATE queue_data SET attractionId = winner` and no dedupe
+   * (`merge-dependencies.ts`), so afterwards two interleaved series sit on top
+   * of each other and can disagree at the same instant. Read consecutively, they
+   * flap between OPERATING and DOWN and manufacture outages that never happened.
+   *
+   * Nothing else records it: there is no merge row in `admin_audit_log`. The
+   * downtime reconstruction skips a ride whose merge falls inside its window,
+   * which is the only way to keep the phantom flapping out of the statistics.
+   */
+  @Column({ name: "last_merged_at", type: "timestamptz", nullable: true })
+  lastMergedAt: Date | null;
 
   /**
    * Why, and on whose authority — the source URL belongs in here. A retirement

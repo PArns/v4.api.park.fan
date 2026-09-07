@@ -9,6 +9,8 @@ import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service
 import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
 import { MLAlertService } from "./services/ml-alert.service";
 import { MLAnomalyDetectionService } from "./services/ml-anomaly-detection.service";
+import { PredictionLeadSnapshotService } from "./services/prediction-lead-snapshot.service";
+import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
 import { MLMonitoringController } from "./controllers/ml-monitoring.controller";
@@ -17,7 +19,9 @@ import {
   MLModel,
   ParkOccupancy,
   PredictionAccuracy,
+  PredictionLeadSnapshot,
 } from "./entities";
+import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.entity";
 import { MLFeatureStats } from "./entities/ml-feature-stats.entity";
 import { MLFeatureDrift } from "./entities/ml-feature-drift.entity";
@@ -57,6 +61,8 @@ import { AdminAuthModule } from "../admin/auth/admin-auth.module";
       MLModel,
       ParkOccupancy,
       PredictionAccuracy,
+      PredictionLeadSnapshot,
+      ForecastAccuracyProfile,
       AttractionAccuracyStats,
       MLFeatureStats,
       MLFeatureDrift,
@@ -79,6 +85,8 @@ import { AdminAuthModule } from "../admin/auth/admin-auth.module";
     MLFeatureDriftService,
     MLAlertService,
     MLAnomalyDetectionService,
+    PredictionLeadSnapshotService,
+    ForecastAccuracyService,
   ],
   controllers: [MLController, MLHealthController, MLMonitoringController],
   exports: [
@@ -90,6 +98,8 @@ import { AdminAuthModule } from "../admin/auth/admin-auth.module";
     MLFeatureDriftService,
     MLAlertService,
     MLAnomalyDetectionService,
+    PredictionLeadSnapshotService,
+    ForecastAccuracyService,
   ],
 })
 export class MLModule {}

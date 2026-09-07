@@ -223,13 +223,16 @@ export class AttractionMergeService {
       // overwriting what it already has.
       const inherited = this.inheritMissingMetadata(winner, loser);
 
-      if (renamed || rewordedName || Object.keys(inherited).length > 0) {
-        await manager.update(Attraction, winnerId, {
-          ...inherited,
-          ...(renamed ? { slug: survivingSlug } : {}),
-          ...(rewordedName ? { name: survivingName } : {}),
-        });
-      }
+      // `lastMergedAt` is unconditional, unlike everything beside it: the merge
+      // happened whether or not the survivor changed its name or inherited a
+      // column, and what depends on this stamp is the reconstruction skipping a
+      // ride whose history is now two interleaved series.
+      await manager.update(Attraction, winnerId, {
+        ...inherited,
+        ...(renamed ? { slug: survivingSlug } : {}),
+        ...(rewordedName ? { name: survivingName } : {}),
+        lastMergedAt: new Date(),
+      });
 
       return {
         winnerId,

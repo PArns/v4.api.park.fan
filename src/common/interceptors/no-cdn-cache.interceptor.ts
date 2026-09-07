@@ -25,6 +25,10 @@ export class NoCdnCacheInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
+        // Nothing to declare once the response is on the wire; setting a
+        // header then throws ERR_HTTP_HEADERS_SENT. See cache.interceptor.ts.
+        if (response.headersSent) return;
+
         response.setHeader(
           "Cache-Control",
           "private, no-store, no-cache, must-revalidate",

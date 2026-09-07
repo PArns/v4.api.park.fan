@@ -33,6 +33,11 @@ describe("WaitTimesProcessor", () => {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
 
+  const mockQueueDataService = {
+    saveLiveData: jest.fn().mockResolvedValue(1),
+    saveLiveDataBatch: jest.fn().mockResolvedValue(new Map()),
+  };
+
   const mockMappingRepository = {
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
@@ -117,7 +122,7 @@ describe("WaitTimesProcessor", () => {
           provide: RestaurantsService,
           useValue: { getRepository: () => ({}) },
         },
-        { provide: QueueDataService, useValue: {} },
+        { provide: QueueDataService, useValue: mockQueueDataService },
         { provide: MultiSourceOrchestrator, useValue: {} },
         { provide: CacheWarmupService, useValue: {} },
         { provide: PopularityService, useValue: { getTopParks: jest.fn() } },
@@ -365,6 +370,81 @@ describe("WaitTimesProcessor", () => {
 
       expect(redis.mget).not.toHaveBeenCalled();
       expect(redis.pipeline).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("processAttractionLiveData (only attractions may reach queue_data)", () => {
+    // `mappingLookup` deliberately holds attractions, shows AND restaurants in
+    // one typeless map, because the show and restaurant paths resolve through
+    // it too. But `queue_data.attractionId` carries a foreign key to
+    // `attractions`, so when an upstream source labels a show as an ATTRACTION
+    // entity — themeparks.wiki does this for "Mickey's PhilharMagic" — the
+    // lookup returns the SHOW's id and the insert is rejected by the database.
+    // In production that was one FK violation per hour, indefinitely.
+    const entity = {
+      source: "themeparks-wiki",
+      externalId: "ext-philharmagic",
+      status: LiveStatus.OPERATING,
+      waitTime: 10,
+    };
+
+    beforeEach(() => {
+      mockQueueDataService.saveLiveData.mockClear();
+    });
+
+    it("skips an id that resolves to a show rather than an attraction", async () => {
+      const mappingLookup = new Map([
+        ["themeparks-wiki:ext-philharmagic", "show-uuid"],
+      ]);
+
+      const saved = await (processor as any).processAttractionLiveData(
+        entity,
+        mappingLookup,
+        new Set(["a-real-attraction-uuid"]),
+      );
+
+      expect(saved).toBe(0);
+      expect(mockQueueDataService.saveLiveData).not.toHaveBeenCalled();
+    });
+
+    // The batch method is the one production runs — the single-entity helper
+    // above currently has no caller — so the guard has to hold here too.
+    it("keeps a show out of the batch that production actually writes", async () => {
+      mockQueueDataService.saveLiveDataBatch.mockClear();
+      const mappingLookup = new Map([
+        ["themeparks-wiki:ext-philharmagic", "show-uuid"],
+        ["themeparks-wiki:ext-ride", "a-real-attraction-uuid"],
+      ]);
+      const entities = [entity, { ...entity, externalId: "ext-ride" }];
+
+      await (processor as any).processAttractionLiveDataBatch(
+        entities,
+        mappingLookup,
+        new Set<string>(),
+        new Set(["a-real-attraction-uuid"]),
+      );
+
+      expect(mockQueueDataService.saveLiveDataBatch).toHaveBeenCalledTimes(1);
+      const written = mockQueueDataService.saveLiveDataBatch.mock
+        .calls[0][0] as Array<{ attractionId: string }>;
+      expect(written.map((i) => i.attractionId)).toEqual([
+        "a-real-attraction-uuid",
+      ]);
+    });
+
+    it("still writes when the id really is an attraction", async () => {
+      const mappingLookup = new Map([
+        ["themeparks-wiki:ext-philharmagic", "a-real-attraction-uuid"],
+      ]);
+
+      const saved = await (processor as any).processAttractionLiveData(
+        entity,
+        mappingLookup,
+        new Set(["a-real-attraction-uuid"]),
+      );
+
+      expect(saved).toBe(1);
+      expect(mockQueueDataService.saveLiveData).toHaveBeenCalledTimes(1);
     });
   });
 });

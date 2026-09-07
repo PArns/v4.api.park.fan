@@ -48,6 +48,8 @@ import {
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
+import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
+import { toOutageDto } from "../../attractions/dto/attraction-outage.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import {
   computeBestVisitTimes,
@@ -105,6 +107,7 @@ export class ParkIntegrationService {
     private readonly wartezeitenClient: WartezeitenClient,
     private readonly popularityService: PopularityService,
     private readonly rideProfileService: RideProfileService,
+    private readonly attractionOutageService: AttractionOutageService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -960,6 +963,42 @@ export class ParkIntegrationService {
         // Curated ride profile — the glossary link.
         const rideProfile = mapRideProfile(rideProfileMap.get(attraction.id));
         if (rideProfile) attraction.rideProfile = rideProfile;
+      }
+
+      // --- Running outages, one query for the whole park ---
+      //
+      // After the loop rather than inside it: a park with eight rides down would
+      // otherwise be eight round-trips against a compressed hypertable, and the
+      // statement already takes an id array. Resolved by AttractionOutageService
+      // and never here, because the ride detail page runs a different precedence
+      // chain and two chains deriving their own "since when" would put two
+      // different sentences about one ride on two pages.
+      const downIds = dto.attractions
+        .filter((a) => a.effectiveStatus === "DOWN")
+        .map((a) => a.id);
+      if (downIds.length > 0) {
+        const byId = new Map(
+          (park.attractions ?? []).map((a) => [a.id, a] as const),
+        );
+        const outages = await this.attractionOutageService.getCurrentOutages(
+          {
+            id: park.id,
+            timezone: park.timezone,
+            wikiEntityId: park.wikiEntityId ?? null,
+          },
+          downIds.map((id) => ({
+            id,
+            curatedOutOfServiceFrom:
+              byId.get(id)?.curatedOutOfServiceFrom ?? null,
+            curatedOutOfServiceTo: byId.get(id)?.curatedOutOfServiceTo ?? null,
+          })),
+        );
+        if (outages.size > 0) {
+          for (const attraction of dto.attractions) {
+            const outage = toOutageDto(outages.get(attraction.id));
+            if (outage) attraction.outage = outage;
+          }
+        }
       }
 
       // Park-level summary: worthy headliners, biggest time-saver first.

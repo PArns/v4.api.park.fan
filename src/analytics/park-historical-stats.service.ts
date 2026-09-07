@@ -497,7 +497,17 @@ export class ParkHistoricalStatsService {
   }
 
   /** Day-curve schema version (see RideDayCurveDto). */
-  private readonly DAY_CURVE_SCHEMA_VERSION = 1;
+  /**
+   * Bumped to 2 when `predicted` was added.
+   *
+   * Unlike the hourly profile's version this one is NOT part of a Redis key —
+   * the day curve is not stored, `HttpCacheInterceptor` only sets headers, so a
+   * response without the new field ages out of Cloudflare within its five
+   * minutes on its own. The number is here for the caller: it is the one field
+   * that says "the shape changed", and leaving it at 1 while the shape changed
+   * makes it worthless for exactly the case it exists for.
+   */
+  private readonly DAY_CURVE_SCHEMA_VERSION = 2;
 
   /**
    * One ride's day: the historical shape, today's readings, and the forecast for
@@ -567,18 +577,37 @@ export class ParkHistoricalStatsService {
       ),
       this.queryAttractionMae(ride.attractionSlug, park.id),
     ]);
-    const forecastByHour = new Map<number, number>();
+    const latestByHour = new Map<number, number>();
+    const firstByHour = new Map<number, number>();
     for (const r of forecastRows) {
-      forecastByHour.set(
-        Number(r.hour_of_day),
-        roundToNearest5Minutes(Number(r.predicted)),
-      );
+      const hour = Number(r.hour_of_day);
+      if (r.last_predicted != null) {
+        latestByHour.set(
+          hour,
+          roundToNearest5Minutes(Number(r.last_predicted)),
+        );
+      }
+      if (r.first_predicted != null) {
+        firstByHour.set(
+          hour,
+          roundToNearest5Minutes(Number(r.first_predicted)),
+        );
+      }
     }
+
     // An hour that has already been measured is not a forecast any more. Leaving
     // both in would draw the model's guess on top of the fact.
     const forecast = profile.hours.map((h, i) =>
-      today[i] != null ? null : (forecastByHour.get(h) ?? null),
+      today[i] != null ? null : (latestByHour.get(h) ?? null),
     );
+
+    // What the model said BEFORE each hour happened — every hour it has an
+    // opinion about, measured or not. This is the series that lets a reader
+    // check the model rather than take its word for it, and it is the reason
+    // `queryHourlyForecast` returns the oldest row per hour as well as the
+    // newest: scoring a prediction against reality only means something if the
+    // prediction was written first.
+    const predicted = profile.hours.map((h) => firstByHour.get(h) ?? null);
 
     return {
       hours: profile.hours,
@@ -589,6 +618,7 @@ export class ParkHistoricalStatsService {
       p90: ride.p90,
       today,
       forecast,
+      predicted,
       forecastError: mae,
       measuredToday: today.some((v) => v != null),
       sampleDays: ride.sampleDays,
@@ -612,6 +642,21 @@ export class ParkHistoricalStatsService {
    * Lightning Lane line is a different queue and would drag the average away
    * from the number a visitor sees on the sign.
    */
+  /**
+   * A NOTE ON THE JOIN, because this file joins `attractions` to three tables and
+   * they do NOT agree on the column type:
+   *
+   *   queue_data.attractionId              uuid  → join `a.id` directly
+   *   wait_time_predictions.attractionId   uuid  → join `a.id` directly
+   *   queue_data_aggregates.attractionId   TEXT  → join `a.id::text`
+   *
+   * The aggregates table is the odd one out, and it is also the one every older
+   * query in this file reads — so `a.id::text = …` looks like the house style
+   * and is wrong the moment it is copied onto a raw-queue or prediction join.
+   * Postgres answers that with `operator does not exist: text = uuid`, a 500 at
+   * request time that neither the build nor any unit test sees, because the SQL
+   * is only parsed when it runs. It shipped exactly that way.
+   */
   private async queryTodayByHour(
     parkId: string,
     timezone: string,
@@ -622,7 +667,7 @@ export class ParkHistoricalStatsService {
               EXTRACT(HOUR FROM (qd.timestamp AT TIME ZONE $2))::int AS hour_of_day,
               AVG(qd."waitTime") AS wait
        FROM queue_data qd
-       JOIN attractions a ON a.id::text = qd."attractionId"
+       JOIN attractions a ON a.id = qd."attractionId"
        WHERE a."parkId" = $1::uuid
          AND qd.timestamp >= ($3::date::timestamp AT TIME ZONE $2)
          AND qd.timestamp <  (($3::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
@@ -638,9 +683,18 @@ export class ParkHistoricalStatsService {
   /**
    * The hourly forecast for one ride, for today.
    *
-   * `DISTINCT ON (predictedTime)` ordered by `createdAt DESC` — the model
-   * re-predicts through the day, so an hour has several rows and only the most
-   * recent one is the current answer.
+   * The model re-predicts through the day, so one hour holds several rows, and
+   * WHICH of them is the answer depends on the question:
+   *
+   * - "what do you expect for 20:00" wants the NEWEST prediction — everything
+   *   learned since this morning is in it.
+   * - "what did you say 14:00 would be" wants the OLDEST — the one made before
+   *   the hour happened. Answering that with a row written after the fact would
+   *   let the model mark its own homework.
+   *
+   * So both come back per hour and the caller picks. Grouping by `predictedTime`
+   * rather than `DISTINCT ON` because two aggregates over the same group is
+   * exactly what `array_agg(… ORDER BY …)` is for.
    */
   private async queryHourlyForecast(
     attractionSlug: string,
@@ -649,17 +703,18 @@ export class ParkHistoricalStatsService {
     todayStr: string,
   ): Promise<Record<string, unknown>[]> {
     return this.aggregateRepo.manager.query(
-      `SELECT DISTINCT ON (p."predictedTime")
-              EXTRACT(HOUR FROM (p."predictedTime" AT TIME ZONE $3))::int AS hour_of_day,
-              p."predictedWaitTime" AS predicted
+      `SELECT EXTRACT(HOUR FROM (p."predictedTime" AT TIME ZONE $3))::int AS hour_of_day,
+              (array_agg(p."predictedWaitTime" ORDER BY p."createdAt" ASC))[1]  AS first_predicted,
+              (array_agg(p."predictedWaitTime" ORDER BY p."createdAt" DESC))[1] AS last_predicted
        FROM wait_time_predictions p
-       JOIN attractions a ON a.id::text = p."attractionId"
+       JOIN attractions a ON a.id = p."attractionId"
        WHERE a.slug = $1
          AND a."parkId" = $2::uuid
          AND p."predictionType" = 'hourly'
          AND p."predictedTime" >= ($4::date::timestamp AT TIME ZONE $3)
          AND p."predictedTime" <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $3)
-       ORDER BY p."predictedTime", p."createdAt" DESC`,
+       GROUP BY p."predictedTime"
+       ORDER BY p."predictedTime"`,
       [attractionSlug, parkId, timezone, todayStr],
     );
   }

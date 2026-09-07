@@ -20,6 +20,8 @@ import {
   ParkRenameService,
   captureParkPath,
 } from "../../parks/services/park-rename.service";
+import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import { parkCacheTag } from "../../common/revalidation/park-status-transitions";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -43,6 +45,7 @@ export class ParkMetadataProcessor {
     private cacheWarmupService: CacheWarmupService,
     private popularityService: PopularityService,
     private parkRenameService: ParkRenameService,
+    private revalidationService: RevalidationService,
     @InjectRepository(ExternalEntityMapping)
     private mappingRepository: Repository<ExternalEntityMapping>,
     @InjectRepository(Park)
@@ -1055,6 +1058,20 @@ export class ParkMetadataProcessor {
     this.logger.log("📅 Syncing schedules...");
     const parks = await this.parkRepository.find();
     let totalScheduleEntries = 0;
+    /**
+     * Parks whose schedule this run actually rewrote, as frontend cache tags.
+     *
+     * A schedule correction is the ONE thing in a calendar month that can change inside a day,
+     * and until now this job told the frontend nothing: it busted its own Redis month cache and
+     * stopped. That was survivable while the frontend re-fetched the calendar every few minutes;
+     * it is not survivable now that the calendar is cached for a day at every layer, because the
+     * expiry would be the only thing that ever surfaced the correction.
+     *
+     * So the job posts the same per-park tag the status-flip wire already uses. Collected here
+     * and sent once at the end rather than per park: 213 POSTs in a loop against one is a
+     * difference the frontend notices and this job does not.
+     */
+    const revalidatedTags: string[] = [];
 
     for (const park of parks) {
       // Only sync schedules for parks with Wiki data
@@ -1097,12 +1114,24 @@ export class ParkMetadataProcessor {
         // Fill gaps for Holidays/Bridge Days
         await this.parksService.fillScheduleGaps(park.id);
         await this.parksService.invalidateCalendarMonthCache(park.id);
+
+        const tag = parkCacheTag(park);
+        if (tag) revalidatedTags.push(tag);
       } catch (error) {
         this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
       }
     }
 
     this.logger.log(`✅ Synced ${totalScheduleEntries} schedule entries`);
+
+    // `immediate` because this is not a "will be right eventually" refresh: the month the
+    // correction lands in is the month the frontend is serving from a day-long cache, and the
+    // next reader is the one who would otherwise see the old hours.
+    if (revalidatedTags.length > 0) {
+      await this.revalidationService.revalidateTags(revalidatedTags, {
+        immediate: true,
+      });
+    }
   }
 
   /**

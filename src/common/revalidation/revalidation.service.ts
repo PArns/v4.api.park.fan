@@ -32,9 +32,20 @@ export class RevalidationService {
 
   /**
    * Revalidate the given frontend cache tags (deduped + batched).
+   *
+   * `immediate` sends `"expire": 0`, which makes the frontend's next request wait for fresh data
+   * instead of being served the old copy one more time. Default is the frontend's
+   * stale-while-revalidate profile, which is right for anything whose previous answer is merely a
+   * little behind. It is not right for a park opening: until that fetch re-runs, the park's shows
+   * carry yesterday's showtimes and read CLOSED, and the person who triggers the revalidation is
+   * the first visitor of the morning.
+   *
    * Returns true if at least one request succeeded, false otherwise.
    */
-  async revalidateTags(tags: string[]): Promise<boolean> {
+  async revalidateTags(
+    tags: string[],
+    { immediate = false }: { immediate?: boolean } = {},
+  ): Promise<boolean> {
     const unique = [...new Set(tags.filter((t) => t && t.length > 0))];
     if (unique.length === 0) return false;
 
@@ -55,7 +66,7 @@ export class RevalidationService {
       try {
         await axios.post(
           url,
-          { tags: batch },
+          { tags: batch, ...(immediate && { expire: 0 }) },
           {
             // Frontend `/api/revalidate` authenticates via a Bearer token;
             // any other scheme is rejected with 401 (and, since this client is

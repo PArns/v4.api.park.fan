@@ -18,6 +18,7 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { PopularityService } from "../../popularity/popularity.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
+import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import type { CrowdLevel } from "../../common/types/crowd-level.type";
 
@@ -86,6 +87,12 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { provide: WartezeitenClient, useValue: {} },
         { provide: PopularityService, useValue: {} },
         { provide: RideProfileService, useValue: {} },
+        {
+          provide: AttractionOutageService,
+          useValue: {
+            getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
+          },
+        },
         { provide: REDIS_CLIENT, useValue: noopRedis },
       ],
     }).compile();

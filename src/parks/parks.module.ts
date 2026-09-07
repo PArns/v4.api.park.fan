@@ -8,6 +8,7 @@ import { WeatherWarningsService } from "./weather-warnings.service";
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { PlanDayService } from "./services/plan-day.service";
 import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
 import { ParkRepairService } from "./services/park-repair.service";
@@ -35,6 +36,7 @@ import { QueueTimesModule } from "../external-apis/queue-times/queue-times.modul
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stats.entity";
 import { ExternalEntityMapping } from "../database/entities/external-entity-mapping.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
 import { StatsModule } from "../stats/stats.module";
 import { PopularityModule } from "../popularity/popularity.module";
 
@@ -49,6 +51,7 @@ import { PopularityModule } from "../popularity/popularity.module";
       ScheduleEntry,
       AttractionAccuracyStats,
       ExternalEntityMapping,
+      Attraction,
     ]),
     ThemeParksModule,
     DestinationsModule,
@@ -76,6 +79,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkIntegrationService,
     ParkEnrichmentService,
     CalendarService,
+    PlanDayService,
     BestDaysService,
     ParkValidatorService,
     ParkRepairService,

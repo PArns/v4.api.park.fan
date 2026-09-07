@@ -8,6 +8,7 @@ import {
 } from "../dto/integrated-calendar.dto";
 import { BestDaysResponse } from "../dto/best-days-calendar.dto";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { CALENDAR_WARMUP_MONTH_TTL } from "../../common/cache/cache-ttl";
 
 /**
  * BestDaysService owns the lean best-days projection and its materialized
@@ -237,7 +238,18 @@ describe("BestDaysService", () => {
       const [key, payload, mode, ttl] = redis.set.mock.calls[0];
       expect(key).toBe("best-days:park-1");
       expect(mode).toBe("EX");
-      expect(ttl).toBeGreaterThan(24 * 60 * 60); // survives a full daily cycle
+      // A PROJECTION MAY NOT OUTLIVE ITS SOURCE. This snapshot is
+      // `calendar.days.map(projectDay)`, and the month caches it is built from
+      // are given CALENDAR_WARMUP_MONTH_TTL by the warmup. It used to be given
+      // 26h against their 13h — "survives a full daily cycle" — so for half a
+      // day it answered with a forecast the calendar had already replaced: on
+      // 2026-09-04 a 24.8h-old snapshot said `low` for three October Saturdays
+      // the live calendar and /plan/day both rated `high` and `very_high`, and
+      // the frontend drew both at once, one in the month grid and one in the
+      // day panel beside it. The endpoint self-heals on a miss (see the
+      // on-demand rebuild in getBestDays), so the shorter life costs one
+      // single-flighted rebuild and buys agreement.
+      expect(ttl).toBe(CALENDAR_WARMUP_MONTH_TTL);
 
       const stored = JSON.parse(payload as string) as BestDaysResponse;
       // Lean projection only:

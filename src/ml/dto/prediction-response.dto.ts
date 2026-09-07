@@ -17,6 +17,17 @@ export class PredictionDto {
   confidence: number;
 
   @ApiProperty({
+    description:
+      "Width of the model's uncertainty band in minutes: the top trained " +
+      "quantile (alpha=0.95) minus the served median. Absent when the model " +
+      "reports no real spread, which is not the same as a zero-wide band. " +
+      "Deliberately not rounded to 5 — a band is a difference, not a posted " +
+      "wait time.",
+    required: false,
+  })
+  uncertaintyMinutes?: number | null;
+
+  @ApiProperty({
     enum: ["increasing", "decreasing", "stable"],
     required: false,
   })

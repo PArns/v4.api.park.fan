@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { ParksService } from "../../parks/parks.service";
+import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 
 /**
  * Rope-Drop Processor
@@ -46,33 +47,30 @@ export class RopeDropProcessor {
       const BATCH_SIZE = 5;
       for (let i = 0; i < parks.length; i += BATCH_SIZE) {
         const batch = parks.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (park) => {
-            try {
-              const computed =
-                await this.analyticsService.computeRopeDropForPark(
-                  park.id,
-                  park.timezone || "UTC",
-                );
-              if (computed.size === 0) return { stored: 0, worth: 0 };
+        const results = await mapWithDbBudget(batch, async (park) => {
+          try {
+            const computed = await this.analyticsService.computeRopeDropForPark(
+              park.id,
+              park.timezone || "UTC",
+            );
+            if (computed.size === 0) return { stored: 0, worth: 0 };
 
-              const worth = Array.from(computed.values()).filter(
-                (r) => r.worth,
-              ).length;
-              const stored = await this.analyticsService.saveRopeDropBatch(
-                park.id,
-                computed,
-              );
-              return { stored, worth };
-            } catch (error) {
-              this.logger.error(
-                `Failed to compute rope-drop for park ${park.name} (${park.id})`,
-                error instanceof Error ? error.stack : String(error),
-              );
-              return null;
-            }
-          }),
-        );
+            const worth = Array.from(computed.values()).filter(
+              (r) => r.worth,
+            ).length;
+            const stored = await this.analyticsService.saveRopeDropBatch(
+              park.id,
+              computed,
+            );
+            return { stored, worth };
+          } catch (error) {
+            this.logger.error(
+              `Failed to compute rope-drop for park ${park.name} (${park.id})`,
+              error instanceof Error ? error.stack : String(error),
+            );
+            return null;
+          }
+        });
 
         for (const outcome of results) {
           if (outcome === null) {

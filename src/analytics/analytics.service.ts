@@ -5592,6 +5592,150 @@ export class AnalyticsService {
    * treat absence as "no data for that day yet" rather than "zero
    * activity".
    */
+  /**
+   * When each ride opens, keyed by the park's own opening time that day.
+   *
+   * A park's opening hour is not its rides' opening hour — but the gap is not a
+   * property of the ride either. Measured over a year at Phantasialand:
+   *
+   * ```
+   *              park opens   Taron    F.L.Y.   Black Mamba
+   *   Apr-Aug       09:00     10:10    10:10       08:10
+   *   January       11:00     11:00    11:00       11:05
+   * ```
+   *
+   * In summer the coasters run an hour after the gates; in winter, when the park
+   * opens at 11:00, **everything opens with the park**. So neither the absolute
+   * time nor the offset carries across seasons: a median taken in December would
+   * put Taron at 11:00 on a July day, and one taken in July would claim 10:00 for
+   * a Christmas morning the park opens at 11:00.
+   *
+   * What does carry is the pair. This returns a map keyed
+   * `attractionId|parkOpensAt`, so a caller looks up the answer for THAT day's
+   * published opening and gets a combination we have actually watched. A park
+   * opening we have never seen returns nothing, which is the honest answer rather
+   * than the nearest one.
+   *
+   * THE SIGNAL IS THE TRANSITION, not the first OPERATING row. `queue_data` is
+   * written on change plus an hourly heartbeat, so a ride left OPERATING
+   * overnight would otherwise report its 06:15 heartbeat as an opening. A day
+   * only counts when the ride was seen CLOSED earlier that same day and turned
+   * OPERATING after it.
+   *
+   * THE ANSWER IS NOT CLAMPED HERE. Half the rides report OPERATING *before* the
+   * park opens (08:10 for Black Mamba against a 09:00 gate): the feed carries the
+   * operator's system state, not whether a visitor can walk up. Clamping belongs
+   * to whoever draws the day — `PlanDayService` does `max(parkOpen, rideOpen)`.
+   *
+   * A full year, because winter is the case that breaks it. The median rather
+   * than the earliest: one late morning is a breakdown, not a schedule.
+   */
+  async getRideOpeningTimes(
+    parkId: string,
+    timezone: string,
+  ): Promise<Map<string, string>> {
+    const cacheKey = `park:ride-openings:v2:${parkId}`;
+    const cached = safeJsonParse<Array<[string, string]>>(
+      await this.redis.get(cacheKey).catch(() => null),
+    );
+    if (cached) return new Map(cached);
+
+    const rows: Array<{
+      attractionId: string;
+      park_opens_at: string;
+      opens_at: string;
+    }> = await this.queueDataRepository.manager.query(
+      `WITH sched AS (
+         SELECT se.date,
+                to_char(se."openingTime" AT TIME ZONE $2, 'HH24:MI') AS park_opens_at
+           FROM schedule_entries se
+          WHERE se."parkId" = $1::uuid
+            AND se."attractionId" IS NULL
+            AND se."scheduleType" = 'OPERATING'
+            AND se."openingTime" IS NOT NULL
+            AND se.date >= current_date - 365 AND se.date < current_date
+       ), d AS (
+         SELECT qd."attractionId" AS aid,
+                (qd.timestamp AT TIME ZONE $2)::date AS day,
+                (qd.timestamp AT TIME ZONE $2)::time AS t,
+                qd.status
+           FROM queue_data qd
+           JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND a.retired_at IS NULL
+            AND qd.timestamp >= (current_date - 365)::timestamp AT TIME ZONE $2
+            AND qd.timestamp <  current_date::timestamp AT TIME ZONE $2
+       ), per_day AS (
+         SELECT aid, day,
+                min(t) FILTER (WHERE status = 'OPERATING') AS first_operating,
+                min(t) FILTER (WHERE status = 'CLOSED')    AS first_closed
+           FROM d GROUP BY 1, 2
+       )
+       SELECT pd.aid AS "attractionId",
+              s.park_opens_at,
+              to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY pd.first_operating), 'HH24:MI') AS opens_at
+         FROM per_day pd
+         JOIN sched s ON s.date = pd.day
+        WHERE pd.first_operating IS NOT NULL
+          AND pd.first_closed IS NOT NULL
+          AND pd.first_closed < pd.first_operating
+        GROUP BY 1, 2
+       HAVING count(*) >= 5`,
+      [parkId, timezone],
+    );
+
+    // Floored to the quarter hour, because the raw median is a DETECTION time,
+    // not an opening: the poller runs every five minutes and the feed lags behind
+    // the gate on top of that, so Phantasialand's 10:00 rides measure 10:10.
+    // Parks open on quarter hours; reporting 10:10 would be precision we do not
+    // have, and a frontend would show it.
+    const out = new Map(
+      rows
+        .filter((r) => r.opens_at && r.park_opens_at)
+        .map(
+          (r) =>
+            [
+              `${r.attractionId}|${r.park_opens_at}`,
+              floorToQuarter(r.opens_at),
+            ] as const,
+        ),
+    );
+    await this.redis
+      .set(cacheKey, JSON.stringify([...out]), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+    return out;
+  }
+
+  /**
+   * Every ride's measured day, for ONE park on ONE date.
+   *
+   * The per-attraction twin below answers a date RANGE for a single ride, which
+   * is what the attraction page asks. A trip planner asks the transpose — one
+   * day, every ride — and running that through the other method would be one
+   * query per attraction, fifty for a large park, to read fifty rows that share
+   * an index.
+   *
+   * `date` is the PARK-local day and the slot times are the park's wall clock
+   * (see the writer in `buildParkHourlyRollup`), so nothing here converts a
+   * timezone. Absence is "not rolled up yet", never "nothing happened": today is
+   * deliberately not in this table, and a day before the nightly job first ran
+   * is not in it either.
+   */
+  async getParkHourlyHistory(
+    parkId: string,
+    date: string,
+  ): Promise<Map<string, AttractionHourlyHistory>> {
+    const rows = await this.attractionHourlyHistoryRepository
+      .createQueryBuilder("h")
+      .where("h.parkId = :parkId", { parkId })
+      .andWhere("h.date = :date", { date })
+      .getMany();
+
+    const map = new Map<string, AttractionHourlyHistory>();
+    for (const row of rows) map.set(row.attractionId, row);
+    return map;
+  }
+
   async getAttractionHourlyHistory(
     attractionId: string,
     fromDate: string,
@@ -6094,4 +6238,12 @@ export class AnalyticsService {
   async countTypicalWaitsRows(): Promise<number> {
     return this.attractionTypicalWaitsRepository.count();
   }
+}
+
+/** `HH:mm` floored to the quarter hour. See `getRideOpeningTimes` for why. */
+function floorToQuarter(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  const floored = Math.floor(m / 15) * 15;
+  return `${String(h).padStart(2, "0")}:${String(floored).padStart(2, "0")}`;
 }

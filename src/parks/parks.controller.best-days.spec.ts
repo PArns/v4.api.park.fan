@@ -16,6 +16,7 @@ import { PredictionAccuracyService } from "../ml/services/prediction-accuracy.se
 import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
+import { PlanDayService } from "./services/plan-day.service";
 import { BestDaysService } from "./services/best-days.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { ParkRenameService } from "./services/park-rename.service";
@@ -75,6 +76,7 @@ describe("ParksController › getBestDaysByGeographicPath", () => {
         { provide: ParkIntegrationService, useValue: noop },
         { provide: ParkEnrichmentService, useValue: noop },
         { provide: CalendarService, useValue: noop },
+        { provide: PlanDayService, useValue: noop },
         { provide: PopularityService, useValue: noop },
         { provide: ParkRenameService, useValue: noop },
         { provide: REDIS_CLIENT, useValue: noop },

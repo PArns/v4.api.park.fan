@@ -175,6 +175,10 @@ export class WaitTimesProcessor {
                 if (a.externalId)
                   mappingLookup.set(`themeparks-wiki:${a.externalId}`, a.id);
               });
+              // The ids that queue_data's foreign key will actually accept.
+              // Kept beside the merged lookup rather than replacing it: the
+              // show and restaurant paths need the shared map.
+              const attractionIds = new Set(pAttractions.map((a) => a.id));
               pShows.forEach((s) => {
                 if (s.externalId)
                   mappingLookup.set(`themeparks-wiki:${s.externalId}`, s.id);
@@ -253,6 +257,7 @@ export class WaitTimesProcessor {
                         attractionEntities,
                         mappingLookup,
                         seenAttractionIds,
+                        attractionIds,
                       );
 
                     // Closing time for the downtime tracker (same for all rides
@@ -460,11 +465,19 @@ export class WaitTimesProcessor {
   private async processAttractionLiveData(
     entityData: EntityLiveData,
     mappingLookup: Map<string, string>,
+    attractionIds: ReadonlySet<string>,
   ): Promise<number> {
     const internalId = mappingLookup.get(
       `${entityData.source}:${entityData.externalId}`,
     );
     if (!internalId) return 0;
+    // `mappingLookup` holds attractions, shows and restaurants together, since
+    // the show and restaurant paths resolve through it too. `queue_data`
+    // however has a foreign key to `attractions`, so an entity the source
+    // labels ATTRACTION but which we store as a show resolves to an id the
+    // insert cannot use. themeparks.wiki does exactly that for Disneyland's
+    // "Mickey's PhilharMagic": one rejected insert per hour, forever.
+    if (!attractionIds.has(internalId)) return 0;
     return this.queueDataService.saveLiveData(
       internalId,
       this.adaptEntityLiveData(entityData),
@@ -485,6 +498,7 @@ export class WaitTimesProcessor {
     entities: EntityLiveData[],
     mappingLookup: Map<string, string>,
     seenAttractionIds: Set<string>,
+    attractionIds: ReadonlySet<string>,
   ): Promise<Map<string, number>> {
     const items: LiveDataBatchItem[] = [];
     const lastSeenKeys: string[] = [];
@@ -494,6 +508,9 @@ export class WaitTimesProcessor {
         `${entityData.source}:${entityData.externalId}`,
       );
       if (!internalId) continue;
+      // See processAttractionLiveData: a show the source calls an ATTRACTION
+      // resolves to an id that queue_data's foreign key rejects.
+      if (!attractionIds.has(internalId)) continue;
       seenAttractionIds.add(internalId);
       lastSeenKeys.push(this.attractionLastSeenKey(internalId));
       items.push({
@@ -758,6 +775,10 @@ export class WaitTimesProcessor {
       name: entityData.name,
       entityType: entityData.entityType,
       status: entityData.status,
+      // Set only where ConflictResolverService overrode the status. It is the
+      // one piece of the merge that leaves no trace in what we serve, and
+      // therefore the only one a later measurement cannot reconstruct.
+      rawStatus: entityData.rawStatus,
       queue,
       showtimes: entityData.showtimes,
       diningAvailability: entityData.diningAvailability,
@@ -979,6 +1000,12 @@ export class WaitTimesProcessor {
                 queueType: QueueType.STANDBY,
                 status: last ? last.status : LiveStatus.CLOSED,
                 waitTime: last ? last.waitTime : 0,
+                // The carried row copies the previous `data_source` too, which
+                // is what made it indistinguishable from a reading. This flag is
+                // the distinction: without it a DOWN that vanishes from every
+                // feed writes itself forward for up to 24 hours and every
+                // duration statistic is wrong upward on the long outages.
+                isHeartbeat: true,
                 dataSource: last ? last.dataSource : "system-heartbeat",
                 lastUpdated: now,
               });

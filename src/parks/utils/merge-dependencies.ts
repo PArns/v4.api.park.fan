@@ -64,6 +64,28 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["op_day"],
   },
   {
+    table: "attraction_outages",
+    column: "attractionId",
+    strategy: "move",
+    conflictColumns: ["started_at"],
+  },
+  {
+    table: "attraction_exposure_days",
+    column: "attractionId",
+    strategy: "move",
+    conflictColumns: ["op_day"],
+  },
+  {
+    // Discarded rather than moved: the profile is an aggregate over a window
+    // that the merge has just invalidated, and the survivor is skipped by the
+    // reconstruction until `last_merged_at` falls out of range anyway. Carrying
+    // the loser's numbers across would publish a figure about a ride that no
+    // longer exists in that shape.
+    table: "attraction_downtime_profiles",
+    column: "attractionId",
+    strategy: "discard",
+  },
+  {
     table: "headliner_attractions",
     column: "attractionId",
     strategy: "move",
@@ -181,6 +203,16 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   { table: "attraction_typical_waits", column: "parkId", strategy: "move" },
   { table: "attraction_day_operating", column: "parkId", strategy: "move" },
   { table: "attraction_hourly_history", column: "parkId", strategy: "move" },
+  { table: "attraction_outages", column: "parkId", strategy: "move" },
+  { table: "attraction_exposure_days", column: "parkId", strategy: "move" },
+  { table: "attraction_downtime_profiles", column: "parkId", strategy: "move" },
+  { table: "park_downtime_coverage", column: "parkId", strategy: "discard" },
+  // `park_id`, not `parkId`: this table is written by raw SQL and its column is
+  // snake_case. Discard rather than move — a curve is an aggregate over the
+  // loser's intervals, and those move to the winner and are recomputed the same
+  // night. Moving the curve would keep a row derived from a population that no
+  // longer exists.
+  { table: "downtime_recovery_curves", column: "park_id", strategy: "discard" },
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
   { table: "ml_accuracy_comparisons", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },
