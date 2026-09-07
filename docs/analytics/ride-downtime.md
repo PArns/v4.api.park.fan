@@ -160,6 +160,30 @@ not with the 4.9 GB of data. **The risk is not the runtime, it is the
 `queue_data` and blocks everything behind it. Run it with a `lock_timeout` and
 retry, rather than letting it sit in the queue.
 
+### Two outages were being merged into one, and it inflated the maximum
+
+Found 2026-09-07 by a review pass with no exclusion list.
+
+The group id increments on every non-DOWN row, but a run is built only from the
+DOWN rows sharing an id. So in `DOWN DOWN CLOSED OPERATING DOWN DOWN` the CLOSED
+closes the first run and the **OPERATING lands in a group with no run in it** —
+invisible to `end_state`. The stitch then read `prev_end_state = 'CLOSED'`,
+treated the seam as one interrupted outage, and merged two separate ones.
+
+Measured on Cedar Point over seven days: **24 of 330 run pairs** inside the
+20-hour stitch window, and the effect on the published figures:
+
+|              |              before |               after |
+| ------------ | ------------------: | ------------------: |
+| intervals    |                 378 |             **400** |
+| mean minutes |                  94 |                  89 |
+| longest      | **4068 min (68 h)** | **1185 min (20 h)** |
+
+The maximum is the most sampling-sensitive statistic in §5, and it was reporting
+a 68-hour outage that never happened. Fixed with a running count of OPERATING
+sightings per attraction, which does not care which group the sighting fell
+into.
+
 ### The capability test was necessary but not sufficient
 
 Added 2026-09-07, after the first nightly run.

@@ -176,7 +176,24 @@ WITH ${sharedCtes()},
                PARTITION BY aid ORDER BY ts
                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
              ), 0
-           ) AS grp
+           ) AS grp,
+           -- How many times this ride has been SEEN RUNNING so far.
+           --
+           -- The stitch below needs to know whether the ride ran again between
+           -- two DOWN runs, and end_state cannot answer that. A breaking row
+           -- carries the group of the run it closes, so in
+           -- DOWN,DOWN,CLOSED,OPERATING,DOWN,DOWN the CLOSED closes the first
+           -- run and the OPERATING lands in a group of its own with no run in
+           -- it — invisible. The stitch then sees prev_end_state = CLOSED,
+           -- treats the seam as one interrupted outage and merges two separate
+           -- ones: measured on Cedar Point over 7 days, 24 of 330 run pairs
+           -- inside the 20-hour window.
+           --
+           -- A running count survives that, because it does not care which
+           -- group the sighting fell into.
+           SUM(CASE WHEN breaks AND status = 'OPERATING' THEN 1 ELSE 0 END) OVER (
+             PARTITION BY aid ORDER BY ts ROWS UNBOUNDED PRECEDING
+           ) AS ops_seen
       FROM seg_c
   ),
   run_rows AS (
@@ -191,6 +208,8 @@ WITH ${sharedCtes()},
     SELECT r.aid, r.pid, r.tz, r.grp,
            MIN(r.ts)                          AS started_at,
            MAX(r.seg_end)                     AS down_until,
+           MIN(r.ops_seen)                    AS ops_at_start,
+           MAX(r.ops_seen)                    AS ops_at_end,
            COUNT(*)::int                      AS rows_in_run,
            COUNT(*) FILTER (WHERE r.is_hb)::int AS hb_rows,
            MAX(r.carried)::int                AS max_carried
@@ -207,12 +226,16 @@ WITH ${sharedCtes()},
            SUM(CASE WHEN prev_until IS NULL
                      OR started_at > prev_until + INTERVAL '${OUTAGE_STITCH_HOURS} hours'
                      OR prev_end_state = 'OPERATING'
+                     -- The ride was seen running between the two runs, wherever
+                     -- that sighting fell. Two outages, not one interrupted.
+                     OR ops_at_start > prev_ops_at_end
                     THEN 1 ELSE 0 END)
              OVER (PARTITION BY aid ORDER BY started_at ROWS UNBOUNDED PRECEDING) AS spell
       FROM (
         SELECT r.*,
                LAG(down_until) OVER (PARTITION BY aid ORDER BY started_at) AS prev_until,
-               LAG(end_state)  OVER (PARTITION BY aid ORDER BY started_at) AS prev_end_state
+               LAG(end_state)   OVER (PARTITION BY aid ORDER BY started_at) AS prev_end_state,
+               LAG(ops_at_end)  OVER (PARTITION BY aid ORDER BY started_at) AS prev_ops_at_end
           FROM runs_e r
       ) s
   ),

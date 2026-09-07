@@ -21,6 +21,50 @@ describe("outage grouping (the arithmetic the SQL performs)", () => {
     return out;
   }
 
+  /** The TypeScript mirror of the `ops_seen` running count. */
+  function opsSeen(rows: Array<{ breaks: boolean; st: string }>): number[] {
+    let n = 0;
+    return rows.map((r) => {
+      if (r.breaks && r.st === "OPERATING") n++;
+      return n;
+    });
+  }
+
+  it("sees the ride running again even when the sighting lands in an empty group", () => {
+    // DOWN DOWN CLOSED OPERATING DOWN DOWN.
+    //
+    // The CLOSED closes the first run, so the OPERATING falls into a group of
+    // its own that contains no run — invisible to `end_state`. The stitch then
+    // read prev_end_state = CLOSED, called the seam one interrupted outage and
+    // merged two separate ones. Measured on Cedar Point over 7 days: 24 of 330
+    // run pairs inside the 20-hour window, and the longest "outage" came back
+    // as 4068 minutes against 1185 once split.
+    const rows = [
+      { breaks: false, st: "DOWN" },
+      { breaks: false, st: "DOWN" },
+      { breaks: true, st: "CLOSED" },
+      { breaks: true, st: "OPERATING" },
+      { breaks: false, st: "DOWN" },
+      { breaks: false, st: "DOWN" },
+    ];
+    const ops = opsSeen(rows);
+    // The first run ends at index 1, the second starts at index 4.
+    const opsAtEndOfFirst = ops[1];
+    const opsAtStartOfSecond = ops[4];
+    expect(opsAtStartOfSecond).toBeGreaterThan(opsAtEndOfFirst);
+  });
+
+  it("does not split when the ride was never seen running between runs", () => {
+    // DOWN CLOSED DOWN — one outage the park closure interrupted, not two.
+    const rows = [
+      { breaks: false, st: "DOWN" },
+      { breaks: true, st: "CLOSED" },
+      { breaks: false, st: "DOWN" },
+    ];
+    const ops = opsSeen(rows);
+    expect(ops[2]).toBe(ops[0]);
+  });
+
   it("keeps the ending reading in the run it ends", () => {
     // D D C D  ->  the CLOSED row must land in group 0 beside the two DOWNs,
     // not open group 1. Counting the current row instead of only the ones
