@@ -1,5 +1,6 @@
 allowBuilds:
   '@nestjs/core': true
+  '@parcel/watcher': false
   '@scarf/scarf': true
   cpu-features: true
   msgpackr-extract: true
