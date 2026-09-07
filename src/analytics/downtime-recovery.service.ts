@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, IsNull, Repository } from "typeorm";
+import type { OutageSignal } from "./entities/attraction-outage.entity";
 import {
   DowntimeRecoveryCurve,
   MIN_PARK_CURVE_SAMPLE,
@@ -55,8 +56,9 @@ export class DowntimeRecoveryService {
     ]);
 
     const toSave = rows.map((row) => ({
-      id: `${row.parkId ?? "pooled"}:${row.elapsedMinutes}`,
+      id: `${row.parkId ?? "pooled"}:${row.signal}:${row.elapsedMinutes}`,
       parkId: row.parkId,
+      signal: row.signal,
       elapsedMinutes: Number(row.elapsedMinutes),
       atRisk: Number(row.atRisk),
       recoveryWithin30: fixed3(row.recoveryWithin30),
@@ -119,6 +121,7 @@ export interface RecoveryCurveSet {
 
 interface CurveRow {
   parkId: string | null;
+  signal: OutageSignal;
   elapsedMinutes: number | string;
   atRisk: number | string;
   recoveryWithin30: number | string | null;
@@ -171,6 +174,7 @@ function intOrNull(value: number | string | null): number | null {
 const RECOVERY_CURVE_SQL = `
   WITH ev_raw AS (
     SELECT a."parkId"          AS park_id,
+           o.signal            AS signal,
            o.operating_minutes AS mins,
            (o.end_reason IN ('recovered', 'reclassified')) AS observed
       FROM attraction_outages o
@@ -183,73 +187,78 @@ const RECOVERY_CURVE_SQL = `
   -- second query with a different WHERE: a serving path that falls back must
   -- not silently change the population under it.
   ev AS (
-    SELECT park_id, mins, observed FROM ev_raw
+    SELECT park_id, signal, mins, observed FROM ev_raw
     UNION ALL
-    SELECT NULL::uuid, mins, observed FROM ev_raw
+    SELECT NULL::uuid, signal, mins, observed FROM ev_raw
   ),
   -- Kaplan-Meier needs, per distinct duration: how many ended there, and how
   -- many were still at risk when it arrived.
   agg AS (
-    SELECT park_id, mins,
+    SELECT park_id, signal, mins,
            COUNT(*) FILTER (WHERE observed)::int AS d,
            COUNT(*)::int                         AS leaving
-      FROM ev GROUP BY park_id, mins
+      FROM ev GROUP BY park_id, signal, mins
   ),
   risk AS (
-    SELECT park_id, mins, d,
-           SUM(leaving) OVER (PARTITION BY park_id ORDER BY mins DESC
+    SELECT park_id, signal, mins, d,
+           SUM(leaving) OVER (PARTITION BY park_id, signal ORDER BY mins DESC
                               ROWS UNBOUNDED PRECEDING) AS n_at_risk
       FROM agg
   ),
   km AS (
-    SELECT park_id, mins, n_at_risk,
+    SELECT park_id, signal, mins, n_at_risk,
            -- Product of (1 - d/n) as a running sum of logs: the product form
            -- underflows on long tails, the log form does not.
            EXP(SUM(LN(GREATEST(1.0 - d::numeric / NULLIF(n_at_risk, 0), 1e-12)))
-               OVER (PARTITION BY park_id ORDER BY mins
+               OVER (PARTITION BY park_id, signal ORDER BY mins
                      ROWS UNBOUNDED PRECEDING)) AS surv
       FROM risk
   ),
   buckets AS (SELECT UNNEST($2::int[]) AS t),
   -- S(T): the survival still standing when the bucket edge is reached.
   anchors AS (
-    SELECT b.t, k.park_id,
+    SELECT b.t, k.park_id, k.signal,
            (SELECT k2.surv FROM km k2
-             WHERE k2.park_id IS NOT DISTINCT FROM k.park_id AND k2.mins <= b.t
+             WHERE k2.park_id IS NOT DISTINCT FROM k.park_id
+               AND k2.signal = k.signal AND k2.mins <= b.t
              ORDER BY k2.mins DESC LIMIT 1) AS s_at_t,
            (SELECT k3.n_at_risk FROM km k3
-             WHERE k3.park_id IS NOT DISTINCT FROM k.park_id AND k3.mins >= b.t
+             WHERE k3.park_id IS NOT DISTINCT FROM k.park_id
+               AND k3.signal = k.signal AND k3.mins >= b.t
              ORDER BY k3.mins ASC LIMIT 1) AS at_risk
-      FROM buckets b CROSS JOIN (SELECT DISTINCT park_id FROM km) k
+      FROM buckets b CROSS JOIN (SELECT DISTINCT park_id, signal FROM km) k
   ),
   -- Conditional quantiles: the first duration at which the surviving fraction
   -- has fallen to (1-q) of what it was at T. NULL when it never does — which is
   -- the honest answer past roughly four hours, and better than a large number
   -- that reads as knowledge.
   quantiles AS (
-    SELECT a.t, a.park_id, a.at_risk, a.s_at_t,
+    SELECT a.t, a.park_id, a.signal, a.at_risk, a.s_at_t,
            (SELECT MIN(k.mins) - a.t FROM km k
-             WHERE k.park_id IS NOT DISTINCT FROM a.park_id
+             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.signal = a.signal
                AND k.mins >= a.t AND k.surv <= a.s_at_t * 0.75) AS rem_p25,
            (SELECT MIN(k.mins) - a.t FROM km k
-             WHERE k.park_id IS NOT DISTINCT FROM a.park_id
+             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.signal = a.signal
                AND k.mins >= a.t AND k.surv <= a.s_at_t * 0.50) AS rem_p50,
            (SELECT MIN(k.mins) - a.t FROM km k
-             WHERE k.park_id IS NOT DISTINCT FROM a.park_id
+             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.signal = a.signal
                AND k.mins >= a.t AND k.surv <= a.s_at_t * 0.25) AS rem_p75,
            -- Recovery share over a horizon is 1 - S(T+H)/S(T), read off the
            -- same estimator, so the probability and the quantiles cannot
            -- disagree about the same curve.
            1 - COALESCE((SELECT k.surv FROM km k
-             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.mins <= a.t + 30
+             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.signal = a.signal
+               AND k.mins <= a.t + 30
              ORDER BY k.mins DESC LIMIT 1), a.s_at_t) / NULLIF(a.s_at_t, 0) AS rec30,
            1 - COALESCE((SELECT k.surv FROM km k
-             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.mins <= a.t + 60
+             WHERE k.park_id IS NOT DISTINCT FROM a.park_id AND k.signal = a.signal
+               AND k.mins <= a.t + 60
              ORDER BY k.mins DESC LIMIT 1), a.s_at_t) / NULLIF(a.s_at_t, 0) AS rec60
       FROM anchors a
      WHERE a.s_at_t IS NOT NULL AND a.at_risk IS NOT NULL
   )
   SELECT park_id                       AS "parkId",
+         signal                        AS "signal",
          t                             AS "elapsedMinutes",
          at_risk                       AS "atRisk",
          ROUND(rec30::numeric, 3)      AS "recoveryWithin30",
@@ -259,5 +268,5 @@ const RECOVERY_CURVE_SQL = `
          rem_p75                       AS "remainingP75"
     FROM quantiles
    WHERE park_id IS NULL OR at_risk >= $3::int
-   ORDER BY park_id NULLS FIRST, t
+   ORDER BY park_id NULLS FIRST, signal, t
 `;

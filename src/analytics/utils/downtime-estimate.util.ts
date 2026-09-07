@@ -63,7 +63,14 @@ export const MIN_ESTIMATE_SAMPLE = 200;
  * the next poll, and saying anything at all there would be the confident number
  * on the thinnest evidence.
  *
- * @param curves - The park's own rows and the pooled rows, both ascending.
+ * The caller passes curves already filtered to the outage's own signal. A
+ * `closed_gap` outage read against a `down` curve would be answered from a
+ * different population — one with censoring, a different end definition and
+ * quartiles of 10/25/50 against 15/20/35 — so the filtering is the caller's job
+ * and this function never mixes them.
+ *
+ * @param curves - The park's own rows and the pooled rows, both ascending, both
+ *   already restricted to one signal.
  * @param elapsedMinutes - Operating minutes since the run started.
  * @returns The estimate, or undefined when the curve cannot answer.
  */

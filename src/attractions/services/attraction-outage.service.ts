@@ -128,6 +128,28 @@ export class AttractionOutageService {
     pooled: DowntimeRecoveryCurve[];
   } | null = null;
 
+  /**
+   * The curves for one signal, park rows and pooled rows.
+   *
+   * Filtering here rather than in `estimateOutage` keeps the pure function
+   * unable to mix the two populations by accident: a `closed_gap` outage
+   * answered from `down` intervals would be read against a different end
+   * definition and a different censoring regime.
+   */
+  private curvesFor(
+    cache: {
+      byPark: Map<string, DowntimeRecoveryCurve[]>;
+      pooled: DowntimeRecoveryCurve[];
+    },
+    parkId: string,
+    signal: OutageSignal,
+  ): { park: DowntimeRecoveryCurve[]; pooled: DowntimeRecoveryCurve[] } {
+    return {
+      park: (cache.byPark.get(parkId) ?? []).filter((r) => r.signal === signal),
+      pooled: cache.pooled.filter((r) => r.signal === signal),
+    };
+  }
+
   private static readonly CURVE_TTL_MS = 30 * 60 * 1000;
 
   private async loadCurves(): Promise<{
@@ -216,13 +238,7 @@ export class AttractionOutageService {
           // with "just started".
           estimate:
             row.hasWindows && Number.isFinite(elapsed)
-              ? estimateOutage(
-                  {
-                    park: curves.byPark.get(park.id) ?? [],
-                    pooled: curves.pooled,
-                  },
-                  elapsed,
-                )
+              ? estimateOutage(this.curvesFor(curves, park.id, "down"), elapsed)
               : undefined,
         });
       }
@@ -288,10 +304,7 @@ export class AttractionOutageService {
           rowsInRun: 1,
           signal: "closed_gap",
           estimate: estimateOutage(
-            {
-              park: curves.byPark.get(park.id) ?? [],
-              pooled: curves.pooled,
-            },
+            this.curvesFor(curves, park.id, "closed_gap"),
             elapsed,
           ),
         });

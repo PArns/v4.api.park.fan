@@ -1,4 +1,5 @@
 import { Column, Entity, Index, PrimaryColumn } from "typeorm";
+import type { OutageSignal } from "./attraction-outage.entity";
 
 /**
  * How long a running outage still has to go, as measured, never as predicted.
@@ -55,7 +56,7 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
  * is that pooled row.
  */
 @Entity("downtime_recovery_curves")
-@Index(["parkId", "elapsedMinutes"], { unique: true })
+@Index(["parkId", "signal", "elapsedMinutes"], { unique: true })
 export class DowntimeRecoveryCurve {
   /**
    * Surrogate key, because the natural one contains a NULL.
@@ -73,6 +74,19 @@ export class DowntimeRecoveryCurve {
   @Column({ type: "uuid", name: "park_id", nullable: true })
   @Index()
   parkId: string | null;
+
+  /**
+   * Which signal's intervals this curve was built from.
+   *
+   * The two must not be pooled together. A `down` interval ends when the feed
+   * says the ride runs again; a `closed_gap` ends when it stops reading CLOSED,
+   * and by construction every one of them recovered — there is no censoring in
+   * that population at all. Their quartiles differ (15/20/35 against 10/25/50)
+   * and so does what a reader is being told, so a curve read against a
+   * `closed_gap` outage is built from `closed_gap` intervals or it is not shown.
+   */
+  @Column({ type: "text", name: "signal", default: "down" })
+  signal: OutageSignal;
 
   /**
    * Lower edge of the elapsed bucket, in the ride's own OPERATING minutes.
