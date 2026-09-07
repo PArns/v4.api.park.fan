@@ -227,6 +227,15 @@ export class AttractionOutageService {
       return out;
     }
 
+    // NOTE: the closure query runs after the DOWN query below, for the rides
+    // that are NOT reading DOWN — it is not skipped just because some other
+    // ride in the park is. Gating it on "nobody here is DOWN" looked equivalent
+    // to the SQL's own population check and is not: the regime is recomputed
+    // once a night, so on the day a blind park emits its first-ever DOWN, that
+    // one ride would silently take the closure line away from every other ride
+    // in the park — and because the projection sends `outage` on every poll,
+    // the note would visibly vanish for a ride that had not recovered.
+
     const since = new Date(
       asOf.getTime() - TRAILING_OUTAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
     );
@@ -278,6 +287,14 @@ export class AttractionOutageService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+
+    // The rides that are not reading DOWN may still be sitting in a closure.
+    // The statement restricts itself to blind parks, so in a park that reports
+    // DOWN this returns nothing and costs one indexed lookup.
+    const notDown = allIds.filter((id) => !ids.includes(id));
+    if (notDown.length > 0) {
+      await this.addClosureGaps(park, notDown, asOf, out);
     }
 
     return out;

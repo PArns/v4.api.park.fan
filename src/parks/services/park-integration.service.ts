@@ -981,9 +981,12 @@ export class ParkIntegrationService {
       // starved the simultaneity filter, which counts rides shutting in the
       // same minute and can only tell a park-wide closing from a fault if it
       // sees the park. `AttractionOutageService` does the filtering now.
-      const anyDown = dto.attractions.some((a) => a.effectiveStatus === "DOWN");
-      const parkCanReportDown = park.wikiEntityId != null;
-      if (parkCanReportDown && (anyDown || dto.attractions.length > 0)) {
+      // No DOWN precondition: the service decides which signal applies, and
+      // the closure signal exists for parks where no ride ever reads DOWN.
+      // `wikiEntityId` is the one real precondition — without it neither signal
+      // can produce anything, and asking would be a round-trip for a
+      // guaranteed empty answer.
+      if (park.wikiEntityId != null && dto.attractions.length > 0) {
         const byId = new Map(
           (park.attractions ?? []).map((a) => [a.id, a] as const),
         );
