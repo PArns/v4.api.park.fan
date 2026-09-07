@@ -120,6 +120,25 @@ export const MAX_EARLY_END_SHARE = 0.5;
  */
 export const MIN_PARK_MINUTES_LEFT = 60;
 
+/**
+ * How far the LIVE statement looks back for "was this ride open earlier today".
+ *
+ * Deliberately NOT `MAX_GAP_HOURS`, which it used to reuse. The two want
+ * opposite things: that one is a ceiling on how long a gap may span and is kept
+ * short to exclude an overnight reopening, while this one must cover the whole
+ * operating day or the morning falls out of the window.
+ *
+ * Measured: 18 blind parks had 399 operating days longer than 12 hours in the
+ * last three weeks, the longest running 24. Under the old 12-hour bound a ride
+ * that broke at 09:15 in a park open until 23:00 dropped off the live line once
+ * the outage passed twelve hours — the failure ran backwards, with the longest
+ * and most certain faults disappearing first.
+ *
+ * 26 hours covers a 24-hour operating day with slack for the poll that opened
+ * it.
+ */
+export const LIVE_LOOKBACK_HOURS = 26;
+
 /** How far a closure may reach before it stops being a same-day gap. */
 export const MAX_GAP_HOURS = 12;
 
@@ -382,10 +401,11 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND COALESCE(qd.data_source, '') NOT IN
            ('system-reconciliation', 'system-heartbeat')
        AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
-       -- One operating day back is enough: the rule is "was open earlier
-       -- today", and a longer window would let yesterday's OPERATING qualify a
-       -- ride that has been shut since.
-       AND qd.timestamp >= $3::timestamptz - INTERVAL '${MAX_GAP_HOURS} hours'
+       -- Far enough back to cover the whole operating day. open_today below
+       -- still requires the OPERATING reading to fall on the same park-local
+       -- day, so a longer window cannot let yesterday qualify a ride that has
+       -- been shut since — the date check does that work, not the bound.
+       AND qd.timestamp >= $3::timestamptz - INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
        AND qd.timestamp <= $3::timestamptz
   ),
   newest AS (SELECT * FROM recent WHERE rn = 1 AND st = 'CLOSED'),
@@ -431,7 +451,8 @@ export const CURRENT_CLOSURE_GAP_SQL = `
                    qd.timestamp      AS ts,
                    qd.status::text   AS st,
                    lag(qd.status::text)  OVER w AS prev_st,
-                   lead(qd.status::text) OVER w AS next_st
+                   lead(qd.status::text) OVER w AS next_st,
+                   lead(qd.timestamp)    OVER w AS next_ts
               FROM queue_data qd
              WHERE qd."attractionId" = ANY($1::uuid[])
                AND qd."queueType" = 'STANDBY'
@@ -445,6 +466,17 @@ export const CURRENT_CLOSURE_GAP_SQL = `
          WHERE f.st = 'CLOSED'
            AND f.prev_st = 'OPERATING'
            AND f.next_st = 'OPERATING'
+           -- The SAME bounds raw_gaps applies, and the comment above claimed
+           -- these were already here. Without them a ride that shuts at night
+           -- and opens next morning satisfies the triple, so every ordinary
+           -- operating day counts as a gap day and the ratio converges on 1.0 —
+           -- which would suppress the live line for exactly the rides that have
+           -- been reliably open. Measured today the two counts agree on all
+           -- 2132 rides, because overnight rows are broken up by our own
+           -- bookkeeping writes; that is the data being kind, not the query
+           -- being right.
+           AND f.next_ts < f.ts + INTERVAL '${MAX_GAP_HOURS} hours'
+           AND (f.next_ts AT TIME ZONE $2)::date = (f.ts AT TIME ZONE $2)::date
       ) d
      GROUP BY d.aid
   ),
@@ -512,7 +544,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND COALESCE(qd.data_source, '') NOT IN
            ('system-reconciliation', 'system-heartbeat')
        AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
-       AND qd.timestamp >= $3::timestamptz - INTERVAL '${MAX_GAP_HOURS} hours'
+       AND qd.timestamp >= $3::timestamptz - INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
        AND qd.timestamp <= $3::timestamptz
      GROUP BY 1
   )
