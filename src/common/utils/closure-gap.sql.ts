@@ -1,4 +1,5 @@
 import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
+import { normalizedClosingSql } from "./park-open-window.sql";
 /**
  * A fault read from a closure, for the parks whose feed never says DOWN.
  *
@@ -397,15 +398,24 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   park_open AS (
     -- Is the park open at this instant, and when does it shut? No rows
     -- short-circuits everything below, because a CLOSED ride in a shut park is
-    -- a shut park.
-    SELECT se."closingTime" AS closes_at
+    -- a shut park — and this CTE is CROSS JOINed, so getting it wrong silences
+    -- the whole park rather than one ride.
+    --
+    -- Through normalizedClosingSql(), like every other query in this feature.
+    -- The write-path repair has no backfill, so stored history still carries
+    -- what the sources sent: a past-midnight close stamped with the opening's
+    -- own calendar date. La Ronde does that every day of its season. Read raw,
+    -- such a row is already "in the past" at 00:30, this CTE returns nothing,
+    -- and every ride in that park loses its line for the rest of the night.
+    SELECT ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "p.timezone")} AS closes_at
       FROM schedule_entries se
+      JOIN parks p ON p.id = se."parkId"
      WHERE se."parkId" = $4::uuid
        AND se."attractionId" IS NULL
        AND se."scheduleType" = 'OPERATING'
        AND se."openingTime" <= $3::timestamptz
-       AND se."closingTime" >  $3::timestamptz
-     ORDER BY se."closingTime" DESC
+       AND ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "p.timezone")} > $3::timestamptz
+     ORDER BY 1 DESC
      LIMIT 1
   ),
   recent AS (
@@ -526,7 +536,10 @@ export const CURRENT_CLOSURE_GAP_SQL = `
                max(w.closes_at) AS closes_at
           FROM queue_data qd
           JOIN LATERAL (
-            SELECT se."closingTime" AS closes_at
+            -- Normalized for the same reason park_open is: a raw past-midnight
+            -- close would make every day look like it ended early, and this
+            -- feeds the filter that decides a ride is on a timetable.
+            SELECT ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "$2")} AS closes_at
               FROM schedule_entries se
              WHERE se."parkId" = $4::uuid
                AND se."attractionId" IS NULL

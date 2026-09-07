@@ -324,17 +324,36 @@ export class DowntimeProfileService {
       ),
       ou AS (
         SELECT o."attractionId" AS aid,
-               COUNT(*)::int                                        AS outages,
-               COUNT(*) FILTER (WHERE o.duration_usable)::int       AS usable,
-               COUNT(*) FILTER (WHERE NOT o.duration_usable)::int   AS censored,
-               COUNT(*) FILTER (WHERE o.started_at < $4::timestamptz)::int AS first_half,
-               COUNT(*) FILTER (WHERE o.started_at >= $4::timestamptz)::int AS second_half,
+               -- Every count and quantile below carries NOT likely_works_period
+               -- in its own FILTER rather than relying on a WHERE clause,
+               -- because the row is still needed: works_minutes has to see it.
+               COUNT(*) FILTER (WHERE NOT o.likely_works_period)::int AS outages,
+               COUNT(*) FILTER (WHERE o.duration_usable
+                                  AND NOT o.likely_works_period)::int AS usable,
+               COUNT(*) FILTER (WHERE NOT o.duration_usable
+                                  AND NOT o.likely_works_period)::int AS censored,
+               COUNT(*) FILTER (WHERE o.started_at < $4::timestamptz
+                                  AND NOT o.likely_works_period)::int AS first_half,
+               COUNT(*) FILTER (WHERE o.started_at >= $4::timestamptz
+                                  AND NOT o.likely_works_period)::int AS second_half,
                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.operating_minutes)
-                 FILTER (WHERE o.duration_usable)                   AS median_minutes,
-               MAX(o.operating_minutes) FILTER (WHERE o.duration_usable) AS longest_minutes
+                 FILTER (WHERE o.duration_usable
+                           AND NOT o.likely_works_period)           AS median_minutes,
+               -- Minutes belonging to spells this feature already refuses to
+               -- count. likely_works_period is a SPELL-level verdict from
+               -- statement 1; the exposure table is built by statement 2, which
+               -- knows only per-segment state and has no such column. So a
+               -- 9-day DOWN run that the feed sent instead of REFURBISHMENT is
+               -- correctly kept out of the count, the median and the longest —
+               -- and its ~13 000 minutes still landed in downShare, putting
+               -- "26 Störungen, Median 20 Min." beside 60-80 % downtime.
+               COALESCE(SUM(o.operating_minutes)
+                 FILTER (WHERE o.likely_works_period), 0)::int       AS works_minutes,
+               MAX(o.operating_minutes) FILTER (WHERE o.duration_usable
+                                            AND NOT o.likely_works_period)
+                                                                   AS longest_minutes
           FROM attraction_outages o
          WHERE o.started_at >= $2::timestamptz AND o.started_at <= $3::timestamptz
-           AND NOT o.likely_works_period
            -- Reported outages only: everything this CTE feeds is a published
            -- figure („34 Störungen gemeldet"), and a closure gap was never
            -- reported by anybody. Without this a park that slips into the
@@ -356,6 +375,7 @@ export class DowntimeProfileService {
              COALESCE(ou.censored, 0)     AS "censored",
              COALESCE(ou.first_half, 0)   AS "firstHalf",
              COALESCE(ou.second_half, 0)  AS "secondHalf",
+             ou.works_minutes             AS "worksMinutes",
              ou.median_minutes            AS "medianMinutes",
              ou.longest_minutes           AS "longestMinutes",
              a.last_merged_at             AS "lastMergedAt",
@@ -427,6 +447,15 @@ export interface ProfileInputs {
   parkId: string;
   operatingMinutes: number | string;
   downMinutes: number | string;
+  /**
+   * Minutes belonging to spells flagged `likely_works_period`.
+   *
+   * They have to be subtracted from `downMinutes` before it becomes a published
+   * share. The flag is a spell-level verdict and the exposure table is built
+   * from per-segment state, so a run this feature already refuses to COUNT
+   * still contributed its minutes to the one percentage on the card.
+   */
+  worksMinutes?: number | string | null;
   observedDays: number | string;
   outages: number | string;
   usableDurations: number | string;
@@ -466,7 +495,11 @@ export function decideProfile(
   const censored = num(row.censored);
   const observedDays = num(row.observedDays);
   const operatingMinutes = num(row.operatingMinutes);
-  const downMinutes = num(row.downMinutes);
+  // Works-period minutes come out of BOTH sides. They are not downtime the
+  // ride suffered, and they are not time it ran either — a nine-day rebuild is
+  // simply not part of the question the share answers.
+  const worksMinutes = Math.min(num(row.worksMinutes), num(row.downMinutes));
+  const downMinutes = Math.max(num(row.downMinutes) - worksMinutes, 0);
   const censoredShare = outages > 0 ? censored / outages : 0;
 
   const withhold = (reason: DowntimeWithheldReason): ProfileDecision => ({
