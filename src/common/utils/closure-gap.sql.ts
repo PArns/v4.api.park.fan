@@ -84,6 +84,42 @@ export const MAX_REGULAR_DAYS = 5;
 /** Minutes a gap must span. One poll cycle is not an outage, it is a reading. */
 export const MIN_GAP_MINUTES = 10;
 
+/**
+ * Share of days a ride may end before the park does, before that IS its day.
+ *
+ * The filter that finally separates a cinema from a broken coaster, and the one
+ * the same-hour test could not do because these rides stop at a different time
+ * every day. Measured over 21 days:
+ *
+ * | Ride | days ending early |
+ * | --- | ---: |
+ * | KinéMAX, Cosmic Collisions, T. Rex (Futuroscope) | **100 %** |
+ * | The Extraordinary Journey | 57 % |
+ * | Arthur, the 4D adventure | 38 % |
+ * | Journey to Atlantis | 15 % |
+ * | Steel Eel (a real fault) | **8 %** |
+ *
+ * A ride that has ended before the park on every single one of the last 21 days
+ * is not breaking daily at a different time; that is its timetable. Set at half,
+ * matching MAX_GAP_DAY_SHARE, and the same conservative direction: a genuinely
+ * unreliable ride is withheld rather than a timetable published as a fault.
+ */
+export const MAX_EARLY_END_SHARE = 0.5;
+
+/**
+ * Park minutes that must still remain when a ride shuts, for it to be a fault.
+ *
+ * A ride closing in the last hour of the day is winding down with the park, not
+ * breaking. This is the user-stated rule ("kurz vor Parkschluss ist keine
+ * Störung") and it is cheap, because the closing time is already joined.
+ *
+ * It does NOT catch everything it might look like it does. Measured at
+ * Futuroscope: the cinemas shut with 80 to 210 minutes still on the clock, so a
+ * threshold that caught them would suppress genuine late-afternoon faults too.
+ * See the note on the live statement about what this signal cannot separate.
+ */
+export const MIN_PARK_MINUTES_LEFT = 60;
+
 /** How far a closure may reach before it stops being a same-day gap. */
 export const MAX_GAP_HOURS = 12;
 
@@ -250,12 +286,34 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
  * counted over the park rather than over the ids passed in, because on a ride
  * page that list is one entry long and the count would always be one.
  *
- * Regularity is deliberately NOT checked here. It needs weeks of history per
- * ride and hour, it is the weakest of the filters (it removes 130 ride-hour
- * pairs against the simultaneity filter's 61 % of raw transitions), and the
- * nightly reconstruction applies it to the stored record anyway. A ride with its
- * own shorter hours may therefore show a live line for one closing; it will not
- * enter the history.
+ * The duty-cycle filter DOES apply here, and it has to. It is what separates a
+ * cinema between showings from a broken ride, and the first thing the repaired
+ * endpoint returned was seven Futuroscope cinemas. It costs one indexed lookup
+ * per candidate — and the candidates are only the rides currently sitting in a
+ * closure, which is a handful.
+ *
+ * The same-hour regularity filter is deliberately NOT checked here. It needs
+ * weeks of history per ride AND hour, it is the weakest of the filters (130
+ * ride-hour pairs against the simultaneity filter's 61 % of raw transitions),
+ * and the nightly reconstruction applies it to the stored record anyway. A ride
+ * with its own shorter hours may therefore show a live line for one closing; it
+ * will not enter the history.
+ *
+ * ## What this signal cannot separate
+ *
+ * A ride that shuts mid-afternoon and does not come back looked, at first, like
+ * something no available signal could separate from a fault: the Futuroscope
+ * cinemas shut with 80 to 210 minutes of park time left, at a different hour
+ * every day, so neither the same-hour test nor a closing-time margin caught
+ * them. What does catch them is asking whether the ride's DAY habitually ends
+ * before the park's — see MAX_EARLY_END_SHARE, where they score 100 % against a
+ * real fault's 8 %.
+ *
+ * What remains unseparated is a ride whose early finish is irregular: closing at
+ * 16:00 on a third of its days is neither a timetable nor obviously a fault.
+ * Those still surface, which is why the wording is „Steht seit … still" and
+ * never „Störung" — a sentence true of a cinema after its last showing and of a
+ * broken ride alike. Anything stronger would need the operator's own showtimes.
  *
  * It also stops at closing time. A ride reading CLOSED in a shut park is not a
  * fault, it is a shut park, so the whole statement returns nothing unless `$3`
@@ -289,15 +347,17 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   park_open AS (
-    -- Is the park open at this instant? One row means yes; no rows short-circuit
-    -- everything below, because a CLOSED ride in a shut park is a shut park.
-    SELECT 1 AS ok
+    -- Is the park open at this instant, and when does it shut? No rows
+    -- short-circuits everything below, because a CLOSED ride in a shut park is
+    -- a shut park.
+    SELECT se."closingTime" AS closes_at
       FROM schedule_entries se
      WHERE se."parkId" = $4::uuid
        AND se."attractionId" IS NULL
        AND se."scheduleType" = 'OPERATING'
        AND se."openingTime" <= $3::timestamptz
        AND se."closingTime" >  $3::timestamptz
+     ORDER BY se."closingTime" DESC
      LIMIT 1
   ),
   recent AS (
@@ -340,6 +400,92 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND r.ts < s.started_at
        AND (r.ts AT TIME ZONE $2)::date = (s.started_at AT TIME ZONE $2)::date
   ),
+  -- Is this ride on a duty cycle rather than broken?
+  --
+  -- Counted over the same window and the same threshold the nightly statement
+  -- uses, so live and history agree about what a fault is. Restricted to the
+  -- rides actually sitting in a closure right now, which is why a per-ride
+  -- scan is affordable here and is not in the historical statement.
+  cycle AS (
+    -- Days carrying a real GAP, which is the same triple the nightly statement
+    -- recognises: OPERATING, then CLOSED, then OPERATING again.
+    --
+    -- Counting days with any CLOSED row instead is wrong and was: every ride
+    -- shuts at closing time, so every ride scored 22 of 22 and the filter
+    -- suppressed the entire signal. The tell was a share above 1.0.
+    SELECT d.aid, count(DISTINCT d.op_day)::numeric AS gap_days
+      FROM (
+        SELECT aid, (ts AT TIME ZONE $2)::date AS op_day
+          FROM (
+            SELECT qd."attractionId" AS aid,
+                   qd.timestamp      AS ts,
+                   qd.status::text   AS st,
+                   lag(qd.status::text)  OVER w AS prev_st,
+                   lead(qd.status::text) OVER w AS next_st
+              FROM queue_data qd
+             WHERE qd."attractionId" = ANY($1::uuid[])
+               AND qd."queueType" = 'STANDBY'
+               AND COALESCE(qd.data_source, '') NOT IN
+                   ('system-reconciliation', 'system-heartbeat')
+               AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
+               AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
+               AND qd.timestamp <  $3::timestamptz
+            WINDOW w AS (PARTITION BY qd."attractionId" ORDER BY qd.timestamp)
+          ) f
+         WHERE f.st = 'CLOSED'
+           AND f.prev_st = 'OPERATING'
+           AND f.next_st = 'OPERATING'
+      ) d
+     GROUP BY d.aid
+  ),
+  active AS (
+    SELECT e."attractionId" AS aid,
+           count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
+      FROM attraction_exposure_days e
+     WHERE e."attractionId" = ANY($1::uuid[])
+       AND e.op_day >= ($3::timestamptz - INTERVAL '21 days')::date
+     GROUP BY e."attractionId"
+  ),
+  -- Does this ride habitually end its day before the park does?
+  --
+  -- Restricted to the candidates, so it is one indexed scan each. Compares each
+  -- day's last OPERATING reading against that day's published closing time.
+  early_end AS (
+    SELECT d.aid,
+           count(*)::numeric AS days,
+           count(*) FILTER (
+             WHERE d.last_operating < d.closes_at
+                   - INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
+           )::numeric AS early_days
+      FROM (
+        SELECT qd."attractionId" AS aid,
+               (qd.timestamp AT TIME ZONE $2)::date AS d,
+               max(qd.timestamp) FILTER (WHERE qd.status = 'OPERATING')
+                 AS last_operating,
+               max(w.closes_at) AS closes_at
+          FROM queue_data qd
+          JOIN LATERAL (
+            SELECT se."closingTime" AS closes_at
+              FROM schedule_entries se
+             WHERE se."parkId" = $4::uuid
+               AND se."attractionId" IS NULL
+               AND se."scheduleType" = 'OPERATING'
+               AND (se."openingTime" AT TIME ZONE $2)::date
+                   = (qd.timestamp AT TIME ZONE $2)::date
+             LIMIT 1
+          ) w ON TRUE
+         WHERE qd."attractionId" = ANY($1::uuid[])
+           AND qd."queueType" = 'STANDBY'
+           AND COALESCE(qd.data_source, '') NOT IN
+               ('system-reconciliation', 'system-heartbeat')
+           AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
+           AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
+           AND qd.timestamp <  $3::timestamptz
+         GROUP BY 1, 2
+      ) d
+     WHERE d.last_operating IS NOT NULL
+     GROUP BY d.aid
+  ),
   -- How many rides in the PARK went CLOSED in that same minute.
   --
   -- Over $1 alone this count is whatever the caller happened to pass — one,
@@ -366,9 +512,22 @@ export const CURRENT_CLOSURE_GAP_SQL = `
     FROM run_start s
     JOIN open_today o ON o.aid = s.aid
     JOIN park_closers sm ON sm.minute = date_trunc('minute', s.started_at)
-   CROSS JOIN park_open
+    LEFT JOIN cycle cy ON cy.aid = s.aid
+    LEFT JOIN active ac ON ac.aid = s.aid
+    LEFT JOIN early_end ee ON ee.aid = s.aid
+   CROSS JOIN park_open po
    CROSS JOIN blind
    WHERE sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
+     -- Winding down with the park is not breaking.
+     AND po.closes_at >= s.started_at
+         + INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
+     -- Not a duty cycle. Below the day floor there is not enough to judge and
+     -- the ride is kept, same as the nightly statement.
+     AND (COALESCE(ac.active_days, 0) < ${MIN_DAYS_FOR_CYCLE_TEST}
+          OR COALESCE(cy.gap_days, 0) / ac.active_days <= ${MAX_GAP_DAY_SHARE})
+     -- Not a ride whose day simply ends earlier than the park's.
+     AND (COALESCE(ee.days, 0) < ${MIN_DAYS_FOR_CYCLE_TEST}
+          OR ee.early_days / ee.days <= ${MAX_EARLY_END_SHARE})
      -- The same floor the historical statement applies. Without it a ride that
      -- flips CLOSED two minutes before the page renders is announced as a
      -- fault, and 27.1 % of raw gaps are exactly one poll cycle.

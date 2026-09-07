@@ -240,6 +240,22 @@ Each filter earns its place:
   with 17 gap-days out of 21 operating days. Found by looking at what the live
   endpoint actually returned after the serving path was repaired, which is the
   check that should have run before any of this shipped.
+- **The early-end filter** catches what none of the others could. A cinema after
+  its last showing shuts mid-afternoon, at a different hour every day, and never
+  comes back — so it forms no gap, matches no hour, and had 80 to 210 minutes of
+  park time left. What separates it is whether the ride's DAY habitually ends
+  before the park's:
+
+  | Ride                               | days ending early |
+  | ---------------------------------- | ----------------: |
+  | KinéMAX, Cosmic Collisions, T. Rex |         **100 %** |
+  | The Extraordinary Journey          |              57 % |
+  | Arthur, the 4D adventure           |              38 % |
+  | Steel Eel (a real fault)           |           **8 %** |
+
+  Futuroscope's live count went from seven to one. What is still not separated
+  is an irregular early finish — a third of days is neither a timetable nor
+  obviously a fault — which is why the wording stays „Steht seit … still".
 
 What survives has quartiles of **15/25/40 minutes** (p90 65, longest 301), close
 to the DOWN signal's own 10/25/50 and unlike anything a scheduled closure looks
