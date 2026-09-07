@@ -307,24 +307,36 @@ export class AttractionOutageService {
       );
       if (rows.length === 0) return;
 
-      const curves = await this.loadCurves();
       for (const row of rows) {
-        const startedAt = new Date(row.startedAt);
-        // Elapsed is wall time here, not operating minutes: the statement only
-        // returns a ride whose closure started inside today's opening window
-        // and is still running, so the two coincide by construction.
-        const elapsed = Math.round(
-          (asOf.getTime() - startedAt.getTime()) / 60000,
-        );
         out.set(row.attractionId, {
-          startedAt,
+          startedAt: new Date(row.startedAt),
           startObserved: true,
           rowsInRun: 1,
           signal: "closed_gap",
-          estimate: estimateOutage(
-            this.curvesFor(curves, park.id, "closed_gap"),
-            elapsed,
-          ),
+          // NO ESTIMATE, deliberately, and this is the load-bearing line.
+          //
+          // The curve for this signal would be fit on a population defined by
+          // having recovered. `CLOSURE_GAP_INTERVALS_SQL` only emits an
+          // interval once the ride is OPERATING again, and the processor stores
+          // every one of them as `recovered` — so censoring in that population
+          // is not the 15.6 % that licensed the estimate in the first place, it
+          // is **zero**, because every closure that never came back was
+          // excluded before counting. The cases thrown away are exactly the
+          // visitor's worst ones: the ride that broke at 15:00 and is out for
+          // the day, and the irregular early finish this signal openly cannot
+          // separate from a fault. A survivorship-biased curve can only err
+          // towards "it will be back soon".
+          //
+          // It also removes the wording problem underneath. The estimate copy
+          // has no signal variant — it says „Störungen wie diese" and „waren
+          // behoben" — so it undid, one line lower, the entire distinction the
+          // sentence above it makes. There is no honest number to attach here
+          // yet, and the line without one still carries the only thing this
+          // signal knows: since when the ride has stood still.
+          //
+          // To turn it back on: keep a closure open when the park shuts, store
+          // it censored rather than dropping it, and the Kaplan-Meier already
+          // in `downtime-recovery.service.ts` does the right thing unchanged.
         });
       }
     } catch (error) {

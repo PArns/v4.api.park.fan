@@ -41,6 +41,21 @@ export const DOWNTIME_WITHHELD_REASONS = [
   /** Too new — the first weeks of a ride are not its steady state. */
   "new_ride",
   /**
+   * The figures exist but are no longer current.
+   *
+   * Its own reason because the alternatives are both wrong. Falling back to
+   * `thin_events` keeps the stored count and renders „34 Störungen gemeldet.
+   * Für eine belastbare Zahl sind das zu wenige" — a sentence refuted by the
+   * number inside it, and since the event floor is 24, that is what EVERY stale
+   * publishable ride produced. Zeroing the count instead states "0 Störungen
+   * gemeldet" about a ride that had 34, which is the blindness-as-clean-record
+   * failure this whole feature exists to avoid.
+   *
+   * The copy says the numbers are not current and nothing about why. A visitor
+   * is owed the first part; our job scheduler is not their problem.
+   */
+  "stale_data",
+  /**
    * Plenty of outages, but too few of them were seen to END.
    *
    * Its own reason rather than `thin_events`, because the two are opposite

@@ -43,6 +43,10 @@ describe("toDowntimeBlock", () => {
     );
     const block = toDowntimeBlock(publishable(old), NOW);
     expect(block.kind).toBe("withheld");
+    // NOT thin_events: that reason keeps the count and renders „34 Störungen
+    // gemeldet … für eine belastbare Zahl zu wenige", refuted by its own
+    // number. Since the event floor is 24, every stale publishable ride hit it.
+    expect(block).toMatchObject({ reason: "stale_data", outages: 34 });
   });
 
   it("withholds when the profile carries no generation time at all", () => {

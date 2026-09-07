@@ -179,13 +179,15 @@ export function toDowntimeBlock(
   ) {
     return {
       kind: "withheld",
-      // A stale profile carries whatever reason it last stored, or the generic
-      // one. Deliberately NOT a reason of its own: a sentence to a visitor
-      // about our job scheduler would be worse than saying nothing, and the
-      // staleness belongs in the logs.
-      reason: profile.withheldReason ?? "thin_events",
-      // Zero for the three reasons that are about us. The client must not read
-      // it as "no outages happened" — the reason says which kind of zero it is.
+      // Staleness gets its own reason. Reusing `thin_events` kept the stored
+      // count and rendered „34 Störungen gemeldet. Für eine belastbare Zahl
+      // sind das zu wenige" — refuted by its own number, and guaranteed for
+      // every stale publishable ride because the event floor is 24.
+      reason: stale ? "stale_data" : (profile.withheldReason ?? "thin_events"),
+      // Zero for the reasons that are about us. The client must not read it as
+      // "no outages happened" — the reason says which kind of zero it is. A
+      // stale profile sends its real count: `stale_data`'s copy does not use
+      // it, and zeroing it would state something false about the ride.
       outages: profile.outages ?? 0,
       windowDays: profile.windowDays,
     };

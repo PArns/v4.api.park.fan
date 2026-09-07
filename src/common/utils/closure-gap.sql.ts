@@ -140,12 +140,23 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     -- inside the row scan this took 70 s over 21 days; hoisted out it is a
     -- single grouped pass and the whole statement runs in about 6.
     --
-    -- The evidence floor is NOT optional and must match
-    -- DOWNTIME_GATES/MIN_BLIND_EVIDENCE_HOURS exactly. Without it the two
-    -- blindness tests disagree: a park under the floor is reports at the
-    -- profile gate and blind here, so it collects inferred intervals while its
-    -- profile counts them as reported ones. That is 11 parks — the ones the
-    -- coverage entity describes as having "too little observation to say".
+    -- Derived here rather than read from park_downtime_coverage, and the
+    -- reason is ordering, not oversight: the nightly job runs
+    -- reconstruction -> profiles -> curves, and the coverage table is written
+    -- by the profile step. Reading it from inside the reconstruction would use
+    -- yesterday's regime to decide what today's intervals mean, and it cannot
+    -- be reordered because the regime depends on attraction_exposure_days,
+    -- which this step produces.
+    --
+    -- The LIVE statement does read the table: it runs all day, long after the
+    -- job settled, and proving a negative over an unbounded history is not
+    -- something to do on a page render.
+    --
+    -- Both must agree, so both use MIN_BLIND_EVIDENCE_HOURS and both require
+    -- never-DOWN. Without the floor the two disagree for the 11 parks the
+    -- coverage entity describes as having "too little observation to say":
+    -- reports at the profile gate, blind here, collecting inferred intervals
+    -- that their own profile would count as reported ones.
     SELECT p.id AS pid
       FROM parks p
      WHERE p.wiki_entity_id IS NOT NULL
@@ -326,25 +337,24 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
  */
 export const CURRENT_CLOSURE_GAP_SQL = `
   WITH blind AS (
-    -- Same restriction the historical statement makes, INCLUDING the evidence
-    -- floor: only where the feed never says DOWN and we have watched long
-    -- enough for that silence to mean something. In a park that reports DOWN
-    -- the fault is already reported, and below the floor the profile gate calls
-    -- the park reports, so the two must not disagree about the same park.
+    -- Read from the table that OWNS this answer, not re-derived beside it.
+    --
+    -- park_downtime_coverage.regime is rebuilt nightly and already applies
+    -- both halves of the test (never-DOWN, and MIN_BLIND_EVIDENCE_HOURS of
+    -- observation). Re-deriving it here meant two sources of truth for one
+    -- question, kept in step only by a comment — the shape CLAUDE.md §4 names,
+    -- where the answer has an owner and the serving path computes its own.
+    --
+    -- It was also expensive in the worst place. Proving NOT EXISTS (… status =
+    -- 'DOWN') with no time bound means visiting every chunk this park's
+    -- attractions touch on a compressed hypertable — on the park-page render
+    -- path, per cache fill, inside a try/catch that turns a timeout into
+    -- silence — to compute something that changes at most once in a park's
+    -- lifetime.
     SELECT 1 AS ok
-     WHERE NOT EXISTS (
-       SELECT 1 FROM queue_data d
-         JOIN attractions da ON da.id = d."attractionId"
-        WHERE da."parkId" = $4::uuid
-          AND d."queueType" = 'STANDBY'
-          AND d.status = 'DOWN'
-     )
-       AND COALESCE((
-         SELECT SUM(ed.operating_minutes) / 60.0
-           FROM attraction_exposure_days ed
-           JOIN attractions ea ON ea.id = ed."attractionId"
-          WHERE ea."parkId" = $4::uuid
-       ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
+      FROM park_downtime_coverage c
+     WHERE c."parkId" = $4::uuid
+       AND c.regime = 'never_reports'
   ),
   park_open AS (
     -- Is the park open at this instant, and when does it shut? No rows
