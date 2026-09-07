@@ -973,10 +973,17 @@ export class ParkIntegrationService {
       // and never here, because the ride detail page runs a different precedence
       // chain and two chains deriving their own "since when" would put two
       // different sentences about one ride on two pages.
-      const downIds = dto.attractions
-        .filter((a) => a.effectiveStatus === "DOWN")
-        .map((a) => a.id);
-      if (downIds.length > 0) {
+      // EVERY ride, with its status, not only the ones reading DOWN.
+      //
+      // Filtering to DOWN here made the closure signal unreachable: it exists
+      // for parks whose feed never emits DOWN, so "rides reading DOWN" is empty
+      // in exactly the parks it serves, and the query never ran once. It also
+      // starved the simultaneity filter, which counts rides shutting in the
+      // same minute and can only tell a park-wide closing from a fault if it
+      // sees the park. `AttractionOutageService` does the filtering now.
+      const anyDown = dto.attractions.some((a) => a.effectiveStatus === "DOWN");
+      const parkCanReportDown = park.wikiEntityId != null;
+      if (parkCanReportDown && (anyDown || dto.attractions.length > 0)) {
         const byId = new Map(
           (park.attractions ?? []).map((a) => [a.id, a] as const),
         );
@@ -986,11 +993,13 @@ export class ParkIntegrationService {
             timezone: park.timezone,
             wikiEntityId: park.wikiEntityId ?? null,
           },
-          downIds.map((id) => ({
-            id,
+          dto.attractions.map((a) => ({
+            id: a.id,
+            effectiveStatus: a.effectiveStatus,
             curatedOutOfServiceFrom:
-              byId.get(id)?.curatedOutOfServiceFrom ?? null,
-            curatedOutOfServiceTo: byId.get(id)?.curatedOutOfServiceTo ?? null,
+              byId.get(a.id)?.curatedOutOfServiceFrom ?? null,
+            curatedOutOfServiceTo:
+              byId.get(a.id)?.curatedOutOfServiceTo ?? null,
           })),
         );
         if (outages.size > 0) {

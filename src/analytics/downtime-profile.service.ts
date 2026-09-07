@@ -190,6 +190,7 @@ export class DowntimeProfileService {
                     CROSS JOIN LATERAL (VALUES (o2.started_at), (o2.ended_at)) AS e(ts)
                     WHERE a2."parkId" = p.id
                       AND NOT o2.likely_works_period
+                      AND o2.signal = 'down'
                       AND e.ts IS NOT NULL
                     GROUP BY EXTRACT(MINUTE FROM e.ts)
                  ) m
@@ -219,6 +220,7 @@ export class DowntimeProfileService {
                 CROSS JOIN LATERAL (VALUES (o3.started_at), (o3.ended_at)) AS e3(ts)
                 WHERE a3."parkId" = p.id
                   AND NOT o3.likely_works_period
+                  AND o3.signal = 'down'
                   AND e3.ts IS NOT NULL
              )::int                                      AS "resolutionEdges",
              PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.operating_minutes)
@@ -228,6 +230,12 @@ export class DowntimeProfileService {
         LEFT JOIN attraction_outages o
                ON o."attractionId" = a.id
               AND NOT o.likely_works_period
+              -- Reported outages only. A closure gap is our own inference and
+              -- is never published as a counted figure; letting it in here
+              -- would put it into this park's outages and
+              -- medianSpellMinutes, and into the resolution census that
+              -- decides the park's regime.
+              AND o.signal = 'down'
        WHERE ($1::uuid[] IS NULL OR p.id = ANY($1::uuid[]))
        GROUP BY p.id, p.wiki_entity_id
       `,
@@ -327,6 +335,14 @@ export class DowntimeProfileService {
           FROM attraction_outages o
          WHERE o.started_at >= $2::timestamptz AND o.started_at <= $3::timestamptz
            AND NOT o.likely_works_period
+           -- Reported outages only: everything this CTE feeds is a published
+           -- figure („34 Störungen gemeldet"), and a closure gap was never
+           -- reported by anybody. Without this a park that slips into the
+           -- reports regime — one under the blindness evidence threshold, or
+           -- one that emits its first DOWN — would publish inferred intervals
+           -- as reported ones, with a downShare of 0.00 beside them because
+           -- the exposure table counts only real DOWN minutes.
+           AND o.signal = 'down'
            AND ($1::uuid[] IS NULL OR o."parkId" = ANY($1::uuid[]))
          GROUP BY o."attractionId"
       )

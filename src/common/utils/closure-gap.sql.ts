@@ -1,3 +1,4 @@
+import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
 /**
  * A fault read from a closure, for the parks whose feed never says DOWN.
  *
@@ -77,6 +78,13 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     -- Resolved ONCE per park, not once per row. As a correlated NOT EXISTS
     -- inside the row scan this took 70 s over 21 days; hoisted out it is a
     -- single grouped pass and the whole statement runs in about 6.
+    --
+    -- The evidence floor is NOT optional and must match
+    -- DOWNTIME_GATES/MIN_BLIND_EVIDENCE_HOURS exactly. Without it the two
+    -- blindness tests disagree: a park under the floor is reports at the
+    -- profile gate and blind here, so it collects inferred intervals while its
+    -- profile counts them as reported ones. That is 11 parks — the ones the
+    -- coverage entity describes as having "too little observation to say".
     SELECT p.id AS pid
       FROM parks p
      WHERE p.wiki_entity_id IS NOT NULL
@@ -88,6 +96,12 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
             AND d."queueType" = 'STANDBY'
             AND d.status = 'DOWN'
        )
+       AND COALESCE((
+         SELECT SUM(ed.operating_minutes) / 60.0
+           FROM attraction_exposure_days ed
+           JOIN attractions ea ON ea.id = ed."attractionId"
+          WHERE ea."parkId" = p.id
+       ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   src AS (
     SELECT a.id AS aid, a."parkId" AS pid, p.timezone AS tz,
@@ -102,6 +116,16 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
        -- Our own bookkeeping rows are not observations of anything.
        AND COALESCE(qd.data_source, '') NOT IN
            ('system-reconciliation', 'system-heartbeat')
+       -- And neither is a CARRIED row, which is the same trap one level down:
+       -- writeHourlyHeartbeats copies the previous row's data_source, so a
+       -- carried CLOSED is indistinguishable from an observed one by source
+       -- alone. It matters more here than anywhere else because the gap is
+       -- recognised by an exact OPERATING/CLOSED/OPERATING triple: one carried
+       -- row in the middle turns next_st into CLOSED and drops the gap
+       -- entirely, which silently truncated this population at ~65 minutes.
+       -- NULL means "written before the column existed" and falls back to the
+       -- old heuristic, exactly as the reconstruction does.
+       AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
        AND qd.timestamp >= $2::timestamptz
        AND qd.timestamp <  $3::timestamptz
   ),
@@ -170,6 +194,10 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
  *   ride flipped to CLOSED at 18:10, and without it the page would have
  *   announced forty simultaneous faults at closing time.
  *
+ * The duration floor and the simultaneity filter DO apply here — the latter
+ * counted over the park rather than over the ids passed in, because on a ride
+ * page that list is one entry long and the count would always be one.
+ *
  * Regularity is deliberately NOT checked here. It needs weeks of history per
  * ride and hour, it is the weakest of the filters (it removes 130 ride-hour
  * pairs against the simultaneity filter's 61 % of raw transitions), and the
@@ -188,9 +216,11 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
  */
 export const CURRENT_CLOSURE_GAP_SQL = `
   WITH blind AS (
-    -- Same restriction the historical statement makes: only where the feed
-    -- never says DOWN. In a park that does, the fault is already reported and
-    -- this would put a second, weaker sentence on the same ride.
+    -- Same restriction the historical statement makes, INCLUDING the evidence
+    -- floor: only where the feed never says DOWN and we have watched long
+    -- enough for that silence to mean something. In a park that reports DOWN
+    -- the fault is already reported, and below the floor the profile gate calls
+    -- the park reports, so the two must not disagree about the same park.
     SELECT 1 AS ok
      WHERE NOT EXISTS (
        SELECT 1 FROM queue_data d
@@ -199,6 +229,12 @@ export const CURRENT_CLOSURE_GAP_SQL = `
           AND d."queueType" = 'STANDBY'
           AND d.status = 'DOWN'
      )
+       AND COALESCE((
+         SELECT SUM(ed.operating_minutes) / 60.0
+           FROM attraction_exposure_days ed
+           JOIN attractions ea ON ea.id = ed."attractionId"
+          WHERE ea."parkId" = $4::uuid
+       ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   park_open AS (
     -- Is the park open at this instant? One row means yes; no rows short-circuit
@@ -223,6 +259,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND qd."queueType" = 'STANDBY'
        AND COALESCE(qd.data_source, '') NOT IN
            ('system-reconciliation', 'system-heartbeat')
+       AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
        -- One operating day back is enough: the rule is "was open earlier
        -- today", and a longer window would let yesterday's OPERATING qualify a
        -- ride that has been shut since.
@@ -251,18 +288,37 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND r.ts < s.started_at
        AND (r.ts AT TIME ZONE $2)::date = (s.started_at AT TIME ZONE $2)::date
   ),
-  -- How many of these rides went CLOSED in that same minute.
-  simultaneity AS (
-    SELECT date_trunc('minute', started_at) AS minute, count(*) AS closers
-      FROM run_start GROUP BY 1
+  -- How many rides in the PARK went CLOSED in that same minute.
+  --
+  -- Over $1 alone this count is whatever the caller happened to pass — one,
+  -- on a ride detail page — so the filter that separates a park-wide closing
+  -- from a single fault would always pass. It has to see the park.
+  park_closers AS (
+    SELECT date_trunc('minute', qd.timestamp) AS minute, count(*) AS closers
+      FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+     WHERE a."parkId" = $4::uuid
+       AND a.retired_at IS NULL
+       AND qd."queueType" = 'STANDBY'
+       AND qd.status = 'CLOSED'
+       AND COALESCE(qd.data_source, '') NOT IN
+           ('system-reconciliation', 'system-heartbeat')
+       AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
+       AND qd.timestamp >= $3::timestamptz - INTERVAL '${MAX_GAP_HOURS} hours'
+       AND qd.timestamp <= $3::timestamptz
+     GROUP BY 1
   )
   SELECT s.aid                                   AS "attractionId",
          s.started_at                            AS "startedAt",
          sm.closers::int                         AS "simultaneousClosers"
     FROM run_start s
     JOIN open_today o ON o.aid = s.aid
-    JOIN simultaneity sm ON sm.minute = date_trunc('minute', s.started_at)
+    JOIN park_closers sm ON sm.minute = date_trunc('minute', s.started_at)
    CROSS JOIN park_open
    CROSS JOIN blind
    WHERE sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
+     -- The same floor the historical statement applies. Without it a ride that
+     -- flips CLOSED two minutes before the page renders is announced as a
+     -- fault, and 27.1 % of raw gaps are exactly one poll cycle.
+     AND $3::timestamptz >= s.started_at + INTERVAL '${MIN_GAP_MINUTES} minutes'
 `;

@@ -233,8 +233,19 @@ Each filter earns its place:
 - **≥10 minutes** removes one poll of noise: 27.1 % of raw gaps are exactly one
   5-minute cycle.
 
-What survives has quartiles of **15/20/35 minutes**, close to the DOWN signal's
-own 10/25/50 and unlike anything a scheduled closure looks like.
+What survives has quartiles of **15/25/40 minutes** (p90 65, longest 301), close
+to the DOWN signal's own 10/25/50 and unlike anything a scheduled closure looks
+like.
+
+> **Corrected 2026-09-07 after review.** The first version of this statement
+> filtered our own carried rows by `data_source` alone. `writeHourlyHeartbeats`
+> copies the previous row's `data_source`, so a carried CLOSED was
+> indistinguishable from an observed one — and because a gap is recognised by an
+> exact OPERATING/CLOSED/OPERATING triple, one carried row in the middle dropped
+> the gap entirely. That silently truncated the whole population at about 65
+> minutes: the quartiles then read 15/20/35 and **242 gaps over 65 minutes did
+> not exist**. The filter is now `is_heartbeat` with the same NULL fallback the
+> reconstruction uses.
 
 **Only in parks that never emit DOWN.** Where a feed does emit it, faults appear
 as DOWN (45.74 per 1000 operating hours) and hardly ever as a closure gap
@@ -249,9 +260,25 @@ second one — we noticed the ride stopped and came back.
 
 The live query adds a closing-time guard the historical one does not need: a
 ride reading CLOSED in a shut park is a shut park, so it returns nothing outside
-a published OPERATING window. Verified against Phantasialand: at 17:30 it
-reports River Quest (since 17:00) and Maus au Chocolat (since 17:25); at 18:30,
-after the 18:10 close, it reports nothing.
+a published OPERATING window. Verified against Phantasialand: at 17:30 it reports
+River Quest (down since 17:00); at 17:05, with River Quest only five minutes in,
+it suppresses it and reports a longer one instead; at 18:30, after the 18:10
+close, it reports nothing.
+
+> **Three corrections from the same review**, all of which had shipped:
+>
+> - **The signal was unreachable.** Both callers gated on
+>   `effectiveStatus === 'DOWN'` before asking the service, and the closure
+>   statement only serves parks that never emit DOWN — mutually exclusive
+>   predicates, so it never ran once in production while the frontend shipped
+>   copy asserting it did. The callers now pass the whole roster with each
+>   ride's status and the service does its own filtering.
+> - **Simultaneity was counted over the ids passed in**, which on a ride page is
+>   one. The filter that separates a park-wide closing from a single fault can
+>   only work over the park, so it is a park-scoped CTE now. This was the
+>   headline defence against announcing forty faults at 18:10.
+> - **The live statement had no duration floor**, so a ride two minutes into a
+>   closure was announced as a fault — 27 % of raw gaps are one poll cycle.
 
 ### Two bugs the first nightly run exposed
 

@@ -60,6 +60,21 @@ export interface CurrentOutage {
 /** What the service needs to know about a candidate ride. */
 export interface OutageCandidate extends CuratedOutOfServiceSource {
   id: string;
+  /**
+   * The ride's resolved status, and the reason the caller passes EVERY ride
+   * rather than only the ones reading `DOWN`.
+   *
+   * The closure signal exists for parks whose feed never emits `DOWN`. Filtering
+   * to `DOWN` before calling made it structurally unreachable there — the two
+   * predicates are mutually exclusive, so it never ran once in production. The
+   * service does its own filtering now, and it needs the status to do it.
+   *
+   * It also needs the whole roster for a second reason: the simultaneity filter
+   * counts how many rides shut in the same minute, and over a pre-filtered list
+   * that count is always one. The filter that removes a park-wide closing can
+   * only work over the park.
+   */
+  effectiveStatus?: string | null;
 }
 
 /** What the service needs to know about the park. */
@@ -195,10 +210,22 @@ export class AttractionOutageService {
     const out = new Map<string, CurrentOutage>();
     if (!park.wikiEntityId) return out;
 
-    const ids = candidates
-      .filter((c) => !isCuratedOutOfService(c, park.timezone))
+    const eligible = candidates.filter(
+      (c) => !isCuratedOutOfService(c, park.timezone),
+    );
+    if (eligible.length === 0) return out;
+
+    // The reported-DOWN query asks only about rides that already read DOWN.
+    const ids = eligible
+      .filter((c) => c.effectiveStatus === "DOWN")
       .map((c) => c.id);
-    if (ids.length === 0) return out;
+    // The closure query needs the whole roster — see OutageCandidate.
+    const allIds = eligible.map((c) => c.id);
+
+    if (ids.length === 0) {
+      await this.addClosureGaps(park, allIds, asOf, out);
+      return out;
+    }
 
     const since = new Date(
       asOf.getTime() - TRAILING_OUTAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
@@ -251,15 +278,6 @@ export class AttractionOutageService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
-
-    // Second signal, for the parks the first one cannot reach. 102 of 182
-    // scheduled parks never emit a DOWN at all, so for them a fault read from a
-    // closure is not a weaker option than a reported one — it is the only one.
-    // The statement restricts itself to those parks, so this cannot
-    // double-count a ride that already came back with a reported outage.
-    if (out.size === 0) {
-      await this.addClosureGaps(park, ids, asOf, out);
     }
 
     return out;

@@ -328,7 +328,11 @@ export class AttractionIntegrationService {
     // rather than `dto.status`: a park that is shut reports CLOSED for every
     // ride, and a line saying the ride has been down since Tuesday under a badge
     // saying the park is closed answers a question nobody asked.
-    if (dto.effectiveStatus === "DOWN" && attraction.park) {
+    // NOT gated on DOWN any more. The closure signal serves parks whose feed
+    // never emits DOWN, so a DOWN gate made it unreachable exactly there. The
+    // service decides which signal applies; a park that can report DOWN and a
+    // ride that is running simply come back empty.
+    if (attraction.park) {
       const outages = await this.outageService.getCurrentOutages(
         {
           id: attraction.parkId,
@@ -338,6 +342,7 @@ export class AttractionIntegrationService {
         [
           {
             id: attraction.id,
+            effectiveStatus: dto.effectiveStatus,
             curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
             curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
           },
@@ -874,6 +879,15 @@ export class AttractionIntegrationService {
         { outageCount: number; outageMinutes: number }
       >();
       try {
+        // Gated on the park's regime, and this is the whole point of the join.
+        //
+        // These two numbers are zero for every day in a park whose feed cannot
+        // report an outage — 91 parks read `never_reports` and 16
+        // `not_capable` — and a zero here is read as "no outages that day". It
+        // is not: it is us being unable to see. The fields are optional and
+        // documented as "absent means not computed, never none", so the honest
+        // answer in those parks is to send nothing at all rather than a zero
+        // that looks like a clean record.
         const outageRows: Array<{
           opDay: string;
           outageStarts: number | string;
@@ -883,9 +897,12 @@ export class AttractionIntegrationService {
                   e.outage_starts AS "outageStarts",
                   e.down_minutes  AS "downMinutes"
              FROM attraction_exposure_days e
+             JOIN attractions a ON a.id = e."attractionId"
+             JOIN park_downtime_coverage c ON c."parkId" = a."parkId"
             WHERE e."attractionId" = $1::uuid
               AND e.op_day >= $2::date
-              AND e.op_day <= $3::date`,
+              AND e.op_day <= $3::date
+              AND c.regime IN ('reports', 'artefact')`,
           [attractionId, fromDateStr, toDateStr],
         );
         for (const row of outageRows) {

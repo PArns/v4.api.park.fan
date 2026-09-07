@@ -182,6 +182,14 @@ const RECOVERY_CURVE_SQL = `
      WHERE o.started_at >= $1::timestamptz
        AND NOT o.likely_works_period
        AND o.operating_minutes IS NOT NULL
+       -- The same flag the profile honours, and for a stronger reason here.
+       -- isDurationUsable rejects a start-censored interval and one whose
+       -- minutes are mostly carried heartbeat rather than observation. Both
+       -- enter Kaplan-Meier as EXACT durations if admitted: a spell with 200 of
+       -- its 300 minutes carried is not a 300-minute outage, and it lands in
+       -- the right tail — which is remainingMedian and remainingP75, the
+       -- numbers a visitor reads standing at a stopped ride.
+       AND o.duration_usable
   ),
   -- The pooled curve is the SAME events with the park key dropped, never a
   -- second query with a different WHERE: a serving path that falls back must

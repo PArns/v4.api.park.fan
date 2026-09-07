@@ -107,6 +107,67 @@ emits DOWN. Details in
       the measured 15/20/35 something is wrong with the interval definition
       rather than with the estimator.
 
+### 2d. Open findings from the 2026-09-07 review
+
+Two independent reviews (correctness + system design) over the whole session's
+diff. What they found and I fixed the same day: the closure signal being
+unreachable, simultaneity counted over the wrong set, the missing live duration
+floor, carried heartbeats truncating the population at 65 min, Kaplan-Meier
+ignoring `duration_usable`, profiles and coverage mixing both signals, per-day
+`outageCount` published ungated for blind parks, and the two blindness gates
+disagreeing for 11 parks.
+
+What is still open, roughly by consequence:
+
+- [ ] **No staleness gate between a stored profile and „in den letzten 90
+      Tagen"**. `toDowntimeBlock` never reads `generated_at`/`window_from`;
+      profiles are upsert-only and never deleted, so a retired ride keeps its
+      last profile forever and a dead nightly job keeps publishing the last
+      good night as current. Same silent-success shape as the curve bug, one
+      layer out and reader-facing.
+- [ ] **`OUTAGE_SCAN_START_SQL` is unbounded below**, so one stuck open interval
+      pins the nightly scan to its own start forever and `DEFAULT_WINDOW_DAYS`
+      bounds nothing. It also makes the closure signal's regularity filter
+      window-dependent: `MAX_REGULAR_DAYS = 5` means "1 day in 6" at 30 days and
+      "1 in 36" at 180, so the stored history is not idempotent.
+- [ ] **The nightly DELETE erases history it never rewrites.** It is keyed on
+      `parkId` with no ride predicate, but the INSERT population is the
+      `tracked` CTE. A ride that leaves `tracked` (merge, retirement, a flip to
+      `open_with_park`, a park losing its schedule) loses its in-window rows
+      permanently.
+- [ ] **`last_merged_at` is stamped by one of four merge paths** — not by
+      `ParkMergeService`, which is the one the column was written for (the USH
+      merge with 29 colliding rides). Two raw `DELETE FROM attractions` paths
+      stamp nothing either, and no entity declares a relation, so there are no
+      FKs to catch the orphans.
+- [ ] **A park with no published hours is served `not_down_capable`, not
+      `no_schedule`.** `rebuildProfiles` sources rides from
+      `attraction_exposure_days`, which needs a schedule to exist, so those
+      rides get no profile row at all and `toDowntimeBlock(null)` falls back to
+      the wrong refusal. Six translations of `no_schedule` are unreachable.
+- [ ] **`park_open` in the live closure query re-reads `closingTime` raw**,
+      without `normalizedClosingSql()`. Stored history still holds misdated
+      closings (a 34-hour day, a 3-year one), and one such row in a blind park
+      makes the guard true permanently.
+- [ ] **`longest_started_at` is always written NULL** while §5 lists
+      "longest + date" as publishable — that date can never render.
+- [ ] **The operating day is keyed off the calendar date** in the closure
+      statement, not the window's opening date, so a park closing after midnight
+      (La Ronde) drops every gap spanning midnight.
+- [ ] Cheap: drop `idx_attraction_outages_ride` (byte-identical to the PK), and
+      the unread `@Index` on profiles/curves. `merge-dependencies.spec.ts`'s
+      snapshot lists predate all five tables, so that guard passes vacuously.
+
+### 2e. Closed: the hand-run ALTER (2026-09-07)
+
+§1 above asked for a go-ahead on the two `queue_data` columns. It is moot: the
+entity shipped, Coolify auto-deploys on push, and `synchronize` applied both
+`ALTER`s unattended at boot — without the `lock_timeout` the plan specified. It
+was harmless because both columns are nullable with no default (verified: 226 of
+257 chunks still compressed). **If anyone later "tidies" `is_heartbeat` to
+`default: false`, that 139 ms catalogue edit becomes an operation TimescaleDB
+refuses on compressed chunks.**
+
 ### 3. Done, 2026-09-06
 
 - Phase 0 run: 150 132 events / 90 d over 2228 rides in 78 parks; capability
