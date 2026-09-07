@@ -7,6 +7,8 @@ import {
   trailingOutageWithElapsedSql,
 } from "../../common/utils/outage-rows.sql";
 import { DowntimeRecoveryCurve } from "../../analytics/entities/downtime-recovery-curve.entity";
+import { CURRENT_CLOSURE_GAP_SQL } from "../../common/utils/closure-gap.sql";
+import type { OutageSignal } from "../../analytics/entities/attraction-outage.entity";
 import {
   estimateOutage,
   type OutageEstimate,
@@ -32,6 +34,19 @@ export interface CurrentOutage {
   startObserved: boolean;
   /** `DOWN` rows behind this run. Diagnostic; never rendered. */
   rowsInRun: number;
+  /**
+   * Which signal placed this outage.
+   *
+   * `down` is the operator's own feed saying the ride is not running.
+   * `closed_gap` is inferred — the ride was open earlier today, shut inside
+   * opening hours, and did not shut together with the park. It only ever
+   * appears for parks whose feed never emits DOWN, where the alternative is
+   * silence rather than a stronger signal.
+   *
+   * **The wording on the page must differ.** A `closed_gap` was never reported
+   * by anybody, so no sentence built on it may say „gemeldet".
+   */
+  signal: OutageSignal;
   /**
    * How long this outage still has to go, read off the measured curve.
    *
@@ -194,6 +209,7 @@ export class AttractionOutageService {
           startedAt: new Date(row.startedAt),
           startObserved: row.startObserved === true,
           rowsInRun: Number(row.rowsInRun) || 0,
+          signal: "down",
           // A park that publishes no hours has no operating clock, so its
           // elapsed figure is zero for a reason that has nothing to do with the
           // ride. Reading a curve at that zero would answer every outage there
@@ -221,6 +237,71 @@ export class AttractionOutageService {
       );
     }
 
+    // Second signal, for the parks the first one cannot reach. 102 of 182
+    // scheduled parks never emit a DOWN at all, so for them a fault read from a
+    // closure is not a weaker option than a reported one — it is the only one.
+    // The statement restricts itself to those parks, so this cannot
+    // double-count a ride that already came back with a reported outage.
+    if (out.size === 0) {
+      await this.addClosureGaps(park, ids, asOf, out);
+    }
+
     return out;
+  }
+
+  /**
+   * Faults inferred from a closure, for a park whose feed never says DOWN.
+   *
+   * Kept in its own method and behind its own try/catch: it is an addition for
+   * parks that would otherwise show nothing, and it must never cost a park its
+   * status row. The filters and the measurements behind them are on
+   * `closure-gap.sql.ts`.
+   */
+  private async addClosureGaps(
+    park: OutageParkContext,
+    ids: string[],
+    asOf: Date,
+    out: Map<string, CurrentOutage>,
+  ): Promise<void> {
+    try {
+      const rows: Array<{
+        attractionId: string;
+        startedAt: Date;
+      }> = await this.queueDataRepository.manager.query(
+        CURRENT_CLOSURE_GAP_SQL,
+        [ids, park.timezone, asOf, park.id],
+      );
+      if (rows.length === 0) return;
+
+      const curves = await this.loadCurves();
+      for (const row of rows) {
+        const startedAt = new Date(row.startedAt);
+        // Elapsed is wall time here, not operating minutes: the statement only
+        // returns a ride whose closure started inside today's opening window
+        // and is still running, so the two coincide by construction.
+        const elapsed = Math.round(
+          (asOf.getTime() - startedAt.getTime()) / 60000,
+        );
+        out.set(row.attractionId, {
+          startedAt,
+          startObserved: true,
+          rowsInRun: 1,
+          signal: "closed_gap",
+          estimate: estimateOutage(
+            {
+              park: curves.byPark.get(park.id) ?? [],
+              pooled: curves.pooled,
+            },
+            elapsed,
+          ),
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Closure-gap lookup failed for park ${park.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }

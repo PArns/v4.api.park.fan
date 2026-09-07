@@ -1,5 +1,9 @@
 import { ApiProperty } from "@nestjs/swagger";
 import type { CurrentOutage } from "../services/attraction-outage.service";
+import {
+  OUTAGE_SIGNALS,
+  type OutageSignal,
+} from "../../analytics/entities/attraction-outage.entity";
 
 /**
  * How much longer a running outage usually lasts, measured and never predicted.
@@ -114,6 +118,21 @@ export class AttractionOutageDto {
 
   @ApiProperty({
     description:
+      "Which signal placed this outage. `down` is the operator's own feed " +
+      "saying the ride is not running. `closed_gap` is INFERRED — the ride was " +
+      "open earlier the same day, shut inside opening hours, and did not shut " +
+      "together with the rest of the park. It appears only for parks whose " +
+      "feed never emits DOWN (102 of 182 scheduled parks), where the " +
+      "alternative is silence rather than a stronger signal. **A client MUST " +
+      "word the two differently**: nobody reported a `closed_gap`, so no " +
+      "sentence built on it may say 'reported'.",
+    enum: OUTAGE_SIGNALS,
+    example: "down",
+  })
+  signal: OutageSignal;
+
+  @ApiProperty({
+    description:
       "How long outages like this one usually still take from here. Absent " +
       "whenever the measured curve cannot answer — too short to have a " +
       "bucket, too thin a sample, or a park that publishes no opening hours " +
@@ -132,6 +151,7 @@ export function toOutageDto(
   return {
     startedAt: outage.startedAt.toISOString(),
     startObserved: outage.startObserved,
+    signal: outage.signal,
     estimate: outage.estimate
       ? {
           elapsedMinutes: outage.estimate.elapsedMinutes,

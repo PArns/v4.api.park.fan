@@ -6,6 +6,32 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — outages read from closures, for the 102 parks whose feed never says DOWN
+
+§1 excluded `CLOSED` while the park is open, and for a good reason (534 of 602
+of ML's old anomalies were genuine closures). But it excluded a raw status, and
+a fault has a shape the raw status does not: the ride **was open earlier the
+same operating day**, shut inside opening hours, and came back. No seasonal
+closure or park shutdown satisfies that.
+
+Three filters, each measured over 21 days. **Simultaneity is the decisive one:
+61.2 % of raw transitions are 5+ rides closing in the same minute** — at
+Phantasialand every ride flipped at 18:10, and without it the page would have
+announced forty faults at closing time. Regularity removes rides with their own
+shorter hours; a 10-minute floor removes one poll of noise (27.1 % of raw gaps).
+25 759 raw transitions become 3618 faults, quartiles 15/20/35 minutes against
+the DOWN signal's own 10/25/50.
+
+Only in parks that never emit DOWN: where a feed does, faults appear as DOWN
+(45.74 per 1000 operating hours) against 2.37 as closure gaps, so the signals do
+not compete.
+
+**It is not a report and is never worded as one.** `signal` travels to the page:
+„Störung gemeldet seit 14:20 Uhr" for a reported one, „Steht seit 14:20 Uhr
+still" for an inferred one. The live query also stops at closing time — verified
+at Phantasialand, which reports River Quest and Maus au Chocolat at 17:30 and
+nothing at 18:30.
+
 ### Added — a park whose feed never reports outages now says so
 
 `wiki_entity_id IS NOT NULL` makes a DOWN possible; it does not make the feed
@@ -34,7 +60,6 @@ The delete is a query builder now, and the curve rebuild has its own try/catch:
 it is an addition to a reconstruction that already succeeded and was written, so
 its failure is logged rather than retried.
 
-
 ### Fixed — a module that exported a service it never provided
 
 `DowntimeRecoveryService` landed in `AnalyticsModule.exports` without being in
@@ -48,7 +73,6 @@ services directly instead of booting Nest. The runtime was the first reader.
 `src/common/module-graph.spec.ts` now reads the decorators — no database, no
 boot — and asserts every exported provider is declared or imported. Verified by
 reintroducing the bug.
-
 
 ### Added — how much longer a stopped ride will be stopped
 

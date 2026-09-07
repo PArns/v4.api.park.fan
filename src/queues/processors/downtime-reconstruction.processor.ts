@@ -8,6 +8,7 @@ import {
   OUTAGE_INTERVALS_SQL,
   OUTAGE_SCAN_START_SQL,
 } from "../../analytics/utils/outage-reconstruction.sql";
+import { CLOSURE_GAP_INTERVALS_SQL } from "../../common/utils/closure-gap.sql";
 import { DowntimeRecoveryService } from "../../analytics/downtime-recovery.service";
 import { DowntimeProfileService } from "../../analytics/downtime-profile.service";
 import { AttractionOutage } from "../../analytics/entities/attraction-outage.entity";
@@ -120,6 +121,25 @@ export class DowntimeReconstructionProcessor {
       ]) as Promise<ExposureRow[]>,
     ]);
 
+    // Third statement, for the parks the first two cannot see. It restricts
+    // itself to parks whose feed never emits DOWN, so it cannot double-count.
+    // Its own try/catch: it is an addition for parks that would otherwise have
+    // no history at all, and its failure must not cost the reconstruction.
+    let closureGaps: ClosureGapRow[] = [];
+    try {
+      closureGaps = (await this.dataSource.query(CLOSURE_GAP_INTERVALS_SQL, [
+        parkIds,
+        scanStart,
+        asOf,
+      ])) as ClosureGapRow[];
+    } catch (error) {
+      this.logger.warn(
+        `Closure-gap reconstruction failed, DOWN intervals kept: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
     // Keyed on the interval's OPERATING day, which statement 1 resolves from the
     // window rather than from the calendar: a park closing at 02:00 files a
     // 00:30 outage under the previous operating day, and a calendar key would
@@ -168,6 +188,42 @@ export class DowntimeReconstructionProcessor {
               rowsInSpell: row.rowsInSpell,
               heartbeatRows: row.heartbeatRows,
               startCensored: row.startCensored,
+              signal: "down" as const,
+              fingerprintVersion: OUTAGE_FINGERPRINT_VERSION,
+              computedAt: asOf,
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
+
+      // A closure gap is a complete, observed interval by construction: the
+      // statement only returns one once the ride has come back, so it always
+      // has both edges and never needs the censoring machinery. Its minutes are
+      // wall minutes measured inside opening hours, which for a same-day gap is
+      // the same number as operating minutes.
+      for (const batch of chunked(closureGaps, 500)) {
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into(AttractionOutage)
+          .values(
+            batch.map((row) => ({
+              attractionId: row.attractionId,
+              parkId: row.parkId,
+              startedAt: row.startedAt,
+              endedAt: row.endedAt,
+              operatingMinutes: row.wallMinutes,
+              observedOperatingMinutes: row.wallMinutes,
+              wallMinutes: row.wallMinutes,
+              operatingDays: 1,
+              endReason: "recovered" as AttractionOutage["endReason"],
+              durationUsable: true,
+              likelyWorksPeriod: false,
+              rowsInSpell: 1,
+              heartbeatRows: 0,
+              startCensored: false,
+              signal: "closed_gap" as const,
               fingerprintVersion: OUTAGE_FINGERPRINT_VERSION,
               computedAt: asOf,
             })),
@@ -229,6 +285,7 @@ export class DowntimeReconstructionProcessor {
 
     this.logger.log(
       `✅ Downtime reconstruction: ${intervals.length} interval(s), ` +
+        `${closureGaps.length} closure gap(s), ` +
         `${exposure.length} exposure day(s) in ${Date.now() - startedAt} ms`,
     );
 
@@ -273,6 +330,15 @@ interface IntervalRow {
   heartbeatRows: number;
   /** Park-local operating day the interval started on, or null if outside every window. */
   startOpDay: string | null;
+}
+
+interface ClosureGapRow {
+  attractionId: string;
+  parkId: string;
+  startedAt: Date;
+  endedAt: Date;
+  startOpDay: string;
+  wallMinutes: number;
 }
 
 interface ExposureRow {

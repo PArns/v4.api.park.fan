@@ -1,6 +1,18 @@
 import { Column, Entity, Index, PrimaryColumn } from "typeorm";
 
 /**
+ * Where an outage interval came from.
+ *
+ * Measured 2026-09-07: in parks whose feed emits DOWN, faults show up as DOWN
+ * (45.74 per 1000 operating hours) and hardly ever as a closure gap (2.37), so
+ * the two signals do not compete for the same events. In the 95 blind parks the
+ * DOWN rate is 0.00 and the closure-gap rate is 5.78 — which is the only thing
+ * that can be said there at all.
+ */
+export const OUTAGE_SIGNALS = ["down", "closed_gap"] as const;
+export type OutageSignal = (typeof OUTAGE_SIGNALS)[number];
+
+/**
  * Why an outage interval stopped, which is also whether its duration may be used.
  *
  * Only `recovered` and `reclassified` are OBSERVED ends. Everything else is the
@@ -90,6 +102,22 @@ export class AttractionOutage {
   /** How many park operating days the interval touches. 1 for the ordinary case. */
   @Column({ type: "smallint", name: "operating_days", default: 1 })
   operatingDays: number;
+
+  /**
+   * Which signal this interval was read from.
+   *
+   * `down` is a reported DOWN run — the operator's own feed saying the ride is
+   * not running. `closed_gap` is inferred: the ride was OPERATING earlier that
+   * day, went CLOSED inside opening hours, and came back the same day.
+   *
+   * They are stored together and must never be summed without looking, because
+   * they are not equally strong evidence. A DOWN is a statement; a closure gap
+   * is our reading of one. The wording a reader sees differs accordingly, and
+   * `closed_gap` is only produced for parks whose feed never emits DOWN at all —
+   * where the alternative is not a weaker signal but silence.
+   */
+  @Column({ type: "text", name: "signal", default: "down" })
+  signal: OutageSignal;
 
   @Column({ type: "text", name: "end_reason" })
   endReason: DowntimeEndReason;

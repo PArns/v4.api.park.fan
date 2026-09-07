@@ -164,7 +164,7 @@ retry, rather than letting it sit in the queue.
 
 Added 2026-09-07, after the first nightly run.
 
-`wiki_entity_id IS NOT NULL` says a DOWN is *possible*. It does not say the
+`wiki_entity_id IS NOT NULL` says a DOWN is _possible_. It does not say the
 park's feed carries the status, and measurement says most of them do not:
 **102 of 182 scheduled parks had produced no DOWN row in 180 days.** Among them
 Phantasialand, Energylandia, Hersheypark, Alton Towers, Parc Asterix and
@@ -172,12 +172,12 @@ PortAventura.
 
 They are not quiet quarters:
 
-| | parks | observed operating hours |
-| --- | ---: | ---: |
-| emits DOWN | 80 | 583 782 |
-| never DOWN | 102 | **736 738** |
+|            | parks | observed operating hours |
+| ---------- | ----: | -----------------------: |
+| emits DOWN |    80 |                  583 782 |
+| never DOWN |   102 |              **736 738** |
 
-The blind group has *more* observed operating time than the reporting one, with
+The blind group has _more_ observed operating time than the reporting one, with
 zero events. Median hours per park are near-identical (6616 against 7250), so
 the two groups do not differ in how much we watched them. At the 10th-percentile
 rate of the parks that do report — 3.46 outages per 1000 operating hours —
@@ -198,6 +198,60 @@ floor anyway.
 
 Regimes in production after the change: 100 `reports`, 91 `never_reports`, 16
 `not_capable`, 6 `no_schedule`.
+
+### A second signal, for the parks the first one cannot reach
+
+Added 2026-09-07, on the observation that §1's blanket exclusion of `CLOSED`
+leaves 102 parks with nothing at all.
+
+§1 excludes `CLOSED` while the park is open, and the reason it gives is sound —
+that class killed ML's `unexpected_closure`, where 534 of 602 anomalies were
+genuine closures. But it excluded a **raw status**, and the raw status is not
+the signal. A fault has a shape: the ride **was open earlier the same operating
+day**, shut _inside_ opening hours, and came back. A seasonal closure, a
+day-long refurbishment and a park shutting for the night can none of them
+satisfy that.
+
+Measured over 21 days, the raw transitions and what each filter removes:
+
+| Step                                            | Intervals |
+| ----------------------------------------------- | --------: |
+| raw `OPERATING → CLOSED` with a same-day return |    25 759 |
+| after simultaneity (≤2 rides in one minute)     |   ~10 000 |
+| after regularity (<5 days at the same hour)     |    ~5 000 |
+| after ≥10 minutes                               | **3 618** |
+
+Each filter earns its place:
+
+- **Simultaneity is the big one: 61.2 % of raw transitions are 5+ rides closing
+  in the same minute.** At Phantasialand every ride flipped to CLOSED at 18:10.
+  Without this filter the page would have announced forty simultaneous faults at
+  closing time.
+- **Regularity** removes a ride with its own shorter hours — 130 ride-hour pairs
+  close on 10+ days at the same hour, among them Disneyland rides on their night
+  pause.
+- **≥10 minutes** removes one poll of noise: 27.1 % of raw gaps are exactly one
+  5-minute cycle.
+
+What survives has quartiles of **15/20/35 minutes**, close to the DOWN signal's
+own 10/25/50 and unlike anything a scheduled closure looks like.
+
+**Only in parks that never emit DOWN.** Where a feed does emit it, faults appear
+as DOWN (45.74 per 1000 operating hours) and hardly ever as a closure gap
+(2.37), so the two signals do not compete for the same events; adding this there
+would mix two populations for a 5 % gain. In the blind parks the DOWN rate is
+0.00 and the closure-gap rate is 5.78.
+
+**It is not a report, and the wording says so.** `attraction_outages.signal`
+carries `down` or `closed_gap` all the way to the page: „Störung gemeldet
+seit 14:20 Uhr" against „Steht seit 14:20 Uhr still". Nobody told us about the
+second one — we noticed the ride stopped and came back.
+
+The live query adds a closing-time guard the historical one does not need: a
+ride reading CLOSED in a shut park is a shut park, so it returns nothing outside
+a published OPERATING window. Verified against Phantasialand: at 17:30 it
+reports River Quest (since 17:00) and Maus au Chocolat (since 17:25); at 18:30,
+after the 18:10 close, it reports nothing.
 
 ### Two bugs the first nightly run exposed
 
