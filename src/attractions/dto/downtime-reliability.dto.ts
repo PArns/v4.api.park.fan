@@ -84,9 +84,11 @@ export class DowntimeWithheldDto {
 
   @ApiProperty({
     description:
-      "Why nothing is published. `not_down_capable`, `artefact_regime` and " +
-      "`no_schedule` are statements about OUR data and say nothing about the " +
-      "ride; the rest are about how much of it there is.",
+      "Why nothing is published. `not_down_capable`, `park_never_reports`, " +
+      "`artefact_regime` and `no_schedule` are statements about OUR data and " +
+      "say nothing about the ride; the rest are about how much of it there is. " +
+      "`park_never_reports` is the common one — 91 parks are listed at the " +
+      "source and have still never emitted a single DOWN reading.",
     enum: DOWNTIME_WITHHELD_REASONS,
     example: "thin_events",
   })
@@ -95,7 +97,7 @@ export class DowntimeWithheldDto {
   @ApiProperty({
     description:
       "Reported outages in the window. Present even when withheld, because a " +
-      "count needs no estimator — but it is 0 for the three reasons above, " +
+      "count needs no estimator — but it is 0 for the four reasons above, " +
       "where a zero means 'we cannot see' and not 'none happened'.",
     example: 6,
   })
@@ -112,7 +114,12 @@ export class ParkDowntimeCoverageDto {
   @ApiProperty({
     description:
       "What this park's outage readings are worth. `not_capable` is read from " +
-      "the park's source configuration and never from the outcome.",
+      "the park's source configuration. `never_reports` is the one value read " +
+      "from the outcome, and only past an evidence threshold at which silence " +
+      "is no longer compatible with a working feed: the park has been watched " +
+      "for 1500+ operating hours and has never emitted a DOWN. Both mean the " +
+      "same thing for a ride — its outages are invisible to us — and neither " +
+      "may be rendered as 'no outages'.",
     enum: DOWNTIME_REGIMES,
     example: "reports",
   })
