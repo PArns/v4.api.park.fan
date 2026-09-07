@@ -119,17 +119,13 @@ disagreeing for 11 parks.
 
 What is still open, roughly by consequence:
 
-- [ ] **No staleness gate between a stored profile and „in den letzten 90
-      Tagen"**. `toDowntimeBlock` never reads `generated_at`/`window_from`;
-      profiles are upsert-only and never deleted, so a retired ride keeps its
-      last profile forever and a dead nightly job keeps publishing the last
-      good night as current. Same silent-success shape as the curve bug, one
-      layer out and reader-facing.
-- [ ] **`OUTAGE_SCAN_START_SQL` is unbounded below**, so one stuck open interval
-      pins the nightly scan to its own start forever and `DEFAULT_WINDOW_DAYS`
-      bounds nothing. It also makes the closure signal's regularity filter
-      window-dependent: `MAX_REGULAR_DAYS = 5` means "1 day in 6" at 30 days and
-      "1 in 36" at 180, so the stored history is not idempotent.
+- [x] ~~No staleness gate on a stored profile~~ — `MAX_PROFILE_AGE_DAYS = 2`,
+      withheld past it, with a spec.
+- [x] ~~`OUTAGE_SCAN_START_SQL` unbounded below~~ — floored at twice the
+      requested window. 71 open-ended intervals exist that could have pinned it.
+- [ ] **Profiles are still upsert-only and never deleted.** The staleness gate
+      stops them being _served_, but a retired ride keeps a row forever. Give
+      the rebuild the same delete-then-insert the curves use.
 - [ ] **The nightly DELETE erases history it never rewrites.** It is keyed on
       `parkId` with no ride predicate, but the INSERT population is the
       `tracked` CTE. A ride that leaves `tracked` (merge, retirement, a flip to
@@ -192,63 +188,63 @@ left is establishing, per attraction, whether it is actually gone.
       with others in their park, and are still receiving reconciliation rows.
 
       Regenerate the list with this — it is the whole definition, and the
-      `s.n <= 2` clause is the load-bearing part:
+          `s.n <= 2` clause is the load-bearing part:
 
-      ```sql
-      WITH act AS (
-        SELECT "attractionId" AS aid,
-               max(timestamp) FILTER (WHERE status='OPERATING') AS last_op,
-               max(timestamp) AS last_row, max("waitTime") AS max_wait
-          FROM queue_data WHERE timestamp > now() - interval '400 days' GROUP BY 1
-      ), cand AS (
-        SELECT a.id, a.name, a."parkId", p.name AS park,
-               act.last_op::date AS d, act.max_wait
-          FROM act JOIN attractions a ON a.id = act.aid
-          JOIN parks p ON p.id = a."parkId"
-         WHERE act.last_op < now() - interval '30 days'
-           AND act.last_row > now() - interval '2 days'
-           AND act.max_wait > 0            -- it really had a queue
-           AND a.retired_at IS NULL
-      ), same_day AS (SELECT "parkId", d, count(*) AS n FROM cand GROUP BY 1,2)
-      SELECT c.park, c.name, c.d AS went_silent, c.id
-        FROM cand c JOIN same_day s ON s."parkId" = c."parkId" AND s.d = c.d
-       WHERE s.n <= 2                      -- individual, not a block
-       ORDER BY c.park, c.name;
-      ```
+          ```sql
+          WITH act AS (
+            SELECT "attractionId" AS aid,
+                   max(timestamp) FILTER (WHERE status='OPERATING') AS last_op,
+                   max(timestamp) AS last_row, max("waitTime") AS max_wait
+              FROM queue_data WHERE timestamp > now() - interval '400 days' GROUP BY 1
+          ), cand AS (
+            SELECT a.id, a.name, a."parkId", p.name AS park,
+                   act.last_op::date AS d, act.max_wait
+              FROM act JOIN attractions a ON a.id = act.aid
+              JOIN parks p ON p.id = a."parkId"
+             WHERE act.last_op < now() - interval '30 days'
+               AND act.last_row > now() - interval '2 days'
+               AND act.max_wait > 0            -- it really had a queue
+               AND a.retired_at IS NULL
+          ), same_day AS (SELECT "parkId", d, count(*) AS n FROM cand GROUP BY 1,2)
+          SELECT c.park, c.name, c.d AS went_silent, c.id
+            FROM cand c JOIN same_day s ON s."parkId" = c."parkId" AND s.d = c.d
+           WHERE s.n <= 2                      -- individual, not a block
+           ORDER BY c.park, c.name;
+          ```
 
-      **Research shape that works** (six subagents grouped by operator, since
-      causes cluster there): each attraction gets one of PERMANENTLY_CLOSED /
-      REFURBISHMENT / SEASONAL / STILL_OPERATING / UNKNOWN, and
-      PERMANENTLY_CLOSED requires a **date and a source** or it does not count.
-      Tell the agents explicitly that STILL_OPERATING is a normal answer —
-      *Pooh's Hunny Hunt*, *Dumbo*, *Enchanted Storybook Castle*, *Marvel Cave*
-      and *Shock Wave* are all in the list and are all landmarks of their parks.
-      If those come back "retired", the research is wrong, not the parks.
+          **Research shape that works** (six subagents grouped by operator, since
+          causes cluster there): each attraction gets one of PERMANENTLY_CLOSED /
+          REFURBISHMENT / SEASONAL / STILL_OPERATING / UNKNOWN, and
+          PERMANENTLY_CLOSED requires a **date and a source** or it does not count.
+          Tell the agents explicitly that STILL_OPERATING is a normal answer —
+          *Pooh's Hunny Hunt*, *Dumbo*, *Enchanted Storybook Castle*, *Marvel Cave*
+          and *Shock Wave* are all in the list and are all landmarks of their parks.
+          If those come back "retired", the research is wrong, not the parks.
 
-      Traps found while preparing the batch: "Sea World" here is the **Gold
-      Coast, Australia** park, not Orlando; `Skyride (Egypt Station)` and
-      `Walibi Express Station 2` are **stations** of one ride; Universal
-      Beijing's "The Wizarding World of Harry Potter" is a whole **land**; and
-      `Coastersaurus - Currently Closed for Maintenance` carries a hint in its
-      name that still needs verifying.
-      Spread over ~20 parks, at most five each. The scattered dates are what
-      separates them from the 67 whose whole block fell silent on one day —
-      those are seasonal closures (Wet'n'Wild's 13+9 on 2026-06-29 is the
-      Southern-Hemisphere winter, Bellewaerde's 5 on 2026-02-11 the Belgian
-      one) and must NOT be retired.
-      Each needs a **date and a source**, not just a verdict: `retired_at` wants
-      the actual closure date where one is stated, and anything that turns out
-      to still exist stays untouched.
+          Traps found while preparing the batch: "Sea World" here is the **Gold
+          Coast, Australia** park, not Orlando; `Skyride (Egypt Station)` and
+          `Walibi Express Station 2` are **stations** of one ride; Universal
+          Beijing's "The Wizarding World of Harry Potter" is a whole **land**; and
+          `Coastersaurus - Currently Closed for Maintenance` carries a hint in its
+          name that still needs verifying.
+          Spread over ~20 parks, at most five each. The scattered dates are what
+          separates them from the 67 whose whole block fell silent on one day —
+          those are seasonal closures (Wet'n'Wild's 13+9 on 2026-06-29 is the
+          Southern-Hemisphere winter, Bellewaerde's 5 on 2026-02-11 the Belgian
+          one) and must NOT be retired.
+          Each needs a **date and a source**, not just a verdict: `retired_at` wants
+          the actual closure date where one is stated, and anything that turns out
+          to still exist stays untouched.
+
 - [x] Four already established and retired as the proof batch: Animal Kingdom's
-      *Affection Section* (2026-02-22), *Dino-Sue* (2026-02-15) and *The
-      Animation Experience* (2026-02-23), Ocean Park's *North Pole Encounter*
+      _Affection Section_ (2026-02-22), _Dino-Sue_ (2026-02-15) and _The
+      Animation Experience_ (2026-02-23), Ocean Park's _North Pole Encounter_
       (2026-03-03).
 - [ ] **`Expedition Everest - Legend of the Forbidden Mountain Single Rider` is
       not a retirement candidate — it is a data-model error.** It is a queue
       variant of a live roller coaster, not an attraction, so it should be
       merged into its parent or excluded at mapping time. Worth checking whether
       other parks have the same shape.
-
 
 ## Feed-dropped attractions still get marked seasonal (2026-08-15)
 
@@ -288,7 +284,6 @@ with the same rows.
       attractions with the same date. That looks like a duplicate park pair for
       the existing duplicate-records work.
 
-
 ## Free-flow attractions & seasonality (2026-08-15)
 
 **Context:** `open_with_park` was only ever curated for Phantasialand. A sweep
@@ -297,30 +292,32 @@ them), 4 sit in Hansa-Park where the flag deliberately cannot fire, and 25 were
 researched one by one against the operators' own pages. 14 were flagged.
 
 **Deliberately not flagged — genuinely seasonal, at parks open year-round:**
+
 - [x] **The season gate exists now** — `isFreeFlowOpen` takes `seasonMonths` +
       the park timezone, and the detector no longer owns the months on a
       free-flow row. What is still missing is the months themselves.
-- [ ] Curate `season_months` for Europa-Park — *Lítill Island* (summer) and
-      *Water Playground* (summer + Halloween); Everland — *Snow playground*
-      (winter); Bellewaerde — *Snowmen Playground* (Christmas event only), then
+- [ ] Curate `season_months` for Europa-Park — _Lítill Island_ (summer) and
+      _Water Playground_ (summer + Halloween); Everland — _Snow playground_
+      (winter); Bellewaerde — _Snowmen Playground_ (Christmas event only), then
       set `open_with_park`. **Needs season-date research first**: "summer" is
       not a month list, Europa-Park's summer season opens in late March (is 3 in
       or out?), and Everland's snow-park closing date was never confirmed by a
       fetched source. These are curation calls against the operator's calendar,
       not util logic.
 - [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
-      *Muddy Puddles Splash Pad*, Walibi Rhône-Alpes *Exotic Island 3-6* and
-      *7-12*. Confirmed free-flow, but no source states an operating window, and
+      _Muddy Puddles Splash Pad_, Walibi Rhône-Alpes _Exotic Island 3-6_ and
+      _7-12_. Confirmed free-flow, but no source states an operating window, and
       a water play area plausibly closes in cold months. Held rather than
-      guessed. (The splash pads at *seasonal parks* — Water Country USA,
+      guessed. (The splash pads at _seasonal parks_ — Water Country USA,
       Hurricane Harbor Arlington — were flagged: the park-status gate does the
       seasonal work there.)
 
 **`season_months` can encode the observation window, not a season:**
+
 - [ ] Phantasialand's Avoras, Berliner Eislaufen and Ice skate hire all have
       their first queue_data row on **2025-12-24** and all derived
       `season_months = [1, 12]`. For the two ice-rink attractions that is
-      correct; for Avoras — advertised by the park as open *"ganzjährig"* — it
+      correct; for Avoras — advertised by the park as open _"ganzjährig"_ — it
       was pure artefact, and it read as out of season all summer.
       **The data alone cannot separate the two cases.** A guard ("only derive
       months once we have observed ≥ ~330 days") would drop the artefact but
@@ -329,9 +326,10 @@ researched one by one against the operators' own pages. 14 were flagged.
       per attraction rather than globally.
 
 **Attractions marked seasonal with no months at all:**
+
 - [ ] Movie Park Germany's 9 Halloween Horror Fest mazes are correctly seasonal
       but have `season_months = NULL`: their first feed row is 2026-04-17, i.e.
-      *after* the last Halloween, so there is no observed operating month to
+      _after_ the last Halloween, so there is no observed operating month to
       derive from. The detector honestly writes NULL. Consequence:
       `isCurrentlyInSeason` is `null`, the frontend cannot distinguish "closed
       today" from "not in season", and they drag the park's operating count to
@@ -343,6 +341,7 @@ researched one by one against the operators' own pages. 14 were flagged.
       `isCurrentlyInSeason` is `null` in both cases.
 
 **Unresolved identities — researched, not concluded:**
+
 - [ ] Heide Park **"PLAYGROUND"** — no source ties this record to a specific
       physical area; the park's own attraction overview names no standalone
       playground. Possibly a feed artefact.
@@ -362,14 +361,14 @@ researched one by one against the operators' own pages. 14 were flagged.
       it is unopened, removed, or mis-fed.
 
 **The wider backlog (not yet touched):**
-- [ ] The name-based net has a known hole: *Mopti's Monkey Depot* contains no
+
+- [ ] The name-based net has a known hole: _Mopti's Monkey Depot_ contains no
       playground vocabulary and would never have matched. The behavioural net —
       attractions that never report OPERATING in a park whose feed demonstrably
       works — returns **453** rows. A sample shows it is dominated by Halloween
-      event attractions, winter operations (*Curlingbaan*, *Schaatsbaan*,
-      *Tubingbaan*), off-season water areas and genuinely defunct rides, so it
+      event attractions, winter operations (_Curlingbaan_, _Schaatsbaan_,
+      _Tubingbaan_), off-season water areas and genuinely defunct rides, so it
       needs a cheaper triage than per-attraction research before it is useful.
-
 
 ## Ride profiles: the safety nets that went with the seed (2026-08-15)
 
@@ -398,6 +397,7 @@ and both fail **silently** — that is what makes them worth tracking.
       ohnehin ein menschlicher Moment.
 
 **Curation left deliberately open:**
+
 - [ ] **Der Audit-Cron ist registriert, aber noch nie gelaufen.** `delayed: 1` auf
       der Queue belegt die Registrierung, der Fehlerpfad ist getestet — dass der
       Handler in Produktion durchlaeuft, zeigt erst der erste Lauf um 06:30.
@@ -511,14 +511,14 @@ and both fail **silently** — that is what makes them worth tracking.
       (`Riptide Racer` vs `Riptide`, `Main Train` vs `Choco Chip Creek`) — die
       brauchen ein Urteil, keinen Batch-Lauf.
 
-- [ ] **Hyperia** (Thorpe Park, RCDB 20652) — sources state 2, 3 *and* 4
+- [ ] **Hyperia** (Thorpe Park, RCDB 20652) — sources state 2, 3 _and_ 4
       inversions; Wikipedia contradicts itself within one article. The element
       list also calls its Immelmann non-inverting. Needs the park's own spec
       sheet or a POV count before the entry moves.
 - [ ] **Zadra** (Energylandia, RCDB 16184) — publishes 3 inversions but the
       curated element list names 4 inverting figures. No source states the
       element order, so neither side can be corrected without inventing data.
-- [ ] **Coasters with no RCDB id are unexamined.** Every ride that *has* an id
+- [ ] **Coasters with no RCDB id are unexamined.** Every ride that _has_ an id
       now has a profile (0 remaining). The coverage question is the other
       direction: 6,508 attractions have no profile, and while most are flat rides
       and shows, an unknown number are coasters that never got an id from the
@@ -534,8 +534,8 @@ and both fail **silently** — that is what makes them worth tracking.
 - [ ] **18 named figures have no 3-D player** (42 of 77 `coaster-elements` have
       one). Concepts and brakes legitimately have none; these are real shapes:
       `bowtie, butterfly, cobra-loop, cutback, dive-drop, flying-snake-dive,
-      high-five, inline-twist, jojo-roll, norwegian-loop, predrop, pretzel-knot,
-      splashdown, stall, stengel-dive, swing-launch, treble-clef, turntable`.
+    high-five, inline-twist, jojo-roll, norwegian-loop, predrop, pretzel-knot,
+    splashdown, stall, stengel-dive, swing-launch, treble-clef, turntable`.
       `inline-twist` and `stall` are the highest-value — they appear most often
       in curated layouts. Build against `lib/three/coaster/elements.ts` and
       verify with `scripts/render-coaster-elements.mjs`, per the three.js
@@ -546,7 +546,6 @@ and both fail **silently** — that is what makes them worth tracking.
 - [x] **Animal Kingdom haelt keine Magic-Kingdom-Rides mehr** — 42 umgehaengt,
       35 Duplikate gemerged, der Park steht bei 24 statt 66 Attraktionen.
 
-
 ## Schedule times: 12-hour-clock rows need a curated override (2026-07-27)
 
 **Context:** `normalizeClosingTime` (PR "repair closing times whose date contradicts
@@ -555,10 +554,10 @@ That fixes 178 rows, but 7 of them stay wrong in a way no generic rule can repai
 the source reports `opens 15:00 / closes 12:00`, which is almost certainly a
 12-hour-clock error where 12:00 means **midnight**:
 
-| Park | Days | Reported | After re-anchoring |
-| --- | --- | --- | --- |
-| Six Flags Qiddiya City | 2026-04-17/24, 05-01/08/15 | 15:00 → 12:00 | 21 h day |
-| Kings Dominion | 2026-09-18, 09-25 (Haunt evenings) | 18:00 → 12:00 | 18 h day |
+| Park                   | Days                               | Reported      | After re-anchoring |
+| ---------------------- | ---------------------------------- | ------------- | ------------------ |
+| Six Flags Qiddiya City | 2026-04-17/24, 05-01/08/15         | 15:00 → 12:00 | 21 h day           |
+| Kings Dominion         | 2026-09-18, 09-25 (Haunt evenings) | 18:00 → 12:00 | 18 h day           |
 
 Those windows are **right during the actual event hours and wrong overnight** — a
 strict improvement over the previous state (closing before opening ⇒ the park read
@@ -571,6 +570,7 @@ noon). The distinguishing signal is `closing < opening`, which the normalizer ha
 already consumed. Guessing further means inventing data.
 
 **How:**
+
 - Curate the affected park/date pairs the way ride heights are curated
   (`src/attractions/data/manual-attraction-metadata.ts` is the pattern): an explicit
   park + date + corrected closing time, applied in `saveScheduleData` after
@@ -622,9 +622,9 @@ Rough order by ROI; each its own PR. Full rationale in
 - [x] **Receptive-field bake-off** — done and flipped: `PCN_GWN_LAYERS` defaults
       to **8** in `pcn-service/config.py`, so the served GraphWaveNet sees the
       whole 192-slot context instead of ~1 h. Won on the busy segment and the
-      champion swap now serves PCN intraday. *(Note: review §7 table row 6 still
-      reads "Default bleibt 2" — that line is stale, the code is the truth.)*
-- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7) — *partly done:*
+      champion swap now serves PCN intraday. _(Note: review §7 table row 6 still
+      reads "Default bleibt 2" — that line is stale, the code is the truth.)_
+- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7) — _partly done:_
       the `pcn_blend` shadow model in `pcn-service/score.py` keeps the persistence
       blend under live A/B (`pcn_forecasts` stays raw on purpose). What remains: the scorer
       currently joins only the freshest origin (≈15-min leads), so the quality of
@@ -645,7 +645,7 @@ Rough order by ROI; each its own PR. Full rationale in
       is now a far-daily concern where it stays the sole level provider).
 - [ ] **Shape offline-vs-live reconcile** (review §6b): offline claimed −7.4% busy,
       live board shows Shape losing everywhere (busy −3.9, bias −20). After the scorer
-      fix, re-read the board; then check whether the *level* Shape renders onto
+      fix, re-read the board; then check whether the _level_ Shape renders onto
       under-shoots busy days (bias −20 smells like a level, not a curve, error). No
       producer swap to `learned.py` before this is understood.
 - [ ] **Cheap experiments from the design doc** (§11.5): Chronos-Bolt zero-shot as a
@@ -669,14 +669,14 @@ checked once it is live:
       `rides: []` for it:
 
       ```
-      curl -s 'https://api.park.fan/v1/parks/asia/saudi-arabia/al-moqbel-palaces/six-flags-qiddiya-city/plan/day?date=2026-09-02' \
-        | jq '{ctx: .context | {openHour, closeHour}, rides: (.rides|length), lastHour: (.rides[0].hours|last)}'
-      ```
+          curl -s 'https://api.park.fan/v1/parks/asia/saudi-arabia/al-moqbel-palaces/six-flags-qiddiya-city/plan/day?date=2026-09-02' \
+            | jq '{ctx: .context | {openHour, closeHour}, rides: (.rides|length), lastHour: (.rides[0].hours|last)}'
+          ```
 
-      Expect `openHour: 16`, `closeHour: 0` and hours running past 23. Check a
-      forecast day too (Parque Warner Madrid or Cedar Point on 31 October), and
-      La Ronde, whose rollup is thin enough that it may still answer with few
-      rides for reasons that have nothing to do with midnight.
+          Expect `openHour: 16`, `closeHour: 0` and hours running past 23. Check a
+          forecast day too (Parque Warner Madrid or Cedar Point on 31 October), and
+          La Ronde, whose rollup is thin enough that it may still answer with few
+          rides for reasons that have nothing to do with midnight.
 
 - [ ] **Tell the frontend the contract is settled.** `estimateFor`
       (`lib/planner/estimate.ts` in the park.fan repo) looks a ride's curve up
@@ -694,11 +694,11 @@ raise TTL 2→15 min + evict expired entries on write.
 
 **Baseline (pre-fix, measured 2026-06-03, ~133 min window):**
 
-| fingerprint | calls/min | ms/min (DB time) | mean_ms |
-|-------------|-----------|------------------|---------|
-| 48c290bd    | 26.1      | 7196             | 275.2   |
-| 0f0d8d65    | 3.6       | 1355             | 373.4   |
-| **combined**| **~29.7** | **~8551** (≈14% of one core) | — |
+| fingerprint  | calls/min | ms/min (DB time)             | mean_ms |
+| ------------ | --------- | ---------------------------- | ------- |
+| 48c290bd     | 26.1      | 7196                         | 275.2   |
+| 0f0d8d65     | 3.6       | 1355                         | 373.4   |
+| **combined** | **~29.7** | **~8551** (≈14% of one core) | —       |
 
 ### Verification protocol (run AFTER deploy)
 
@@ -719,10 +719,12 @@ Baseline SQL: `pg_stat_statements` joined with `pg_stat_statements_info`, normal
 `calls` and `total_exec_time` by `EXTRACT(EPOCH FROM now()-stats_reset)/60`.
 
 ### Decision gate — per-attraction caching (only if still hot)
+
 If `hourly_agg` is still a top load after the fix, the remaining cost is the **single-attraction
 path** `getAttractionPredictions` (`src/ml/ml.service.ts`, `attractionIds: [attractionId]`,
 attraction-detail pages) which uses a per-single-attraction key and does NOT reuse the
 park-level fetch (`predictForPark` → `activeAttractionIds`).
+
 - [ ] If hot: cache the query result **split by attractionId** (safe — window functions are
       `PARTITION BY "attractionId"`, so each attraction's rolling values are independent).
       On read, assemble from per-attraction cache; query only the missing IDs. Then single-
@@ -745,6 +747,7 @@ and should be its own PR.
 for item 2 — refactoring untested sync code is how regressions ship.
 
 **How:**
+
 - Mirror the existing patterns in `src/attractions/services/attraction-integration.service.spec.ts`
   and `src/parks/parks.service.spec.ts` (repository mocks via `getRepositoryToken`,
   Redis mock as plain object).
@@ -763,12 +766,14 @@ for item 2 — refactoring untested sync code is how regressions ship.
 **Current state:** `syncAttractions`, `syncShows`, `syncRestaurants` share the
 walk-parks → fetch-children → filter-type → prefetch-existing → upsert skeleton
 (~80 duplicated lines), but differ on purpose:
+
 - attractions: also syncs from Queue-Times (`qt-`) and Wartezeiten (`wz-`) sources,
 - shows: batches updates (`toUpdate[]` + `Promise.all`) and inserts separately,
 - restaurants: optional `deep` mode (per-entity `getEntity()` with fallback),
   prefetch via `In(apiExternalIds)`.
 
 **How:** template-method base class, NOT full unification:
+
 ```ts
 abstract class ThemeParksEntitySync<TEntity, TChild> {
   // template: park loop + isThemeParksWikiId() skip + children fetch + prefetch maps
@@ -777,6 +782,7 @@ abstract class ThemeParksEntitySync<TEntity, TChild> {
   protected abstract persist(toInsert: ..., toUpdate: ...): Promise<void>; // strategies stay per-entity
 }
 ```
+
 Attractions keep their qt-/wz- branches OUTSIDE the template (only the wiki branch
 moves in). Don't force `deep` into the template — keep it a restaurants-only hook.
 **Prereq:** item 1. Effort: ~1–2 days incl. test updates.
@@ -788,11 +794,15 @@ logger + batch loop (`BATCH_SIZE = 5`) + success/failure counters + duration log
 Redis done-markers and error semantics vary too much for inheritance.
 
 **How:** extract only the uniform part into `src/queues/utils/batch-runner.util.ts`:
+
 ```ts
-export async function runInBatches<T>(items: T[], batchSize: number,
+export async function runInBatches<T>(
+  items: T[],
+  batchSize: number,
   worker: (item: T) => Promise<void>,
-): Promise<{ succeeded: number; failed: number }>
+): Promise<{ succeeded: number; failed: number }>;
 ```
+
 Adopt it opportunistically when touching a processor; don't do a big-bang rewrite.
 Effort: helper ~1h, adoption incremental.
 
@@ -817,6 +827,7 @@ naive LIMIT would silently drop entities from search. PR #68 added a size log +
 a warning at >16 MB serialized.
 
 **How (when the warning appears in logs):**
+
 - preferred: add an `isSearchable`/popularity-derived flag and filter on it,
 - or: split the Redis index into per-continent keys and lazy-load,
 - or: switch serialization to msgpack/gzip (last resort, complexity for ~2–3x).

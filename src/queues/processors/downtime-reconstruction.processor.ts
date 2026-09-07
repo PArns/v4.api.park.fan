@@ -96,6 +96,11 @@ export class DowntimeReconstructionProcessor {
         await this.dataSource.query(OUTAGE_SCAN_START_SQL, [
           windowFrom,
           parkIds,
+          // Hard floor on how far back the scan may reach, whatever it finds
+          // still open. Twice the requested window: enough slack for a genuinely
+          // long outage to keep its start, bounded enough that the statement
+          // cannot grow without limit.
+          new Date(asOf.getTime() - windowDays * 2 * 24 * 60 * 60 * 1000),
         ]);
       if (rows[0]?.scan_start) scanStart = new Date(rows[0].scan_start);
     } catch (error) {

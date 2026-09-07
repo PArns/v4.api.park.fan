@@ -23,7 +23,8 @@ import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime
  * | --- | --- | --- |
  * | came back the same day | the park shutting for the night | a closing park does not reopen |
  * | `MAX_SIMULTANEOUS_CLOSERS` | park-wide events (weather, closing time) | **61.2 %** of raw transitions are 5+ rides in one minute |
- * | `MAX_REGULAR_DAYS` | a ride with its own shorter hours | 130 ride-hour pairs close on 10+ days at the same hour |
+ * | MAX_REGULAR_DAYS | a ride with its own shorter hours | 130 ride-hour pairs close on 10+ days at the same hour |
+ * | MAX_GAP_DAY_SHARE | a show or duty cycle, which closes at a different time each day | 71 rides carry a gap on 60 %+ of their operating days |
  * | `MIN_GAP_MINUTES` | one poll of noise | 27.1 % of raw gaps are exactly one 5-minute cycle |
  *
  * Raw transitions over 21 days: 25 759. After all four: **3618**, over 1137
@@ -47,6 +48,30 @@ import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime
 
 /** Rides closing in the same minute, above which it is the park and not a ride. */
 export const MAX_SIMULTANEOUS_CLOSERS = 2;
+
+/**
+ * Share of a ride's operating days that may carry a gap before it is read as a
+ * cycle rather than a fault.
+ *
+ * The hour-based filter below only catches a ride that closes at the SAME hour.
+ * A show, a character meet or a ride on a duty cycle closes at a different time
+ * every day and sails straight through it. Measured over 21 days across the
+ * blind parks: **71 rides carry a gap on 60 % or more of their operating days**
+ * (1433 gaps), against 883 rides under 10 % (1176 gaps). The first group is
+ * Futuroscope's cinemas, Nigloland's character meets and a handful of coasters
+ * on what is plainly a duty cycle — 17 gap-days out of 21 operating days is not
+ * a run of bad luck.
+ *
+ * Set at half: a ride that stops on more days than not is describing its
+ * timetable, not its reliability. It is the conservative direction — a genuinely
+ * unreliable ride is withheld rather than a timetable published as faults.
+ * Applying it drops the 21-day population from 2817 to 1757 and leaves the
+ * median untouched at 25 minutes.
+ */
+export const MAX_GAP_DAY_SHARE = 0.5;
+
+/** Operating days a ride needs before that share means anything. */
+export const MIN_DAYS_FOR_CYCLE_TEST = 5;
 
 /**
  * Days a ride may close at the same hour before it is read as its own schedule.
@@ -160,6 +185,28 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   regularity AS (
     SELECT aid, closed_hour, count(DISTINCT op_day) AS days
       FROM raw_gaps GROUP BY 1, 2
+  ),
+  -- A ride that stops on more days than not is describing its timetable.
+  -- The hour filter above cannot see this: a show closes at a different time
+  -- every day. Measured over the blind parks, 71 rides carry a gap on 60 %+ of
+  -- their operating days.
+  -- Operating days per ride, resolved ONCE as a grouped scan. As a correlated
+  -- subquery inside cycle this ran past two minutes; the same mistake, and
+  -- the same fix, as the blind-park check above.
+  active AS (
+    SELECT e."attractionId" AS aid,
+           count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
+      FROM attraction_exposure_days e
+     WHERE e.op_day >= ($2::timestamptz)::date
+     GROUP BY e."attractionId"
+  ),
+  cycle AS (
+    SELECT g.aid,
+           count(DISTINCT g.op_day)::numeric AS gap_days,
+           COALESCE(MAX(ac.active_days), 0)  AS active_days
+      FROM raw_gaps g
+      LEFT JOIN active ac ON ac.aid = g.aid
+     GROUP BY g.aid
   )
   SELECT g.aid                                  AS "attractionId",
          g.pid                                  AS "parkId",
@@ -172,9 +219,14 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
       ON s.pid = g.pid AND s.minute = date_trunc('minute', g.started_at)
     JOIN regularity r
       ON r.aid = g.aid AND r.closed_hour = g.closed_hour
+    JOIN cycle c ON c.aid = g.aid
    WHERE s.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
      AND r.days    <  ${MAX_REGULAR_DAYS}
      AND g.gap_min >= ${MIN_GAP_MINUTES}
+     -- Not a duty cycle. Below the day floor there is not enough to judge, and
+     -- the ride is kept.
+     AND (c.active_days < ${MIN_DAYS_FOR_CYCLE_TEST}
+          OR c.gap_days / c.active_days <= ${MAX_GAP_DAY_SHARE})
    ORDER BY g.pid, g.aid, g.started_at
 `;
 

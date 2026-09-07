@@ -135,8 +135,24 @@ export type DowntimeBlockDto = DowntimeFiguresDto | DowntimeWithheldDto;
  * nightly job writes a row for every tracked ride, so its absence means the ride
  * is not tracked, which is the same statement.
  */
+/**
+ * Days a profile may be old before it stops describing "the last 90 days".
+ *
+ * The job runs nightly, so two days is already two missed runs. Without this
+ * check a dead job keeps publishing its last successful night as current, and a
+ * retired ride keeps its last profile forever — the profile table is upsert-only
+ * and never deletes. That is the same silent-success shape as the recovery-curve
+ * bug, one layer out and this time facing a reader.
+ *
+ * Withholding is the right failure: the numbers themselves may still be roughly
+ * true, but the sentence built on them („in den letzten 90 Tagen") is not, and
+ * there is no way to tell a visitor which part to discount.
+ */
+export const MAX_PROFILE_AGE_DAYS = 2;
+
 export function toDowntimeBlock(
   profile: AttractionDowntimeProfile | null | undefined,
+  now: Date = new Date(),
 ): DowntimeBlockDto {
   if (!profile) {
     return {
@@ -147,7 +163,15 @@ export function toDowntimeBlock(
     };
   }
 
+  // A profile older than the job's own cadence describes a window that has
+  // moved on. See MAX_PROFILE_AGE_DAYS.
+  const ageDays = profile.generatedAt
+    ? (now.getTime() - new Date(profile.generatedAt).getTime()) / 86_400_000
+    : Number.POSITIVE_INFINITY;
+  const stale = !(ageDays <= MAX_PROFILE_AGE_DAYS);
+
   if (
+    stale ||
     !profile.publishable ||
     profile.medianMinutes == null ||
     profile.longestMinutes == null ||
@@ -155,6 +179,10 @@ export function toDowntimeBlock(
   ) {
     return {
       kind: "withheld",
+      // A stale profile carries whatever reason it last stored, or the generic
+      // one. Deliberately NOT a reason of its own: a sentence to a visitor
+      // about our job scheduler would be worse than saying nothing, and the
+      // staleness belongs in the logs.
       reason: profile.withheldReason ?? "thin_events",
       // Zero for the three reasons that are about us. The client must not read
       // it as "no outages happened" — the reason says which kind of zero it is.

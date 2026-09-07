@@ -232,6 +232,14 @@ Each filter earns its place:
   pause.
 - **≥10 minutes** removes one poll of noise: 27.1 % of raw gaps are exactly one
   5-minute cycle.
+- **The duty-cycle filter** removes what the hour filter cannot see. A show, a
+  character meet or a ride on a duty cycle closes at a _different_ time each day
+  and sails through a same-hour test. Measured: **71 rides carry a gap on 60 %
+  or more of their operating days** (1433 gaps) against 883 rides under 10 %
+  (1176 gaps) — Futuroscope's cinemas, Nigloland's character meets, and coasters
+  with 17 gap-days out of 21 operating days. Found by looking at what the live
+  endpoint actually returned after the serving path was repaired, which is the
+  check that should have run before any of this shipped.
 
 What survives has quartiles of **15/25/40 minutes** (p90 65, longest 301), close
 to the DOWN signal's own 10/25/50 and unlike anything a scheduled closure looks

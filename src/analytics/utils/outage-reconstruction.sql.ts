@@ -383,10 +383,29 @@ SELECT t.aid                             AS "attractionId",
  * Parameters: `$1` the requested window start, `$2` uuid[] park filter or NULL.
  */
 export const OUTAGE_SCAN_START_SQL = `
-  SELECT LEAST(
-           COALESCE(MIN(o.started_at), $1::timestamptz),
-           $1::timestamptz
-         ) - INTERVAL '1 day' AS scan_start
+  SELECT GREATEST(
+           LEAST(
+             COALESCE(MIN(o.started_at), $1::timestamptz),
+             $1::timestamptz
+           ) - INTERVAL '1 day',
+           -- Floor. Without it the scan walks back to the oldest interval that
+           -- is still open, forever: an interval ending in \ongoing\ or
+           -- \window_edge\ stores ended_at = NULL, is deleted by the next run
+           -- and written again identically, so one stuck spell pins the scan to
+           -- its own start and DEFAULT_WINDOW_DAYS bounds nothing. That is the
+           -- ~7-minute, multi-GB-spill case the 30-day default exists to avoid.
+           --
+           -- It also keeps the closure signal's regularity and cycle filters
+           -- meaningful: both are shares over the scanned window, so a window
+           -- that silently grows from 30 days to five months turns
+           -- MAX_REGULAR_DAYS from "1 day in 6" into "1 in 36" and makes the
+           -- stored history depend on when it was computed.
+           --
+           -- A spell older than the floor keeps its stored row untouched, which
+           -- is the right trade: a wrong duration on one long-running outage
+           -- beats an unbounded nightly scan.
+           $3::timestamptz
+         ) AS scan_start
     FROM attraction_outages o
    WHERE ($2::uuid[] IS NULL OR o."parkId" = ANY($2::uuid[]))
      AND (o.ended_at IS NULL OR o.started_at >= $1::timestamptz)
